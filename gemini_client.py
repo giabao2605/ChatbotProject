@@ -5,14 +5,12 @@ from google.genai import errors as genai_errors
 DEFAULT_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
 _PLACEHOLDER_KEY = "DIEN_KEY_CUA_BAN_VAO_DAY"
 
-
 def is_retryable_error(exc) -> bool:
     """Retry khi bi rate-limit (429) hoac loi server (5xx) cua Gemini (google-genai)."""
     if isinstance(exc, genai_errors.APIError):
         code = getattr(exc, "code", None)
         return code == 429 or (isinstance(code, int) and code >= 500)
     return False
-
 
 class GeminiVisionModel:
     """
@@ -31,7 +29,6 @@ class GeminiVisionModel:
             model=self.model_name,
             contents=parts,
         )
-
 
 def build_vision_model(model_name: str = DEFAULT_VISION_MODEL):
     """Tra ve GeminiVisionModel neu co API key hop le, nguoc lai None."""

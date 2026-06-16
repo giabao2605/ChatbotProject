@@ -226,7 +226,7 @@ for msg in st.session_state.chat_history:
             feedback = st.feedback("thumbs", key=fb_key)
             processed_key = f"processed_{fb_key}"
             if feedback is not None and st.session_state.get(processed_key) != feedback:
-                danh_gia = 1 if feedback == 1 else -1
+                danh_gia = 1 if feedback == 0 else -1  # st.feedback("thumbs"): 0=like, 1=dislike
                 update_chat_feedback(msg["chat_id"], danh_gia)
                 st.session_state[processed_key] = feedback
  
