@@ -32,8 +32,32 @@ def run_worker():
             logger.info(f"Worker bắt đầu xử lý JobID {job_id}: {file_name}")
             print(f"\n[{time.strftime('%H:%M:%S')}] Đang xử lý: {file_name}")
             
+            # 1.5. Phân loại AI
+            try:
+                from document_classifier import classify_document
+                import json
+                from db_logic import engine
+                from sqlalchemy import text
+                
+                print(f"[{time.strftime('%H:%M:%S')}] Đang phân loại bằng AI...")
+                cls_res = classify_document(file_path, file_name)
+                
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        UPDATE IngestionJobs 
+                        SET ClassificationJson = :j, ClassificationConfidence = :c, RequestedAction = :a 
+                        WHERE JobID = :id
+                    """), {
+                        "j": json.dumps(cls_res, ensure_ascii=False),
+                        "c": cls_res.get("confidence", 0.0),
+                        "a": cls_res.get("detected_action", "new_document"),
+                        "id": job_id
+                    })
+            except Exception as e:
+                logger.error(f"Lỗi khi classify AI: {e}")
+            
             # 2. Xử lý file thực tế
-            update_ingestion_job(job_id, status="embedding", error_message="Đang xử lý (chunking & embedding)...")
+            update_ingestion_job(job_id, status="extracting", error_message="Đang bóc tách PDF...")
             
             # Sử dụng learn_new_file của hệ thống
             success, message = learn_new_file(

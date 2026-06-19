@@ -15,7 +15,7 @@ import underthesea
 from qdrant_client import models
 from logger_config import logger
 # FIX #1: dung 2 ham moi (reset 1 lan + insert tung trang). Giu save_document_metadata cho file 1 trang.
-from db_logic import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records
+from db_logic import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records, get_document_info
 from rag_logic import vectorstore, client
 # FIX Bug #4: predicate retry dung chung cho Gemini (google-genai)
 from gemini_client import describe_gemini_error, is_retryable_error
@@ -560,7 +560,7 @@ def extract_text_from_supported_file(file_path, ten_file, vision_model=None):
     supported = ", ".join(sorted(SUPPORTED_LEARNING_EXTENSIONS))
     raise ValueError(f"Dinh dang {ext or '(khong co duoi file)'} chua duoc ho tro. Cac dinh dang dang ho tro: {supported}")
  
-def extract_bom_records(table):
+def extract_bom_records(table, table_idx=None):
     records = []
     if not table or len(table) < 2: return records
     
@@ -570,7 +570,7 @@ def extract_bom_records(table):
         cleaned_table.append(cleaned_row)
         
     header_idx = -1
-    col_map = {'ma': -1, 'ten': -1, 'vat_lieu': -1, 'sl': -1, 'ghi_chu': -1}
+    col_map = {'ma': -1, 'ten': -1, 'vat_lieu': -1, 'sl': -1, 'ghi_chu': -1, 'unit': -1}
     
     for row_idx in range(min(5, len(cleaned_table))):
         row_norm = [remove_accents(h.lower()) for h in cleaned_table[row_idx]]
@@ -586,9 +586,11 @@ def extract_bom_records(table):
                 elif 'vat lieu' in h and col_map['vat_lieu'] == -1: col_map['vat_lieu'] = i
                 elif ('so luong' in h or h == 'sl') and col_map['sl'] == -1: col_map['sl'] = i
                 elif 'ghi chu' in h and col_map['ghi_chu'] == -1: col_map['ghi_chu'] = i
+                elif any(kw in h for kw in ['don vi', 'dvt', 'unit']) and col_map['unit'] == -1: col_map['unit'] = i
             break
             
     if header_idx != -1:
+        import json
         for row in cleaned_table[header_idx + 1:]:
             rec = {}
             if col_map['ma'] != -1 and col_map['ma'] < len(row): rec['ma_hang'] = row[col_map['ma']]
@@ -600,6 +602,11 @@ def extract_bom_records(table):
                     rec['so_luong'] = int(num_str) if num_str else None
                 except: rec['so_luong'] = None
             if col_map['ghi_chu'] != -1 and col_map['ghi_chu'] < len(row): rec['ghi_chu'] = row[col_map['ghi_chu']]
+            if col_map['unit'] != -1 and col_map['unit'] < len(row): rec['don_vi'] = row[col_map['unit']]
+            
+            rec['confidence'] = 0.9 if rec.get('ma_hang') and rec.get('so_luong') else 0.5
+            rec['raw_row_json'] = json.dumps(row, ensure_ascii=False)
+            rec['source_table_index'] = table_idx
             
             if rec.get('ten_vat_tu') or rec.get('ma_hang'):
                 records.append(rec)
@@ -628,6 +635,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
  
         # FIX #1: Reset metadata MOT LAN cho ca file, lay doc_id dung chung cho moi trang
         doc_id = reset_document_metadata(ten_file, thu_muc)
+        doc_info = get_document_info(doc_id)
  
         # FIX hieu nang: mo pdfplumber MOT LAN ngoai vong lap (truoc day mo lai moi trang)
         try:
@@ -701,14 +709,18 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                             # Convert BOM rows if present
                             if vision_data.get("bom_rows"):
                                 structured_bom = []
-                                for row in vision_data["bom_rows"]:
+                                for idx, row in enumerate(vision_data["bom_rows"]):
                                     if isinstance(row, dict):
                                         structured_bom.append({
                                             "ma_hang": str(row.get("ma", row.get("code", row.get("ma_hang", "")))),
                                             "ten_vat_tu": str(row.get("ten", row.get("name", row.get("ten_vat_tu", "")))),
                                             "vat_lieu": str(row.get("vat_lieu", row.get("material", ""))),
                                             "so_luong": row.get("sl", row.get("qty", row.get("so_luong", None))),
-                                            "ghi_chu": str(row.get("ghi_chu", row.get("note", "")))
+                                            "ghi_chu": str(row.get("ghi_chu", row.get("note", ""))),
+                                            "don_vi": str(row.get("don_vi", row.get("unit", ""))),
+                                            "confidence": row.get("confidence", 0.85),
+                                            "raw_row_json": json.dumps(row, ensure_ascii=False),
+                                            "source_table_index": 0
                                         })
                                 if structured_bom:
                                     save_bom_records(doc_id, page_num + 1, structured_bom)
@@ -767,6 +779,18 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     "kich_thuoc_tong_the": info["kich_thuoc"],
                     "trang_so": page_num + 1,
                     "doc_status": "pending_review",
+                    "doc_id": doc_id,
+                    "family_id": doc_info.get("family_id"),
+                    "base_code": doc_info.get("base_code", ""),
+                    "version_no": doc_info.get("version_no", 1),
+                    "version_label": doc_info.get("version_label", ""),
+                    "variant_code": doc_info.get("variant_code", "default"),
+                    "variant_group": doc_info.get("variant_group", ""),
+                    "lifecycle_status": doc_info.get("lifecycle_status", "draft"),
+                    "review_status": doc_info.get("review_status", "pending_review"),
+                    "is_current": doc_info.get("is_current", False),
+                    "is_archived": doc_info.get("is_archived", False),
+                    "supersedes_doc_id": doc_info.get("supersedes_doc_id"),
                 }
                 info['trang_so'] = page_num + 1
  
@@ -801,9 +825,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     try:
                         page_plumber = pdf_table_reader.pages[page_num]
                         tables = page_plumber.extract_tables()
-                        for table in tables:
+                        for table_idx, table in enumerate(tables):
                             # Parse BOM records and save to SQL
-                            bom_records = extract_bom_records(table)
+                            bom_records = extract_bom_records(table, table_idx=table_idx)
                             if bom_records:
                                 save_bom_records(doc_id, page_num + 1, bom_records)
                                 

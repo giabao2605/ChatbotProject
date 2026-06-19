@@ -42,6 +42,16 @@ def create_indexes():
             "metadata.file_goc": models.PayloadSchemaType.KEYWORD,
             "metadata.phong_ban_quyen": models.PayloadSchemaType.KEYWORD,
             "metadata.loai_du_lieu": models.PayloadSchemaType.KEYWORD,
+            "metadata.doc_id": models.PayloadSchemaType.INTEGER,
+            "metadata.family_id": models.PayloadSchemaType.INTEGER,
+            "metadata.base_code": models.PayloadSchemaType.KEYWORD,
+            "metadata.version_no": models.PayloadSchemaType.INTEGER,
+            "metadata.version_label": models.PayloadSchemaType.KEYWORD,
+            "metadata.variant_code": models.PayloadSchemaType.KEYWORD,
+            "metadata.lifecycle_status": models.PayloadSchemaType.KEYWORD,
+            "metadata.review_status": models.PayloadSchemaType.KEYWORD,
+            "metadata.is_current": models.PayloadSchemaType.BOOL,
+            "metadata.is_archived": models.PayloadSchemaType.BOOL,
         }
         
         # Lấy thông tin schema hiện tại

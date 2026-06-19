@@ -29,7 +29,7 @@ results = []
 for i, q in enumerate(questions, 1):
     print(f"\n[{i}/{len(questions)}] Đang kiểm tra: {q}")
     try:
-        stream, ref_text, ref_images, parts = chat_with_rag(q)
+        stream, ref_text, ref_images, parts, debug_info = chat_with_rag(q)
         answer = ""
         for chunk in stream:
             answer += chunk

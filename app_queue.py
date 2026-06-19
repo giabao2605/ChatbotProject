@@ -10,9 +10,22 @@ def run_queue():
         st.error("Không thể kết nối đến Database.")
         return
 
+    import auth
+    current_user = auth.get_current_user()
+    is_admin = auth.has_role("admin")
+
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT JobID, TenFile, ThuMuc, Status, ErrorMessage, CreatedAt FROM IngestionJobs ORDER BY CreatedAt DESC"))
+            query_str = "SELECT JobID, TenFile, ThuMuc, Status, ErrorMessage, CreatedAt, UploadedBy FROM IngestionJobs"
+            params = {}
+            if not is_admin:
+                query_str += " WHERE ThuMuc = :dept OR UploadedBy = :uname"
+                params["dept"] = current_user["department"]
+                params["uname"] = current_user["username"]
+                
+            query_str += " ORDER BY CreatedAt DESC"
+            
+            result = conn.execute(text(query_str), params)
             jobs = result.fetchall()
 
         if not jobs:
@@ -23,7 +36,7 @@ def run_queue():
         
         # Tạo bảng hiển thị
         for job in jobs:
-            job_id, ten_file, thu_muc, status, error_message, created_at = job
+            job_id, ten_file, thu_muc, status, error_message, created_at, uploaded_by = job
             
             if status == "published":
                 color = "green"
@@ -31,11 +44,13 @@ def run_queue():
                 color = "red"
             elif status == "pending_review":
                 color = "orange"
+            elif status == "classifying":
+                color = "purple"
             else:
                 color = "blue"
 
             with st.expander(f"[{status.upper()}] {ten_file} (Job: {job_id}) - {created_at.strftime('%Y-%m-%d %H:%M:%S')}"):
-                st.write(f"**Thư mục:** {thu_muc}")
+                st.write(f"**Thư mục:** {thu_muc} | **Người tải lên:** {uploaded_by or 'Unknown'}")
                 st.write(f"**Trạng thái:** <span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
                 if error_message:
                     st.write(f"**Thông báo:** {error_message}")

@@ -226,11 +226,38 @@ def run_chat():
                     update_chat_feedback(msg["chat_id"], danh_gia)
                     st.session_state[processed_key] = feedback
  
+    import auth
+    current_user = auth.get_current_user()
+    can_upload = auth.has_role("uploader") or auth.has_role("admin")
+
+    # Viewer chi duoc phep chon anh
+    allowed_types = None if can_upload else [ext.lstrip(".") for ext in IMAGE_QUESTION_EXTENSIONS]
+
     # Xu ly nhap cau hoi
-    if submission := st.chat_input("Nhap cau hoi ky thuat can tra cuu...", accept_file=True, file_type=UPLOAD_FILE_TYPES):
+    if submission := st.chat_input("Nhap cau hoi ky thuat can tra cuu...", accept_file=True, file_type=allowed_types):
         # Rut trich cau hoi va tep tu submission
         prompt = submission.text if submission.text else "Vui long phan tich hinh anh nay."
         uploaded_files = submission.files if submission.files else []
+        
+        # Server-side validation: chặn nếu viewer upload file ko phải là ảnh (vd họ bypass client-side file picker)
+        if uploaded_files and not can_upload:
+            has_forbidden = False
+            for f in uploaded_files:
+                ext = os.path.splitext(f.name)[1].lower()
+                if ext not in IMAGE_QUESTION_EXTENSIONS:
+                    has_forbidden = True
+                    break
+            if has_forbidden:
+                st.session_state.chat_history.append({
+                    "role": "user",
+                    "content": prompt
+                })
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": "❌ **Từ chối quyền truy cập:** Bạn hiện chỉ có quyền xem (viewer). Bạn không được phép upload file tài liệu (PDF, Word, Excel) vào hệ thống. Bạn chỉ được phép gửi **hình ảnh** (.jpg, .png, .webp) để hỏi Chatbot. Vui lòng thử lại!"
+                })
+                st.rerun()
+
  
         # Kiem tra xem user upload file tai lieu (yeu cau hoc) hay upload anh (hoi RAG)
         prompt_lower = remove_accents(prompt.lower())
@@ -259,7 +286,8 @@ def run_chat():
                 responses = []
                 status_placeholder = st.status(f"Đã đưa {len(uploaded_files)} tài liệu vào hàng đợi (Queue)...", expanded=True)
                 with status_placeholder:
-                    tu_hoc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data_Goc", "Tu_Hoc")
+                    user_dept_folder = current_user["department"]
+                    tu_hoc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data_Goc", user_dept_folder)
                     os.makedirs(tu_hoc_dir, exist_ok=True)
  
                     for idx, uf in enumerate(uploaded_files):
@@ -272,7 +300,12 @@ def run_chat():
                         with open(file_path, "wb") as f:
                             f.write(file_bytes)
  
-                        job_id = create_ingestion_job(safe_original_name, file_path, "Tu_Hoc")
+                        job_id = create_ingestion_job(
+                            safe_original_name, 
+                            file_path, 
+                            user_dept_folder, 
+                            uploaded_by=current_user["username"]
+                        )
                         if job_id:
                             success_count += 1
                             responses.append(f"**{uf.name}**: Đã lưu và đưa vào hàng đợi xử lý ngầm (JobID: {job_id})")
@@ -350,12 +383,14 @@ def run_chat():
                     # Truyen lich su (Windowing) va State Memory vao loi RAG
                     history_for_rag = st.session_state.chat_history[:-1]
  
-                    # 1. THOC HIEN RAG
-                    stream, ref_text, ref_images, new_part_ids = chat_with_rag(
+                    # 1. THUC HIEN RAG (Co RBAC)
+                    stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag(
                         user_question=prompt,
                         image_path=temp_img_path,
                         chat_history=history_for_rag,
-                        current_part_ids=st.session_state.current_part_ids
+                        current_part_ids=st.session_state.current_part_ids,
+                        user_department=current_user["department"],
+                        user_roles=current_user["roles"]
                     )
  
                     # Cap nhat State Memory moi

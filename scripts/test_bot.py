@@ -15,7 +15,7 @@ for i, q in enumerate(questions, 1):
     print("\n" + "="*80)
     print(f"CÂU HỎI {i}: {q}")
     print("="*80)
-    stream, ref_text, ref_images, parts = chat_with_rag(q)
+    stream, ref_text, ref_images, parts, debug_info = chat_with_rag(q)
     print("\nTRẢ LỜI:")
     for chunk in stream:
         print(chunk, end='', flush=True)

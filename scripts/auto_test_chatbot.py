@@ -161,7 +161,7 @@ for tc in test_cases:
     
     start = time.time()
     try:
-        stream, ref_text, ref_images, new_part_ids = chat_with_rag(tc["question"])
+        stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag(tc["question"])
         # Bot trả về stream (generator), ta phải đọc hết để ráp thành câu trả lời hoàn chỉnh
         answer = "".join(list(stream))
         if ref_text:
