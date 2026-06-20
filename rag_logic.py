@@ -78,19 +78,25 @@ class RAGSystem:
         logger.info(f"   -> Ket noi Qdrant Cloud tai: {qdrant_url}")
         client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
  
-        logger.info("   -> Dang tai model Embedding chuyen Tieng Viet (keepitreal/vietnamese-sbert)...")
-        embed_model = os.getenv("EMBEDDING_MODEL", "keepitreal/vietnamese-sbert")
-        embeddings = HuggingFaceEmbeddings(model_name=embed_model)
+        embed_model = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+        logger.info(f"   -> Dang tai model Embedding: {embed_model}")
+
+        embeddings = HuggingFaceEmbeddings(
+            model_name=embed_model,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True}
+        )
  
         logger.info("   -> Dang khoi tao mo hinh BM25 (Qdrant/bm25)...")
         sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
  
         if not client.collection_exists("TaiLieuKyThuat_v2"):
             logger.info("   -> Collection 'TaiLieuKyThuat_v2' khong ton tai. Dang tao moi...")
+            embedding_dim = int(os.getenv("EMBEDDING_DIM", "1024"))
             client.create_collection(
                 collection_name="TaiLieuKyThuat_v2",
                 vectors_config=models.VectorParams(
-                    size=768,
+                    size=embedding_dim,
                     distance=models.Distance.COSINE
                 ),
                 sparse_vectors_config={
@@ -111,6 +117,7 @@ class RAGSystem:
             "metadata.ma_vat_tu": models.PayloadSchemaType.KEYWORD,
             "metadata.ma_lien_quan": models.PayloadSchemaType.KEYWORD,
             "metadata.loai_du_lieu": models.PayloadSchemaType.KEYWORD,
+            "metadata.doc_status": models.PayloadSchemaType.KEYWORD,
             "metadata.doc_id": models.PayloadSchemaType.INTEGER,
             "metadata.family_id": models.PayloadSchemaType.INTEGER,
             "metadata.base_code": models.PayloadSchemaType.KEYWORD,
@@ -943,7 +950,27 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         retrieved_docs.insert(0, fake_doc)
  
     if not retrieved_docs and not is_chitchat and not skip_retrieval:
-        logger.info("Canh bao: Khong tim thay tai lieu Qdrant nao. Chuyen cho LLM tu xu ly tu choi thong minh.")
+        logger.warning("BLOCKER: Khong tim thay tai lieu nao, chan LLM de tranh hallucination.")
+
+        empty_msg = (
+            "Tài liệu hiện tại chưa có dữ liệu liên quan đến câu hỏi của bạn. "
+            "Mình không thể trả lời dựa trên suy đoán. "
+            "Vui lòng nạp tài liệu vào hệ thống trước, hoặc hỏi nội dung đã có trong dữ liệu."
+        )
+
+        def empty_stream():
+            yield empty_msg
+
+        log_trace(
+            "rag_end",
+            trace_id,
+            final_latency_ms=int((time.time() - t_start) * 1000),
+            refusal=True,
+            refusal_reason="no_retrieved_docs",
+            docs_count=0,
+        )
+
+        return empty_stream(), "", [], current_part_ids
  
     # BUOC B2: CROSS-ENCODER RE-RANK & REORDER (CHONG LOST IN THE MIDDLE)
     if retrieved_docs:

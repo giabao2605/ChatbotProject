@@ -4,24 +4,129 @@ import re
 import tempfile
 import uuid
 import time
+import unicodedata
+import json
+import subprocess
+import sys
 from dotenv import load_dotenv
- 
-# Phai load_dotenv() TRUOC khi import file_learning
-# de GOOGLE_API_KEY co trong env khi file_learning.py khoi tao Gemini Vision (Fix Bug Tu Hoc #1)
-load_dotenv()
- 
-from rag_logic import chat_with_rag
-from db_logic import save_chat_history, clear_chat_history, update_chat_feedback, get_all_sessions, get_chat_history, create_ingestion_job
-from file_learning import SUPPORTED_LEARNING_EXTENSIONS, learn_new_file
 from datetime import date, timedelta
-from pdf_processor import remove_accents
- 
-IMAGE_QUESTION_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
-LEARNING_COMMAND_KEYWORDS = (
-    "hoc", "nap", "learn", "luu", "them du lieu", "kien thuc",
+
+load_dotenv()
+
+from db_logic import (
+    save_chat_history,
+    clear_chat_history,
+    update_chat_feedback,
+    get_all_sessions,
+    get_chat_history,
+    create_ingestion_job,
 )
+
+IMAGE_QUESTION_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"
+}
+
+# Danh sách định dạng file được phép upload
+SUPPORTED_LEARNING_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".doc",
+    ".xlsx",
+    ".xls",
+    ".csv",
+    ".txt",
+    ".md",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".gif",
+    ".webp",
+    ".tif",
+    ".tiff",
+}
+
+LEARNING_COMMAND_KEYWORDS = (
+    "hoc",
+    "nap",
+    "learn",
+    "luu",
+    "them du lieu",
+    "kien thuc",
+)
+
 UPLOAD_FILE_TYPES = sorted(ext.lstrip(".") for ext in SUPPORTED_LEARNING_EXTENSIONS)
- 
+
+def remove_accents(text: str) -> str:
+    if text is None:
+        return ""
+    text = str(text)
+    text = text.replace("đ", "d").replace("Đ", "D")
+    normalized = unicodedata.normalize("NFD", text)
+    return "".join(
+        ch for ch in normalized
+        if unicodedata.category(ch) != "Mn"
+    ) 
+
+
+def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None):
+    """Run RAG in a separate Python process so native libs cannot crash Streamlit."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    worker_path = os.path.join(base_dir, "rag_worker.py")
+    payload = {
+        "user_question": user_question,
+        "image_path": image_path,
+        "chat_history": chat_history or [],
+        "current_part_ids": current_part_ids or [],
+        "user_department": user_department,
+        "user_roles": user_roles or [],
+    }
+
+    os.makedirs(os.path.join(base_dir, "temp_logs"), exist_ok=True)
+    in_path = os.path.join(base_dir, "temp_logs", f"rag_in_{uuid.uuid4().hex}.json")
+    out_path = os.path.join(base_dir, "temp_logs", f"rag_out_{uuid.uuid4().hex}.json")
+
+    try:
+        with open(in_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+
+        timeout = int(os.getenv("RAG_WORKER_TIMEOUT", "240"))
+        result = subprocess.run(
+            [sys.executable, worker_path, in_path, out_path],
+            cwd=base_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+        if not os.path.exists(out_path):
+            err = (result.stderr or result.stdout or "Không có output từ RAG worker")[-4000:]
+            raise RuntimeError(f"RAG worker không trả kết quả. returncode={result.returncode}. Log: {err}")
+
+        with open(out_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error", "RAG worker lỗi không rõ"))
+
+        response_text = data.get("response", "")
+        ref_text = data.get("ref_text", "")
+        ref_images = data.get("ref_images", [])
+        new_part_ids = data.get("new_part_ids", current_part_ids or [])
+
+        def one_chunk_stream():
+            yield response_text
+
+        return one_chunk_stream(), ref_text, ref_images, new_part_ids
+
+    finally:
+        for path in (in_path, out_path):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
 # Da xoa _escape_md (Tranh loi double-escape cho Markdown)
  
 
@@ -69,14 +174,14 @@ def run_chat():
         """, unsafe_allow_html=True)
  
         # Nut Cuoc tro chuyen moi
-        if st.button("Cuoc tro chuyen moi", width="stretch", type="primary"):
+        if st.button("Cuoc tro chuyen moi", use_container_width=True, type="primary"):
             st.session_state.session_id = str(uuid.uuid4())
             st.session_state.chat_history = []
             st.session_state.current_part_ids = []
             st.rerun()
 
         if st.session_state.current_part_ids:
-            if st.button("Xoa ngu canh ma hien tai", width="stretch"):
+            if st.button("Xoa ngu canh ma hien tai", use_container_width=True):
                 st.session_state.current_part_ids = []
                 st.rerun()
  
@@ -116,12 +221,12 @@ def run_chat():
                 label = f"{s['cau_hoi']}"
                 col1, col2 = st.columns([85, 15])
                 with col1:
-                    if st.button(label, key=f"btn_chat_{s['session_id']}", width="stretch", type=btn_type):
+                    if st.button(label, key=f"btn_chat_{s['session_id']}", use_container_width=True, type=btn_type):
                         st.session_state.session_id = s['session_id']
                         st.session_state.chat_history = get_chat_history(s['session_id'])
                         st.rerun()
                 with col2:
-                    if st.button("X", key=f"btn_del_{s['session_id']}", help="Xoa", width="stretch"):
+                    if st.button("X", key=f"btn_del_{s['session_id']}", help="Xoa", use_container_width=True):
                         clear_chat_history(s['session_id'])
                         if is_current:
                             st.session_state.session_id = str(uuid.uuid4())
@@ -215,7 +320,7 @@ def run_chat():
                         if i + j < len(ref_images):
                             img_path = ref_images[i + j]
                             with cols[j]:
-                                st.image(img_path, caption=os.path.basename(img_path), width="stretch")
+                                st.image(img_path, caption=os.path.basename(img_path), use_container_width=True)
             # Nut Danh gia (Feedback)
             if msg.get("chat_id"):
                 fb_key = f"fb_{msg['chat_id']}"
@@ -234,10 +339,23 @@ def run_chat():
     allowed_types = None if can_upload else [ext.lstrip(".") for ext in IMAGE_QUESTION_EXTENSIONS]
 
     # Xu ly nhap cau hoi
-    if submission := st.chat_input("Nhap cau hoi ky thuat can tra cuu...", accept_file=True, file_type=allowed_types):
-        # Rut trich cau hoi va tep tu submission
-        prompt = submission.text if submission.text else "Vui long phan tich hinh anh nay."
-        uploaded_files = submission.files if submission.files else []
+    uploaded_files = []
+
+    if can_upload:
+        uploaded_files = st.file_uploader(
+            "Tải file lên nếu cần",
+            type=UPLOAD_FILE_TYPES,
+            accept_multiple_files=True,
+            key="chat_file_uploader"
+        )
+
+        if uploaded_files is None:
+            uploaded_files = []
+
+    prompt_input = st.chat_input("Nhap cau hoi ky thuat can tra cuu...")
+
+    if prompt_input:
+        prompt = prompt_input if prompt_input else "Vui long phan tich hinh anh nay."
         
         # Server-side validation: chặn nếu viewer upload file ko phải là ảnh (vd họ bypass client-side file picker)
         if uploaded_files and not can_upload:
@@ -331,7 +449,7 @@ def run_chat():
                     "content": final_bot_msg,
                     "chat_id": chat_id
                 })
-            st.rerun()
+            return
  
         else:
             # --- LUONG RAG BINH THUONG (Dung anh + text) ---
@@ -384,7 +502,7 @@ def run_chat():
                     history_for_rag = st.session_state.chat_history[:-1]
  
                     # 1. THUC HIEN RAG (Co RBAC)
-                    stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag(
+                    stream, ref_text, ref_images, new_part_ids = chat_with_rag_worker(
                         user_question=prompt,
                         image_path=temp_img_path,
                         chat_history=history_for_rag,
@@ -433,7 +551,7 @@ def run_chat():
                                 if i + j < len(ref_images):
                                     img_path = ref_images[i + j]
                                     with cols[j]:
-                                        st.image(img_path, caption=os.path.basename(img_path), width="stretch")
+                                        st.image(img_path, caption=os.path.basename(img_path), use_container_width=True)
  
             chat_id = save_chat_history(
                 session_id=st.session_state.session_id,
@@ -448,4 +566,5 @@ def run_chat():
                 "ref_images": ref_images,
                 "chat_id": chat_id
             })
-            st.rerun()
+            # Không rerun sau khi trả lời xong, tránh Streamlit bị crash
+            return

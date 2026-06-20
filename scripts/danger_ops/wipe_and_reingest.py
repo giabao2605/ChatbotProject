@@ -1,8 +1,11 @@
 import os
 import time
+import sys
 from sqlalchemy import text
 from qdrant_client import QdrantClient
 from dotenv import load_dotenv
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Load .env de doc QDRANT_URL va QDRANT_API_KEY giong het rag_logic.py
 load_dotenv()
@@ -62,7 +65,7 @@ except Exception as e:
 
 print("2b. Dang xoa file anh cu trong Data_Anh_Da_Tach...")
 import shutil
-base_dir = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 anh_dir = os.path.join(base_dir, "Data_Anh_Da_Tach")
 if os.path.exists(anh_dir):
     try:
@@ -81,7 +84,7 @@ else:
 # ====================================================
 def reingest_all():
     print("\n3. Bat dau Re-ingest toan bo tu thu muc Data_Goc...")
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     data_goc_path = os.path.join(base_dir, "Data_Goc")
 
     if not os.path.exists(data_goc_path):

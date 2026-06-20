@@ -31,3 +31,6 @@ plot.log
 .vscode/
 .idea/
 Thumbs.db
+check_qdrant_count.py
+rag_in_*.json
+rag_out_*.json

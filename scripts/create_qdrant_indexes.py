@@ -42,6 +42,7 @@ def create_indexes():
             "metadata.file_goc": models.PayloadSchemaType.KEYWORD,
             "metadata.phong_ban_quyen": models.PayloadSchemaType.KEYWORD,
             "metadata.loai_du_lieu": models.PayloadSchemaType.KEYWORD,
+            "metadata.doc_status": models.PayloadSchemaType.KEYWORD,
             "metadata.doc_id": models.PayloadSchemaType.INTEGER,
             "metadata.family_id": models.PayloadSchemaType.INTEGER,
             "metadata.base_code": models.PayloadSchemaType.KEYWORD,

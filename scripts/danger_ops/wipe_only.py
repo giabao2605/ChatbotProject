@@ -1,10 +1,12 @@
 import os
 import shutil
+import sys
 from sqlalchemy import text
 # pyrefly: ignore [missing-import]
 from qdrant_client import QdrantClient
 from dotenv import load_dotenv
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 load_dotenv()
 
 print("1. Dang xoa collection Qdrant 'TaiLieuKyThuat_v2'...")
@@ -28,7 +30,7 @@ except Exception as e:
     print(f" -> Loi xoa SQL Server: {e}")
 
 print("3. Dang xoa file anh trong Data_Anh_Da_Tach...")
-base_dir = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 anh_dir = os.path.join(base_dir, "Data_Anh_Da_Tach")
 if os.path.exists(anh_dir):
     try:

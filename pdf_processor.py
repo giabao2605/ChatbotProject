@@ -50,12 +50,14 @@ def tokenize_cached(text):
     return underthesea.word_tokenize(text, format="text")
  
 # Khoi tao Tokenizer Singleton de do luong chunk size chinh xac
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+
 try:
-    GLOBAL_TOKENIZER = AutoTokenizer.from_pretrained("keepitreal/vietnamese-sbert")
-    logger.info("Da load AutoTokenizer (keepitreal/vietnamese-sbert) thanh cong cho Chunking.")
+    GLOBAL_TOKENIZER = AutoTokenizer.from_pretrained(EMBEDDING_MODEL_NAME)
+    logger.info(f"Da load AutoTokenizer ({EMBEDDING_MODEL_NAME}) thanh cong cho Chunking.")
 except Exception as e:
-    logger.warning(f"Khong the load AutoTokenizer: {e}. Fallback ve dem ky tu.")
     GLOBAL_TOKENIZER = None
+    logger.warning(f"Khong load duoc tokenizer {EMBEDDING_MODEL_NAME}: {e}")
  
 def tokenizer_length(text):
     if GLOBAL_TOKENIZER:
