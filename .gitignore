@@ -19,6 +19,7 @@ temp_logs/
 
 # Secrets
 .env
+.streamlit/secrets.toml
 
 # Debug & Temp scripts (không commit)
 debug*.py

@@ -2,7 +2,7 @@ import os
 import sys
 
 # Add root folder to sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from db_logic import engine, text
 

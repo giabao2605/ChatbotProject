@@ -67,13 +67,21 @@ pip install -r requirements.txt
 Create a `.env` file in the root directory (based on the provided `.env.example` if applicable) and configure your credentials:
 
 ```env
-GEMINI_API_KEY="your_gemini_api_key"
-QDRANT_URL="your_qdrant_cloud_url"
-QDRANT_API_KEY="your_qdrant_api_key"
-SQL_SERVER="your_sql_server_address"
-SQL_DATABASE="your_database_name"
-SQL_UID="your_db_username"
-SQL_PWD="your_db_password"
+SQL_SERVER=localhost\SQLEXPRESS
+SQL_DATABASE=Mech_Chatbot_DB
+SQL_DRIVER=ODBC Driver 17 for SQL Server
+
+QDRANT_URL=...
+QDRANT_API_KEY=...
+
+COHERE_API_KEY=...
+COHERE_MODEL_NAME=command-r-08-2024
+
+GOOGLE_API_KEY=...
+GEMINI_VISION_MODEL=gemini-2.5-flash
+
+EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_DIM=1024
 ```
 
 ### 5. Running the Application

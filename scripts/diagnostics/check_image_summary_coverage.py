@@ -4,7 +4,7 @@ import json
 from collections import defaultdict
 from sqlalchemy import text
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from db_logic import engine
 from qdrant_client import QdrantClient
@@ -27,26 +27,31 @@ def check_coverage():
         failed_pages = conn.execute(text("SELECT COUNT(*) FROM IngestionJobs WHERE Status = 'failed'")).scalar()
         
     print("Checking Qdrant...")
-    # Count docs with image_summary
-    limit = 10000
+    all_points = []
+    next_offset = None
+    
     try:
-        scroll_res, _ = client.scroll(
-            collection_name=collection,
-            scroll_filter=None,
-            limit=limit,
-            with_payload=True,
-            with_vectors=False
-        )
+        while True:
+            points, next_offset = client.scroll(
+                collection_name=collection,
+                scroll_filter=None,
+                limit=1000,
+                offset=next_offset,
+                with_payload=True,
+                with_vectors=False
+            )
+            all_points.extend(points)
+            if next_offset is None:
+                break
     except Exception as e:
         print(f"Error querying Qdrant: {e}")
-        scroll_res = []
 
     docs_with_image_summary = set()
     all_docs = set()
     image_summary_chunks = 0
     uncertain_fields = 0
     
-    for p in scroll_res:
+    for p in all_points:
         meta = p.payload.get("metadata", {})
         doc_id = meta.get("doc_id")
         loai = meta.get("loai_du_lieu")

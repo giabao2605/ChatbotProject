@@ -277,17 +277,68 @@ _INTENT_TIMEOUT = float(os.getenv("INTENT_TIMEOUT", "6.0"))
 _INTENT_EXECUTOR = ThreadPoolExecutor(max_workers=_INTENT_MAX_WORKERS)
 atexit.register(lambda: _INTENT_EXECUTOR.shutdown(wait=False))
 
-def create_rbac_filter(user_department, user_roles):
+def serialize_qdrant_filter(f):
+    try:
+        if hasattr(f, "model_dump"):
+            return f.model_dump()
+        if hasattr(f, "dict"):
+            return f.dict()
+        return str(f)
+    except Exception:
+        return str(f)
+
+def create_rbac_filter(user_department, user_roles, allowed_departments=None):
     if not user_roles or "admin" in user_roles:
         return None
+        
+    allowed = list(allowed_departments) if allowed_departments else []
+    if user_department and user_department not in allowed:
+        allowed.append(user_department)
+    if "CHUNG" not in allowed:
+        allowed.append("CHUNG")
+        
     return models.Filter(
-        should=[
-            models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchValue(value=user_department)),
-            models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchValue(value="CHUNG"))
+        must=[
+            models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchAny(any=allowed))
         ]
     )
 
-def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None):
+def deterministic_version_intent(question):
+    q = question.lower()
+
+    versions = []
+    for m in re.findall(r'\bv\s*(\d+)\b', q):
+        versions.append(int(m))
+
+    for m in re.findall(r'\bversion\s*(\d+)\b', q):
+        versions.append(int(m))
+
+    for m in re.findall(r'\brev\s*(\d+)\b', q):
+        versions.append(int(m))
+
+    versions = sorted(set(versions))
+
+    compare_keywords = ["so sánh", "khác", "compare", "difference"]
+    history_keywords = ["lịch sử", "history", "các version", "toàn bộ version"]
+    archive_keywords = ["bản cũ", "archive", "archived", "lưu trữ", "đã thay thế"]
+
+    q_norm = q
+
+    if any(k in q_norm for k in compare_keywords) and len(versions) >= 2:
+        return "compare_versions", versions
+
+    if any(k in q_norm for k in history_keywords):
+        return "version_history", versions
+
+    if any(k in q_norm for k in archive_keywords):
+        return "include_archived", versions
+
+    if len(versions) == 1:
+        return "specific_version", versions
+
+    return None, versions
+
+def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None):
     """Phan tich cau hoi de lay danh sach ma doi tuong va intent versioning bang LLM (co timeout)."""
     if current_part_ids is None:
         current_part_ids = []
@@ -298,7 +349,13 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     1. "base_codes": Mang cac ma so ban ve/linh kien/tieu chuan (vd: ["banve-1", "9.3.03844"]). Neu cau hoi la xa giao (chao, cam on, thoi tiet), tra ve ["CHITCHAT"].
     2. "detected_versions": Mang cac so version (nguyen) neu user nhac den (vd v1 -> [1], v2 va v3 -> [2, 3]). Neu khong co, tra ve [].
     3. "variant_codes": Mang cac chuoi variant neu nhac den.
-    4. "version_policy": "current_only" (mac dinh, hoi chung), "specific_version" (hoi 1 version cu the), "compare_versions" (so sanh), "all_current_variants" (hoi nhieu variant).
+    4. "version_policy": một trong:
+    - "current_only": hỏi chung, chỉ lấy bản đang lưu hành
+    - "specific_version": hỏi version cụ thể như v1, v2
+    - "compare_versions": hỏi so sánh nhiều version
+    - "include_archived": user nói rõ muốn gồm bản cũ/archive
+    - "version_history": user hỏi lịch sử version
+    - "all_current_variants": user hỏi mã có nhiều variant cùng lưu hành
     5. "query_type": "general_lookup" hoac "bom_lookup" (hoi vat tu, bang ke).
     
     Luu y: Chi tra ve dung JSON, khong giai thich gi them.
@@ -350,6 +407,14 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         except Exception as e:
             logger.warning(f"Loi LLM Intent Extraction: {e}. Fallback ve Regex.")
 
+    det_policy, det_versions = deterministic_version_intent(question)
+
+    if det_versions:
+        intent_data["detected_versions"] = det_versions
+
+    if det_policy:
+        intent_data["version_policy"] = det_policy
+
     from db_logic import normalize_base_code
     extracted_codes = [normalize_base_code(c) for c in intent_data["base_codes"] if c]
     
@@ -393,10 +458,36 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
             must_conditions.append(models.FieldCondition(key="metadata.version_no", match=models.MatchAny(any=d_vers)))
         if intent_data["variant_codes"]:
             must_conditions.append(models.FieldCondition(key="metadata.variant_code", match=models.MatchAny(any=intent_data["variant_codes"])))
+    elif vp == "include_archived":
+        must_conditions.append(
+            models.FieldCondition(
+                key="metadata.lifecycle_status",
+                match=models.MatchAny(any=["published", "archived", "superseded", "retired"])
+            )
+        )
+        must_conditions.append(
+            models.FieldCondition(
+                key="metadata.review_status",
+                match=models.MatchValue(value="approved")
+            )
+        )
+    elif vp == "version_history":
+        must_conditions.append(
+            models.FieldCondition(
+                key="metadata.lifecycle_status",
+                match=models.MatchAny(any=["published", "archived", "superseded", "retired"])
+            )
+        )
+        must_conditions.append(
+            models.FieldCondition(
+                key="metadata.review_status",
+                match=models.MatchValue(value="approved")
+            )
+        )
     else:
         must_conditions.append(models.FieldCondition(key="metadata.is_current", match=models.MatchValue(value=True)))
 
-    rbac_filter = create_rbac_filter(user_department, user_roles)
+    rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments=allowed_departments)
     if rbac_filter:
         must_conditions.append(rbac_filter)
 
@@ -631,10 +722,28 @@ def has_unsupported_numbers(answer, context_text, question):
         return True
     return False
 
+def make_debug_info(docs=None):
+    docs = docs or []
+    return {
+        "retrieved_docs": [
+            {
+                "file_goc": d.metadata.get("file_goc"),
+                "doc_id": d.metadata.get("doc_id"),
+                "version_no": d.metadata.get("version_no"),
+                "variant_code": d.metadata.get("variant_code"),
+                "is_current": d.metadata.get("is_current"),
+                "lifecycle_status": d.metadata.get("lifecycle_status"),
+                "review_status": d.metadata.get("review_status"),
+                "score": d.metadata.get("relevance_score"),
+            }
+            for d in docs
+        ]
+    }
+
 # ==========================================
 # 4. HAM XU LY LOI (TRAI TIM CUA CHATBOT)
 # ==========================================
-def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None):
+def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None):
     if chat_history is None:
         chat_history = []
         
@@ -730,13 +839,13 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     if is_chitchat:
         logger.info("Cau hoi la giao tiep co ban, bo qua truy xuat DB.")
         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, is_chitchat=True)
-        return mock_stream(), "", [], current_part_ids
+        return mock_stream(), "", [], current_part_ids, make_debug_info([])
     else:
         logger.info("Dang phan tich intent de tim kiem du lieu...")
         t_intent = time.time()
-        rbac_filter = create_rbac_filter(user_department, user_roles)
+        rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments)
         strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data = extract_search_intent(
-            user_question, current_part_ids, user_department, user_roles
+            user_question, current_part_ids, user_department, user_roles, allowed_departments
         )
         
         log_trace("intent", trace_id, 
@@ -751,11 +860,11 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             def ask_version_stream():
                 yield "Bạn muốn so sánh tài liệu này với phiên bản nào? (Ví dụ: v1 và v2, hoặc bản đang lưu hành và bản bị lưu trữ gần nhất). Vui lòng chỉ định rõ phiên bản để mình đối chiếu số liệu chính xác nhé."
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="missing_compare_versions")
-            return ask_version_stream(), "", [], current_part_ids
+            return ask_version_stream(), "", [], current_part_ids, make_debug_info([])
 
         if new_part_ids == ["CHITCHAT"]:
             logger.info("LLM xac nhan la cau hoi ngoai le/xa giao. Bo qua toan bo Retrieval va HyDE.")
-            return mock_stream(), "", [], current_part_ids
+            return mock_stream(), "", [], current_part_ids, make_debug_info([])
         else:
             # Tien xu ly cau hoi bang underthesea de match voi du lieu BM25
             tokenized_question = tokenize_cached(user_question)
@@ -823,6 +932,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                                 search_type="similarity",
                                 search_kwargs={"k": base_k, "filter": strict_filter}
                             )
+                            active_filter = strict_filter
                             retrieved_docs = retriever_strict.invoke(query_to_search)
                         except Exception as e:
                             logger.warning(f"Strict retrieval that bai: {e}")
@@ -836,6 +946,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                                 search_type="similarity",
                                 search_kwargs={"k": base_k * 2, "filter": broad_filter}
                             )
+                            active_filter = broad_filter
                             broad_docs = retriever_broad.invoke(query_to_search)
                             
                             # Merge and deduplicate
@@ -870,6 +981,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     search_type="similarity",
                     search_kwargs={"k": base_k, "filter": general_filter}
                 )
+                active_filter = general_filter
                 retrieved_docs = retriever.invoke(query_to_search)
  
     # Fallback (Thoat trang thai neu tim theo State khong ra ket qua)
@@ -893,6 +1005,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             search_type="similarity",
             search_kwargs={"k": base_k, "filter": fallback_filter}
         )
+        active_filter = fallback_filter
         retrieved_docs = retriever_no_filter.invoke(query_to_search)
 
     if not skip_retrieval:
@@ -901,7 +1014,13 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                   mode=retrieval_mode,
                   docs_count=len(retrieved_docs),
                   is_bom_query=is_bom_query if new_part_ids else False,
-                  part_ids=new_part_ids)
+                  part_ids=new_part_ids,
+                  version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None,
+                  detected_versions=intent_data.get("detected_versions") if "intent_data" in locals() else None,
+                  variant_codes=intent_data.get("variant_codes") if "intent_data" in locals() else None,
+                  strict_filter=serialize_qdrant_filter(strict_filter) if "strict_filter" in locals() else None,
+                  broad_filter=serialize_qdrant_filter(broad_filter) if "broad_filter" in locals() else None,
+                  top_k=base_k if "base_k" in locals() else None)
 
     # Inject SQL BOM Data
     if not skip_retrieval and new_part_ids:
@@ -970,7 +1089,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             docs_count=0,
         )
 
-        return empty_stream(), "", [], current_part_ids
+        return empty_stream(), "", [], current_part_ids, make_debug_info([])
  
     # BUOC B2: CROSS-ENCODER RE-RANK & REORDER (CHONG LOST IN THE MIDDLE)
     if retrieved_docs:
@@ -1022,8 +1141,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             empty_msg = "Tài liệu hiện tại không ghi chú thông tin về câu hỏi của bạn. Vui lòng kiểm tra lại hoặc cung cấp thêm bản vẽ."
             def mock_stream():
                 yield empty_msg
-            log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="empty_context", docs_count=0)
-            return mock_stream(), "", [], new_part_ids
+            log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="empty_context", docs_count=0, version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, user_department=user_department, user_roles=user_roles)
+            return mock_stream(), "", [], new_part_ids, make_debug_info([])
 
         retrieved_docs = fake_docs + real_docs
 
@@ -1046,8 +1165,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         safe_msg = make_insufficient_evidence_message(user_question, evidence_reason)
         def refusal_stream():
             yield safe_msg
-        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="evidence_gate", docs_count=len(retrieved_docs))
-        return refusal_stream(), ref_text, ref_images, new_part_ids
+        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="evidence_gate", docs_count=len(retrieved_docs), doc_ids=[d.metadata.get("doc_id") for d in retrieved_docs], retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=[d.metadata.get("relevance_score") for d in retrieved_docs], user_department=user_department, user_roles=user_roles)
+        return refusal_stream(), ref_text, ref_images, new_part_ids, make_debug_info(retrieved_docs)
 
     chain = prompt_template | llm | StrOutputParser()
 
@@ -1083,11 +1202,11 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     )
                     yield ans
                     log_trace("llm_generation", trace_id, model=os.getenv("COHERE_MODEL_NAME", "command-r-08-2024"), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
-                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_numbers", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores)
+                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_numbers", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                 else:
                     yield answer
                     log_trace("llm_generation", trace_id, model=os.getenv("COHERE_MODEL_NAME", "command-r-08-2024"), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
-                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores)
+                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
             except Exception as e:
                 has_error = True
                 error_msg = str(e)
@@ -1133,22 +1252,11 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     lifecycle_status = [d.metadata.get("lifecycle_status") for d in retrieved_docs]
                     
                     log_trace("llm_generation", trace_id, model=os.getenv("COHERE_MODEL_NAME", "command-r-08-2024"), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
-                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=retrieved_file_goc, version_no=version_no, variant_code=variant_code, is_current=is_current, lifecycle_status=lifecycle_status, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
+                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=retrieved_file_goc, version_no=version_no, variant_code=variant_code, is_current=is_current, lifecycle_status=lifecycle_status, review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
         stream = normal_stream()
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)
-    debug_info = {
-        "retrieved_docs": []
-    }
-    for d in retrieved_docs:
-        debug_info["retrieved_docs"].append({
-            "file_goc": d.metadata.get("file_goc"),
-            "doc_id": d.metadata.get("doc_id"),
-            "version_no": d.metadata.get("version_no"),
-            "variant_code": d.metadata.get("variant_code"),
-            "is_current": d.metadata.get("is_current"),
-            "lifecycle_status": d.metadata.get("lifecycle_status")
-        })
+    debug_info = make_debug_info(retrieved_docs)
         
     return stream, ref_text, ref_images, new_part_ids, debug_info
  
@@ -1198,7 +1306,7 @@ if __name__ == "__main__":
     print("=" * 50)
  
     print("\n--- TEST: HOI VE DUNG SAI VAT LIEU ---")
-    stream, ref_text, ref_images, parts = chat_with_rag("Dung sai do day vat lieu la bao nhieu?")
+    stream, ref_text, ref_images, parts, debug_info = chat_with_rag("Dung sai do day vat lieu la bao nhieu?")
     print("\nBot tra loi: ", end="")
     for chunk in stream:
         print(chunk, end="")

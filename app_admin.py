@@ -6,7 +6,8 @@ from db_logic import (
     publish_as_new_version, 
     publish_as_new_variant, 
     publish_as_standalone, 
-    reject_document
+    reject_document,
+    write_audit_log
 )
 
 def run_admin():
@@ -113,6 +114,7 @@ def run_admin():
                             "Publish làm version mới (Archive bản cũ cùng variant)",
                             "Publish song song như variant mới (Giữ nguyên bản cũ)",
                             "Publish như tài liệu độc lập (Standalone)",
+                            "Lưu nháp / Cần sửa metadata",
                             "Từ chối (Reject)"
                         ],
                         key=f"radio_{doc_id}"
@@ -143,21 +145,74 @@ def run_admin():
                                     f_row2 = save_conn.execute(text("SELECT FamilyID FROM DocumentFamily WHERE BaseCode = :b"), {"b": edit_base_code_norm}).fetchone()
                                     save_conn.execute(text("UPDATE TaiLieu SET FamilyID = :fid WHERE DocID = :did"), {"fid": f_row2[0], "did": doc_id})
 
-                        success = False
-                        if "version mới" in action_choice:
-                            success = publish_as_new_version(doc_id, reviewer=current_user["username"])
-                        elif "variant mới" in action_choice:
-                            success = publish_as_new_variant(doc_id, reviewer=current_user["username"])
-                        elif "độc lập" in action_choice:
-                            success = publish_as_standalone(doc_id, reviewer=current_user["username"])
-                        elif "Từ chối" in action_choice:
-                            success = reject_document(doc_id, reviewer=current_user["username"])
-                            
-                        if success:
-                            st.success(f"Đã xử lý thành công: {action_choice}")
+                        write_audit_log(current_user["username"], "edit_metadata", "TaiLieu", doc_id, {
+                            "old_base_code": t_bc, "new_base_code": edit_base_code_norm,
+                            "old_version": t_vn, "new_version": edit_version_no,
+                            "old_variant": t_vc, "new_variant": edit_variant_code
+                        })
+
+                        if "sửa metadata" in action_choice:
+                            with engine.begin() as conn:
+                                conn.execute(text("""
+                                    UPDATE TaiLieu
+                                    SET LifecycleStatus = 'draft',
+                                        ReviewStatus = 'pending_review'
+                                    WHERE DocID = :did
+                                """), {"did": doc_id})
+
+                                conn.execute(text("""
+                                    UPDATE IngestionJobs
+                                    SET Status = 'pending_review',
+                                        ErrorMessage = N'Cần sửa metadata trước khi publish',
+                                        UpdatedAt = GETDATE()
+                                    WHERE TenFile = :f AND ThuMuc = :t
+                                """), {"f": ten_file, "t": thu_muc})
+                            st.success("Đã cập nhật metadata và đưa về trạng thái chờ review!")
                             st.rerun()
                         else:
-                            st.error("Xử lý thất bại. Vui lòng kiểm tra log.")
+                            success = False
+                            is_publish_action = "Từ chối" not in action_choice
+                            
+                            if is_publish_action:
+                                with engine.begin() as conn:
+                                    conn.execute(text("""
+                                        UPDATE IngestionJobs
+                                        SET Status = 'publishing',
+                                            UpdatedAt = GETDATE()
+                                        WHERE TenFile = :f AND ThuMuc = :t
+                                    """), {"f": ten_file, "t": thu_muc})
+
+                            if "version mới" in action_choice:
+                                success = publish_as_new_version(doc_id, reviewer=current_user["username"])
+                            elif "variant mới" in action_choice:
+                                success = publish_as_new_variant(doc_id, reviewer=current_user["username"])
+                            elif "độc lập" in action_choice:
+                                success = publish_as_standalone(doc_id, reviewer=current_user["username"])
+                            elif "Từ chối" in action_choice:
+                                success = reject_document(doc_id, reviewer=current_user["username"])
+                                
+                            if success:
+                                with engine.begin() as conn:
+                                    if is_publish_action:
+                                        conn.execute(text("""
+                                            UPDATE IngestionJobs
+                                            SET Status = 'published',
+                                                ProgressPercent = 100,
+                                                UpdatedAt = GETDATE()
+                                            WHERE TenFile = :f AND ThuMuc = :t
+                                        """), {"f": ten_file, "t": thu_muc})
+                                    else:
+                                        conn.execute(text("""
+                                            UPDATE IngestionJobs
+                                            SET Status = 'rejected',
+                                                UpdatedAt = GETDATE()
+                                            WHERE TenFile = :f AND ThuMuc = :t
+                                        """), {"f": ten_file, "t": thu_muc})
+                                        
+                                st.success(f"Đã xử lý thành công: {action_choice}")
+                                st.rerun()
+                            else:
+                                st.error("Xử lý thất bại. Vui lòng kiểm tra log.")
 
     with tabs[0]:
         render_doc_list(pending_docs, show_actions=True)

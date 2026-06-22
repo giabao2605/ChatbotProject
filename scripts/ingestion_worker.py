@@ -6,7 +6,7 @@ import traceback
 # Thêm thư mục gốc vào sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db_logic import get_pending_job, update_ingestion_job
+from db_logic import get_pending_job, update_ingestion_job, mark_job_failed, write_audit_log
 from file_learning import learn_new_file
 from logger_config import logger
 
@@ -53,18 +53,24 @@ def run_worker():
                         "a": cls_res.get("detected_action", "new_document"),
                         "id": job_id
                     })
+                write_audit_log("System Worker", "classify_done", "IngestionJobs", job_id, {"cls_res": cls_res})
             except Exception as e:
                 logger.error(f"Lỗi khi classify AI: {e}")
             
             # 2. Xử lý file thực tế
-            update_ingestion_job(job_id, status="extracting", error_message="Đang bóc tách PDF...")
+            update_ingestion_job(job_id, status="extracting", error_message="Đang bóc tách nội dung...")
             
+            def progress_handler(msg):
+                print(f"  > {msg}")
+                if msg == "__STATUS__:embedding":
+                    update_ingestion_job(job_id, status="embedding", error_message="Đang tạo embedding...")
+
             # Sử dụng learn_new_file của hệ thống
             success, message = learn_new_file(
                 file_path=file_path,
                 ten_file=file_name,
                 thu_muc=thu_muc,
-                progress_callback=lambda msg: print(f"  > {msg}")
+                progress_callback=progress_handler
             )
             
             # 3. Cập nhật kết quả cuối cùng
@@ -75,11 +81,13 @@ def run_worker():
             else:
                 logger.error(f"Job {job_id} thất bại: {message}")
                 print(f"[{time.strftime('%H:%M:%S')}] Thất bại: {message}")
-                update_ingestion_job(job_id, status="failed", error_message=message)
+                mark_job_failed(job_id, error_message=message)
                 
         except Exception as e:
             logger.error(f"Lỗi không xác định trong Ingestion Worker: {e}\n{traceback.format_exc()}")
             print(f"Lỗi: {e}")
+            if 'job_id' in locals():
+                mark_job_failed(job_id, error_message=str(e))
             time.sleep(10)
 
 if __name__ == "__main__":

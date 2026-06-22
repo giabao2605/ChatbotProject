@@ -32,6 +32,7 @@ def main():
             current_part_ids=payload.get("current_part_ids") or [],
             user_department=payload.get("user_department"),
             user_roles=payload.get("user_roles") or [],
+            allowed_departments=payload.get("allowed_departments") or [],
         )
 
         if len(rag_result) >= 4:
@@ -39,6 +40,7 @@ def main():
             ref_text = rag_result[1]
             ref_images = rag_result[2]
             new_part_ids = rag_result[3]
+            debug_info = rag_result[4] if len(rag_result) >= 5 else {}
         else:
             raise ValueError(f"chat_with_rag trả về thiếu dữ liệu: {len(rag_result)} values")
 
@@ -52,6 +54,7 @@ def main():
             "ref_text": ref_text or "",
             "ref_images": ref_images or [],
             "new_part_ids": new_part_ids or [],
+            "debug_info": debug_info,
         })
 
         # Avoid native-library teardown crashes (onnxruntime/torch/tokenizers/etc.)

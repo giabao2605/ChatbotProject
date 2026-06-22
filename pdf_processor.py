@@ -882,6 +882,8 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     except Exception as e:
                         logger.warning(f"Khong xoa duoc vector cu (bo qua, tiep tuc): {ten_file}: {e}")
  
+                if progress_callback:
+                    progress_callback("__STATUS__:embedding")
                 _add_docs_with_retry(all_chunks)
                 report["total_chunks"] += len(all_chunks)
  
@@ -1066,6 +1068,8 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             except Exception as e:
                 logger.warning(f"Khong xoa duoc vector cu (bo qua, tiep tuc): {ten_file}: {e}")
  
+            if progress_callback:
+                progress_callback("__STATUS__:embedding")
             _add_docs_with_retry(all_chunks)
             report["total_chunks"] += len(all_chunks)
  

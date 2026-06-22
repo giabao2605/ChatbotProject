@@ -7,8 +7,10 @@ IF NOT EXISTS (
     WHERE name = 'Mech_Chatbot_DB'
 ) BEGIN CREATE DATABASE Mech_Chatbot_DB;
 END
-GO USE Mech_Chatbot_DB;
-GO -- Xoa Foreign keys neu co
+GO
+USE Mech_Chatbot_DB;
+GO
+-- Xoa Foreign keys neu co
     WHILE (
         EXISTS (
             SELECT 1
@@ -43,7 +45,7 @@ GO -- ==========================================
         TenFile NVARCHAR(255) NOT NULL,
         FilePath NVARCHAR(500) NOT NULL,
         ThuMuc NVARCHAR(255),
-        Status NVARCHAR(50) DEFAULT 'pending', -- pending, classifying, extracting, embedding, failed, pending_review, published, rejected
+        Status NVARCHAR(50) DEFAULT 'pending', -- pending, classifying, extracting, embedding, pending_review, publishing, published, failed, rejected
         ErrorMessage NVARCHAR(MAX),
         UploadedBy NVARCHAR(255) NULL,
         RequestedAction NVARCHAR(50) NULL,
@@ -99,7 +101,9 @@ GO
         ReviewedBy NVARCHAR(255) NULL,
         ClassificationConfidence FLOAT NULL,
         ClassificationJson NVARCHAR(MAX) NULL,
-        CONSTRAINT FK_TaiLieu_Family FOREIGN KEY (FamilyID) REFERENCES DocumentFamily(FamilyID)
+        CONSTRAINT FK_TaiLieu_Family FOREIGN KEY (FamilyID) REFERENCES DocumentFamily(FamilyID),
+        CONSTRAINT CHK_LifecycleStatus CHECK (LifecycleStatus IN ('draft', 'published', 'archived', 'superseded', 'retired', 'rejected')),
+        CONSTRAINT CHK_ReviewStatus CHECK (ReviewStatus IN ('pending_review', 'approved', 'rejected'))
     );
 GO
     CREATE INDEX IX_TaiLieu_BaseCode_Current ON TaiLieu(BaseCode, IsCurrent, LifecycleStatus, ReviewStatus);
@@ -151,6 +155,7 @@ GO
         MaHang NVARCHAR(255),
         TenVatTu NVARCHAR(500),
         VatLieu NVARCHAR(255),
+        NormalizedMaterial NVARCHAR(255) NULL,
         SoLuong INT,
         GhiChu NVARCHAR(MAX),
         Unit NVARCHAR(50) NULL,
@@ -238,6 +243,13 @@ CREATE TABLE UserRoles (
 );
 GO
 
+CREATE TABLE UserDepartments (
+    UserID INT NOT NULL,
+    Department NVARCHAR(255) NOT NULL,
+    PRIMARY KEY (UserID, Department)
+);
+GO
+
 -- Seed data for Auth
 INSERT INTO Roles (RoleName) VALUES ('admin'), ('reviewer'), ('uploader'), ('viewer');
 INSERT INTO Users (Username, PasswordHash, DisplayName, Department) VALUES ('admin', '$2b$12$GjF79FWNuuNfl4VWOA28iOk4ubZWWd5OltSsAiZ5TgaWPz5UtAZpu', 'Administrator', 'IT');
@@ -248,21 +260,23 @@ INSERT INTO Users (Username, PasswordHash, DisplayName, Department) VALUES ('upl
 INSERT INTO UserRoles (UserID, RoleID) VALUES (3, 3);
 INSERT INTO Users (Username, PasswordHash, DisplayName, Department) VALUES ('reviewer1', '$2b$12$12Y5ru30M7ai9YuW3Ip7ZOiXXYiuyv/.Yn4YH2mX749joCzzEvhI2', 'Truong Phong', 'Ky_Thuat');
 INSERT INTO UserRoles (UserID, RoleID) VALUES (4, 2);
+
+-- Seed UserDepartments
+INSERT INTO UserDepartments (UserID, Department) VALUES (1, 'IT'), (2, 'Tu_Hoc'), (3, 'Ky_Thuat'), (4, 'Ky_Thuat');
 GO
 
 -- ==========================================
--- PHAN 5: FEEDBACK REVIEW (Phase 6)
+-- PHAN 5: AUDIT LOG (Phase 5)
 -- ==========================================
-CREATE TABLE FeedbackReview (
-    FeedbackID INT IDENTITY(1,1) PRIMARY KEY,
-    ChatID INT,
-    Question NVARCHAR(MAX),
-    BotAnswer NVARCHAR(MAX),
-    FailureType NVARCHAR(100),
-    CorrectAnswer NVARCHAR(MAX),
-    CorrectSourceDocID INT NULL,
-    ReviewerNote NVARCHAR(MAX),
-    AddedToGoldenSet BIT DEFAULT 0,
+CREATE TABLE AuditLog (
+    AuditID INT IDENTITY(1,1) PRIMARY KEY,
+    UserID INT NULL,
+    Username NVARCHAR(255),
+    Action NVARCHAR(100) NOT NULL,
+    EntityType NVARCHAR(100),
+    EntityID INT NULL,
+    Details NVARCHAR(MAX),
     CreatedAt DATETIME DEFAULT GETDATE()
 );
 GO
+

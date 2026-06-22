@@ -19,7 +19,7 @@ from db_logic import (
     update_chat_feedback,
     get_all_sessions,
     get_chat_history,
-    create_ingestion_job,
+    create_ingestion_job, write_audit_log,
 )
 
 IMAGE_QUESTION_EXTENSIONS = {
@@ -69,7 +69,7 @@ def remove_accents(text: str) -> str:
     ) 
 
 
-def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None):
+def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None):
     """Run RAG in a separate Python process so native libs cannot crash Streamlit."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     worker_path = os.path.join(base_dir, "rag_worker.py")
@@ -80,6 +80,7 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
         "current_part_ids": current_part_ids or [],
         "user_department": user_department,
         "user_roles": user_roles or [],
+        "allowed_departments": allowed_departments or [],
     }
 
     os.makedirs(os.path.join(base_dir, "temp_logs"), exist_ok=True)
@@ -113,11 +114,12 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
         ref_text = data.get("ref_text", "")
         ref_images = data.get("ref_images", [])
         new_part_ids = data.get("new_part_ids", current_part_ids or [])
+        debug_info = data.get("debug_info", {})
 
         def one_chunk_stream():
             yield response_text
 
-        return one_chunk_stream(), ref_text, ref_images, new_part_ids
+        return one_chunk_stream(), ref_text, ref_images, new_part_ids, debug_info
 
     finally:
         for path in (in_path, out_path):
@@ -502,13 +504,14 @@ def run_chat():
                     history_for_rag = st.session_state.chat_history[:-1]
  
                     # 1. THUC HIEN RAG (Co RBAC)
-                    stream, ref_text, ref_images, new_part_ids = chat_with_rag_worker(
+                    stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag_worker(
                         user_question=prompt,
                         image_path=temp_img_path,
                         chat_history=history_for_rag,
                         current_part_ids=st.session_state.current_part_ids,
                         user_department=current_user["department"],
-                        user_roles=current_user["roles"]
+                        user_roles=current_user["roles"],
+                        allowed_departments=current_user.get("allowed_departments", [])
                     )
  
                     # Cap nhat State Memory moi
@@ -560,6 +563,16 @@ def run_chat():
                 image_path=saved_img_path,
                 ref_images=ref_images  # FIX C5: luu danh sach duong dan ban ve can cu
             )
+            
+            # Log audit
+            write_audit_log(
+                username=current_user["username"],
+                action="chat_query",
+                entity_type="LichSuChat",
+                entity_id=chat_id,
+                details={"prompt": prompt, "session_id": st.session_state.session_id}
+            )
+
             st.session_state.chat_history.append({
                 "role": "assistant",
                 "content": raw_response,
@@ -568,3 +581,4 @@ def run_chat():
             })
             # Không rerun sau khi trả lời xong, tránh Streamlit bị crash
             return
+            

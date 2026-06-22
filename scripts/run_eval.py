@@ -57,6 +57,7 @@ def run_evaluation():
             should_refuse = case.get("should_refuse", False)
             user_department = case.get("user_department")
             user_roles = case.get("user_roles")
+            allowed_departments = case.get("allowed_departments")
             
             level_stats[level]["total"] += 1
             
@@ -75,18 +76,18 @@ def run_evaluation():
             try:
                 # 1. Evaluate Intent Extraction
                 try:
-                    strict_f, broad_f, p_ids, is_inh, is_bom, intent_data = extract_search_intent(question, [], user_department, user_roles)
+                    strict_f, broad_f, p_ids, is_inh, is_bom, intent_data = extract_search_intent(question, [], user_department, user_roles, allowed_departments)
                     actual_policy = intent_data.get("version_policy", "current_only") if intent_data else "current_only"
                 except Exception as e:
                     # Backward compatibility if intent extraction format changes
-                    strict_f, broad_f, p_ids, is_inh, is_bom = extract_search_intent(question, [], user_department, user_roles)
+                    strict_f, broad_f, p_ids, is_inh, is_bom = extract_search_intent(question, [], user_department, user_roles, allowed_departments)
                     actual_policy = "current_only"
                     
                 policy_passed = (actual_policy == expected_version_policy)
                 if policy_passed: metrics["policy_pass"] += 1
                 
                 # 2. Goi RAG
-                stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag(question, None, [], [], user_department, user_roles)
+                stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag(question, None, [], [], user_department, user_roles, allowed_departments)
                 bot_answer = ""
                 for chunk in stream:
                     bot_answer += chunk
@@ -121,7 +122,10 @@ def run_evaluation():
                 # Check expected sources (Recall@5 approx)
                 sources_passed = True
                 failed_sources = []
-                retrieved_files = [str(d.get("file_goc", "")).lower() for d in debug_info.get("retrieved_docs", [])]
+                retrieved_files = [
+                    str(d.get("file_goc", "")).lower() 
+                    for d in debug_info.get("retrieved_docs", [])[:5]
+                ]
                 for src in expected_sources:
                     # Check in debug_info or in bot_answer text
                     found = False
@@ -189,7 +193,7 @@ def run_evaluation():
         out.write(f"- **Tổng số câu test:** {total_tests}\n")
         out.write(f"- **Pass toàn phần:** {passed_tests} ({(passed_tests/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
         out.write(f"- **Answer Keyword Score:** {metrics['keyword_pass']}/{total_tests} ({(metrics['keyword_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
-        out.write(f"- **Source Recall Score:** {metrics['source_pass']}/{total_tests} ({(metrics['source_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
+        out.write(f"- **Retrieval Recall@5:** {metrics['source_pass']}/{total_tests} ({(metrics['source_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
         out.write(f"- **Forbidden Violation:** {metrics['forbidden_violation']}/{total_tests}\n")
         out.write(f"- **Refusal Score:** {metrics['refusal_pass']}/{total_tests} ({(metrics['refusal_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
         out.write(f"- **Version Policy Score:** {metrics['policy_pass']}/{total_tests} ({(metrics['policy_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
@@ -197,13 +201,47 @@ def run_evaluation():
         out.write(f"- **Average Latency:** {avg_lat:.2f}s/query\n\n")
         
         out.write(f"## KẾT QUẢ THEO NHÓM (LEVEL)\n")
+        
+        THRESHOLDS = {
+            "L1": 90,
+            "L2": 85,
+            "L3": 95,
+            "L4": 98,
+            "L5": 90,
+            "L6": 90,
+        }
+        
+        overall_failed_threshold = False
+        
         for lvl, st in level_stats.items():
             rate = (st["pass"]/st["total"])*100 if st["total"] > 0 else 0
-            out.write(f"- **{lvl}**: Pass {st['pass']}/{st['total']} ({rate:.1f}%)\n")
+            
+            # Match threshold based on the first two characters (e.g., L1_keyword -> L1)
+            base_lvl = lvl.split('_')[0] if '_' in lvl else lvl
+            threshold = THRESHOLDS.get(base_lvl)
+            
+            if threshold is not None:
+                passed_threshold = rate >= threshold
+                if not passed_threshold:
+                    overall_failed_threshold = True
+
+                out.write(
+                    f"- **{lvl}**: Pass {st['pass']}/{st['total']} "
+                    f"({rate:.1f}%) | Threshold: {threshold}% | "
+                    f"{'PASS' if passed_threshold else 'FAIL'}\n"
+                )
+            else:
+                out.write(f"- **{lvl}**: Pass {st['pass']}/{st['total']} ({rate:.1f}%)\n")
 
     print(f"\nDa hoan tat test. Pass {passed_tests}/{total_tests}. Vui long mo file scripts/eval_report.md de xem ket qua chi tiet.")
+    
+    if overall_failed_threshold:
+        print("\n❌ CI/CD ALERT: Có ít nhất 1 level không đạt ngưỡng threshold yêu cầu.")
+        import sys
+        sys.exit(1)
 
 if __name__ == "__main__":
     # Ep kieu in stdout mac dinh thanh utf-8 cho chac an tren windows
+    import sys
     sys.stdout.reconfigure(encoding='utf-8')
     run_evaluation()

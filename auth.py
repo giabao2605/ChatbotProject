@@ -26,13 +26,10 @@ def authenticate_user(username, password):
                 
             stored_hash = user[5]
             
-            # Verify bcrypt hash, đồng thời hỗ trợ mật khẩu plaintext legacy
+            # Verify bcrypt hash
             try:
                 if stored_hash is None:
                     is_valid = False
-                elif stored_hash == password:
-                    # Plaintext legacy
-                    is_valid = True
                 else:
                     is_valid = bcrypt.checkpw(
                         password.encode("utf-8"),
@@ -58,12 +55,25 @@ def authenticate_user(username, password):
             
             role_list = [r[0] for r in roles]
             
+            try:
+                dept_rows = conn.execute(
+                    text("SELECT Department FROM UserDepartments WHERE UserID = :uid"),
+                    {"uid": user[0]}
+                ).fetchall()
+                allowed_departments = [r[0] for r in dept_rows]
+            except Exception:
+                allowed_departments = []
+                
+            if user[3] and user[3] not in allowed_departments:
+                allowed_departments.append(user[3])
+            
             return {
                 "user_id": user[0],
                 "username": user[1],
                 "display_name": user[2],
                 "department": user[3],
                 "roles": role_list,
+                "allowed_departments": allowed_departments,
             }
     except Exception as e:
         st.error(f"Lỗi truy vấn: {e}")

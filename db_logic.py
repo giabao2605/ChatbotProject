@@ -400,6 +400,20 @@ def save_document_metadata(file_name, thu_muc, info):
     doc_id = reset_document_metadata(file_name, thu_muc)
     return save_page_metadata(file_name, thu_muc, info, doc_id=doc_id)
 
+import re
+
+def normalize_material_name(raw):
+    if not raw:
+        return None
+
+    s = str(raw).strip().lower()
+    s = s.replace("inox", "stainless steel")
+    s = s.replace("sus304", "sus 304")
+    s = s.replace("ss304", "sus 304")
+    s = re.sub(r"\s+", " ", s)
+
+    return s
+
 def save_bom_records(doc_id, trang_so, records):
     """Luu danh sach cac vat tu cua bang ke vao SQL"""
     if not doc_id or not records:
@@ -410,8 +424,8 @@ def save_bom_records(doc_id, trang_so, records):
             for rec in records:
                 conn.execute(
                     text("""
-                        INSERT INTO BangKeVatTu (DocID, TrangSo, MaHang, TenVatTu, VatLieu, SoLuong, GhiChu, Unit, Confidence, RawRowJson, SourceTableIndex)
-                        VALUES (:doc_id, :trang_so, :ma_hang, :ten, :vat_lieu, :sl, :ghi_chu, :unit, :conf, :raw, :idx)
+                        INSERT INTO BangKeVatTu (DocID, TrangSo, MaHang, TenVatTu, VatLieu, NormalizedMaterial, SoLuong, GhiChu, Unit, Confidence, RawRowJson, SourceTableIndex)
+                        VALUES (:doc_id, :trang_so, :ma_hang, :ten, :vat_lieu, :normalized_material, :sl, :ghi_chu, :unit, :conf, :raw, :idx)
                     """),
                     {
                         "doc_id": doc_id,
@@ -419,6 +433,7 @@ def save_bom_records(doc_id, trang_so, records):
                         "ma_hang": _sanitize_text(rec.get("ma_hang"), 255),
                         "ten": _sanitize_text(rec.get("ten_vat_tu"), 500),
                         "vat_lieu": _sanitize_text(rec.get("vat_lieu"), 255),
+                        "normalized_material": _sanitize_text(normalize_material_name(rec.get("vat_lieu")), 255),
                         "sl": _sanitize_int(rec.get("so_luong"), None),
                         "ghi_chu": _sanitize_text(rec.get("ghi_chu"), 4000),
                         "unit": _sanitize_text(rec.get("don_vi"), 50),
@@ -507,7 +522,10 @@ def create_ingestion_job(file_name, file_path, thu_muc, uploaded_by=None):
                 {"f": file_name, "p": file_path, "t": thu_muc, "u": uploaded_by}
             )
             row = result.fetchone()
-            return row[0] if row else None
+            job_id = row[0] if row else None
+            if job_id:
+                write_audit_log(uploaded_by or "System", "upload", "IngestionJobs", job_id, {"file_name": file_name, "thu_muc": thu_muc})
+            return job_id
     except Exception as e:
         logger.error(f"Loi tao IngestionJob: {e}", exc_info=True)
         return None
@@ -529,7 +547,7 @@ def update_ingestion_job(job_id, status, error_message=None):
     except Exception as e:
         logger.error(f"Loi cap nhat IngestionJob {job_id}: {e}", exc_info=True)
 
-def get_pending_job():
+def get_pending_job(worker_id="worker-1"):
     _ensure_engine()
     try:
         with engine.connect() as conn:
@@ -540,14 +558,23 @@ def get_pending_job():
                     WITH CTE AS (
                         SELECT TOP 1 JobID, Status
                         FROM IngestionJobs
-                        WHERE Status = 'pending'
+                        WHERE (
+                            (Status = 'pending' AND (LockedAt IS NULL OR LockedAt < DATEADD(minute, -15, GETDATE())))
+                            OR (Status IN ('classifying', 'extracting', 'embedding') AND LockedAt < DATEADD(minute, -15, GETDATE()))
+                          )
+                          AND ISNULL(RetryCount, 0) < ISNULL(MaxRetry, 3)
                         ORDER BY CreatedAt ASC
                     )
                     UPDATE CTE
-                    SET Status = 'classifying'
+                    SET Status = 'classifying',
+                        LockedBy = :worker_id,
+                        LockedAt = GETDATE(),
+                        ProgressPercent = 5,
+                        UpdatedAt = GETDATE()
                     OUTPUT inserted.JobID, inserted.TenFile, inserted.FilePath, inserted.ThuMuc;
                     """
-                )
+                ),
+                {"worker_id": worker_id}
             )
             row = result.fetchone()
             if row:
@@ -558,9 +585,49 @@ def get_pending_job():
         logger.error(f"Loi lay pending job: {e}", exc_info=True)
         return None
 
+def mark_job_failed(job_id, error_message):
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE IngestionJobs
+                SET RetryCount = ISNULL(RetryCount, 0) + 1,
+                    Status = CASE 
+                        WHEN ISNULL(RetryCount, 0) + 1 >= ISNULL(MaxRetry, 3)
+                        THEN 'failed'
+                        ELSE 'pending'
+                    END,
+                    ErrorMessage = :e,
+                    LockedBy = NULL,
+                    LockedAt = NULL,
+                    UpdatedAt = GETDATE()
+                WHERE JobID = :id
+            """), {"id": job_id, "e": error_message})
+    except Exception as e:
+        logger.error(f"Loi danh dau job fail {job_id}: {e}", exc_info=True)
+
 # ==========================================
 # PHAN QUAN LY VONG DOI & REVIEW (PHASE 3)
 # ==========================================
+
+def write_audit_log(username, action, entity_type=None, entity_id=None, details=None, user_id=None):
+    _ensure_engine()
+    import json
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO AuditLog (UserID, Username, Action, EntityType, EntityID, Details)
+                VALUES (:uid, :username, :action, :etype, :eid, :details)
+            """), {
+                "uid": user_id,
+                "username": username,
+                "action": action,
+                "etype": entity_type,
+                "eid": entity_id,
+                "details": json.dumps(details or {}, ensure_ascii=False)
+            })
+    except Exception as e:
+        logger.error(f"Loi write_audit_log: {e}", exc_info=True)
 
 def update_qdrant_metadata(doc_id, metadata_updates):
     from rag_logic import client
@@ -626,12 +693,12 @@ def publish_as_new_version(doc_id, reviewer="System"):
     with engine.begin() as conn:
         for old in old_docs:
             conn.execute(text("""
-                UPDATE TaiLieu SET IsCurrent = 0, IsArchived = 1, LifecycleStatus = 'archived', ArchivedAt = GETDATE() WHERE DocID = :id
+                UPDATE TaiLieu SET IsCurrent = 0, IsArchived = 1, LifecycleStatus = 'superseded', ArchivedAt = GETDATE() WHERE DocID = :id
             """), {"id": old.DocID})
             update_qdrant_metadata(old.DocID, {
                 "is_current": False,
                 "is_archived": True,
-                "lifecycle_status": "archived"
+                "lifecycle_status": "superseded"
             })
             
         conn.execute(text("""
@@ -650,6 +717,8 @@ def publish_as_new_version(doc_id, reviewer="System"):
             "published_at": datetime.now().isoformat(),
             "supersedes_doc_id": old_id
         })
+        
+    write_audit_log(reviewer, "publish_new_version", "TaiLieu", doc.DocID, {"base_code": doc.BaseCode, "version": doc.VersionNo, "superseded": old_id})
     return True
 
 def publish_as_new_variant(doc_id, reviewer="System"):
@@ -671,6 +740,8 @@ def publish_as_new_variant(doc_id, reviewer="System"):
             "is_archived": False,
             "published_at": datetime.now().isoformat()
         })
+        
+    write_audit_log(reviewer, "publish_variant", "TaiLieu", doc.DocID, {"base_code": doc.BaseCode, "variant": doc.VariantCode})
     return True
 
 def publish_as_standalone(doc_id, reviewer="System"):
@@ -687,6 +758,8 @@ def reject_document(doc_id, reviewer="System"):
             "lifecycle_status": "rejected",
             "review_status": "rejected"
         })
+        
+    write_audit_log(reviewer, "reject_document", "TaiLieu", doc_id, {})
     return True
 
 def archive_document(doc_id, reviewer="System"):
@@ -701,59 +774,102 @@ def archive_document(doc_id, reviewer="System"):
             "is_archived": True,
             "lifecycle_status": "archived"
         })
+        
+    write_audit_log(reviewer, "archive_document", "TaiLieu", doc_id, {})
     return True
 
 def rollback_to_version(base_code, version_no, variant_code="default", reviewer="System"):
     """
-    Rollback: tim version moi nhat dang published cua (base_code, variant_code) -> archive
-    Tim version_no muc tieu -> published & current
+    [DEPRECATED] Chuyen sang dung rollback_to_version_by_family.
+    Wrapper tam thoi de giu tuong thich nguoc.
     """
+    logger.warning("rollback_to_version (BaseCode) is deprecated. Use rollback_to_version_by_family instead.")
+    _ensure_engine()
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT TOP 1 FamilyID FROM TaiLieu WHERE BaseCode = :bc"), {"bc": base_code}).fetchone()
+            if not row or not row[0]:
+                logger.error(f"Cannot find FamilyID for BaseCode {base_code}")
+                return False
+            return rollback_to_version_by_family(row[0], version_no, variant_code, reviewer)
+    except Exception as e:
+        logger.error(f"Loi wrapper rollback: {e}")
+        return False
+
+def rollback_to_version_by_family(family_id, version_no, variant_code="default", reviewer="System"):
     _ensure_engine()
     try:
         with engine.begin() as conn:
-            # Archive current
-            current = conn.execute(text("""
-                SELECT DocID FROM TaiLieu 
-                WHERE BaseCode = :bc AND VariantCode = :vc AND IsCurrent = 1 AND LifecycleStatus = 'published'
-            """), {"bc": base_code, "vc": variant_code}).fetchone()
-            
-            if current:
+            current_rows = conn.execute(text("""
+                SELECT DocID FROM TaiLieu
+                WHERE FamilyID = :fid
+                  AND VariantCode = :vc
+                  AND IsCurrent = 1
+                  AND LifecycleStatus = 'published'
+            """), {
+                "fid": family_id,
+                "vc": variant_code
+            }).fetchall()
+
+            for row in current_rows:
+                old_doc_id = row[0]
                 conn.execute(text("""
-                    UPDATE TaiLieu SET IsCurrent = 0, IsArchived = 1, LifecycleStatus = 'archived', ArchivedAt = GETDATE()
+                    UPDATE TaiLieu
+                    SET IsCurrent = 0,
+                        IsArchived = 1,
+                        LifecycleStatus = 'superseded',
+                        ArchivedAt = GETDATE()
                     WHERE DocID = :id
-                """), {"id": current[0]})
-                
-                update_qdrant_metadata(current[0], {
+                """), {"id": old_doc_id})
+
+                update_qdrant_metadata(old_doc_id, {
                     "is_current": False,
                     "is_archived": True,
-                    "lifecycle_status": "archived"
+                    "lifecycle_status": "superseded"
                 })
-                
-            # Promote target
+
             target = conn.execute(text("""
-                SELECT DocID FROM TaiLieu 
-                WHERE BaseCode = :bc AND VariantCode = :vc AND VersionNo = :vn
-            """), {"bc": base_code, "vc": variant_code, "vn": version_no}).fetchone()
-            
-            if target:
-                conn.execute(text("""
-                    UPDATE TaiLieu SET IsCurrent = 1, IsArchived = 0, LifecycleStatus = 'published', ReviewStatus = 'approved', NguoiDuyet = :rev, PublishedAt = GETDATE()
-                    WHERE DocID = :id
-                """), {"id": target[0], "rev": reviewer})
-                
-                update_qdrant_metadata(target[0], {
-                    "is_current": True,
-                    "is_archived": False,
-                    "lifecycle_status": "published",
-                    "review_status": "approved"
-                })
-                
-                logger.info(f"Da rollback {base_code} ({variant_code}) ve version {version_no}")
-                return True
-            else:
-                logger.warning(f"Khong tim thay target version {version_no} cho {base_code} ({variant_code})")
+                SELECT DocID FROM TaiLieu
+                WHERE FamilyID = :fid
+                  AND VariantCode = :vc
+                  AND VersionNo = :vn
+            """), {
+                "fid": family_id,
+                "vc": variant_code,
+                "vn": version_no
+            }).fetchone()
+
+            if not target:
                 return False
+
+            target_doc_id = target[0]
+
+            conn.execute(text("""
+                UPDATE TaiLieu
+                SET IsCurrent = 1,
+                    IsArchived = 0,
+                    LifecycleStatus = 'published',
+                    ReviewStatus = 'approved',
+                    ReviewedBy = :rev,
+                    NguoiDuyet = :rev,
+                    PublishedAt = GETDATE()
+                WHERE DocID = :id
+            """), {
+                "id": target_doc_id,
+                "rev": reviewer
+            })
+
+            update_qdrant_metadata(target_doc_id, {
+                "is_current": True,
+                "is_archived": False,
+                "lifecycle_status": "published",
+                "review_status": "approved"
+            })
+
+            write_audit_log(reviewer, "rollback", "TaiLieu", target_doc_id, {"family_id": family_id, "target_version": version_no})
+            return True
+
     except Exception as e:
-        logger.error(f"Loi rollback: {e}")
+        logger.error(f"Loi rollback_to_version_by_family: {e}", exc_info=True)
         return False
 
