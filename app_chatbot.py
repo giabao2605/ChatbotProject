@@ -68,6 +68,12 @@ def remove_accents(text: str) -> str:
         if unicodedata.category(ch) != "Mn"
     ) 
 
+def safe_folder_name(name: str) -> str:
+    name = str(name or "UNKNOWN")
+    name = re.sub(r'[\\/*?:"<>|]', "_", name)
+    name = name.replace("..", "_")
+    return name[:100]
+
 
 def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None):
     """Run RAG in a separate Python process so native libs cannot crash Streamlit."""
@@ -337,22 +343,20 @@ def run_chat():
     current_user = auth.get_current_user()
     can_upload = auth.has_role("uploader") or auth.has_role("admin")
 
-    # Viewer chi duoc phep chon anh
-    allowed_types = None if can_upload else [ext.lstrip(".") for ext in IMAGE_QUESTION_EXTENSIONS]
-
     # Xu ly nhap cau hoi
-    uploaded_files = []
+    allowed_types = UPLOAD_FILE_TYPES if can_upload else [
+        ext.lstrip(".") for ext in IMAGE_QUESTION_EXTENSIONS
+    ]
 
-    if can_upload:
-        uploaded_files = st.file_uploader(
-            "Tải file lên nếu cần",
-            type=UPLOAD_FILE_TYPES,
-            accept_multiple_files=True,
-            key="chat_file_uploader"
-        )
+    uploaded_files = st.file_uploader(
+        "Tải file lên nếu cần",
+        type=allowed_types,
+        accept_multiple_files=True,
+        key="chat_file_uploader"
+    )
 
-        if uploaded_files is None:
-            uploaded_files = []
+    if uploaded_files is None:
+        uploaded_files = []
 
     prompt_input = st.chat_input("Nhap cau hoi ky thuat can tra cuu...")
 
@@ -406,7 +410,7 @@ def run_chat():
                 responses = []
                 status_placeholder = st.status(f"Đã đưa {len(uploaded_files)} tài liệu vào hàng đợi (Queue)...", expanded=True)
                 with status_placeholder:
-                    user_dept_folder = current_user["department"]
+                    user_dept_folder = safe_folder_name(current_user["department"])
                     tu_hoc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data_Goc", user_dept_folder)
                     os.makedirs(tu_hoc_dir, exist_ok=True)
  
@@ -504,24 +508,25 @@ def run_chat():
                     history_for_rag = st.session_state.chat_history[:-1]
  
                     # 1. THUC HIEN RAG (Co RBAC)
-                    stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag_worker(
-                        user_question=prompt,
-                        image_path=temp_img_path,
-                        chat_history=history_for_rag,
-                        current_part_ids=st.session_state.current_part_ids,
-                        user_department=current_user["department"],
-                        user_roles=current_user["roles"],
-                        allowed_departments=current_user.get("allowed_departments", [])
-                    )
- 
-                    # Cap nhat State Memory moi
-                    st.session_state.current_part_ids = new_part_ids
- 
-                    if temp_img_path and os.path.exists(temp_img_path):
-                        try:
-                            os.remove(temp_img_path)
-                        except Exception:
-                            pass
+                    try:
+                        stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag_worker(
+                            user_question=prompt,
+                            image_path=temp_img_path,
+                            chat_history=history_for_rag,
+                            current_part_ids=st.session_state.current_part_ids,
+                            user_department=current_user["department"],
+                            user_roles=current_user["roles"],
+                            allowed_departments=current_user.get("allowed_departments", [])
+                        )
+     
+                        # Cap nhat State Memory moi
+                        st.session_state.current_part_ids = new_part_ids
+                    finally:
+                        if temp_img_path and os.path.exists(temp_img_path):
+                            try:
+                                os.remove(temp_img_path)
+                            except Exception:
+                                pass
  
                     raw_chunks = []
  

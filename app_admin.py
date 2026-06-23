@@ -40,7 +40,7 @@ def run_admin():
             LEFT JOIN TaiLieuKyThuat tk ON t.DocID = tk.DocID AND tk.TrangSo = 1
             OUTER APPLY (
                 SELECT TOP 1 ClassificationJson, RequestedAction, ClassificationConfidence 
-                FROM IngestionJobs j2 
+                FROM dbo.IngestionJobs j2 
                 WHERE j2.TenFile = t.TenFile AND j2.ThuMuc = t.ThuMuc 
                 ORDER BY j2.CreatedAt DESC
             ) j
@@ -74,14 +74,16 @@ def run_admin():
                 st.write(f"**Thư mục:** {thu_muc}")
                 
                 # Hien thi AI Classification
+                cls_data = {}
                 if class_json:
                     try:
                         cls_data = json.loads(class_json)
                         st.markdown("### 🤖 AI Classification Đề Xuất:")
                         st.info(f"**Action:** `{cls_data.get('detected_action')}` | **Base Code:** `{cls_data.get('base_code')}` | **Confidence:** {class_conf*100 if class_conf else 0:.1f}%")
                         st.write(f"**Lý do AI:** {cls_data.get('reason')}")
-                    except:
-                        pass
+                    except Exception as e:
+                        st.warning(f"ClassificationJson không hợp lệ: {e}")
+
                 else:
                     st.warning("Chưa có kết quả AI Classification cho file này.")
 
@@ -109,7 +111,7 @@ def run_admin():
                         edit_loai_tl = st.text_input("Document Type", value=loai_tl or "technical_drawing", key=f"dt_{doc_id}")
                     
                     action_choice = st.radio(
-                        "Chọn hành động Publish (AI Đề xuất: " + (cls_data.get('detected_action', 'new_document') if class_json else 'new_document') + "):",
+                        "Chọn hành động Publish (AI Đề xuất: " + cls_data.get('detected_action', 'new_document') + "):",
                         options=[
                             "Publish làm version mới (Archive bản cũ cùng variant)",
                             "Publish song song như variant mới (Giữ nguyên bản cũ)",
@@ -161,7 +163,7 @@ def run_admin():
                                 """), {"did": doc_id})
 
                                 conn.execute(text("""
-                                    UPDATE IngestionJobs
+                                    UPDATE dbo.IngestionJobs
                                     SET Status = 'pending_review',
                                         ErrorMessage = N'Cần sửa metadata trước khi publish',
                                         UpdatedAt = GETDATE()
@@ -176,7 +178,7 @@ def run_admin():
                             if is_publish_action:
                                 with engine.begin() as conn:
                                     conn.execute(text("""
-                                        UPDATE IngestionJobs
+                                        UPDATE dbo.IngestionJobs
                                         SET Status = 'publishing',
                                             UpdatedAt = GETDATE()
                                         WHERE TenFile = :f AND ThuMuc = :t
@@ -195,7 +197,7 @@ def run_admin():
                                 with engine.begin() as conn:
                                     if is_publish_action:
                                         conn.execute(text("""
-                                            UPDATE IngestionJobs
+                                            UPDATE dbo.IngestionJobs
                                             SET Status = 'published',
                                                 ProgressPercent = 100,
                                                 UpdatedAt = GETDATE()
@@ -203,14 +205,14 @@ def run_admin():
                                         """), {"f": ten_file, "t": thu_muc})
                                     else:
                                         conn.execute(text("""
-                                            UPDATE IngestionJobs
+                                            UPDATE dbo.IngestionJobs
                                             SET Status = 'rejected',
                                                 UpdatedAt = GETDATE()
                                             WHERE TenFile = :f AND ThuMuc = :t
                                         """), {"f": ten_file, "t": thu_muc})
                                         
                                 st.success(f"Đã xử lý thành công: {action_choice}")
-                                st.rerun()
+                                st.info("Tài liệu đã được duyệt. Vui lòng refresh trang nếu danh sách chưa cập nhật.")
                             else:
                                 st.error("Xử lý thất bại. Vui lòng kiểm tra log.")
 
@@ -270,7 +272,7 @@ def run_admin():
                                     "should_refuse": selected_type == "should_refuse",
                                     "failure_type": selected_type
                                 }
-                                import os, json
+                                import os
                                 golden_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "golden_set.jsonl")
                                 with open(golden_path, "a", encoding="utf-8") as gf:
                                     gf.write(json.dumps(golden_entry, ensure_ascii=False) + "\n")

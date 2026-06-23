@@ -25,7 +25,11 @@ try:
         raise ValueError("Thieu thiet lap QDRANT_URL hoac QDRANT_API_KEY trong file .env")
 
     print(f" -> Ket noi Qdrant Cloud: {qdrant_url}")
-    temp_client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+    temp_client = QdrantClient(
+        url=qdrant_url,
+        api_key=qdrant_api_key,
+        timeout=120,
+    )
     temp_client.delete_collection(collection_name="TaiLieuKyThuat_v2")
     print(" -> Da xoa Qdrant collection thanh cong.")
 except UnexpectedResponse as e:
@@ -109,7 +113,7 @@ def reingest_all():
             print(f"\n--- Dang nap: {file} (Thu muc: {thu_muc_name}) ---")
             try:
                 # Dung lai ham learn_new_file de tan dung toan bo luong xu ly chuan
-                success, msg = learn_new_file(file_path, file, thu_muc=thu_muc_name)
+                success, msg, _ = learn_new_file(file_path, file, thu_muc=thu_muc_name)
                 if success:
                     success_count += 1
                 else:

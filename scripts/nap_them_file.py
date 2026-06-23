@@ -60,7 +60,7 @@ if __name__ == "__main__":
         print(f"\n=== ĐANG XỬ LÝ: {ten_file} (Thư mục: {thu_muc}) ===")
         logger.info(f"Đang xử lý file: {ten_file}")
 
-        success, msg = learn_new_file(file_path, ten_file, thu_muc=thu_muc, progress_callback=console_progress)
+        success, msg, _ = learn_new_file(file_path, ten_file, thu_muc=thu_muc, progress_callback=console_progress)
 
         if success:
             print(f"  ✅ Thành công! {msg}")

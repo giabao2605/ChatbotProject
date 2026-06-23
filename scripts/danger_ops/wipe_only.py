@@ -13,7 +13,11 @@ print("1. Dang xoa collection Qdrant 'TaiLieuKyThuat_v2'...")
 try:
     qdrant_url = os.getenv("QDRANT_URL", "")
     qdrant_api_key = os.getenv("QDRANT_API_KEY", "")
-    client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+    client = QdrantClient(
+        url=qdrant_url,
+        api_key=qdrant_api_key,
+        timeout=120,
+    )
     client.delete_collection(collection_name="TaiLieuKyThuat_v2")
     print(" -> Da xoa Qdrant collection thanh cong.")
 except Exception as e:

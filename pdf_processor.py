@@ -15,7 +15,7 @@ import underthesea
 from qdrant_client import models
 from logger_config import logger
 # FIX #1: dung 2 ham moi (reset 1 lan + insert tung trang). Giu save_document_metadata cho file 1 trang.
-from db_logic import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records, get_document_info
+from db_logic import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records, get_document_info, mark_document_ingest_failed, save_document_page, save_technical_attributes
 from rag_logic import vectorstore, client
 # FIX Bug #4: predicate retry dung chung cho Gemini (google-genai)
 from gemini_client import describe_gemini_error, is_retryable_error
@@ -520,7 +520,7 @@ def format_vision_data(data):
     return "Kết quả phân tích ảnh (Cấu trúc JSON):\n" + "\n".join(parts) if parts else ""
 def _read_image_file(file_path, ten_file, vision_model):
     if not vision_model:
-        raise ValueError("File anh can GOOGLE_API_KEY hop le de Gemini Vision doc noi dung/OCR.")
+        raise ValueError("File ảnh cần PROXYLLM_API_KEY hợp lệ để GPT-5.4 Vision đọc nội dung/OCR.")
     image = Image.open(file_path)
     prompt = (
         f"Day la file anh '{ten_file}' duoc nap lam du lieu cho chatbot ky thuat. "
@@ -539,7 +539,12 @@ def _read_image_file(file_path, ten_file, vision_model):
         "Dien vao cac mang cac thong tin ky thuat tuong ung ban nhin thay trong anh."
     )
     response = call_gemini_vision(vision_model, prompt, image)
-    return format_vision_json(response.text)
+    vision_data = parse_vision_json(response.text)
+
+    if vision_data:
+        return format_vision_data(vision_data)
+
+    return response.text or ""
  
 def extract_text_from_supported_file(file_path, ten_file, vision_model=None):
     ext = os.path.splitext(file_path)[1].lower()
@@ -614,6 +619,49 @@ def extract_bom_records(table, table_idx=None):
                 records.append(rec)
     return records
 
+def calculate_quality_status(report):
+    total_pages = report.get("total_pages", 0)
+    failed_pages = report.get("failed_pages", [])
+    chunks = report.get("total_chunks", 0)
+    attrs = report.get("technical_attributes_count", 0)
+    bom_rows = report.get("bom_rows_count", 0)
+    if total_pages <= 0:
+        return 0, "blocked"
+    if failed_pages:
+        return 0, "blocked"
+    if chunks <= 0:
+        return 0, "blocked"
+    score = 100
+    if attrs == 0:
+        score -= 30
+    if len(report.get("pages_text_extracted", [])) == 0 and len(report.get("pages_local_ocr_success", [])) == 0 and len(report.get("pages_gemini_success", [])) == 0:
+        score -= 40
+    if report.get("vision_failed_pages"):
+        score -= 30
+    if score >= 90:
+        return score, "ready_for_review"
+    elif score >= 70:
+        return score, "needs_review"
+    else:
+        return score, "blocked"
+
+def has_mechanical_signal(text):
+    if not text:
+        return False
+    patterns = [
+        r"\b\d+\.\d+\.\d+\b",             # mã dạng 9.3.03951
+        r"\b\d{3}-\d{3}\b",               # mã dạng 975-123
+        r"±\s*\d+",                       # dung sai
+        r"\bSUS\s*\d+\b",
+        r"\bSS400\b",
+        r"\bSPCC\b",
+        r"\bInox\b",
+        r"\b\d+(?:\.\d+)?\s[xX×]\s\d+",   # kích thước 10x604
+        r"Ø\s*\d+",
+        r"\bR\s*\d+",
+    ]
+    return any(re.search(p, text, re.IGNORECASE) for p in patterns)
+
 # 3. Ham xu ly PDF trung tam
 def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progress_callback=None):
     start_time = time.time()
@@ -622,9 +670,17 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
         "ten_file": ten_file,
         "total_pages": 0,
         "total_chunks": 0,
+        "pages_text_extracted": [],
+        "pages_table_extracted": [],
+        "pages_local_ocr_success": [],
+        "pages_gemini_success": [],
         "failed_pages": [],
         "vision_failed_pages": [],
         "metadata_llm_failed_pages": [],
+        "bom_rows_count": 0,
+        "technical_attributes_count": 0,
+        "quality_score": 0,
+        "quality_status": "unknown",
         "warnings": [],
         "time_taken": 0,
         "message": ""
@@ -668,13 +724,27 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 image_summary = ""
                 vision_metadata = {}
                 is_text_heavy = len(text.strip()) > 1500  # Chi bo qua trang van ban thuan
+                if len(text.strip()) > 100:
+                    report["pages_text_extracted"].append(page_num + 1)
                 
                 # Luon goi Gemini cho PDF ky thuat, tru trang toan text
-                vision_required = os.path.exists(img_path) and not is_text_heavy
+                vision_required = os.path.exists(img_path)
                 vision_failed = False
+                local_ocr_text = ""
+                local_ocr_confidence = 0.0
+                vision_data = {}
+                
+                if vision_required:
+                    # Che do chinh xac cao: bo qua Local OCR/Tesseract hoan toan.
+                    # Luon dua anh trang PDF sang GPT-5.4 Vision de OCR + trich xuat JSON.
+                    local_ocr_text = ""
+                    local_ocr_confidence = 0.0
+                    if progress_callback:
+                        progress_callback(f"Trang {page_num+1}: Bỏ qua Local OCR, dùng GPT-5.4 Vision để phân tích ảnh.")
+
                 if vision_model and vision_required:
                     if progress_callback:
-                        progress_callback(f"Dang dung AI (Gemini) phan tich anh trang {page_num+1}...")
+                        progress_callback(f"Đang dùng GPT-5.4 Vision phân tích ảnh trang {page_num+1}...")
                     try:
                         img_to_analyze = Image.open(img_path)
                         prompt = (
@@ -698,6 +768,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                         
                         if vision_data:
                             image_summary = format_vision_data(vision_data)
+                            report["pages_gemini_success"].append(page_num + 1)
                             
                             # Add to vision_metadata
                             if vision_data.get("document_codes"): vision_metadata["vision_document_codes"] = ", ".join([str(x) for x in vision_data["document_codes"]])
@@ -731,13 +802,13 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     except Exception as e:
                         vision_failed = True
                         detail = describe_gemini_error(e)
-                        warn = f"Trang {page_num+1}: Gemini Vision/OCR loi cho {img_name}: {detail}"
+                        warn = f"Trang {page_num+1}: GPT-5.4 Vision/OCR lỗi cho {img_name}: {detail}"
                         report["vision_failed_pages"].append(page_num+1)
                         report["warnings"].append(warn)
                         logger.error(warn)
                 elif vision_required and not vision_model:
                     vision_failed = True
-                    warn = f"Trang {page_num+1}: can Gemini Vision/OCR nhung chua cau hinh GOOGLE_API_KEY hop le."
+                    warn = f"Trang {page_num+1}: cần GPT-5.4 Vision/OCR nhưng chưa cấu hình PROXYLLM_API_KEY hợp lệ."
                     report["vision_failed_pages"].append(page_num+1)
                     report["warnings"].append(warn)
                     logger.error(warn)
@@ -760,6 +831,58 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 )
                 if len(report["warnings"]) > warning_count_before_metadata:
                     report["metadata_llm_failed_pages"].append(page_num+1)
+                
+                # Count technical attributes (fields that are not empty and not "Khong ro")
+                for k, v in info.items():
+                    if v and v != "Khong ro" and v != [] and k not in ["yckt", "hdcv", "ngay_ve", "nguoi_lap"]:
+                        report["technical_attributes_count"] += 1
+
+                tech_attrs = []
+                def add_attr(atype, avalue, source_text, extractor, confidence=1.0, unit=None):
+                    if avalue and avalue != "Khong ro" and avalue != []:
+                        if isinstance(avalue, list):
+                            for v in avalue:
+                                if v and v != "Khong ro":
+                                    tech_attrs.append({
+                                        "AttributeType": atype, "AttributeValue": str(v), "Unit": unit,
+                                        "SourceText": str(source_text)[:1000], "Confidence": confidence, "ExtractedBy": extractor
+                                    })
+                        else:
+                            tech_attrs.append({
+                                "AttributeType": atype, "AttributeValue": str(avalue), "Unit": unit,
+                                "SourceText": str(source_text)[:1000], "Confidence": confidence, "ExtractedBy": extractor
+                            })
+
+                add_attr("material", info.get("vat_lieu"), text[:200], "llm_text")
+                add_attr("thickness", info.get("dung_sai_day"), text[:200], "llm_text")
+                add_attr("dimension", info.get("kich_thuoc"), text[:200], "llm_text")
+                add_attr("tolerance", info.get("dung_sai_khac"), text[:200], "llm_text")
+                add_attr("part_name", info.get("ten_tai_lieu"), text[:200], "llm_text")
+                add_attr("drawing_code", info.get("ma_doi_tuong"), text[:200], "llm_text")
+                add_attr("quantity", info.get("so_luong"), text[:200], "llm_text")
+                add_attr("note", info.get("yckt"), text[:200], "llm_text")
+
+                if vision_data:
+                    add_attr("material", vision_data.get("materials"), image_summary[:500], "gemini_vision", 0.9)
+                    add_attr("dimension", vision_data.get("dimensions"), image_summary[:500], "gemini_vision", 0.9)
+                    add_attr("tolerance", vision_data.get("tolerances"), image_summary[:500], "gemini_vision", 0.9)
+                    add_attr("part_name", vision_data.get("part_names"), image_summary[:500], "gemini_vision", 0.9)
+                    add_attr("drawing_code", vision_data.get("document_codes"), image_summary[:500], "gemini_vision", 0.9)
+                    add_attr("note", vision_data.get("technical_notes"), image_summary[:500], "gemini_vision", 0.9)
+
+                from mechanical_extractors import extract_mechanical_attributes
+                regex_attrs = extract_mechanical_attributes(combined_text_for_metadata)
+                for attr in regex_attrs:
+                    tech_attrs.append({
+                        "AttributeType": attr["type"],
+                        "AttributeValue": attr["value"],
+                        "Unit": None,
+                        "SourceText": attr["source_text"][:1000],
+                        "Confidence": attr["confidence"],
+                        "ExtractedBy": attr["extracted_by"]
+                    })
+
+                save_technical_attributes(doc_id, ten_file, page_num + 1, tech_attrs)
 
                 metadata = {
                     "file_goc": ten_file,
@@ -796,6 +919,18 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 }
                 info['trang_so'] = page_num + 1
  
+                save_document_page(
+                    doc_id=doc_id,
+                    file_name=ten_file,
+                    page_no=page_num + 1,
+                    text_extract=text,
+                    local_ocr_text=local_ocr_text,
+                    vision_summary=image_summary,
+                    local_ocr_confidence=local_ocr_confidence,
+                    extraction_status="success",
+                    image_path=img_path
+                )
+
                 # FIX #1: CHI insert metadata trang nay (khong xoa metadata cac trang khac)
                 save_page_metadata(ten_file, thu_muc, info, doc_id=doc_id)
  
@@ -827,10 +962,13 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     try:
                         page_plumber = pdf_table_reader.pages[page_num]
                         tables = page_plumber.extract_tables()
+                        if tables:
+                            report["pages_table_extracted"].append(page_num + 1)
                         for table_idx, table in enumerate(tables):
                             # Parse BOM records and save to SQL
                             bom_records = extract_bom_records(table, table_idx=table_idx)
                             if bom_records:
+                                report["bom_rows_count"] += len(bom_records)
                                 save_bom_records(doc_id, page_num + 1, bom_records)
                                 
                             for row in table:
@@ -914,12 +1052,16 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     if report["status"] == "error" and ROLLBACK_ON_INGEST_ERROR:
         try:
             _delete_vectors_for_file(ten_file, thu_muc)
-            reset_document_metadata(ten_file, thu_muc)
+            mark_document_ingest_failed(ten_file, thu_muc, report.get("message"))
             report["total_chunks"] = 0
             report["warnings"].append("Da rollback vector/metadata cua file nay vi ingest khong dat quality gate.")
         except Exception as e:
             report["warnings"].append(f"Rollback vector/metadata that bai: {e}")
             logger.warning(f"Rollback vector/metadata that bai cho {ten_file}: {e}")
+
+    score, status = calculate_quality_status(report)
+    report["quality_score"] = score
+    report["quality_status"] = status
 
     report["time_taken"] = round(time.time() - start_time, 2)
     message_parts = []
@@ -928,9 +1070,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     if report["failed_pages"]:
         message_parts.append(f"Cac trang loi/bo qua: {report['failed_pages']}")
     if report["vision_failed_pages"]:
-        message_parts.append(f"Trang loi Gemini Vision/OCR: {report['vision_failed_pages']}")
+        message_parts.append(f"Trang lỗi GPT-5.4 Vision/OCR: {report['vision_failed_pages']}")
     if report["metadata_llm_failed_pages"]:
-        message_parts.append(f"Trang loi Gemini metadata fallback: {report['metadata_llm_failed_pages']}")
+        message_parts.append(f"Trang lỗi GPT-5.4 metadata fallback: {report['metadata_llm_failed_pages']}")
     if report["warnings"]:
         message_parts.append("Canh bao chat luong: " + " | ".join(report["warnings"][:5]))
     if not message_parts:
@@ -946,9 +1088,17 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         "ten_file": ten_file,
         "total_pages": 1,
         "total_chunks": 0,
+        "pages_text_extracted": [],
+        "pages_table_extracted": [],
+        "pages_local_ocr_success": [],
+        "pages_gemini_success": [],
         "failed_pages": [],
         "vision_failed_pages": [],
         "metadata_llm_failed_pages": [],
+        "bom_rows_count": 0,
+        "technical_attributes_count": 0,
+        "quality_score": 0,
+        "quality_status": "unknown",
         "warnings": [],
         "time_taken": 0,
         "message": ""
@@ -1004,6 +1154,11 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             }
             info["loai_tai_lieu"] = type_map.get(data_type, "Tai lieu tong hop")
  
+        # File 1 trang: reset + lấy doc_id để gắn vào Qdrant metadata
+        doc_id = reset_document_metadata(ten_file, thu_muc)
+        save_page_metadata(ten_file, thu_muc, info, doc_id=doc_id)
+        doc_info = get_document_info(doc_id)
+
         metadata = {
             "file_goc": ten_file,
             "phong_ban_quyen": thu_muc,
@@ -1025,11 +1180,20 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             "trang_so": 1,
             "dinh_dang_file": ext,
             "doc_status": "pending_review",
+            "doc_id": doc_id,
+            "family_id": doc_info.get("family_id"),
+            "base_code": doc_info.get("base_code", ""),
+            "version_no": doc_info.get("version_no", 1),
+            "version_label": doc_info.get("version_label", ""),
+            "variant_code": doc_info.get("variant_code", "default"),
+            "variant_group": doc_info.get("variant_group", ""),
+            "lifecycle_status": doc_info.get("lifecycle_status", "draft"),
+            "review_status": doc_info.get("review_status", "pending_review"),
+            "is_current": doc_info.get("is_current", False),
+            "is_archived": doc_info.get("is_archived", False),
+            "supersedes_doc_id": doc_info.get("supersedes_doc_id"),
         }
         info["trang_so"] = 1
- 
-        # File 1 trang: dung wrapper save_document_metadata (reset + insert 1 lan)
-        save_document_metadata(ten_file, thu_muc, info)
  
         all_chunks = []
         title_block = (
@@ -1084,12 +1248,16 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
     if report["status"] == "error" and ROLLBACK_ON_INGEST_ERROR:
         try:
             _delete_vectors_for_file(ten_file, thu_muc)
-            reset_document_metadata(ten_file, thu_muc)
+            mark_document_ingest_failed(ten_file, thu_muc, report.get("message"))
             report["total_chunks"] = 0
             report["warnings"].append("Da rollback vector/metadata cua file nay vi ingest khong dat quality gate.")
         except Exception as e:
             report["warnings"].append(f"Rollback vector/metadata that bai: {e}")
             logger.warning(f"Rollback vector/metadata that bai cho {ten_file}: {e}")
+
+    score, status = calculate_quality_status(report)
+    report["quality_score"] = score
+    report["quality_status"] = status
 
     report["time_taken"] = round(time.time() - start_time, 2)
     message_parts = []

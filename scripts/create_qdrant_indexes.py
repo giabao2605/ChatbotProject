@@ -27,7 +27,11 @@ def create_indexes():
 
     logger.info(f"Đang kết nối tới Qdrant tại: {qdrant_url} ...")
     try:
-        client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+        client = QdrantClient(
+            url=qdrant_url,
+            api_key=qdrant_api_key,
+            timeout=120,
+        )
         
         collection_name = "TaiLieuKyThuat_v2"
         

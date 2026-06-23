@@ -1,0 +1,17 @@
+streamlit
+sqlalchemy
+pyodbc
+python-dotenv
+qdrant-client
+langchain
+langchain-core
+langchain-community
+langchain-qdrant
+pymupdf
+pdfplumber
+pillow
+tenacity
+underthesea
+sentence-transformers
+openai
+langchain-openai

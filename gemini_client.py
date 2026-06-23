@@ -1,21 +1,45 @@
+"""
+OpenAI-compatible vision client for ProxyLLM GPT-5.4.
+
+Giu lai ten file/ham cu (gemini_client.py, build_vision_model, describe_gemini_error)
+de cac call-site hien tai trong pdf_processor.py/rag_logic.py khong can doi nhieu.
+"""
+
+import base64
+import io
 import os
 import threading
 import time
-from google import genai
-from google.genai import errors as genai_errors
+from dataclasses import dataclass
 from tenacity import RetryError
+from openai import OpenAI
 
-DEFAULT_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
+DEFAULT_VISION_MODEL = os.getenv("GPT_VISION_MODEL_NAME", os.getenv("GPT_MODEL_NAME", "gpt-5.4"))
 _PLACEHOLDER_KEY = "DIEN_KEY_CUA_BAN_VAO_DAY"
-_GEMINI_CALL_LOCK = threading.Lock()
-_LAST_GEMINI_CALL_AT = 0.0
+_GPT_CALL_LOCK = threading.Lock()
+_LAST_GPT_CALL_AT = 0.0
 
-def is_retryable_error(exc) -> bool:
-    """Retry khi bi rate-limit (429) hoac loi server (5xx) cua Gemini (google-genai)."""
-    if isinstance(exc, genai_errors.APIError):
-        code = getattr(exc, "code", None)
-        return code == 429 or (isinstance(code, int) and code >= 500)
-    return False
+
+@dataclass
+class GPTVisionResponse:
+    text: str
+
+
+def _get_api_key():
+    return (
+        os.getenv("PROXYLLM_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("GPT_API_KEY")
+    )
+
+
+def _get_base_url():
+    return (
+        os.getenv("PROXYLLM_BASE_URL")
+        or os.getenv("OPENAI_BASE_URL")
+        or "https://api.proxyllm.eu/v1"
+    )
+
 
 def _unwrap_retry_error(exc):
     if isinstance(exc, RetryError):
@@ -25,62 +49,113 @@ def _unwrap_retry_error(exc):
             return exc
     return exc
 
-def describe_gemini_error(exc) -> str:
-    """Mo ta loi goc cua Gemini thay vi chi hien RetryError chung chung."""
+
+def classify_gemini_error(exc) -> str:
+    """Ten ham cu, nhung phan loai loi cho GPT/ProxyLLM."""
     root = _unwrap_retry_error(exc)
-    code = getattr(root, "code", None) or getattr(root, "status_code", None)
-    status = getattr(root, "status", None)
+    msg = str(root).lower()
+    code = getattr(root, "status_code", None) or getattr(root, "code", None)
+
+    if "insufficient_quota" in msg or "quota" in msg or "credit" in msg:
+        return "quota_exceeded"
+    if code == 429 or "rate limit" in msg or "too many requests" in msg:
+        return "rate_limit_temporary"
+    if isinstance(code, int) and code >= 500:
+        return "server_error"
+    if "api key" in msg or "permission" in msg or "unauthorized" in msg or "401" in msg:
+        return "auth_error"
+    return "unknown_error"
+
+
+def is_retryable_error(exc) -> bool:
+    err_type = classify_gemini_error(exc)
+    return err_type in ["rate_limit_temporary", "server_error"]
+
+
+def describe_gemini_error(exc) -> str:
+    """Ten ham cu de code hien tai khong bi vo; noi dung mo ta GPT/ProxyLLM error."""
+    root = _unwrap_retry_error(exc)
+    err_type = classify_gemini_error(exc)
+    code = getattr(root, "status_code", None) or getattr(root, "code", None)
     message = getattr(root, "message", None) or str(root)
-    parts = [type(root).__name__]
+    parts = [f"[{err_type.upper()}]", type(root).__name__]
     if code is not None:
         parts.append(f"code={code}")
-    if status:
-        parts.append(f"status={status}")
     if message:
         parts.append(f"message={message}")
     if root is not exc:
         return f"{type(exc).__name__} -> " + ", ".join(parts)
     return ", ".join(parts)
 
-def _throttle_gemini_call():
-    """Giam nguy co 429 khi re-ingest nhieu ban ve lien tiep."""
+
+def _throttle_gpt_call():
+    """Giam nguy co rate-limit khi re-ingest nhieu ban ve lien tiep."""
     try:
-        min_interval = float(os.getenv("GEMINI_MIN_INTERVAL_SECONDS", "6"))
+        min_interval = float(os.getenv("GPT_MIN_INTERVAL_SECONDS", "0"))
     except ValueError:
-        min_interval = 6.0
+        min_interval = 0.0
     if min_interval <= 0:
         return
 
-    global _LAST_GEMINI_CALL_AT
-    with _GEMINI_CALL_LOCK:
+    global _LAST_GPT_CALL_AT
+    with _GPT_CALL_LOCK:
         now = time.monotonic()
-        wait_for = min_interval - (now - _LAST_GEMINI_CALL_AT)
+        wait_for = min_interval - (now - _LAST_GPT_CALL_AT)
         if wait_for > 0:
             time.sleep(wait_for)
-        _LAST_GEMINI_CALL_AT = time.monotonic()
+        _LAST_GPT_CALL_AT = time.monotonic()
 
-class GeminiVisionModel:
+
+def _pil_to_data_url(image):
+    buf = io.BytesIO()
+    # Anh render tu PDF thuong la RGB/RGBA; JPEG nhe hon PNG cho API vision.
+    if getattr(image, "mode", "RGB") not in ("RGB", "L"):
+        image = image.convert("RGB")
+    image.save(buf, format="JPEG", quality=int(os.getenv("GPT_VISION_JPEG_QUALITY", "85")), optimize=True)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{b64}"
+
+
+class GPTVisionModel:
     """
-    Wrapper giu NGUYEN interface cu `.generate_content(...)` de cac call-site
-    (rag_logic / pdf_processor) khong phai doi logic khi migrate sang google-genai.
+    Wrapper giu interface cu `.generate_content(...)`.
+    contents co the la str hoac list [prompt, PIL.Image].
+    Tra ve object co `.text` giong Gemini response cu.
     """
 
     def __init__(self, api_key: str, model_name: str = DEFAULT_VISION_MODEL):
-        self._client = genai.Client(api_key=api_key)
+        self._client = OpenAI(api_key=api_key, base_url=_get_base_url())
         self.model_name = model_name
 
     def generate_content(self, contents):
-        # contents co the la str (chi prompt) hoac list [prompt, PIL.Image]
-        _throttle_gemini_call()
+        _throttle_gpt_call()
         parts = list(contents) if isinstance(contents, (list, tuple)) else [contents]
-        return self._client.models.generate_content(
+
+        user_content = []
+        for part in parts:
+            # PIL Image
+            if hasattr(part, "save") and hasattr(part, "mode"):
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": _pil_to_data_url(part)},
+                })
+            else:
+                user_content.append({"type": "text", "text": str(part)})
+
+        resp = self._client.chat.completions.create(
             model=self.model_name,
-            contents=parts,
+            messages=[{"role": "user", "content": user_content}],
+            temperature=float(os.getenv("GPT_VISION_TEMPERATURE", "0")),
+            max_tokens=int(os.getenv("GPT_VISION_MAX_OUTPUT_TOKENS", "2500")),
+            timeout=float(os.getenv("GPT_TIMEOUT_SECONDS", "180")),
         )
+        text = resp.choices[0].message.content or ""
+        return GPTVisionResponse(text=text)
+
 
 def build_vision_model(model_name: str = DEFAULT_VISION_MODEL):
-    """Tra ve GeminiVisionModel neu co API key hop le, nguoc lai None."""
-    api_key = os.getenv("GOOGLE_API_KEY")
+    """Tra ve GPTVisionModel neu co ProxyLLM/OpenAI API key hop le, nguoc lai None."""
+    api_key = _get_api_key()
     if api_key and api_key != _PLACEHOLDER_KEY:
-        return GeminiVisionModel(api_key, model_name)
+        return GPTVisionModel(api_key, model_name)
     return None

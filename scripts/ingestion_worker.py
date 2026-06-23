@@ -6,12 +6,14 @@ import traceback
 # Thêm thư mục gốc vào sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db_logic import get_pending_job, update_ingestion_job, mark_job_failed, write_audit_log
+from db_logic import get_pending_job, update_ingestion_job, mark_job_failed, mark_job_waiting_quota, write_audit_log, update_ingestion_report
 from file_learning import learn_new_file
 from logger_config import logger
 
 def run_worker():
     logger.info("Khởi động Ingestion Worker chạy ngầm...")
+
+
     print("Ingestion Worker đã sẵn sàng. Đang chờ file mới...")
     
     while True:
@@ -44,8 +46,13 @@ def run_worker():
                 
                 with engine.begin() as conn:
                     conn.execute(text("""
-                        UPDATE IngestionJobs 
-                        SET ClassificationJson = :j, ClassificationConfidence = :c, RequestedAction = :a 
+                        UPDATE dbo.IngestionJobs 
+                        SET ClassificationJson = :j, 
+                            ClassificationConfidence = :c, 
+                            RequestedAction = :a,
+                            Status = 'extracting',
+                            ProgressPercent = 20,
+                            UpdatedAt = GETDATE()
                         WHERE JobID = :id
                     """), {
                         "j": json.dumps(cls_res, ensure_ascii=False),
@@ -66,7 +73,7 @@ def run_worker():
                     update_ingestion_job(job_id, status="embedding", error_message="Đang tạo embedding...")
 
             # Sử dụng learn_new_file của hệ thống
-            success, message = learn_new_file(
+            success, message, report = learn_new_file(
                 file_path=file_path,
                 ten_file=file_name,
                 thu_muc=thu_muc,
@@ -77,17 +84,44 @@ def run_worker():
             if success:
                 logger.info(f"Job {job_id} hoàn tất: {message}")
                 print(f"[{time.strftime('%H:%M:%S')}] Thành công: {message}")
-                update_ingestion_job(job_id, status="pending_review", error_message="")
+                
+                report_saved = True
+                if report:
+                    report_saved = update_ingestion_report(job_id, report)
+                
+                if not report_saved:
+                    mark_job_failed(
+                        job_id,
+                        "Không lưu được ExtractionReport/QualityScore/QualityStatus. Không cho qua quality gate."
+                    )
+                    continue
+
+                if report and report.get("quality_status") in ["ready_for_review", "needs_review"]:
+                    update_ingestion_job(job_id, status="pending_review", error_message="")
+                else:
+                    mark_job_failed(job_id, error_message=message + " (Failed quality gate: blocked)")
             else:
                 logger.error(f"Job {job_id} thất bại: {message}")
                 print(f"[{time.strftime('%H:%M:%S')}] Thất bại: {message}")
-                mark_job_failed(job_id, error_message=message)
+                
+                if report:
+                    update_ingestion_report(job_id, report)
+                    
+                msg_lower = message.lower()
+                if "[quota_exceeded]" in msg_lower or "quota exceeded" in msg_lower or "resource_exhausted" in msg_lower or "free_tier_requests" in msg_lower:
+                    mark_job_waiting_quota(job_id, error_message=message)
+                else:
+                    mark_job_failed(job_id, error_message=message)
                 
         except Exception as e:
             logger.error(f"Lỗi không xác định trong Ingestion Worker: {e}\n{traceback.format_exc()}")
             print(f"Lỗi: {e}")
             if 'job_id' in locals():
-                mark_job_failed(job_id, error_message=str(e))
+                e_str_lower = str(e).lower()
+                if "[quota_exceeded]" in e_str_lower or "quota exceeded" in e_str_lower or "resource_exhausted" in e_str_lower or "free_tier_requests" in e_str_lower:
+                    mark_job_waiting_quota(job_id, error_message=str(e))
+                else:
+                    mark_job_failed(job_id, error_message=str(e))
             time.sleep(10)
 
 if __name__ == "__main__":

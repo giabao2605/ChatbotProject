@@ -1,0 +1,16 @@
+[
+    {
+        "question": "Vật liệu của mã 9.3.03951 Model1 là gì?",
+        "expected_answer_contains": ["SUS304"],
+        "expected_source_file": "9.3.03951",
+        "expected_page": 1,
+        "must_not_contain": ["có thể", "thường là", "khả năng"]
+    },
+    {
+        "question": "Dung sai của mã 9.3.03844 là bao nhiêu?",
+        "expected_answer_contains": ["±0.1"],
+        "expected_source_file": "9.3.03844",
+        "expected_page": 1,
+        "must_not_contain": ["không rõ nếu nguồn có", "ước tính"]
+    }
+]

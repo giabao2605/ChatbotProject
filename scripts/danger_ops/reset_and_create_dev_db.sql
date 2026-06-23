@@ -1,3 +1,8 @@
+﻿/*
+WARNING: DEV ONLY.
+This script DROPS existing tables and deletes data.
+Do NOT run on production.
+*/
 -- ==========================================
 -- DATABASE HO TRO CHATBOT CO KHI (da sua - them cot RefImages cho FIX C5)
 -- ==========================================
@@ -279,105 +284,5 @@ CREATE TABLE AuditLog (
     CreatedAt DATETIME DEFAULT GETDATE()
 );
 GO
-SELECT DB_NAME() AS CurrentDatabase;
 
-USE Mech_Chatbot_DB;
-GO
 
-IF COL_LENGTH('dbo.IngestionJobs', 'RetryCount') IS NULL
-BEGIN
-    ALTER TABLE dbo.IngestionJobs
-    ADD RetryCount INT NOT NULL CONSTRAINT DF_IngestionJobs_RetryCount DEFAULT 0;
-END
-GO
-
-IF COL_LENGTH('dbo.IngestionJobs', 'MaxRetry') IS NULL
-BEGIN
-    ALTER TABLE dbo.IngestionJobs
-    ADD MaxRetry INT NOT NULL CONSTRAINT DF_IngestionJobs_MaxRetry DEFAULT 3;
-END
-GO
-
-IF COL_LENGTH('dbo.IngestionJobs', 'LockedBy') IS NULL
-BEGIN
-    ALTER TABLE dbo.IngestionJobs
-    ADD LockedBy NVARCHAR(255) NULL;
-END
-GO
-
-IF COL_LENGTH('dbo.IngestionJobs', 'LockedAt') IS NULL
-BEGIN
-    ALTER TABLE dbo.IngestionJobs
-    ADD LockedAt DATETIME NULL;
-END
-GO
-
-IF COL_LENGTH('dbo.IngestionJobs', 'ProgressPercent') IS NULL
-BEGIN
-    ALTER TABLE dbo.IngestionJobs
-    ADD ProgressPercent INT NOT NULL CONSTRAINT DF_IngestionJobs_ProgressPercent DEFAULT 0;
-END
-GO
-
-IF COL_LENGTH('dbo.IngestionJobs', 'UpdatedAt') IS NULL
-BEGIN
-    ALTER TABLE dbo.IngestionJobs
-    ADD UpdatedAt DATETIME NOT NULL CONSTRAINT DF_IngestionJobs_UpdatedAt DEFAULT GETDATE();
-END
-GO
-
-SELECT 
-    TABLE_SCHEMA,
-    TABLE_NAME,
-    COLUMN_NAME,
-    DATA_TYPE,
-    IS_NULLABLE
-FROM INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_NAME = 'IngestionJobs'
-ORDER BY ORDINAL_POSITION;
-
-UPDATE dbo.IngestionJobs
-SET Status = 'pending',
-    RetryCount = 0,
-    LockedBy = NULL,
-    LockedAt = NULL,
-    ProgressPercent = 0,
-    UpdatedAt = GETDATE(),
-    ErrorMessage = NULL
-WHERE Status IN ('pending', 'classifying', 'extracting', 'embedding');
-
-UPDATE dbo.IngestionJobs
-SET Status = 'pending',
-    RetryCount = 0,
-    LockedBy = NULL,
-    LockedAt = NULL,
-    ProgressPercent = 0,
-    UpdatedAt = GETDATE(),
-    ErrorMessage = NULL
-WHERE Status IN ('pending', 'classifying', 'extracting', 'embedding', 'failed');
-
-USE Mech_Chatbot_DB;
-GO
-
-UPDATE dbo.IngestionJobs
-SET Status = 'pending',
-    ErrorMessage = NULL,
-    RetryCount = 0,
-    LockedBy = NULL,
-    LockedAt = NULL,
-    ProgressPercent = 0,
-    UpdatedAt = GETDATE()
-WHERE Status IN ('pending', 'classifying', 'extracting', 'embedding');
-
-USE Mech_Chatbot_DB;
-GO
-
-UPDATE dbo.IngestionJobs
-SET Status = 'pending',
-    ErrorMessage = NULL,
-    RetryCount = 0,
-    LockedBy = NULL,
-    LockedAt = NULL,
-    ProgressPercent = 0,
-    UpdatedAt = GETDATE()
-WHERE Status IN ('pending', 'classifying', 'extracting', 'embedding', 'failed');

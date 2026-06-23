@@ -24,6 +24,7 @@ def fix_ingestionjobs_schema():
         "LockedBy": "NVARCHAR(255) NULL",
         "LockedAt": "DATETIME NULL",
         "ProgressPercent": "INT NULL",
+        "UpdatedAt": "DATETIME NULL",
     }
     
     with engine.begin() as conn:
@@ -46,7 +47,8 @@ def fix_ingestionjobs_schema():
             UPDATE dbo.IngestionJobs
             SET RetryCount = ISNULL(RetryCount, 0),
                 MaxRetry = ISNULL(MaxRetry, 3),
-                ProgressPercent = ISNULL(ProgressPercent, 0)
+                ProgressPercent = ISNULL(ProgressPercent, 0),
+                UpdatedAt = ISNULL(UpdatedAt, GETDATE())
         """))
         
         # Nếu có job pending cũ nhưng thiếu file path thì đánh dấu failed để worker không kẹt

@@ -15,7 +15,11 @@ def check_coverage():
     
     q_url = os.getenv("QDRANT_URL")
     q_api = os.getenv("QDRANT_API_KEY")
-    client = QdrantClient(url=q_url, api_key=q_api)
+    client = QdrantClient(
+        url=q_url,
+        api_key=q_api,
+        timeout=120,
+    )
     collection = "TaiLieuKyThuat_v2"
     
     print("Checking SQL Database...")

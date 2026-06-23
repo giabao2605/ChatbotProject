@@ -64,7 +64,11 @@ def reset_all_data():
         qdrant_url = os.getenv("QDRANT_URL", "")
         qdrant_api_key = os.getenv("QDRANT_API_KEY", "")
         if qdrant_url and qdrant_api_key:
-            client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+            client = QdrantClient(
+                url=qdrant_url,
+                api_key=qdrant_api_key,
+                timeout=120,
+            )
             client.delete_collection(collection_name="TaiLieuKyThuat_v2")
             print("Đã xóa Qdrant collection thành công.")
         else:

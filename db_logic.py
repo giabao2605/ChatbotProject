@@ -13,10 +13,28 @@ load_dotenv()
 SQL_SERVER = os.getenv("SQL_SERVER", r"localhost\SQLEXPRESS")
 SQL_DATABASE = os.getenv("SQL_DATABASE", "Mech_Chatbot_DB")
 SQL_DRIVER = os.getenv("SQL_DRIVER", "ODBC Driver 17 for SQL Server")
- 
-params = urllib.parse.quote_plus(
-    f"DRIVER={SQL_DRIVER};SERVER={SQL_SERVER};DATABASE={SQL_DATABASE};Trusted_Connection=yes;"
-)
+SQL_USERNAME = os.getenv("SQL_USERNAME")
+SQL_PASSWORD = os.getenv("SQL_PASSWORD")
+SQL_TRUSTED_CONNECTION = os.getenv("SQL_TRUSTED_CONNECTION", "yes").lower() in {"1", "true", "yes"}
+
+if SQL_USERNAME and SQL_PASSWORD:
+    conn_str = (
+        f"DRIVER={SQL_DRIVER};"
+        f"SERVER={SQL_SERVER};"
+        f"DATABASE={SQL_DATABASE};"
+        f"UID={SQL_USERNAME};"
+        f"PWD={SQL_PASSWORD};"
+        f"TrustServerCertificate=yes;"
+    )
+else:
+    conn_str = (
+        f"DRIVER={SQL_DRIVER};"
+        f"SERVER={SQL_SERVER};"
+        f"DATABASE={SQL_DATABASE};"
+        f"Trusted_Connection=yes;"
+    )
+
+params = urllib.parse.quote_plus(conn_str)
  
 try:
     engine = create_engine(
@@ -238,7 +256,7 @@ def update_chat_feedback(chat_id, danh_gia):
 def _get_or_create_doc(conn, file_name, thu_muc):
     # Fetch classification json tu IngestionJobs (neu co) de update metadata
     job = conn.execute(
-        text("SELECT TOP 1 ClassificationJson FROM IngestionJobs WHERE TenFile = :f AND ThuMuc = :t ORDER BY CreatedAt DESC"),
+        text("SELECT TOP 1 ClassificationJson FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t ORDER BY CreatedAt DESC"),
         {"f": file_name, "t": thu_muc}
     ).fetchone()
     
@@ -301,6 +319,43 @@ def _get_or_create_doc(conn, file_name, thu_muc):
     row = res.fetchone()
     return row[0] if row else None
  
+def mark_document_ingest_failed(file_name, thu_muc, error_message=None):
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT DocID
+                    FROM TaiLieu
+                    WHERE TenFile = :f AND ThuMuc = :t
+                """),
+                {"f": file_name, "t": thu_muc}
+            ).fetchone()
+
+            if not row:
+                return
+
+            doc_id = row[0]
+
+            conn.execute(text("DELETE FROM TaiLieuKyThuat WHERE DocID = :d"), {"d": doc_id})
+            conn.execute(text("DELETE FROM BangKeVatTu WHERE DocID = :d"), {"d": doc_id})
+            conn.execute(text("DELETE FROM DocumentPages WHERE DocID = :d"), {"d": doc_id})
+            conn.execute(text("DELETE FROM TechnicalAttributes WHERE DocID = :d"), {"d": doc_id})
+
+            conn.execute(
+                text("""
+                    UPDATE TaiLieu
+                    SET LifecycleStatus = 'rejected',
+                        ReviewStatus = 'rejected',
+                        LyDoTuChoi = :msg,
+                        TrangThaiVector = 0
+                    WHERE DocID = :d
+                """),
+                {"d": doc_id, "msg": error_message or "Ingest failed"}
+            )
+    except Exception as e:
+        logger.error(f"Loi mark_document_ingest_failed: {e}", exc_info=True)
+
 def reset_document_metadata(file_name, thu_muc):
     """Fix #1: GOI MOT LAN truoc khi nap file. Xoa metadata cu, tra ve DocID dung chung."""
     _ensure_engine()
@@ -310,6 +365,8 @@ def reset_document_metadata(file_name, thu_muc):
             if doc_id is not None:
                 conn.execute(text("DELETE FROM TaiLieuKyThuat WHERE DocID = :d"), {"d": doc_id})
                 conn.execute(text("DELETE FROM BangKeVatTu WHERE DocID = :d"), {"d": doc_id})
+                conn.execute(text("DELETE FROM DocumentPages WHERE DocID = :d"), {"d": doc_id})
+                conn.execute(text("DELETE FROM TechnicalAttributes WHERE DocID = :d"), {"d": doc_id})
             return doc_id
     except Exception as e:
         logger.error(f"Loi reset metadata {file_name}: {e}", exc_info=True)
@@ -362,6 +419,131 @@ def _prepare_metadata_params(info):
         "yckt": _sanitize_text(info.get("yckt")),
     }
  
+def save_document_page(doc_id, file_name, page_no, text_extract, local_ocr_text, vision_summary, local_ocr_confidence, extraction_status, image_path):
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO dbo.DocumentPages (
+                        DocID, FileName, PageNo, TextExtract, LocalOCRText, 
+                        VisionSummary, LocalOCRConfidence, ExtractionStatus, ImagePath
+                    ) VALUES (
+                        :d, :f, :p, :t, :o, :v, :c, :s, :i
+                    )
+                """),
+                {
+                    "d": doc_id,
+                    "f": file_name,
+                    "p": page_no,
+                    "t": text_extract,
+                    "o": local_ocr_text,
+                    "v": vision_summary,
+                    "c": local_ocr_confidence,
+                    "s": extraction_status,
+                    "i": image_path
+                }
+            )
+    except Exception as e:
+        logger.error(f"Loi luu DocumentPages cho {file_name} trang {page_no}: {e}", exc_info=True)
+
+def save_technical_attributes(doc_id, file_name, page_no, attributes):
+    if not attributes:
+        return
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            for attr in attributes:
+                conn.execute(
+                    text("""
+                        INSERT INTO dbo.TechnicalAttributes (
+                            DocID, FileName, PageNo, AttributeType, AttributeName, 
+                            AttributeValue, Unit, SourceText, Confidence, ExtractedBy
+                        ) VALUES (
+                            :d, :f, :p, :at, :an, :av, :u, :st, :c, :eb
+                        )
+                    """),
+                    {
+                        "d": doc_id,
+                        "f": file_name,
+                        "p": page_no,
+                        "at": attr.get("AttributeType", ""),
+                        "an": attr.get("AttributeName", ""),
+                        "av": str(attr.get("AttributeValue", ""))[:500],
+                        "u": attr.get("Unit"),
+                        "st": attr.get("SourceText"),
+                        "c": attr.get("Confidence"),
+                        "eb": attr.get("ExtractedBy")
+                    }
+                )
+    except Exception as e:
+        logger.error(f"Loi luu TechnicalAttributes cho {file_name}: {e}", exc_info=True)
+
+def verify_technical_attribute(attr_id, verified_by, correct_value=None):
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            if correct_value is not None:
+                conn.execute(
+                    text("""
+                        UPDATE dbo.TechnicalAttributes
+                        SET HumanVerified = 1,
+                            VerifiedBy = :v,
+                            VerifiedAt = GETDATE(),
+                            AttributeValue = :val
+                        WHERE AttributeID = :id
+                    """),
+                    {"id": attr_id, "v": verified_by, "val": str(correct_value)[:500]}
+                )
+            else:
+                conn.execute(
+                    text("""
+                        UPDATE dbo.TechnicalAttributes
+                        SET HumanVerified = 1,
+                            VerifiedBy = :v,
+                            VerifiedAt = GETDATE()
+                        WHERE AttributeID = :id
+                    """),
+                    {"id": attr_id, "v": verified_by}
+                )
+    except Exception as e:
+        logger.error(f"Loi verify_technical_attribute: {e}", exc_info=True)
+
+def get_technical_attributes_for_rag(file_name):
+    _ensure_engine()
+    try:
+        with engine.connect() as conn:
+            # Ưu tiên lấy dòng được human verified, sau đó mới đến confidence cao
+            rows = conn.execute(
+                text("""
+                    SELECT AttributeType, AttributeValue, Unit, HumanVerified, ExtractedBy
+                    FROM (
+                        SELECT *,
+                               ROW_NUMBER() OVER(
+                                   PARTITION BY AttributeType 
+                                   ORDER BY HumanVerified DESC, Confidence DESC
+                               ) as rn
+                        FROM dbo.TechnicalAttributes
+                        WHERE FileName = :f
+                    ) t
+                    WHERE rn = 1
+                """),
+                {"f": file_name}
+            ).fetchall()
+            
+            result = {}
+            for r in rows:
+                result[r[0]] = {
+                    "value": r[1],
+                    "unit": r[2],
+                    "human_verified": bool(r[3]),
+                    "extracted_by": r[4]
+                }
+            return result
+    except Exception as e:
+        logger.error(f"Loi get_technical_attributes_for_rag {file_name}: {e}", exc_info=True)
+        return {}
+
 def save_page_metadata(file_name, thu_muc, info, doc_id=None):
     """Fix #1: Chi INSERT 1 dong cho 1 trang. KHONG xoa du lieu trang khac."""
     _ensure_engine()
@@ -445,9 +627,19 @@ def save_bom_records(doc_id, trang_so, records):
     except Exception as e:
         logger.error(f"Loi save_bom_records cho doc_id {doc_id}, trang {trang_so}: {e}", exc_info=True)
 
-def search_bom_by_code(ma_hang_list, version_policy="current_only", detected_versions=None, user_department=None, user_roles=None):
+def search_bom_by_code(
+    ma_hang_list,
+    version_policy="current_only",
+    detected_versions=None,
+    user_department=None,
+    user_roles=None,
+    allowed_departments=None,
+):
     """Tim kiem bang ke vat tu tren SQL theo ma hang hoac ma doi tuong (parent assembly)"""
     if not ma_hang_list:
+        return []
+    if not user_roles:
+        logger.warning("Deny SQL BOM search because user_roles is empty.")
         return []
     _ensure_engine()
     try:
@@ -484,7 +676,18 @@ def search_bom_by_code(ma_hang_list, version_policy="current_only", detected_ver
                 
             # RBAC
             if not user_roles or "admin" not in user_roles:
-                filter_sql += " AND (t.ThuMuc = :dept OR t.ThuMuc = 'CHUNG')"
+                allowed = list(allowed_departments or [])
+                if user_department and user_department not in allowed:
+                    allowed.append(user_department)
+                if "CHUNG" not in allowed:
+                    allowed.append("CHUNG")
+
+                dept_conditions = []
+                for i, dept in enumerate(allowed):
+                    key = f"dept{i}"
+                    dept_conditions.append(f"t.ThuMuc = :{key}")
+
+                filter_sql += " AND (" + " OR ".join(dept_conditions) + ")"
             
             query = text(f"""
                 SELECT DISTINCT b.MaHang, b.TenVatTu, b.VatLieu, b.SoLuong, b.GhiChu, t.TenFile, t.VersionNo 
@@ -496,7 +699,8 @@ def search_bom_by_code(ma_hang_list, version_policy="current_only", detected_ver
             """)
             params = {f"m{i}": f"%{m}%" for i, m in enumerate(ma_hang_list)}
             if not user_roles or "admin" not in user_roles:
-                params["dept"] = user_department
+                for i, dept in enumerate(allowed):
+                    params[f"dept{i}"] = dept
                 
             result = conn.execute(query, params).fetchall()
             return result
@@ -514,7 +718,7 @@ def create_ingestion_job(file_name, file_path, thu_muc, uploaded_by=None):
             result = conn.execute(
                 text(
                     """
-                    INSERT INTO IngestionJobs (TenFile, FilePath, ThuMuc, Status, UploadedBy)
+                    INSERT INTO dbo.IngestionJobs (TenFile, FilePath, ThuMuc, Status, UploadedBy)
                     OUTPUT INSERTED.JobID
                     VALUES (:f, :p, :t, 'pending', :u)
                     """
@@ -537,8 +741,10 @@ def update_ingestion_job(job_id, status, error_message=None):
             conn.execute(
                 text(
                     """
-                    UPDATE IngestionJobs
-                    SET Status = :s, ErrorMessage = :e, UpdatedAt = GETDATE()
+                    UPDATE dbo.IngestionJobs
+                    SET Status = :s,
+                        ErrorMessage = :e,
+                        UpdatedAt = GETDATE()
                     WHERE JobID = :id
                     """
                 ),
@@ -547,22 +753,74 @@ def update_ingestion_job(job_id, status, error_message=None):
     except Exception as e:
         logger.error(f"Loi cap nhat IngestionJob {job_id}: {e}", exc_info=True)
 
+def update_ingestion_report(job_id, report):
+    _ensure_engine()
+    try:
+        import json
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE dbo.IngestionJobs
+                SET ExtractionReport = :report,
+                    QualityScore = :score,
+                    QualityStatus = :status,
+                    UpdatedAt = GETDATE()
+                WHERE JobID = :id
+            """), {
+                "id": job_id,
+                "report": json.dumps(report, ensure_ascii=False),
+                "score": report.get("quality_score"),
+                "status": report.get("quality_status")
+            })
+        return True
+    except Exception as e:
+        logger.error(f"Loi cap nhat report cho job {job_id}: {e}", exc_info=True)
+        return False
 def get_pending_job(worker_id="worker-1"):
     _ensure_engine()
     try:
-        with engine.connect() as conn:
-            # Dung UPDATE voi OUTPUT cho atomic picking (chong race condition neu co nhieu worker)
+        with engine.begin() as conn:
+            # Atomic picking:
+            # - READPAST: bỏ qua job đang bị worker khác lock
+            # - UPDLOCK: giữ update lock cho dòng được chọn
+            # - ROWLOCK: ưu tiên lock cấp dòng
             result = conn.execute(
                 text(
                     """
                     WITH CTE AS (
-                        SELECT TOP 1 JobID, Status
-                        FROM IngestionJobs
+                        SELECT TOP 1
+                            JobID,
+                            TenFile,
+                            FilePath,
+                            ThuMuc,
+                            Status,
+                            RetryCount,
+                            MaxRetry,
+                            LockedBy,
+                            LockedAt,
+                            ProgressPercent,
+                            CreatedAt,
+                            UpdatedAt
+                        FROM dbo.IngestionJobs WITH (READPAST, UPDLOCK, ROWLOCK)
                         WHERE (
-                            (Status = 'pending' AND (LockedAt IS NULL OR LockedAt < DATEADD(minute, -15, GETDATE())))
-                            OR (Status IN ('classifying', 'extracting', 'embedding') AND LockedAt < DATEADD(minute, -15, GETDATE()))
-                          )
-                          AND ISNULL(RetryCount, 0) < ISNULL(MaxRetry, 3)
+                            (
+                                Status IN ('pending', 'pending_retry')
+                                AND (
+                                    LockedAt IS NULL
+                                    OR LockedAt < DATEADD(minute, -15, GETDATE())
+                                )
+                                AND ISNULL(RetryCount, 0) < ISNULL(MaxRetry, 3)
+                            )
+                            OR (
+                                Status = 'waiting_quota'
+                                AND NextRetryAt IS NOT NULL
+                                AND NextRetryAt <= GETDATE()
+                            )
+                            OR (
+                                Status IN ('classifying', 'extracting', 'embedding')
+                                AND LockedAt < DATEADD(minute, -15, GETDATE())
+                                AND ISNULL(RetryCount, 0) < ISNULL(MaxRetry, 3)
+                            )
+                        )
                         ORDER BY CreatedAt ASC
                     )
                     UPDATE CTE
@@ -571,40 +829,84 @@ def get_pending_job(worker_id="worker-1"):
                         LockedAt = GETDATE(),
                         ProgressPercent = 5,
                         UpdatedAt = GETDATE()
-                    OUTPUT inserted.JobID, inserted.TenFile, inserted.FilePath, inserted.ThuMuc;
+                    OUTPUT
+                        inserted.JobID,
+                        inserted.TenFile,
+                        inserted.FilePath,
+                        inserted.ThuMuc;
                     """
                 ),
                 {"worker_id": worker_id}
             )
+
             row = result.fetchone()
+
             if row:
-                conn.commit()
-                return {"job_id": row[0], "ten_file": row[1], "file_path": row[2], "thu_muc": row[3]}
+                return {
+                    "job_id": row[0],
+                    "ten_file": row[1],
+                    "file_path": row[2],
+                    "thu_muc": row[3],
+                }
+
             return None
+
     except Exception as e:
         logger.error(f"Loi lay pending job: {e}", exc_info=True)
         return None
 
 def mark_job_failed(job_id, error_message):
     _ensure_engine()
+    lower_msg = str(error_message).lower()
+    if (
+        "[quota_exceeded]" in lower_msg
+        or "quota exceeded" in lower_msg
+        or "resource_exhausted" in lower_msg
+        or "free_tier_requests" in lower_msg
+    ):
+        return mark_job_waiting_quota(job_id, error_message)
     try:
         with engine.begin() as conn:
             conn.execute(text("""
-                UPDATE IngestionJobs
+                UPDATE dbo.IngestionJobs
                 SET RetryCount = ISNULL(RetryCount, 0) + 1,
                     Status = CASE 
-                        WHEN ISNULL(RetryCount, 0) + 1 >= ISNULL(MaxRetry, 3)
-                        THEN 'failed'
-                        ELSE 'pending'
+                        WHEN :e LIKE '%[AUTH_ERROR]%' THEN 'failed'
+                        WHEN ISNULL(RetryCount, 0) + 1 >= ISNULL(MaxRetry, 3) THEN 'failed'
+                        ELSE 'pending_retry'
                     END,
                     ErrorMessage = :e,
                     LockedBy = NULL,
                     LockedAt = NULL,
+                    ProgressPercent = 0,
                     UpdatedAt = GETDATE()
                 WHERE JobID = :id
             """), {"id": job_id, "e": error_message})
     except Exception as e:
         logger.error(f"Loi danh dau job fail {job_id}: {e}", exc_info=True)
+
+def mark_job_waiting_quota(job_id, error_message, retry_after_hours=24):
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE dbo.IngestionJobs
+                SET Status = 'waiting_quota',
+                    FailureType = 'gemini_quota',
+                    ErrorMessage = :e,
+                    NextRetryAt = DATEADD(hour, :h, GETDATE()),
+                    LockedBy = NULL,
+                    LockedAt = NULL,
+                    ProgressPercent = 0,
+                    UpdatedAt = GETDATE()
+                WHERE JobID = :id
+            """), {
+                "id": job_id,
+                "e": error_message,
+                "h": retry_after_hours
+            })
+    except Exception as e:
+        logger.error(f"Loi danh dau waiting_quota job {job_id}: {e}", exc_info=True)
 
 # ==========================================
 # PHAN QUAN LY VONG DOI & REVIEW (PHASE 3)
@@ -643,7 +945,8 @@ def update_qdrant_metadata(doc_id, metadata_updates):
         )
         points, _ = scroll_res
         if not points:
-            return
+            logger.warning(f"Không tìm thấy Qdrant points cho DocID {doc_id}")
+            return False
             
         for p in points:
             meta = p.payload.get("metadata", {}) if p.payload else {}
@@ -656,8 +959,10 @@ def update_qdrant_metadata(doc_id, metadata_updates):
             )
             
         logger.info(f"Updated Qdrant payload cho {len(points)} chunks cua DocID {doc_id}")
+        return True
     except Exception as e:
-        logger.error(f"Loi update Qdrant payload cho DocID {doc_id}: {e}")
+        logger.error(f"Loi update Qdrant payload cho DocID {doc_id}: {e}", exc_info=True)
+        return False
 
 def get_doc(doc_id):
     _ensure_engine()
@@ -695,11 +1000,13 @@ def publish_as_new_version(doc_id, reviewer="System"):
             conn.execute(text("""
                 UPDATE TaiLieu SET IsCurrent = 0, IsArchived = 1, LifecycleStatus = 'superseded', ArchivedAt = GETDATE() WHERE DocID = :id
             """), {"id": old.DocID})
-            update_qdrant_metadata(old.DocID, {
+            ok_old = update_qdrant_metadata(old.DocID, {
                 "is_current": False,
                 "is_archived": True,
                 "lifecycle_status": "superseded"
             })
+            if not ok_old:
+                raise RuntimeError(f"Update Qdrant metadata that bai cho old DocID {old.DocID}")
             
         conn.execute(text("""
             UPDATE TaiLieu SET IsCurrent = 1, IsArchived = 0, LifecycleStatus = 'published', ReviewStatus = 'approved',
@@ -708,7 +1015,7 @@ def publish_as_new_version(doc_id, reviewer="System"):
             WHERE DocID = :id
         """), {"id": doc.DocID, "rev": reviewer, "old_id": old_id})
         
-        update_qdrant_metadata(doc.DocID, {
+        ok_new = update_qdrant_metadata(doc.DocID, {
             "doc_status": "published",
             "lifecycle_status": "published",
             "review_status": "approved",
@@ -717,6 +1024,8 @@ def publish_as_new_version(doc_id, reviewer="System"):
             "published_at": datetime.now().isoformat(),
             "supersedes_doc_id": old_id
         })
+        if not ok_new:
+            raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc.DocID}")
         
     write_audit_log(reviewer, "publish_new_version", "TaiLieu", doc.DocID, {"base_code": doc.BaseCode, "version": doc.VersionNo, "superseded": old_id})
     return True
@@ -732,7 +1041,7 @@ def publish_as_new_variant(doc_id, reviewer="System"):
             WHERE DocID = :id
         """), {"id": doc.DocID, "rev": reviewer})
         
-        update_qdrant_metadata(doc.DocID, {
+        ok_var = update_qdrant_metadata(doc.DocID, {
             "doc_status": "published",
             "lifecycle_status": "published",
             "review_status": "approved",
@@ -740,6 +1049,8 @@ def publish_as_new_variant(doc_id, reviewer="System"):
             "is_archived": False,
             "published_at": datetime.now().isoformat()
         })
+        if not ok_var:
+            raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc.DocID}")
         
     write_audit_log(reviewer, "publish_variant", "TaiLieu", doc.DocID, {"base_code": doc.BaseCode, "variant": doc.VariantCode})
     return True
@@ -754,10 +1065,12 @@ def reject_document(doc_id, reviewer="System"):
             WHERE DocID = :id
         """), {"id": doc_id, "rev": reviewer})
         
-        update_qdrant_metadata(doc_id, {
+        ok_rej = update_qdrant_metadata(doc_id, {
             "lifecycle_status": "rejected",
             "review_status": "rejected"
         })
+        if not ok_rej:
+            raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc_id}")
         
     write_audit_log(reviewer, "reject_document", "TaiLieu", doc_id, {})
     return True
@@ -769,11 +1082,13 @@ def archive_document(doc_id, reviewer="System"):
             WHERE DocID = :id
         """), {"id": doc_id})
         
-        update_qdrant_metadata(doc_id, {
+        ok_arch = update_qdrant_metadata(doc_id, {
             "is_current": False,
             "is_archived": True,
             "lifecycle_status": "archived"
         })
+        if not ok_arch:
+            raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc_id}")
         
     write_audit_log(reviewer, "archive_document", "TaiLieu", doc_id, {})
     return True
@@ -822,11 +1137,13 @@ def rollback_to_version_by_family(family_id, version_no, variant_code="default",
                     WHERE DocID = :id
                 """), {"id": old_doc_id})
 
-                update_qdrant_metadata(old_doc_id, {
+                ok_rb_old = update_qdrant_metadata(old_doc_id, {
                     "is_current": False,
                     "is_archived": True,
                     "lifecycle_status": "superseded"
                 })
+                if not ok_rb_old:
+                    raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {old_doc_id}")
 
             target = conn.execute(text("""
                 SELECT DocID FROM TaiLieu
@@ -859,12 +1176,14 @@ def rollback_to_version_by_family(family_id, version_no, variant_code="default",
                 "rev": reviewer
             })
 
-            update_qdrant_metadata(target_doc_id, {
+            ok_rb_new = update_qdrant_metadata(target_doc_id, {
                 "is_current": True,
                 "is_archived": False,
                 "lifecycle_status": "published",
                 "review_status": "approved"
             })
+            if not ok_rb_new:
+                raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {target_doc_id}")
 
             write_audit_log(reviewer, "rollback", "TaiLieu", target_doc_id, {"family_id": family_id, "target_version": version_no})
             return True

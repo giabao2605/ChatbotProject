@@ -11,7 +11,7 @@ from rag_logic import chat_with_rag, extract_search_intent
 from logger_config import logger
 
 def run_evaluation():
-    golden_set_file = os.path.join(os.path.dirname(__file__), "golden_set.jsonl")
+    golden_set_file = os.path.join(os.path.dirname(__file__), "golden_set_datagoc_real.jsonl")
     output_file = os.path.join(os.path.dirname(__file__), "eval_report.md")
     
     if not os.path.exists(golden_set_file):
