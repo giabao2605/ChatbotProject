@@ -184,14 +184,18 @@ def run_admin():
                                         WHERE TenFile = :f AND ThuMuc = :t
                                     """), {"f": ten_file, "t": thu_muc})
 
-                            if "version mới" in action_choice:
-                                success = publish_as_new_version(doc_id, reviewer=current_user["username"])
-                            elif "variant mới" in action_choice:
-                                success = publish_as_new_variant(doc_id, reviewer=current_user["username"])
-                            elif "độc lập" in action_choice:
-                                success = publish_as_standalone(doc_id, reviewer=current_user["username"])
-                            elif "Từ chối" in action_choice:
-                                success = reject_document(doc_id, reviewer=current_user["username"])
+                            try:
+                                if "version mới" in action_choice:
+                                    success = publish_as_new_version(doc_id, reviewer=current_user["username"])
+                                elif "variant mới" in action_choice:
+                                    success = publish_as_new_variant(doc_id, reviewer=current_user["username"])
+                                elif "độc lập" in action_choice:
+                                    success = publish_as_standalone(doc_id, reviewer=current_user["username"])
+                                elif "Từ chối" in action_choice:
+                                    success = reject_document(doc_id, reviewer=current_user["username"])
+                            except Exception as e:
+                                success = False
+                                st.error(f"Lỗi khi xử lý '{action_choice}': {e}")
                                 
                             if success:
                                 with engine.begin() as conn:

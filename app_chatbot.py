@@ -73,10 +73,26 @@ def safe_folder_name(name: str) -> str:
     name = re.sub(r'[\\/*?:"<>|]', "_", name)
     name = name.replace("..", "_")
     return name[:100]
+import threading as _threading
+
+# Phase 1: Giới hạn số subprocess RAG chạy đồng thời để tránh OOM.
+_MAX_CONCURRENT_RAG = int(os.getenv("MAX_CONCURRENT_RAG", "2"))
+_RAG_SEMAPHORE = _threading.Semaphore(_MAX_CONCURRENT_RAG)
+
+import logging as _logging
+_worker_logger = _logging.getLogger("MechChatbot")
 
 
 def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None):
     """Run RAG in a separate Python process so native libs cannot crash Streamlit."""
+    acquired = _RAG_SEMAPHORE.acquire(timeout=120)
+    if not acquired:
+        raise RuntimeError(
+            f"Hệ thống đang bận ({_MAX_CONCURRENT_RAG} request đang xử lý). "
+            "Vui lòng thử lại sau ít giây."
+        )
+
+    t_start = time.time()
     base_dir = os.path.dirname(os.path.abspath(__file__))
     worker_path = os.path.join(base_dir, "rag_worker.py")
     payload = {
@@ -106,6 +122,15 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
             timeout=timeout,
         )
 
+        elapsed = time.time() - t_start
+        _worker_logger.info(
+            f"RAG worker finished: returncode={result.returncode}, "
+            f"elapsed={elapsed:.1f}s"
+        )
+
+        if result.stderr:
+            _worker_logger.warning(f"RAG worker stderr (last 2000 chars): {result.stderr[-2000:]}")
+
         if not os.path.exists(out_path):
             err = (result.stderr or result.stdout or "Không có output từ RAG worker")[-4000:]
             raise RuntimeError(f"RAG worker không trả kết quả. returncode={result.returncode}. Log: {err}")
@@ -128,6 +153,7 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
         return one_chunk_stream(), ref_text, ref_images, new_part_ids, debug_info
 
     finally:
+        _RAG_SEMAPHORE.release()
         for path in (in_path, out_path):
             try:
                 if os.path.exists(path):
@@ -136,7 +162,75 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
                 pass
 
 # Da xoa _escape_md (Tranh loi double-escape cho Markdown)
- 
+
+# ==========================================
+# Phase 2: HTTP client mode — gọi rag_server.py thay vì subprocess
+# ==========================================
+RAG_SERVER_URL = os.getenv("RAG_SERVER_URL", "")  # e.g. http://localhost:8100
+
+
+def chat_with_rag_api(user_question, image_path=None, chat_history=None,
+                      current_part_ids=None, user_department=None,
+                      user_roles=None, allowed_departments=None):
+    """Call the persistent RAG FastAPI server via HTTP (Phase 2 mode)."""
+    import requests as _requests
+
+    payload = {
+        "user_question": user_question,
+        "image_path": image_path,
+        "chat_history": chat_history or [],
+        "current_part_ids": current_part_ids or [],
+        "user_department": user_department,
+        "user_roles": user_roles or [],
+        "allowed_departments": allowed_departments or [],
+    }
+
+    timeout = int(os.getenv("RAG_WORKER_TIMEOUT", "240"))
+
+    try:
+        resp = _requests.post(
+            f"{RAG_SERVER_URL}/chat",
+            json=payload,
+            timeout=timeout,
+        )
+    except _requests.ConnectionError:
+        raise RuntimeError(
+            f"Không kết nối được RAG Server tại {RAG_SERVER_URL}. "
+            "Vui lòng đảm bảo server đang chạy (python rag_server.py)."
+        )
+    except _requests.Timeout:
+        raise RuntimeError(
+            f"RAG Server không phản hồi trong {timeout}s. "
+            "Hệ thống có thể đang quá tải."
+        )
+
+    if resp.status_code == 503:
+        detail = resp.json().get("detail", "Hệ thống đang bận")
+        raise RuntimeError(detail)
+
+    if resp.status_code != 200:
+        detail = resp.json().get("detail", resp.text[:500])
+        raise RuntimeError(f"RAG Server lỗi (HTTP {resp.status_code}): {detail}")
+
+    data = resp.json()
+    response_text = data.get("response", "")
+    ref_text = data.get("ref_text", "")
+    ref_images = data.get("ref_images", [])
+    new_part_ids = data.get("new_part_ids", current_part_ids or [])
+    debug_info = data.get("debug_info", {})
+
+    def one_chunk_stream():
+        yield response_text
+
+    return one_chunk_stream(), ref_text, ref_images, new_part_ids, debug_info
+
+
+def chat_with_rag_dispatch(user_question, **kwargs):
+    """Auto-dispatch: dùng FastAPI server nếu RAG_SERVER_URL được set, ngược lại dùng subprocess."""
+    if RAG_SERVER_URL:
+        return chat_with_rag_api(user_question, **kwargs)
+    return chat_with_rag_worker(user_question, **kwargs)
+
 
 def run_chat():
     # ==========================================
@@ -509,7 +603,7 @@ def run_chat():
  
                     # 1. THUC HIEN RAG (Co RBAC)
                     try:
-                        stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag_worker(
+                        stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag_dispatch(
                             user_question=prompt,
                             image_path=temp_img_path,
                             chat_history=history_for_rag,

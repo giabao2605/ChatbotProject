@@ -15,34 +15,31 @@ def create_indexes():
     Tạo Payload Index cho Qdrant để tăng tốc độ filter/tìm kiếm
     khi dữ liệu quy mô lớn (scale up).
     """
-    # Load biến môi trường
     load_dotenv()
-    
+
     qdrant_url = os.getenv("QDRANT_URL", "")
     qdrant_api_key = os.getenv("QDRANT_API_KEY", "")
-    
+
     if not qdrant_url or not qdrant_api_key:
         logger.error("Thiếu thiết lập QDRANT_URL hoặc QDRANT_API_KEY trong file .env")
         return
 
     logger.info(f"Đang kết nối tới Qdrant tại: {qdrant_url} ...")
     try:
-        client = QdrantClient(
-            url=qdrant_url,
-            api_key=qdrant_api_key,
-            timeout=120,
-        )
-        
+        client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=120)
+
         collection_name = "TaiLieuKyThuat_v2"
-        
-        # Kiểm tra collection tồn tại
+
         if not client.collection_exists(collection_name):
             logger.error(f"Collection '{collection_name}' không tồn tại. Vui lòng chạy ứng dụng chính trước để khởi tạo.")
             return
 
-        # Định nghĩa các index cần tạo
         REQUIRED_INDEXES = {
             "metadata.ma_doi_tuong": models.PayloadSchemaType.KEYWORD,
+            "metadata.ma_chinh": models.PayloadSchemaType.KEYWORD,
+            "metadata.ma_btp": models.PayloadSchemaType.KEYWORD,
+            "metadata.ma_vat_tu": models.PayloadSchemaType.KEYWORD,
+            "metadata.ma_lien_quan": models.PayloadSchemaType.KEYWORD,
             "metadata.file_goc": models.PayloadSchemaType.KEYWORD,
             "metadata.phong_ban_quyen": models.PayloadSchemaType.KEYWORD,
             "metadata.loai_du_lieu": models.PayloadSchemaType.KEYWORD,
@@ -58,14 +55,11 @@ def create_indexes():
             "metadata.is_current": models.PayloadSchemaType.BOOL,
             "metadata.is_archived": models.PayloadSchemaType.BOOL,
         }
-        
-        # Lấy thông tin schema hiện tại
+
         info = client.get_collection(collection_name)
         existing_indexes = info.payload_schema or {}
-        
         logger.info(f"Schema hiện tại có {len(existing_indexes)} index(es).")
-        
-        # Tạo index nếu chưa có
+
         created_count = 0
         for field_name, field_schema in REQUIRED_INDEXES.items():
             if field_name not in existing_indexes:
@@ -80,9 +74,9 @@ def create_indexes():
                 logger.info(f"✓ Tạo index '{field_name}' thành công.")
             else:
                 logger.info(f"Trường '{field_name}' đã được index.")
-                
+
         logger.info(f"Đã tạo mới {created_count} index(es). Tối ưu hóa Qdrant hoàn tất.")
-        
+
     except Exception as e:
         logger.error(f"Có lỗi xảy ra khi kết nối/tạo index Qdrant: {e}")
 

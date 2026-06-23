@@ -931,9 +931,24 @@ def write_audit_log(username, action, entity_type=None, entity_id=None, details=
     except Exception as e:
         logger.error(f"Loi write_audit_log: {e}", exc_info=True)
 
+_qdrant_client_singleton = None
+
+def _get_qdrant_client():
+    """QdrantClient nhẹ, KHÔNG nạp model RAG (torch/onnxruntime) vào tiến trình hiện tại.
+    Dùng cho thao tác admin (publish/reject/archive) gọi từ Streamlit để tránh crash native."""
+    global _qdrant_client_singleton
+    if _qdrant_client_singleton is None:
+        from qdrant_client import QdrantClient
+        _qdrant_client_singleton = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+            timeout=120,
+        )
+    return _qdrant_client_singleton
+
 def update_qdrant_metadata(doc_id, metadata_updates):
-    from rag_logic import client
     from qdrant_client import models
+    client = _get_qdrant_client()
     try:
         scroll_res = client.scroll(
             collection_name="TaiLieuKyThuat_v2",
@@ -945,8 +960,8 @@ def update_qdrant_metadata(doc_id, metadata_updates):
         )
         points, _ = scroll_res
         if not points:
-            logger.warning(f"Không tìm thấy Qdrant points cho DocID {doc_id}")
-            return False
+            logger.warning(f"Không có Qdrant points cho DocID {doc_id} (tài liệu chưa nạp vào Qdrant). Bỏ qua cập nhật metadata Qdrant, coi như thành công.")
+            return True
             
         for p in points:
             meta = p.payload.get("metadata", {}) if p.payload else {}

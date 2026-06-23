@@ -15,3 +15,7 @@ underthesea
 sentence-transformers
 openai
 langchain-openai
+bcrypt
+fastapi
+uvicorn
+requests

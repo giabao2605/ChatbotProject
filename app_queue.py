@@ -23,10 +23,11 @@ def run_queue():
                 LockedBy, LockedAt, ProgressPercent, UpdatedAt,
                 FailureType, NextRetryAt, QualityScore, QualityStatus, ExtractionReport
             FROM dbo.IngestionJobs
+            WHERE Status NOT IN ('pending_review', 'published', 'rejected', 'archived', 'superseded')
             """
             params = {}
             if not is_admin:
-                query_str += " WHERE ThuMuc = :dept OR UploadedBy = :uname"
+                query_str += " AND (ThuMuc = :dept OR UploadedBy = :uname)"
                 params["dept"] = current_user["department"]
                 params["uname"] = current_user["username"]
                 

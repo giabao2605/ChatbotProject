@@ -114,40 +114,9 @@ class RAGSystem:
                 }
             )
 
-        REQUIRED_PAYLOAD_INDEXES = {
-            "metadata.file_goc": models.PayloadSchemaType.KEYWORD,
-            "metadata.phong_ban_quyen": models.PayloadSchemaType.KEYWORD,
-            "metadata.ma_doi_tuong": models.PayloadSchemaType.KEYWORD,
-            "metadata.ma_chinh": models.PayloadSchemaType.KEYWORD,
-            "metadata.ma_btp": models.PayloadSchemaType.KEYWORD,
-            "metadata.ma_vat_tu": models.PayloadSchemaType.KEYWORD,
-            "metadata.ma_lien_quan": models.PayloadSchemaType.KEYWORD,
-            "metadata.loai_du_lieu": models.PayloadSchemaType.KEYWORD,
-            "metadata.doc_status": models.PayloadSchemaType.KEYWORD,
-            "metadata.doc_id": models.PayloadSchemaType.INTEGER,
-            "metadata.family_id": models.PayloadSchemaType.INTEGER,
-            "metadata.base_code": models.PayloadSchemaType.KEYWORD,
-            "metadata.version_no": models.PayloadSchemaType.INTEGER,
-            "metadata.version_label": models.PayloadSchemaType.KEYWORD,
-            "metadata.variant_code": models.PayloadSchemaType.KEYWORD,
-            "metadata.lifecycle_status": models.PayloadSchemaType.KEYWORD,
-            "metadata.review_status": models.PayloadSchemaType.KEYWORD,
-            "metadata.is_current": models.PayloadSchemaType.BOOL,
-            "metadata.is_archived": models.PayloadSchemaType.BOOL,
-        }
-        
-        info = client.get_collection("TaiLieuKyThuat_v2")
-        existing_indexes = info.payload_schema or {}
-        
-        for field_name, field_schema in REQUIRED_PAYLOAD_INDEXES.items():
-            if field_name not in existing_indexes:
-                logger.info(f"   -> Dang tao Payload Index cho '{field_name}'...")
-                client.create_payload_index(
-                    collection_name="TaiLieuKyThuat_v2",
-                    field_name=field_name,
-                    field_schema=field_schema,
-                    wait=True,
-                )
+        # NOTE: Payload indexes are managed by scripts/create_qdrant_indexes.py
+        # Run that script once during initial setup or after schema changes.
+        # Removed from here to speed up cold-start time.
  
         vectorstore = QdrantVectorStore(
             client=client,
@@ -489,7 +458,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         is_inherited = True
         
         if is_inherited and new_part_ids:
-            from pdf_processor import remove_accents
+            from text_utils import remove_accents
             q_norm = remove_accents(question.lower())
             broad_keywords = ["toan bo", "tat ca", "danh sach", "co nhung ma", "co nhung san pham", "cac ma", "cac san pham"]
             if any(kw in q_norm for kw in broad_keywords):
@@ -558,7 +527,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         qdrant_filter = models.Filter(must=must_conditions)
         return qdrant_filter, qdrant_filter, new_part_ids, is_inherited, False, intent_data
  
-    from pdf_processor import remove_accents
+    from text_utils import remove_accents
     q_norm = remove_accents(question.lower())
     is_bom_query = intent_data["query_type"] == "bom_lookup" or any(kw in q_norm for kw in ["vat tu", "bang ke", "bom", "danh sach", "chi tiet", "gom nhung gi", "cau tao", "linh kien", "part list", "thanh phan", "chi tiet con", "vat lieu", "cum nay", "ma nao"])
  
@@ -647,7 +616,7 @@ MATERIAL_SUB_EVIDENCE_PATTERNS = [r"thay\s*the|tuong\s*duong|co\s*the\s*thay|vat
 
 
 def _norm(text):
-    from pdf_processor import remove_accents
+    from text_utils import remove_accents
     return remove_accents(str(text or "").lower())
 
 
@@ -1041,7 +1010,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                       reason="no_vision_model")
  
     # BUOC B: TIM KIEM THONG MINH KET HOP STATE MEMORY
-    from pdf_processor import remove_accents
+    from text_utils import remove_accents
     text_clean_check = re.sub(r'[^\w\s]', '', remove_accents(user_question.lower())).strip()
     chitchat_words_check = {"xin chao", "chao", "hi", "hello", "cam on", "thank", "thanks", "ok", "da", "vang", "tam biet", "bye", "alo", "chao ban"}
     is_chitchat = text_clean_check in chitchat_words_check
@@ -1279,7 +1248,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 target_top_n = RERANK_PER_PART * max(1, len(new_part_ids) if new_part_ids else 1)
                 
                 # MUC A: Nhan dien tu khoa liet ke de mo rong top_n, tranh bi cat cong doan
-                from pdf_processor import remove_accents
+                from text_utils import remove_accents
                 q_norm = remove_accents(user_question.lower())
                 list_keywords = ["toan bo", "tat ca", "quy trinh", "liet ke"]
                 if any(kw in q_norm for kw in list_keywords):

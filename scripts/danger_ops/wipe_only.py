@@ -27,8 +27,12 @@ print("2. Dang xoa du lieu SQL Server (TaiLieu, TaiLieuKyThuat)...")
 from db_logic import engine
 try:
     with engine.begin() as conn:
+        conn.execute(text("DELETE FROM BangKeVatTu"))
+        conn.execute(text("DELETE FROM DocumentPages"))
+        conn.execute(text("DELETE FROM TechnicalAttributes"))
         conn.execute(text("DELETE FROM TaiLieuKyThuat"))
         conn.execute(text("DELETE FROM TaiLieu"))
+        conn.execute(text("DELETE FROM IngestionJobs"))
     print(" -> Da don dep SQL Server thanh cong.")
 except Exception as e:
     print(f" -> Loi xoa SQL Server: {e}")
