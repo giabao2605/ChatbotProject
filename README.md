@@ -63,36 +63,7 @@ ChatBotProject/
 2. Set up a cluster on **Qdrant Cloud** and obtain the URL/API Key.
 3. You can initialize Qdrant indexes locally using `python scripts/create_qdrant_indexes.py`.
 
-### 3. Environment Configuration
-
-Create a `.env` file in the root directory and configure your credentials:
-
-```env
-# SQL Server
-SQL_SERVER=localhost\SQLEXPRESS
-SQL_DATABASE=Mech_Chatbot_DB
-SQL_DRIVER=ODBC Driver 17 for SQL Server
-
-# Qdrant
-QDRANT_URL=https://your-cluster-url.qdrant.tech
-QDRANT_API_KEY=your_qdrant_api_key
-
-# LLM & Vision
-PROXYLLM_API_KEY=your_api_key
-PROXYLLM_BASE_URL=https://api.proxyllm.eu/v1
-GPT_MODEL_NAME=gpt-5.4
-GPT_VISION_MODEL_NAME=gpt-5.4-vision
-
-# Embeddings
-EMBEDDING_MODEL=BAAI/bge-m3
-EMBEDDING_DIM=1024
-
-# Service Configurations
-RAG_SERVER_URL=http://localhost:8100
-MAX_CONCURRENT_RAG=2
-```
-
-### 4. Running the Application
+### 3. Running the Application
 
 **Option A: Using Docker Compose (Recommended)**
 
@@ -123,7 +94,7 @@ python scripts/ingestion_worker.py
 streamlit run app.py
 ```
 
-### 5. Application Modules
+### 4. Application Modules
 
 Once running, navigate the Streamlit sidebar to access:
 - **Chatbot Hỏi Đáp:** Interact with the RAG system and ask mechanical engineering questions.
