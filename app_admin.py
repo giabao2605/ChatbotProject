@@ -18,11 +18,11 @@ def run_admin():
 
     col_new, col_reset, _col_sp = st.columns([1, 1, 4])
     with col_new:
-        if st.button("➕ Thêm file mới", help="Chuyển sang trang upload để nạp bản vẽ mới", use_container_width=True):
+        if st.button("Thêm file mới", help="Chuyển sang trang upload để nạp bản vẽ mới", use_container_width=True):
             st.session_state["_goto_page"] = "Chatbot Hỏi Đáp"
             st.rerun()
     with col_reset:
-        if st.button("🔄 Làm mới (Reset)", help="Tải lại dữ liệu mới nhất từ database", use_container_width=True):
+        if st.button("Làm mới (Reset)", help="Tải lại dữ liệu mới nhất từ database", use_container_width=True):
             st.rerun()
 
     if engine is None:
@@ -89,7 +89,7 @@ def run_admin():
                 if class_json:
                     try:
                         cls_data = json.loads(class_json)
-                        st.markdown("### 🤖 AI Classification Đề Xuất:")
+                        st.markdown("### AI Classification Đề Xuất:")
                         st.info(f"**Action:** `{cls_data.get('detected_action')}` | **Base Code:** `{cls_data.get('base_code')}` | **Confidence:** {class_conf*100 if class_conf else 0:.1f}%")
                         st.write(f"**Lý do AI:** {cls_data.get('reason')}")
                     except Exception as e:
@@ -110,7 +110,7 @@ def run_admin():
                     st.write(f"- **Dung sai:** {dung_sai}")
 
                 if show_actions:
-                    st.markdown("### ✏️ Cập nhật Metadata trước khi Duyệt (Bắt buộc kiểm tra):")
+                    st.markdown("### Cập nhật Metadata trước khi Duyệt (Bắt buộc kiểm tra):")
                     col_a, col_b = st.columns(2)
                     with col_a:
                         edit_base_code = st.text_input("Base Code", value=t_bc or "", key=f"bc_{doc_id}")
@@ -233,7 +233,7 @@ def run_admin():
 
                 if allow_manage:
                     st.markdown("---")
-                    st.markdown("### 🛠️ Cập nhật bản vẽ (Update)")
+                    st.markdown("### Cập nhật bản vẽ (Update)")
                     with st.form(key=f"update_form_{doc_id}"):
                         uc1, uc2 = st.columns(2)
                         with uc1:
@@ -244,7 +244,7 @@ def run_admin():
                             u_vc = st.text_input("Variant Code", value=t_vc or "default", key=f"u_vc_{doc_id}")
                             u_vg = st.text_input("Variant Group", value=t_vg or "", key=f"u_vg_{doc_id}")
                             u_dt = st.text_input("Document Type", value=loai_tl or "", key=f"u_dt_{doc_id}")
-                        if st.form_submit_button("💾 Lưu cập nhật bản vẽ", type="primary"):
+                        if st.form_submit_button("Lưu cập nhật bản vẽ", type="primary"):
                             try:
                                 ok_upd = update_document_full_metadata(
                                     doc_id, base_code=u_bc, version_no=u_vn, version_label=u_vl,
@@ -259,7 +259,7 @@ def run_admin():
                             except Exception as e:
                                 st.error(f"Lỗi khi cập nhật: {e}")
 
-                    st.markdown("### 🗑️ Xóa bản vẽ (Delete)")
+                    st.markdown("### Xóa bản vẽ (Delete)")
                     confirm_del = st.checkbox(
                         "Tôi hiểu thao tác này sẽ xóa VĨNH VIỄN toàn bộ dữ liệu (SQL + vector Qdrant) và không thể khôi phục.",
                         key=f"confirm_del_{doc_id}"
