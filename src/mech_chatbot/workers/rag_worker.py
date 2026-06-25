@@ -33,6 +33,8 @@ def main():
             user_department=payload.get("user_department"),
             user_roles=payload.get("user_roles") or [],
             allowed_departments=payload.get("allowed_departments") or [],
+            max_security_level=payload.get("max_security_level") or "internal",
+            allowed_sites=payload.get("allowed_sites") or [],
         )
 
         if len(rag_result) >= 4:

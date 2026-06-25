@@ -83,7 +83,7 @@ import logging as _logging
 _worker_logger = _logging.getLogger("MechChatbot")
 
 
-def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None):
+def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="internal", allowed_sites=None):
     """Run RAG in a separate Python process so native libs cannot crash Streamlit."""
     acquired = _RAG_SEMAPHORE.acquire(timeout=120)
     if not acquired:
@@ -103,6 +103,8 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
         "user_department": user_department,
         "user_roles": user_roles or [],
         "allowed_departments": allowed_departments or [],
+        "max_security_level": max_security_level or "internal",
+        "allowed_sites": allowed_sites or [],
     }
 
     os.makedirs(os.path.join(base_dir, "temp_logs"), exist_ok=True)
@@ -171,7 +173,8 @@ RAG_SERVER_URL = os.getenv("RAG_SERVER_URL", "")  # e.g. http://localhost:8100
 
 def chat_with_rag_api(user_question, image_path=None, chat_history=None,
                       current_part_ids=None, user_department=None,
-                      user_roles=None, allowed_departments=None):
+                      user_roles=None, allowed_departments=None, max_security_level="internal",
+                      allowed_sites=None):
     """Call the persistent RAG FastAPI server via HTTP (Phase 2 mode)."""
     import requests as _requests
 
@@ -183,6 +186,8 @@ def chat_with_rag_api(user_question, image_path=None, chat_history=None,
         "user_department": user_department,
         "user_roles": user_roles or [],
         "allowed_departments": allowed_departments or [],
+        "max_security_level": max_security_level or "internal",
+        "allowed_sites": allowed_sites or [],
     }
 
     timeout = int(os.getenv("RAG_WORKER_TIMEOUT", "240"))
@@ -616,7 +621,9 @@ def run_chat():
                             current_part_ids=st.session_state.current_part_ids,
                             user_department=current_user["department"],
                             user_roles=current_user["roles"],
-                            allowed_departments=current_user.get("allowed_departments", [])
+                            allowed_departments=current_user.get("allowed_departments", []),
+                            max_security_level=current_user.get("max_security_level", "internal"),
+                            allowed_sites=current_user.get("allowed_sites", [])
                         )
      
                         # Cap nhat State Memory moi

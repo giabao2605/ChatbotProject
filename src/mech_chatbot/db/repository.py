@@ -345,19 +345,20 @@ def _get_or_create_doc(conn, file_name, thu_muc):
         conn.execute(
             text("""UPDATE TaiLieu SET 
                 ReviewStatus = 'pending_review',
-                FamilyID = :fid, BaseCode = :bc, VersionNo = :vn, VersionLabel = :vl, VariantCode = :vc
+                FamilyID = :fid, BaseCode = :bc, VersionNo = :vn, VersionLabel = :vl, VariantCode = :vc,
+                Site = :site
                 WHERE DocID = :d"""),
-            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code}
+            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc)}
         )
         return doc_id
         
     res = conn.execute(
         text(
-            """INSERT INTO TaiLieu (TenFile, ThuMuc, TrangThaiVector, ReviewStatus, FamilyID, BaseCode, VersionNo, VersionLabel, VariantCode) 
+            """INSERT INTO TaiLieu (TenFile, ThuMuc, TrangThaiVector, ReviewStatus, FamilyID, BaseCode, VersionNo, VersionLabel, VariantCode, Site) 
             OUTPUT INSERTED.DocID 
-            VALUES (:f, :t, 1, 'pending_review', :fid, :bc, :vn, :vl, :vc)"""
+            VALUES (:f, :t, 1, 'pending_review', :fid, :bc, :vn, :vl, :vc, :site)"""
         ),
-        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code},
+        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc)},
     )
     row = res.fetchone()
     return row[0] if row else None
@@ -521,6 +522,32 @@ def save_technical_attributes(doc_id, file_name, page_no, attributes):
                 )
     except Exception as e:
         logger.error(f"Loi luu TechnicalAttributes cho {file_name}: {e}", exc_info=True)
+
+def save_document_attributes(doc_id, domain, attributes):
+    """Luu metadata domain phi co khi vao DocumentAttributes (ke_toan, nhan_su, chung...)."""
+    if not attributes:
+        return
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            for attr in attributes:
+                conn.execute(
+                    text("""
+                        INSERT INTO dbo.DocumentAttributes (DocID, Domain, AttributeKey, AttributeValue, Confidence, ExtractedBy)
+                        VALUES (:d, :dom, :k, :v, :c, :eb)
+                    """),
+                    {
+                        "d": doc_id,
+                        "dom": domain,
+                        "k": str(attr.get("key", ""))[:150],
+                        "v": str(attr.get("value", "")),
+                        "c": attr.get("confidence"),
+                        "eb": attr.get("extracted_by", "regex"),
+                    },
+                )
+    except Exception as e:
+        logger.error(f"Loi luu DocumentAttributes cho doc {doc_id}: {e}", exc_info=True)
+
 
 def verify_technical_attribute(attr_id, verified_by, correct_value=None):
     _ensure_engine()
@@ -889,7 +916,8 @@ def get_pending_job(worker_id="worker-1"):
                                 AND ISNULL(RetryCount, 0) < ISNULL(MaxRetry, 3)
                             )
                         )
-                        ORDER BY CreatedAt ASC
+                        -- P1.5: uu tien theo Priority (nho hon = uu tien hon), roi FIFO theo CreatedAt
+                        ORDER BY ISNULL(Priority, 100) ASC, CreatedAt ASC
                     )
                     UPDATE CTE
                     SET Status = 'classifying',
@@ -1448,3 +1476,272 @@ def rollback_to_version_by_family(family_id, version_no, variant_code="default",
         logger.error(f"Loi rollback_to_version_by_family: {e}", exc_info=True)
         return False
 
+
+
+# =====================================================================
+# P1 HELPERS — quan ly phong ban/site dong, RBAC site, hang doi, dashboard
+# =====================================================================
+
+def _resolve_site(thu_muc):
+    """Xac dinh site code cho mot phong ban (uu tien Departments.Site neu co).
+    An toan: moi loi deu fallback ve mapping mac dinh / 'HQ'."""
+    try:
+        from mech_chatbot.ingestion.site_registry import resolve_site_by_department
+        db_site = None
+        try:
+            with engine.connect() as conn:
+                r = conn.execute(text("SELECT Site FROM dbo.Departments WHERE DeptCode = :c"), {"c": thu_muc}).fetchone()
+                db_site = r[0] if r else None
+        except Exception:
+            db_site = None
+        return resolve_site_by_department(thu_muc, db_site=db_site)
+    except Exception:
+        return "HQ"
+
+
+def list_known_departments(active_only=True):
+    """Danh muc phong ban (bang Departments). Tra ve list dict."""
+    _ensure_engine()
+    where = "WHERE IsActive = 1" if active_only else ""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                f"SELECT DeptCode, DeptName, Domain, Site, IsActive FROM dbo.Departments {where} ORDER BY DeptCode"
+            )).fetchall()
+        return [
+            {"code": r[0], "name": r[1], "domain": r[2], "site": r[3], "is_active": bool(r[4])}
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"list_known_departments loi: {e}", exc_info=True)
+        return []
+
+
+def upsert_department(code, name=None, domain=None, site=None, is_active=True):
+    """Them moi hoac cap nhat 1 phong ban (idempotent theo DeptCode)."""
+    _ensure_engine()
+    if not code:
+        return False
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                MERGE dbo.Departments AS tgt
+                USING (SELECT :c AS DeptCode) AS src ON tgt.DeptCode = src.DeptCode
+                WHEN MATCHED THEN UPDATE SET DeptName = :n, Domain = :d, Site = :s, IsActive = :a
+                WHEN NOT MATCHED THEN INSERT (DeptCode, DeptName, Domain, Site, IsActive)
+                    VALUES (:c, :n, :d, :s, :a);
+            """), {"c": code, "n": name, "d": domain, "s": site, "a": 1 if is_active else 0})
+        return True
+    except Exception as e:
+        logger.error(f"upsert_department loi: {e}", exc_info=True)
+        return False
+
+
+def list_known_sites(active_only=True):
+    """Danh muc khu/site (bang Sites)."""
+    _ensure_engine()
+    where = "WHERE IsActive = 1" if active_only else ""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                f"SELECT SiteCode, SiteName, IsActive FROM dbo.Sites {where} ORDER BY SiteCode"
+            )).fetchall()
+        return [{"code": r[0], "name": r[1], "is_active": bool(r[2])} for r in rows]
+    except Exception as e:
+        logger.error(f"list_known_sites loi: {e}", exc_info=True)
+        return []
+
+
+def upsert_site(code, name=None, is_active=True):
+    _ensure_engine()
+    if not code:
+        return False
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                MERGE dbo.Sites AS tgt
+                USING (SELECT :c AS SiteCode) AS src ON tgt.SiteCode = src.SiteCode
+                WHEN MATCHED THEN UPDATE SET SiteName = :n, IsActive = :a
+                WHEN NOT MATCHED THEN INSERT (SiteCode, SiteName, IsActive) VALUES (:c, :n, :a);
+            """), {"c": code, "n": name, "a": 1 if is_active else 0})
+        return True
+    except Exception as e:
+        logger.error(f"upsert_site loi: {e}", exc_info=True)
+        return False
+
+
+def get_user_sites(user_id):
+    """Danh sach site user duoc phep. List rong = KHONG gioi han theo site."""
+    _ensure_engine()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT Site FROM dbo.UserSites WHERE UserID = :uid"), {"uid": user_id}).fetchall()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
+
+
+def set_user_sites(user_id, sites):
+    """Thay toan bo danh sach site cua user (replace)."""
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM dbo.UserSites WHERE UserID = :uid"), {"uid": user_id})
+            for s in (sites or []):
+                if s:
+                    conn.execute(text("INSERT INTO dbo.UserSites (UserID, Site) VALUES (:uid, :s)"), {"uid": user_id, "s": s})
+        return True
+    except Exception as e:
+        logger.error(f"set_user_sites loi: {e}", exc_info=True)
+        return False
+
+
+def set_user_departments(user_id, departments):
+    """Thay toan bo danh sach phong ban cua user (replace)."""
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM dbo.UserDepartments WHERE UserID = :uid"), {"uid": user_id})
+            for d in (departments or []):
+                if d:
+                    conn.execute(text("INSERT INTO dbo.UserDepartments (UserID, Department) VALUES (:uid, :d)"), {"uid": user_id, "d": d})
+        return True
+    except Exception as e:
+        logger.error(f"set_user_departments loi: {e}", exc_info=True)
+        return False
+
+
+def set_user_clearance(user_id, max_level):
+    """Dat muc mat toi da cho user (public/internal/confidential)."""
+    _ensure_engine()
+    if max_level not in ("public", "internal", "confidential"):
+        return False
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                MERGE dbo.UserSecurityClearance AS tgt
+                USING (SELECT :uid AS UserID) AS src ON tgt.UserID = src.UserID
+                WHEN MATCHED THEN UPDATE SET MaxLevel = :lvl
+                WHEN NOT MATCHED THEN INSERT (UserID, MaxLevel) VALUES (:uid, :lvl);
+            """), {"uid": user_id, "lvl": max_level})
+        return True
+    except Exception as e:
+        logger.error(f"set_user_clearance loi: {e}", exc_info=True)
+        return False
+
+
+def set_job_priority(job_id, priority):
+    """Dat do uu tien cho job (nho hon = uu tien hon). Vd: 10 = gap, 100 = thuong."""
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE dbo.IngestionJobs SET Priority = :p, UpdatedAt = GETDATE() WHERE JobID = :id"
+            ), {"p": int(priority), "id": job_id})
+        return True
+    except Exception as e:
+        logger.error(f"set_job_priority loi: {e}", exc_info=True)
+        return False
+
+
+def cancel_job(job_id, canceled_by="System"):
+    """Huy 1 job dang cho/loi. Khong huy job dang chay giua chung neu da publish."""
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            res = conn.execute(text("""
+                UPDATE dbo.IngestionJobs
+                SET Status = 'rejected',
+                    CanceledBy = :by, CanceledAt = GETDATE(),
+                    ErrorMessage = ISNULL(ErrorMessage, '') + ' [Huy boi ' + :by + ']',
+                    LockedBy = NULL, LockedAt = NULL, UpdatedAt = GETDATE()
+                WHERE JobID = :id
+                  AND Status NOT IN ('published', 'pending_review', 'publishing')
+            """), {"by": canceled_by, "id": job_id})
+        return res.rowcount > 0
+    except Exception as e:
+        logger.error(f"cancel_job loi: {e}", exc_info=True)
+        return False
+
+
+def requeue_job(job_id):
+    """Dua lai job ve 'pending' (retry thu cong)."""
+    _ensure_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE dbo.IngestionJobs
+                SET Status = 'pending', ErrorMessage = NULL, FailureType = NULL,
+                    NextRetryAt = NULL, RetryCount = 0, LockedBy = NULL, LockedAt = NULL,
+                    ProgressPercent = 0, CanceledBy = NULL, CanceledAt = NULL, UpdatedAt = GETDATE()
+                WHERE JobID = :id
+            """), {"id": job_id})
+        return True
+    except Exception as e:
+        logger.error(f"requeue_job loi: {e}", exc_info=True)
+        return False
+
+
+def queue_eta_seconds():
+    """Uoc luong ETA (giay) de don het hang doi = so job cho * thoi gian TB/job gan day.
+    Tra ve dict {pending, avg_seconds, eta_seconds}."""
+    _ensure_engine()
+    try:
+        with engine.connect() as conn:
+            pending = conn.execute(text(
+                "SELECT COUNT(*) FROM dbo.IngestionJobs WHERE Status IN ('pending','pending_retry','waiting_quota')"
+            )).scalar() or 0
+            # Thoi gian TB xu ly cua 50 job published gan nhat
+            avg = conn.execute(text("""
+                SELECT AVG(CAST(DATEDIFF(second, CreatedAt, UpdatedAt) AS FLOAT))
+                FROM (
+                    SELECT TOP 50 CreatedAt, UpdatedAt FROM dbo.IngestionJobs
+                    WHERE Status = 'published' AND UpdatedAt IS NOT NULL
+                    ORDER BY UpdatedAt DESC
+                ) x
+            """)).scalar()
+        avg = float(avg) if avg else 90.0  # mac dinh 90s/job neu chua co lich su
+        return {"pending": int(pending), "avg_seconds": round(avg, 1), "eta_seconds": int(pending * avg)}
+    except Exception as e:
+        logger.error(f"queue_eta_seconds loi: {e}", exc_info=True)
+        return {"pending": 0, "avg_seconds": 0, "eta_seconds": 0}
+
+
+def dashboard_by_department():
+    """Thong ke theo phong ban (P1.6): so tai lieu, cho duyet, job loi."""
+    _ensure_engine()
+    try:
+        with engine.connect() as conn:
+            doc_rows = conn.execute(text("""
+                SELECT ISNULL(ThuMuc, '(khong ro)') AS Dept,
+                       COUNT(*) AS Total,
+                       SUM(CASE WHEN ReviewStatus = 'pending_review' THEN 1 ELSE 0 END) AS Pending,
+                       SUM(CASE WHEN ReviewStatus = 'approved' AND LifecycleStatus = 'published' THEN 1 ELSE 0 END) AS Published,
+                       SUM(CASE WHEN SecurityLevel = 'confidential' THEN 1 ELSE 0 END) AS Confidential
+                FROM TaiLieu GROUP BY ThuMuc
+            """)).fetchall()
+            job_rows = conn.execute(text("""
+                SELECT ISNULL(ThuMuc, '(khong ro)') AS Dept,
+                       SUM(CASE WHEN Status IN ('failed','waiting_quota') THEN 1 ELSE 0 END) AS Failed,
+                       SUM(CASE WHEN Status IN ('pending','pending_retry','classifying','extracting','embedding','publishing') THEN 1 ELSE 0 END) AS Running
+                FROM dbo.IngestionJobs GROUP BY ThuMuc
+            """)).fetchall()
+        jobs = {r[0]: {"failed": int(r[1] or 0), "running": int(r[2] or 0)} for r in job_rows}
+        out = []
+        for r in doc_rows:
+            dept = r[0]
+            j = jobs.get(dept, {"failed": 0, "running": 0})
+            out.append({
+                "department": dept,
+                "total": int(r[1] or 0),
+                "pending_review": int(r[2] or 0),
+                "published": int(r[3] or 0),
+                "confidential": int(r[4] or 0),
+                "failed_jobs": j["failed"],
+                "running_jobs": j["running"],
+            })
+        out.sort(key=lambda x: x["total"], reverse=True)
+        return out
+    except Exception as e:
+        logger.error(f"dashboard_by_department loi: {e}", exc_info=True)
+        return []

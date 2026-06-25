@@ -1,3 +1,6 @@
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
 -- ============================================================
 -- SCRIPT KHOI TAO DATABASE - AN TOAN CHO PRODUCTION
 -- File: database/init/Mech_Chatbot_DB.sql
@@ -118,6 +121,10 @@ BEGIN
         ReviewedBy      NVARCHAR(255) NULL,
         ClassificationConfidence FLOAT        NULL,
         ClassificationJson       NVARCHAR(MAX) NULL,
+        -- Multi-domain (P0)
+        Domain          NVARCHAR(50)  NULL,               -- co_khi / ky_thuat / ke_toan / nhan_su / chung
+        SecurityLevel   NVARCHAR(20)  NOT NULL DEFAULT 'internal',  -- public / internal / confidential
+        Site            NVARCHAR(100) NULL,               -- khu/xuong/site (P1)
         CONSTRAINT FK_TaiLieu_Family
             FOREIGN KEY (FamilyID) REFERENCES DocumentFamily(FamilyID),
         CONSTRAINT CHK_LifecycleStatus
@@ -414,6 +421,17 @@ BEGIN
 END
 GO
 
+-- Muc mat cho user (RBAC 2 chieu: department x security_level)
+IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'dbo.UserSecurityClearance') AND type = 'U')
+BEGIN
+    CREATE TABLE UserSecurityClearance (
+        UserID   INT NOT NULL PRIMARY KEY,
+        MaxLevel NVARCHAR(20) NOT NULL DEFAULT 'internal',  -- public / internal / confidential
+        CONSTRAINT FK_USC_Users FOREIGN KEY (UserID) REFERENCES Users(UserID)
+    );
+END
+GO
+
 -- Seed Roles neu bang trong (idempotent)
 IF NOT EXISTS (SELECT 1 FROM dbo.Roles)
 BEGIN
@@ -436,6 +454,10 @@ BEGIN
 
     INSERT INTO UserDepartments (UserID, Department)
     SELECT UserID, 'IT' FROM Users WHERE Username = 'admin';
+
+    -- Admin: muc mat cao nhat
+    INSERT INTO UserSecurityClearance (UserID, MaxLevel)
+    SELECT UserID, 'confidential' FROM Users WHERE Username = 'admin';
 END
 GO
 
@@ -456,6 +478,10 @@ BEGIN
     FROM Users u
     CROSS JOIN (VALUES ('Tu_Hoc'), ('CHUNG')) AS d(Department)
     WHERE u.Username = 'viewer1';
+
+    -- viewer1: chi xem duoc tai lieu internal va public (khong xem confidential)
+    INSERT INTO UserSecurityClearance (UserID, MaxLevel)
+    SELECT UserID, 'internal' FROM Users WHERE Username = 'viewer1';
 END
 GO
 
@@ -479,6 +505,10 @@ BEGIN
         ('To_Ban_Le'), ('Bang_Ke'), ('Gia_Cong_Ngoai'), ('CHUNG')
     ) AS d(Department)
     WHERE u.Username = 'uploader1';
+
+    -- uploader1: internal level
+    INSERT INTO UserSecurityClearance (UserID, MaxLevel)
+    SELECT UserID, 'internal' FROM Users WHERE Username = 'uploader1';
 END
 GO
 
@@ -502,6 +532,10 @@ BEGIN
         ('To_Ban_Le'), ('Bang_Ke'), ('Gia_Cong_Ngoai'), ('IT'), ('Tu_Hoc'), ('CHUNG')
     ) AS d(Department)
     WHERE u.Username = 'reviewer1';
+
+    -- reviewer1: xem duoc ca confidential
+    INSERT INTO UserSecurityClearance (UserID, MaxLevel)
+    SELECT UserID, 'confidential' FROM Users WHERE Username = 'reviewer1';
 END
 GO
 
@@ -521,6 +555,29 @@ BEGIN
         Details    NVARCHAR(MAX),
         CreatedAt  DATETIME DEFAULT GETDATE()
     );
+END
+GO
+
+-- ==========================================
+-- PHAN 5B: METADATA TONG QUAT (da domain, P0)
+-- ==========================================
+-- Bang DocumentAttributes: luu metadata cho domain phi co khi (ke_toan, nhan_su...)
+-- Vi du: so_hop_dong, ky_luong, phong_ban, v.v.
+
+IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'dbo.DocumentAttributes') AND type = 'U')
+BEGIN
+    CREATE TABLE DocumentAttributes (
+        AttrID         INT IDENTITY(1,1) PRIMARY KEY,
+        DocID          INT NOT NULL,
+        Domain         NVARCHAR(50)  NOT NULL,
+        AttributeKey   NVARCHAR(150) NOT NULL,
+        AttributeValue NVARCHAR(MAX) NULL,
+        Confidence     FLOAT NULL,
+        ExtractedBy    NVARCHAR(50) NULL,        -- 'regex' | 'llm' | 'manual'
+        CreatedAt      DATETIME DEFAULT GETDATE(),
+        CONSTRAINT FK_DocAttr_TaiLieu FOREIGN KEY (DocID) REFERENCES TaiLieu(DocID) ON DELETE CASCADE
+    );
+    CREATE INDEX IX_DocAttr_Doc_Domain ON DocumentAttributes(DocID, Domain);
 END
 GO
 

@@ -1,6 +1,6 @@
-﻿import streamlit as st
+import streamlit as st
 from sqlalchemy import text
-from mech_chatbot.db.repository import engine
+from mech_chatbot.db.repository import engine, dashboard_by_department
 from mech_chatbot.auth import service as auth
 def _scalar(conn, sql, params=None):
     try:
@@ -43,6 +43,10 @@ def run_dashboard():
     c7.metric("Feedback cần xử lý", stats["pending_feedback"])
 
     st.markdown("---")
+    st.subheader("Thong ke theo phong ban")
+    render_department_breakdown()
+
+    st.markdown("---")
     left, right = st.columns(2)
     with left:
         st.subheader("Tài liệu mới")
@@ -50,6 +54,34 @@ def run_dashboard():
     with right:
         st.subheader("Job lỗi gần đây")
         render_recent_failed_jobs()
+
+
+def render_department_breakdown():
+    """P1.6: bang suc khoe theo tung phong ban."""
+    try:
+        rows = dashboard_by_department()
+    except Exception as e:
+        st.error(f"Khong tai duoc thong ke theo phong: {e}")
+        return
+    if not rows:
+        st.info("Chua co du lieu theo phong ban.")
+        return
+    table = [
+        {
+            "Phong ban": r["department"],
+            "Tong tai lieu": r["total"],
+            "Da publish": r["published"],
+            "Cho duyet": r["pending_review"],
+            "Mat (confidential)": r["confidential"],
+            "Job dang chay": r["running_jobs"],
+            "Job loi": r["failed_jobs"],
+        }
+        for r in rows
+    ]
+    st.dataframe(table, use_container_width=True, hide_index=True)
+    total_failed = sum(r["failed_jobs"] for r in rows)
+    if total_failed:
+        st.warning(f"Co {total_failed} job ingest dang loi tren toan he thong - kiem tra tab Hang doi.")
 
 
 def render_recent_documents():

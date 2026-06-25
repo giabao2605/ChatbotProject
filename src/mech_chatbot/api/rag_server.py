@@ -94,6 +94,8 @@ class ChatRequest(BaseModel):
     user_department: Optional[str] = None
     user_roles: List[str] = Field(default_factory=list)
     allowed_departments: List[str] = Field(default_factory=list)
+    max_security_level: Optional[str] = "internal"
+    allowed_sites: List[str] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -191,6 +193,8 @@ def _run_rag_sync(req: ChatRequest) -> ChatResponse:
         user_department=req.user_department,
         user_roles=req.user_roles,
         allowed_departments=req.allowed_departments,
+        max_security_level=req.max_security_level,
+        allowed_sites=req.allowed_sites,
     )
 
     # Consume the stream to get the full response text

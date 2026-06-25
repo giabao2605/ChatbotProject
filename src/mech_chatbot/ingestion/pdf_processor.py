@@ -15,7 +15,7 @@ import underthesea
 from qdrant_client import models
 from mech_chatbot.config.logging import logger
 # FIX #1: dung 2 ham moi (reset 1 lan + insert tung trang). Giu save_document_metadata cho file 1 trang.
-from mech_chatbot.db.repository import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records, get_document_info, mark_document_ingest_failed, save_document_page, save_technical_attributes
+from mech_chatbot.db.repository import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records, get_document_info, mark_document_ingest_failed, save_document_page, save_technical_attributes, save_document_attributes
 from mech_chatbot.rag.service import vectorstore, client
 # FIX Bug #4: predicate retry dung chung cho Gemini (google-genai)
 from mech_chatbot.llm.vision_client import describe_gemini_error, is_retryable_error
@@ -619,12 +619,12 @@ def extract_bom_records(table, table_idx=None):
                 records.append(rec)
     return records
 
-def calculate_quality_status(report):
+def _quality_mechanical(report):
+    """Tinh diem chat luong cho tai lieu co khi (logic cu, giu nguyen)."""
     total_pages = report.get("total_pages", 0)
     failed_pages = report.get("failed_pages", [])
     chunks = report.get("total_chunks", 0)
     attrs = report.get("technical_attributes_count", 0)
-    bom_rows = report.get("bom_rows_count", 0)
     if total_pages <= 0:
         return 0, "blocked"
     if failed_pages:
@@ -645,6 +645,50 @@ def calculate_quality_status(report):
     else:
         return score, "blocked"
 
+
+def _quality_generic(report):
+    """Tinh diem chat luong cho tai lieu phi co khi (ke_toan, nhan_su, chung).
+    KHONG phat khi thieu thuoc tinh ky thuat (attrs == 0).
+    """
+    total_pages = report.get("total_pages", 0)
+    failed_pages = report.get("failed_pages", [])
+    chunks = report.get("total_chunks", 0)
+    if total_pages <= 0 or chunks <= 0:
+        return 0, "blocked"
+    if failed_pages:
+        return 0, "blocked"
+    score = 100
+    # Chi phat khi KHONG trich duoc text nao
+    if (len(report.get("pages_text_extracted", [])) == 0
+        and len(report.get("pages_local_ocr_success", [])) == 0
+        and len(report.get("pages_gemini_success", [])) == 0):
+        score -= 50
+    if score >= 90:
+        return score, "ready_for_review"
+    elif score >= 70:
+        return score, "needs_review"
+    else:
+        return score, "blocked"
+
+
+_QUALITY_FUNCS = {
+    'quality_mechanical': _quality_mechanical,
+    'quality_generic': _quality_generic,
+}
+
+
+def calculate_quality_status(report, domain='co_khi'):
+    """Tinh diem chat luong theo domain.
+    
+    Args:
+        report: dict bao cao ingest
+        domain: domain key ('co_khi', 'ke_toan', 'nhan_su', 'chung', ...)
+    """
+    from mech_chatbot.ingestion.domain_registry import get_domain_config
+    cfg = get_domain_config(domain)
+    fn = _QUALITY_FUNCS.get(cfg.quality_fn, _quality_generic)
+    return fn(report)
+
 def has_mechanical_signal(text):
     if not text:
         return False
@@ -664,6 +708,11 @@ def has_mechanical_signal(text):
 
 # 3. Ham xu ly PDF trung tam
 def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progress_callback=None):
+    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, get_default_security
+    from mech_chatbot.ingestion.site_registry import resolve_site_by_department
+    domain = resolve_domain_by_department(thu_muc)
+    security_level = get_default_security(domain)
+    site = resolve_site_by_department(thu_muc)  # P1.2
     start_time = time.time()
     report = {
         "status": "success",
@@ -728,7 +777,11 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     report["pages_text_extracted"].append(page_num + 1)
                 
                 # Luon goi Gemini cho PDF ky thuat, tru trang toan text
-                vision_required = os.path.exists(img_path)
+                from mech_chatbot.ingestion.domain_registry import get_domain_config as _gdc_vision
+                _is_mech_domain_vision = _gdc_vision(domain).extractor == 'mechanical'
+                # P0: chi day anh/scan qua GPT Vision. Trang co lop text day (van ban thuan)
+                # thuoc domain phi co khi thi doc truc tiep tu text layer, tiet kiem quota Vision.
+                vision_required = os.path.exists(img_path) and (_is_mech_domain_vision or not is_text_heavy)
                 vision_failed = False
                 local_ocr_text = ""
                 local_ocr_confidence = 0.0
@@ -871,7 +924,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     add_attr("note", vision_data.get("technical_notes"), image_summary[:500], "gemini_vision", 0.9)
 
                 from mech_chatbot.ingestion.mechanical_extractors import extract_mechanical_attributes
-                regex_attrs = extract_mechanical_attributes(combined_text_for_metadata)
+                from mech_chatbot.ingestion.domain_registry import get_domain_config as _gdc_attr
+                _attr_kind = _gdc_attr(domain).extractor
+                regex_attrs = extract_mechanical_attributes(combined_text_for_metadata) if _attr_kind == 'mechanical' else []
                 for attr in regex_attrs:
                     tech_attrs.append({
                         "AttributeType": attr["type"],
@@ -882,7 +937,11 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                         "ExtractedBy": attr["extracted_by"]
                     })
 
-                save_technical_attributes(doc_id, ten_file, page_num + 1, tech_attrs)
+                if _attr_kind == 'mechanical':
+                    save_technical_attributes(doc_id, ten_file, page_num + 1, tech_attrs)
+                else:
+                    from mech_chatbot.ingestion.generic_extractors import extract_generic_attributes
+                    save_document_attributes(doc_id, domain, extract_generic_attributes(combined_text_for_metadata, domain))
 
                 metadata = {
                     "file_goc": ten_file,
@@ -916,6 +975,11 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     "is_current": doc_info.get("is_current", False),
                     "is_archived": doc_info.get("is_archived", False),
                     "supersedes_doc_id": doc_info.get("supersedes_doc_id"),
+                    # Multi-domain (P0)
+                    "domain": domain,
+                    "security_level": security_level,
+                    # Multi-site (P1.2)
+                    "site": site,
                 }
                 info['trang_so'] = page_num + 1
  
@@ -1059,7 +1123,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
             report["warnings"].append(f"Rollback vector/metadata that bai: {e}")
             logger.warning(f"Rollback vector/metadata that bai cho {ten_file}: {e}")
 
-    score, status = calculate_quality_status(report)
+    score, status = calculate_quality_status(report, domain)
     report["quality_score"] = score
     report["quality_status"] = status
 
@@ -1081,6 +1145,11 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     return report
  
 def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, progress_callback=None):
+    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, get_default_security
+    from mech_chatbot.ingestion.site_registry import resolve_site_by_department
+    domain = resolve_domain_by_department(thu_muc)
+    security_level = get_default_security(domain)
+    site = resolve_site_by_department(thu_muc)  # P1.2
     ext = os.path.splitext(file_path)[1].lower()
     start_time = time.time()
     report = {
@@ -1192,6 +1261,11 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             "is_current": doc_info.get("is_current", False),
             "is_archived": doc_info.get("is_archived", False),
             "supersedes_doc_id": doc_info.get("supersedes_doc_id"),
+            # Multi-domain (P0)
+            "domain": domain,
+            "security_level": security_level,
+            # Multi-site (P1.2)
+            "site": site,
         }
         info["trang_so"] = 1
  
@@ -1255,7 +1329,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             report["warnings"].append(f"Rollback vector/metadata that bai: {e}")
             logger.warning(f"Rollback vector/metadata that bai cho {ten_file}: {e}")
 
-    score, status = calculate_quality_status(report)
+    score, status = calculate_quality_status(report, domain)
     report["quality_score"] = score
     report["quality_status"] = status
 

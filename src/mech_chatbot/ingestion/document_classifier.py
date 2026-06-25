@@ -53,10 +53,19 @@ def normalize_filename_to_classification(filename):
     res["base_code"] = res["base_code"].strip()
     return res
 
-def classify_document(file_path, original_filename=None):
+def classify_document(file_path, original_filename=None, thu_muc=None):
+    """Phan loai tai lieu 2 tang:
+      Tang 1: xac dinh domain tu thu_muc (co_khi / ke_toan / nhan_su / ...)
+      Tang 2: phan loai chi tiet bang LLM theo domain
+    """
     if not original_filename:
         original_filename = os.path.basename(file_path)
-        
+
+    # ---- Tang 1: Domain routing ----
+    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, get_default_security
+    domain = resolve_domain_by_department(thu_muc) if thu_muc else 'chung'
+    is_mechanical = domain in ('co_khi', 'ky_thuat')
+
     text_content = extract_first_pages(file_path, 2)
     
     # 1. Deterministic Regex Pre-processing
@@ -64,8 +73,10 @@ def classify_document(file_path, original_filename=None):
     regex_base_code = norm_data["base_code"]
     regex_version_no = norm_data["version_no"]
     regex_version_label = norm_data["version_label"]
-    
-    prompt = f"""
+
+    # ---- Tang 2: LLM Classification tuy theo domain ----
+    if is_mechanical:
+        prompt = f"""
     Thuc hien AI Classification cho tai lieu co khi.
     Ten file: {original_filename}
     Noi dung 2 trang dau:
@@ -88,17 +99,42 @@ def classify_document(file_path, original_filename=None):
     
     Chi tra ve dung JSON. Khong giai thich gi them.
     """
+        fallback_doc_type = "technical_drawing"
+    else:
+        # Prompt cho domain phi co khi (ke_toan, nhan_su, chung)
+        prompt = f"""
+    Phan loai tai lieu hanh chinh/van phong.
+    Domain: {domain}
+    Ten file: {original_filename}
+    Noi dung 2 trang dau:
+    {text_content[:3000]}
     
+    Tra ve MOT JSON object duy nhat voi cac key sau:
+    - "base_code": Ma hoac ten rut gon cua tai lieu. Bat buoc.
+    - "version_label": Nhan version neu co, mac dinh "".
+    - "version_no": So version, mac dinh 1.
+    - "variant_code": Mac dinh "default".
+    - "document_type": Loai tai lieu. Vi du: "invoice", "contract", "payroll", "decision", "report", "form", "generic".
+    - "detected_action": "new_document".
+    - "confidence": Do tu tin (0.0 - 1.0).
+    - "reason": Giai thich ngan gon.
+    
+    Chi tra ve dung JSON. Khong giai thich gi them.
+    """
+        fallback_doc_type = "generic"
+
     default_res = {
         "base_code": regex_base_code,
         "version_label": regex_version_label,
         "version_no": regex_version_no,
         "variant_code": "default",
-        "document_type": "technical_drawing",
+        "document_type": fallback_doc_type,
         "detected_action": "new_document",
         "possible_existing_family": None,
         "confidence": 0.5,
-        "reason": "Fallback do LLM loi hoac regex mac dinh."
+        "reason": "Fallback do LLM loi hoac regex mac dinh.",
+        "domain": domain,
+        "security_level": get_default_security(domain),
     }
     
     try:
@@ -118,7 +154,11 @@ def classify_document(file_path, original_filename=None):
         
         if family_id and parsed.get("detected_action") == "new_document":
             parsed["detected_action"] = "new_version" if parsed.get("version_no", 1) > 1 else "new_variant"
-            
+
+        # Gan domain + security_level vao ket qua
+        parsed["domain"] = domain
+        parsed["security_level"] = get_default_security(domain)
+
         return parsed
     except Exception as e:
         logger.error(f"Loi classification LLM: {e}")

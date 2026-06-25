@@ -1,7 +1,10 @@
 ﻿import streamlit as st
 from sqlalchemy import text
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import engine, update_document_full_metadata, delete_document_completely
+from mech_chatbot.db.repository import (
+    engine, update_document_full_metadata, delete_document_completely,
+    list_known_departments, list_known_sites,
+)
 
 
 def run_documents():
@@ -16,9 +19,32 @@ def run_documents():
         return
 
     current_user = auth.get_current_user()
+    is_admin = auth.has_role("admin")
+
     search = st.text_input("Tìm kiếm", placeholder="Tên file, Base Code, mã đối tượng...")
-    status_filter = st.selectbox("Trạng thái", ["Tất cả", "published", "draft", "rejected", "archived", "superseded"])
-    docs = load_documents(current_user, search, status_filter)
+
+    # P1.4: bộ lọc theo phòng ban + khu/site
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        status_filter = st.selectbox("Trạng thái", ["Tất cả", "published", "draft", "rejected", "archived", "superseded"])
+
+    # Danh sách phòng ban khả dụng cho user (admin thấy tất cả)
+    if is_admin:
+        dept_options = [d["code"] for d in list_known_departments(active_only=False)]
+    else:
+        dept_options = [d for d in (current_user.get("allowed_departments") or [current_user.get("department")]) if d]
+    with fc2:
+        dept_filter = st.selectbox("Phòng ban", ["Tất cả"] + sorted(set(dept_options)))
+
+    # Danh sách khu/site (admin: tất cả; user: theo allowed_sites nếu có)
+    if is_admin:
+        site_options = [s["code"] for s in list_known_sites(active_only=False)]
+    else:
+        site_options = [s for s in (current_user.get("allowed_sites") or []) if s]
+    with fc3:
+        site_filter = st.selectbox("Khu / Site", ["Tất cả"] + sorted(set(site_options)))
+
+    docs = load_documents(current_user, search, status_filter, dept_filter, site_filter)
 
     if not docs:
         st.info("Không tìm thấy tài liệu.")
@@ -29,13 +55,13 @@ def run_documents():
         render_document_item(doc, current_user)
 
 
-def load_documents(current_user, search, status_filter):
+def load_documents(current_user, search, status_filter, dept_filter="Tất cả", site_filter="Tất cả"):
     is_admin = auth.has_role("admin")
     query = """
         SELECT TOP 200
             t.DocID, t.TenFile, t.ThuMuc, t.BaseCode, t.VersionNo, t.VersionLabel,
             t.VariantCode, t.VariantGroup, t.LifecycleStatus, t.ReviewStatus,
-            t.IsCurrent, t.NgayTaiLen,
+            t.IsCurrent, t.NgayTaiLen, t.Site, t.Domain, t.SecurityLevel,
             tk.MaDoiTuong, tk.LoaiTaiLieu, tk.TenSanPham
         FROM TaiLieu t
         LEFT JOIN TaiLieuKyThuat tk ON t.DocID = tk.DocID AND tk.TrangSo = 1
@@ -51,16 +77,37 @@ def load_documents(current_user, search, status_filter):
                  OR tk.MaDoiTuong LIKE :search OR tk.TenSanPham LIKE :search)
         """
         params["search"] = f"%{search}%"
-    if not is_admin:
-        allowed = current_user.get("allowed_departments") or [current_user.get("department")]
-        allowed = [d for d in allowed if d]
-        if allowed:
-            keys = []
-            for i, dept in enumerate(allowed):
-                key = f"dept_{i}"
-                params[key] = dept
-                keys.append(f":{key}")
-            query += f" AND t.ThuMuc IN ({', '.join(keys)})"
+
+    # RBAC phòng ban: non-admin chỉ thấy phòng được phép
+    allowed = [d for d in (current_user.get("allowed_departments") or [current_user.get("department")]) if d]
+    if not is_admin and allowed:
+        keys = []
+        for i, dept in enumerate(allowed):
+            key = f"dept_{i}"
+            params[key] = dept
+            keys.append(f":{key}")
+        query += f" AND t.ThuMuc IN ({', '.join(keys)})"
+
+    # P1.4: lọc theo phòng ban được chọn
+    if dept_filter and dept_filter != "Tất cả":
+        query += " AND t.ThuMuc = :dept_pick"
+        params["dept_pick"] = dept_filter
+
+    # P1.4 + RBAC site: non-admin giới hạn theo allowed_sites (cho phép Site NULL để không ẩn dữ liệu cũ)
+    user_sites = [s for s in (current_user.get("allowed_sites") or []) if s]
+    if not is_admin and user_sites:
+        keys = []
+        for i, s in enumerate(user_sites):
+            key = f"usite_{i}"
+            params[key] = s
+            keys.append(f":{key}")
+        query += f" AND (t.Site IS NULL OR t.Site IN ({', '.join(keys)}))"
+
+    # P1.4: lọc theo khu/site được chọn
+    if site_filter and site_filter != "Tất cả":
+        query += " AND t.Site = :site_pick"
+        params["site_pick"] = site_filter
+
     query += " ORDER BY t.NgayTaiLen DESC"
     with engine.connect() as conn:
         return conn.execute(text(query), params).fetchall()
@@ -69,14 +116,19 @@ def load_documents(current_user, search, status_filter):
 def render_document_item(doc, current_user):
     (doc_id, ten_file, thu_muc, base_code, version_no, version_label, variant_code,
      variant_group, lifecycle_status, review_status, is_current, ngay_tai_len,
+     site, domain, security_level,
      ma_doi_tuong, loai_tai_lieu, ten_san_pham) = doc
 
     current_badge = " · current" if is_current else ""
-    with st.expander(f"{ten_file} · {lifecycle_status}{current_badge}"):
+    sec_badge = f" · 🔒 {security_level}" if security_level else ""
+    with st.expander(f"{ten_file} · {lifecycle_status}{current_badge}{sec_badge}"):
         c1, c2 = st.columns(2)
         with c1:
             st.write(f"**DocID:** {doc_id}")
             st.write(f"**Phòng ban:** {thu_muc}")
+            st.write(f"**Khu / Site:** {site or '(chưa gán)'}")
+            st.write(f"**Lĩnh vực (domain):** {domain or '(chưa gán)'}")
+            st.write(f"**Mức mật:** {security_level or '(chưa gán)'}")
             st.write(f"**Base Code:** `{base_code}`")
             st.write(f"**Version:** {version_no} - {version_label}")
             st.write(f"**Variant:** {variant_code}")

@@ -124,6 +124,25 @@ def authenticate_user(username, password):
                     "Fallback cho phep xem CHUNG. Chay migration fix_rbac_seed.sql de cap nhat."
                 )
             
+            try:
+                clr = conn.execute(
+                    text("SELECT MaxLevel FROM UserSecurityClearance WHERE UserID = :uid"),
+                    {"uid": user[0]},
+                ).fetchone()
+                max_security_level = clr[0] if clr else "internal"
+            except Exception:
+                max_security_level = "internal"
+
+            # P1.2: RBAC chieu thu 3 — site. List rong = KHONG gioi han theo site.
+            try:
+                site_rows = conn.execute(
+                    text("SELECT Site FROM UserSites WHERE UserID = :uid"),
+                    {"uid": user[0]},
+                ).fetchall()
+                allowed_sites = [r[0] for r in site_rows]
+            except Exception:
+                allowed_sites = []
+
             return {
                 "user_id": user[0],
                 "username": user[1],
@@ -131,6 +150,8 @@ def authenticate_user(username, password):
                 "department": user[3],
                 "roles": role_list,
                 "allowed_departments": allowed_departments,
+                "max_security_level": max_security_level,
+                "allowed_sites": allowed_sites,
             }
     except Exception as e:
         st.error(f"Lỗi truy vấn: {e}")

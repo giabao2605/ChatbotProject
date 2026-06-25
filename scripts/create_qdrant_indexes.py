@@ -42,6 +42,8 @@ def create_indexes():
             "metadata.ma_lien_quan": models.PayloadSchemaType.KEYWORD,
             "metadata.file_goc": models.PayloadSchemaType.KEYWORD,
             "metadata.phong_ban_quyen": models.PayloadSchemaType.KEYWORD,
+            "metadata.security_level": models.PayloadSchemaType.KEYWORD,
+            "metadata.domain": models.PayloadSchemaType.KEYWORD,
             "metadata.loai_du_lieu": models.PayloadSchemaType.KEYWORD,
             "metadata.doc_status": models.PayloadSchemaType.KEYWORD,
             "metadata.doc_id": models.PayloadSchemaType.INTEGER,

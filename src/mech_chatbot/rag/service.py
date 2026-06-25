@@ -293,7 +293,41 @@ def serialize_qdrant_filter(f):
     except Exception:
         return str(f)
 
-def create_rbac_filter(user_department, user_roles, allowed_departments=None):
+LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
+
+
+def _allowed_levels(max_security_level):
+    order = LEVEL_ORDER.get((max_security_level or "internal"), 1)
+    return [lvl for lvl, o in LEVEL_ORDER.items() if o <= order]
+
+
+def _security_filter(max_security_level):
+    levels = _allowed_levels(max_security_level)
+    try:
+        return models.Filter(should=[
+            models.IsEmptyCondition(is_empty=models.PayloadField(key="metadata.security_level")),
+            models.FieldCondition(key="metadata.security_level", match=models.MatchAny(any=levels)),
+        ])
+    except Exception:
+        return models.FieldCondition(key="metadata.security_level", match=models.MatchAny(any=levels))
+
+
+def _site_filter(allowed_sites):
+    """P1.2: gioi han theo site. List rong/None -> KHONG loc theo site (tuong thich nguoc).
+    Cho phep tai lieu chua gan site (metadata.site rong) de khong an du lieu cu."""
+    sites = [s for s in (allowed_sites or []) if s]
+    if not sites:
+        return None
+    try:
+        return models.Filter(should=[
+            models.IsEmptyCondition(is_empty=models.PayloadField(key="metadata.site")),
+            models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites)),
+        ])
+    except Exception:
+        return models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites))
+
+
+def create_rbac_filter(user_department, user_roles, allowed_departments=None, max_security_level=None, allowed_sites=None):
     # Chỉ admin mới được bỏ filter
     if user_roles and "admin" in user_roles:
         return None
@@ -317,11 +351,15 @@ def create_rbac_filter(user_department, user_roles, allowed_departments=None):
     if not allowed:
         allowed = ["CHUNG"]
 
-    return models.Filter(
-        must=[
-            models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchAny(any=allowed))
-        ]
-    )
+    must = [
+        models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchAny(any=allowed)),
+        _security_filter(max_security_level),
+    ]
+    site_cond = _site_filter(allowed_sites)
+    if site_cond is not None:
+        must.append(site_cond)
+
+    return models.Filter(must=must)
 
 def deterministic_version_intent(question):
     q = question.lower()
@@ -369,7 +407,7 @@ def extract_mechanical_codes(question):
         codes.extend(re.findall(pattern, question, re.IGNORECASE))
     return sorted(set(codes))
 
-def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None):
+def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None):
     """Phan tich cau hoi de lay danh sach ma doi tuong va intent versioning bang LLM (co timeout)."""
     if current_part_ids is None:
         current_part_ids = []
@@ -518,7 +556,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     else:
         must_conditions.append(models.FieldCondition(key="metadata.is_current", match=models.MatchValue(value=True)))
 
-    rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments=allowed_departments)
+    rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments=allowed_departments, max_security_level=max_security_level, allowed_sites=allowed_sites)
     if rbac_filter:
         must_conditions.append(rbac_filter)
 
@@ -929,7 +967,7 @@ def current_published_filter(rbac_filter=None):
 # ==========================================
 # 4. HAM XU LY LOI (TRAI TIM CUA CHATBOT)
 # ==========================================
-def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None):
+def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="internal", allowed_sites=None):
     if chat_history is None:
         chat_history = []
         
@@ -1029,9 +1067,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     else:
         logger.info("Dang phan tich intent de tim kiem du lieu...")
         t_intent = time.time()
-        rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments)
+        rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments, max_security_level=max_security_level, allowed_sites=allowed_sites)
         strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data = extract_search_intent(
-            user_question, current_part_ids, user_department, user_roles, allowed_departments
+            user_question, current_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites
         )
         
         log_trace("intent", trace_id, 
@@ -1301,6 +1339,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     # Tao trich dan truoc de neu evidence gate tu choi van co the hien thi tai lieu da tim thay
     ref_text, ref_images = build_source_citations(retrieved_docs)
+    _conf_docs = [d.metadata.get("file_goc") for d in retrieved_docs if d.metadata.get("security_level") == "confidential"]
+    if _conf_docs:
+        logger.warning(f"[audit][confidential] dept={user_department} roles={user_roles} truy cap tai lieu mat: {_conf_docs}")
 
     # LOP PHONG THU 2: Evidence Gate cho cau hoi bay / cau hoi can so lieu
     t_gate = time.time()
@@ -1455,8 +1496,24 @@ def build_source_citations(docs):
         loai = doc.metadata.get('loai_du_lieu', '')
         # Lay thu_muc de reconstruct ten file anh dung format (Fix Bug #7)
         thu_muc = doc.metadata.get('phong_ban_quyen', '')
+        # P1.3: bo sung dinh danh nguon de mo dung tai lieu goc
+        doc_id = doc.metadata.get('doc_id')
+        site = doc.metadata.get('site')
+        version_no = doc.metadata.get('version_no')
  
         cite = f"**{source}** (Trang {page}) - {cong_doan}"
+        # Hau to dinh danh: phong/khu + phien ban + ma tai lieu (de tra cuu trong Kho tai lieu)
+        tags = []
+        if thu_muc:
+            tags.append(str(thu_muc))
+        if site:
+            tags.append(f"khu {site}")
+        if version_no:
+            tags.append(f"v{version_no}")
+        if doc_id is not None:
+            tags.append(f"DocID {doc_id}")
+        if tags:
+            cite += "  \u00b7 _" + " | ".join(tags) + "_"
         if loai == 'image_summary':
             cite += " *(phan tich hinh anh)*"
         if cite not in references:
