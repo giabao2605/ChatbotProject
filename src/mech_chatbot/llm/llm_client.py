@@ -1,7 +1,6 @@
 import os
 from tenacity import retry, retry_if_exception, wait_exponential, stop_after_attempt
 from dotenv import load_dotenv
-# pyrefly: ignore [missing-import]
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
@@ -26,7 +25,7 @@ def _get_base_url():
 
 
 def get_llm_model_name():
-    return os.getenv("GPT_MODEL_NAME", "gpt-5.4")
+    return os.getenv("GPT_MODEL_NAME", "glm-5.2")
 
 
 def _make_llm(max_tokens=None):
@@ -75,7 +74,7 @@ def gpt_invoke(messages):
     return llm.invoke(messages)
 
 
-# Alias tuong thich nguoc: code cu goi cohere_invoke -> nay thuc chat goi GPT-5.4
+# Alias tuong thich nguoc: code cu goi cohere_invoke -> nay thuc chat goi GLM-5.2
 def cohere_invoke(messages):
     return gpt_invoke(messages)
 
@@ -84,7 +83,7 @@ def get_gpt_llm():
     return llm
 
 
-# Alias tuong thich nguoc: code cu goi get_cohere_llm -> nay tra GPT-5.4 llm
+# Alias tuong thich nguoc: code cu goi get_cohere_llm -> nay tra GLM-5.2 llm
 def get_cohere_llm():
     return llm
 
@@ -122,7 +121,7 @@ def _safe_json_array(text):
 )
 def gpt_rerank_documents(documents, query, top_n=10):
     """
-    Rerank nhe bang GPT-5.4 thay Cohere Rerank.
+    Rerank nhe bang GLM-5.2 thay Cohere Rerank.
     Tra ve list Document, gan metadata['relevance_score'] tu 0..1.
     """
     docs = list(documents or [])

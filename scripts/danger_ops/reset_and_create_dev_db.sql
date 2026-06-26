@@ -68,6 +68,8 @@ GO
 
 -- Buoc 2: Xoa tat ca bang (thu tu phu thuoc)
 IF OBJECT_ID('dbo.AuditLog',        'U') IS NOT NULL DROP TABLE dbo.AuditLog;
+IF OBJECT_ID('dbo.DocQualityScore', 'U') IS NOT NULL DROP TABLE dbo.DocQualityScore;
+IF OBJECT_ID('dbo.GoldenAnswer', 'U') IS NOT NULL DROP TABLE dbo.GoldenAnswer;
 IF OBJECT_ID('dbo.AnswerSource',  'U') IS NOT NULL DROP TABLE dbo.AnswerSource;
 IF OBJECT_ID('dbo.FeedbackReview',  'U') IS NOT NULL DROP TABLE dbo.FeedbackReview;
 IF OBJECT_ID('dbo.LichSuChat',      'U') IS NOT NULL DROP TABLE dbo.LichSuChat;
@@ -286,6 +288,35 @@ CREATE TABLE LichSuChat (
     DanhGia       SMALLINT,
     ThoiGian      DATETIME DEFAULT GETDATE(),
     Username      NVARCHAR(255) NOT NULL     -- Bat buoc: phan tach lich su chat theo user
+);
+GO
+
+CREATE TABLE DocQualityScore (
+    DocID            INT NOT NULL PRIMARY KEY,
+    LikeCount        INT NOT NULL DEFAULT 0,
+    DislikeCount     INT NOT NULL DEFAULT 0,
+    WeightedLike     FLOAT NOT NULL DEFAULT 0,
+    WeightedDislike  FLOAT NOT NULL DEFAULT 0,
+    QualityScore     FLOAT NULL,
+    NetScore         FLOAT NULL,
+    SampleSize       INT NOT NULL DEFAULT 0,
+    LastComputedAt   DATETIME NULL,
+    CONSTRAINT FK_DocQualityScore_DocID FOREIGN KEY (DocID) REFERENCES TaiLieu(DocID) ON DELETE CASCADE
+);
+GO
+
+CREATE TABLE GoldenAnswer (
+    GoldenID      INT IDENTITY(1,1) PRIMARY KEY,
+    FeedbackID    INT NULL,
+    QuestionHash  NVARCHAR(64) NOT NULL,
+    QuestionText  NVARCHAR(4000) NULL,
+    GoldenAnswer  NVARCHAR(MAX) NULL,
+    SourceDocID   INT NULL,
+    Department    NVARCHAR(100) NULL,
+    Site          NVARCHAR(100) NULL,
+    CreatedBy     NVARCHAR(256) NULL,
+    IsActive      BIT NOT NULL DEFAULT 1,
+    CreatedAt     DATETIME NOT NULL DEFAULT GETDATE()
 );
 GO
 

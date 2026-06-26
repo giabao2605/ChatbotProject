@@ -184,6 +184,7 @@ system_prompt = (
     "Khong duoc tra loi thong so ky thuat neu khong xac dinh duoc file va trang nguon.\n"
     "KHONG DUOC DUNG cac cum: 'co the', 'kha nang', 'thuong la', 'theo kinh nghiem', 'thong thuong' cho thong so ky thuat, vat lieu, kich thuoc, dung sai, so luong.\n"
     "14. ƯU TIÊN STRUCTURED DATA: Nếu phần context có [STRUCTURED DATA - HUMAN VERIFIED PRIORITY], phải ưu tiên dữ liệu đó hơn OCR/raw text. Nếu structured data và raw text mâu thuẫn, phải báo mâu thuẫn, không tự chọn.\n"
+    "15. GOLDEN ANSWER: Neu context co [GOLDEN ANSWER - CHUYEN GIA DA DUYET], day la cau tra loi da duoc chuyen gia kiem duyet cho cau hoi nay; phai uu tien tuyet doi, bam sat noi dung do va van kem trich dan nguon neu co."
 )
 prompt_template = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
@@ -1346,6 +1347,21 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     structured_context = build_structured_attributes_context(retrieved_docs)
     if structured_context:
         context_text = structured_context + "\n\n" + context_text
+    # P3-4: chen Golden Answer (cau tra loi da duyet) lam context uu tien cao nhat
+    try:
+        from mech_chatbot.db.repository import find_golden_answer
+        _golden = find_golden_answer(user_question)
+    except Exception as _e:
+        logger.error(f"Loi tra cuu Golden Answer: {_e}")
+        _golden = None
+    if _golden and _golden.get("answer"):
+        _g_src = _golden.get("source_doc_id")
+        _gp = ["[GOLDEN ANSWER - CHUYEN GIA DA DUYET - UU TIEN CAO NHAT]", str(_golden.get("answer")).strip()]
+        if _g_src:
+            _gp.append("(Nguon da duyet: DocID %s)" % _g_src)
+        _gp.append("[HET GOLDEN ANSWER]")
+        context_text = chr(10).join(_gp) + chr(10) + chr(10) + context_text
+        logger.info("Da chen Golden Answer vao context (uu tien cao nhat).")
     logger.info(f"Da tim thay {len(retrieved_docs)} tai lieu lien quan. Dang phan tich...")
 
     # Tao trich dan truoc de neu evidence gate tu choi van co the hien thi tai lieu da tim thay

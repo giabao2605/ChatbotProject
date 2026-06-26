@@ -9,7 +9,8 @@ from mech_chatbot.db.repository import (
     reject_document,
     write_audit_log,
     update_document_full_metadata,
-    delete_document_completely
+    delete_document_completely,
+    upsert_golden_answer
 )
 
 def run_admin():
@@ -336,5 +337,9 @@ def run_admin():
                                 with open(golden_path, "a", encoding="utf-8") as gf:
                                     gf.write(json.dumps(golden_entry, ensure_ascii=False) + "\n")
                                     
+                            if correct_ans and correct_ans.strip():
+                                with engine.connect() as _c:
+                                    _sr = _c.execute(text("SELECT SourceDocID, Department, Site FROM FeedbackReview WHERE FeedbackID = :fid"), {"fid": fid}).fetchone()
+                                upsert_golden_answer(question=q, answer=correct_ans, source_doc_id=(_sr[0] if _sr else None), department=(_sr[1] if _sr else None), site=(_sr[2] if _sr else None), created_by="admin", feedback_id=fid)
                             st.success("Đã cập nhật và thêm vào Golden Set!")
                             st.rerun()

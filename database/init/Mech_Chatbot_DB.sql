@@ -389,7 +389,40 @@ BEGIN
     );
 END
 GO
+IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'dbo.DocQualityScore') AND type = 'U')
+BEGIN
+    CREATE TABLE DocQualityScore (
+        DocID            INT NOT NULL PRIMARY KEY,
+        LikeCount        INT NOT NULL DEFAULT 0,
+        DislikeCount     INT NOT NULL DEFAULT 0,
+        WeightedLike     FLOAT NOT NULL DEFAULT 0,
+        WeightedDislike  FLOAT NOT NULL DEFAULT 0,
+        QualityScore     FLOAT NULL,
+        NetScore         FLOAT NULL,
+        SampleSize       INT NOT NULL DEFAULT 0,
+        LastComputedAt   DATETIME NULL,
+        CONSTRAINT FK_DocQualityScore_DocID FOREIGN KEY (DocID) REFERENCES TaiLieu(DocID) ON DELETE CASCADE
+    );
+END
+GO
 
+IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'dbo.GoldenAnswer') AND type = 'U')
+BEGIN
+    CREATE TABLE GoldenAnswer (
+        GoldenID      INT IDENTITY(1,1) PRIMARY KEY,
+        FeedbackID    INT NULL,
+        QuestionHash  NVARCHAR(64) NOT NULL,
+        QuestionText  NVARCHAR(4000) NULL,
+        GoldenAnswer  NVARCHAR(MAX) NULL,
+        SourceDocID   INT NULL,
+        Department    NVARCHAR(100) NULL,
+        Site          NVARCHAR(100) NULL,
+        CreatedBy     NVARCHAR(256) NULL,
+        IsActive      BIT NOT NULL DEFAULT 1,
+        CreatedAt     DATETIME NOT NULL DEFAULT GETDATE()
+    );
+END
+GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_LichSuChat_Session_Time' AND object_id = OBJECT_ID('dbo.LichSuChat'))
 BEGIN
     CREATE NONCLUSTERED INDEX IX_LichSuChat_Session_Time ON LichSuChat(SessionID, ThoiGian);

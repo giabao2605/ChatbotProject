@@ -348,6 +348,159 @@ def mark_feedback_stale_for_doc(doc_id, resolved_by_doc_id=None):
         return 0
 
 
+# ============================================================
+# P3-3: Diem chat luong tai lieu (DocQualityScore)
+# P3-4: Golden Answer
+# ============================================================
+ROLE_WEIGHTS = {
+    "admin": 3.0, "owner": 3.0, "superadmin": 3.0,
+    "reviewer": 2.0, "manager": 2.0, "approver": 2.0,
+    "engineer": 1.5, "ky_su": 1.5,
+    "user": 1.0, "viewer": 1.0, "guest": 0.5,
+}
+QUALITY_HALF_LIFE_DAYS = 90.0
+QUALITY_PRIOR = 0.6
+QUALITY_SMOOTH_K = 2.0
+
+
+def _role_weight(roles):
+    w = 1.0
+    for r in (roles or []):
+        if r is None:
+            continue
+        w = max(w, ROLE_WEIGHTS.get(str(r).strip().lower(), 1.0))
+    return w
+
+
+def recompute_doc_quality_scores():
+    """P3-3: Tinh lai diem chat luong moi tai lieu tu like/dislike, co trong so theo vai tro
+    nguoi danh gia + time-decay, va BO QUA cac feedback da bi danh dau stale."""
+    _ensure_engine()
+    role_map = {}
+    try:
+        with engine.connect() as conn:
+            rrows = conn.execute(text(
+                "SELECT u.Username, r.RoleName FROM Users u "
+                "LEFT JOIN UserRoles ur ON ur.UserID = u.UserID "
+                "LEFT JOIN Roles r ON r.RoleID = ur.RoleID"
+            )).fetchall()
+        for uname, rname in rrows:
+            if uname is None:
+                continue
+            role_map.setdefault(uname, [])
+            if rname:
+                role_map[uname].append(rname)
+    except Exception as e:
+        logger.warning(f"[quality] Khong doc duoc role map: {e}")
+
+    with engine.connect() as conn:
+        votes = conn.execute(text(
+            "WITH primary_src AS ("
+            "  SELECT a.ChatID, a.DocID, "
+            "         ROW_NUMBER() OVER (PARTITION BY a.ChatID ORDER BY a.RankNo ASC, a.SourceID ASC) AS rn "
+            "  FROM AnswerSource a WHERE a.DocID IS NOT NULL"
+            ") "
+            "SELECT ps.DocID, l.DanhGia, l.ThoiGian, l.Username "
+            "FROM LichSuChat l "
+            "JOIN primary_src ps ON ps.ChatID = l.ChatID AND ps.rn = 1 "
+            "WHERE l.DanhGia IS NOT NULL "
+            "  AND NOT EXISTS (SELECT 1 FROM FeedbackReview fr WHERE fr.ChatID = l.ChatID AND ISNULL(fr.IsStale,0) = 1)"
+        )).fetchall()
+
+    agg = {}
+    now = datetime.now()
+    for doc_id, danh_gia, thoi_gian, username in votes:
+        if doc_id is None:
+            continue
+        rw = _role_weight(role_map.get(username, []))
+        try:
+            age_days = max(0.0, (now - thoi_gian).total_seconds() / 86400.0) if thoi_gian else 0.0
+        except Exception:
+            age_days = 0.0
+        tw = 0.5 ** (age_days / QUALITY_HALF_LIFE_DAYS)
+        w = rw * tw
+        a = agg.setdefault(doc_id, {"like": 0, "dislike": 0, "wl": 0.0, "wd": 0.0, "n": 0})
+        a["n"] += 1
+        if int(danh_gia) == 1:
+            a["like"] += 1
+            a["wl"] += w
+        else:
+            a["dislike"] += 1
+            a["wd"] += w
+
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM DocQualityScore"))
+        for doc_id, a in agg.items():
+            wl, wd = a["wl"], a["wd"]
+            quality = (wl + QUALITY_PRIOR * QUALITY_SMOOTH_K) / (wl + wd + QUALITY_SMOOTH_K)
+            net = wl - wd
+            conn.execute(text(
+                "INSERT INTO DocQualityScore (DocID, LikeCount, DislikeCount, WeightedLike, WeightedDislike, QualityScore, NetScore, SampleSize, LastComputedAt) "
+                "VALUES (:d, :lk, :dk, :wl, :wd, :q, :net, :n, GETDATE())"
+            ), {"d": doc_id, "lk": a["like"], "dk": a["dislike"], "wl": round(wl, 4),
+                "wd": round(wd, 4), "q": round(quality, 4), "net": round(net, 4), "n": a["n"]})
+    logger.info(f"[quality] Da tinh lai diem chat luong cho {len(agg)} tai lieu.")
+    return len(agg)
+
+
+def get_doc_quality_ranking(limit=50, worst_first=True):
+    """P3-3: Bang xep hang chat luong tai lieu (mac dinh diem thap nhat truoc de uu tien xu ly)."""
+    _ensure_engine()
+    order = "ASC" if worst_first else "DESC"
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT TOP (:lim) q.DocID, t.TenFile, t.VersionNo, t.IsCurrent, t.LifecycleStatus, "
+            "       q.LikeCount, q.DislikeCount, q.WeightedLike, q.WeightedDislike, q.QualityScore, q.NetScore, q.SampleSize, q.LastComputedAt "
+            "FROM DocQualityScore q LEFT JOIN TaiLieu t ON t.DocID = q.DocID "
+            "ORDER BY q.QualityScore " + order + ", q.WeightedDislike DESC"
+        ), {"lim": int(limit)}).fetchall()
+    cols = ["doc_id", "file", "version_no", "is_current", "lifecycle_status", "like", "dislike", "wl", "wd", "quality", "net", "n", "computed_at"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def upsert_golden_answer(question, answer, source_doc_id=None, department=None, site=None, created_by="System", feedback_id=None):
+    """P3-4: Luu cau tra loi da duoc chuyen gia duyet thanh Golden Answer (gom theo hash cau hoi)."""
+    _ensure_engine()
+    if not question or not answer:
+        return None
+    qhash = _question_hash(question)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE GoldenAnswer SET IsActive = 0 WHERE QuestionHash = :h AND IsActive = 1"), {"h": qhash})
+            conn.execute(text(
+                "INSERT INTO GoldenAnswer (FeedbackID, QuestionHash, QuestionText, GoldenAnswer, SourceDocID, Department, Site, CreatedBy, IsActive) "
+                "VALUES (:fid, :h, :q, :a, :sd, :dept, :site, :cb, 1)"
+            ), {"fid": feedback_id, "h": qhash, "q": _cap_len(question, 4000), "a": answer,
+                "sd": source_doc_id, "dept": _cap_len(department, 100), "site": _cap_len(site, 100), "cb": _cap_len(created_by, 256)})
+        logger.info(f"[golden] Da luu Golden Answer (hash={(qhash[:8] if qhash else '?')}).")
+        return qhash
+    except Exception as e:
+        logger.error(f"[golden] Loi upsert Golden Answer: {e}", exc_info=True)
+        return None
+
+
+def find_golden_answer(question, department=None):
+    """P3-4: Tra ve Golden Answer dang active khop cau hoi (theo hash cau hoi da chuan hoa)."""
+    _ensure_engine()
+    qhash = _question_hash(question)
+    if not qhash:
+        return None
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text(
+                "SELECT TOP 1 GoldenID, QuestionText, GoldenAnswer, SourceDocID, Department, Site "
+                "FROM GoldenAnswer WHERE QuestionHash = :h AND IsActive = 1 ORDER BY CreatedAt DESC"
+            ), {"h": qhash}).fetchone()
+        if not row:
+            return None
+        return {"golden_id": row[0], "question": row[1], "answer": row[2],
+                "source_doc_id": row[3], "department": row[4], "site": row[5]}
+    except Exception as e:
+        logger.error(f"[golden] Loi find Golden Answer: {e}", exc_info=True)
+        return None
+
+
+
 def update_chat_feedback(chat_id, danh_gia):
     _ensure_engine()
     try:
