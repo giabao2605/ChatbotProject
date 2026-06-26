@@ -30,6 +30,11 @@ def run_worker():
             file_name = job["ten_file"]
             file_path = job["file_path"]
             thu_muc = job["thu_muc"]
+            # GD4: phan loai chon tu form upload (override; None -> suy tu folder)
+            domain_override = job.get("domain")
+            security_override = job.get("security_level")
+            cong_doan_override = job.get("cong_doan")
+            site_override = job.get("site")
             
             logger.info(f"Worker bắt đầu xử lý JobID {job_id}: {file_name}")
             print(f"\n[{time.strftime('%H:%M:%S')}] Đang xử lý: {file_name}")
@@ -42,7 +47,7 @@ def run_worker():
                 from sqlalchemy import text
                 
                 print(f"[{time.strftime('%H:%M:%S')}] Đang phân loại bằng AI...")
-                cls_res = classify_document(file_path, file_name)
+                cls_res = classify_document(file_path, file_name, thu_muc=thu_muc)
                 
                 with engine.begin() as conn:
                     conn.execute(text("""
@@ -73,11 +78,18 @@ def run_worker():
                     update_ingestion_job(job_id, status="embedding", error_message="Đang tạo embedding...")
 
             # Sử dụng learn_new_file của hệ thống
+            # scan_sensitive=True: luon do noi dung nhay cam (khong tin folder tuyet doi),
+            # ke ca file upload le lan nap hang loat -> tu nang 'confidential' khi can.
             success, message, report = learn_new_file(
                 file_path=file_path,
                 ten_file=file_name,
                 thu_muc=thu_muc,
-                progress_callback=progress_handler
+                progress_callback=progress_handler,
+                domain_override=domain_override,
+                security_override=security_override,
+                cong_doan_override=cong_doan_override,
+                site_override=site_override,
+                scan_sensitive=True,
             )
             
             # 3. Cập nhật kết quả cuối cùng

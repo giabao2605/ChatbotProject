@@ -93,16 +93,16 @@ def normalize_filename_to_classification(filename):
 
 def classify_document(file_path, original_filename=None, thu_muc=None):
     """Phan loai tai lieu 2 tang:
-      Tang 1: xac dinh domain tu thu_muc (co_khi / ke_toan / nhan_su / ...)
+      Tang 1: xac dinh domain tu thu_muc (mechanical / tabular / generic, tra cuu Departments)
       Tang 2: phan loai chi tiet bang LLM theo domain
     """
     if not original_filename:
         original_filename = os.path.basename(file_path)
 
     # ---- Tang 1: Domain routing ----
-    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, get_default_security
-    domain = resolve_domain_by_department(thu_muc) if thu_muc else 'chung'
-    is_mechanical = domain in ('co_khi', 'ky_thuat')
+    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, resolve_security_by_department
+    domain = resolve_domain_by_department(thu_muc)
+    is_mechanical = (domain == 'mechanical')
 
     text_content = extract_pages_for_classification(file_path)
     
@@ -112,56 +112,17 @@ def classify_document(file_path, original_filename=None, thu_muc=None):
     regex_version_no = norm_data["version_no"]
     regex_version_label = norm_data["version_label"]
 
-    # ---- Tang 2: LLM Classification tuy theo domain ----
-    if is_mechanical:
-        prompt = f"""
-    Thuc hien AI Classification cho tai lieu co khi.
-    Ten file: {original_filename}
-    Noi dung trich xuat (nhieu trang dai dien):
-    {text_content[:6000]}
-    
-    Hệ thống đã trích xuất sơ bộ từ tên file bằng Regex:
-    - Base Code đề xuất: {regex_base_code}
-    - Version Label đề xuất: {regex_version_label}
-    - Version No đề xuất: {regex_version_no}
-    
-    Dựa vào thông tin trên và nội dung file, hãy phân tích và tra ve MOT JSON object duy nhat voi cac key sau:
-    - "base_code": Ma ban ve goc. Uu tien dung Base Code de xuat neu hop ly. Bat buoc phai co.
-    - "version_label": Nhan version (VD: v2, r1, rev2). Neu khong co, tra ve chuoi rong "".
-    - "version_no": So version kieu nguyen (VD: v2 -> 2). Mac dinh la 1.
-    - "variant_code": Nhan bien the (VD: neu file la banveso1.2 thi variant_code la "1.2"). Mac dinh "default".
-    - "document_type": "technical_drawing", "bom", hoac "other".
-    - "detected_action": Hanh dong de xuat ("new_version", "new_variant", "new_document").
-    - "confidence": Do tu tin (tu 0.0 den 1.0).
-    - "reason": Giai thich ngan gon ly do phan loai.
-    
-    Uu tien phan loai dua tren NOI DUNG tai lieu o tren; ten file chi la goi y phu.
-    Chi tra ve dung JSON. Khong giai thich gi them.
-    """
-        fallback_doc_type = "technical_drawing"
-    else:
-        # Prompt cho domain phi co khi (ke_toan, nhan_su, chung)
-        prompt = f"""
-    Phan loai tai lieu hanh chinh/van phong.
-    Domain: {domain}
-    Ten file: {original_filename}
-    Noi dung trich xuat (nhieu trang dai dien):
-    {text_content[:6000]}
-    
-    Tra ve MOT JSON object duy nhat voi cac key sau:
-    - "base_code": Ma hoac ten rut gon cua tai lieu. Bat buoc.
-    - "version_label": Nhan version neu co, mac dinh "".
-    - "version_no": So version, mac dinh 1.
-    - "variant_code": Mac dinh "default".
-    - "document_type": Loai tai lieu. Vi du: "invoice", "contract", "payroll", "decision", "report", "form", "generic".
-    - "detected_action": "new_document".
-    - "confidence": Do tu tin (0.0 - 1.0).
-    - "reason": Giai thich ngan gon.
-    
-    Uu tien phan loai dua tren NOI DUNG tai lieu o tren; ten file chi la goi y phu.
-    Chi tra ve dung JSON. Khong giai thich gi them.
-    """
-        fallback_doc_type = "generic"
+    # ---- Tang 2: LLM Classification qua DomainHandler (GD3) ----
+    from mech_chatbot.ingestion.domain_handlers import get_handler
+    handler = get_handler(domain)
+    prompt, fallback_doc_type = handler.build_classify_prompt(
+        original_filename=original_filename,
+        text_content=text_content,
+        regex_base_code=regex_base_code,
+        regex_version_label=regex_version_label,
+        regex_version_no=regex_version_no,
+        domain=domain,
+    )
 
     default_res = {
         "base_code": regex_base_code,
@@ -174,7 +135,7 @@ def classify_document(file_path, original_filename=None, thu_muc=None):
         "confidence": 0.5,
         "reason": "Fallback do LLM loi hoac regex mac dinh.",
         "domain": domain,
-        "security_level": get_default_security(domain),
+        "security_level": resolve_security_by_department(thu_muc),
     }
     
     try:
@@ -197,7 +158,7 @@ def classify_document(file_path, original_filename=None, thu_muc=None):
 
         # Gan domain + security_level vao ket qua
         parsed["domain"] = domain
-        parsed["security_level"] = get_default_security(domain)
+        parsed["security_level"] = resolve_security_by_department(thu_muc)
 
         return parsed
     except Exception as e:

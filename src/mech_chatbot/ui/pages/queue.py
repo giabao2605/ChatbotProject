@@ -62,7 +62,8 @@ def run_queue():
                 CreatedAt, UploadedBy, RetryCount, MaxRetry, 
                 LockedBy, LockedAt, ProgressPercent, UpdatedAt,
                 FailureType, NextRetryAt, QualityScore, QualityStatus, ExtractionReport,
-                ISNULL(Priority, 100) AS Priority
+                ISNULL(Priority, 100) AS Priority,
+                Domain, SecurityLevel, CongDoan, Site
             FROM dbo.IngestionJobs
             WHERE Status NOT IN ('pending_review', 'published', 'archived', 'superseded')
             """
@@ -99,7 +100,8 @@ def run_queue():
                 created_at, uploaded_by, retry_count, max_retry,
                 locked_by, locked_at, progress_percent, updated_at,
                 failure_type, next_retry_at, quality_score, quality_status, extraction_report,
-                priority
+                priority,
+                domain_val, security_val, cong_doan_val, site_val
             ) = job
 
             if status == "published":
@@ -116,6 +118,12 @@ def run_queue():
             prio_badge = "🔥 GAP" if (priority or 100) < 50 else ("⬇️ thấp" if (priority or 100) > 150 else "thường")
             with st.expander(f"[{status.upper()}] {ten_file} (Job: {job_id}) · Ưu tiên: {prio_badge} - {created_at.strftime('%Y-%m-%d %H:%M:%S')}"):
                 st.write(f"**Thư mục:** {thu_muc} | **Người tải lên:** {uploaded_by or 'Unknown'}")
+                st.write(
+                    f"**Domain:** {domain_val or 'theo thư mục'} | "
+                    f"**Mức mật:** {security_val or 'theo thư mục'}"
+                    + (f" | **Công đoạn:** {cong_doan_val}" if cong_doan_val else "")
+                    + (f" | **Site:** {site_val}" if site_val else "")
+                )
                 st.write(f"**Trạng thái:** <span style='color:{color}'>{status}</span> (Tiến độ: {progress_percent}%)", unsafe_allow_html=True)
                 st.progress((progress_percent or 0) / 100)
                 st.write(f"**Ưu tiên (Priority):** {priority} (nhỏ hơn = ưu tiên hơn)")

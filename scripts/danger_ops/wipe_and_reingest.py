@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import sys
 from sqlalchemy import text
@@ -113,7 +113,8 @@ def reingest_all():
             print(f"\n--- Dang nap: {file} (Thu muc: {thu_muc_name}) ---")
             try:
                 # Dung lai ham learn_new_file de tan dung toan bo luong xu ly chuan
-                success, msg, _ = learn_new_file(file_path, file, thu_muc=thu_muc_name)
+                # GD4: re-ingest hang loat -> bat do noi dung nhay cam (khong tin folder tuyet doi).
+                success, msg, _ = learn_new_file(file_path, file, thu_muc=thu_muc_name, scan_sensitive=True)
                 if success:
                     success_count += 1
                 else:

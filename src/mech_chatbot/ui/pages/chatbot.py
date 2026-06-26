@@ -261,8 +261,8 @@ def run_chat():
     # 3. SIDEBAR - CONG CU PHU TRO
     # ==========================================
     with st.sidebar:
-        st.header("Tro Ly Co Khi")
-        st.caption("Tra cuu tai lieu ky thuat thong minh")
+        st.header("Tro Ly Tai Lieu Noi Bo")
+        st.caption("Tra cuu tai lieu noi bo thong minh")
  
         # CSS Canh le trai cho toan bo nut trong sidebar de trong giong ChatGPT
         st.markdown("""
@@ -356,8 +356,8 @@ def run_chat():
     # ==========================================
     # 4. GIAO DIEN CHAT CHINH
     # ==========================================
-    st.markdown("<h2 style='text-align: center; margin-bottom: 0;'>Tro Ly Ao Ky Thuat Co Khi</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: gray; margin-bottom: 2rem;'>Hoi bat ky cau hoi nao ve ban ve, linh kien, dung sai, yeu cau gia cong...</p>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; margin-bottom: 0;'>Tro Ly Tai Lieu Noi Bo</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: gray; margin-bottom: 2rem;'>Hoi bat ky cau hoi nao ve tai lieu, quy trinh, chinh sach hay du lieu cua cac phong ban...</p>", unsafe_allow_html=True)
  
     # CSS Customization cho Main Chat
     st.markdown("""

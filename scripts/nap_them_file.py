@@ -1,4 +1,4 @@
-﻿"""
+"""
 Script nạp thêm file vào Qdrant từ command line.
 Hỗ trợ mọi định dạng: PDF, DOCX, XLSX, CSV, TXT, ảnh...
 
@@ -60,7 +60,8 @@ if __name__ == "__main__":
         print(f"\n=== ĐANG XỬ LÝ: {ten_file} (Thư mục: {thu_muc}) ===")
         logger.info(f"Đang xử lý file: {ten_file}")
 
-        success, msg, _ = learn_new_file(file_path, ten_file, thu_muc=thu_muc, progress_callback=console_progress)
+        # GD4: nap hang loat tu fileserver -> KHONG tin folder tuyet doi, bat do noi dung nhay cam.
+        success, msg, _ = learn_new_file(file_path, ten_file, thu_muc=thu_muc, progress_callback=console_progress, scan_sensitive=True)
 
         if success:
             print(f"   Thành công! {msg}")

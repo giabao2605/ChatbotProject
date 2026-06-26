@@ -8,7 +8,7 @@ import streamlit as st
 from mech_chatbot.auth import service as auth
 from mech_chatbot.config import theme as ui_theme
 
-st.set_page_config(page_title="Trợ Lý Kỹ Thuật Cơ Khí", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Trợ Lý Tài Liệu Nội Bộ", layout="wide", initial_sidebar_state="expanded")
 ui_theme.inject_global_css()
 
 auth.check_auth()
@@ -51,7 +51,7 @@ if "nav_page" not in st.session_state or st.session_state["nav_page"] not in [p[
     st.session_state["nav_page"] = available_pages[0]["key"]
 
 with st.sidebar:
-    st.markdown("### Trợ Lý Cơ Khí")
+    st.markdown("### Trợ Lý Tài Liệu Nội Bộ")
     st.caption("Quản trị dữ liệu kỹ thuật & hỏi đáp RAG")
     st.markdown("---")
     st.markdown(f"**Xin chào, {user['display_name']}!**")

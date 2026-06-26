@@ -10,8 +10,18 @@ from mech_chatbot.db.repository import (
     write_audit_log,
     update_document_full_metadata,
     delete_document_completely,
+    update_qdrant_metadata,
     upsert_golden_answer
 )
+
+# GD4b: dung chung cho form duyet (linh hoat da phong ban)
+DOMAIN_OPTIONS = ["mechanical", "tabular", "generic"]
+DOMAIN_LABELS = {
+    "mechanical": "Cơ khí / Kỹ thuật",
+    "tabular": "Bảng biểu / Tài chính",
+    "generic": "Hành chính / Văn bản",
+}
+SECURITY_LEVELS = ["public", "internal", "confidential"]
 
 def run_admin():
     st.title("Duyệt Tài Liệu Đầu Vào (Phase 3 Workflow)")
@@ -47,7 +57,8 @@ def run_admin():
             SELECT t.DocID, t.TenFile, t.ThuMuc, t.ReviewStatus, t.NgayTaiLen,
                    tk.MaDoiTuong, tk.LoaiTaiLieu, tk.TenSanPham, tk.VatLieu, tk.DungSaiDay, tk.KichThuocTongThe,
                    j.ClassificationJson, j.RequestedAction, t.LifecycleStatus, j.ClassificationConfidence,
-                   t.BaseCode, t.VersionNo, t.VersionLabel, t.VariantCode, t.VariantGroup
+                   t.BaseCode, t.VersionNo, t.VersionLabel, t.VariantCode, t.VariantGroup,
+                   t.Domain, t.SecurityLevel, t.Site
             FROM TaiLieu t
             LEFT JOIN TaiLieuKyThuat tk ON t.DocID = tk.DocID AND tk.TrangSo = 1
             OUTER APPLY (
@@ -80,7 +91,7 @@ def run_admin():
             return
 
         for d in docs:
-            doc_id, ten_file, thu_muc, review_status, ngay_tai_len, ma_dt, loai_tl, ten_sp, vat_lieu, dung_sai, kich_thuoc, class_json, req_action, life_status, class_conf, t_bc, t_vn, t_vl, t_vc, t_vg = d
+            doc_id, ten_file, thu_muc, review_status, ngay_tai_len, ma_dt, loai_tl, ten_sp, vat_lieu, dung_sai, kich_thuoc, class_json, req_action, life_status, class_conf, t_bc, t_vn, t_vl, t_vc, t_vg, t_dom, t_sec, t_site = d
             
             with st.expander(f"{ten_file} - Tải lên: {ngay_tai_len.strftime('%Y-%m-%d')} | Trạng thái: {life_status}"):
                 st.write(f"**Thư mục:** {thu_muc}")
@@ -100,15 +111,25 @@ def run_admin():
                     st.warning("Chưa có kết quả AI Classification cho file này.")
 
                 st.markdown("### Dữ Liệu Bóc Tách Metadata:")
+                _is_mech = (t_dom or "generic") == "mechanical"
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.write(f"- **Mã đối tượng:** `{ma_dt}`")
-                    st.write(f"- **Loại:** {loai_tl}")
-                    st.write(f"- **Tên SP:** {ten_sp}")
+                    st.write(f"- **Phòng ban:** {thu_muc}")
+                    st.write(f"- **Lĩnh vực (domain):** {DOMAIN_LABELS.get(t_dom, t_dom or '(chưa gán)')}")
+                    st.write(f"- **Mức mật:** {t_sec or '(chưa gán)'}")
+                    st.write(f"- **Khu / Site:** {t_site or '(chưa gán)'}")
+                    st.write(f"- **Loại tài liệu:** {loai_tl}")
                 with col2:
-                    st.write(f"- **Vật liệu:** {vat_lieu}")
-                    st.write(f"- **Kích thước:** {kich_thuoc}")
-                    st.write(f"- **Dung sai:** {dung_sai}")
+                    if _is_mech:
+                        st.write(f"- **Mã đối tượng:** `{ma_dt}`")
+                        st.write(f"- **Tên SP:** {ten_sp}")
+                        st.write(f"- **Vật liệu:** {vat_lieu}")
+                        st.write(f"- **Kích thước:** {kich_thuoc}")
+                        st.write(f"- **Dung sai:** {dung_sai}")
+                    else:
+                        if ten_sp:
+                            st.write(f"- **Tiêu đề tài liệu:** {ten_sp}")
+                        st.caption("(Tài liệu phi kỹ thuật — không áp dụng các trường bản vẽ: vật liệu, kích thước, dung sai.)")
 
                 if show_actions:
                     st.markdown("### Cập nhật Metadata trước khi Duyệt (Bắt buộc kiểm tra):")
@@ -120,8 +141,19 @@ def run_admin():
                     with col_b:
                         edit_variant_code = st.text_input("Variant Code", value=t_vc or "default", key=f"vc_{doc_id}")
                         edit_variant_group = st.text_input("Variant Group", value=t_vg or "", key=f"vg_{doc_id}")
-                        edit_loai_tl = st.text_input("Document Type", value=loai_tl or "technical_drawing", key=f"dt_{doc_id}")
-                    
+                        edit_loai_tl = st.text_input("Document Type / Loại tài liệu", value=loai_tl or "", key=f"dt_{doc_id}")
+
+                    st.markdown("**Phân loại & quyền truy cập (đa phòng ban):**")
+                    colc, cold, cole = st.columns(3)
+                    with colc:
+                        _dom_idx = DOMAIN_OPTIONS.index(t_dom) if t_dom in DOMAIN_OPTIONS else DOMAIN_OPTIONS.index("generic")
+                        edit_domain = st.selectbox("Lĩnh vực (domain)", DOMAIN_OPTIONS, index=_dom_idx, format_func=lambda dv: DOMAIN_LABELS.get(dv, dv), key=f"dom_{doc_id}")
+                    with cold:
+                        _sec_idx = SECURITY_LEVELS.index(t_sec) if t_sec in SECURITY_LEVELS else SECURITY_LEVELS.index("internal")
+                        edit_security = st.selectbox("Mức mật", SECURITY_LEVELS, index=_sec_idx, key=f"sec_{doc_id}")
+                    with cole:
+                        edit_site = st.text_input("Khu / Site", value=t_site or "", key=f"site_{doc_id}")
+
                     action_choice = st.radio(
                         "Chọn hành động Publish (AI Đề xuất: " + cls_data.get('detected_action', 'new_document') + "):",
                         options=[
@@ -142,11 +174,13 @@ def run_admin():
                         with engine.begin() as save_conn:
                             save_conn.execute(text("""
                                 UPDATE TaiLieu 
-                                SET BaseCode = :bc, VersionNo = :vn, VersionLabel = :vl, VariantCode = :vc, VariantGroup = :vg
+                                SET BaseCode = :bc, VersionNo = :vn, VersionLabel = :vl, VariantCode = :vc, VariantGroup = :vg,
+                                    Domain = :dom, SecurityLevel = :sec, Site = :site
                                 WHERE DocID = :did
                             """), {
                                 "bc": edit_base_code_norm, "vn": edit_version_no, "vl": edit_version_label,
-                                "vc": edit_variant_code, "vg": edit_variant_group, "did": doc_id
+                                "vc": edit_variant_code, "vg": edit_variant_group, "did": doc_id,
+                                "dom": edit_domain, "sec": edit_security, "site": (edit_site or None)
                             })
                             save_conn.execute(text("UPDATE TaiLieuKyThuat SET LoaiTaiLieu = :ltl WHERE DocID = :did"), {"ltl": edit_loai_tl, "did": doc_id})
                             
@@ -162,8 +196,16 @@ def run_admin():
                         write_audit_log(current_user["username"], "edit_metadata", "TaiLieu", doc_id, {
                             "old_base_code": t_bc, "new_base_code": edit_base_code_norm,
                             "old_version": t_vn, "new_version": edit_version_no,
-                            "old_variant": t_vc, "new_variant": edit_variant_code
+                            "old_variant": t_vc, "new_variant": edit_variant_code,
+                            "old_security": t_sec, "new_security": edit_security,
+                            "old_domain": t_dom, "new_domain": edit_domain
                         })
+
+                        # GD4b: dong bo phan loai/quyen xuong Qdrant payload
+                        try:
+                            update_qdrant_metadata(doc_id, {"domain": edit_domain, "security_level": edit_security, "site": (edit_site or None), "loai_tai_lieu": edit_loai_tl})
+                        except Exception as _qe:
+                            st.warning(f"Đã lưu SQL nhưng đồng bộ Qdrant lỗi: {_qe}")
 
                         if "sửa metadata" in action_choice:
                             with engine.begin() as conn:

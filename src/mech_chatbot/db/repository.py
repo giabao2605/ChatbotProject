@@ -698,6 +698,12 @@ def _get_or_create_doc(conn, file_name, thu_muc):
     version_label = cls_data.get("version_label")
     version_no = cls_data.get("version_no", 1)
     variant_code = cls_data.get("variant_code") or "default"
+
+    # GD2: luon ghi Domain + SecurityLevel vao TaiLieu (truoc day chi ghi Site/family).
+    # Uu tien gia tri tu classification; fallback resolve theo phong ban (data-driven Departments).
+    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, resolve_security_by_department
+    domain = cls_data.get("domain") or resolve_domain_by_department(thu_muc)
+    security_level = cls_data.get("security_level") or resolve_security_by_department(thu_muc)
     
     f_id = None
     if base_code:
@@ -728,19 +734,19 @@ def _get_or_create_doc(conn, file_name, thu_muc):
             text("""UPDATE TaiLieu SET 
                 ReviewStatus = 'pending_review',
                 FamilyID = :fid, BaseCode = :bc, VersionNo = :vn, VersionLabel = :vl, VariantCode = :vc,
-                Site = :site
+                Site = :site, Domain = :domain, SecurityLevel = :seclvl
                 WHERE DocID = :d"""),
-            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc)}
+            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc), "domain": domain, "seclvl": security_level}
         )
         return doc_id
         
     res = conn.execute(
         text(
-            """INSERT INTO TaiLieu (TenFile, ThuMuc, TrangThaiVector, ReviewStatus, FamilyID, BaseCode, VersionNo, VersionLabel, VariantCode, Site) 
+            """INSERT INTO TaiLieu (TenFile, ThuMuc, TrangThaiVector, ReviewStatus, FamilyID, BaseCode, VersionNo, VersionLabel, VariantCode, Site, Domain, SecurityLevel) 
             OUTPUT INSERTED.DocID 
-            VALUES (:f, :t, 1, 'pending_review', :fid, :bc, :vn, :vl, :vc, :site)"""
+            VALUES (:f, :t, 1, 'pending_review', :fid, :bc, :vn, :vl, :vc, :site, :domain, :seclvl)"""
         ),
-        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc)},
+        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc), "domain": domain, "seclvl": security_level},
     )
     row = res.fetchone()
     return row[0] if row else None
@@ -1203,24 +1209,43 @@ def search_bom_by_code(
 # ==========================================
 # BACKGROUND JOBS
 # ==========================================
-def create_ingestion_job(file_name, file_path, thu_muc, uploaded_by=None):
+def create_ingestion_job(file_name, file_path, thu_muc, uploaded_by=None,
+                         domain=None, security_level=None, cong_doan=None,
+                         site=None, phong_ban=None):
+    """Tao IngestionJob. GD4: luu kem phan loai chon tu form upload
+    (domain / security_level / cong_doan / site / phong_ban) de worker dung
+    lam override thay vi chi suy tu folder. Cac tham so nay deu optional;
+    neu None thi ingest se tu suy theo folder (backward compatible).
+    PhongBan mac dinh = thu_muc neu khong truyen rieng.
+    """
     _ensure_engine()
     try:
         with engine.begin() as conn:
             result = conn.execute(
                 text(
                     """
-                    INSERT INTO dbo.IngestionJobs (TenFile, FilePath, ThuMuc, Status, UploadedBy)
+                    INSERT INTO dbo.IngestionJobs
+                        (TenFile, FilePath, ThuMuc, Status, UploadedBy,
+                         Domain, SecurityLevel, PhongBan, CongDoan, Site)
                     OUTPUT INSERTED.JobID
-                    VALUES (:f, :p, :t, 'pending', :u)
+                    VALUES (:f, :p, :t, 'pending', :u,
+                            :dom, :sec, :pb, :cd, :site)
                     """
                 ),
-                {"f": file_name, "p": file_path, "t": thu_muc, "u": uploaded_by}
+                {
+                    "f": file_name, "p": file_path, "t": thu_muc, "u": uploaded_by,
+                    "dom": domain, "sec": security_level,
+                    "pb": phong_ban or thu_muc, "cd": cong_doan, "site": site,
+                }
             )
             row = result.fetchone()
             job_id = row[0] if row else None
             if job_id:
-                write_audit_log(uploaded_by or "System", "upload", "IngestionJobs", job_id, {"file_name": file_name, "thu_muc": thu_muc})
+                write_audit_log(uploaded_by or "System", "upload", "IngestionJobs", job_id, {
+                    "file_name": file_name, "thu_muc": thu_muc,
+                    "domain": domain, "security_level": security_level,
+                    "cong_doan": cong_doan, "site": site, "phong_ban": phong_ban or thu_muc,
+                })
             return job_id
     except Exception as e:
         logger.error(f"Loi tao IngestionJob: {e}", exc_info=True)
@@ -1290,6 +1315,11 @@ def get_pending_job(worker_id="worker-1"):
                             LockedBy,
                             LockedAt,
                             ProgressPercent,
+                            Domain,
+                            SecurityLevel,
+                            PhongBan,
+                            CongDoan,
+                            Site,
                             CreatedAt,
                             UpdatedAt
                         FROM dbo.IngestionJobs WITH (READPAST, UPDLOCK, ROWLOCK)
@@ -1326,7 +1356,12 @@ def get_pending_job(worker_id="worker-1"):
                         inserted.JobID,
                         inserted.TenFile,
                         inserted.FilePath,
-                        inserted.ThuMuc;
+                        inserted.ThuMuc,
+                        inserted.Domain,
+                        inserted.SecurityLevel,
+                        inserted.PhongBan,
+                        inserted.CongDoan,
+                        inserted.Site;
                     """
                 ),
                 {"worker_id": worker_id}
@@ -1340,6 +1375,11 @@ def get_pending_job(worker_id="worker-1"):
                     "ten_file": row[1],
                     "file_path": row[2],
                     "thu_muc": row[3],
+                    "domain": row[4],
+                    "security_level": row[5],
+                    "phong_ban": row[6],
+                    "cong_doan": row[7],
+                    "site": row[8],
                 }
 
             return None
@@ -1501,6 +1541,7 @@ def update_qdrant_metadata(doc_id, metadata_updates):
 
 def update_document_full_metadata(doc_id, base_code=None, version_no=None, version_label=None,
                                   variant_code=None, variant_group=None, loai_tai_lieu=None,
+                                  domain=None, security_level=None, site=None, cong_doan=None,
                                   reviewer="System"):
     """Cap nhat lai 'ma ban ve'/version/variant cho 1 tai lieu da duyet/tu choi.
     Dong bo ca SQL (TaiLieu + TaiLieuKyThuat + FamilyID) lan Qdrant payload."""
@@ -1514,6 +1555,13 @@ def update_document_full_metadata(doc_id, base_code=None, version_no=None, versi
             WHERE DocID = :id
         """), {"bc": norm_base, "vn": version_no, "vl": version_label,
                "vc": variant_code, "vg": variant_group, "id": doc_id})
+        # GD4b: cho phep chinh phan loai linh hoat da phong ban (chi cap nhat khi co gia tri)
+        if domain is not None:
+            conn.execute(text("UPDATE TaiLieu SET Domain = :d WHERE DocID = :id"), {"d": domain, "id": doc_id})
+        if security_level is not None:
+            conn.execute(text("UPDATE TaiLieu SET SecurityLevel = :s WHERE DocID = :id"), {"s": security_level, "id": doc_id})
+        if site is not None:
+            conn.execute(text("UPDATE TaiLieu SET Site = :st WHERE DocID = :id"), {"st": (site or None), "id": doc_id})
         if loai_tai_lieu is not None:
             loai_tai_lieu = _normalize_doc_type_label(loai_tai_lieu)
             conn.execute(text("UPDATE TaiLieuKyThuat SET LoaiTaiLieu = :l WHERE DocID = :id"),
@@ -1533,6 +1581,10 @@ def update_document_full_metadata(doc_id, base_code=None, version_no=None, versi
     if variant_code is not None: qmeta["variant_code"] = variant_code
     if variant_group is not None: qmeta["variant_group"] = variant_group
     if loai_tai_lieu is not None: qmeta["loai_tai_lieu"] = loai_tai_lieu
+    if domain is not None: qmeta["domain"] = domain
+    if security_level is not None: qmeta["security_level"] = security_level
+    if site is not None: qmeta["site"] = (site or None)
+    if cong_doan is not None: qmeta["cong_doan"] = (cong_doan or None)
 
     ok = update_qdrant_metadata(doc_id, qmeta) if qmeta else True
     # P3-2: metadata da doi -> feedback cu cua tai lieu nay tro thanh stale

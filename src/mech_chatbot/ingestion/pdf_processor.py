@@ -677,17 +677,15 @@ _QUALITY_FUNCS = {
 }
 
 
-def calculate_quality_status(report, domain='co_khi'):
+def calculate_quality_status(report, domain='generic'):
     """Tinh diem chat luong theo domain.
     
     Args:
         report: dict bao cao ingest
-        domain: domain key ('co_khi', 'ke_toan', 'nhan_su', 'chung', ...)
+        domain: domain key ('mechanical', 'tabular', 'generic')
     """
-    from mech_chatbot.ingestion.domain_registry import get_domain_config
-    cfg = get_domain_config(domain)
-    fn = _QUALITY_FUNCS.get(cfg.quality_fn, _quality_generic)
-    return fn(report)
+    from mech_chatbot.ingestion.domain_handlers import get_handler
+    return get_handler(domain).quality(report)
 
 def has_mechanical_signal(text):
     if not text:
@@ -707,12 +705,12 @@ def has_mechanical_signal(text):
     return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
 # 3. Ham xu ly PDF trung tam
-def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progress_callback=None):
-    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, get_default_security
+def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progress_callback=None, domain_override=None, security_override=None, cong_doan_override=None, site_override=None, scan_sensitive=False):
+    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, resolve_security_by_department
     from mech_chatbot.ingestion.site_registry import resolve_site_by_department
-    domain = resolve_domain_by_department(thu_muc)
-    security_level = get_default_security(domain)
-    site = resolve_site_by_department(thu_muc)  # P1.2
+    domain = domain_override or resolve_domain_by_department(thu_muc)
+    security_level = security_override or resolve_security_by_department(thu_muc)
+    site = site_override or resolve_site_by_department(thu_muc)  # P1.2
     start_time = time.time()
     report = {
         "status": "success",
@@ -778,8 +776,8 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     report["pages_text_extracted"].append(page_num + 1)
                 
                 # Luon goi Gemini cho PDF ky thuat, tru trang toan text
-                from mech_chatbot.ingestion.domain_registry import get_domain_config as _gdc_vision
-                _is_mech_domain_vision = _gdc_vision(domain).extractor == 'mechanical'
+                from mech_chatbot.ingestion.domain_handlers import get_handler as _gh_vision
+                _is_mech_domain_vision = _gh_vision(domain).vision_always
                 # P0: chi day anh/scan qua GPT Vision. Trang co lop text day (van ban thuan)
                 # thuoc domain phi co khi thi doc truc tiep tu text layer, tiet kiem quota Vision.
                 vision_required = os.path.exists(img_path) and (_is_mech_domain_vision or not is_text_heavy)
@@ -937,9 +935,10 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     add_attr("note", vision_data.get("technical_notes"), image_summary[:500], "gemini_vision", 0.9)
 
                 from mech_chatbot.ingestion.mechanical_extractors import extract_mechanical_attributes
-                from mech_chatbot.ingestion.domain_registry import get_domain_config as _gdc_attr
-                _attr_kind = _gdc_attr(domain).extractor
-                regex_attrs = extract_mechanical_attributes(combined_text_for_metadata) if _attr_kind == 'mechanical' else []
+                from mech_chatbot.ingestion.domain_handlers import get_handler as _gh_attr
+                _handler_attr = _gh_attr(domain)
+                _attr_kind = _handler_attr.extractor_kind
+                regex_attrs = extract_mechanical_attributes(combined_text_for_metadata) if _handler_attr.attribute_strategy == 'technical' else []
                 for attr in regex_attrs:
                     tech_attrs.append({
                         "AttributeType": attr["type"],
@@ -950,12 +949,21 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                         "ExtractedBy": attr["extracted_by"]
                     })
 
-                if _attr_kind == 'mechanical':
+                if _handler_attr.attribute_strategy == 'technical':
                     save_technical_attributes(doc_id, ten_file, page_num + 1, tech_attrs)
                 else:
                     from mech_chatbot.ingestion.generic_extractors import extract_generic_attributes
                     save_document_attributes(doc_id, domain, extract_generic_attributes(combined_text_for_metadata, domain))
 
+                # GD4: duong nap hang loat khong tin folder tuyet doi -> quet noi dung nhay cam
+                if scan_sensitive:
+                    from mech_chatbot.ingestion.sensitive_scanner import scan_sensitive_content, escalate_security
+                    _scan = scan_sensitive_content(combined_text_for_metadata)
+                    if _scan.get("is_sensitive") and security_level != "confidential":
+                        security_level = escalate_security(security_level, _scan)
+                        report["warnings"].append(
+                            f"Phat hien noi dung nhay cam {_scan['categories']} -> nang muc mat 'confidential', can review thu cong."
+                        )
                 metadata = {
                     "file_goc": ten_file,
                     "phong_ban_quyen": thu_muc,
@@ -966,7 +974,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     "ma_lien_quan": info.get("ma_lien_quan", []),
                     "loai_tai_lieu": info["loai_tai_lieu"],
                     "ten_san_pham": info["ten_tai_lieu"],
-                    "cong_doan": info["cong_doan"],
+                    "cong_doan": cong_doan_override or info["cong_doan"],
                     "so_luong": info["so_luong"],
                     "vat_lieu": info["vat_lieu"],
                     "nguoi_lap": info["nguoi_lap"],
@@ -1157,12 +1165,12 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     report["message"] = " ".join(message_parts)
     return report
  
-def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, progress_callback=None):
-    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, get_default_security
+def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, progress_callback=None, domain_override=None, security_override=None, cong_doan_override=None, site_override=None, scan_sensitive=False):
+    from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, resolve_security_by_department
     from mech_chatbot.ingestion.site_registry import resolve_site_by_department
-    domain = resolve_domain_by_department(thu_muc)
-    security_level = get_default_security(domain)
-    site = resolve_site_by_department(thu_muc)  # P1.2
+    domain = domain_override or resolve_domain_by_department(thu_muc)
+    security_level = security_override or resolve_security_by_department(thu_muc)
+    site = site_override or resolve_site_by_department(thu_muc)  # P1.2
     ext = os.path.splitext(file_path)[1].lower()
     start_time = time.time()
     report = {
@@ -1241,6 +1249,16 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         save_page_metadata(ten_file, thu_muc, info, doc_id=doc_id)
         doc_info = get_document_info(doc_id)
 
+        # GD4: duong nap hang loat khong tin folder tuyet doi -> quet noi dung nhay cam
+        if scan_sensitive:
+            from mech_chatbot.ingestion.sensitive_scanner import scan_sensitive_content, escalate_security
+            _scan = scan_sensitive_content(text_content)
+            if _scan.get("is_sensitive") and security_level != "confidential":
+                security_level = escalate_security(security_level, _scan)
+                report["warnings"].append(
+                    f"Phat hien noi dung nhay cam {_scan['categories']} -> nang muc mat 'confidential', can review thu cong."
+                )
+
         metadata = {
             "file_goc": ten_file,
             "phong_ban_quyen": thu_muc,
@@ -1251,7 +1269,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             "ma_lien_quan": info.get("ma_lien_quan", []),
             "loai_tai_lieu": info["loai_tai_lieu"],
             "ten_san_pham": info["ten_tai_lieu"],
-            "cong_doan": info["cong_doan"],
+            "cong_doan": cong_doan_override or info["cong_doan"],
             "so_luong": info["so_luong"],
             "vat_lieu": info["vat_lieu"],
             "nguoi_lap": info["nguoi_lap"],

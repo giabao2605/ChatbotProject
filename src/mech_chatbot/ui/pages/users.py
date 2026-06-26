@@ -1,4 +1,4 @@
-﻿import bcrypt
+import bcrypt
 import streamlit as st
 from sqlalchemy import text
 from mech_chatbot.auth import service as auth
@@ -149,7 +149,7 @@ def render_org_management():
             code = st.text_input("Mã phòng (vd: To_Han)")
             name = st.text_input("Tên hiển thị")
         with c2:
-            domain = st.selectbox("Lĩnh vực (domain)", ["", "co_khi", "ky_thuat", "ke_toan", "nhan_su", "chung"])
+            domain = st.selectbox("Lĩnh vực / kiểu đọc (domain)", ["", "mechanical", "tabular", "generic"])
             site = st.selectbox("Khu mặc định", [""] + _site_codes())
         active = st.checkbox("Active", value=True)
         if st.form_submit_button("Lưu phòng ban", type="primary"):

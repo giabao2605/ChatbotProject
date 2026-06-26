@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 from sqlalchemy import text
 from mech_chatbot.auth import service as auth
 from mech_chatbot.ingestion.doc_type_registry import canonical_label
@@ -6,6 +6,15 @@ from mech_chatbot.db.repository import (
     engine, update_document_full_metadata, delete_document_completely,
     list_known_departments, list_known_sites,
 )
+
+# GD4b: dung chung cho cac form chinh phan loai (linh hoat da phong ban)
+DOMAIN_OPTIONS = ["mechanical", "tabular", "generic"]
+DOMAIN_LABELS = {
+    "mechanical": "Cơ khí / Kỹ thuật",
+    "tabular": "Bảng biểu / Tài chính",
+    "generic": "Hành chính / Văn bản",
+}
+SECURITY_LEVELS = ["public", "internal", "confidential"]
 
 
 def run_documents():
@@ -137,27 +146,47 @@ def render_document_item(doc, current_user):
             st.write(f"**Review:** {review_status}")
             st.write(f"**Lifecycle:** {lifecycle_status}")
             st.write(f"**Ngày tải:** {ngay_tai_len}")
-            st.write(f"**Mã đối tượng:** {ma_doi_tuong}")
-            st.write(f"**Tên sản phẩm:** {ten_san_pham}")
+            # GD4b: hien thi linh hoat theo domain — chi tai lieu co khi moi show ma doi tuong
+            if (domain or "generic") == "mechanical":
+                st.write(f"**Mã đối tượng:** {ma_doi_tuong}")
+                st.write(f"**Tên sản phẩm:** {ten_san_pham}")
+            elif ten_san_pham:
+                st.write(f"**Tiêu đề tài liệu:** {ten_san_pham}")
             st.write(f"**Loại tài liệu:** {canonical_label(loai_tai_lieu)}")
 
         if auth.has_role("admin"):
-            render_admin_actions(doc_id, base_code, version_no, version_label, variant_code, variant_group, loai_tai_lieu, current_user)
+            render_admin_actions(doc_id, base_code, version_no, version_label, variant_code, variant_group, loai_tai_lieu, domain, security_level, site, thu_muc, current_user)
 
 
-def render_admin_actions(doc_id, base_code, version_no, version_label, variant_code, variant_group, loai_tai_lieu, current_user):
+def render_admin_actions(doc_id, base_code, version_no, version_label, variant_code, variant_group, loai_tai_lieu, domain, security_level, site, thu_muc, current_user):
     st.markdown("---")
     st.subheader("Quản trị tài liệu")
     with st.form(f"edit_doc_{doc_id}"):
+        # --- Phân loại & quyền truy cập (linh hoạt đa phòng ban) ---
+        st.markdown("**Phân loại & quyền truy cập**")
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1:
+            _dom_idx = DOMAIN_OPTIONS.index(domain) if domain in DOMAIN_OPTIONS else DOMAIN_OPTIONS.index("generic")
+            new_domain = st.selectbox("Lĩnh vực (domain)", DOMAIN_OPTIONS, index=_dom_idx,
+                                      format_func=lambda d: DOMAIN_LABELS.get(d, d), key=f"dom_{doc_id}")
+        with cc2:
+            _sec_idx = SECURITY_LEVELS.index(security_level) if security_level in SECURITY_LEVELS else SECURITY_LEVELS.index("internal")
+            new_security = st.selectbox("Mức mật", SECURITY_LEVELS, index=_sec_idx, key=f"sec_{doc_id}")
+        with cc3:
+            _site_opts = [""] + sorted({s["code"] for s in list_known_sites(active_only=False)} | ({site} if site else set()))
+            _site_idx = _site_opts.index(site) if site in _site_opts else 0
+            new_site = st.selectbox("Khu / Site", _site_opts, index=_site_idx,
+                                    format_func=lambda s: s or "(chưa gán)", key=f"site_{doc_id}")
+        st.markdown("**Thông tin phiên bản / mã tài liệu**")
         c1, c2 = st.columns(2)
         with c1:
-            new_base_code = st.text_input("Base Code", value=base_code or "")
+            new_base_code = st.text_input("Base Code / Mã tài liệu", value=base_code or "")
             new_version_no = st.number_input("Version No", value=int(version_no) if version_no else 1, step=1)
             new_version_label = st.text_input("Version Label", value=version_label or "")
         with c2:
             new_variant_code = st.text_input("Variant Code", value=variant_code or "default")
             new_variant_group = st.text_input("Variant Group", value=variant_group or "")
-            new_doc_type = st.text_input("Document Type", value=loai_tai_lieu or "")
+            new_doc_type = st.text_input("Document Type / Loại tài liệu", value=loai_tai_lieu or "")
         submitted = st.form_submit_button("Lưu metadata", type="primary")
     if submitted:
         try:
@@ -165,6 +194,7 @@ def render_admin_actions(doc_id, base_code, version_no, version_label, variant_c
                 doc_id, base_code=new_base_code, version_no=new_version_no,
                 version_label=new_version_label, variant_code=new_variant_code,
                 variant_group=new_variant_group, loai_tai_lieu=new_doc_type,
+                domain=new_domain, security_level=new_security, site=new_site,
                 reviewer=current_user["username"],
             )
             if ok:
