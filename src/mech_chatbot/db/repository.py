@@ -455,7 +455,12 @@ def get_doc_quality_ranking(limit=50, worst_first=True):
             "ORDER BY q.QualityScore " + order + ", q.WeightedDislike DESC"
         ), {"lim": int(limit)}).fetchall()
     cols = ["doc_id", "file", "version_no", "is_current", "lifecycle_status", "like", "dislike", "wl", "wd", "quality", "net", "n", "computed_at"]
-    return [dict(zip(cols, r)) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        d["reliable"] = (d.get("n") or 0) >= QUALITY_MIN_SAMPLE
+        out.append(d)
+    return out
 
 
 def upsert_golden_answer(question, answer, source_doc_id=None, department=None, site=None, created_by="System", feedback_id=None):
@@ -501,10 +506,136 @@ def find_golden_answer(question, department=None):
 
 
 
-def update_chat_feedback(chat_id, danh_gia):
+# ============================================================
+# P3-5: Regression testing CRUD
+# P3-6: Guardrails (cleanup, normalize, nguong mau)
+# ============================================================
+QUALITY_MIN_SAMPLE = 3
+
+
+def normalize_question(q):
+    """P3-6: chuan hoa cau hoi (bo dau, lowercase, gom khoang trang) de so khop on dinh."""
+    try:
+        s = unicodedata.normalize("NFKD", str(q or "")).encode("ascii", "ignore").decode("ascii")
+        return " ".join(s.lower().split())
+    except Exception:
+        return str(q or "").strip().lower()
+
+
+def add_regression_question(question, expected_doc_id=None, expected_keywords=None, department=None, site=None, created_by="System"):
+    """P3-5: them 1 cau hoi vao bo hoi quy."""
+    _ensure_engine()
+    if not question or not str(question).strip():
+        return None
+    kw = expected_keywords
+    if isinstance(expected_keywords, (list, tuple)):
+        kw = ", ".join([str(x).strip() for x in expected_keywords if str(x).strip()])
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "INSERT INTO RegressionQuestion (QuestionText, ExpectedDocID, ExpectedKeywords, Department, Site, CreatedBy, IsActive) "
+            "OUTPUT INSERTED.RegQID "
+            "VALUES (:q, :ed, :kw, :dept, :site, :cb, 1)"
+        ), {"q": _cap_len(question, 2000), "ed": expected_doc_id, "kw": kw,
+            "dept": _cap_len(department, 100), "site": _cap_len(site, 100), "cb": _cap_len(created_by, 256)}).fetchone()
+    return row[0] if row else None
+
+
+def list_regression_questions(active_only=True):
+    """P3-5: liet ke cau hoi hoi quy."""
+    _ensure_engine()
+    q = ("SELECT RegQID, QuestionText, ExpectedDocID, ExpectedKeywords, Department, Site, IsActive, CreatedAt "
+         "FROM RegressionQuestion")
+    if active_only:
+        q += " WHERE IsActive = 1"
+    q += " ORDER BY CreatedAt DESC"
+    cols = ["reg_qid", "question", "expected_doc_id", "expected_keywords", "department", "site", "is_active", "created_at"]
+    with engine.connect() as conn:
+        rows = conn.execute(text(q)).fetchall()
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def set_regression_question_active(reg_qid, is_active):
+    """P3-5: bat/tat 1 cau hoi hoi quy."""
+    _ensure_engine()
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE RegressionQuestion SET IsActive = :a WHERE RegQID = :id"),
+                     {"a": 1 if is_active else 0, "id": reg_qid})
+    return True
+
+
+def save_regression_run(reg_qid, batch_id, answer_text, matched_doc_ids, doc_hit, keyword_hit, passed, duration_ms=None, error_text=None):
+    """P3-5: luu ket qua 1 lan chay hoi quy."""
+    _ensure_engine()
+    mids = matched_doc_ids
+    if isinstance(matched_doc_ids, (list, tuple)):
+        mids = ",".join([str(x) for x in matched_doc_ids if x is not None])
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO RegressionRun (RegQID, RunBatchID, AnswerText, MatchedDocIDs, DocHit, KeywordHit, Passed, DurationMs, ErrorText) "
+            "VALUES (:q, :b, :a, :m, :dh, :kh, :p, :dur, :err)"
+        ), {"q": reg_qid, "b": _cap_len(batch_id, 64), "a": answer_text, "m": _cap_len(mids, 500),
+            "dh": 1 if doc_hit else 0, "kh": 1 if keyword_hit else 0, "p": 1 if passed else 0,
+            "dur": duration_ms, "err": _cap_len(error_text, 1000)})
+    return True
+
+
+def get_latest_regression_batch():
+    """P3-5: lay batch hoi quy moi nhat."""
+    _ensure_engine()
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT TOP 1 RunBatchID FROM RegressionRun ORDER BY CreatedAt DESC, RunID DESC")).fetchone()
+    return row[0] if row else None
+
+
+def get_regression_runs(batch_id=None):
+    """P3-5: lay chi tiet cac lan chay cua 1 batch (mac dinh batch moi nhat)."""
+    _ensure_engine()
+    if batch_id is None:
+        batch_id = get_latest_regression_batch()
+    if not batch_id:
+        return []
+    cols = ["run_id", "reg_qid", "question", "passed", "doc_hit", "keyword_hit", "matched_doc_ids", "expected_doc_id", "duration_ms", "error", "answer", "created_at"]
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT rr.RunID, rr.RegQID, rq.QuestionText, rr.Passed, rr.DocHit, rr.KeywordHit, rr.MatchedDocIDs, rq.ExpectedDocID, rr.DurationMs, rr.ErrorText, rr.AnswerText, rr.CreatedAt "
+            "FROM RegressionRun rr LEFT JOIN RegressionQuestion rq ON rq.RegQID = rr.RegQID "
+            "WHERE rr.RunBatchID = :b ORDER BY rr.RunID ASC"
+        ), {"b": batch_id}).fetchall()
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def cleanup_dangling_records():
+    """P3-6: don du lieu mo coi tham chieu toi Doc/Chat khong con ton tai."""
+    _ensure_engine()
+    counts = {}
+    with engine.begin() as conn:
+        r = conn.execute(text("UPDATE GoldenAnswer SET SourceDocID = NULL WHERE SourceDocID IS NOT NULL AND SourceDocID NOT IN (SELECT DocID FROM TaiLieu)"))
+        counts["golden_source_nulled"] = r.rowcount if r.rowcount is not None else 0
+        r = conn.execute(text("UPDATE FeedbackReview SET SourceDocID = NULL WHERE SourceDocID IS NOT NULL AND SourceDocID NOT IN (SELECT DocID FROM TaiLieu)"))
+        counts["feedback_source_nulled"] = r.rowcount if r.rowcount is not None else 0
+        r = conn.execute(text("DELETE FROM AnswerSource WHERE ChatID NOT IN (SELECT ChatID FROM LichSuChat)"))
+        counts["answersource_orphan_deleted"] = r.rowcount if r.rowcount is not None else 0
+        r = conn.execute(text("DELETE FROM DocQualityScore WHERE DocID NOT IN (SELECT DocID FROM TaiLieu)"))
+        counts["quality_orphan_deleted"] = r.rowcount if r.rowcount is not None else 0
+    logger.info(f"[guardrail] cleanup_dangling_records: {counts}")
+    return counts
+
+
+def update_chat_feedback(chat_id, danh_gia, voter_username=None):
     _ensure_engine()
     try:
         with engine.begin() as conn:
+            # P3-6 guardrail: chi chu so huu chat moi duoc danh gia; idempotent (1 vote/ChatID)
+            owner_row = conn.execute(text("SELECT Username, DanhGia FROM LichSuChat WHERE ChatID = :c"), {"c": chat_id}).fetchone()
+            if owner_row is None:
+                logger.warning(f"[vote] ChatID {chat_id} khong ton tai, bo qua danh gia.")
+                return False
+            chat_owner, current_vote = owner_row[0], owner_row[1]
+            if voter_username and chat_owner and str(voter_username).strip().lower() != str(chat_owner).strip().lower():
+                logger.warning(f"[vote] {voter_username} khong phai chu so huu ChatID {chat_id} (cua {chat_owner}); tu choi.")
+                return False
+            if current_vote is not None and int(current_vote) == int(danh_gia):
+                return True
             conn.execute(
                 text("UPDATE LichSuChat SET DanhGia = :danh_gia WHERE ChatID = :chat_id"),
                 {"danh_gia": danh_gia, "chat_id": chat_id},
@@ -539,8 +670,10 @@ def update_chat_feedback(chat_id, danh_gia):
                             {"c": chat_id, "q": row[0], "b": row[1], "sd": src_doc_id, "sv": src_ver,
                              "ch": _question_hash(row[0]), "dept": _cap_len(dept, 100), "site": _cap_len(site, 100)}
                         )
+        return True
     except Exception as e:
         logger.error(f"Loi khi cap nhat danh gia chat: {e}", exc_info=True)
+        return False
  
 # ==========================================
 # DOCUMENT METADATA (Fix #1: tach reset / insert)

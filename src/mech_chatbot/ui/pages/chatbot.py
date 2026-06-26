@@ -440,7 +440,7 @@ def run_chat():
                 processed_key = f"processed_{fb_key}"
                 if feedback is not None and st.session_state.get(processed_key) != feedback:
                     danh_gia = 1 if feedback == "Thích" else -1
-                    update_chat_feedback(msg["chat_id"], danh_gia)
+                    update_chat_feedback(msg["chat_id"], danh_gia, voter_username=st.session_state.get("username"))
                     st.session_state[processed_key] = feedback
  
     from mech_chatbot.auth import service as auth
@@ -710,7 +710,7 @@ def run_chat():
                 processed_key = f"processed_{fb_key}"
                 if feedback is not None and st.session_state.get(processed_key) != feedback:
                     danh_gia = 1 if feedback == "Thích" else -1
-                    update_chat_feedback(chat_id, danh_gia)
+                    update_chat_feedback(chat_id, danh_gia, voter_username=st.session_state.get("username"))
                     st.session_state[processed_key] = feedback
 
             # Khong rerun sau khi tra loi xong, tranh Streamlit bi crash

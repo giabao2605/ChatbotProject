@@ -68,6 +68,8 @@ GO
 
 -- Buoc 2: Xoa tat ca bang (thu tu phu thuoc)
 IF OBJECT_ID('dbo.AuditLog',        'U') IS NOT NULL DROP TABLE dbo.AuditLog;
+IF OBJECT_ID('dbo.RegressionRun', 'U') IS NOT NULL DROP TABLE dbo.RegressionRun;
+IF OBJECT_ID('dbo.RegressionQuestion', 'U') IS NOT NULL DROP TABLE dbo.RegressionQuestion;
 IF OBJECT_ID('dbo.DocQualityScore', 'U') IS NOT NULL DROP TABLE dbo.DocQualityScore;
 IF OBJECT_ID('dbo.GoldenAnswer', 'U') IS NOT NULL DROP TABLE dbo.GoldenAnswer;
 IF OBJECT_ID('dbo.AnswerSource',  'U') IS NOT NULL DROP TABLE dbo.AnswerSource;
@@ -288,6 +290,35 @@ CREATE TABLE LichSuChat (
     DanhGia       SMALLINT,
     ThoiGian      DATETIME DEFAULT GETDATE(),
     Username      NVARCHAR(255) NOT NULL     -- Bat buoc: phan tach lich su chat theo user
+);
+GO
+
+CREATE TABLE RegressionQuestion (
+    RegQID           INT IDENTITY(1,1) PRIMARY KEY,
+    QuestionText     NVARCHAR(2000) NOT NULL,
+    ExpectedDocID    INT NULL,
+    ExpectedKeywords NVARCHAR(MAX) NULL,
+    Department       NVARCHAR(100) NULL,
+    Site             NVARCHAR(100) NULL,
+    CreatedBy        NVARCHAR(256) NULL,
+    IsActive         BIT NOT NULL DEFAULT 1,
+    CreatedAt        DATETIME NOT NULL DEFAULT GETDATE()
+);
+GO
+
+CREATE TABLE RegressionRun (
+    RunID         INT IDENTITY(1,1) PRIMARY KEY,
+    RegQID        INT NOT NULL,
+    RunBatchID    NVARCHAR(64) NOT NULL,
+    AnswerText    NVARCHAR(MAX) NULL,
+    MatchedDocIDs NVARCHAR(500) NULL,
+    DocHit        BIT NOT NULL DEFAULT 0,
+    KeywordHit    BIT NOT NULL DEFAULT 0,
+    Passed        BIT NOT NULL DEFAULT 0,
+    DurationMs    INT NULL,
+    ErrorText     NVARCHAR(1000) NULL,
+    CreatedAt     DATETIME NOT NULL DEFAULT GETDATE(),
+    CONSTRAINT FK_RegressionRun_RegQID FOREIGN KEY (RegQID) REFERENCES RegressionQuestion(RegQID) ON DELETE CASCADE
 );
 GO
 

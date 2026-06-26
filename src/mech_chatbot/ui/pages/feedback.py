@@ -6,6 +6,11 @@ from mech_chatbot.db.repository import (
     upsert_golden_answer,
     recompute_doc_quality_scores,
     get_doc_quality_ranking,
+    add_regression_question,
+    list_regression_questions,
+    set_regression_question_active,
+    get_regression_runs,
+    cleanup_dangling_records,
 )
 
 FAILURE_TYPES = [
@@ -25,6 +30,10 @@ def run_feedback():
         return
 
     render_quality_ranking()
+    st.divider()
+    render_regression_panel()
+    st.divider()
+    render_maintenance_panel()
     st.divider()
 
     only_pending = st.checkbox("Chỉ hiện feedback chưa xử lý", value=True)
@@ -53,6 +62,64 @@ def render_quality_ranking():
             "HienHanh": "✓" if r["is_current"] else "",
         } for r in rows]
         st.dataframe(table, use_container_width=True)
+
+def render_regression_panel():
+    with st.expander("🧪 Bộ kiểm thử hồi quy (P3-5)", expanded=False):
+        st.caption("Tập câu hỏi chuẩn + đáp án kỳ vọng (DocID và/hoặc từ khóa). Bấm Chạy hồi quy để đối chiếu câu trả lời hiện tại của bot, phát hiện hồi quy sau khi cập nhật tài liệu/cấu hình.")
+        with st.form("add_reg_q"):
+            st.markdown("**Thêm câu hỏi hồi quy**")
+            rq_text = st.text_area("Câu hỏi", key="rq_text")
+            c1, c2 = st.columns(2)
+            with c1:
+                rq_doc = st.text_input("ExpectedDocID (tùy chọn)", key="rq_doc")
+            with c2:
+                rq_dept = st.text_input("Phòng ban (tùy chọn)", key="rq_dept")
+            rq_kw = st.text_input("Từ khóa kỳ vọng (cách nhau bằng dấu phẩy)", key="rq_kw")
+            if st.form_submit_button("Thêm câu hỏi"):
+                if rq_text and rq_text.strip():
+                    add_regression_question(question=rq_text, expected_doc_id=(int(rq_doc) if rq_doc.strip().isdigit() else None), expected_keywords=rq_kw, department=(rq_dept or None), created_by=(st.session_state.get("username") or "reviewer"))
+                    st.success("Đã thêm câu hỏi hồi quy.")
+                    st.rerun()
+                else:
+                    st.warning("Nhập nội dung câu hỏi trước.")
+        qs = list_regression_questions(active_only=False)
+        st.caption(f"Đang có {len([q for q in qs if q['is_active']])} câu active / {len(qs)} tổng.")
+        if st.button("▶️ Chạy hồi quy ngay", key="run_regression", type="primary"):
+            with st.spinner("Đang chạy bộ hồi quy qua engine RAG..."):
+                from mech_chatbot.rag.regression import run_regression_batch
+                summary = run_regression_batch(run_by=(st.session_state.get("username") or "reviewer"))
+            st.success(f"Batch {summary['batch_id']}: {summary['passed']}/{summary['total']} PASS (tỷ lệ {summary['pass_rate']*100:.0f}%).")
+        runs = get_regression_runs()
+        if runs:
+            st.markdown("**Kết quả batch gần nhất**")
+            table = [{
+                "RegQID": r["reg_qid"], "Câu hỏi": (r["question"] or "")[:50],
+                "PASS": "✅" if r["passed"] else "❌",
+                "DocHit": "✓" if r["doc_hit"] else "", "KwHit": "✓" if r["keyword_hit"] else "",
+                "ExpDoc": r["expected_doc_id"], "Matched": r["matched_doc_ids"],
+                "ms": r["duration_ms"], "Loi": (r["error"] or "")[:40],
+            } for r in runs]
+            st.dataframe(table, use_container_width=True)
+        else:
+            st.info("Chưa có kết quả hồi quy. Thêm câu hỏi và bấm Chạy hồi quy.")
+        if qs:
+            with st.expander("Quản lý câu hỏi hồi quy", expanded=False):
+                for q in qs:
+                    cols = st.columns([6, 1])
+                    with cols[0]:
+                        st.write(f"#{q['reg_qid']} · {(q['question'] or '')[:70]} · Doc={q['expected_doc_id'] or '-'} · {'active' if q['is_active'] else 'off'}")
+                    with cols[1]:
+                        if st.button(("Tắt" if q["is_active"] else "Bật"), key=f"toggle_rq_{q['reg_qid']}"):
+                            set_regression_question_active(q["reg_qid"], not q["is_active"])
+                            st.rerun()
+
+
+def render_maintenance_panel():
+    with st.expander("🧹 Bảo trì & Guardrails (P3-6)", expanded=False):
+        st.caption("Dọn dữ liệu mồ côi (tham chiếu tới tài liệu/chat đã xoá) để điểm chất lượng và golden set không bị sai lệch.")
+        if st.button("Dọn dữ liệu mồ côi ngay", key="cleanup_dangling"):
+            counts = cleanup_dangling_records()
+            st.success("Đã dọn: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
 
 def load_feedbacks(only_pending):
     query = """
