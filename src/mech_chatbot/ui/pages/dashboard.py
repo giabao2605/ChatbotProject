@@ -2,6 +2,7 @@ import streamlit as st
 from sqlalchemy import text
 from mech_chatbot.db.repository import engine, dashboard_by_department
 from mech_chatbot.auth import service as auth
+from mech_chatbot.ui import labels
 def _scalar(conn, sql, params=None):
     try:
         return conn.execute(text(sql), params or {}).scalar() or 0
@@ -43,7 +44,7 @@ def run_dashboard():
     c7.metric("Feedback cần xử lý", stats["pending_feedback"])
 
     st.markdown("---")
-    st.subheader("Thong ke theo phong ban")
+    st.subheader("Thống kê theo phòng ban")
     render_department_breakdown()
 
     st.markdown("---")
@@ -64,7 +65,7 @@ def render_department_breakdown():
         st.error(f"Khong tai duoc thong ke theo phong: {e}")
         return
     if not rows:
-        st.info("Chua co du lieu theo phong ban.")
+        st.info("Chưa có dữ liệu theo phòng ban.")
         return
     table = [
         {
@@ -79,9 +80,27 @@ def render_department_breakdown():
         for r in rows
     ]
     st.dataframe(table, use_container_width=True, hide_index=True)
+
+    # B6: bieu do so tai lieu theo phong ban
+    try:
+        import pandas as pd
+        chart_df = pd.DataFrame(
+            [{"Phòng ban": r["department"], "Số tài liệu": r["total"]} for r in rows]
+        ).set_index("Phòng ban")
+        st.bar_chart(chart_df["Số tài liệu"])
+    except Exception:
+        # fallback neu thieu pandas
+        st.bar_chart({r["department"]: r["total"] for r in rows})
+
+    # B6: lam noi cac phong dang co job loi
+    depts_with_failures = [r for r in rows if r["failed_jobs"]]
     total_failed = sum(r["failed_jobs"] for r in rows)
-    if total_failed:
-        st.warning(f"Co {total_failed} job ingest dang loi tren toan he thong - kiem tra tab Hang doi.")
+    if depts_with_failures:
+        st.warning(
+            f"⚠️ Co {total_failed} job ingest dang loi. Phong can chu y: "
+            + ", ".join(f"{r['department']} ({r['failed_jobs']})" for r in depts_with_failures)
+            + " — kiem tra tab Hang doi."
+        )
 
 
 def render_recent_documents():
@@ -100,7 +119,7 @@ def render_recent_documents():
         st.info("Chưa có tài liệu.")
         return
     for doc_id, ten_file, thu_muc, review_status, lifecycle_status, ngay_tai_len in rows:
-        st.write(f"**{ten_file}**  \n`{thu_muc}` · `{review_status}` · `{lifecycle_status}` · {ngay_tai_len}")
+        st.write(f"**{ten_file}**  \n`{thu_muc}` · {labels.status_badge(review_status)} · {labels.status_badge(lifecycle_status)} · {ngay_tai_len}")
 
 
 def render_recent_failed_jobs():
@@ -120,8 +139,8 @@ def render_recent_failed_jobs():
         st.success("Không có job lỗi.")
         return
     for job_id, ten_file, thu_muc, status, error_message, updated_at in rows:
-        with st.expander(f"[{status}] {ten_file}"):
+        with st.expander(f"{labels.status_badge(status)} · {ten_file}"):
             st.write(f"**JobID:** {job_id}")
-            st.write(f"**Thư mục:** {thu_muc}")
+            st.write(f"**Phòng ban:** {thu_muc}")
             st.write(f"**Cập nhật:** {updated_at}")
             st.error(error_message or "Không có thông báo lỗi.")

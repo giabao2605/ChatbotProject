@@ -50,6 +50,12 @@ if not available_pages:
 if "nav_page" not in st.session_state or st.session_state["nav_page"] not in [p["key"] for p in available_pages]:
     st.session_state["nav_page"] = available_pages[0]["key"]
 
+# Cho phep cac trang yeu cau dieu huong (vd nut 'Them file moi') — xu ly TRUOC khi tao radio
+if "_nav_request" in st.session_state:
+    _req = st.session_state.pop("_nav_request")
+    if _req in [p["key"] for p in available_pages]:
+        st.session_state["nav_page"] = _req
+
 with st.sidebar:
     st.markdown("### Trợ Lý Tài Liệu Nội Bộ")
     st.caption("Quản trị dữ liệu kỹ thuật & hỏi đáp RAG")
@@ -57,6 +63,18 @@ with st.sidebar:
     st.markdown(f"**Xin chào, {user['display_name']}!**")
     st.caption(f"Phòng ban: {user.get('department')}")
     st.caption("Role: " + ", ".join(user.get("roles", [])))
+
+    # C12: hien thi ro quyen cua nguoi dung (phong ban / khu / muc mat)
+    with st.expander("🔑 Quyền của tôi"):
+        _allowed_depts = user.get("allowed_departments") or ([user.get("department")] if user.get("department") else [])
+        _allowed_sites = user.get("allowed_sites") or []
+        st.markdown("**Phòng ban được xem:**")
+        st.write(", ".join([d for d in _allowed_depts if d]) or "(chưa gán)")
+        st.markdown("**Khu / Site được xem:**")
+        st.write(", ".join([s for s in _allowed_sites if s]) or "(không giới hạn)")
+        st.markdown("**Mức mật tối đa:**")
+        st.write(user.get("max_security_level", "internal"))
+        st.caption("Nếu không thấy tài liệu mong đợi, hãy liên hệ admin để được cấp thêm quyền.")
     st.markdown("---")
 
     page_labels = {page["key"]: f"{page['label']}" for page in available_pages}

@@ -1,10 +1,12 @@
+import os
 import streamlit as st
 from sqlalchemy import text
 from mech_chatbot.auth import service as auth
 from mech_chatbot.ingestion.doc_type_registry import canonical_label
+from mech_chatbot.ui import labels
 from mech_chatbot.db.repository import (
     engine, update_document_full_metadata, delete_document_completely,
-    list_known_departments, list_known_sites,
+    list_known_departments, list_known_sites, write_audit_log,
 )
 
 # GD4b: dung chung cho cac form chinh phan loai (linh hoat da phong ban)
@@ -15,6 +17,8 @@ DOMAIN_LABELS = {
     "generic": "Hành chính / Văn bản",
 }
 SECURITY_LEVELS = ["public", "internal", "confidential"]
+
+PAGE_SIZE = 50  # B7: so tai lieu moi trang
 
 
 def run_documents():
@@ -31,64 +35,98 @@ def run_documents():
     current_user = auth.get_current_user()
     is_admin = auth.has_role("admin")
 
-    search = st.text_input("Tìm kiếm", placeholder="Tên file, Base Code, mã đối tượng...")
+    # B5: bo loc co key on dinh -> Streamlit tu nho lua chon qua moi rerun trong phien
+    search = st.text_input("Tìm kiếm", placeholder="Tên file, Base Code, mã đối tượng...", key="docs_search")
 
-    # P1.4: bộ lọc theo phòng ban + khu/site
     fc1, fc2, fc3 = st.columns(3)
     with fc1:
-        status_filter = st.selectbox("Trạng thái", ["Tất cả", "published", "draft", "rejected", "archived", "superseded"])
+        status_filter = st.selectbox(
+            "Trạng thái",
+            ["Tất cả", "published", "draft", "rejected", "archived", "superseded"],
+            key="docs_status",
+        )
 
-    # Danh sách phòng ban khả dụng cho user (admin thấy tất cả)
+    # Danh sach phong ban kha dung cho user (admin thay tat ca)
     if is_admin:
         dept_options = [d["code"] for d in list_known_departments(active_only=True)]
     else:
         dept_options = [d for d in (current_user.get("allowed_departments") or [current_user.get("department")]) if d]
     with fc2:
-        dept_filter = st.selectbox("Phòng ban", ["Tất cả"] + sorted(set(dept_options)))
+        dept_filter = st.selectbox("Phòng ban", ["Tất cả"] + sorted(set(dept_options)), key="docs_dept")
 
-    # Danh sách khu/site (admin: tất cả; user: theo allowed_sites nếu có)
+    # Danh sach khu/site (admin: tat ca; user: theo allowed_sites neu co)
     if is_admin:
         site_options = [s["code"] for s in list_known_sites(active_only=False)]
     else:
         site_options = [s for s in (current_user.get("allowed_sites") or []) if s]
     with fc3:
-        site_filter = st.selectbox("Khu / Site", ["Tất cả"] + sorted(set(site_options)))
+        site_filter = st.selectbox("Khu / Site", ["Tất cả"] + sorted(set(site_options)), key="docs_site")
 
-    docs = load_documents(current_user, search, status_filter, dept_filter, site_filter)
+    # B7: phan trang — reset ve trang 1 khi bo loc thay doi
+    filter_signature = (search, status_filter, dept_filter, site_filter)
+    if st.session_state.get("docs_filter_sig") != filter_signature:
+        st.session_state["docs_page"] = 1
+        st.session_state["docs_filter_sig"] = filter_signature
+    page = st.session_state.get("docs_page", 1)
 
-    if not docs:
+    total = count_documents(current_user, search, status_filter, dept_filter, site_filter)
+    if not total:
         st.info("Không tìm thấy tài liệu.")
         return
 
-    st.write(f"Tìm thấy **{len(docs)}** tài liệu.")
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(max(1, page), total_pages)
+    st.session_state["docs_page"] = page
+    offset = (page - 1) * PAGE_SIZE
+
+    docs = load_documents(
+        current_user, search, status_filter, dept_filter, site_filter,
+        offset=offset, limit=PAGE_SIZE,
+    )
+
+    st.write(f"Tìm thấy **{total}** tài liệu · Trang **{page}/{total_pages}** (mỗi trang {PAGE_SIZE}).")
     for doc in docs:
         render_document_item(doc, current_user)
 
+    _render_pagination(page, total_pages)
 
-def load_documents(current_user, search, status_filter, dept_filter="Tất cả", site_filter="Tất cả"):
+
+def _render_pagination(page, total_pages):
+    if total_pages <= 1:
+        return
+    st.markdown("---")
+    pc1, pc2, pc3 = st.columns([1, 2, 1])
+    with pc1:
+        if st.button("⬅️ Trang trước", disabled=(page <= 1), use_container_width=True, key="docs_prev"):
+            st.session_state["docs_page"] = max(1, page - 1)
+            st.rerun()
+    with pc2:
+        st.markdown(
+            f"<div style='text-align:center;padding-top:6px'>Trang <b>{page}</b> / {total_pages}</div>",
+            unsafe_allow_html=True,
+        )
+    with pc3:
+        if st.button("Trang sau ➡️", disabled=(page >= total_pages), use_container_width=True, key="docs_next"):
+            st.session_state["docs_page"] = min(total_pages, page + 1)
+            st.rerun()
+
+
+def _build_document_filters(current_user, search, status_filter, dept_filter, site_filter):
+    """Dung chung cho count_documents + load_documents: tra ve (where_sql, params)."""
     is_admin = auth.has_role("admin")
-    query = """
-        SELECT TOP 200
-            t.DocID, t.TenFile, t.ThuMuc, t.BaseCode, t.VersionNo, t.VersionLabel,
-            t.VariantCode, t.VariantGroup, t.LifecycleStatus, t.ReviewStatus,
-            t.IsCurrent, t.NgayTaiLen, t.Site, t.Domain, t.SecurityLevel,
-            tk.MaDoiTuong, tk.LoaiTaiLieu, tk.TenSanPham
-        FROM TaiLieu t
-        LEFT JOIN TaiLieuKyThuat tk ON t.DocID = tk.DocID AND tk.TrangSo = 1
-        WHERE 1 = 1
-    """
+    where = " WHERE 1 = 1"
     params = {}
-    if status_filter != "Tất cả":
-        query += " AND t.LifecycleStatus = :status"
+    if status_filter and status_filter != "Tất cả":
+        where += " AND t.LifecycleStatus = :status"
         params["status"] = status_filter
     if search:
-        query += """
+        where += """
             AND (t.TenFile LIKE :search OR t.BaseCode LIKE :search
                  OR tk.MaDoiTuong LIKE :search OR tk.TenSanPham LIKE :search)
         """
         params["search"] = f"%{search}%"
 
-    # RBAC phòng ban: non-admin chỉ thấy phòng được phép
+    # RBAC phong ban: non-admin chi thay phong duoc phep
     allowed = [d for d in (current_user.get("allowed_departments") or [current_user.get("department")]) if d]
     if not is_admin and allowed:
         keys = []
@@ -96,14 +134,14 @@ def load_documents(current_user, search, status_filter, dept_filter="Tất cả"
             key = f"dept_{i}"
             params[key] = dept
             keys.append(f":{key}")
-        query += f" AND t.ThuMuc IN ({', '.join(keys)})"
+        where += f" AND t.ThuMuc IN ({', '.join(keys)})"
 
-    # P1.4: lọc theo phòng ban được chọn
+    # loc theo phong ban duoc chon
     if dept_filter and dept_filter != "Tất cả":
-        query += " AND t.ThuMuc = :dept_pick"
+        where += " AND t.ThuMuc = :dept_pick"
         params["dept_pick"] = dept_filter
 
-    # P1.4 + RBAC site: non-admin giới hạn theo allowed_sites (cho phép Site NULL để không ẩn dữ liệu cũ)
+    # RBAC site: non-admin gioi han theo allowed_sites (cho phep Site NULL de khong an du lieu cu)
     user_sites = [s for s in (current_user.get("allowed_sites") or []) if s]
     if not is_admin and user_sites:
         keys = []
@@ -111,48 +149,142 @@ def load_documents(current_user, search, status_filter, dept_filter="Tất cả"
             key = f"usite_{i}"
             params[key] = s
             keys.append(f":{key}")
-        query += f" AND (t.Site IS NULL OR t.Site IN ({', '.join(keys)}))"
+        where += f" AND (t.Site IS NULL OR t.Site IN ({', '.join(keys)}))"
 
-    # P1.4: lọc theo khu/site được chọn
+    # loc theo khu/site duoc chon
     if site_filter and site_filter != "Tất cả":
-        query += " AND t.Site = :site_pick"
+        where += " AND t.Site = :site_pick"
         params["site_pick"] = site_filter
+    return where, params
 
-    query += " ORDER BY t.NgayTaiLen DESC"
+
+def count_documents(current_user, search, status_filter, dept_filter="Tất cả", site_filter="Tất cả"):
+    """B7: dem tong so tai lieu khop bo loc (de tinh so trang)."""
+    where, params = _build_document_filters(current_user, search, status_filter, dept_filter, site_filter)
+    query = """
+        SELECT COUNT(*)
+        FROM TaiLieu t
+        LEFT JOIN TaiLieuKyThuat tk ON t.DocID = tk.DocID AND tk.TrangSo = 1
+    """ + where
+    with engine.connect() as conn:
+        return conn.execute(text(query), params).scalar() or 0
+
+
+def load_documents(current_user, search, status_filter, dept_filter="Tất cả", site_filter="Tất cả", offset=0, limit=PAGE_SIZE):
+    where, params = _build_document_filters(current_user, search, status_filter, dept_filter, site_filter)
+    query = """
+        SELECT
+            t.DocID, t.TenFile, t.ThuMuc, t.BaseCode, t.VersionNo, t.VersionLabel,
+            t.VariantCode, t.VariantGroup, t.LifecycleStatus, t.ReviewStatus,
+            t.IsCurrent, t.NgayTaiLen, t.Site, t.Domain, t.SecurityLevel,
+            tk.MaDoiTuong, tk.LoaiTaiLieu, tk.TenSanPham, t.FilePath
+        FROM TaiLieu t
+        LEFT JOIN TaiLieuKyThuat tk ON t.DocID = tk.DocID AND tk.TrangSo = 1
+    """ + where
+    # B7: phan trang bang OFFSET/FETCH (yeu cau ORDER BY)
+    query += " ORDER BY t.NgayTaiLen DESC OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
+    params["offset"] = int(offset)
+    params["limit"] = int(limit)
     with engine.connect() as conn:
         return conn.execute(text(query), params).fetchall()
+
+
+# --------------------------- C8: tai lai file goc an toan ---------------------------
+def _project_root():
+    # documents.py: src/mech_chatbot/ui/pages/documents.py -> len 5 cap toi root project
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+
+def _resolve_original_path(file_path):
+    """Tra ve (realpath_hop_le|None, message).
+
+    Chong path traversal: chi cho phep file nam trong thu muc data/raw.
+    """
+    if not file_path:
+        return None, "Tài liệu chưa lưu đường dẫn file gốc."
+    root = _project_root()
+    raw_root = os.path.realpath(os.path.join(root, "data", "raw"))
+    candidate = file_path if os.path.isabs(file_path) else os.path.join(root, file_path)
+    real = os.path.realpath(candidate)
+    try:
+        within = os.path.commonpath([real, raw_root]) == raw_root
+    except ValueError:
+        within = False
+    if not within:
+        return None, "Đường dẫn file gốc không hợp lệ (ngoài vùng cho phép data/raw)."
+    if not os.path.isfile(real):
+        return None, "File gốc không còn trên server."
+    return real, None
+
+
+def render_download_original(doc_id, ten_file, file_path, security_level, current_user, key_prefix="docs"):
+    """C8: nut tai file goc. Doc bytes lazily (chi khi user yeu cau) de tranh I/O hang loat."""
+    real, msg = _resolve_original_path(file_path)
+    if real is None:
+        st.caption(f"📎 {msg}")
+        return
+    prep = st.checkbox("📎 Chuẩn bị tải file gốc", key=f"{key_prefix}_prep_{doc_id}")
+    if not prep:
+        return
+    try:
+        with open(real, "rb") as f:
+            data = f.read()
+    except Exception as e:
+        st.warning(f"Không đọc được file gốc: {e}")
+        return
+    clicked = st.download_button(
+        "⬇️ Bấm để tải xuống",
+        data=data,
+        file_name=os.path.basename(real) or (ten_file or "file"),
+        key=f"{key_prefix}_dl_{doc_id}",
+    )
+    if clicked:
+        try:
+            write_audit_log(
+                current_user.get("username"), "download_original", "TaiLieu", doc_id,
+                {"file": ten_file, "security_level": security_level},
+            )
+        except Exception:
+            pass
 
 
 def render_document_item(doc, current_user):
     (doc_id, ten_file, thu_muc, base_code, version_no, version_label, variant_code,
      variant_group, lifecycle_status, review_status, is_current, ngay_tai_len,
      site, domain, security_level,
-     ma_doi_tuong, loai_tai_lieu, ten_san_pham) = doc
+     ma_doi_tuong, loai_tai_lieu, ten_san_pham, file_path) = doc
 
     current_badge = " · current" if is_current else ""
     sec_badge = f" · 🔒 {security_level}" if security_level else ""
-    with st.expander(f"{ten_file} · {lifecycle_status}{current_badge}{sec_badge}"):
+    # B4: badge trang thai thong nhat
+    with st.expander(f"{ten_file} · {labels.status_badge(lifecycle_status)}{current_badge}{sec_badge}"):
         c1, c2 = st.columns(2)
         with c1:
             st.write(f"**DocID:** {doc_id}")
             st.write(f"**Phòng ban:** {thu_muc}")
             st.write(f"**Khu / Site:** {site or '(chưa gán)'}")
-            st.write(f"**Lĩnh vực (domain):** {domain or '(chưa gán)'}")
+            st.write(f"**Lĩnh vực (domain):** {labels.domain_label(domain)}")
             st.write(f"**Mức mật:** {security_level or '(chưa gán)'}")
             st.write(f"**Base Code:** `{base_code}`")
             st.write(f"**Version:** {version_no} - {version_label}")
             st.write(f"**Variant:** {variant_code}")
         with c2:
-            st.write(f"**Review:** {review_status}")
-            st.write(f"**Lifecycle:** {lifecycle_status}")
+            st.write(f"**Review:** {labels.status_badge(review_status)}")
+            st.write(f"**Lifecycle:** {labels.status_badge(lifecycle_status)}")
             st.write(f"**Ngày tải:** {ngay_tai_len}")
-            # GD4b: hien thi linh hoat theo domain — chi tai lieu co khi moi show ma doi tuong
-            if (domain or "generic") == "mechanical":
-                st.write(f"**Mã đối tượng:** {ma_doi_tuong}")
-                st.write(f"**Tên sản phẩm:** {ten_san_pham}")
-            elif ten_san_pham:
-                st.write(f"**Tiêu đề tài liệu:** {ten_san_pham}")
-            st.write(f"**Loại tài liệu:** {canonical_label(loai_tai_lieu)}")
+            # A1: hien thi nhan dong theo domain — truong khong thuoc domain se bi an
+            _lbl_ma = labels.field_label(domain, "ma_doi_tuong")
+            if _lbl_ma and ma_doi_tuong:
+                st.write(f"**{_lbl_ma}:** {ma_doi_tuong}")
+            _lbl_ten = labels.field_label(domain, "ten_san_pham")
+            if _lbl_ten and ten_san_pham:
+                st.write(f"**{_lbl_ten}:** {ten_san_pham}")
+            _lbl_loai = labels.field_label(domain, "loai_tai_lieu")
+            if _lbl_loai:
+                st.write(f"**{_lbl_loai}:** {canonical_label(loai_tai_lieu)}")
+
+        # C8: tai lai file goc tu kho tai lieu
+        render_download_original(doc_id, ten_file, file_path, security_level, current_user)
 
         if auth.has_role("admin"):
             render_admin_actions(doc_id, base_code, version_no, version_label, variant_code, variant_group, loai_tai_lieu, domain, security_level, site, thu_muc, current_user)
@@ -162,7 +294,7 @@ def render_admin_actions(doc_id, base_code, version_no, version_label, variant_c
     st.markdown("---")
     st.subheader("Quản trị tài liệu")
     with st.form(f"edit_doc_{doc_id}"):
-        # --- Phân loại & quyền truy cập (linh hoạt đa phòng ban) ---
+        # --- Phan loai & quyen truy cap (linh hoat da phong ban) ---
         st.markdown("**Phân loại & quyền truy cập**")
         cc1, cc2, cc3 = st.columns(3)
         with cc1:

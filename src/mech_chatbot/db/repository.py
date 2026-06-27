@@ -683,7 +683,7 @@ def update_chat_feedback(chat_id, danh_gia, voter_username=None):
 def _get_or_create_doc(conn, file_name, thu_muc):
     # Fetch classification json tu IngestionJobs (neu co) de update metadata
     job = conn.execute(
-        text("SELECT TOP 1 ClassificationJson FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t ORDER BY CreatedAt DESC"),
+        text("SELECT TOP 1 ClassificationJson, FilePath FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t ORDER BY CreatedAt DESC"),
         {"f": file_name, "t": thu_muc}
     ).fetchone()
     
@@ -736,19 +736,19 @@ def _get_or_create_doc(conn, file_name, thu_muc):
             text("""UPDATE TaiLieu SET 
                 ReviewStatus = 'pending_review',
                 FamilyID = :fid, BaseCode = :bc, VersionNo = :vn, VersionLabel = :vl, VariantCode = :vc,
-                Site = :site, Domain = :domain, SecurityLevel = :seclvl
+                Site = :site, Domain = :domain, SecurityLevel = :seclvl, FilePath = :fp
                 WHERE DocID = :d"""),
-            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc), "domain": domain, "seclvl": security_level}
+            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc), "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None)}
         )
         return doc_id
         
     res = conn.execute(
         text(
-            """INSERT INTO TaiLieu (TenFile, ThuMuc, TrangThaiVector, ReviewStatus, FamilyID, BaseCode, VersionNo, VersionLabel, VariantCode, Site, Domain, SecurityLevel) 
+            """INSERT INTO TaiLieu (TenFile, ThuMuc, TrangThaiVector, ReviewStatus, FamilyID, BaseCode, VersionNo, VersionLabel, VariantCode, Site, Domain, SecurityLevel, FilePath) 
             OUTPUT INSERTED.DocID 
-            VALUES (:f, :t, 1, 'pending_review', :fid, :bc, :vn, :vl, :vc, :site, :domain, :seclvl)"""
+            VALUES (:f, :t, 1, 'pending_review', :fid, :bc, :vn, :vl, :vc, :site, :domain, :seclvl, :fp)"""
         ),
-        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc), "domain": domain, "seclvl": security_level},
+        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _resolve_site(thu_muc), "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None)},
     )
     row = res.fetchone()
     return row[0] if row else None
@@ -2269,6 +2269,26 @@ def dashboard_by_department():
     except Exception as e:
         logger.error(f"dashboard_by_department loi: {e}", exc_info=True)
         return []
+
+
+def count_docs_by_department():
+    """A3: dem so tai lieu (TaiLieu) theo phong ban (ThuMuc).
+
+    Tra ve dict {ten_phong_ban: so_luong}. Dung de hien cot 'So tai lieu'
+    trong quan ly phong ban va canh bao khi tat phong dang con tai lieu.
+    """
+    _ensure_engine()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT ISNULL(ThuMuc, '(khong ro)') AS Dept, COUNT(*) AS Total
+                FROM TaiLieu
+                GROUP BY ThuMuc
+            """)).fetchall()
+        return {r[0]: int(r[1] or 0) for r in rows}
+    except Exception as e:
+        logger.error(f"count_docs_by_department loi: {e}", exc_info=True)
+        return {}
 
 
 # ============================ P2: MATERIAL DICTIONARY ============================

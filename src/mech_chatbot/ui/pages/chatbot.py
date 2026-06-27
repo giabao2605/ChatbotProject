@@ -668,6 +668,9 @@ def run_chat():
                                     img_path = ref_images[i + j]
                                     with cols[j]:
                                         st.image(img_path, caption=os.path.basename(img_path), use_container_width=True)
+
+                    # C9: hien thi nguon trich dan ngay duoi cau tra loi (trong bong chat assistant)
+                    _render_answer_sources(debug_info)
  
             chat_id = save_chat_history(
                 session_id=st.session_state.session_id,
@@ -746,3 +749,122 @@ def run_chat():
             # Khong rerun sau khi tra loi xong, tranh Streamlit bi crash
             return
             
+
+
+
+# ===== C9: hien thi nguon trich dan duoi cau tra loi (RBAC-aware) =====
+_LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
+
+
+def _lookup_sources_meta(doc_ids):
+    """Tra cuu ten file / phong ban / duong dan / muc mat theo DocID."""
+    ids = [i for i in doc_ids if i is not None]
+    if not ids:
+        return {}
+    try:
+        from mech_chatbot.db.repository import engine
+        from sqlalchemy import text
+        keys, params = [], {}
+        for i, did in enumerate(ids):
+            k = "id_%d" % i
+            params[k] = did
+            keys.append(":" + k)
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT DocID, TenFile, ThuMuc, SecurityLevel, FilePath "
+                "FROM TaiLieu WHERE DocID IN (" + ", ".join(keys) + ")"
+            ), params).fetchall()
+        return {r[0]: {"ten_file": r[1], "thu_muc": r[2], "security_level": r[3], "file_path": r[4]} for r in rows}
+    except Exception:
+        return {}
+
+
+def _render_answer_sources(debug_info):
+    """C9: render danh sach nguon duoi cau tra loi, ton trong RBAC/muc mat."""
+    if not isinstance(debug_info, dict):
+        return
+    docs = debug_info.get("retrieved_docs", []) or []
+    if not docs:
+        return
+    # gom theo doc_id, giu diem cao nhat
+    best = {}
+    for d in docs:
+        if not isinstance(d, dict):
+            continue
+        key = d.get("doc_id") or d.get("file_goc")
+        if key is None:
+            continue
+        prev = best.get(key)
+        if prev is None or (d.get("score") or 0) > (prev.get("score") or 0):
+            best[key] = d
+    sources = list(best.values())
+    if not sources:
+        return
+
+    try:
+        from mech_chatbot.auth import service as auth
+        current_user = auth.get_current_user() or {}
+    except Exception:
+        current_user = {}
+    user_level = _LEVEL_ORDER.get(current_user.get("max_security_level", "internal"), 1)
+
+    meta = _lookup_sources_meta([d.get("doc_id") for d in sources if d.get("doc_id") is not None])
+
+    import os as _os
+    sid = st.session_state.get("session_id", "s")
+    with st.expander("Nguồn trích dẫn (%d)" % len(sources)):
+        for d in sorted(sources, key=lambda x: (x.get("score") or 0), reverse=True):
+            doc_id = d.get("doc_id")
+            m = meta.get(doc_id, {})
+            ten_file = m.get("ten_file") or d.get("file_goc") or "(không rõ)"
+            phong_ban = m.get("thu_muc") or "(không rõ)"
+            sec_level = m.get("security_level") or d.get("security_level") or "internal"
+            trang = d.get("trang")
+            score = d.get("score")
+            try:
+                if score is None:
+                    score_txt = "—"
+                elif float(score) <= 1:
+                    score_txt = "%.0f%%" % (float(score) * 100)
+                else:
+                    score_txt = "%.2f" % float(score)
+            except Exception:
+                score_txt = "—"
+            trang_txt = ("trang %s" % trang) if trang not in (None, "") else "—"
+            st.markdown("- **%s** · %s · %s · độ liên quan: %s" % (ten_file, phong_ban, trang_txt, score_txt))
+
+            # RBAC: chi cho tai file goc khi muc mat user >= muc mat tai lieu
+            if _LEVEL_ORDER.get(sec_level, 1) > user_level:
+                st.caption("🔒 Bạn không đủ quyền tải file gốc của nguồn này.")
+                continue
+            file_path = m.get("file_path")
+            if not file_path or doc_id is None:
+                continue
+            # tai dung helper bao mat cua C8 (chong path traversal, chi trong data/raw)
+            try:
+                from mech_chatbot.ui.pages.documents import _resolve_original_path
+                real, msg = _resolve_original_path(file_path)
+            except Exception:
+                real, msg = None, "Không đọc được file gốc."
+            if real is None:
+                st.caption("📎 %s" % msg)
+                continue
+            try:
+                with open(real, "rb") as f:
+                    data = f.read()
+            except Exception:
+                st.caption("📎 Không đọc được file gốc.")
+                continue
+            clicked = st.download_button(
+                "⬇️ Tải file gốc",
+                data=data,
+                file_name=_os.path.basename(real),
+                key="chat_src_dl_%s_%s" % (sid, doc_id),
+            )
+            if clicked:
+                try:
+                    from mech_chatbot.db.repository import write_audit_log
+                    write_audit_log(current_user.get("username"), "download_original", "TaiLieu", doc_id,
+                                    {"file": ten_file, "security_level": sec_level, "source": "chatbot"})
+                except Exception:
+                    pass

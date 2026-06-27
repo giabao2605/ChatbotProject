@@ -12,6 +12,7 @@ from mech_chatbot.db.repository import (
     delete_document_completely,
     update_qdrant_metadata
 )
+from mech_chatbot.ui import labels
 
 # GD4b: dung chung cho form duyet (linh hoat da phong ban)
 DOMAIN_OPTIONS = ["mechanical", "tabular", "generic"]
@@ -29,7 +30,7 @@ def run_admin():
     col_new, col_reset, _col_sp = st.columns([1, 1, 4])
     with col_new:
         if st.button("Thêm file mới", help="Chuyển sang trang upload để nạp bản vẽ mới", use_container_width=True):
-            st.session_state["_goto_page"] = "Chatbot Hỏi Đáp"
+            st.session_state["_nav_request"] = "upload"
             st.rerun()
     with col_reset:
         if st.button("Làm mới (Reset)", help="Tải lại dữ liệu mới nhất từ database", use_container_width=True):
@@ -89,11 +90,16 @@ def run_admin():
             st.info("Không có tài liệu nào trong danh sách này.")
             return
 
+        if show_actions:
+            _render_bulk_panel(docs, current_user)
+
         for d in docs:
             doc_id, ten_file, thu_muc, review_status, ngay_tai_len, ma_dt, loai_tl, ten_sp, vat_lieu, dung_sai, kich_thuoc, class_json, req_action, life_status, class_conf, t_bc, t_vn, t_vl, t_vc, t_vg, t_dom, t_sec, t_site, t_qstatus, t_qscore = d
             
-            with st.expander(f"{ten_file} - Tải lên: {ngay_tai_len.strftime('%Y-%m-%d')} | Trạng thái: {life_status}"):
-                st.write(f"**Thư mục:** {thu_muc}")
+            with st.expander(f"{ten_file} - Tải lên: {ngay_tai_len.strftime('%Y-%m-%d')} | {labels.status_badge(life_status)}"):
+                st.write(f"**Phòng ban:** {thu_muc}")
+                if show_actions:
+                    st.checkbox("☑️ Chọn để thao tác hàng loạt", key=f"bulk_sel_{doc_id}")
                 
                 # Hien thi AI Classification
                 cls_data = {}
@@ -110,25 +116,35 @@ def run_admin():
                     st.warning("Chưa có kết quả AI Classification cho file này.")
 
                 st.markdown("### Dữ Liệu Bóc Tách Metadata:")
-                _is_mech = (t_dom or "generic") == "mechanical"
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.write(f"- **Ph��ng ban:** {thu_muc}")
-                    st.write(f"- **Lĩnh vực (domain):** {DOMAIN_LABELS.get(t_dom, t_dom or '(chưa gán)')}")
+                    st.write(f"- **Phòng ban:** {thu_muc}")
+                    st.write(f"- **Lĩnh vực (domain):** {labels.domain_label(t_dom)}")
                     st.write(f"- **Mức mật:** {t_sec or '(chưa gán)'}")
                     st.write(f"- **Khu / Site:** {t_site or '(chưa gán)'}")
-                    st.write(f"- **Loại tài liệu:** {loai_tl}")
+                    _lbl_loai = labels.field_label(t_dom, "loai_tai_lieu")
+                    if _lbl_loai:
+                        st.write(f"- **{_lbl_loai}:** {loai_tl}")
                 with col2:
-                    if _is_mech:
-                        st.write(f"- **Mã đối tượng:** `{ma_dt}`")
-                        st.write(f"- **Tên SP:** {ten_sp}")
-                        st.write(f"- **Vật liệu:** {vat_lieu}")
-                        st.write(f"- **Kích thước:** {kich_thuoc}")
-                        st.write(f"- **Dung sai:** {dung_sai}")
-                    else:
-                        if ten_sp:
-                            st.write(f"- **Tiêu đề tài liệu:** {ten_sp}")
-                        st.caption("(Tài liệu phi kỹ thuật — không áp dụng các trường bản vẽ: vật liệu, kích thước, dung sai.)")
+                    # A1: nhan dong theo domain, truong khong thuoc domain se bi an
+                    _lbl_ma = labels.field_label(t_dom, "ma_doi_tuong")
+                    _lbl_ten = labels.field_label(t_dom, "ten_san_pham")
+                    _lbl_vl = labels.field_label(t_dom, "vat_lieu")
+                    _lbl_kt = labels.field_label(t_dom, "kich_thuoc")
+                    _lbl_ds = labels.field_label(t_dom, "dung_sai")
+                    _shown_any = False
+                    if _lbl_ma and ma_dt:
+                        st.write(f"- **{_lbl_ma}:** `{ma_dt}`"); _shown_any = True
+                    if _lbl_ten and ten_sp:
+                        st.write(f"- **{_lbl_ten}:** {ten_sp}"); _shown_any = True
+                    if _lbl_vl and vat_lieu:
+                        st.write(f"- **{_lbl_vl}:** {vat_lieu}"); _shown_any = True
+                    if _lbl_kt and kich_thuoc:
+                        st.write(f"- **{_lbl_kt}:** {kich_thuoc}"); _shown_any = True
+                    if _lbl_ds and dung_sai:
+                        st.write(f"- **{_lbl_ds}:** {dung_sai}"); _shown_any = True
+                    if not _shown_any:
+                        st.caption("(Không có trường chi tiết áp dụng cho loại tài liệu này.)")
 
                 if show_actions:
                     st.markdown("### Cập nhật Metadata trước khi Duyệt (Bắt buộc kiểm tra):")
@@ -337,3 +353,77 @@ def run_admin():
         render_doc_list(published_docs, show_actions=False, allow_manage=True)
     with tabs[2]:
         render_doc_list(rejected_docs, show_actions=False, allow_manage=True)
+
+
+def _collect_selected(docs):
+    """C10: lay danh sach tai lieu da tick chon (theo session_state)."""
+    selected = []
+    for d in docs:
+        doc_id = d[0]
+        if st.session_state.get(f"bulk_sel_{doc_id}"):
+            selected.append(d)
+    return selected
+
+
+def _run_bulk(selected, current_user, mode, include_blocked=False):
+    """C10: duyet (standalone) hoac tu choi hang loat, bao cao tung file.
+
+    GD5: ton trong gate chat luong — mac dinh BO QUA tai lieu blocked khi duyet,
+    tru khi tick override (include_blocked=True) -> ghi audit override_quality_gate.
+    """
+    ok, fail, skipped, results = 0, 0, 0, []
+    for d in selected:
+        doc_id, ten_file, thu_muc = d[0], d[1], d[2]
+        quality_status = d[23] if len(d) > 23 else None
+        try:
+            if mode == "approve":
+                if quality_status == "blocked" and not include_blocked:
+                    skipped += 1
+                    results.append(f"⏭️ {ten_file} (bị chặn chất lượng — bỏ qua, hãy duyệt riêng để override)")
+                    continue
+                if quality_status == "blocked" and include_blocked:
+                    write_audit_log(current_user["username"], "override_quality_gate", "TaiLieu", doc_id, {"quality_status": quality_status, "quality_score": (d[24] if len(d) > 24 else None), "action": "bulk_approve"})
+                success = publish_as_standalone(doc_id, reviewer=current_user["username"])
+            else:
+                success = reject_document(doc_id, reviewer=current_user["username"])
+            if success:
+                ok += 1
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        UPDATE dbo.IngestionJobs SET Status = :s, UpdatedAt = GETDATE()
+                        WHERE TenFile = :f AND ThuMuc = :t
+                    """), {"s": "published" if mode == "approve" else "rejected", "f": ten_file, "t": thu_muc})
+                write_audit_log(current_user["username"], "bulk_" + mode, "TaiLieu", doc_id, {"file": ten_file})
+                results.append(f"✅ {ten_file}")
+            else:
+                fail += 1
+                results.append(f"❌ {ten_file} (thất bại)")
+        except Exception as e:
+            fail += 1
+            results.append(f"❌ {ten_file}: {e}")
+        st.session_state[f"bulk_sel_{doc_id}"] = False
+    st.success(f"Hoàn tất: {ok} thành công, {fail} lỗi, {skipped} bị bỏ qua (chất lượng).")
+    with st.expander("Chi tiết từng tài liệu", expanded=True):
+        for r in results:
+            st.write(r)
+    st.info("Vui lòng bấm **Làm mới (Reset)** hoặc chuyển tab để cập nhật danh sách.")
+
+
+def _render_bulk_panel(docs, current_user):
+    """C10: panel thao tac hang loat o dau tab Cho Duyet."""
+    with st.container(border=True):
+        st.markdown("#### ⚡ Thao tác hàng loạt")
+        selected = _collect_selected(docs)
+        n_blocked = sum(1 for d in selected if (len(d) > 23 and d[23] == "blocked"))
+        st.caption(f"Đã chọn **{len(selected)}** / {len(docs)} tài liệu. Tích chọn ở từng tài liệu bên dưới.")
+        if n_blocked:
+            st.warning(f"⚠️ Trong số đã chọn có **{n_blocked}** tài liệu bị chặn chất lượng. Mặc định chúng sẽ bị BỎ QUA khi duyệt.")
+        include_blocked = st.checkbox("Vẫn duyệt cả tài liệu bị chặn chất lượng (override gate)", key="bulk_include_blocked", disabled=not n_blocked)
+        confirm_bulk = st.checkbox("Tôi xác nhận thao tác hàng loạt trên các tài liệu đã chọn.", key="bulk_confirm_pending")
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            if st.button("Duyệt đã chọn (Standalone)", disabled=not (selected and confirm_bulk), key="bulk_approve_btn", use_container_width=True, type="primary"):
+                _run_bulk(selected, current_user, mode="approve", include_blocked=include_blocked)
+        with bc2:
+            if st.button("Từ chối đã chọn", disabled=not (selected and confirm_bulk), key="bulk_reject_btn", use_container_width=True, type="secondary"):
+                _run_bulk(selected, current_user, mode="reject")

@@ -7,6 +7,7 @@ from mech_chatbot.db.repository import (
     list_known_departments, upsert_department,
     list_known_sites, upsert_site,
     get_user_sites, set_user_sites, set_user_departments, set_user_clearance,
+    count_docs_by_department,
 )
 
 ROLE_OPTIONS = ["admin", "reviewer", "uploader", "viewer"]
@@ -137,16 +138,52 @@ def render_org_management():
     """P1.1 + P1.2: quản lý danh mục phòng ban và khu/site ngay trên UI."""
     st.subheader("Phòng ban")
     depts = list_known_departments(active_only=False)
+    doc_counts = count_docs_by_department()  # A3: so tai lieu theo phong ban
     if depts:
         st.dataframe(
-            [{"Mã": d["code"], "Tên": d["name"], "Lĩnh vực": d["domain"], "Khu mặc định": d["site"], "Active": d["is_active"]} for d in depts],
+            [{
+                "Mã": d["code"], "Tên": d["name"], "Lĩnh vực": d["domain"],
+                "Khu mặc định": d["site"],
+                "Số tài liệu": doc_counts.get(d["code"], 0),
+                "Active": d["is_active"],
+            } for d in depts],
             use_container_width=True, hide_index=True,
         )
+
+        # A3: bật/tắt nhanh từng phòng ban (cảnh báo nếu phòng còn tài liệu)
+        st.markdown("**Bật/Tắt nhanh từng phòng ban**")
+        for d in depts:
+            n_docs = doc_counts.get(d["code"], 0)
+            cc1, cc2, cc3 = st.columns([3, 2, 2])
+            with cc1:
+                st.write(f"**{d['code']}** · {d['name'] or ''}")
+            with cc2:
+                st.caption(f"{n_docs} tài liệu · {'🟢 Active' if d['is_active'] else '⚪ Đã tắt'}")
+            with cc3:
+                if d["is_active"]:
+                    if st.button("Tắt", key=f"deact_{d['code']}", use_container_width=True):
+                        if n_docs > 0 and not st.session_state.get(f"confirm_deact_{d['code']}"):
+                            st.session_state[f"confirm_deact_{d['code']}"] = True
+                            st.warning(f"⚠️ Phòng **{d['code']}** đang có **{n_docs}** tài liệu. Bấm 'Tắt' lần nữa để xác nhận.")
+                        else:
+                            if upsert_department(d["code"], d["name"], d["domain"], d["site"], False):
+                                st.session_state.pop(f"confirm_deact_{d['code']}", None)
+                                st.success(f"Đã tắt phòng {d['code']}.")
+                                st.rerun()
+                            else:
+                                st.error("Cập nhật thất bại.")
+                else:
+                    if st.button("Bật", key=f"act_{d['code']}", use_container_width=True):
+                        if upsert_department(d["code"], d["name"], d["domain"], d["site"], True):
+                            st.success(f"Đã bật phòng {d['code']}.")
+                            st.rerun()
+                        else:
+                            st.error("Cập nhật thất bại.")
     with st.form("add_dept"):
         st.markdown("**Thêm / cập nhật phòng ban**")
         c1, c2 = st.columns(2)
         with c1:
-            code = st.text_input("Mã phòng (vd: To_Han)")
+            code = st.text_input("Mã phòng (vd: Technical)")
             name = st.text_input("Tên hiển thị")
         with c2:
             domain = st.selectbox("Lĩnh vực / kiểu đọc (domain)", ["", "mechanical", "tabular", "generic"])

@@ -4,6 +4,7 @@ from mech_chatbot.db.repository import (
     engine, queue_eta_seconds, set_job_priority, cancel_job, requeue_job,
     list_known_departments, list_known_sites,
 )
+from mech_chatbot.ui import labels
 
 
 def _fmt_eta(seconds):
@@ -44,15 +45,16 @@ def run_queue():
         status_filter = st.selectbox(
             "Trạng thái",
             ["Tất cả", "pending", "pending_retry", "classifying", "extracting", "embedding", "failed", "waiting_quota"],
+            key="queue_status",
         )
     with fc2:
         if is_admin:
             dept_options = [d["code"] for d in list_known_departments(active_only=True)]
         else:
             dept_options = [d for d in (current_user.get("allowed_departments") or [current_user.get("department")]) if d]
-        dept_filter = st.selectbox("Phòng ban", ["Tất cả"] + sorted(set(dept_options)))
+        dept_filter = st.selectbox("Phòng ban", ["Tất cả"] + sorted(set(dept_options)), key="queue_dept")
     with fc3:
-        search = st.text_input("Tìm file")
+        search = st.text_input("Tìm file", key="queue_search")
 
     try:
         with engine.connect() as conn:
@@ -104,26 +106,15 @@ def run_queue():
                 domain_val, security_val, cong_doan_val, site_val
             ) = job
 
-            if status == "published":
-                color = "green"
-            elif status == "failed":
-                color = "red"
-            elif status == "pending_review":
-                color = "orange"
-            elif status == "classifying":
-                color = "purple"
-            else:
-                color = "blue"
-
             prio_badge = "🔥 GAP" if (priority or 100) < 50 else ("⬇️ thấp" if (priority or 100) > 150 else "thường")
-            with st.expander(f"[{status.upper()}] {ten_file} (Job: {job_id}) · Ưu tiên: {prio_badge} - {created_at.strftime('%Y-%m-%d %H:%M:%S')}"):
-                st.write(f"**Thư mục:** {thu_muc} | **Người tải lên:** {uploaded_by or 'Unknown'}")
+            with st.expander(f"{labels.status_badge(status)} · {ten_file} (Job: {job_id}) · Ưu tiên: {prio_badge} - {created_at.strftime('%Y-%m-%d %H:%M:%S')}"):
+                st.write(f"**Phòng ban:** {thu_muc} | **Người tải lên:** {uploaded_by or 'Unknown'}")
                 st.write(
                     f"**Domain:** {domain_val or 'theo thư mục'} | "
                     f"**Mức mật:** {security_val or 'theo thư mục'}"
                     + (f" | **Site:** {site_val}" if site_val else "")
                 )
-                st.write(f"**Trạng thái:** <span style='color:{color}'>{status}</span> (Tiến độ: {progress_percent}%)", unsafe_allow_html=True)
+                st.write(f"**Trạng thái:** {labels.status_badge(status)} (Tiến độ: {progress_percent}%)")
                 st.progress((progress_percent or 0) / 100)
                 st.write(f"**Ưu tiên (Priority):** {priority} (nhỏ hơn = ưu tiên hơn)")
                 st.write(f"**Debug Info:** Retry: {retry_count}/{max_retry} | LockedBy: {locked_by} at {locked_at}")

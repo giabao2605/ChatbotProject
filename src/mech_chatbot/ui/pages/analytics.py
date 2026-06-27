@@ -28,6 +28,7 @@ def run_analytics():
         options=[7, 30, 90, 365],
         index=1,
         format_func=lambda d: f"{d} ngày gần nhất",
+        key="analytics_period",
     )
 
     with st.spinner("Đang tổng hợp..."):
