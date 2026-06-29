@@ -8,6 +8,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 from sqlalchemy import text
 from mech_chatbot.db.repository import engine
+try:
+    from mech_chatbot.ui.i18n import t, get_lang
+except ImportError:
+    def t(s, **kw): return s.format(**kw) if kw else s  # noqa: E731
+    def get_lang(): return "vi"  # noqa: E731
 
 # ---------------------------------------------------------------------------
 # Rate-limit / Account lockout (in-process, resets khi restart server)
@@ -154,7 +159,7 @@ def authenticate_user(username, password):
                 "allowed_sites": allowed_sites,
             }
     except Exception as e:
-        st.error(f"Lỗi truy vấn: {e}")
+        st.error(t("Lỗi truy vấn: {e}", e=e))
         return None
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -219,12 +224,13 @@ def login_screen():
 
         # Thong bao khac nhau: bi khoa vs sai mat khau thuong
         if _is_rate_limited(username):
-            st.session_state["login_error"] = (
-                f"Tài khoản tạm thời bị khóa do đăng nhập sai quá {_MAX_FAILURES} lần. "
-                f"Vui lòng thử lại sau {_LOCKOUT_SECONDS // 60} phút."
+            st.session_state["login_error"] = t(
+                "Tài khoản tạm thời bị khóa do đăng nhập sai quá {n} lần. "
+                "Vui lòng thử lại sau {m} phút.",
+                n=_MAX_FAILURES, m=_LOCKOUT_SECONDS // 60,
             )
         else:
-            st.session_state["login_error"] = "Sai tên đăng nhập hoặc mật khẩu."
+            st.session_state["login_error"] = t("Sai tên đăng nhập hoặc mật khẩu.")
         st.rerun()
 
     return False

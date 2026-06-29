@@ -1,48 +1,39 @@
-"""P0: Form metadata tong quat DONG theo domain (dung chung cho Upload / Kho tai lieu / Duyet).
-
-Muc tieu da phong ban:
-- Moi tai lieu (ke toan, hanh chinh, ISO, HSE, ky thuat...) deu nhap duoc cac
-  truong dung chung: Tieu de, Tom tat, Tu khoa, So van ban, cac moc ngay, Nguoi
-  ky/owner, Ngon ngu, Trang thai hieu luc.
-- Cac truong DAC THU theo domain (vd ke toan: don vi/ky/tong gia tri; hanh chinh:
-  co quan ban hanh/pham vi) duoc render rieng va luu vao DocumentAttributes.
-
-Module chi phu thuoc streamlit nen import duoc o moi trang. Cac ham render tra ve
-dict gia tri da chuan hoa; KHONG tu ghi DB (trang goi quyet dinh luu the nao).
-"""
+"""P0: Form metadata tong quat DONG theo domain (dung chung cho Upload / Kho tai lieu / Duyet)."""
 import re
 import streamlit as st
 
+from mech_chatbot.ui.i18n import t
+
 DOMAINS = ["mechanical", "tabular", "generic"]
 DOMAIN_LABELS = {
-    "mechanical": "Cơ khí / Kỹ thuật",
-    "tabular": "Bảng biểu / Tài chính",
-    "generic": "Hành chính / Văn bản",
+    "mechanical": "C\u01a1 kh\u00ed / K\u1ef9 thu\u1eadt",
+    "tabular": "B\u1ea3ng bi\u1ec3u / T\u00e0i ch\u00ednh",
+    "generic": "H\u00e0nh ch\u00ednh / V\u0103n b\u1ea3n",
 }
 
 LANGUAGES = ["", "vi", "en", "vi+en", "other"]
 EFFECTIVE_STATUSES = ["active", "draft", "expired", "superseded"]
 EFFECTIVE_STATUS_LABELS = {
-    "active": "Đang hiệu lực",
-    "draft": "Bản nháp / dự thảo",
-    "expired": "Hết hiệu lực",
-    "superseded": "Đã bị thay thế",
+    "active": "\u0110ang hi\u1ec7u l\u1ef1c",
+    "draft": "B\u1ea3n nh\u00e1p / d\u1ef1 th\u1ea3o",
+    "expired": "H\u1ebft hi\u1ec7u l\u1ef1c",
+    "superseded": "\u0110\u00e3 b\u1ecb thay th\u1ebf",
 }
 
-# Truong dac thu theo domain -> luu vao DocumentAttributes (key = AttributeKey).
+# Truong dac thu theo domain -> luu vao DocumentAttributes.
 DOMAIN_ATTR_FIELDS = {
     "tabular": [
-        ("don_vi", "Đơn vị tính / tiền tệ", "text"),
-        ("ky_chung_tu", "Kỳ / loại chứng từ", "text"),
-        ("tong_gia_tri", "Tổng giá trị", "text"),
-        ("doi_tac", "Đối tác / Nhà cung cấp", "text"),
+        ("don_vi", "\u0110\u01a1n v\u1ecb t\u00ednh / ti\u1ec1n t\u1ec7", "text"),
+        ("ky_chung_tu", "K\u1ef3 / lo\u1ea1i ch\u1ee9ng t\u1eeb", "text"),
+        ("tong_gia_tri", "T\u1ed5ng gi\u00e1 tr\u1ecb", "text"),
+        ("doi_tac", "\u0110\u1ed1i t\u00e1c / Nh\u00e0 cung c\u1ea5p", "text"),
     ],
     "generic": [
-        ("co_quan_ban_hanh", "Cơ quan / Phòng ban ban hành", "text"),
-        ("pham_vi_ap_dung", "Phạm vi áp dụng", "text"),
-        ("linh_vuc", "Lĩnh vực / chủ đề", "text"),
+        ("co_quan_ban_hanh", "C\u01a1 quan / Ph\u00f2ng ban ban h\u00e0nh", "text"),
+        ("pham_vi_ap_dung", "Ph\u1ea1m vi \u00e1p d\u1ee5ng", "text"),
+        ("linh_vuc", "L\u0129nh v\u1ef1c / ch\u1ee7 \u0111\u1ec1", "text"),
     ],
-    "mechanical": [],  # da co bang TaiLieuKyThuat / BangKeVatTu rieng
+    "mechanical": [],
 }
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -54,18 +45,17 @@ def normalize_domain(domain):
 
 
 def _s(v):
-    """strip -> chuoi rong giu nguyen '' (de phan biet xoa khi edit)."""
     if v is None:
         return ""
     return str(v).strip()
 
 
 def _date_value(label, value, key):
-    """O nhap ngay dang text (YYYY-MM-DD) de cho phep BO TRONG. Tra ve chuoi."""
-    raw = st.text_input(label, value=_fmt_date(value), key=key, placeholder="YYYY-MM-DD")
+    """O nhap ngay dang text (YYYY-MM-DD). Tra ve chuoi."""
+    raw = st.text_input(t(label), value=_fmt_date(value), key=key, placeholder="YYYY-MM-DD")
     raw = _s(raw)
     if raw and not _DATE_RE.match(raw):
-        st.caption(f"⚠️ `{label}` nên theo định dạng YYYY-MM-DD (vd 2026-06-29). Giá trị hiện tại sẽ không được lưu nếu sai định dạng.")
+        st.caption("\u26a0\ufe0f `" + t(label) + "` " + t("n\u00ean theo \u0111\u1ecbnh d\u1ea1ng YYYY-MM-DD (vd 2026-06-29). Gi\u00e1 tr\u1ecb hi\u1ec7n t\u1ea1i s\u1ebd kh\u00f4ng \u0111\u01b0\u1ee3c l\u01b0u n\u1ebfu sai \u0111\u1ecbnh d\u1ea1ng."))
     return raw
 
 
@@ -73,48 +63,70 @@ def _fmt_date(value):
     if value is None:
         return ""
     s = str(value)
-    # date/datetime -> lay phan YYYY-MM-DD
     return s[:10] if _DATE_RE.match(s[:10]) else s
 
 
 def render_common_metadata(prefix, defaults=None, show_header=True):
-    """Render cac truong metadata DUNG CHUNG. Tra ve dict theo key cua repository
-    (_COMMON_META_COLS): title, summary, tags, doc_number, issued_date,
-    effective_date, expiry_date, review_date, owner_signer, language, effective_status.
-    Gia tri ngay sai dinh dang se bi loai (set '').
-    """
+    """Render cac truong metadata DUNG CHUNG. Tra ve dict."""
     d = defaults or {}
     if show_header:
-        st.markdown("**Thông tin tài liệu (dùng chung)**")
-    title = st.text_input("Tiêu đề tài liệu", value=_s(d.get("title")), key=f"{prefix}_title",
-                          help="Tên gọi dễ đọc của tài liệu (khác với tên file).")
-    summary = st.text_area("Tóm tắt nội dung", value=_s(d.get("summary")), key=f"{prefix}_summary",
-                           help="Vài câu mô tả để người dùng & chatbot hiểu nhanh tài liệu nói về gì.")
-    tags = st.text_input("Từ khóa (phân tách bằng dấu phẩy)", value=_s(d.get("tags")), key=f"{prefix}_tags",
-                         help="VD: an toàn, 5S, bảo trì máy CNC")
+        st.markdown("**" + t("Th\u00f4ng tin t\u00e0i li\u1ec7u (d\u00f9ng chung)") + "**")
+    title = st.text_input(
+        t("Ti\u00eau \u0111\u1ec1 t\u00e0i li\u1ec7u"),
+        value=_s(d.get("title")),
+        key=f"{prefix}_title",
+        help=t("T\u00ean g\u1ecdi d\u1ec5 \u0111\u1ecdc c\u1ee7a t\u00e0i li\u1ec7u (kh\u00e1c v\u1edbi t\u00ean file)."),
+    )
+    summary = st.text_area(
+        t("T\u00f3m t\u1eaft n\u1ed9i dung"),
+        value=_s(d.get("summary")),
+        key=f"{prefix}_summary",
+        help=t("V\u00e0i c\u00e2u m\u00f4 t\u1ea3 \u0111\u1ec3 ng\u01b0\u1eddi d\u00f9ng & chatbot hi\u1ec3u nhanh t\u00e0i li\u1ec7u n\u00f3i v\u1ec1 g\u00ec."),
+    )
+    tags = st.text_input(
+        t("T\u1eeb kh\u00f3a (ph\u00e2n t\u00e1ch b\u1eb1ng d\u1ea5u ph\u1ea9y)"),
+        value=_s(d.get("tags")),
+        key=f"{prefix}_tags",
+        help=t("VD: an to\u00e0n, 5S, b\u1ea3o tr\u00ec m\u00e1y CNC"),
+    )
     c1, c2 = st.columns(2)
     with c1:
-        doc_number = st.text_input("Số văn bản / chứng từ", value=_s(d.get("doc_number")), key=f"{prefix}_doc_number")
-        issued_date = _date_value("Ngày ban hành", d.get("issued_date"), key=f"{prefix}_issued_date")
-        effective_date = _date_value("Ngày hiệu lực", d.get("effective_date"), key=f"{prefix}_effective_date")
+        doc_number = st.text_input(
+            t("S\u1ed1 v\u0103n b\u1ea3n / ch\u1ee9ng t\u1eeb"),
+            value=_s(d.get("doc_number")),
+            key=f"{prefix}_doc_number",
+        )
+        issued_date = _date_value("Ng\u00e0y ban h\u00e0nh", d.get("issued_date"), key=f"{prefix}_issued_date")
+        effective_date = _date_value("Ng\u00e0y hi\u1ec7u l\u1ef1c", d.get("effective_date"), key=f"{prefix}_effective_date")
     with c2:
-        owner_signer = st.text_input("Người ký / phụ trách", value=_s(d.get("owner_signer")), key=f"{prefix}_owner_signer")
-        expiry_date = _date_value("Ngày hết hiệu lực", d.get("expiry_date"), key=f"{prefix}_expiry_date")
-        review_date = _date_value("Ngày soát xét kế tiếp", d.get("review_date"), key=f"{prefix}_review_date")
+        owner_signer = st.text_input(
+            t("Ng\u01b0\u1eddi k\u00fd / ph\u1ee5 tr\u00e1ch"),
+            value=_s(d.get("owner_signer")),
+            key=f"{prefix}_owner_signer",
+        )
+        expiry_date = _date_value("Ng\u00e0y h\u1ebft hi\u1ec7u l\u1ef1c", d.get("expiry_date"), key=f"{prefix}_expiry_date")
+        review_date = _date_value("Ng\u00e0y so\u00e1t x\u00e9t k\u1ebf ti\u1ebfp", d.get("review_date"), key=f"{prefix}_review_date")
     c3, c4 = st.columns(2)
     with c3:
         _lang = _s(d.get("language"))
-        language = st.selectbox("Ngôn ngữ", LANGUAGES,
-                                index=LANGUAGES.index(_lang) if _lang in LANGUAGES else 0,
-                                format_func=lambda x: x or "(không rõ)", key=f"{prefix}_language")
+        language = st.selectbox(
+            t("Ng\u00f4n ng\u1eef"),
+            LANGUAGES,
+            index=LANGUAGES.index(_lang) if _lang in LANGUAGES else 0,
+            format_func=lambda x: x or t("(kh\u00f4ng r\u00f5)"),
+            key=f"{prefix}_language",
+        )
     with c4:
         _st = _s(d.get("effective_status")) or "active"
-        effective_status = st.selectbox("Trạng thái hiệu lực", EFFECTIVE_STATUSES,
-                                        index=EFFECTIVE_STATUSES.index(_st) if _st in EFFECTIVE_STATUSES else 0,
-                                        format_func=lambda x: EFFECTIVE_STATUS_LABELS.get(x, x),
-                                        key=f"{prefix}_effective_status")
+        effective_status = st.selectbox(
+            t("Tr\u1ea1ng th\u00e1i hi\u1ec7u l\u1ef1c"),
+            EFFECTIVE_STATUSES,
+            index=EFFECTIVE_STATUSES.index(_st) if _st in EFFECTIVE_STATUSES else 0,
+            format_func=lambda x: t(EFFECTIVE_STATUS_LABELS.get(x, x)),
+            key=f"{prefix}_effective_status",
+        )
 
-    def _vd(x):  # validate date: sai dinh dang -> '' (khong luu)
+    def _vd(x):
         return x if (x == "" or _DATE_RE.match(x)) else ""
 
     return {
@@ -133,12 +145,12 @@ def render_domain_attributes(domain, prefix, defaults=None, show_header=True):
         return {}
     d = (defaults or {})
     if show_header:
-        st.markdown(f"**Trường riêng cho lĩnh vực: {DOMAIN_LABELS.get(dom, dom)}**")
+        st.markdown("**" + t("Tr\u01b0\u1eddng ri\u00eang cho l\u0129nh v\u1ef1c: {domain}", domain=t(DOMAIN_LABELS.get(dom, dom))) + "**")
     out = {}
     cols = st.columns(2)
     for i, (key, label, _typ) in enumerate(fields):
         with cols[i % 2]:
-            out[key] = st.text_input(label, value=_s(d.get(key)), key=f"{prefix}_attr_{key}")
+            out[key] = st.text_input(t(label), value=_s(d.get(key)), key=f"{prefix}_attr_{key}")
     return out
 
 
@@ -150,7 +162,7 @@ def render_metadata_section(domain, prefix, common_defaults=None, attr_defaults=
 
 
 def compact(d):
-    """Bo cac gia tri rong/None (dung khi nhap luc upload, chi giu field co data)."""
+    """Bo cac gia tri rong/None."""
     out = {}
     for k, v in (d or {}).items():
         if v is None:
@@ -162,7 +174,7 @@ def compact(d):
 
 
 def build_upload_meta(common, attrs):
-    """Gop common + attrs thanh dict luu IngestionJobs.UploadMetaJson (chi field co data)."""
+    """Gop common + attrs thanh dict luu IngestionJobs.UploadMetaJson."""
     meta = compact(common)
     a = compact(attrs)
     if a:

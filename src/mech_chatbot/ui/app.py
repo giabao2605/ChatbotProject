@@ -7,8 +7,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import streamlit as st
 from mech_chatbot.auth import service as auth
 from mech_chatbot.config import theme as ui_theme
+from mech_chatbot.ui import i18n
+from mech_chatbot.ui.i18n import t
 
-st.set_page_config(page_title="Trợ Lý Tài Liệu Nội Bộ", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title=t("Trợ Lý Tài Liệu Nội Bộ"), layout="wide", initial_sidebar_state="expanded")
 ui_theme.inject_global_css()
 
 auth.check_auth()
@@ -26,6 +28,7 @@ def can_access_page(allowed_roles):
     return any(role in roles for role in allowed_roles)
 
 
+# Nhan trang dung key tieng Viet on dinh; hien thi qua t() de song ngu.
 PAGES = [
     {"key": "dashboard", "label": "Tổng quan", "roles": ["admin"]},
     {"key": "chatbot", "label": "Chatbot hỏi đáp", "roles": ["viewer", "uploader", "reviewer", "admin"]},
@@ -44,7 +47,7 @@ PAGES = [
 
 available_pages = [page for page in PAGES if can_access_page(page["roles"])]
 if not available_pages:
-    st.error("Tài khoản chưa được gán quyền truy cập trang nào.")
+    st.error(t("Tài khoản chưa được gán quyền truy cập trang nào."))
     st.stop()
 
 if "nav_page" not in st.session_state or st.session_state["nav_page"] not in [p["key"] for p in available_pages]:
@@ -57,29 +60,32 @@ if "_nav_request" in st.session_state:
         st.session_state["nav_page"] = _req
 
 with st.sidebar:
-    st.markdown("### Trợ Lý Tài Liệu Nội Bộ")
-    st.caption("Quản trị dữ liệu kỹ thuật & hỏi đáp RAG")
+    st.markdown("### " + t("Trợ Lý Tài Liệu Nội Bộ"))
+    st.caption(t("Quản trị dữ liệu kỹ thuật & hỏi đáp RAG"))
+
+    # Cong tac chon ngon ngu DUY NHAT: dieu khien CA giao dien lan chatbot tra loi.
+    i18n.language_selector()
     st.markdown("---")
-    st.markdown(f"**Xin chào, {user['display_name']}!**")
-    st.caption(f"Phòng ban: {user.get('department')}")
-    st.caption("Role: " + ", ".join(user.get("roles", [])))
+    st.markdown("**" + t("Xin chào, {name}!", name=user['display_name']) + "**")
+    st.caption(t("Phòng ban: {dept}", dept=user.get('department')))
+    st.caption(t("Role: ") + ", ".join(user.get("roles", [])))
 
     # C12: hien thi ro quyen cua nguoi dung (phong ban / khu / muc mat)
-    with st.expander("🔑 Quyền của tôi"):
+    with st.expander("🔑 " + t("Quyền của tôi")):
         _allowed_depts = user.get("allowed_departments") or ([user.get("department")] if user.get("department") else [])
         _allowed_sites = user.get("allowed_sites") or []
-        st.markdown("**Phòng ban được xem:**")
-        st.write(", ".join([d for d in _allowed_depts if d]) or "(chưa gán)")
-        st.markdown("**Khu / Site được xem:**")
-        st.write(", ".join([s for s in _allowed_sites if s]) or "(không giới hạn)")
-        st.markdown("**Mức mật tối đa:**")
+        st.markdown("**" + t("Phòng ban được xem:") + "**")
+        st.write(", ".join([d for d in _allowed_depts if d]) or t("(chưa gán)"))
+        st.markdown("**" + t("Khu / Site được xem:") + "**")
+        st.write(", ".join([s for s in _allowed_sites if s]) or t("(không giới hạn)"))
+        st.markdown("**" + t("Mức mật tối đa:") + "**")
         st.write(user.get("max_security_level", "internal"))
-        st.caption("Nếu không thấy tài liệu mong đợi, hãy liên hệ admin để được cấp thêm quyền.")
+        st.caption(t("Nếu không thấy tài liệu mong đợi, hãy liên hệ admin để được cấp thêm quyền."))
     st.markdown("---")
 
-    page_labels = {page["key"]: f"{page['label']}" for page in available_pages}
+    page_labels = {page["key"]: t(page['label']) for page in available_pages}
     st.radio(
-        "Điều hướng",
+        t("Điều hướng"),
         options=list(page_labels.keys()),
         format_func=lambda key: page_labels[key],
         key="nav_page",
@@ -87,7 +93,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    if st.button("Đăng xuất", use_container_width=True):
+    if st.button(t("Đăng xuất"), use_container_width=True):
         auth.logout()
 
 page = st.session_state["nav_page"]

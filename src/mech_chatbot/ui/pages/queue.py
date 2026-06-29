@@ -5,57 +5,72 @@ from mech_chatbot.db.repository import (
     list_known_departments, list_known_sites,
 )
 from mech_chatbot.ui import labels
+from mech_chatbot.ui.i18n import t
 
 
 def _fmt_eta(seconds):
     seconds = int(seconds or 0)
     if seconds <= 0:
-        return "~0 phút"
+        return "~0 " + t("ph\u00fat")
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
     if h:
         return f"~{h}h{m:02d}m"
     if m:
-        return f"~{m} phút {s:02d}s"
+        return f"~{m} " + t("ph\u00fat") + f" {s:02d}s"
     return f"~{s}s"
 
 
 def run_queue():
-    st.title("Quản Lý Tiến Trình Nạp Dữ Liệu")
-    st.markdown("Xem danh sách các file đang được đưa vào xử lý bóc tách (Worker Queue).")
+    st.title(t("Qu\u1ea3n L\u00fd Ti\u1ebfn Tr\u00ecnh N\u1ea1p D\u1eef Li\u1ec7u"))
+    st.markdown(t("Xem danh s\u00e1ch c\u00e1c file \u0111ang \u0111\u01b0\u1ee3c \u0111\u01b0a v\u00e0o x\u1eed l\u00fd b\u00f3c t\u00e1ch (Worker Queue)."))
 
     if engine is None:
-        st.error("Không thể kết nối đến Database.")
+        st.error(t("Kh\u00f4ng th\u1ec3 k\u1ebft n\u1ed1i \u0111\u1ebfn Database."))
         return
 
     from mech_chatbot.auth import service as auth
     current_user = auth.get_current_user()
     is_admin = auth.has_role("admin")
 
-    # --- P1.5: Bảng điều khiển ETA ---
+    non_admin_allowed_departments = []
+    if not is_admin:
+        _active_codes_q = {d["code"] for d in list_known_departments(active_only=True)}
+        non_admin_allowed_departments = [
+            d for d in (current_user.get("allowed_departments") or [current_user.get("department")])
+            if d and d in _active_codes_q
+        ]
+
+    # --- P1.5: Bang dieu khien ETA ---
     eta = queue_eta_seconds()
     m1, m2, m3 = st.columns(3)
-    m1.metric("Đang chờ xử lý", eta.get("pending", 0))
-    m2.metric("TB mỗi job", f"{eta.get('avg_seconds', 0):.0f}s")
-    m3.metric("Dự kiến xử xong", _fmt_eta(eta.get("eta_seconds", 0)))
+    m1.metric(t("\u0110ang ch\u1edd x\u1eed l\u00fd"), eta.get("pending", 0))
+    m2.metric(t("TB m\u1ed7i job"), f"{eta.get('avg_seconds', 0):.0f}s")
+    m3.metric(t("D\u1ef1 ki\u1ebfn x\u1eed xong"), _fmt_eta(eta.get("eta_seconds", 0)))
 
-    # --- Bộ lọc ---
+    # --- Bo loc ---
     fc1, fc2, fc3 = st.columns(3)
     with fc1:
         status_filter = st.selectbox(
-            "Trạng thái",
-            ["Tất cả", "pending", "pending_retry", "classifying", "extracting", "embedding", "failed", "waiting_quota"],
+            t("Tr\u1ea1ng th\u00e1i"),
+            [t("T\u1ea5t c\u1ea3"), "pending", "pending_retry", "classifying", "extracting", "embedding", "failed", "waiting_quota"],
             key="queue_status",
         )
     with fc2:
         if is_admin:
             dept_options = [d["code"] for d in list_known_departments(active_only=True)]
         else:
-            dept_options = [d for d in (current_user.get("allowed_departments") or [current_user.get("department")]) if d]
-        dept_filter = st.selectbox("Phòng ban", ["Tất cả"] + sorted(set(dept_options)), key="queue_dept")
+            # P0.4: chi hien phong ban dang active + user duoc phep
+            _active_codes_q = {d["code"] for d in list_known_departments(active_only=True)}
+            dept_options = [
+                d for d in (current_user.get("allowed_departments") or [current_user.get("department")])
+                if d and d in _active_codes_q
+            ]
+        dept_filter = st.selectbox(t("Ph\u00f2ng ban"), [t("T\u1ea5t c\u1ea3")] + sorted(set(dept_options)), key="queue_dept")
     with fc3:
-        search = st.text_input("Tìm file", key="queue_search")
+        search = st.text_input(t("T\u00ecm file"), key="queue_search")
 
+    _tat_ca = t("T\u1ea5t c\u1ea3")
     try:
         with engine.connect() as conn:
             query_str = """
@@ -70,31 +85,37 @@ def run_queue():
             WHERE Status NOT IN ('pending_review', 'published', 'archived', 'superseded')
             """
             params = {}
-            if status_filter != "Tất cả":
+            if status_filter != _tat_ca:
                 query_str += " AND Status = :status"
                 params["status"] = status_filter
-            if dept_filter and dept_filter != "Tất cả":
+            if dept_filter and dept_filter != _tat_ca:
                 query_str += " AND ThuMuc = :dept_pick"
                 params["dept_pick"] = dept_filter
             if search:
                 query_str += " AND TenFile LIKE :search"
                 params["search"] = f"%{search}%"
             if not is_admin:
-                query_str += " AND (ThuMuc = :dept OR UploadedBy = :uname)"
-                params["dept"] = current_user["department"]
                 params["uname"] = current_user["username"]
+                if non_admin_allowed_departments:
+                    _dept_clauses = []
+                    for _idx, _dept in enumerate(sorted(set(non_admin_allowed_departments))):
+                        _k = f"allowed_dept_{_idx}"
+                        _dept_clauses.append(f"ThuMuc = :{_k}")
+                        params[_k] = _dept
+                    query_str += " AND ((" + " OR ".join(_dept_clauses) + ") OR UploadedBy = :uname)"
+                else:
+                    query_str += " AND UploadedBy = :uname"
 
-            # Ưu tiên hiển thị giống thứ tự worker lấy job
             query_str += " ORDER BY ISNULL(Priority, 100) ASC, CreatedAt DESC"
 
             result = conn.execute(text(query_str), params)
             jobs = result.fetchall()
 
         if not jobs:
-            st.info("Hiện không có file nào trong hàng đợi.")
+            st.info(t("Hi\u1ec7n kh\u00f4ng c\u00f3 file n\u00e0o trong h\u00e0ng \u0111\u1ee3i."))
             return
 
-        st.subheader(f"Tổng số: {len(jobs)} jobs")
+        st.subheader(t("T\u1ed5ng s\u1ed1: {n} jobs", n=len(jobs)))
 
         for job in jobs:
             (
@@ -106,23 +127,28 @@ def run_queue():
                 domain_val, security_val, cong_doan_val, site_val
             ) = job
 
-            prio_badge = "🔥 GAP" if (priority or 100) < 50 else ("⬇️ thấp" if (priority or 100) > 150 else "thường")
-            with st.expander(f"{labels.status_badge(status)} · {ten_file} (Job: {job_id}) · Ưu tiên: {prio_badge} - {created_at.strftime('%Y-%m-%d %H:%M:%S')}"):
-                st.write(f"**Phòng ban:** {thu_muc} | **Người tải lên:** {uploaded_by or 'Unknown'}")
+            prio_badge = ("\U0001f525 GAP" if (priority or 100) < 50
+                          else ("\u2b07\ufe0f " + t("th\u1ea5p") if (priority or 100) > 150
+                                else t("th\u01b0\u1eddng")))
+            with st.expander(
+                f"{labels.status_badge(status)} \u00b7 {ten_file} (Job: {job_id}) \u00b7 "
+                + t("\u01afu ti\u00ean:") + f" {prio_badge} - {created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+            ):
+                st.write(f"**" + t("Ph\u00f2ng ban:") + f"** {thu_muc} | **" + t("Ng\u01b0\u1eddi t\u1ea3i l\u00ean:") + f"** {uploaded_by or 'Unknown'}")
                 st.write(
-                    f"**Domain:** {domain_val or 'theo thư mục'} | "
-                    f"**Mức mật:** {security_val or 'theo thư mục'}"
+                    f"**Domain:** {domain_val or t('theo th\u01b0 m\u1ee5c')} | "
+                    f"**" + t("M\u1ee9c m\u1eadt:") + f"** {security_val or t('theo th\u01b0 m\u1ee5c')}"
                     + (f" | **Site:** {site_val}" if site_val else "")
                 )
-                st.write(f"**Trạng thái:** {labels.status_badge(status)} (Tiến độ: {progress_percent}%)")
+                st.write(f"**" + t("Tr\u1ea1ng th\u00e1i:") + f"** {labels.status_badge(status)} (" + t("Ti\u1ebfn \u0111\u1ed9:") + f" {progress_percent}%)")
                 st.progress((progress_percent or 0) / 100)
-                st.write(f"**Ưu tiên (Priority):** {priority} (nhỏ hơn = ưu tiên hơn)")
+                st.write(f"**" + t("\u01afu ti\u00ean (Priority):") + f"** {priority} (" + t("nh\u1ecf h\u01a1n = \u01b0u ti\u00ean h\u01a1n") + ")")
                 st.write(f"**Debug Info:** Retry: {retry_count}/{max_retry} | LockedBy: {locked_by} at {locked_at}")
                 st.write(f"**Failure Type:** {failure_type or 'N/A'}")
                 st.write(f"**Next Retry At:** {next_retry_at or 'N/A'}")
                 st.write(f"**Quality:** {quality_status or 'N/A'} ({quality_score or 0}/100)")
                 if error_message:
-                    st.write(f"**Thông báo:** {error_message}")
+                    st.write(f"**" + t("Th\u00f4ng b\u00e1o:") + f"** {error_message}")
 
                 import json
                 if extraction_report:
@@ -132,45 +158,45 @@ def run_queue():
                     except Exception:
                         st.text(extraction_report)
 
-                # --- P1.5: Hành động (admin) ---
+                # --- P1.5: Hanh dong (admin) ---
                 if is_admin:
                     st.markdown("---")
                     ac1, ac2, ac3 = st.columns([2, 1, 1])
                     with ac1:
                         new_prio = st.number_input(
-                            "Đặt ưu tiên", value=int(priority or 100), step=10, min_value=0, max_value=1000,
+                            t("\u0110\u1eb7t \u01b0u ti\u00ean"),
+                            value=int(priority or 100), step=10, min_value=0, max_value=1000,
                             key=f"prio_{job_id}",
                         )
-                        if st.button("Lưu ưu tiên", key=f"saveprio_{job_id}"):
+                        if st.button(t("L\u01b0u \u01b0u ti\u00ean"), key=f"saveprio_{job_id}"):
                             if set_job_priority(job_id, int(new_prio)):
-                                st.success("Đã cập nhật ưu tiên.")
+                                st.success(t("\u0110\u00e3 c\u1eadp nh\u1eadt \u01b0u ti\u00ean."))
                                 st.rerun()
                             else:
-                                st.error("Không cập nhật được ưu tiên.")
+                                st.error(t("Kh\u00f4ng c\u1eadp nh\u1eadt \u0111\u01b0\u1ee3c \u01b0u ti\u00ean."))
                     with ac2:
                         if status in ["failed", "waiting_quota", "pending_retry"]:
-                            if st.button("Thử lại", key=f"retry_{job_id}"):
+                            if st.button(t("Th\u1eed l\u1ea1i"), key=f"retry_{job_id}"):
                                 if requeue_job(job_id):
-                                    st.success("Đã đưa lại vào hàng đợi!")
+                                    st.success(t("\u0110\u00e3 \u0111\u01b0a l\u1ea1i v\u00e0o h\u00e0ng \u0111\u1ee3i!"))
                                     st.rerun()
                                 else:
-                                    st.error("Thử lại thất bại.")
+                                    st.error(t("Th\u1eed l\u1ea1i th\u1ea5t b\u1ea1i."))
                     with ac3:
-                        if st.button("Hủy job", key=f"cancel_{job_id}", type="secondary"):
+                        if st.button(t("H\u1ee7y job"), key=f"cancel_{job_id}", type="secondary"):
                             if cancel_job(job_id, canceled_by=current_user["username"]):
-                                st.success("Đã hủy job.")
+                                st.success(t("\u0110\u00e3 h\u1ee7y job."))
                                 st.rerun()
                             else:
-                                st.warning("Không thể hủy (job có thể đã hoàn tất hoặc đang publish).")
+                                st.warning(t("Kh\u00f4ng th\u1ec3 h\u1ee7y (job c\u00f3 th\u1ec3 \u0111\u00e3 ho\u00e0n t\u1ea5t ho\u1eb7c \u0111ang publish)."))
                 else:
-                    # Non-admin: chỉ retry job của mình khi lỗi
                     if status in ["failed", "waiting_quota"]:
-                        if st.button(f"Thử lại Job {job_id}", key=f"retry_{job_id}"):
+                        if st.button(t("Th\u1eed l\u1ea1i Job {jid}", jid=job_id), key=f"retry_{job_id}"):
                             if requeue_job(job_id):
-                                st.success("Đã đưa lại vào hàng đợi!")
+                                st.success(t("\u0110\u00e3 \u0111\u01b0a l\u1ea1i v\u00e0o h\u00e0ng \u0111\u1ee3i!"))
                                 st.rerun()
                             else:
-                                st.error("Thử lại thất bại.")
+                                st.error(t("Th\u1eed l\u1ea1i th\u1ea5t b\u1ea1i."))
 
     except Exception as e:
-        st.error(f"Lỗi truy xuất dữ liệu: {e}")
+        st.error(t("L\u1ed7i truy xu\u1ea5t d\u1eef li\u1ec7u: {e}", e=e))

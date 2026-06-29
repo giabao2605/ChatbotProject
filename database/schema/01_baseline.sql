@@ -514,12 +514,15 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'dbo.Departments') AND type = 'U')
 BEGIN
     CREATE TABLE dbo.Departments (
-        DeptCode  NVARCHAR(255) NOT NULL PRIMARY KEY,   -- vd: Production, Accountant, HR
-        DeptName  NVARCHAR(255) NULL,                   -- ten hien thi
-        Domain    NVARCHAR(50)  NULL,                   -- mechanical | tabular | generic
-        Site      NVARCHAR(100) NULL,
-        IsActive  BIT NOT NULL DEFAULT 1,
-        CreatedAt DATETIME DEFAULT GETDATE()
+        DeptCode    NVARCHAR(255) NOT NULL PRIMARY KEY,   -- vd: Production, Accountant, HR
+        DeptName    NVARCHAR(255) NULL,                   -- ten hien thi
+        Domain      NVARCHAR(50)  NULL,                   -- mechanical | tabular | generic
+        Site        NVARCHAR(100) NULL,
+        IsActive    BIT NOT NULL DEFAULT 1,
+        Status      NVARCHAR(20) NOT NULL CONSTRAINT DF_Departments_Status DEFAULT 'active',
+        DisabledAt  DATETIME NULL,
+        ArchivedAt  DATETIME NULL,
+        CreatedAt   DATETIME DEFAULT GETDATE()
     );
 END
 GO
@@ -527,6 +530,12 @@ GO
 IF COL_LENGTH('dbo.Departments','DefaultSecurity') IS NULL ALTER TABLE dbo.Departments ADD DefaultSecurity NVARCHAR(20) NOT NULL CONSTRAINT DF_Departments_DefaultSecurity DEFAULT 'internal';  -- public|internal|confidential
 GO
 IF COL_LENGTH('dbo.Departments','FolderGoc')       IS NULL ALTER TABLE dbo.Departments ADD FolderGoc NVARCHAR(150) NULL;  -- vd '08.Production'
+GO
+IF COL_LENGTH('dbo.Departments','Status')          IS NULL ALTER TABLE dbo.Departments ADD Status NVARCHAR(20) NOT NULL CONSTRAINT DF_Departments_Status DEFAULT 'active';
+GO
+IF COL_LENGTH('dbo.Departments','DisabledAt')      IS NULL ALTER TABLE dbo.Departments ADD DisabledAt DATETIME NULL;
+GO
+IF COL_LENGTH('dbo.Departments','ArchivedAt')      IS NULL ALTER TABLE dbo.Departments ADD ArchivedAt DATETIME NULL;
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'dbo.Sites') AND type = 'U')

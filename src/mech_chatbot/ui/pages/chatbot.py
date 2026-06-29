@@ -11,6 +11,8 @@ import sys
 from dotenv import load_dotenv
 from datetime import date, timedelta
 
+from mech_chatbot.ui.i18n import t, get_lang
+
 load_dotenv()
 
 from mech_chatbot.db.repository import (
@@ -84,13 +86,13 @@ import logging as _logging
 _worker_logger = _logging.getLogger("MechChatbot")
 
 
-def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="internal", allowed_sites=None):
+def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="internal", allowed_sites=None, response_language="vi"):
     """Run RAG in a separate Python process so native libs cannot crash Streamlit."""
     acquired = _RAG_SEMAPHORE.acquire(timeout=120)
     if not acquired:
         raise RuntimeError(
-            f"Hệ thống đang bận ({_MAX_CONCURRENT_RAG} request đang xử lý). "
-            "Vui lòng thử lại sau ít giây."
+            t("Hệ thống đang bận ({n} request đang xử lý). Vui lòng thử lại sau ít giây.",
+              n=_MAX_CONCURRENT_RAG)
         )
 
     t_start = time.time()
@@ -106,6 +108,7 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
         "allowed_departments": allowed_departments or [],
         "max_security_level": max_security_level or "internal",
         "allowed_sites": allowed_sites or [],
+        "response_language": response_language or "vi",
     }
 
     os.makedirs(os.path.join(base_dir, "temp_logs"), exist_ok=True)
@@ -136,13 +139,14 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
 
         if not os.path.exists(out_path):
             err = (result.stderr or result.stdout or "Không có output từ RAG worker")[-4000:]
-            raise RuntimeError(f"RAG worker không trả kết quả. returncode={result.returncode}. Log: {err}")
+            raise RuntimeError(t("RAG worker không trả kết quả. returncode={rc}. Log: {log}",
+                                  rc=result.returncode, log=err))
 
         with open(out_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         if not data.get("ok"):
-            raise RuntimeError(data.get("error", "RAG worker lỗi không rõ"))
+            raise RuntimeError(t(data.get("error", "RAG worker lỗi không rõ")))
 
         response_text = data.get("response", "")
         ref_text = data.get("ref_text", "")
@@ -175,7 +179,7 @@ RAG_SERVER_URL = os.getenv("RAG_SERVER_URL", "")  # e.g. http://localhost:8100
 def chat_with_rag_api(user_question, image_path=None, chat_history=None,
                       current_part_ids=None, user_department=None,
                       user_roles=None, allowed_departments=None, max_security_level="internal",
-                      allowed_sites=None):
+                      allowed_sites=None, response_language="vi"):
     """Call the persistent RAG FastAPI server via HTTP (Phase 2 mode)."""
     import requests as _requests
 
@@ -189,6 +193,7 @@ def chat_with_rag_api(user_question, image_path=None, chat_history=None,
         "allowed_departments": allowed_departments or [],
         "max_security_level": max_security_level or "internal",
         "allowed_sites": allowed_sites or [],
+        "response_language": response_language or "vi",
     }
 
     timeout = int(os.getenv("RAG_WORKER_TIMEOUT", "240"))
@@ -201,13 +206,12 @@ def chat_with_rag_api(user_question, image_path=None, chat_history=None,
         )
     except _requests.ConnectionError:
         raise RuntimeError(
-            f"Không kết nối được RAG Server tại {RAG_SERVER_URL}. "
-            "Vui lòng đảm bảo server đang chạy (python rag_server.py)."
+            t("Không kết nối được RAG Server tại {url}. Vui lòng đảm bảo server đang chạy.",
+              url=RAG_SERVER_URL)
         )
     except _requests.Timeout:
         raise RuntimeError(
-            f"RAG Server không phản hồi trong {timeout}s. "
-            "Hệ thống có thể đang quá tải."
+            t("RAG Server không phản hồi trong {n}s. Hệ thống có thể đang quá tải.", n=timeout)
         )
 
     if resp.status_code == 503:
@@ -216,7 +220,7 @@ def chat_with_rag_api(user_question, image_path=None, chat_history=None,
 
     if resp.status_code != 200:
         detail = resp.json().get("detail", resp.text[:500])
-        raise RuntimeError(f"RAG Server lỗi (HTTP {resp.status_code}): {detail}")
+        raise RuntimeError(t("RAG Server lỗi (HTTP {code}): {detail}", code=resp.status_code, detail=detail))
 
     data = resp.json()
     response_text = data.get("response", "")
@@ -261,8 +265,8 @@ def run_chat():
     # 3. SIDEBAR - CONG CU PHU TRO
     # ==========================================
     with st.sidebar:
-        st.header("Trợ lý Tài liệu Nội bộ")
-        st.caption("Tra cứu tài liệu nội bộ thông minh")
+        st.header(t("Trợ lý Tài liệu Nội bộ"))
+        st.caption(t("Tra cứu tài liệu nội bộ thông minh"))
  
         # CSS Canh le trai cho toan bo nut trong sidebar de trong giong ChatGPT
         st.markdown("""
@@ -286,21 +290,24 @@ def run_chat():
         """, unsafe_allow_html=True)
  
         # Nut Cuoc tro chuyen moi
-        if st.button("Cuộc trò chuyện mới", use_container_width=True, type="primary"):
+        if st.button(t("Cuộc trò chuyện mới"), use_container_width=True, type="primary"):
             st.session_state.session_id = str(uuid.uuid4())
             st.session_state.chat_history = []
             st.session_state.current_part_ids = []
             st.rerun()
 
         if st.session_state.current_part_ids:
-            if st.button("Xóa ngữ cảnh hiện tại", use_container_width=True):
+            if st.button(t("Xóa ngữ cảnh hiện tại"), use_container_width=True):
                 st.session_state.current_part_ids = []
                 st.rerun()
  
         st.markdown("<br>", unsafe_allow_html=True)
  
+        # Ngon ngu (giao dien + chatbot) duoc chon o cong tac DUY NHAT tren sidebar
+        # chinh (app.py -> i18n.language_selector). response_language tu dong dong bo.
+
         # O tim kiem lich su chat
-        search_query = st.text_input("Tìm kiếm lịch sử", "")
+        search_query = st.text_input(t("Tìm kiếm lịch sử"), "")
  
         # Danh sach cac phien chat cu
         sessions = get_all_sessions(username=current_user["username"], is_admin=is_admin)
@@ -312,6 +319,7 @@ def run_chat():
         # Phan nhom theo ngay
         today = date.today()
         yesterday = today - timedelta(days=1)
+        # Giu key tieng Viet lam khoa noi bo; chi dich khi hien thi.
         grouped_sessions = {"Hôm nay": [], "Hôm qua": [], "Cũ hơn": []}
         for s in sessions:
             s_date = s['thoi_gian'].date()
@@ -325,7 +333,7 @@ def run_chat():
         for group_name, group_sessions in grouped_sessions.items():
             if not group_sessions:
                 continue
-            st.caption(f"**{group_name}**")
+            st.caption(f"**{t(group_name)}**")
             for s in group_sessions:
                 is_current = (s['session_id'] == st.session_state.session_id)
                 btn_type = "primary" if is_current else "secondary"
@@ -338,7 +346,7 @@ def run_chat():
                         st.session_state.chat_history = get_chat_history(s['session_id'], username=current_user["username"], is_admin=is_admin)
                         st.rerun()
                 with col2:
-                    if st.button("X", key=f"btn_del_{s['session_id']}", help="Xóa cuộc trò chuyện", use_container_width=True):
+                    if st.button("X", key=f"btn_del_{s['session_id']}", help=t("Xóa cuộc trò chuyện"), use_container_width=True):
                         clear_chat_history(s['session_id'], username=current_user["username"], is_admin=is_admin)
                         if is_current:
                             st.session_state.session_id = str(uuid.uuid4())
@@ -348,16 +356,16 @@ def run_chat():
  
         st.markdown("---")
         st.markdown(
-            "<small><b>Lưu ý:</b> Bot chỉ trả lời dựa trên tài liệu "
-            "đã được nạp vào hệ thống.</small>",
+            "<small><b>" + t("Lưu ý") + ":</b> "
+            + t("Bot chỉ trả lời dựa trên tài liệu đã được nạp vào hệ thống.") + "</small>",
             unsafe_allow_html=True
         )
  
     # ==========================================
     # 4. GIAO DIEN CHAT CHINH
     # ==========================================
-    st.markdown("<h2 style='text-align: center; margin-bottom: 0;'>Trợ lý Tài liệu Nội bộ</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: gray; margin-bottom: 2rem;'>Hỏi bất kỳ câu hỏi nào về tài liệu, quy trình, chính sách hay dữ liệu của các phòng ban...</p>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; margin-bottom: 0;'>" + t("Trợ lý Tài liệu Nội bộ") + "</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: gray; margin-bottom: 2rem;'>" + t("Hỏi bất kỳ câu hỏi nào về tài liệu, quy trình, chính sách hay dữ liệu của các phòng ban...") + "</p>", unsafe_allow_html=True)
  
     # CSS Customization cho Main Chat
     st.markdown("""
@@ -424,7 +432,7 @@ def run_chat():
                     st.image(img, width=300)
             # Hien thi ban ve can cu (neu co)
             if msg.get("ref_images"):
-                st.markdown("**Hình ảnh căn cứ:**")
+                st.markdown("**" + t("Hình ảnh căn cứ:") + "**")
                 ref_images = msg["ref_images"]
                 for i in range(0, len(ref_images), 3):
                     cols = st.columns(3)
@@ -436,10 +444,10 @@ def run_chat():
             # Nut Danh gia (Feedback)
             if msg.get("chat_id"):
                 fb_key = f"fb_{msg['chat_id']}"
-                feedback = st.radio("Đánh giá:", ["Thích", "Không thích"], index=None, horizontal=True, key=fb_key, label_visibility="collapsed")
+                feedback = st.radio(t("Đánh giá:"), ["like", "dislike"], index=None, horizontal=True, key=fb_key, format_func=lambda v: t("Thích") if v == "like" else t("Không thích"), label_visibility="collapsed")
                 processed_key = f"processed_{fb_key}"
                 if feedback is not None and st.session_state.get(processed_key) != feedback:
-                    danh_gia = 1 if feedback == "Thích" else -1
+                    danh_gia = 1 if feedback == "like" else -1
                     update_chat_feedback(msg["chat_id"], danh_gia, voter_username=st.session_state.get("username"))
                     st.session_state[processed_key] = feedback
  
@@ -452,7 +460,7 @@ def run_chat():
     allowed_types = [ext.lstrip(".") for ext in IMAGE_QUESTION_EXTENSIONS]
 
     uploaded_files = st.file_uploader(
-        "Tải file lên nếu cần",
+        t("Tải file lên nếu cần"),
         type=allowed_types,
         accept_multiple_files=True,
         key="chat_file_uploader"
@@ -461,10 +469,10 @@ def run_chat():
     if uploaded_files is None:
         uploaded_files = []
 
-    prompt_input = st.chat_input("Nhập câu hỏi cần tra cứu (tài liệu, quy trình, chính sách...)")
+    prompt_input = st.chat_input(t("Nhập câu hỏi cần tra cứu (tài liệu, quy trình, chính sách...)"))
 
     if prompt_input:
-        prompt = prompt_input if prompt_input else "Vui lòng phân tích hình ảnh này."
+        prompt = prompt_input if prompt_input else t("Vui lòng phân tích hình ảnh này.")
         
         # Server-side validation: chặn nếu viewer upload file ko phải là ảnh (vd họ bypass client-side file picker)
         if uploaded_files and not can_upload:
@@ -481,7 +489,7 @@ def run_chat():
                 })
                 st.session_state.chat_history.append({
                     "role": "assistant",
-                    "content": " **Từ chối quyền truy cập:** Bạn hiện chỉ có quyền xem (viewer). Bạn không được phép upload file tài liệu (PDF, Word, Excel) vào hệ thống. Bạn chỉ được phép gửi **hình ảnh** (.jpg, .png, .webp) để hỏi Chatbot. Vui lòng thử lại!"
+                    "content": t(" **Từ chối quyền truy cập:** Bạn hiện chỉ có quyền xem (viewer). Bạn không được phép upload file tài liệu (PDF, Word, Excel) vào hệ thống. Bạn chỉ được phép gửi **hình ảnh** (.jpg, .png, .webp) để hỏi Chatbot. Vui lòng thử lại!")
                 })
                 st.rerun()
 
@@ -609,11 +617,12 @@ def run_chat():
  
             # Goi ham RAG tu file rag_logic.py
             with st.chat_message("assistant"):
-                with st.spinner("Đang tìm kiếm trong tài liệu..."):
+                with st.spinner(t("Đang tìm kiếm trong tài liệu...")):
                     # Truyen lich su (Windowing) va State Memory vao loi RAG
                     history_for_rag = st.session_state.chat_history[:-1]
  
                     # 1. THUC HIEN RAG (Co RBAC)
+                    _rag_error = None
                     try:
                         stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag_dispatch(
                             user_question=prompt,
@@ -624,17 +633,28 @@ def run_chat():
                             user_roles=current_user["roles"],
                             allowed_departments=current_user.get("allowed_departments", []),
                             max_security_level=current_user.get("max_security_level", "internal"),
-                            allowed_sites=current_user.get("allowed_sites", [])
+                            allowed_sites=current_user.get("allowed_sites", []),
+                            response_language=get_lang(),
                         )
-     
                         # Cap nhat State Memory moi
                         st.session_state.current_part_ids = new_part_ids
+                    except (RuntimeError, Exception) as _e:
+                        _rag_error = _e
                     finally:
                         if temp_img_path and os.path.exists(temp_img_path):
                             try:
                                 os.remove(temp_img_path)
                             except Exception:
                                 pass
+
+                    if _rag_error is not None:
+                        _err_display = t(str(_rag_error)) if str(_rag_error) else t("Hệ thống gặp lỗi không xác định. Vui lòng thử lại.")
+                        st.error("⚠️ " + _err_display)
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": "⚠️ " + _err_display,
+                        })
+                        return
  
                     raw_chunks = []
  
@@ -650,7 +670,7 @@ def run_chat():
                         except Exception as e:
                             from mech_chatbot.config.logging import logger
                             logger.error(f"Loi streaming response: {e}", exc_info=True)
-                            yield "\n\nXin lỗi, hệ thống gặp lỗi khi sinh câu trả lời. Vui lòng thử lại."
+                            yield t("\n\nXin lỗi, hệ thống gặp lỗi khi sinh câu trả lời. Vui lòng thử lại.")
  
                     st.write_stream(generate_response)
  
@@ -660,7 +680,7 @@ def run_chat():
                         raw_response += ref_text
  
                     if ref_images:
-                        st.markdown("**Hình ảnh căn cứ:**")
+                        st.markdown("**" + t("Hình ảnh căn cứ:") + "**")
                         for i in range(0, len(ref_images), 3):
                             cols = st.columns(3)
                             for j in range(3):
@@ -739,10 +759,10 @@ def run_chat():
             # khong ve o day thi cau tra loi vua xong se thieu nut like/dislike.
             if chat_id:
                 fb_key = f"fb_{chat_id}"
-                feedback = st.radio("Đánh giá:", ["Thích", "Không thích"], index=None, horizontal=True, key=fb_key, label_visibility="collapsed")
+                feedback = st.radio(t("Đánh giá:"), ["like", "dislike"], index=None, horizontal=True, key=fb_key, format_func=lambda v: t("Thích") if v == "like" else t("Không thích"), label_visibility="collapsed")
                 processed_key = f"processed_{fb_key}"
                 if feedback is not None and st.session_state.get(processed_key) != feedback:
-                    danh_gia = 1 if feedback == "Thích" else -1
+                    danh_gia = 1 if feedback == "like" else -1
                     update_chat_feedback(chat_id, danh_gia, voter_username=st.session_state.get("username"))
                     st.session_state[processed_key] = feedback
 
@@ -812,12 +832,12 @@ def _render_answer_sources(debug_info):
 
     import os as _os
     sid = st.session_state.get("session_id", "s")
-    with st.expander("Nguồn trích dẫn (%d)" % len(sources)):
+    with st.expander(t("Nguồn trích dẫn ({n})", n=len(sources))):
         for d in sorted(sources, key=lambda x: (x.get("score") or 0), reverse=True):
             doc_id = d.get("doc_id")
             m = meta.get(doc_id, {})
-            ten_file = m.get("ten_file") or d.get("file_goc") or "(không rõ)"
-            phong_ban = m.get("thu_muc") or "(không rõ)"
+            ten_file = m.get("ten_file") or d.get("file_goc") or t("(không rõ)")
+            phong_ban = m.get("thu_muc") or t("(không rõ)")
             sec_level = m.get("security_level") or d.get("security_level") or "internal"
             trang = d.get("trang")
             score = d.get("score")
@@ -830,12 +850,12 @@ def _render_answer_sources(debug_info):
                     score_txt = "%.2f" % float(score)
             except Exception:
                 score_txt = "—"
-            trang_txt = ("trang %s" % trang) if trang not in (None, "") else "—"
-            st.markdown("- **%s** · %s · %s · độ liên quan: %s" % (ten_file, phong_ban, trang_txt, score_txt))
+            trang_txt = t("trang {p}", p=trang) if trang not in (None, "") else "—"
+            st.markdown("- **%s** · %s · %s · %s: %s" % (ten_file, phong_ban, trang_txt, t("độ liên quan"), score_txt))
 
             # RBAC: chi cho tai file goc khi muc mat user >= muc mat tai lieu
             if _LEVEL_ORDER.get(sec_level, 1) > user_level:
-                st.caption("🔒 Bạn không đủ quyền tải file gốc của nguồn này.")
+                st.caption("🔒 " + t("Bạn không đủ quyền tải file gốc của nguồn này."))
                 continue
             file_path = m.get("file_path")
             if not file_path or doc_id is None:
@@ -845,7 +865,7 @@ def _render_answer_sources(debug_info):
                 from mech_chatbot.ui.pages.documents import _resolve_original_path
                 real, msg = _resolve_original_path(file_path)
             except Exception:
-                real, msg = None, "Không đọc được file gốc."
+                real, msg = None, t("Không đọc được file gốc.")
             if real is None:
                 st.caption("📎 %s" % msg)
                 continue
@@ -853,10 +873,10 @@ def _render_answer_sources(debug_info):
                 with open(real, "rb") as f:
                     data = f.read()
             except Exception:
-                st.caption("📎 Không đọc được file gốc.")
+                st.caption("📎 " + t("Không đọc được file gốc."))
                 continue
             clicked = st.download_button(
-                "⬇️ Tải file gốc",
+                "⬇️ " + t("Tải file gốc"),
                 data=data,
                 file_name=_os.path.basename(real),
                 key="chat_src_dl_%s_%s" % (sid, doc_id),

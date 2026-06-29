@@ -35,6 +35,7 @@ def main():
             allowed_departments=payload.get("allowed_departments") or [],
             max_security_level=payload.get("max_security_level") or "internal",
             allowed_sites=payload.get("allowed_sites") or [],
+            response_language=payload.get("response_language") or "vi",
         )
 
         if len(rag_result) >= 4:

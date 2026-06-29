@@ -1295,6 +1295,40 @@ def create_ingestion_job(file_name, file_path, thu_muc, uploaded_by=None,
     """
     import json as _json
     _ensure_engine()
+
+    # P0.2 / P4.1: Server-side guard — block phong ban disabled HOAC archived.
+    # Phan biet ro "bang chua co" (legacy OK) vs "DB loi thuc su" (nen block).
+    # Check Status truoc (mo hinh moi), fallback IsActive (mo hinh cu).
+    try:
+        with engine.connect() as _chk:
+            _dept_row = _chk.execute(
+                text("SELECT IsActive, Status FROM dbo.Departments WHERE DeptCode = :c"),
+                {"c": thu_muc},
+            ).fetchone()
+            if _dept_row is not None:
+                _is_active, _status = _dept_row[0], (_dept_row[1] or 'active')
+                # Uu tien Status (mo hinh moi P2); fallback IsActive neu Status NULL
+                _blocked = (
+                    _status.lower() in ('disabled', 'archived')
+                    or (not _is_active and _status.lower() not in ('active',))
+                )
+                if _blocked:
+                    logger.warning(
+                        f"[P4.1] Blocked create_ingestion_job: phong ban '{thu_muc}'"
+                        f" Status='{_status}' IsActive={_is_active}."
+                        f" file='{file_name}' uploaded_by='{uploaded_by}'"
+                    )
+                    return None
+    except Exception as _chk_err:
+        import sqlalchemy.exc as _sa_exc
+        if isinstance(_chk_err, (_sa_exc.ProgrammingError, _sa_exc.OperationalError)):
+            # Bang Departments chua ton tai (DB legacy) -> fallback an toan, cho qua
+            logger.debug(f"[P4.1] Bang Departments chua co, bo qua check cho '{thu_muc}'")
+        else:
+            # Loi DB thuc su -> block de tranh tao job vao phong loi
+            logger.error(f"[P4.1] Loi DB khi kiem tra phong ban '{thu_muc}': {_chk_err}")
+            return None
+
     _upload_meta_json = (_json.dumps(upload_meta, ensure_ascii=False) if upload_meta else None)
     try:
         with engine.begin() as conn:
@@ -2032,17 +2066,94 @@ def _resolve_site(thu_muc):
         return "HQ"
 
 
-def list_known_departments(active_only=True):
-    """Danh muc phong ban (bang Departments). Tra ve list dict."""
+def _departments_support_status():
     _ensure_engine()
-    where = "WHERE IsActive = 1" if active_only else ""
     try:
         with engine.connect() as conn:
-            rows = conn.execute(text(
-                f"SELECT DeptCode, DeptName, Domain, Site, IsActive FROM dbo.Departments {where} ORDER BY DeptCode"
-            )).fetchall()
+            row = conn.execute(text("""
+                SELECT 1
+                FROM sys.columns
+                WHERE object_id = OBJECT_ID('dbo.Departments')
+                  AND name = 'Status'
+            """)).fetchone()
+            return bool(row)
+    except Exception:
+        return False
+
+
+def _normalize_department_status(status=None, is_active=True):
+    st = str(status or "").strip().lower()
+    if st in ("active", "disabled", "archived"):
+        return st
+    return "active" if is_active else "disabled"
+
+
+def _split_csv_tokens(value):
+    out = []
+    if value is None:
+        return out
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    for raw in values:
+        for part in str(raw).split(","):
+            p = part.strip()
+            if p and p not in out:
+                out.append(p)
+    return out
+
+
+def _replace_department_token_list(value, old_code, new_code=None):
+    old_code = str(old_code or "").strip()
+    new_code = str(new_code or "").strip() or None
+    out = []
+    for token in _split_csv_tokens(value):
+        if token == old_code:
+            if new_code and new_code not in out:
+                out.append(new_code)
+        elif token not in out:
+            out.append(token)
+    return ",".join(out) if out else None
+
+
+def list_known_departments(active_only=True):
+    """Danh muc phong ban (bang Departments). Tra ve list dict.
+
+    Backward compatible:
+    - DB cu: chi co IsActive -> map sang status active/disabled.
+    - DB moi: uu tien cot Status, nhung van giu IsActive de code cu tiep tuc chay.
+    """
+    _ensure_engine()
+    supports_status = _departments_support_status()
+    if supports_status:
+        where = "WHERE Status = 'active'" if active_only else ""
+        sql = f"""
+            SELECT DeptCode, DeptName, Domain, Site, IsActive, Status, DisabledAt, ArchivedAt
+            FROM dbo.Departments {where}
+            ORDER BY DeptCode
+        """
+    else:
+        where = "WHERE IsActive = 1" if active_only else ""
+        sql = f"""
+            SELECT DeptCode, DeptName, Domain, Site, IsActive,
+                   CASE WHEN IsActive = 1 THEN 'active' ELSE 'disabled' END AS Status,
+                   CAST(NULL AS DATETIME) AS DisabledAt,
+                   CAST(NULL AS DATETIME) AS ArchivedAt
+            FROM dbo.Departments {where}
+            ORDER BY DeptCode
+        """
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(sql)).fetchall()
         return [
-            {"code": r[0], "name": r[1], "domain": r[2], "site": r[3], "is_active": bool(r[4])}
+            {
+                "code": r[0],
+                "name": r[1],
+                "domain": r[2],
+                "site": r[3],
+                "is_active": (str(r[5]).lower() == "active") if r[5] is not None else bool(r[4]),
+                "status": (str(r[5]).lower() if r[5] else ("active" if r[4] else "disabled")),
+                "disabled_at": r[6],
+                "archived_at": r[7],
+            }
             for r in rows
         ]
     except Exception as e:
@@ -2050,24 +2161,265 @@ def list_known_departments(active_only=True):
         return []
 
 
-def upsert_department(code, name=None, domain=None, site=None, is_active=True):
-    """Them moi hoac cap nhat 1 phong ban (idempotent theo DeptCode)."""
+def upsert_department(code, name=None, domain=None, site=None, is_active=True, status=None):
+    """Them moi hoac cap nhat 1 phong ban (idempotent theo DeptCode).
+
+    status uu tien hon is_active. Luon dong bo ca Status va IsActive de backward-compatible.
+    """
     _ensure_engine()
     if not code:
         return False
+    resolved_status = _normalize_department_status(status=status, is_active=is_active)
+    resolved_is_active = 1 if resolved_status == "active" else 0
+    supports_status = _departments_support_status()
     try:
         with engine.begin() as conn:
-            conn.execute(text("""
-                MERGE dbo.Departments AS tgt
-                USING (SELECT :c AS DeptCode) AS src ON tgt.DeptCode = src.DeptCode
-                WHEN MATCHED THEN UPDATE SET DeptName = :n, Domain = :d, Site = :s, IsActive = :a
-                WHEN NOT MATCHED THEN INSERT (DeptCode, DeptName, Domain, Site, IsActive)
-                    VALUES (:c, :n, :d, :s, :a);
-            """), {"c": code, "n": name, "d": domain, "s": site, "a": 1 if is_active else 0})
+            if supports_status:
+                conn.execute(text("""
+                    MERGE dbo.Departments AS tgt
+                    USING (SELECT :c AS DeptCode) AS src ON tgt.DeptCode = src.DeptCode
+                    WHEN MATCHED THEN UPDATE SET
+                        DeptName = :n,
+                        Domain = :d,
+                        Site = :site,
+                        IsActive = :a,
+                        Status = :st,
+                        DisabledAt = CASE
+                            WHEN :st = 'disabled' AND (tgt.Status IS NULL OR tgt.Status <> 'disabled') THEN GETDATE()
+                            WHEN :st <> 'disabled' THEN NULL
+                            ELSE tgt.DisabledAt
+                        END,
+                        ArchivedAt = CASE
+                            WHEN :st = 'archived' AND (tgt.Status IS NULL OR tgt.Status <> 'archived') THEN GETDATE()
+                            WHEN :st <> 'archived' THEN NULL
+                            ELSE tgt.ArchivedAt
+                        END
+                    WHEN NOT MATCHED THEN INSERT (DeptCode, DeptName, Domain, Site, IsActive, Status, DisabledAt, ArchivedAt)
+                        VALUES (
+                            :c, :n, :d, :site, :a, :st,
+                            CASE WHEN :st = 'disabled' THEN GETDATE() ELSE NULL END,
+                            CASE WHEN :st = 'archived' THEN GETDATE() ELSE NULL END
+                        );
+                """), {"c": code, "n": name, "d": domain, "site": site, "a": resolved_is_active, "st": resolved_status})
+            else:
+                conn.execute(text("""
+                    MERGE dbo.Departments AS tgt
+                    USING (SELECT :c AS DeptCode) AS src ON tgt.DeptCode = src.DeptCode
+                    WHEN MATCHED THEN UPDATE SET DeptName = :n, Domain = :d, Site = :site, IsActive = :a
+                    WHEN NOT MATCHED THEN INSERT (DeptCode, DeptName, Domain, Site, IsActive)
+                        VALUES (:c, :n, :d, :site, :a);
+                """), {"c": code, "n": name, "d": domain, "site": site, "a": resolved_is_active})
         return True
     except Exception as e:
         logger.error(f"upsert_department loi: {e}", exc_info=True)
         return False
+
+
+def get_department_summary(code):
+    """Thong ke nhanh 1 phong ban phuc vu disable/archive/reassign UI."""
+    _ensure_engine()
+    if not code:
+        return None
+    supports_status = _departments_support_status()
+    try:
+        with engine.connect() as conn:
+            if supports_status:
+                dept = conn.execute(text("""
+                    SELECT DeptCode, DeptName, Domain, Site, IsActive, Status, DisabledAt, ArchivedAt
+                    FROM dbo.Departments WHERE DeptCode = :c
+                """), {"c": code}).fetchone()
+            else:
+                dept = conn.execute(text("""
+                    SELECT DeptCode, DeptName, Domain, Site, IsActive,
+                           CASE WHEN IsActive = 1 THEN 'active' ELSE 'disabled' END AS Status,
+                           CAST(NULL AS DATETIME) AS DisabledAt,
+                           CAST(NULL AS DATETIME) AS ArchivedAt
+                    FROM dbo.Departments WHERE DeptCode = :c
+                """), {"c": code}).fetchone()
+            if not dept:
+                return None
+            users = conn.execute(text("SELECT COUNT(*) FROM dbo.UserDepartments WHERE Department = :c"), {"c": code}).fetchone()
+            jobs = conn.execute(text("""
+                SELECT COUNT(*) FROM dbo.IngestionJobs
+                WHERE ThuMuc = :c
+                  AND Status IN ('pending', 'pending_retry', 'pending_review', 'extracting', 'embedding', 'classifying', 'publishing')
+            """), {"c": code}).fetchone()
+            docs = conn.execute(text("SELECT COUNT(*) FROM dbo.TaiLieu WHERE ThuMuc = :c AND LifecycleStatus <> 'deleting'"), {"c": code}).fetchone()
+            shared_docs = conn.execute(text("""
+                SELECT COUNT(*) FROM dbo.TaiLieu
+                WHERE ThuMuc <> :c AND LifecycleStatus <> 'deleting' AND PhongBan IS NOT NULL AND ',' + PhongBan + ',' LIKE :lk
+            """), {"c": code, "lk": f"%,{code},%"}).fetchone()
+        return {
+            "code": dept[0],
+            "name": dept[1],
+            "domain": dept[2],
+            "site": dept[3],
+            "is_active": (str(dept[5]).lower() == "active") if dept[5] is not None else bool(dept[4]),
+            "status": (str(dept[5]).lower() if dept[5] else ("active" if dept[4] else "disabled")),
+            "disabled_at": dept[6],
+            "archived_at": dept[7],
+            "users": int(users[0] or 0),
+            "pending_jobs": int(jobs[0] or 0),
+            "docs": int(docs[0] or 0),
+            "shared_docs": int(shared_docs[0] or 0),
+        }
+    except Exception as e:
+        logger.error(f"get_department_summary loi code={code}: {e}", exc_info=True)
+        return None
+
+
+def set_department_status(code, status, actor="System", force=False):
+    """Chuyen trang thai phong ban active/disabled/archived.
+
+    archived chi cho phep khi khong con user va job pending, tru khi force=True.
+    Phong ban da archived khong cho mo lai qua UI de tranh vo lifecycle.
+    """
+    summary = get_department_summary(code)
+    if not summary:
+        return {"ok": False, "message": f"Khong tim thay phong ban '{code}'."}
+    current_status = summary.get("status") or ("active" if summary.get("is_active") else "disabled")
+    target_status = _normalize_department_status(status=status, is_active=(status == "active"))
+    if current_status == "archived" and target_status != "archived":
+        return {"ok": False, "message": f"Phong ban '{code}' da archived va khong mo lai qua flow nay."}
+    if target_status == "archived" and not force:
+        if (summary.get("users") or 0) > 0 or (summary.get("pending_jobs") or 0) > 0:
+            return {
+                "ok": False,
+                "message": (
+                    f"Khong the archive phong '{code}' khi con {summary.get('users', 0)} user "
+                    f"va {summary.get('pending_jobs', 0)} job dang xu ly."
+                ),
+                "summary": summary,
+            }
+    ok = upsert_department(
+        code,
+        name=summary.get("name"),
+        domain=summary.get("domain"),
+        site=summary.get("site"),
+        status=target_status,
+        is_active=(target_status == "active"),
+    )
+    if ok:
+        write_audit_log(actor or "System", "department_status", "Departments", code, {
+            "from": current_status,
+            "to": target_status,
+            "force": bool(force),
+        })
+        return {"ok": True, "status": target_status, "summary": get_department_summary(code)}
+    return {"ok": False, "message": f"Cap nhat trang thai phong '{code}' that bai."}
+
+
+def archive_department(code, actor="System", force=False):
+    """Shortcut cho set_department_status(..., 'archived')."""
+    return set_department_status(code, "archived", actor=actor, force=force)
+
+
+def reassign_department_data(source_code, target_code, actor="System", move_users=True):
+    """Chuyen toan bo du lieu phong ban A -> B, sau do disable A.
+
+    Bao gom: TaiLieu.ThuMuc/PhongBan, IngestionJobs.ThuMuc/PhongBan,
+    UserDepartments (+ Users.Department de dong bo UI), va payload Qdrant.
+    """
+    _ensure_engine()
+    source_code = (source_code or "").strip()
+    target_code = (target_code or "").strip()
+    if not source_code or not target_code:
+        return {"ok": False, "message": "Source/target department la bat buoc."}
+    if source_code == target_code:
+        return {"ok": False, "message": "Khong the reassign cung 1 phong ban."}
+
+    src = get_department_summary(source_code)
+    tgt = get_department_summary(target_code)
+    if not src or not tgt:
+        return {"ok": False, "message": "Khong tim thay phong nguon hoac dich."}
+    if (tgt.get("status") or "active") != "active":
+        return {"ok": False, "message": f"Phong dich '{target_code}' phai o trang thai active."}
+    if (src.get("status") or "active") == "archived":
+        return {"ok": False, "message": f"Phong nguon '{source_code}' da archived, khong reassign qua flow nay."}
+
+    updated_doc_payloads = []
+    qdrant_failures = []
+    try:
+        with engine.begin() as conn:
+            # 1) TaiLieu
+            doc_rows = conn.execute(text("""
+                SELECT DocID, ThuMuc, PhongBan
+                FROM dbo.TaiLieu
+                WHERE ThuMuc = :src OR (PhongBan IS NOT NULL AND ',' + PhongBan + ',' LIKE :lk)
+            """), {"src": source_code, "lk": f"%,{source_code},%"}).fetchall()
+            for row in doc_rows:
+                doc_id, thu_muc, phong_ban = row[0], row[1], row[2]
+                new_thu_muc = target_code if thu_muc == source_code else thu_muc
+                new_phong_ban = _replace_department_token_list(phong_ban, source_code, target_code)
+                if not new_phong_ban and new_thu_muc:
+                    new_phong_ban = new_thu_muc
+                conn.execute(text("UPDATE dbo.TaiLieu SET ThuMuc = :t, PhongBan = :pb WHERE DocID = :id"),
+                             {"t": new_thu_muc, "pb": new_phong_ban, "id": doc_id})
+                updated_doc_payloads.append((doc_id, _split_csv_tokens(new_phong_ban or new_thu_muc)))
+
+            # 2) IngestionJobs
+            job_rows = conn.execute(text("""
+                SELECT JobID, ThuMuc, PhongBan
+                FROM dbo.IngestionJobs
+                WHERE ThuMuc = :src OR (PhongBan IS NOT NULL AND ',' + PhongBan + ',' LIKE :lk)
+            """), {"src": source_code, "lk": f"%,{source_code},%"}).fetchall()
+            for row in job_rows:
+                job_id, thu_muc, phong_ban = row[0], row[1], row[2]
+                new_thu_muc = target_code if thu_muc == source_code else thu_muc
+                new_phong_ban = _replace_department_token_list(phong_ban, source_code, target_code)
+                if not new_phong_ban and new_thu_muc:
+                    new_phong_ban = new_thu_muc
+                conn.execute(text("UPDATE dbo.IngestionJobs SET ThuMuc = :t, PhongBan = :pb WHERE JobID = :id"),
+                             {"t": new_thu_muc, "pb": new_phong_ban, "id": job_id})
+
+            # 3) RBAC users
+            moved_users = 0
+            if move_users:
+                user_rows = conn.execute(text("SELECT DISTINCT UserID FROM dbo.UserDepartments WHERE Department = :src"),
+                                         {"src": source_code}).fetchall()
+                user_ids = [r[0] for r in user_rows]
+                conn.execute(text("DELETE FROM dbo.UserDepartments WHERE Department = :src"), {"src": source_code})
+                for uid in user_ids:
+                    exists = conn.execute(text("SELECT 1 FROM dbo.UserDepartments WHERE UserID = :uid AND Department = :dst"),
+                                          {"uid": uid, "dst": target_code}).fetchone()
+                    if not exists:
+                        conn.execute(text("INSERT INTO dbo.UserDepartments (UserID, Department) VALUES (:uid, :dst)"),
+                                     {"uid": uid, "dst": target_code})
+                conn.execute(text("UPDATE dbo.Users SET Department = :dst WHERE Department = :src"),
+                             {"dst": target_code, "src": source_code})
+                moved_users = len(user_ids)
+            else:
+                moved_users = 0
+
+        # 4) Qdrant payload (ngoai transaction SQL)
+        for doc_id, phong_ban_quyen in updated_doc_payloads:
+            ok_meta = update_qdrant_metadata(doc_id, {
+                "phong_ban_quyen": phong_ban_quyen,
+                "department": (phong_ban_quyen[0] if phong_ban_quyen else target_code),
+            })
+            if not ok_meta:
+                qdrant_failures.append(doc_id)
+
+        # 5) Disable phong nguon sau khi move
+        status_res = set_department_status(source_code, "disabled", actor=actor, force=True)
+        write_audit_log(actor or "System", "department_reassign", "Departments", source_code, {
+            "to": target_code,
+            "move_users": bool(move_users),
+            "docs": len(updated_doc_payloads),
+            "qdrant_failures": qdrant_failures,
+        })
+        return {
+            "ok": True,
+            "source": source_code,
+            "target": target_code,
+            "moved_docs": len(updated_doc_payloads),
+            "moved_users": moved_users,
+            "qdrant_failures": qdrant_failures,
+            "status_result": status_res,
+        }
+    except Exception as e:
+        logger.error(f"reassign_department_data loi {source_code}->{target_code}: {e}", exc_info=True)
+        return {"ok": False, "message": str(e)}
 
 
 def list_known_sites(active_only=True):
@@ -2247,12 +2599,33 @@ def dashboard_by_department():
         with engine.connect() as conn:
             doc_rows = conn.execute(text("""
                 SELECT ISNULL(ThuMuc, '(khong ro)') AS Dept,
-                       COUNT(*) AS Total,
+                       COUNT(*) AS OwnedTotal,
                        SUM(CASE WHEN ReviewStatus = 'pending_review' THEN 1 ELSE 0 END) AS Pending,
                        SUM(CASE WHEN ReviewStatus = 'approved' AND LifecycleStatus = 'published' THEN 1 ELSE 0 END) AS Published,
                        SUM(CASE WHEN SecurityLevel = 'confidential' THEN 1 ELSE 0 END) AS Confidential
-                FROM TaiLieu GROUP BY ThuMuc
+                FROM TaiLieu
+                WHERE LifecycleStatus <> 'deleting'
+                GROUP BY ThuMuc
             """)).fetchall()
+            # P4.4: STRING_SPLIT yeu cau SQL Server compat level >= 130.
+            # Wrap rieng de fallback an toan neu DB cu khong ho tro.
+            try:
+                shared_rows = conn.execute(text("""
+                    SELECT shared.Dept, COUNT(*) AS SharedAccess
+                    FROM (
+                        SELECT DISTINCT d.DocID, j.value AS Dept
+                        FROM dbo.TaiLieu d
+                        CROSS APPLY string_split(d.PhongBan, ',') j
+                        WHERE d.LifecycleStatus <> 'deleting'
+                          AND j.value IS NOT NULL
+                          AND LTRIM(RTRIM(j.value)) <> ''
+                          AND LTRIM(RTRIM(j.value)) <> ISNULL(d.ThuMuc, '')
+                    ) shared
+                    GROUP BY shared.Dept
+                """)).fetchall()
+            except Exception as _split_err:
+                logger.warning(f"[P4.4] STRING_SPLIT khong kha dung (SQL compat level?): {_split_err}. Bo qua shared_access.")
+                shared_rows = []
             job_rows = conn.execute(text("""
                 SELECT ISNULL(ThuMuc, '(khong ro)') AS Dept,
                        SUM(CASE WHEN Status IN ('failed','waiting_quota') THEN 1 ELSE 0 END) AS Failed,
@@ -2260,13 +2633,19 @@ def dashboard_by_department():
                 FROM dbo.IngestionJobs GROUP BY ThuMuc
             """)).fetchall()
         jobs = {r[0]: {"failed": int(r[1] or 0), "running": int(r[2] or 0)} for r in job_rows}
+        shared = {str(r[0]).strip(): int(r[1] or 0) for r in shared_rows}
         out = []
         for r in doc_rows:
             dept = r[0]
+            dept_key = str(dept).strip()
             j = jobs.get(dept, {"failed": 0, "running": 0})
+            owned_total = int(r[1] or 0)
+            shared_total = int(shared.get(dept_key, 0))
             out.append({
                 "department": dept,
-                "total": int(r[1] or 0),
+                "owned_total": owned_total,
+                "shared_access": shared_total,
+                "total": owned_total + shared_total,
                 "pending_review": int(r[2] or 0),
                 "published": int(r[3] or 0),
                 "confidential": int(r[4] or 0),
@@ -2292,6 +2671,7 @@ def count_docs_by_department():
             rows = conn.execute(text("""
                 SELECT ISNULL(ThuMuc, '(khong ro)') AS Dept, COUNT(*) AS Total
                 FROM TaiLieu
+                WHERE LifecycleStatus <> 'deleting'
                 GROUP BY ThuMuc
             """)).fetchall()
         return {r[0]: int(r[1] or 0) for r in rows}

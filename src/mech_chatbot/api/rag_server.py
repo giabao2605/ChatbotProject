@@ -96,6 +96,7 @@ class ChatRequest(BaseModel):
     allowed_departments: List[str] = Field(default_factory=list)
     max_security_level: Optional[str] = "internal"
     allowed_sites: List[str] = Field(default_factory=list)
+    response_language: Optional[str] = "vi"
 
 
 class ChatResponse(BaseModel):
@@ -139,9 +140,14 @@ async def chat_endpoint(req: ChatRequest):
     Concurrency is limited by MAX_CONCURRENT_RAG semaphore.
     """
     if not _rag_ready:
+        _lang_pre = (getattr(req, "response_language", None) or "vi").lower()
         raise HTTPException(
             status_code=503,
-            detail="RAG system is not loaded yet. Please wait and retry.",
+            detail=(
+                "RAG system is not loaded yet. Please wait and retry."
+                if _lang_pre.startswith("en")
+                else "Hệ thống RAG chưa sẵn sàng. Vui lòng chờ và thử lại."
+            ),
         )
 
     # Try to acquire semaphore with timeout
@@ -150,11 +156,18 @@ async def chat_endpoint(req: ChatRequest):
             _rag_semaphore.acquire(), timeout=120.0
         )
     except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Hệ thống đang bận ({MAX_CONCURRENT_RAG} request đang xử lý). "
-                   "Vui lòng thử lại sau.",
-        )
+        _lang = (getattr(req, "response_language", None) or "vi").lower()
+        if _lang.startswith("en"):
+            _detail_503 = (
+                f"System is busy ({MAX_CONCURRENT_RAG} requests being processed). "
+                "Please retry in a moment."
+            )
+        else:
+            _detail_503 = (
+                f"Hệ thống đang bận ({MAX_CONCURRENT_RAG} request đang xử lý). "
+                "Vui lòng thử lại sau."
+            )
+        raise HTTPException(status_code=503, detail=_detail_503)
 
     t_start = time.time()
     try:
@@ -195,6 +208,7 @@ def _run_rag_sync(req: ChatRequest) -> ChatResponse:
         allowed_departments=req.allowed_departments,
         max_security_level=req.max_security_level,
         allowed_sites=req.allowed_sites,
+        response_language=req.response_language,
     )
 
     # Consume the stream to get the full response text
