@@ -67,6 +67,8 @@ def render_user_list():
             # --- P1.1/P1.2: chỉnh quyền RBAC cho user ---
             with st.form(f"rbac_{user_id}"):
                 st.markdown("**Phân quyền RBAC**")
+                cur_roles = get_user_roles(user_id)
+                new_roles = st.multiselect("Roles", ROLE_OPTIONS, default=[r for r in cur_roles if r in ROLE_OPTIONS], key=f"r_{user_id}")
                 # giữ lại các giá trị cũ dù chưa nằm trong danh mục
                 dept_opts = sorted(set(dept_codes) | set(cur_depts))
                 site_opts = sorted(set(site_codes) | set(cur_sites))
@@ -80,12 +82,47 @@ def render_user_list():
                     set_user_departments(user_id, new_depts)
                     set_user_sites(user_id, new_sites)
                     set_user_clearance(user_id, new_level)
+                    # P1.3: cap nhat roles theo RoleName (them/bot)
+                    add_roles = [r for r in new_roles if r not in cur_roles]
+                    del_roles = [r for r in cur_roles if r not in new_roles]
                     with engine.begin() as conn:
                         conn.execute(text("UPDATE Users SET IsActive = :active WHERE UserID = :uid"), {"active": 1 if new_active else 0, "uid": user_id})
+                        for _role in add_roles:
+                            conn.execute(text("""
+                                INSERT INTO UserRoles (UserID, RoleID)
+                                SELECT :uid, r.RoleID FROM Roles r
+                                WHERE r.RoleName = :role
+                                  AND NOT EXISTS (
+                                      SELECT 1 FROM UserRoles ur WHERE ur.UserID = :uid AND ur.RoleID = r.RoleID
+                                  )
+                            """), {"uid": user_id, "role": _role})
+                        for _role in del_roles:
+                            conn.execute(text("""
+                                DELETE ur FROM UserRoles ur
+                                JOIN Roles r ON ur.RoleID = r.RoleID
+                                WHERE ur.UserID = :uid AND r.RoleName = :role
+                            """), {"uid": user_id, "role": _role})
                     st.success("Đã cập nhật quyền.")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Lỗi cập nhật: {e}")
+
+            # P1.3: dat lai mat khau cho user
+            with st.form(f"pwd_{user_id}"):
+                st.markdown("**Đặt lại mật khẩu**")
+                new_pw = st.text_input("Mật khẩu mới", type="password", key=f"pw_{user_id}")
+                pw_saved = st.form_submit_button("Đặt lại mật khẩu")
+            if pw_saved:
+                if not new_pw or len(new_pw) < 6:
+                    st.error("Mật khẩu phải có ít nhất 6 ký tự.")
+                else:
+                    try:
+                        ph = bcrypt.hashpw(new_pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+                        with engine.begin() as conn:
+                            conn.execute(text("UPDATE Users SET PasswordHash = :p WHERE UserID = :uid"), {"p": ph, "uid": user_id})
+                        st.success("Đã đặt lại mật khẩu.")
+                    except Exception as e:
+                        st.error(f"Lỗi đặt lại mật khẩu: {e}")
 
 
 def render_create_user():

@@ -261,8 +261,8 @@ def run_chat():
     # 3. SIDEBAR - CONG CU PHU TRO
     # ==========================================
     with st.sidebar:
-        st.header("Tro Ly Tai Lieu Noi Bo")
-        st.caption("Tra cuu tai lieu noi bo thong minh")
+        st.header("Trợ lý Tài liệu Nội bộ")
+        st.caption("Tra cứu tài liệu nội bộ thông minh")
  
         # CSS Canh le trai cho toan bo nut trong sidebar de trong giong ChatGPT
         st.markdown("""
@@ -286,21 +286,21 @@ def run_chat():
         """, unsafe_allow_html=True)
  
         # Nut Cuoc tro chuyen moi
-        if st.button("Cuoc tro chuyen moi", use_container_width=True, type="primary"):
+        if st.button("Cuộc trò chuyện mới", use_container_width=True, type="primary"):
             st.session_state.session_id = str(uuid.uuid4())
             st.session_state.chat_history = []
             st.session_state.current_part_ids = []
             st.rerun()
 
         if st.session_state.current_part_ids:
-            if st.button("Xoa ngu canh ma hien tai", use_container_width=True):
+            if st.button("Xóa ngữ cảnh hiện tại", use_container_width=True):
                 st.session_state.current_part_ids = []
                 st.rerun()
  
         st.markdown("<br>", unsafe_allow_html=True)
  
         # O tim kiem lich su chat
-        search_query = st.text_input("Tim kiem lich su", "")
+        search_query = st.text_input("Tìm kiếm lịch sử", "")
  
         # Danh sach cac phien chat cu
         sessions = get_all_sessions(username=current_user["username"], is_admin=is_admin)
@@ -312,15 +312,15 @@ def run_chat():
         # Phan nhom theo ngay
         today = date.today()
         yesterday = today - timedelta(days=1)
-        grouped_sessions = {"Hom nay": [], "Hom qua": [], "Cu hon": []}
+        grouped_sessions = {"Hôm nay": [], "Hôm qua": [], "Cũ hơn": []}
         for s in sessions:
             s_date = s['thoi_gian'].date()
             if s_date == today:
-                grouped_sessions["Hom nay"].append(s)
+                grouped_sessions["Hôm nay"].append(s)
             elif s_date == yesterday:
-                grouped_sessions["Hom qua"].append(s)
+                grouped_sessions["Hôm qua"].append(s)
             else:
-                grouped_sessions["Cu hon"].append(s)
+                grouped_sessions["Cũ hơn"].append(s)
  
         for group_name, group_sessions in grouped_sessions.items():
             if not group_sessions:
@@ -338,7 +338,7 @@ def run_chat():
                         st.session_state.chat_history = get_chat_history(s['session_id'], username=current_user["username"], is_admin=is_admin)
                         st.rerun()
                 with col2:
-                    if st.button("X", key=f"btn_del_{s['session_id']}", help="Xoa", use_container_width=True):
+                    if st.button("X", key=f"btn_del_{s['session_id']}", help="Xóa cuộc trò chuyện", use_container_width=True):
                         clear_chat_history(s['session_id'], username=current_user["username"], is_admin=is_admin)
                         if is_current:
                             st.session_state.session_id = str(uuid.uuid4())
@@ -348,16 +348,16 @@ def run_chat():
  
         st.markdown("---")
         st.markdown(
-            "<small><b>Luu y:</b> Bot chi tra loi dua tren du lieu ban ve "
-            "da duoc nap vao he thong.</small>",
+            "<small><b>Lưu ý:</b> Bot chỉ trả lời dựa trên tài liệu "
+            "đã được nạp vào hệ thống.</small>",
             unsafe_allow_html=True
         )
  
     # ==========================================
     # 4. GIAO DIEN CHAT CHINH
     # ==========================================
-    st.markdown("<h2 style='text-align: center; margin-bottom: 0;'>Tro Ly Tai Lieu Noi Bo</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: gray; margin-bottom: 2rem;'>Hoi bat ky cau hoi nao ve tai lieu, quy trinh, chinh sach hay du lieu cua cac phong ban...</p>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; margin-bottom: 0;'>Trợ lý Tài liệu Nội bộ</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: gray; margin-bottom: 2rem;'>Hỏi bất kỳ câu hỏi nào về tài liệu, quy trình, chính sách hay dữ liệu của các phòng ban...</p>", unsafe_allow_html=True)
  
     # CSS Customization cho Main Chat
     st.markdown("""
@@ -424,7 +424,7 @@ def run_chat():
                     st.image(img, width=300)
             # Hien thi ban ve can cu (neu co)
             if msg.get("ref_images"):
-                st.markdown("**Ban ve can cu:**")
+                st.markdown("**Hình ảnh căn cứ:**")
                 ref_images = msg["ref_images"]
                 for i in range(0, len(ref_images), 3):
                     cols = st.columns(3)
@@ -461,10 +461,10 @@ def run_chat():
     if uploaded_files is None:
         uploaded_files = []
 
-    prompt_input = st.chat_input("Nhap cau hoi ky thuat can tra cuu...")
+    prompt_input = st.chat_input("Nhập câu hỏi cần tra cứu (tài liệu, quy trình, chính sách...)")
 
     if prompt_input:
-        prompt = prompt_input if prompt_input else "Vui long phan tich hinh anh nay."
+        prompt = prompt_input if prompt_input else "Vui lòng phân tích hình ảnh này."
         
         # Server-side validation: chặn nếu viewer upload file ko phải là ảnh (vd họ bypass client-side file picker)
         if uploaded_files and not can_upload:
@@ -609,7 +609,7 @@ def run_chat():
  
             # Goi ham RAG tu file rag_logic.py
             with st.chat_message("assistant"):
-                with st.spinner("Dang tim kiem trong tai lieu ky thuat..."):
+                with st.spinner("Đang tìm kiếm trong tài liệu..."):
                     # Truyen lich su (Windowing) va State Memory vao loi RAG
                     history_for_rag = st.session_state.chat_history[:-1]
  
@@ -650,7 +650,7 @@ def run_chat():
                         except Exception as e:
                             from mech_chatbot.config.logging import logger
                             logger.error(f"Loi streaming response: {e}", exc_info=True)
-                            yield "\n\nXin loi, he thong gap loi khi sinh cau tra loi. Vui long thu lai."
+                            yield "\n\nXin lỗi, hệ thống gặp lỗi khi sinh câu trả lời. Vui lòng thử lại."
  
                     st.write_stream(generate_response)
  
@@ -660,7 +660,7 @@ def run_chat():
                         raw_response += ref_text
  
                     if ref_images:
-                        st.markdown("**Ban ve can cu:**")
+                        st.markdown("**Hình ảnh căn cứ:**")
                         for i in range(0, len(ref_images), 3):
                             cols = st.columns(3)
                             for j in range(3):

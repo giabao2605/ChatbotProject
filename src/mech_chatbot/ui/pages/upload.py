@@ -4,6 +4,7 @@ import time
 import streamlit as st
 from mech_chatbot.auth import service as auth
 from mech_chatbot.db.repository import create_ingestion_job
+from mech_chatbot.ui import metadata_forms
 
 SUPPORTED_LEARNING_EXTENSIONS = {
     ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".txt", ".md",
@@ -141,6 +142,12 @@ def run_upload():
             accept_multiple_files=True,
         )
 
+        # P0: metadata tong quat + truong rieng theo domain (nhap luc upload)
+        with st.expander("Thông tin tài liệu (metadata) — nên nhập để tìm kiếm/lọc tốt hơn", expanded=False):
+            st.caption("Không bắt buộc, nhưng nhập sẵn giúp chatbot & người dùng lọc theo ngày hiệu lực, số văn bản... thay vì phụ thuộc hoàn toàn vào AI. Metadata này áp dụng cho TẤT CẢ file trong lần tải này.")
+            _meta_common, _meta_attrs = metadata_forms.render_metadata_section(chosen_domain, prefix="upload_meta")
+        upload_meta = metadata_forms.build_upload_meta(_meta_common, _meta_attrs)
+
         # Bat buoc: phai co phong ban VA co file moi cho submit.
         can_submit = bool(target_department) and bool(uploaded_files)
         submitted = st.button(
@@ -159,11 +166,12 @@ def run_upload():
             domain=chosen_domain, security_level=chosen_security,
             site=chosen_site,
             extra_departments=extra_departments,
+            upload_meta=upload_meta,
         )
 
 
 def save_uploaded_files(uploaded_files, target_department, current_user,
-                        domain=None, security_level=None, cong_doan=None, site=None, extra_departments=None):
+                        domain=None, security_level=None, cong_doan=None, site=None, extra_departments=None, upload_meta=None):
     success_count = 0
     fail_count = 0
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
@@ -191,6 +199,7 @@ def save_uploaded_files(uploaded_files, target_department, current_user,
                     domain=domain, security_level=security_level,
                     cong_doan=cong_doan, site=site,
                     phong_ban=[dept_folder] + [safe_folder_name(d) for d in (extra_departments or [])],
+                    upload_meta=upload_meta,
                 )
                 if job_id:
                     success_count += 1

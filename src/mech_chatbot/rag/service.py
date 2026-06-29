@@ -256,6 +256,52 @@ def build_structured_attributes_context(docs):
         logger.warning(f"Khong lay duoc structured attributes: {e}")
         return ""
  
+def build_common_metadata_context(docs):
+    """P1.2: bo sung metadata tong quat (Tieu de/So van ban/Trang thai hieu luc/
+    ngay hieu luc...) tu SQL vao context. Giup chatbot tra loi co nhan dien tai lieu
+    va canh bao khi tai lieu het hieu luc / da bi thay the.
+    """
+    try:
+        from mech_chatbot.db.repository import get_common_metadata_for_rag
+        from datetime import date, datetime
+        _nl = chr(10)
+        doc_ids = [d.metadata.get("doc_id") for d in docs if d is not None and d.metadata.get("doc_id") is not None]
+        meta_map = get_common_metadata_for_rag(doc_ids)
+        if not meta_map:
+            return ""
+        blocks = []
+        for did, m in meta_map.items():
+            parts = []
+            if m.get("title"): parts.append(f"Tieu de: {m[chr(39)+chr(116)+chr(105)+chr(116)+chr(108)+chr(101)+chr(39)]}")
+            if m.get("doc_number"): parts.append("So van ban: " + str(m.get("doc_number")))
+            if m.get("effective_status"): parts.append("Trang thai hieu luc: " + str(m.get("effective_status")))
+            if m.get("effective_date"): parts.append("Ngay hieu luc: " + str(m.get("effective_date")))
+            if m.get("expiry_date"): parts.append("Ngay het hieu luc: " + str(m.get("expiry_date")))
+            if m.get("owner_signer"): parts.append("Nguoi ky/phu trach: " + str(m.get("owner_signer")))
+            if m.get("tags"): parts.append("Tu khoa: " + str(m.get("tags")))
+            if m.get("summary"): parts.append("Tom tat: " + str(m.get("summary")))
+            warn = ""
+            st_val = (m.get("effective_status") or "").lower()
+            if st_val in ("expired", "superseded"):
+                warn = " [CANH BAO: tai lieu co trang thai " + st_val + " - co the KHONG con hieu luc, can luu y nguoi dung]"
+            elif m.get("expiry_date"):
+                try:
+                    exp = datetime.strptime(str(m.get("expiry_date"))[:10], "%Y-%m-%d").date()
+                    if exp < date.today():
+                        warn = " [CANH BAO: tai lieu da qua ngay het hieu luc " + str(m.get("expiry_date")) + "]"
+                except Exception:
+                    pass
+            if parts:
+                blocks.append("[METADATA TAI LIEU - DocID " + str(did) + "]" + warn + _nl + _nl.join(parts))
+        if not blocks:
+            return ""
+        header = "[THONG TIN TONG QUAT TAI LIEU (tu CSDL - uu tien khi tra loi ve phong ban/hieu luc)]"
+        return header + _nl + (_nl + _nl).join(blocks)
+    except Exception as e:
+        logger.warning("Khong lay duoc common metadata context: " + str(e))
+        return ""
+
+
 def format_docs(docs):
     """Format documents kem thong tin nguon ro rang de LLM co the trich dan va so sanh."""
     formatted_texts = []
@@ -1219,7 +1265,13 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                         retrieved_docs = strict_docs
             else:
                 # Tim kiem chung neu khong co ma
-                base_k = 30
+                try:
+                    from mech_chatbot.db.repository import get_app_setting_int
+                    base_k = get_app_setting_int("rag_general_top_k", 30)
+                except Exception:
+                    base_k = 30
+                if not base_k or base_k < 1:
+                    base_k = 30
                 retrieval_mode = "general"
                 logger.info(f"Khong co ma cu tinh, dang tim kiem tren toan bo Database (Pure Hybrid Search) k={base_k}...")
                 
@@ -1395,6 +1447,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     # BUOC C: SINH CAU TRA LOI (STREAMING)
     context_text = format_docs(retrieved_docs)
+    # P1.2: chen metadata tong quat (phong ban / hieu luc) tu CSDL
+    common_meta_context = build_common_metadata_context(retrieved_docs)
+    if common_meta_context:
+        context_text = common_meta_context + (chr(10) + chr(10)) + context_text
     structured_context = build_structured_attributes_context(retrieved_docs)
     if structured_context:
         context_text = structured_context + "\n\n" + context_text

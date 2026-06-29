@@ -787,7 +787,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 text = page.get_text("text")
 
                 # Render image truoc de kip phan tich
-                pix = page.get_pixmap(dpi=200)
+                pix = page.get_pixmap(dpi=int(os.getenv("PDF_RENDER_DPI", "300")))
                 safe_thu_muc = re.sub(r'[\\/*?:"<>|]', "", thu_muc) if thu_muc else ""
                 if safe_thu_muc:
                     img_name = f"{safe_thu_muc}_{base_name}_page{page_num+1}.png"
@@ -1245,8 +1245,9 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             raise ValueError("Khong trich xuat duoc noi dung co the tim kiem tu file nay.")
  
         warning_count_before_metadata = len(report["warnings"])
+        _meta_limit = int(os.getenv("METADATA_TEXT_LIMIT", "20000"))
         info = extract_metadata_smart(
-            text_content[:5000],
+            text_content[:_meta_limit],
             ten_file,
             thu_muc,
             vision_model,

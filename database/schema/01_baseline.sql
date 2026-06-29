@@ -624,6 +624,65 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_MaterialSynonym_Synony
 GO
 
 -- ==========================================================================
+-- PHAN P0: METADATA TONG QUAT DA PHONG BAN (V0004 inline vao baseline)
+-- Cot moi them rieng bang ALTER idempotent (KHONG dat trong CREATE bi guard).
+-- ==========================================================================
+IF COL_LENGTH('dbo.TaiLieu','Title')           IS NULL ALTER TABLE dbo.TaiLieu ADD Title NVARCHAR(500) NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','Summary')         IS NULL ALTER TABLE dbo.TaiLieu ADD Summary NVARCHAR(MAX) NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','Tags')            IS NULL ALTER TABLE dbo.TaiLieu ADD Tags NVARCHAR(1000) NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','DocNumber')       IS NULL ALTER TABLE dbo.TaiLieu ADD DocNumber NVARCHAR(150) NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','IssuedDate')      IS NULL ALTER TABLE dbo.TaiLieu ADD IssuedDate DATE NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','EffectiveDate')   IS NULL ALTER TABLE dbo.TaiLieu ADD EffectiveDate DATE NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','ExpiryDate')      IS NULL ALTER TABLE dbo.TaiLieu ADD ExpiryDate DATE NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','ReviewDate')      IS NULL ALTER TABLE dbo.TaiLieu ADD ReviewDate DATE NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','OwnerSigner')     IS NULL ALTER TABLE dbo.TaiLieu ADD OwnerSigner NVARCHAR(255) NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','DocLanguage')     IS NULL ALTER TABLE dbo.TaiLieu ADD DocLanguage NVARCHAR(20) NULL;
+GO
+IF COL_LENGTH('dbo.TaiLieu','EffectiveStatus') IS NULL ALTER TABLE dbo.TaiLieu ADD EffectiveStatus NVARCHAR(20) NOT NULL CONSTRAINT DF_TaiLieu_EffectiveStatus DEFAULT 'active';
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_TaiLieu_DocNumber' AND object_id = OBJECT_ID('dbo.TaiLieu'))
+    CREATE INDEX IX_TaiLieu_DocNumber ON dbo.TaiLieu(DocNumber);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_TaiLieu_EffectiveStatus' AND object_id = OBJECT_ID('dbo.TaiLieu'))
+    CREATE INDEX IX_TaiLieu_EffectiveStatus ON dbo.TaiLieu(EffectiveStatus, ExpiryDate);
+GO
+IF COL_LENGTH('dbo.IngestionJobs','UploadMetaJson') IS NULL ALTER TABLE dbo.IngestionJobs ADD UploadMetaJson NVARCHAR(MAX) NULL;
+GO
+
+-- ==========================================================================
+-- PHAN P1.4: CAU HINH UNG DUNG (AppSettings)
+-- ==========================================================================
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AppSettings' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.AppSettings (
+        SettingKey   NVARCHAR(100) NOT NULL PRIMARY KEY,
+        SettingValue NVARCHAR(MAX) NULL,
+        UpdatedAt    DATETIME NOT NULL CONSTRAINT DF_AppSettings_UpdatedAt DEFAULT GETDATE(),
+        UpdatedBy    NVARCHAR(255) NULL
+    );
+END
+GO
+
+MERGE dbo.AppSettings AS tgt
+USING (VALUES
+    ('expiry_warning_days', '30'),
+    ('rag_general_top_k', '30')
+) AS src (SettingKey, SettingValue)
+ON tgt.SettingKey = src.SettingKey
+WHEN NOT MATCHED BY TARGET THEN
+    INSERT (SettingKey, SettingValue) VALUES (src.SettingKey, src.SettingValue);
+GO
+
+-- ==========================================================================
 -- GHI NHAN PHIEN BAN BASELINE
 -- ==========================================================================
 IF NOT EXISTS (SELECT 1 FROM dbo._SchemaVersions WHERE Version = 'baseline_v2')

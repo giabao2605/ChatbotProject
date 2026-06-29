@@ -10,8 +10,11 @@ from mech_chatbot.db.repository import (
     write_audit_log,
     update_document_full_metadata,
     delete_document_completely,
-    update_qdrant_metadata
+    update_qdrant_metadata,
+    get_document_metadata,
+    update_document_common_metadata,
 )
+from mech_chatbot.ui import metadata_forms
 from mech_chatbot.ui import labels
 
 # GD4b: dung chung cho form duyet (linh hoat da phong ban)
@@ -169,6 +172,11 @@ def run_admin():
                     with cole:
                         edit_site = st.text_input("Khu / Site", value=t_site or "", key=f"site_{doc_id}")
 
+                    _meta = get_document_metadata(doc_id)
+                    with st.expander("Metadata tổng quát (đa phòng ban) — kiểm tra/bổ sung trước khi duyệt", expanded=False):
+                        edit_common = metadata_forms.render_common_metadata(prefix=f"admeta_{doc_id}", defaults=_meta, show_header=False)
+                        edit_attrs = metadata_forms.render_domain_attributes(edit_domain, prefix=f"admeta_{doc_id}", defaults=_meta.get("attributes"))
+
                     # GD5: gate chat luong — cho phep reviewer/admin override khi tai lieu bi blocked
                     _is_blocked = (t_qstatus == "blocked")
                     override_quality = False
@@ -214,6 +222,14 @@ def run_admin():
                                     save_conn.execute(text("INSERT INTO DocumentFamily (BaseCode, FamilyName) VALUES (:b, :n)"), {"b": edit_base_code_norm, "n": f"Family {edit_base_code_norm}"})
                                     f_row2 = save_conn.execute(text("SELECT FamilyID FROM DocumentFamily WHERE BaseCode = :b"), {"b": edit_base_code_norm}).fetchone()
                                     save_conn.execute(text("UPDATE TaiLieu SET FamilyID = :fid WHERE DocID = :did"), {"fid": f_row2[0], "did": doc_id})
+
+                        try:
+                            update_document_common_metadata(
+                                doc_id, reviewer=current_user["username"], domain=edit_domain,
+                                attributes=edit_attrs, **edit_common,
+                            )
+                        except Exception as _me:
+                            st.warning(f"Lưu metadata tổng quát lỗi: {_me}")
 
                         write_audit_log(current_user["username"], "edit_metadata", "TaiLieu", doc_id, {
                             "old_base_code": t_bc, "new_base_code": edit_base_code_norm,
