@@ -43,6 +43,9 @@ _rag_ready = False
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _rag_ready
+    from mech_chatbot.config.validate import assert_config_valid, safe_config_summary
+    assert_config_valid()
+    logger.info("Config OK: %s", safe_config_summary())
     logger.info("=" * 60)
     logger.info("RAG Server starting — loading models (one-time)...")
     logger.info("=" * 60)

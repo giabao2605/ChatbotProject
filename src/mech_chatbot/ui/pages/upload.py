@@ -40,7 +40,7 @@ def _resolve_defaults(dept):
             resolve_domain_by_department, resolve_security_by_department,
         )
         domain = resolve_domain_by_department(dept) or "generic"
-        security = resolve_security_by_department(dept) or "internal"
+        security = resolve_security_by_department(dept) or "public"
     except Exception:
         pass
     try:

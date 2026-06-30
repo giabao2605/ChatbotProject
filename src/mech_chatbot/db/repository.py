@@ -1248,7 +1248,7 @@ def search_bom_by_code(
                 # qua nga SQL (trong khi nga Qdrant da chan). Dong bo logic voi _security_filter
                 # / _allowed_levels ben rag/service.py: cho xem cac muc <= clearance, mac dinh 'internal'.
                 _LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
-                _max_order = _LEVEL_ORDER.get((max_security_level or "internal"), 1)
+                _max_order = _LEVEL_ORDER.get((max_security_level or "public"), 0)
                 _sec_levels = [lvl for lvl, o in _LEVEL_ORDER.items() if o <= _max_order]
                 sec_conditions = []
                 for i, lvl in enumerate(_sec_levels):

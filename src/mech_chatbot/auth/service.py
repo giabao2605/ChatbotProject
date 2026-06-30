@@ -8,45 +8,19 @@ import streamlit as st
 import streamlit.components.v1 as components
 from sqlalchemy import text
 from mech_chatbot.db.repository import engine
+from mech_chatbot.auth import rate_limit
+from mech_chatbot.auth.security_policy import resolve_clearance, DEFAULT_MAX_SECURITY_LEVEL
 try:
     from mech_chatbot.ui.i18n import t, get_lang
 except ImportError:
     def t(s, **kw): return s.format(**kw) if kw else s  # noqa: E731
     def get_lang(): return "vi"  # noqa: E731
 
-# ---------------------------------------------------------------------------
-# Rate-limit / Account lockout (in-process, resets khi restart server)
-# ---------------------------------------------------------------------------
-_MAX_FAILURES   = 5        # So lan sai toi da
-_LOCKOUT_SECONDS = 300     # Khoa 5 phut sau khi vuot nguong
-_WINDOW_SECONDS  = 600     # Cua so dem: reset neu khong sai them trong 10 phut
 
-_lock   = threading.Lock()
-_fails  = defaultdict(list)  # username -> [timestamp, ...]
-
-def _is_rate_limited(username: str) -> bool:
-    """Kiem tra xem username co dang bi khoa do nhieu lan dang nhap sai khong."""
-    now = time.monotonic()
-    with _lock:
-        attempts = _fails[username]
-        # Xoa cac lan cu hon cua so
-        _fails[username] = [t for t in attempts if now - t < _WINDOW_SECONDS]
-        return len(_fails[username]) >= _MAX_FAILURES
-
-def _record_failure(username: str):
-    """Ghi nhan mot lan dang nhap sai."""
-    now = time.monotonic()
-    with _lock:
-        _fails[username].append(now)
-
-def _clear_failures(username: str):
-    """Xoa lich su sai sau khi dang nhap thanh cong."""
-    with _lock:
-        _fails.pop(username, None)
 
 def authenticate_user(username, password):
     # Kiem tra rate-limit TRUOC khi truy van DB (tranh lo thong tin user ton tai)
-    if _is_rate_limited(username):
+    if rate_limit.is_rate_limited(engine, username):
         from mech_chatbot.config.logging import logger
         logger.warning(f"[rate-limit] User '{username}' bi khoa do qua nhieu lan sai.")
         return None
@@ -67,10 +41,10 @@ def authenticate_user(username, password):
             ).fetchone()
             
             if not user:
-                _record_failure(username)
+                rate_limit.record_failure(engine, username)
                 return None
             if not user[4]:  # IsActive = 0
-                _record_failure(username)
+                rate_limit.record_failure(engine, username)
                 return None
                 
             stored_hash = user[5]
@@ -88,10 +62,10 @@ def authenticate_user(username, password):
                 is_valid = False
                 
             if not is_valid:
-                _record_failure(username)
+                rate_limit.record_failure(engine, username)
                 return None
                 
-            _clear_failures(username)  # Dang nhap thanh cong -> xoa bộ dem
+            rate_limit.clear_failures(engine, username)  # Dang nhap thanh cong -> xoa bộ dem
             roles = conn.execute(
                 text(
                     """
@@ -134,9 +108,10 @@ def authenticate_user(username, password):
                     text("SELECT MaxLevel FROM UserSecurityClearance WHERE UserID = :uid"),
                     {"uid": user[0]},
                 ).fetchone()
-                max_security_level = clr[0] if clr else "internal"
+                # An toan mac dinh: thieu/khong hop le -> 'public' (khong phai 'internal')
+                max_security_level = resolve_clearance(clr[0] if clr else None)
             except Exception:
-                max_security_level = "internal"
+                max_security_level = DEFAULT_MAX_SECURITY_LEVEL
 
             # P1.2: RBAC chieu thu 3 — site. List rong = KHONG gioi han theo site.
             try:
@@ -223,11 +198,11 @@ def login_screen():
             st.rerun()
 
         # Thong bao khac nhau: bi khoa vs sai mat khau thuong
-        if _is_rate_limited(username):
+        if rate_limit.is_rate_limited(engine, username):
             st.session_state["login_error"] = t(
                 "Tài khoản tạm thời bị khóa do đăng nhập sai quá {n} lần. "
                 "Vui lòng thử lại sau {m} phút.",
-                n=_MAX_FAILURES, m=_LOCKOUT_SECONDS // 60,
+                n=rate_limit.MAX_FAILURES, m=rate_limit.LOCKOUT_SECONDS // 60,
             )
         else:
             st.session_state["login_error"] = t("Sai tên đăng nhập hoặc mật khẩu.")

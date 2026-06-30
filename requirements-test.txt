@@ -1,0 +1,7 @@
+# Phu thuoc rieng cho bo test. Cai trong venv cua project:
+#   pip install -r requirements-test.txt
+pytest>=8.0
+pytest-cov>=5.0        # bao phu code: pytest --cov=mech_chatbot
+requests>=2.31         # goi RAG server trong test eval
+# Cac thu vien runtime (qdrant-client, sqlalchemy, bcrypt, streamlit, langchain...)
+# da nam trong requirements.txt cua project; test integration tai dung chung.

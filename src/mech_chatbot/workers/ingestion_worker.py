@@ -143,5 +143,7 @@ def run_worker():
             time.sleep(10)
 
 if __name__ == "__main__":
+    from mech_chatbot.config.validate import assert_config_valid
+    assert_config_valid()
     sys.stdout.reconfigure(encoding='utf-8')
     run_worker()

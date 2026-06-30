@@ -30,6 +30,7 @@ from langchain_core.messages import HumanMessage
 import json
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, gpt_rerank_documents, get_llm_model_name
 from mech_chatbot.db.repository import search_bom_by_code
+from mech_chatbot.rag.rbac import compose_retrieval_filters
  
 logger.info("Dang khoi dong he thong RAG AI...")
  
@@ -587,7 +588,7 @@ LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
 
 
 def _allowed_levels(max_security_level):
-    order = LEVEL_ORDER.get((max_security_level or "internal"), 1)
+    order = LEVEL_ORDER.get((max_security_level or "public"), 0)
     return [lvl for lvl, o in LEVEL_ORDER.items() if o <= order]
 
 
@@ -865,30 +866,8 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     q_norm = remove_accents(question.lower())
     is_bom_query = intent_data["query_type"] == "bom_lookup" or any(kw in q_norm for kw in ["vat tu", "bang ke", "bom", "danh sach", "chi tiet", "gom nhung gi", "cau tao", "linh kien", "part list", "thanh phan", "chi tiet con", "vat lieu", "cum nay", "ma nao"])
  
-    # Buoc 1: Strict filter (match base_code, ma_chinh, or ma_doi_tuong)
-    strict_musts = list(must_conditions)
-    if new_part_ids and "CHITCHAT" not in new_part_ids:
-        strict_musts.append(models.Filter(
-            should=[
-                models.FieldCondition(key="metadata.base_code", match=models.MatchAny(any=new_part_ids)),
-                models.FieldCondition(key="metadata.ma_chinh", match=models.MatchAny(any=new_part_ids)),
-                models.FieldCondition(key="metadata.ma_doi_tuong", match=models.MatchAny(any=new_part_ids))
-            ]
-        ))
-    strict_filter = models.Filter(must=strict_musts)
- 
-    # Buoc 2: Broad filter (expand to ma_btp, ma_vat_tu, ma_lien_quan)
-    broad_musts = list(must_conditions)
-    broad_conditions = [
-        models.FieldCondition(key="metadata.base_code", match=models.MatchAny(any=new_part_ids)),
-        models.FieldCondition(key="metadata.ma_chinh", match=models.MatchAny(any=new_part_ids)),
-        models.FieldCondition(key="metadata.ma_btp", match=models.MatchAny(any=new_part_ids)),
-        models.FieldCondition(key="metadata.ma_vat_tu", match=models.MatchAny(any=new_part_ids)),
-        models.FieldCondition(key="metadata.ma_lien_quan", match=models.MatchAny(any=new_part_ids)),
-        models.FieldCondition(key="metadata.ma_doi_tuong", match=models.MatchAny(any=new_part_ids))
-    ]
-    broad_musts.append(models.Filter(should=broad_conditions))
-    broad_filter = models.Filter(must=broad_musts)
+    # Ghep strict & broad qua MOT nguon duy nhat (rbac.py) -> chong noi quyen.
+    strict_filter, broad_filter = compose_retrieval_filters(must_conditions, new_part_ids)
     
     return strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data
  
@@ -1276,7 +1255,7 @@ def current_published_filter(rbac_filter=None):
 # ==========================================
 # 4. HAM XU LY LOI (TRAI TIM CUA CHATBOT)
 # ==========================================
-def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="internal", allowed_sites=None, response_language="vi"):
+def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi"):
     if chat_history is None:
         chat_history = []
         

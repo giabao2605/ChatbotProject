@@ -11,6 +11,8 @@ from mech_chatbot.ui import i18n
 from mech_chatbot.ui.i18n import t
 
 st.set_page_config(page_title=t("Trợ Lý Tài Liệu Nội Bộ"), layout="wide", initial_sidebar_state="expanded")
+from mech_chatbot.config.validate import assert_config_valid
+assert_config_valid()
 ui_theme.inject_global_css()
 
 auth.check_auth()

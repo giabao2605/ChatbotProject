@@ -14,6 +14,8 @@ def write_output(path, data):
 
 
 def main():
+    from mech_chatbot.config.validate import assert_config_valid
+    assert_config_valid()
     if len(sys.argv) != 3:
         raise SystemExit("Usage: rag_worker.py input.json output.json")
 
@@ -33,7 +35,7 @@ def main():
             user_department=payload.get("user_department"),
             user_roles=payload.get("user_roles") or [],
             allowed_departments=payload.get("allowed_departments") or [],
-            max_security_level=payload.get("max_security_level") or "internal",
+            max_security_level=payload.get("max_security_level") or "public",
             allowed_sites=payload.get("allowed_sites") or [],
             response_language=payload.get("response_language") or "vi",
         )

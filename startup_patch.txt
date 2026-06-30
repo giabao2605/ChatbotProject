@@ -1,0 +1,43 @@
+==========================================================
+ P0 #6 — Gan validate config fail-fast luc khoi dong app
+==========================================================
+
+FILE MOI:
+  src/mech_chatbot/config/validate.py   (da co trong goi nay)
+
+MUC DICH: thieu/sai cau hinh -> bao loi NGAY luc khoi dong, kem danh sach loi,
+thay vi chay am tham voi gia tri default sai. Secret khong bao gio bi log.
+
+----------------------------------------------------------
+GAN VAO CAC DIEM KHOI DONG
+----------------------------------------------------------
+Them o DAU ham khoi dong cua tung tien trinh (RAG server, UI, worker).
+
+Vi du voi RAG server (src/mech_chatbot/api/rag_server.py), gan TRUOC khi
+server bat dau nhan request (vd trong ham main()/truoc uvicorn.run):
+
+    from mech_chatbot.config.validate import assert_config_valid, safe_config_summary
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Fail-fast: thieu/sai cau hinh -> dung ngay, in danh sach loi
+    assert_config_valid()
+    # Log cau hinh AN TOAN (secret bi che) de de debug
+    logger.info("Config OK: %s", safe_config_summary())
+
+Voi worker hoac UI, lam tuong tu o diem khoi dong.
+
+GHI CHU TINH CHINH:
+- Neu mot tien trinh KHONG can SQL (vd chi goi RAG), co the goi:
+      assert_config_valid(require_sql=False)
+- Tuong tu require_llm / require_qdrant / require_embedding = False de bo qua
+  nhom khong lien quan.
+
+----------------------------------------------------------
+KIEM TRA
+----------------------------------------------------------
+  pytest tests/unit -v
+
+Them ~18 test moi (test_config_validate.py). Ky vong tat ca xanh.
+Thu fail-fast that: tam xoa QDRANT_URL trong .env roi chay app -> phai bao loi
+ngay lap tuc kem dong 'Thieu QDRANT_URL ...'.

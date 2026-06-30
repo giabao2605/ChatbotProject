@@ -106,7 +106,7 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
         "user_department": user_department,
         "user_roles": user_roles or [],
         "allowed_departments": allowed_departments or [],
-        "max_security_level": max_security_level or "internal",
+        "max_security_level": max_security_level or "public",
         "allowed_sites": allowed_sites or [],
         "response_language": response_language or "vi",
     }
@@ -191,7 +191,7 @@ def chat_with_rag_api(user_question, image_path=None, chat_history=None,
         "user_department": user_department,
         "user_roles": user_roles or [],
         "allowed_departments": allowed_departments or [],
-        "max_security_level": max_security_level or "internal",
+        "max_security_level": max_security_level or "public",
         "allowed_sites": allowed_sites or [],
         "response_language": response_language or "vi",
     }
@@ -838,7 +838,7 @@ def _render_answer_sources(debug_info):
             m = meta.get(doc_id, {})
             ten_file = m.get("ten_file") or d.get("file_goc") or t("(không rõ)")
             phong_ban = m.get("thu_muc") or t("(không rõ)")
-            sec_level = m.get("security_level") or d.get("security_level") or "internal"
+            sec_level = m.get("security_level") or d.get("security_level") or "public"
             trang = d.get("trang")
             score = d.get("score")
             try:
