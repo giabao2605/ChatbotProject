@@ -14,6 +14,8 @@ moi tra cuu deu co fallback an toan de pipeline ingest khong vo.
 
 from dataclasses import dataclass
 
+from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
+
 
 @dataclass
 class DomainConfig:
@@ -61,7 +63,7 @@ _FALLBACK_DOMAIN = {
     'To_Dong_Goi': 'mechanical', 'To_Ban_Le': 'mechanical',
     'Bang_Ke': 'mechanical', 'Gia_Cong_Ngoai': 'mechanical',
     'Ke_Toan': 'tabular',
-    'Nhan_Su': 'generic', 'CHUNG': 'generic', 'Tu_Hoc': 'generic',
+    'Nhan_Su': 'generic', SHARE_ALL_DEPARTMENT: 'generic', 'Tu_Hoc': 'generic',
 }
 
 # Muc mat fallback theo ten phong/thu muc (khi DB chua co cot DefaultSecurity).

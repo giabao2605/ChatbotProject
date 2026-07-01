@@ -44,7 +44,44 @@ DEPARTMENT_SITE = {
     # Ke toan / nhan su
     "Ke_Toan": "VP_KE_TOAN",
     "Nhan_Su": "VP_NHAN_SU",
+    # --- DeptCode moi (data-driven Departments, soi guong domain_registry) ---
+    "Technical": "PHONG_KY_THUAT",
+    "Production": "XUONG_CO_KHI",
+    "Maintenance": "XUONG_CO_KHI",
+    "Molding": "XUONG_CO_KHI",
+    "Accountant": "VP_KE_TOAN",
+    "HR": "VP_NHAN_SU",
+    "Purchasing": "HQ",
+    "Warehouse": "HQ",
+    "Sales": "HQ",
+    "Planning": "HQ",
+    "QualityControl": "HQ",
+    "ISO": "HQ",
+    "HSE_5S": "HQ",
+    "IT": "HQ",
 }
+
+
+def _lookup_site(thu_muc):
+    """Tra cuu Site tu bang dbo.Departments (uu tien nguon su that trong DB).
+    Tra ve None neu khong tim thay hoac DB loi (de caller fallback map tinh).
+    Lazy import de tranh circular import va de unit test khong can DB.
+    """
+    if not thu_muc:
+        return None
+    try:
+        from mech_chatbot.db.repository import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT Site FROM dbo.Departments WHERE DeptCode = :t OR FolderGoc = :t"),
+                {"t": thu_muc},
+            ).fetchone()
+        if row and row[0]:
+            return str(row[0])
+    except Exception:
+        return None
+    return None
 
 
 def resolve_site_by_department(thu_muc, db_site=None):
@@ -54,10 +91,17 @@ def resolve_site_by_department(thu_muc, db_site=None):
         thu_muc: ten phong ban / thu muc upload.
         db_site: site cau hinh tay tren bang Departments (uu tien cao nhat).
     """
+    # 1) Site cau hinh tay tren bang Departments (uu tien cao nhat).
     if db_site:
         return str(db_site)
+    # 2) Tu doc Departments.Site (B2/B3: dong bo cho moi caller, ke ca ingest).
+    db_lookup = _lookup_site(thu_muc)
+    if db_lookup:
+        return db_lookup
+    # 3) Map tinh fallback (gom ca DeptCode moi lan ten thu muc cu).
     if thu_muc and thu_muc in DEPARTMENT_SITE:
         return DEPARTMENT_SITE[thu_muc]
+    # 4) Fallback an toan.
     return SITE_DEFAULT
 
 

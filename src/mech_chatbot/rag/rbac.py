@@ -8,6 +8,8 @@ Logic giu NGUYEN BAN tu service.py (khong doi hanh vi).
 """
 from qdrant_client import models
 
+from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
+
 LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
 
 # Cac key metadata dung de match ma chi tiet (part id) trong Qdrant.
@@ -82,11 +84,11 @@ def create_rbac_filter(user_department, user_roles, allowed_departments=None, ma
     allowed = list(allowed_departments) if allowed_departments else []
     if user_department and user_department not in allowed:
         allowed.append(user_department)
-    if "CHUNG" not in allowed:
-        allowed.append("CHUNG")
+    if SHARE_ALL_DEPARTMENT not in allowed:
+        allowed.append(SHARE_ALL_DEPARTMENT)
 
     if not allowed:
-        allowed = ["CHUNG"]
+        allowed = [SHARE_ALL_DEPARTMENT]
 
     must = [
         models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchAny(any=allowed)),

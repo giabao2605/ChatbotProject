@@ -41,6 +41,7 @@ def create_indexes():
             "metadata.ma_vat_tu": models.PayloadSchemaType.KEYWORD,
             "metadata.ma_lien_quan": models.PayloadSchemaType.KEYWORD,
             "metadata.file_goc": models.PayloadSchemaType.KEYWORD,
+            "metadata.thu_muc": models.PayloadSchemaType.KEYWORD,
             "metadata.phong_ban_quyen": models.PayloadSchemaType.KEYWORD,
             "metadata.security_level": models.PayloadSchemaType.KEYWORD,
             "metadata.domain": models.PayloadSchemaType.KEYWORD,

@@ -1,40 +1,61 @@
-# Environments
+# ===== Python virtual environments =====
+# Moi truong ban dang dung
 chat_env/
+# Thu muc env cu dang lam Source Control hien 1000+ file (co Lib/site-packages)
+source/
+# Chan them cac ten env thuong gap (phong khi tao moi)
 venv/
+.venv/
 env/
-__pycache__/
-*.pyc
-.pytest_cache/
+ENV/
+# Chan bat ky thu muc env nao co cau truc chuan (theo file danh dau cua venv)
+**/pyvenv.cfg
+**/site-packages/
 
-# Data (raw & processed)
+# ===== Python cache & build =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== Data (raw & processed) =====
 data/raw/
 data/processed/
 data/cache/
 
-# Logs & Temp
+# ===== Logs & Temp =====
 logs/
 temp_logs/
 *.log
 
-# Secrets
+# ===== Secrets =====
 .env
+.env.*
+!.env.example
 .streamlit/secrets.toml
 
-# Debug & Temp scripts
+# ===== Debug & Temp scripts =====
 debug*.py
 debug*.txt
 temp_*.py
 temp_*.txt
 plot.log
 
-# IDE & OS
+# ===== IDE & OS =====
 .vscode/
 .idea/
 Thumbs.db
+.DS_Store
 
-# Temp RAG worker files
+# ===== Temp RAG worker files =====
 rag_in_*.json
 rag_out_*.json
 
-# Refactor script (one-time use)
+# ===== Refactor script (one-time use) =====
 refactor_project.py

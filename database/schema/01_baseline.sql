@@ -517,7 +517,6 @@ BEGIN
         DeptCode    NVARCHAR(255) NOT NULL PRIMARY KEY,   -- vd: Production, Accountant, HR
         DeptName    NVARCHAR(255) NULL,                   -- ten hien thi
         Domain      NVARCHAR(50)  NULL,                   -- mechanical | tabular | generic
-        Site        NVARCHAR(100) NULL,
         IsActive    BIT NOT NULL DEFAULT 1,
         Status      NVARCHAR(20) NOT NULL CONSTRAINT DF_Departments_Status DEFAULT 'active',
         DisabledAt  DATETIME NULL,
@@ -530,6 +529,8 @@ GO
 IF COL_LENGTH('dbo.Departments','DefaultSecurity') IS NULL ALTER TABLE dbo.Departments ADD DefaultSecurity NVARCHAR(20) NOT NULL CONSTRAINT DF_Departments_DefaultSecurity DEFAULT 'internal';  -- public|internal|confidential
 GO
 IF COL_LENGTH('dbo.Departments','FolderGoc')       IS NULL ALTER TABLE dbo.Departments ADD FolderGoc NVARCHAR(150) NULL;  -- vd '08.Production'
+GO
+IF COL_LENGTH('dbo.Departments','Site')            IS NULL ALTER TABLE dbo.Departments ADD Site NVARCHAR(100) NULL;  -- P1.2: khu/site cua phong ban (ALTER idempotent, khong nhet trong CREATE TABLE)
 GO
 IF COL_LENGTH('dbo.Departments','Status')          IS NULL ALTER TABLE dbo.Departments ADD Status NVARCHAR(20) NOT NULL CONSTRAINT DF_Departments_Status DEFAULT 'active';
 GO

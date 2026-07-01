@@ -10,6 +10,7 @@ import pdfplumber
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from mech_chatbot.config.settings import QDRANT_COLLECTION
+from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception
 from transformers import AutoTokenizer
 import underthesea
@@ -361,12 +362,21 @@ def _add_docs_with_retry(chunks):
     vectorstore.add_documents(chunks)
 
 def _delete_vectors_for_file(ten_file, thu_muc):
+    # Bug#4: khop theo metadata.thu_muc (thu muc goc, gia tri don) thay vi
+    # metadata.phong_ban_quyen (danh sach quyen). phong_ban_quyen co the chua nhieu
+    # phong chia se, dung MatchValue tren list de lai vector khi doi ten phong.
+    # Van giu should de tuong thich nguoc voi vector cu (chua co metadata.thu_muc).
     client.delete(
         collection_name=QDRANT_COLLECTION,
-        points_selector=models.Filter(must=[
-            models.FieldCondition(key="metadata.file_goc", match=models.MatchValue(value=ten_file)),
-            models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchValue(value=thu_muc)),
-        ])
+        points_selector=models.Filter(
+            must=[
+                models.FieldCondition(key="metadata.file_goc", match=models.MatchValue(value=ten_file)),
+            ],
+            should=[
+                models.FieldCondition(key="metadata.thu_muc", match=models.MatchValue(value=thu_muc)),
+                models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchValue(value=thu_muc)),
+            ],
+        )
     )
  
 def _require_package(package, feature_name):
@@ -727,7 +737,7 @@ def _normalize_phong_ban_quyen(thu_muc, phong_ban_override=None):
     _add(thu_muc)
     _add(phong_ban_override)
     if not result:
-        result = ["CHUNG"]
+        result = [SHARE_ALL_DEPARTMENT]
     return result
 
 
@@ -993,6 +1003,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                         )
                 metadata = {
                     "file_goc": ten_file,
+                    "thu_muc": thu_muc,
                     "phong_ban_quyen": _normalize_phong_ban_quyen(thu_muc, phong_ban_override),
                     "ma_doi_tuong": info["ma_doi_tuong"],
                     "ma_chinh": info.get("ma_chinh", []),
@@ -1312,6 +1323,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
 
         metadata = {
             "file_goc": ten_file,
+            "thu_muc": thu_muc,
             "phong_ban_quyen": _normalize_phong_ban_quyen(thu_muc, phong_ban_override),
             "ma_doi_tuong": info["ma_doi_tuong"],
             "ma_chinh": info.get("ma_chinh", []),

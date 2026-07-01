@@ -8,6 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from sqlalchemy import text
 from mech_chatbot.db.repository import engine
+from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
 from mech_chatbot.auth import rate_limit
 from mech_chatbot.auth.security_policy import resolve_clearance, DEFAULT_MAX_SECURITY_LEVEL
 try:
@@ -89,18 +90,18 @@ def authenticate_user(username, password):
             except Exception:
                 allowed_departments = []
 
-            # LUU Y: KHONG tu dong them user[3] (department display label nhu "Ky_Thuat")
+            # LUU Y: KHONG tu dong them user[3] (department display label nhu "Technical")
             # vao allowed_departments. Department chi la nhan hien thi; quyen xem tai lieu
-            # duoc kiem soat duy nhat boi bang UserDepartments (chua ten to san xuat thuc te:
-            # To_Han, To_Dap, CHUNG...). Them "Ky_Thuat" vao day se khien filter Qdrant
-            # tim gia tri khong ton tai trong metadata.phong_ban_quyen.
+            # duoc kiem soat duy nhat boi bang UserDepartments (chua DeptCode thuc te theo
+            # seed 14 phong: Technical, Production, Accountant, HR, CHUNG...). Them "Technical"
+            # vao day se khien filter Qdrant tim gia tri khong ton tai trong metadata.phong_ban_quyen.
             if not allowed_departments:
                 # Fallback an toan: neu UserDepartments chua co du lieu, chi cho xem CHUNG
-                allowed_departments = ["CHUNG"]
+                allowed_departments = [SHARE_ALL_DEPARTMENT]
                 from mech_chatbot.config.logging import logger
                 logger.warning(
                     f"User '{user[1]}' khong co ban ghi trong UserDepartments. "
-                    "Fallback cho phep xem CHUNG. Chay migration fix_rbac_seed.sql de cap nhat."
+                    "Fallback cho phep xem CHUNG. Bo sung ban ghi vao dbo.UserDepartments de cap nhat."
                 )
             
             try:

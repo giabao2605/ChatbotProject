@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 from mech_chatbot.config.logging import logger
 from mech_chatbot.config.settings import QDRANT_COLLECTION
+from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
  
 load_dotenv()
  
@@ -1225,8 +1226,8 @@ def search_bom_by_code(
             # RBAC: chi dung allowed_departments tu UserDepartments, khong tu dong them department
             if not user_roles or "admin" not in user_roles:
                 allowed = list(allowed_departments or [])
-                if "CHUNG" not in allowed:
-                    allowed.append("CHUNG")
+                if SHARE_ALL_DEPARTMENT not in allowed:
+                    allowed.append(SHARE_ALL_DEPARTMENT)
 
                 dept_conditions = []
                 for i, dept in enumerate(allowed):
@@ -1235,7 +1236,7 @@ def search_bom_by_code(
                     # GD5 muc 4: ho tro tai lieu chia se nhieu phong (TaiLieu.PhongBan dang CSV).
                     # Khop theo bien gioi dau phay de tranh sub-string match (vd 'QC' vs 'QC2').
                     dept_conditions.append(
-                        "(t.ThuMuc = :" + key + " OR (t.PhongBan IS NOT NULL AND ',' + t.PhongBan + ',' LIKE :" + lk + "))"
+                        "(t.ThuMuc = :" + key + " OR (t.PhongBan IS NOT NULL AND ',' + REPLACE(t.PhongBan, ' ', '') + ',' LIKE :" + lk + "))"
                     )
                     params[key] = dept
                     params[lk] = f"%,{dept},%"
@@ -2247,7 +2248,7 @@ def get_department_summary(code):
             docs = conn.execute(text("SELECT COUNT(*) FROM dbo.TaiLieu WHERE ThuMuc = :c AND LifecycleStatus <> 'deleting'"), {"c": code}).fetchone()
             shared_docs = conn.execute(text("""
                 SELECT COUNT(*) FROM dbo.TaiLieu
-                WHERE ThuMuc <> :c AND LifecycleStatus <> 'deleting' AND PhongBan IS NOT NULL AND ',' + PhongBan + ',' LIKE :lk
+                WHERE ThuMuc <> :c AND LifecycleStatus <> 'deleting' AND PhongBan IS NOT NULL AND ',' + REPLACE(PhongBan, ' ', '') + ',' LIKE :lk
             """), {"c": code, "lk": f"%,{code},%"}).fetchone()
         return {
             "code": dept[0],
@@ -2345,7 +2346,7 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
             doc_rows = conn.execute(text("""
                 SELECT DocID, ThuMuc, PhongBan
                 FROM dbo.TaiLieu
-                WHERE ThuMuc = :src OR (PhongBan IS NOT NULL AND ',' + PhongBan + ',' LIKE :lk)
+                WHERE ThuMuc = :src OR (PhongBan IS NOT NULL AND ',' + REPLACE(PhongBan, ' ', '') + ',' LIKE :lk)
             """), {"src": source_code, "lk": f"%,{source_code},%"}).fetchall()
             for row in doc_rows:
                 doc_id, thu_muc, phong_ban = row[0], row[1], row[2]
@@ -2361,7 +2362,7 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
             job_rows = conn.execute(text("""
                 SELECT JobID, ThuMuc, PhongBan
                 FROM dbo.IngestionJobs
-                WHERE ThuMuc = :src OR (PhongBan IS NOT NULL AND ',' + PhongBan + ',' LIKE :lk)
+                WHERE ThuMuc = :src OR (PhongBan IS NOT NULL AND ',' + REPLACE(PhongBan, ' ', '') + ',' LIKE :lk)
             """), {"src": source_code, "lk": f"%,{source_code},%"}).fetchall()
             for row in job_rows:
                 job_id, thu_muc, phong_ban = row[0], row[1], row[2]

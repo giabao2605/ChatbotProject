@@ -30,7 +30,14 @@ from langchain_core.messages import HumanMessage
 import json
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, gpt_rerank_documents, get_llm_model_name
 from mech_chatbot.db.repository import search_bom_by_code
-from mech_chatbot.rag.rbac import compose_retrieval_filters
+from mech_chatbot.rag.rbac import (
+    compose_retrieval_filters,
+    create_rbac_filter,
+    _security_filter,
+    _site_filter,
+    _allowed_levels,
+    LEVEL_ORDER,
+)
 from mech_chatbot.rag.entity_resolver import (
     extract_no_code_constraints,
     resolve_candidates_from_docs,
@@ -349,6 +356,40 @@ _MECH_EXTRA_EN = (
     "or number of days/hours (e.g. 24h, 8h, 1 day) if the documents do not state them."
 )
 
+# --------------------------- QUY TAC RIENG: TABULAR / SO LIEU (F2) ---------------------------
+_TABULAR_EXTRA_VI = (
+    "\n=== QUY TẮC CHUYÊN MÔN BẢNG BIỂU / SỐ LIỆU ===\n"
+    "T1. TRÍCH SỐ LIỆU CHÍNH XÁC: Mọi con số (số tiền, số lượng, đơn giá, ngày tháng, "
+    "mã chứng từ) phải trích đúng nguyên văn từ bảng trong tài liệu. Tuyệt đối không làm "
+    "tròn, ước lượng hay tự bịa số.\n"
+    "T2. GIỮ NGUYÊN ĐƠN VỊ & ĐỊNH DẠNG: Giữ đúng đơn vị (VNĐ, USD, kg, cái...), định dạng "
+    "số và dấu phân cách như trong tài liệu gốc.\n"
+    "T3. TRÌNH BÀY DẠNG BẢNG: Khi liệt kê hoặc so sánh nhiều dòng/nhiều kỳ, luôn dùng Bảng "
+    "(Markdown Table) với đúng tiêu đề cột như tài liệu gốc.\n"
+    "T4. ĐỌC ĐÚNG HÀNG–CỘT: Khi tra một ô, phải xác định đúng giao của nhãn hàng và tiêu đề "
+    "cột; không lấy nhầm ô lân cận.\n"
+    "T5. TÍNH TOÁN CÓ KIỂM SOÁT: Chỉ cộng/trừ/tính tổng khi người dùng yêu cầu và dữ liệu đủ; "
+    "nêu rõ công thức và các dòng đã dùng. Nếu thiếu dữ liệu, nói rõ là không đủ cơ sở, không tự suy diễn.\n"
+    "T6. KHÔNG SUY DIỄN NGHIỆP VỤ: Không tự diễn giải xu hướng, nguyên nhân hay kết luận tài "
+    "chính nếu tài liệu không nêu."
+)
+_TABULAR_EXTRA_EN = (
+    "\n=== TABULAR / NUMERIC DATA RULES ===\n"
+    "T1. EXACT FIGURES: Every number (amount, quantity, unit price, date, document code) must "
+    "be quoted exactly from the tables in the documents. Never round, estimate, or invent numbers.\n"
+    "T2. KEEP UNITS & FORMAT: Preserve units (VND, USD, kg, pcs...), number format and "
+    "separators as in the source.\n"
+    "T3. PRESENT AS TABLES: When listing or comparing multiple rows/periods, always use a "
+    "Markdown Table with the same column headers as the source.\n"
+    "T4. READ ROW–COLUMN CORRECTLY: When looking up a cell, identify the correct intersection "
+    "of the row label and the column header; do not pick an adjacent cell.\n"
+    "T5. CONTROLLED CALCULATION: Only add/subtract/total when the user asks and data is "
+    "sufficient; state the formula and the rows used. If data is missing, say it is "
+    "insufficient; do not infer.\n"
+    "T6. NO BUSINESS SPECULATION: Do not interpret trends, causes, or financial conclusions "
+    "not stated in the documents."
+)
+
 # --------------------------- HEADER (VAI TRO) THEO DOMAIN / NGON NGU ---------------------------
 _NEUTRAL_HEADER_VI = (
     "Bạn là 'Trợ Lý Tài Liệu Nội Bộ' của công ty, phục vụ nhiều phòng ban (Kỹ thuật/Cơ khí, "
@@ -385,11 +426,29 @@ _MECH_HEADER_EN = (
     "=== RECENT CONVERSATION HISTORY ===\n{chat_history_str}\n\n"
 )
 
+_TABULAR_HEADER_VI = (
+    "Bạn là 'Trợ Lý Dữ Liệu Bảng Biểu / Tài Chính' của công ty, phục vụ các nghiệp vụ "
+    "số liệu (Kế toán, Mua hàng, Kho, Kinh doanh...). Bạn CHỈ trả lời dựa trên TÀI LIỆU "
+    "NỘI BỘ được cung cấp ở phần dữ liệu bên dưới; bạn KHÔNG phải chatbot kiến thức tổng "
+    "quát.\n\n"
+    "=== Dữ LIỆU TÀI LIỆU (TỪ QDRANT) ===\n{context}\n\n"
+    "=== LỊCH SỬ TRÒ CHUYỆN GẦN ĐÂY ===\n{chat_history_str}\n\n"
+)
+_TABULAR_HEADER_EN = (
+    "You are the company's 'Tabular / Financial Data Assistant', serving numeric functions "
+    "(Accounting, Purchasing, Warehouse, Sales...). You answer ONLY based on the INTERNAL "
+    "DOCUMENTS provided in the data section below; you are NOT a general-knowledge chatbot.\n\n"
+    "=== DOCUMENT DATA (FROM QDRANT) ===\n{context}\n\n"
+    "=== RECENT CONVERSATION HISTORY ===\n{chat_history_str}\n\n"
+)
+
 # --------------------------- LAP RAP CAC PROMPT HOAN CHINH ---------------------------
 NEUTRAL_SYSTEM_PROMPT_VI = _NEUTRAL_HEADER_VI + _COMMON_RULES_VI + _NEUTRAL_EXTRA_VI
 NEUTRAL_SYSTEM_PROMPT_EN = _NEUTRAL_HEADER_EN + _COMMON_RULES_EN + _NEUTRAL_EXTRA_EN
 MECHANICAL_SYSTEM_PROMPT_VI = _MECH_HEADER_VI + _COMMON_RULES_VI + _MECH_EXTRA_VI
 MECHANICAL_SYSTEM_PROMPT_EN = _MECH_HEADER_EN + _COMMON_RULES_EN + _MECH_EXTRA_EN
+TABULAR_SYSTEM_PROMPT_VI = _TABULAR_HEADER_VI + _COMMON_RULES_VI + _TABULAR_EXTRA_VI
+TABULAR_SYSTEM_PROMPT_EN = _TABULAR_HEADER_EN + _COMMON_RULES_EN + _TABULAR_EXTRA_EN
 
 # Alias tuong thich nguoc (mac dinh tieng Viet)
 NEUTRAL_SYSTEM_PROMPT = NEUTRAL_SYSTEM_PROMPT_VI
@@ -400,6 +459,8 @@ _SYSTEM_PROMPTS = {
     ("mechanical", "en"): MECHANICAL_SYSTEM_PROMPT_EN,
     ("generic", "vi"): NEUTRAL_SYSTEM_PROMPT_VI,
     ("generic", "en"): NEUTRAL_SYSTEM_PROMPT_EN,
+    ("tabular", "vi"): TABULAR_SYSTEM_PROMPT_VI,
+    ("tabular", "en"): TABULAR_SYSTEM_PROMPT_EN,
 }
 
 SUPPORTED_LANGS = ("vi", "en")
@@ -416,10 +477,16 @@ def _normalize_lang(lang):
 # ===========================================================================
 
 
-def _build_prompt_template(is_mechanical, lang="vi"):
-    """GD3 + song ngu: chon system prompt theo ngu canh (co khi vs trung lap) va ngon ngu (vi/en)."""
+def _build_prompt_template(domain="generic", lang="vi"):
+    """GD3 + F2 + song ngu: chon system prompt theo domain (mechanical|tabular|generic) va ngon ngu (vi/en).
+
+    Tuong thich nguoc: van chap nhan bool (is_mechanical) -> True='mechanical', False='generic'.
+    """
     lang = _normalize_lang(lang)
-    domain = "mechanical" if is_mechanical else "generic"
+    if isinstance(domain, bool):  # backward compat: truoc day nhan is_mechanical
+        domain = "mechanical" if domain else "generic"
+    if domain not in ("mechanical", "tabular", "generic"):
+        domain = "generic"
     system = _SYSTEM_PROMPTS.get((domain, lang), NEUTRAL_SYSTEM_PROMPT_VI)
     return ChatPromptTemplate.from_messages([
         ("system", system),
@@ -436,9 +503,24 @@ def _context_is_mechanical(docs, part_ids=None):
         return any(d == "mechanical" for d in domains)
     return bool(part_ids)
 
+
+def _context_domain(docs, part_ids=None):
+    """F2: chon domain cho prompt theo tai lieu da truy hoi.
+    Uu tien 'mechanical' (co guard chuyen mon), roi 'tabular', roi 'generic'.
+    Du lieu cu khong co metadata.domain -> 'mechanical' neu co part_ids co khi, con lai 'generic'.
+    """
+    domains = [d.metadata.get("domain") for d in docs if d is not None and d.metadata.get("domain")]
+    if domains:
+        if any(d == "mechanical" for d in domains):
+            return "mechanical"
+        if any(d == "tabular" for d in domains):
+            return "tabular"
+        return "generic"
+    return "mechanical" if part_ids else "generic"
+
 # Mac dinh module-level: prompt trung lap (an toan cho moi domain).
 system_prompt = NEUTRAL_SYSTEM_PROMPT
-prompt_template = _build_prompt_template(False)
+prompt_template = _build_prompt_template("generic")
 
 def build_structured_attributes_context(docs):
     try:
@@ -589,79 +671,10 @@ def serialize_qdrant_filter(f):
     except Exception:
         return str(f)
 
-LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
-
-
-def _allowed_levels(max_security_level):
-    order = LEVEL_ORDER.get((max_security_level or "public"), 0)
-    return [lvl for lvl, o in LEVEL_ORDER.items() if o <= order]
-
-
-def _security_filter(max_security_level):
-    levels = _allowed_levels(max_security_level)
-    # GD5 muc 5: tai lieu THIEU metadata.security_level coi nhu MAT (confidential).
-    # Truoc day IsEmptyCondition cho MOI nguoi thay tai lieu chua gan muc mat -> ho hong bao mat.
-    # Nay chi user co clearance 'confidential' (levels chua 'confidential') moi duoc thay tai lieu
-    # chua gan muc mat (empty); user clearance thap se KHONG con thay -> mac dinh an toan.
-    allow_empty = "confidential" in levels
-    should = []
-    if allow_empty:
-        should.append(models.IsEmptyCondition(is_empty=models.PayloadField(key="metadata.security_level")))
-    should.append(models.FieldCondition(key="metadata.security_level", match=models.MatchAny(any=levels)))
-    try:
-        return models.Filter(should=should)
-    except Exception:
-        return models.FieldCondition(key="metadata.security_level", match=models.MatchAny(any=levels))
-
-
-def _site_filter(allowed_sites):
-    """P1.2: gioi han theo site. List rong/None -> KHONG loc theo site (tuong thich nguoc).
-    Cho phep tai lieu chua gan site (metadata.site rong) de khong an du lieu cu."""
-    sites = [s for s in (allowed_sites or []) if s]
-    if not sites:
-        return None
-    try:
-        return models.Filter(should=[
-            models.IsEmptyCondition(is_empty=models.PayloadField(key="metadata.site")),
-            models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites)),
-        ])
-    except Exception:
-        return models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites))
-
-
-def create_rbac_filter(user_department, user_roles, allowed_departments=None, max_security_level=None, allowed_sites=None):
-    # Chỉ admin mới được bỏ filter
-    if user_roles and "admin" in user_roles:
-        return None
-
-    if not user_roles:
-        return models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="metadata.phong_ban_quyen",
-                    match=models.MatchValue(value="__DENY__")
-                )
-            ]
-        )
-
-    allowed = list(allowed_departments) if allowed_departments else []
-    if user_department and user_department not in allowed:
-        allowed.append(user_department)
-    if "CHUNG" not in allowed:
-        allowed.append("CHUNG")
-
-    if not allowed:
-        allowed = ["CHUNG"]
-
-    must = [
-        models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchAny(any=allowed)),
-        _security_filter(max_security_level),
-    ]
-    site_cond = _site_filter(allowed_sites)
-    if site_cond is not None:
-        must.append(site_cond)
-
-    return models.Filter(must=must)
+# C1 (GD3): create_rbac_filter / _security_filter / _site_filter / _allowed_levels /
+# LEVEL_ORDER da duoc CHUYEN sang mech_chatbot.rag.rbac (1 nguon su that) va import
+# o dau file. Truoc day ton tai 2 ban trung (service.py + rbac.py) de bi drift:
+# unit test chay tren rbac.py con production chay ban trong service.py. Nay dung chung.
 
 def deterministic_version_intent(question):
     q = question.lower()
@@ -1783,7 +1796,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     # GD3: chon prompt + gate guard co khi theo ngu canh truy hoi
     _ctx_is_mech = _context_is_mechanical(retrieved_docs, new_part_ids)
-    chain = _build_prompt_template(_ctx_is_mech, response_language) | llm | StrOutputParser()
+    _ctx_domain = _context_domain(retrieved_docs, new_part_ids)
+    chain = _build_prompt_template(_ctx_domain, response_language) | llm | StrOutputParser()
 
     stream_input = {
         "context": context_text,
