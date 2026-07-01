@@ -474,6 +474,63 @@ def _normalize_lang(lang):
         return "en"
     return "vi"
 
+
+# ---------------------------------------------------------------------------
+# Lightweight translator cho cac chuoi response trong rag/service.py
+# Khong import streamlit (service chay trong worker/server) -> dict rieng.
+# ---------------------------------------------------------------------------
+_RAG_RESPONSES_EN: dict[str, str] = {
+    "Chào bạn! Mình là trợ lý AI kỹ thuật cơ khí. Bạn có thể hỏi mình về bản vẽ, "
+    "dung sai, vật liệu, quy trình gia công hoặc upload tài liệu để mình học thêm.": (
+        "Hi there! I'm the AI technical assistant. You can ask me about drawings, "
+        "tolerances, materials, manufacturing processes or upload documents for me to learn."
+    ),
+    "Bạn muốn so sánh tài liệu này với phiên bản nào? (Ví dụ: v1 và v2, hoặc bản "
+    "đang lưu hành và bản bị lưu trữ gần nhất). Vui lòng chỉ định rõ phiên bản để "
+    "mình đối chiếu số liệu chính xác nhé.": (
+        "Which versions would you like to compare? (For example: v1 and v2, or the "
+        "current version vs. the most recent archived one). Please specify the versions "
+        "so I can cross-reference the data accurately."
+    ),
+    "Tài liệu hiện tại chưa có dữ liệu liên quan đến câu hỏi của bạn. "
+    "Mình không thể trả lời dựa trên suy đoán. "
+    "Vui lòng nạp tài liệu vào hệ thống trước, hoặc hỏi nội dung đã có trong dữ liệu.": (
+        "The current documents do not contain data related to your question. "
+        "I cannot answer based on guesswork. "
+        "Please load the relevant documents into the system first, or ask about existing data."
+    ),
+    "Tài liệu hiện tại không ghi chú thông tin về câu hỏi của bạn. "
+    "Vui lòng kiểm tra lại hoặc cung cấp thêm bản vẽ.": (
+        "The current documents do not contain information about your question. "
+        "Please check again or provide additional drawings."
+    ),
+    "Mình chưa xác định chắc chắn được tài liệu/bản vẽ cần tra theo mô tả của bạn. "
+    "Bạn vui lòng cung cấp thêm mã bản vẽ, model, tên sản phẩm, kích thước hoặc "
+    "vật liệu cụ thể hơn nhé.": (
+        "I couldn't determine the exact document/drawing from your description. "
+        "Could you please provide a drawing code, model name, product name, "
+        "dimensions or material for a more specific lookup?"
+    ),
+    "Nguon tham chieu:": "References:",
+    "Mình tìm thấy nhiều tài liệu có thể khớp với mô tả của bạn. "
+    "Bạn muốn tra theo tài liệu nào dưới đây?": (
+        "I found multiple documents that may match your description. "
+        "Which document below would you like me to look up?"
+    ),
+    "Bạn có thể trả lời bằng mã/model ở cột đầu, hoặc yêu cầu 'so sánh các model' "
+    "để mình lập bảng đối chiếu.": (
+        "You can reply with the code/model from the first column, or ask me to "
+        "'compare models' for a side-by-side comparison."
+    ),
+}
+
+
+def _t_rag(text: str, lang: str = "vi") -> str:
+    """Dich chuoi response RAG sang EN neu lang=='en', nguoc lai giu nguyen VI."""
+    if _normalize_lang(lang) != "en":
+        return text
+    return _RAG_RESPONSES_EN.get(text, text)
+
 # ===========================================================================
 
 
@@ -991,6 +1048,8 @@ def _norm(text):
     return remove_accents(str(text or "").lower())
 
 
+
+
 def is_high_risk_question(question):
     q = _norm(question)
     return any(kw in q for kw in RISKY_QUESTION_KEYWORDS) or bool(re.search(r"\b\d{3,}\b", q))
@@ -1031,9 +1090,15 @@ def heuristic_missing_evidence_reason(question, context_text):
     return None
 
 
-def make_insufficient_evidence_message(question, reason):
+def make_insufficient_evidence_message(question, reason, lang="vi"):
+    if _normalize_lang(lang) == "en":
+        return (
+            f"The current documents do not contain enough information to answer this question ({reason}).\n\n"
+            "I will not estimate or fabricate data. To get an answer, please load documents with directly relevant data, "
+            "such as machining time per product, hourly/shift productivity, production norms, costs or applicable inspection standards."
+        )
     return (
-        f"Tài liệu hiện tại không ghi thông tin ��ủ để tr�� lời câu hỏi này ({reason}).\n\n"
+        f"Tài liệu hiện tại không ghi thông tin đủ để trả lời câu hỏi này ({reason}).\n\n"
         "Mình sẽ không tự ước lượng hoặc tự bịa số liệu. Để trả lời được, bạn cần bổ sung tài liệu có dữ kiện trực tiếp liên quan, "
         "ví dụ thời gian gia công cho 1 sản phẩm, năng suất theo giờ/ca, định mức sản xuất, chi phí hoặc tiêu chuẩn kiểm tra tương ứng."
     )
@@ -1403,8 +1468,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     skip_retrieval = False
     query_to_search = user_question  # Mac dinh, cac nhanh ben duoi se override neu can
  
+    _chitchat_vi = ("Chào bạn! Mình là trợ lý AI kỹ thuật cơ khí. Bạn có thể hỏi mình về bản vẽ, "
+                    "dung sai, vật liệu, quy trình gia công hoặc upload tài liệu để mình học thêm.")
     def mock_stream():
-        yield "Chào bạn! Mình là trợ lý AI kỹ thuật cơ khí. Bạn có thể hỏi mình về bản vẽ, dung sai, vật liệu, quy trình gia công hoặc upload tài liệu để mình học thêm."
+        yield _t_rag(_chitchat_vi, response_language)
 
     if is_chitchat:
         logger.info("Cau hoi la giao tiep co ban, bo qua truy xuat DB.")
@@ -1427,13 +1494,17 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
  
         if intent_data.get("version_policy") == "compare_versions" and not intent_data.get("detected_versions"):
             logger.info("Nguoi dung muon so sanh nhung khong chi dinh version. Yeu cau xac minh.")
+            _ver_vi = ("Bạn muốn so sánh tài liệu này với phiên bản nào? (Ví dụ: v1 và v2, hoặc bản "
+                       "đang lưu hành và bản bị lưu trữ gần nhất). Vui lòng chỉ định rõ phiên bản để "
+                       "mình đối chiếu số liệu chính xác nhé.")
             def ask_version_stream():
-                yield "Bạn muốn so sánh tài liệu này với phiên bản nào? (Ví dụ: v1 và v2, hoặc bản đang lưu hành và bản bị lưu trữ gần nhất). Vui lòng chỉ định rõ phiên bản để mình đối chiếu số liệu chính xác nhé."
+                yield _t_rag(_ver_vi, response_language)
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="missing_compare_versions")
             return ask_version_stream(), "", [], current_part_ids, make_debug_info([])
 
         if new_part_ids == ["CHITCHAT"]:
             logger.info("LLM xac nhan la cau hoi ngoai le/xa giao. Bo qua toan bo Retrieval va HyDE.")
+            log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, is_chitchat=True)
             return mock_stream(), "", [], current_part_ids, make_debug_info([])
         else:
             # Tien xu ly cau hoi bang underthesea de match voi du lieu BM25
@@ -1524,8 +1595,13 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     # Kiem tra ket qua tim kiem ma cu the (khong fallback semantic lung tung)
     if not skip_retrieval and not retrieved_docs and new_part_ids:
         logger.info(f"Khong tim thay bat ky tai lieu nao cho ma {new_part_ids}. Tu choi fallback semantic.")
+        _codes_str = ', '.join(new_part_ids)
+        if _normalize_lang(response_language) == "en":
+            _no_code_msg = f"Sorry, I couldn't find the code '{_codes_str}' in the current drawing system. Please double-check the code or provide more details."
+        else:
+            _no_code_msg = f"Rất tiếc, mình không tìm thấy mã số '{_codes_str}' nào trong hệ thống bản vẽ hiện tại. Vui lòng kiểm tra lại mã hoặc mô tả rõ hơn."
         def insufficient_evidence_stream():
-            yield f"Rất tiếc, mình không tìm thấy mã số '{', '.join(new_part_ids)}' nào trong hệ thống bản vẽ hiện tại. Vui lòng kiểm tra lại mã hoặc mô tả rõ hơn."
+            yield _no_code_msg
         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="no_docs_for_exact_code")
         return insufficient_evidence_stream(), "", [], current_part_ids, make_debug_info([])
 
@@ -1590,11 +1666,14 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     logger.info(f"Nhieu candidate sau disambiguation: {[c.get('key') for c in resolution['candidates']]}.")
                     _table_md = build_candidate_table_markdown(resolution["candidates"])
                     def variant_ambiguity_stream():
+                        _header_vi = ("Mình tìm thấy nhiều tài liệu có thể khớp với mô tả của bạn. "
+                                      "Bạn muốn tra theo tài liệu nào dưới đây?")
+                        _footer_vi = ("Bạn có thể trả lời bằng mã/model ở cột đầu, hoặc yêu cầu 'so sánh các model' "
+                                      "để mình lập bảng đối chiếu.")
                         yield (
-                            "Mình tìm thấy nhiều tài liệu có thể khớp với mô tả của bạn. "
-                            "Bạn muốn tra theo tài liệu nào dưới đây?\n\n"
+                            _t_rag(_header_vi, response_language) + "\n\n"
                             + _table_md
-                            + "\n\nBạn có thể trả lời bằng mã/model ở cột đầu, hoặc yêu cầu 'so sánh các model' để mình lập bảng đối chiếu."
+                            + "\n\n" + _t_rag(_footer_vi, response_language)
                         )
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="multiple_candidates_need_choice")
                     return variant_ambiguity_stream(), "", [], current_part_ids, make_debug_info([])
@@ -1602,10 +1681,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     # Co mo ta nhung khong tai lieu nao khop du chac -> xin them thong tin.
                     logger.info(f"Khong resolve duoc candidate du chac voi rang buoc {_constraints}.")
                     def insufficient_candidate_stream():
-                        yield (
-                            "Mình chưa xác định chắc chắn được tài liệu/bản vẽ cần tra theo mô tả của bạn. "
-                            "Bạn vui lòng cung cấp thêm mã bản vẽ, model, tên sản phẩm, kích thước hoặc vật liệu cụ thể hơn nhé."
-                        )
+                        _insuf_vi = ("Mình chưa xác định chắc chắn được tài liệu/bản vẽ cần tra theo mô tả của bạn. "
+                                     "Bạn vui lòng cung cấp thêm mã bản vẽ, model, tên sản phẩm, kích thước hoặc "
+                                     "vật liệu cụ thể hơn nhé.")
+                        yield _t_rag(_insuf_vi, response_language)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="no_confident_candidate")
                     return insufficient_candidate_stream(), "", [], current_part_ids, make_debug_info([])
                 # decision == "pass": de nguyen, tra loi binh thuong
@@ -1674,11 +1753,12 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     if not retrieved_docs and not is_chitchat and not skip_retrieval:
         logger.warning("BLOCKER: Khong tim thay tai lieu nao, chan LLM de tranh hallucination.")
 
-        empty_msg = (
+        _empty_vi = (
             "Tài liệu hiện tại chưa có dữ liệu liên quan đến câu hỏi của bạn. "
             "Mình không thể trả lời dựa trên suy đoán. "
             "Vui lòng nạp tài liệu vào hệ thống trước, hoặc hỏi nội dung đã có trong dữ liệu."
         )
+        empty_msg = _t_rag(_empty_vi, response_language)
 
         def empty_stream():
             yield empty_msg
@@ -1739,7 +1819,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         # LOP PHONG THU 1 (CODE): Chan hoan toan LLM neu khong co tai lieu that (va khong phai chitchat/co anh)
         if not real_docs and not fake_docs:
             logger.warning("BLOCKER: Context rong, chan goi LLM de tranh Hallucination.")
-            empty_msg = "Tài liệu hiện tại không ghi chú thông tin về câu hỏi của bạn. Vui lòng kiểm tra lại hoặc cung cấp thêm bản vẽ."
+            _empty2_vi = ("Tài liệu hiện tại không ghi chú thông tin về câu hỏi của bạn. "
+                          "Vui lòng kiểm tra lại hoặc cung cấp thêm bản vẽ.")
+            empty_msg = _t_rag(_empty2_vi, response_language)
             def mock_stream():
                 yield empty_msg
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="empty_context", docs_count=0, version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, user_department=user_department, user_roles=user_roles)
@@ -1788,7 +1870,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     
     if not answerable:
         logger.warning(f"Evidence gate BLOCK cau hoi: {evidence_reason}")
-        safe_msg = make_insufficient_evidence_message(user_question, evidence_reason)
+        safe_msg = make_insufficient_evidence_message(user_question, evidence_reason, lang=response_language)
         def refusal_stream():
             yield safe_msg
         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="evidence_gate", docs_count=len(retrieved_docs), doc_ids=[d.metadata.get("doc_id") for d in retrieved_docs], retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=[d.metadata.get("relevance_score") for d in retrieved_docs], user_department=user_department, user_roles=user_roles)
@@ -1837,7 +1919,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 if bad_mats or bad_codes:
                     ans = make_insufficient_evidence_message(
                         user_question,
-                        f"Câu trả lời chứa thông tin tự tạo không có trong nguồn: materials={unsupported_mats}, codes={unsupported_codes}"
+                        f"Câu trả lời chứa thông tin tự tạo không có trong nguồn: materials={unsupported_mats}, codes={unsupported_codes}",
+                        lang=response_language,
                     )
                     yield ans
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
@@ -1845,7 +1928,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 elif bad_units:
                     ans = make_insufficient_evidence_message(
                         user_question,
-                        f"Câu trả lời chứa đơn vị/ký hiệu kỹ thuật không có trong nguồn: {unsupported_units}"
+                        f"Câu trả lời chứa đơn vị/ký hiệu kỹ thuật không có trong nguồn: {unsupported_units}",
+                        lang=response_language,
                     )
                     yield ans
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
@@ -1853,7 +1937,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 elif has_unsupported_numbers(answer, context_text, user_question, strict_mode=STRICT_ANSWER_MODE):
                     ans = make_insufficient_evidence_message(
                         user_question,
-                        "cau tra loi sinh ra co so lieu khong truy vet duoc trong tai lieu"
+                        "cau tra loi sinh ra co so lieu khong truy vet duoc trong tai lieu",
+                        lang=response_language,
                     )
                     yield ans
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
@@ -1865,7 +1950,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 ):
                     ans = make_insufficient_evidence_message(
                         user_question,
-                        "câu trả lời không có đủ nguồn file/trang/version rõ ràng"
+                        "câu trả lời không có đủ nguồn file/trang/version rõ ràng",
+                        lang=response_language,
                     )
                     yield ans
                     log_trace(

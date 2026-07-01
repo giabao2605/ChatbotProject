@@ -7,13 +7,99 @@ Muc tieu (A1 + B4):
 Dung cho moi domain / moi loai file. Khong phu thuoc DB nen luon import duoc.
 """
 
-from mech_chatbot.ui.i18n import t
+from mech_chatbot.ui.i18n import t, get_lang
 
 DOMAIN_LABELS = {
     "mechanical": "Co khi / Ky thuat",
     "tabular": "Bang bieu / Tai chinh",
     "generic": "Hanh chinh / Van ban",
 }
+
+# ----------------------------- Departments (song ngu) -----------------------
+# Nhan hien thi song ngu cho ma phong ban (DeptCode).
+# QUAN TRONG: gia tri luu trong DB / dung cho RBAC / query VAN LA MA GOC.
+# Day chi la lop HIEN THI. Dinh dang: "Ten (MA)".
+# Phong ban chua khai bao o day -> fallback ve chinh ma goc.
+DEPARTMENT_LABELS = {
+    "Accountant": {"vi": "Kế toán", "en": "Accounting"},
+    "HR": {"vi": "Nhân sự", "en": "Human Resources"},
+    "HSE_5S": {"vi": "HSE & 5S", "en": "HSE & 5S"},
+    "ISO": {"vi": "ISO", "en": "ISO"},
+    "IT": {"vi": "Công nghệ thông tin", "en": "Information Technology"},
+    "Maintenance": {"vi": "Bảo trì", "en": "Maintenance"},
+    "Molding": {"vi": "Khuôn đúc", "en": "Molding"},
+    "Planning": {"vi": "Kế hoạch", "en": "Planning"},
+    "Production": {"vi": "Sản xuất", "en": "Production"},
+    "Purchasing": {"vi": "Mua hàng", "en": "Purchasing"},
+    "QualityControl": {"vi": "Quản lý chất lượng", "en": "Quality Control"},
+    "Sales": {"vi": "Kinh doanh", "en": "Sales"},
+    "Technical": {"vi": "Kỹ thuật", "en": "Technical"},
+    "Warehouse": {"vi": "Kho", "en": "Warehouse"},
+    "CHUNG": {"vi": "Dùng chung (mọi phòng ban)", "en": "Shared (all departments)"},
+}
+
+_DEPT_DISPLAY_SUFFIXES = (" (disabled)", " (archived)")
+
+
+def dept_label(code):
+    """Nhan hien thi song ngu cho 1 ma phong ban: 'Ten (MA)'.
+
+    - Gia tri goc (code) KHONG doi; chi doi cach hien thi.
+    - Giu hau to ' (disabled)' / ' (archived)' neu admin dropdown them vao.
+    - Ten trung ma (vd 'ISO') -> chi hien 1 lan, tranh 'ISO (ISO)'.
+    - Phong chua khai bao -> fallback ve ma goc.
+    """
+    if code is None:
+        return ""
+    code_str = str(code).strip()
+    if not code_str:
+        return code_str
+    suffix = ""
+    for _sfx in _DEPT_DISPLAY_SUFFIXES:
+        if code_str.endswith(_sfx):
+            suffix = _sfx
+            code_str = code_str[: -len(_sfx)].strip()
+            break
+    entry = DEPARTMENT_LABELS.get(code_str)
+    if not entry:
+        return code_str + suffix
+    name = entry.get(get_lang()) or entry.get("en") or code_str
+    if name.strip().lower() == code_str.lower():
+        return name + suffix
+    return f"{name} ({code_str}){suffix}"
+
+
+def dept_labels_str(codes, sep=", ", empty=""):
+    """Noi nhieu ma phong ban thanh chuoi hien thi song ngu."""
+    if not codes:
+        return empty
+    if isinstance(codes, str):
+        codes = [codes]
+    parts = [dept_label(c) for c in codes if c not in (None, "")]
+    return sep.join(parts) if parts else empty
+
+
+# ----------------------------- Glossary (thuat ngu) -------------------------
+# Giu nguyen thuat ngu goc + kem nghia (theo lua chon nguoi dung).
+# Ap dung cho cac NHAN dung mot minh (vi du selectbox "Domain").
+GLOSSARY = {
+    "Domain": {"vi": "Domain (lĩnh vực)", "en": "Domain"},
+    "RAG": {"vi": "RAG (truy hồi tăng cường)", "en": "RAG"},
+    "Qdrant": {"vi": "Qdrant (cơ sở dữ liệu vector)", "en": "Qdrant"},
+    "metadata": {"vi": "metadata (siêu dữ liệu)", "en": "metadata"},
+    "variant": {"vi": "variant (biến thể)", "en": "variant"},
+    "payload": {"vi": "payload (dữ liệu đính kèm)", "en": "payload"},
+    "embedding": {"vi": "embedding (vector nhúng)", "en": "embedding"},
+    "worker": {"vi": "worker (tiến trình xử lý nền)", "en": "worker"},
+}
+
+
+def gloss(term):
+    """Tra ve thuat ngu kem nghia theo ngon ngu hien tai."""
+    entry = GLOSSARY.get(term)
+    if not entry:
+        return term
+    return entry.get(get_lang()) or entry.get("en") or term
 
 # Nhan truong theo domain.
 DOMAIN_FIELD_LABELS = {

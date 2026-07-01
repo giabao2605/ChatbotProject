@@ -13,17 +13,22 @@
 --   (sau do chay lai seed/03_departments.sql de nap gia tri Site cho 14 phong)
 -- ============================================================================
 USE Mech_Chatbot_DB;
+GO 
+IF EXISTS (
+        SELECT 1
+        FROM dbo._SchemaVersions
+        WHERE Version = 'V0008'
+    ) RETURN;
+GO 
+IF COL_LENGTH('dbo.Departments', 'Site') IS NULL
+ALTER TABLE dbo.Departments
+ADD Site NVARCHAR(100) NULL;
 GO
-IF EXISTS (SELECT 1 FROM dbo._SchemaVersions WHERE Version = 'V0008') RETURN;
-GO
-
-IF COL_LENGTH('dbo.Departments','Site') IS NULL
-    ALTER TABLE dbo.Departments ADD Site NVARCHAR(100) NULL;
-GO
-
 INSERT INTO dbo._SchemaVersions (Version, Description)
-VALUES ('V0008', 'P1.2/B1: them cot Site vao Departments (ALTER idempotent, tach khoi CREATE TABLE)');
-GO
-
+VALUES (
+        'V0008',
+        'P1.2/B1: them cot Site vao Departments (ALTER idempotent, tach khoi CREATE TABLE)'
+    );
+GO 
 PRINT 'V0008: Hoan tat them cot Departments.Site. Hay chay lai seed/03_departments.sql de nap gia tri Site.';
 GO

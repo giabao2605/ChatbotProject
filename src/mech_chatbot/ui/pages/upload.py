@@ -121,12 +121,14 @@ def run_upload():
             target_department = st.selectbox(
                 t("Phòng ban chính của lô upload *"),
                 allowed_departments,
+                format_func=dept_label,
                 help=t("Tất cả file trong lần tải này sẽ thuộc phòng ban này. Nếu file thuộc nhiều phòng khác nhau, hãy chuyển sang chế độ gán riêng từng file."),
             )
 
             extra_departments = st.multiselect(
                 t("Chia sẻ thêm cho phòng ban khác (tùy chọn)"),
                 [d for d in allowed_departments if d != target_department],
+                format_func=dept_label,
                 help=t("Tài liệu sẽ đọc được bởi phòng chính và các phòng được chọn thêm."),
             )
 
@@ -158,7 +160,7 @@ def run_upload():
 
                 if is_admin:
                     chosen_domain = st.selectbox(
-                        "Domain",
+                        gloss("Domain"),
                         list(DOMAIN_LABELS.keys()),
                         index=list(DOMAIN_LABELS.keys()).index(def_domain),
                         format_func=lambda x: t(DOMAIN_LABELS.get(x, x)),
@@ -197,11 +199,13 @@ def run_upload():
                     _file_dept = st.selectbox(
                         t("Phòng ban chính"),
                         allowed_departments,
+                        format_func=dept_label,
                         key=f"upload_file_dept_{idx}",
                     )
                     _file_extra = st.multiselect(
                         t("Chia sẻ thêm cho phòng ban khác (tùy chọn)"),
                         [d for d in allowed_departments if d != _file_dept],
+                        format_func=dept_label,
                         key=f"upload_file_extra_{idx}",
                     )
                     _fdomain, _fsecurity, _fsite = _resolve_defaults(_file_dept)
@@ -217,9 +221,11 @@ def run_upload():
                     )
         elif uploaded_files and len(uploaded_files) > 1:
             _batch_info_placeholder.info(
-                f"ℹ️ Đang chuẩn bị upload **{len(uploaded_files)} file** "
-                f"— tất cả sẽ được gán vào phòng **{target_department}**. "
-                "Nếu các file thuộc nhiều phòng khác nhau, hãy chuyển sang chế độ gán riêng từng file."
+                t(
+                    "ℹ️ Đang chuẩn bị upload **{n} file** — tất cả sẽ được gán vào phòng **{dept}**. "
+                    "Nếu các file thuộc nhiều phòng khác nhau, hãy chuyển sang chế độ gán riêng từng file.",
+                    n=len(uploaded_files), dept=dept_label(target_department),
+                )
             )
 
         with st.expander(
@@ -279,7 +285,7 @@ def save_uploaded_files(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     )
 
-    with st.status(t("Đang lưu file và tạo job ingest..."), expanded=True) as status_box:
+    with st.status(t("Đang l��u file và tạo job ingest..."), expanded=True) as status_box:
         if file_assignments:
             st.write(
                 t("Chế độ nhiều phòng ban: mỗi file sẽ được lưu và tạo job theo phòng bạn đã gán riêng.")

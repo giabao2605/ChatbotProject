@@ -70,7 +70,7 @@ def render_department_breakdown():
         return
     table = [
         {
-            t("Phong ban"): r["department"],
+            t("Phong ban"): labels.dept_label(r["department"]),
             t("Tai lieu so huu"): r.get("owned_total", r["total"]),
             t("Tai lieu duoc chia se"): r.get("shared_access", 0),
             t("Tong tai lieu"): r["total"],
@@ -90,7 +90,7 @@ def render_department_breakdown():
         _col_dept = t("Phòng ban")
         _col_docs = t("Số tài liệu")
         chart_df = pd.DataFrame(
-            [{_col_dept: r["department"], _col_docs: r["total"]} for r in rows]
+            [{_col_dept: labels.dept_label(r["department"]), _col_docs: r["total"]} for r in rows]
         ).set_index(_col_dept)
         st.bar_chart(chart_df[_col_docs])
     except Exception:
@@ -101,7 +101,7 @@ def render_department_breakdown():
     depts_with_failures = [r for r in rows if r["failed_jobs"]]
     total_failed = sum(r["failed_jobs"] for r in rows)
     if depts_with_failures:
-        _depts = ", ".join(f"{r['department']} ({r['failed_jobs']})" for r in depts_with_failures)
+        _depts = ", ".join(f"{labels.dept_label(r['department'])} ({r['failed_jobs']})" for r in depts_with_failures)
         st.warning(
             "⚠️ " + t(
                 "Co {n} job ingest dang loi. Phong can chu y: {depts} - kiem tra tab Hang doi.",
@@ -126,7 +126,7 @@ def render_recent_documents():
         st.info(t("Chưa có tài liệu."))
         return
     for doc_id, ten_file, thu_muc, review_status, lifecycle_status, ngay_tai_len in rows:
-        st.write(f"**{ten_file}**  \n`{thu_muc}` · {labels.status_badge(review_status)} · {labels.status_badge(lifecycle_status)} · {ngay_tai_len}")
+        st.write(f"**{ten_file}**  \n`{labels.dept_label(thu_muc)}` · {labels.status_badge(review_status)} · {labels.status_badge(lifecycle_status)} · {ngay_tai_len}")
 
 
 def render_recent_failed_jobs():

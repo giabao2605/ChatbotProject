@@ -13,6 +13,7 @@ from mech_chatbot.db.repository import (
     cleanup_dangling_records,
 )
 from mech_chatbot.ui.i18n import t
+from mech_chatbot.ui.labels import dept_label
 
 FAILURE_TYPES = [
     "wrong_version", "wrong_source", "retrieval_miss", "ocr_error", "bom_parse_error",
@@ -21,7 +22,7 @@ FAILURE_TYPES = [
 
 
 def run_feedback():
-    st.title("Feedback Loop")
+    st.title(t("Vòng phản hồi"))
     st.caption(t("Ph\u00e2n lo\u1ea1i c\u00e2u tr\u1ea3 l\u1eddi b\u1ecb dislike \u0111\u1ec3 c\u1ea3i thi\u1ec7n RAG v\u00e0 golden set."))
     if not (auth.has_role("reviewer") or auth.has_role("admin")):
         st.error(t("B\u1ea1n kh\u00f4ng c\u00f3 quy\u1ec1n x\u1eed l\u00fd feedback."))
@@ -154,7 +155,7 @@ def render_feedback_item(fb):
     fid, cid, question, bot_answer, failure_type, correct_answer, added, created, doc_ver, dept, is_stale = fb
     title_q = (question or "")[:80]
     stale_badge = " \u00b7 \u26a0\ufe0fSTALE" if is_stale else ""
-    with st.expander(f"[{created}] ChatID {cid} \u00b7 v{doc_ver or '?'} \u00b7 {dept or '-'}{stale_badge} \u00b7 {title_q}"):
+    with st.expander(f"[{created}] ChatID {cid} \u00b7 v{doc_ver or '?'} \u00b7 {dept_label(dept) or '-'}{stale_badge} \u00b7 {title_q}"):
         st.write("### " + t("C\u00e2u h\u1ecfi"))
         st.write(question or "")
         st.write("### " + t("C\u00e2u tr\u1ea3 l\u1eddi bot"))

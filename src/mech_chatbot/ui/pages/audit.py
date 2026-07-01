@@ -9,7 +9,7 @@ from mech_chatbot.ui.i18n import t
 
 
 def run_audit():
-    st.title("Audit Log")
+    st.title(t("Nhật ký kiểm toán"))
     if not auth.has_role("admin"):
         st.error(t("Ch\u1ec9 admin \u0111\u01b0\u1ee3c xem audit log."))
         return

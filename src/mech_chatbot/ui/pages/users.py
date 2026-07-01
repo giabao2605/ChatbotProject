@@ -12,6 +12,7 @@ from mech_chatbot.db.repository import (
     archive_department, reassign_department_data,
 )
 from mech_chatbot.ui.i18n import t
+from mech_chatbot.ui.labels import dept_label, dept_labels_str
 
 ROLE_OPTIONS = ["admin", "reviewer", "uploader", "viewer"]
 LEVEL_OPTIONS = ["public", "internal", "confidential"]
@@ -114,10 +115,10 @@ def render_user_list():
             cur_depts = get_user_departments(user_id)
             cur_sites = get_user_sites(user_id)
             cur_level = get_user_clearance(user_id)
-            st.write("**Allowed departments:** " + (", ".join(cur_depts) or t("(kh\u00f4ng)")))
+            st.write("**" + t("Phòng ban được phép") + ":** " + (dept_labels_str(cur_depts) or t("(kh\u00f4ng)")))
             _inactive_depts = [d for d in cur_depts if d not in active_dept_codes]
             if _inactive_depts:
-                st.warning(t("User này đang còn quyền ở phòng đã đóng: {depts}", depts=", ".join(_inactive_depts)))
+                st.warning(t("User này đang còn quyền ở phòng đã đóng: {depts}", depts=dept_labels_str(_inactive_depts)))
             st.write("**Allowed sites/khu:** " + (", ".join(cur_sites) or t("(kh\u00f4ng gi\u1edbi h\u1ea1n)")))
             st.write(f"**" + t("M\u1ee9c m\u1eadt t\u1ed1i \u0111a:") + f"** {cur_level}")
 
@@ -125,14 +126,14 @@ def render_user_list():
                 st.markdown("**" + t("Ph\u00e2n quy\u1ec1n RBAC") + "**")
                 cur_roles = get_user_roles(user_id)
                 new_roles = st.multiselect(
-                    "Roles", ROLE_OPTIONS,
+                    t("Vai trò"), ROLE_OPTIONS,
                     default=[r for r in cur_roles if r in ROLE_OPTIONS],
                     key=f"r_{user_id}",
                 )
                 dept_opts = sorted(set(active_dept_codes) | set(cur_depts))
                 site_opts = sorted(set(site_codes) | set(cur_sites))
                 new_depts = st.multiselect(
-                    "Allowed departments", dept_opts, default=cur_depts, key=f"d_{user_id}"
+                    t("Phòng ban được phép"), dept_opts, default=cur_depts, format_func=dept_label, key=f"d_{user_id}"
                 )
                 new_sites = st.multiselect(
                     t("Allowed sites/khu (\u0111\u1ec3 tr\u1ed1ng = kh\u00f4ng gi\u1edbi h\u1ea1n)"),
@@ -144,7 +145,7 @@ def render_user_list():
                     index=LEVEL_OPTIONS.index(cur_level) if cur_level in LEVEL_OPTIONS else 1,
                     key=f"l_{user_id}",
                 )
-                new_active = st.checkbox("Active", value=bool(is_active), key=f"active_{user_id}")
+                new_active = st.checkbox(t("Đang hoạt động"), value=bool(is_active), key=f"active_{user_id}")
                 saved = st.form_submit_button(t("L\u01b0u quy\u1ec1n"), type="primary")
             if saved:
                 try:
@@ -160,7 +161,7 @@ def render_user_list():
                         _blocked_depts = [d for d in new_depts if d not in _new_depts_safe]
                         st.warning(
                             t("Da loai bo {n} phong ban non-active khoi danh sach cap quyen moi: {depts}",
-                              n=len(_blocked_depts), depts=', '.join(_blocked_depts))
+                              n=len(_blocked_depts), depts=dept_labels_str(_blocked_depts))
                         )
                     set_user_departments(user_id, _new_depts_safe)
                     set_user_sites(user_id, new_sites)
@@ -218,18 +219,19 @@ def render_create_user():
     dept_codes = _dept_codes(active_only=True)
     site_codes = _site_codes()
 
-    username = st.text_input("Username")
+    username = st.text_input(t("Tên đăng nhập"))
     display_name = st.text_input(t("T\u00ean hi\u1ec3n th\u1ecb"))
     department = (
-        st.selectbox(t("Ph\u00f2ng ban ch\u00ednh"), [""] + dept_codes)
+        st.selectbox(t("Ph\u00f2ng ban ch\u00ednh"), [""] + dept_codes, format_func=dept_label)
         if dept_codes
         else st.text_input(t("Ph\u00f2ng ban ch\u00ednh"))
     )
     password = st.text_input(t("M\u1eadt kh\u1ea9u"), type="password")
-    selected_roles = st.multiselect("Roles", ROLE_OPTIONS, default=["viewer"])
+    selected_roles = st.multiselect(t("Vai trò"), ROLE_OPTIONS, default=["viewer"])
     allowed_departments = st.multiselect(
-        "Allowed departments", sorted(set(dept_codes)),
+        t("Phòng ban được phép"), sorted(set(dept_codes)),
         default=([department] if department else []),
+        format_func=dept_label,
     )
     allowed_sites = st.multiselect(
         t("Allowed sites/khu (\u0111\u1ec3 tr\u1ed1ng = kh\u00f4ng gi\u1edbi h\u1ea1n)"),
@@ -294,7 +296,7 @@ def render_org_management():
             use_container_width=True, hide_index=True,
         )
 
-        st.markdown("**" + t("Vòng đời từng phòng ban") + "**")
+        st.markdown("**" + t("Vòng đ���i từng phòng ban") + "**")
         for d in depts:
             code = d["code"]
             status = d.get("status") or ("active" if d.get("is_active") else "disabled")
@@ -310,10 +312,10 @@ def render_org_management():
             with cc2:
                 st.caption(_status_badge(status))
             with cc3:
-                extra = f" · {shared_docs} shared" if shared_docs else ""
-                st.caption(f"{n_docs} tài liệu · {n_users} user{extra}")
+                extra = t(" · {n} shared", n=shared_docs) if shared_docs else ""
+                st.caption(t("{n_docs} tài liệu · {n_users} user", n_docs=n_docs, n_users=n_users) + extra)
             with cc4:
-                st.caption(f"{n_jobs} job pending")
+                st.caption(t("{n_jobs} job pending", n_jobs=n_jobs))
             with cc5:
                 if status == "active":
                     if st.button(t("Tắt"), key=f"deact_{code}", use_container_width=True):
@@ -321,9 +323,12 @@ def render_org_management():
                         if not st.session_state.get(_confirm_key):
                             st.session_state[_confirm_key] = True
                             st.warning(
-                                f"⚠️ Xác nhận tắt phòng **{code}**? "
-                                f"Hiện có **{n_docs}** tài liệu, **{n_users}** user, **{n_jobs}** job pending. "
-                                "Upload mới sẽ bị khóa. Bấm **Tắt** lần nữa để xác nhận."
+                                t(
+                                    "⚠️ Xác nhận tắt phòng **{code}**? "
+                                    "Hiện có **{n_docs}** tài liệu, **{n_users}** user, **{n_jobs}** job pending. "
+                                    "Upload mới sẽ bị khóa. Bấm **Tắt** lần nữa để xác nhận.",
+                                    code=code, n_docs=n_docs, n_users=n_users, n_jobs=n_jobs,
+                                )
                             )
                         else:
                             res = set_department_status(code, "disabled", actor=actor)
@@ -349,15 +354,18 @@ def render_org_management():
                             if not st.session_state.get(_confirm_key):
                                 st.session_state[_confirm_key] = True
                                 st.warning(
-                                    f"📦 Xác nhận archive phòng **{code}**? "
-                                    f"Điều kiện: 0 user, 0 job pending. Hiện tại có **{n_users}** user, **{n_jobs}** job pending, **{n_docs}** tài liệu. "
-                                    "Bấm **Archive** lần nữa để xác nhận."
+                                    t(
+                                        "📦 Xác nhận archive phòng **{code}**? "
+                                        "Điều kiện: 0 user, 0 job pending. Hiện tại có **{n_users}** user, **{n_jobs}** job pending, **{n_docs}** tài liệu. "
+                                        "Bấm **Archive** lần nữa để xác nhận.",
+                                        code=code, n_users=n_users, n_jobs=n_jobs, n_docs=n_docs,
+                                    )
                                 )
                             else:
                                 res = archive_department(code, actor=actor, force=False)
                                 st.session_state.pop(_confirm_key, None)
                                 if res.get("ok"):
-                                    st.success(f"Đã archive phòng {code}.")
+                                    st.success(t("Đã archive phòng {code}.", code=code))
                                     st.rerun()
                                 else:
                                     st.error(res.get("message") or t("Cập nhật thất bại."))
@@ -368,9 +376,12 @@ def render_org_management():
                         if not st.session_state.get(_confirm_key):
                             st.session_state[_confirm_key] = True
                             st.warning(
-                                f"♻️ Xac nhan khoi phuc phong **{code}** tu trang thai archived? "
-                                "Phong se chuyen ve 'disabled' (chua nhan job/user moi). "
-                                "Bam **Khoi phuc** lan nua de xac nhan."
+                                t(
+                                    "♻️ Xac nhan khoi phuc phong **{code}** tu trang thai archived? "
+                                    "Phong se chuyen ve 'disabled' (chua nhan job/user moi). "
+                                    "Bam **Khoi phuc** lan nua de xac nhan.",
+                                    code=code,
+                                )
                             )
                         else:
                             res = set_department_status(code, "disabled", actor=actor, force=True)
@@ -402,10 +413,14 @@ def render_org_management():
                 if res.get("ok"):
                     q_fail = res.get("qdrant_failures") or []
                     st.success(
-                        f"Đã chuyển **{res.get('moved_docs', 0)}** tài liệu và **{res.get('moved_users', 0)}** user từ **{source_code}** sang **{target_code}**."
+                        t(
+                            "Đã chuyển **{docs}** tài liệu và **{users}** user từ **{src}** sang **{dst}**.",
+                            docs=res.get("moved_docs", 0), users=res.get("moved_users", 0),
+                            src=source_code, dst=target_code,
+                        )
                     )
                     if q_fail:
-                        st.warning(f"Có {len(q_fail)} DocID chưa đồng bộ được Qdrant: {q_fail[:10]}")
+                        st.warning(t("Có {n} DocID chưa đồng bộ được Qdrant: {ids}", n=len(q_fail), ids=q_fail[:10]))
                     st.rerun()
                 else:
                     st.error(res.get("message") or t("Thao tác reassign thất bại."))
@@ -447,7 +462,7 @@ def render_org_management():
             scode = st.text_input(t("Mã khu (vd: XUONG_CO_KHI)"))
         with c2:
             sname = st.text_input(t("Tên khu"))
-        sactive = st.checkbox("Active", value=True, key="site_active")
+        sactive = st.checkbox(t("Đang hoạt động"), value=True, key="site_active")
         if st.form_submit_button(t("Lưu khu/site"), type="primary"):
             if not scode.strip():
                 st.error(t("Mã khu là bắt buộc."))

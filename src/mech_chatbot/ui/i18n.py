@@ -608,6 +608,477 @@ _EN.update({
     ),
 })
 
+# --- Phase 4: dashboard.py ---
+_EN.update({
+    "Tổng quan hệ thống": "System overview",
+    "Theo dõi nhanh trạng thái tài liệu, ingest, chatbot và feedback.": (
+        "Quick overview of document, ingest, chatbot and feedback status."
+    ),
+    "Chỉ admin được xem trang tổng quan.": "Only admins can view the overview page.",
+    "Không thể kết nối Database.": "Cannot connect to the database.",
+    "Tổng tài liệu": "Total documents",
+    "Chờ duyệt": "Pending review",
+    "Job đang xử lý": "Running jobs",
+    "Job lỗi": "Failed jobs",
+    "Đã published": "Published",
+    "Chat hôm nay": "Chats today",
+    "Feedback cần xử lý": "Feedback to process",
+    "Thống kê theo phòng ban": "Statistics by department",
+    "Tài liệu mới": "Recent documents",
+    "Job lỗi gần đây": "Recent failed jobs",
+    "Chưa có dữ liệu theo phòng ban.": "No departmental data yet.",
+    "Phong ban": "Department",
+    "Tai lieu so huu": "Owned documents",
+    "Tai lieu duoc chia se": "Shared documents",
+    "Tong tai lieu": "Total documents",
+    "Da publish": "Published",
+    "Cho duyet": "Pending review",
+    "Mat (confidential)": "Confidential",
+    "Job dang chay": "Running jobs",
+    "Job loi": "Failed jobs",
+    "Co {n} job ingest dang loi. Phong can chu y: {depts} - kiem tra tab Hang doi.": (
+        "{n} ingest job(s) failing. Departments to check: {depts} — see the Queue tab."
+    ),
+    "Khong tai duoc thong ke theo phong: {e}": "Cannot load department stats: {e}",
+    "Khong tai duoc tai lieu moi: {e}": "Cannot load recent documents: {e}",
+    "Chưa có tài liệu.": "No documents yet.",
+    "Khong tai duoc job loi: {e}": "Cannot load failed jobs: {e}",
+    "Không có job lỗi.": "No failed jobs.",
+    "Phòng ban:": "Department:",
+    "Cập nhật:": "Updated:",
+    "Không có thông báo lỗi.": "No error message.",
+    "Phòng ban": "Department",
+    "Số tài liệu": "Documents",
+})
+
+# --- Phase 4: settings.py ---
+_EN.update({
+    "Cấu hình hệ thống": "System configuration",
+    "Chỉ admin được truy cập cấu hình.": "Only admins can access configuration.",
+    "Kiểm tra sức khỏe hệ thống": "System health check",
+    "Kiểm tra nhanh kết nối tới Database, Qdrant, Embedding và LLM.": (
+        "Quick connectivity check for Database, Qdrant, Embedding and LLM."
+    ),
+    "Chạy kiểm tra ngay": "Run checks now",
+    "Qdrant (vector DB)": "Qdrant (vector DB)",
+    "Embedding model": "Embedding model",
+    "Thống kê hệ thống": "System statistics",
+    "Tổng số tài liệu": "Total documents",
+    "Số phòng ban có tài liệu": "Departments with documents",
+    "Tài liệu theo phòng ban": "Documents by department",
+    "Không lấy được thống kê: {e}": "Cannot load statistics: {e}",
+    "Tham số cấu hình ứng dụng": "Application settings",
+    "Không đọc được cấu hình: {e}": "Cannot read configuration: {e}",
+    "Số ngày cảnh báo trước khi tài liệu hết hiệu lực": "Days to warn before document expiry",
+    "Tài liệu có ExpiryDate trong khoảng này sẽ được cảnh báo 'sắp hết hạn'.": (
+        "Documents with ExpiryDate within this range will be flagged as 'expiring soon'."
+    ),
+    "Số đoạn tài liệu tối đa khi tìm kiếm chung (RAG general top_k)": (
+        "Max document chunks for general search (RAG general top_k)"
+    ),
+    "Số chunk tối đa lấy khi câu hỏi không gắn mã tài liệu cụ thể.": (
+        "Max chunks retrieved when the question has no specific document code."
+    ),
+    "Lưu cấu hình": "Save configuration",
+    "Đã lưu cấu hình ứng dụng.": "Application configuration saved.",
+    "Lỗi lưu cấu hình: {e}": "Configuration save error: {e}",
+    "Đang dùng RAG Server API": "Using RAG Server API",
+    "Chưa có RAG_SERVER_URL. Hệ thống sẽ dùng subprocess worker.": (
+        "No RAG_SERVER_URL configured. System will use subprocess worker."
+    ),
+    "Bảo mật": "Security",
+    "Trang này không hiển thị API key, password database hoặc token.": (
+        "This page does not display API keys, database passwords or tokens."
+    ),
+    "Engine chưa khởi tạo.": "Engine not initialized.",
+    "Kết nối Database OK.": "Database connection OK.",
+    "Lỗi: {e}": "Error: {e}",
+    "Chưa cấu hình QDRANT_URL.": "QDRANT_URL not configured.",
+    "Qdrant OK ({url}).": "Qdrant OK ({url}).",
+    "Qdrant trả về HTTP {code}.": "Qdrant returned HTTP {code}.",
+    "Lỗi kết nối Qdrant: {e}": "Qdrant connection error: {e}",
+    "Embedding: {model} (dim={dim}).": "Embedding: {model} (dim={dim}).",
+    "Chưa cấu hình EMBEDDING_MODEL.": "EMBEDDING_MODEL not configured.",
+    "Đã cấu hình API key cho LLM: ": "LLM API key configured: ",
+    "Chưa thấy API key LLM trong môi trường (OPENAI/GOOGLE/GEMINI/ANTHROPIC/LLM_API_KEY).": (
+        "No LLM API key found in environment (OPENAI/GOOGLE/GEMINI/ANTHROPIC/LLM_API_KEY)."
+    ),
+})
+
+# --- Phase 4: labels.py status badges ---
+_EN.update({
+    "Chờ duyệt": "Pending review",
+    "Đã duyệt": "Approved",
+    "Đã xuất bản": "Published",
+    "Bản nháp": "Draft",
+    "Từ chối": "Rejected",
+    "Lưu trữ": "Archived",
+    "Đã thay thế": "Superseded",
+    "Đang chờ": "Pending",
+    "Chờ thử lại": "Pending retry",
+    "Đang phân loại": "Classifying",
+    "Đang bóc tách": "Extracting",
+    "Đang tạo vector": "Embedding",
+    "Đang xuất bản": "Publishing",
+    "Lỗi": "Error",
+    "Chờ quota": "Waiting quota",
+    "Đã hủy": "Cancelled",
+    "Bị chặn (chất lượng)": "Blocked (quality)",
+    "Đạt": "Passed",
+    "Cảnh báo": "Warning",
+    "(không rõ)": "(unknown)",
+})
+
+# --- Phase 4: RAG chatbot response messages (used in rag/service.py) ---
+_EN.update({
+    # Chitchat greeting
+    "Chào bạn! Mình là trợ lý AI kỹ thuật cơ khí. Bạn có thể hỏi mình về bản vẽ, "
+    "dung sai, vật liệu, quy trình gia công hoặc upload tài li���u để mình học thêm.": (
+        "Hi there! I'm the AI technical assistant. You can ask me about drawings, "
+        "tolerances, materials, manufacturing processes or upload documents for me to learn."
+    ),
+    # Version disambiguation
+    "Bạn muốn so sánh tài liệu này với phiên bản nào? (Ví dụ: v1 và v2, hoặc bản "
+    "đang lưu hành và bản bị lưu trữ gần nhất). Vui lòng chỉ định rõ phiên bản để "
+    "mình đối chiếu số liệu chính xác nhé.": (
+        "Which versions would you like to compare? (For example: v1 and v2, or the "
+        "current version vs. the most recent archived one). Please specify the versions "
+        "so I can cross-reference the data accurately."
+    ),
+    # No docs for exact code
+    "Rất tiếc, mình không tìm thấy mã số '{codes}' nào trong hệ thống bản vẽ hiện tại. "
+    "Vui lòng kiểm tra lại mã hoặc mô tả rõ hơn.": (
+        "Sorry, I couldn't find the code '{codes}' in the current drawing system. "
+        "Please double-check the code or provide more details."
+    ),
+    # Empty context
+    "Tài liệu hiện tại chưa có dữ liệu liên quan đến câu hỏi của bạn. "
+    "Mình không thể trả lời dựa trên suy đoán. "
+    "Vui lòng nạp tài liệu vào hệ thống trước, hoặc hỏi nội dung đã có trong dữ liệu.": (
+        "The current documents do not contain data related to your question. "
+        "I cannot answer based on guesswork. "
+        "Please load the relevant documents into the system first, or ask about existing data."
+    ),
+    # Empty context (post-rerank)
+    "Tài liệu hiện tại không ghi chú thông tin về câu hỏi của bạn. "
+    "Vui lòng kiểm tra lại hoặc cung cấp thêm bản vẽ.": (
+        "The current documents do not contain information about your question. "
+        "Please check again or provide additional drawings."
+    ),
+    # Variant ambiguity
+    "Mình tìm thấy nhiều tài liệu có thể khớp với mô tả của bạn. "
+    "Bạn muốn tra theo tài liệu nào dưới đây?": (
+        "I found multiple documents that may match your description. "
+        "Which document below would you like me to look up?"
+    ),
+    "Bạn có thể trả lời bằng mã/model ở cột đầu, hoặc yêu cầu 'so sánh các model' "
+    "để mình lập bảng đối chiếu.": (
+        "You can reply with the code/model from the first column, or ask me to "
+        "'compare models' for a side-by-side comparison."
+    ),
+    # Insufficient candidate
+    "Mình chưa xác định chắc chắn được tài liệu/bản vẽ cần tra theo mô tả của bạn. "
+    "Bạn vui lòng cung cấp thêm mã bản vẽ, model, tên sản phẩm, kích thước hoặc "
+    "vật liệu cụ thể hơn nhé.": (
+        "I couldn't determine the exact document/drawing from your description. "
+        "Could you please provide a drawing code, model name, product name, "
+        "dimensions or material for a more specific lookup?"
+    ),
+    # Source citations header
+    "Nguon tham chieu:": "References:",
+})
+
+# --- Phase 5: cac chuoi f-string con dang do (users/documents/queue/upload/chatbot) ---
+_EN.update({
+    # documents.py
+    "Chọn DocID {doc_id} · {name}": "Select DocID {doc_id} · {name}",
+    # queue.py
+    "Chọn Job {job_id} · {name}": "Select Job {job_id} · {name}",
+    # upload.py
+    "ℹ️ Đang chuẩn bị upload **{n} file** — tất cả sẽ được gán vào phòng **{dept}**. "
+    "Nếu các file thuộc nhiều phòng khác nhau, hãy chuyển sang chế độ gán riêng từng file.": (
+        "ℹ️ Preparing to upload **{n} file(s)** — all will be assigned to department **{dept}**. "
+        "If the files belong to different departments, switch to per-file assignment mode."
+    ),
+    # users.py
+    "{n_docs} tài liệu · {n_users} user": "{n_docs} docs · {n_users} users",
+    " · {n} shared": " · {n} shared",
+    "{n_jobs} job pending": "{n_jobs} pending job(s)",
+    "⚠️ Xác nhận tắt phòng **{code}**? "
+    "Hiện có **{n_docs}** tài liệu, **{n_users}** user, **{n_jobs}** job pending. "
+    "Upload mới sẽ bị khóa. Bấm **Tắt** lần nữa để xác nhận.": (
+        "⚠️ Confirm disabling department **{code}**? "
+        "There are **{n_docs}** document(s), **{n_users}** user(s), **{n_jobs}** pending job(s). "
+        "New uploads will be locked. Click **Disable** again to confirm."
+    ),
+    "📦 Xác nhận archive phòng **{code}**? "
+    "Điều kiện: 0 user, 0 job pending. Hiện tại có **{n_users}** user, **{n_jobs}** job pending, **{n_docs}** tài liệu. "
+    "Bấm **Archive** lần nữa để xác nhận.": (
+        "📦 Confirm archiving department **{code}**? "
+        "Requirements: 0 users, 0 pending jobs. Currently there are **{n_users}** user(s), **{n_jobs}** pending job(s), **{n_docs}** document(s). "
+        "Click **Archive** again to confirm."
+    ),
+    "Đã archive phòng {code}.": "Department {code} archived.",
+    "♻️ Xac nhan khoi phuc phong **{code}** tu trang thai archived? "
+    "Phong se chuyen ve 'disabled' (chua nhan job/user moi). "
+    "Bam **Khoi phuc** lan nua de xac nhan.": (
+        "♻️ Confirm restoring department **{code}** from archived status? "
+        "The department will move back to 'disabled' (won't accept new jobs/users). "
+        "Click **Restore** again to confirm."
+    ),
+    "Đã chuyển **{docs}** tài liệu và **{users}** user từ **{src}** sang **{dst}**.": (
+        "Moved **{docs}** document(s) and **{users}** user(s) from **{src}** to **{dst}**."
+    ),
+    "Có {n} DocID chưa đồng bộ được Qdrant: {ids}": (
+        "{n} DocID(s) not yet synced to Qdrant: {ids}"
+    ),
+    # chatbot.py (luong hoc tai lieu)
+    "Hay hoc cac tai lieu nay: **{files}**": "Please learn these documents: **{files}**",
+    "---\n**[{i}/{total}] Đang lưu file: {name}**": "---\n**[{i}/{total}] Saving file: {name}**",
+    "Đã đưa {n} tài liệu vào hàng đợi (Queue)...": "Queued {n} document(s) for processing...",
+})
+
+# --- Phase 6: bo sung day du cac chuoi con sot (admin/analytics/audit/documents/
+#     feedback/materials/queue/upload/users/metadata_forms/labels/app) ---
+_EN.update({
+    # --- Chung / dung nhieu noi ---
+    "(chưa xác định)": "(undetermined)",
+    "Không kết nối được Database.": "Could not connect to the database.",
+    "Không thể kết nối đến Database.": "Could not connect to the database.",
+    "Chỉ admin mới truy cập được trang này.": "Only admins can access this page.",
+    "Chỉ admin được truy cập trang này.": "Only admins can access this page.",
+    "Mặc định": "Default",
+    "Hành động": "Action",
+    "Loại tài liệu": "Document type",
+    # --- labels.py: field labels theo domain ---
+    "Mã đối tượng": "Object code",
+    "Tên sản phẩm": "Product name",
+    "Vật liệu": "Material",
+    "Kích thước tổng thể": "Overall dimensions",
+    "Tiêu đề chứng từ": "Voucher title",
+    "Đơn vị": "Unit",
+    "Tiêu đề tài liệu": "Document title",
+    "Loại văn bản": "Document type",
+    "Số văn bản": "Document number",
+    "Người ký": "Signer",
+    # --- metadata_forms.py ---
+    "Đơn vị tính / tiền tệ": "Unit of measure / currency",
+    "Đối tác / Nhà cung cấp": "Partner / Supplier",
+    "Lĩnh vực / chủ đề": "Field / topic",
+    "Tên gọi dễ đọc của tài liệu (khác với tên file).": "A human-readable name for the document (different from the file name).",
+    "Vài câu mô tả để người dùng & chatbot hiểu nhanh tài liệu nói về gì.": "A few sentences describing what the document is about, so users & the chatbot can grasp it quickly.",
+    "nên theo định dạng YYYY-MM-DD (vd 2026-06-29). Giá trị hiện tại sẽ không được lưu nếu sai định dạng.": "should follow the YYYY-MM-DD format (e.g. 2026-06-29). The current value will not be saved if the format is wrong.",
+    # --- app.py nav ---
+    "Vòng đời từng phòng ban": "Per-department lifecycle",
+    # --- upload.py ---
+    "Upload file vào hàng đợi ingest để worker xử lý nền.": "Upload files to the ingest queue for background worker processing.",
+    "Cách gán phòng ban": "Department assignment mode",
+    "Một phòng ban cho cả lô": "One department for the whole batch",
+    "Gán phòng ban riêng cho từng file": "Assign a separate department per file",
+    "Dùng chế độ thứ hai khi bạn upload nhiều file thuộc nhiều phòng ban khác nhau.": "Use the second mode when you upload multiple files belonging to different departments.",
+    "Phòng ban chính của lô upload *": "Primary department for this upload batch *",
+    "Tất cả file trong lần tải này sẽ thuộc phòng ban này. Nếu file thuộc nhiều phòng khác nhau, hãy chuyển sang chế độ gán riêng từng file.": "All files in this upload will belong to this department. If files belong to different departments, switch to per-file assignment mode.",
+    "Tài liệu sẽ đọc được bởi phòng chính và các phòng được chọn thêm.": "The document will be readable by the primary department and the additionally selected departments.",
+    "Mức mật mặc định:": "Default security level:",
+    "Mặc định theo phòng. Người thường chỉ được giữ hoặc nâng cao hơn.": "Defaults to the department. Regular users can only keep it or raise it higher.",
+    "Ở chế độ này, mỗi file sẽ có phòng ban chính riêng. Domain / mức mật / site sẽ tự suy theo từng phòng khi tạo job ingest.": "In this mode, each file has its own primary department. Domain / security level / site will be inferred per department when the ingest job is created.",
+    "Kéo thả file vào đây hoặc chọn file": "Drag and drop files here or browse",
+    "Mỗi file bên dưới sẽ tạo 1 job riêng với phòng ban bạn chọn.": "Each file below will create its own job with the department you choose.",
+    "Gán phòng ban cho từng file": "Assign a department to each file",
+    "Thông tin tài liệu (metadata) — nên nhập để tìm kiếm/lọc tốt hơn": "Document information (metadata) — recommended for better search/filtering",
+    "Bạn đang gán phòng riêng từng file nhưng metadata bên dưới vẫn dùng chung cho cả lô. Nếu từng file có metadata rất khác nhau, hãy tách thành nhiều lần upload nhỏ hơn.": "You are assigning departments per file, but the metadata below still applies to the whole batch. If files have very different metadata, split them into smaller uploads.",
+    "Đưa vào hàng đợi xử lý": "Add to processing queue",
+    "Chưa chọn phòng ban — không thể gửi.": "No department selected — cannot submit.",
+    "Chế độ nhiều phòng ban: mỗi file sẽ được lưu và tạo job theo phòng bạn đã gán riêng.": "Multi-department mode: each file will be saved and queued according to the department you assigned to it.",
+    "Đang lưu file và tạo job ingest...": "Saving files and creating ingest jobs...",
+    "Tất cả phòng ban bạn được phép đều đang tạm dừng hoạt động. Không thể upload lúc này. Liên hệ quản trị để được hỗ trợ.": "All departments you are allowed to use are currently suspended. You cannot upload right now. Contact an administrator for help.",
+    "Tài khoản của bạn chưa được gán phòng ban nào. Không thể upload khi chưa có phòng ban. Liên hệ quản trị để được gán.": "Your account is not assigned to any department. You cannot upload without a department. Contact an administrator to be assigned.",
+    "Không tạo được job": "Could not create job",
+    "public - Công khai": "public - Public",
+    "internal - Nội bộ": "internal - Internal",
+    "confidential - Mật": "confidential - Confidential",
+    "mechanical - Tài liệu kỹ thuật / bản vẽ": "mechanical - Technical document / drawing",
+    "tabular - Bảng biểu / số liệu": "tabular - Table / figures",
+    "generic - Tài liệu văn bản chung": "generic - General text document",
+    # --- queue.py ---
+    "Xem danh sách các file đang được đưa vào xử lý bóc tách (Worker Queue).": "View the files being processed for extraction (Worker Queue).",
+    "Đang chờ xử lý": "Pending",
+    "Hiện không có file nào trong hàng đợi.": "There are currently no files in the queue.",
+    "Chọn tất cả jobs đang hiển thị": "Select all displayed jobs",
+    "Đã chọn {n} job.": "Selected {n} jobs.",
+    "Xác nhận xóa {n} job?": "Confirm deleting {n} jobs?",
+    "Xóa tất cả jobs đã chọn": "Delete all selected jobs",
+    "Tiến độ:": "Progress:",
+    "Đặt ưu tiên": "Set priority",
+    "Đã cập nhật ưu tiên.": "Priority updated.",
+    "Không cập nhật được ưu tiên.": "Could not update priority.",
+    "Đã hủy job.": "Job canceled.",
+    "Không thể hủy (job có thể đã hoàn tất hoặc đang publish).": "Cannot cancel (the job may already be completed or publishing).",
+    "Đã đưa lại vào hàng đợi!": "Re-queued!",
+    # --- admin.py (review) ---
+    "Hiển các file đã xử lý xong (status = pending_review), cần Reviewer xác nhận trước khi push lên Qdrant.": "Shows files that finished processing (status = pending_review) and need reviewer approval before being pushed to Qdrant.",
+    "Chọn nhiều job cùng lúc để publish, reject hoặc xóa. Publish sẽ chạy trực tiếp, không còn kẹt ở trạng thái publishing.": "Select multiple jobs at once to publish, reject or delete. Publish runs directly, no longer stuck in the publishing state.",
+    "Chọn tất cả jobs đang hiển thị ": "Select all displayed jobs ",
+    "Kiểu publish hàng loạt": "Bulk publish mode",
+    "Lọc tài liệu theo bộ lọc, sau đó chọn nhiều tài liệu và áp dụng cùng 1 metadata cho tất cả.": "Filter documents, then select multiple and apply the same metadata to all of them.",
+    "Đã xuất bản tài liệu. Chatbot có thể dùng sau khi payload Qdrant cập nhật.": "Document published. The chatbot can use it after the Qdrant payload updates.",
+    "Không có job nào đủ điều kiện.": "No eligible jobs.",
+    "Publish tất cả đã chọn": "Publish all selected",
+    "Reject tất cả đã chọn": "Reject all selected",
+    "Xóa tất cả đã chọn": "Delete all selected",
+    "Xác nhận xóa {n} job/tài liệu? Không thể hoàn tác.": "Confirm deleting {n} jobs/documents? This cannot be undone.",
+    "Không có tài liệu nào.": "No documents.",
+    "Đã từ chối tài liệu.": "Document rejected.",
+    "Đã lưu metadata, giữ trạng thái chờ duyệt.": "Metadata saved, kept in pending-review status.",
+    "Đã chọn: {n} job": "Selected: {n} jobs",
+    "Publish như tài liệu độc lập": "Publish as a standalone document",
+    "Publish song song như variant mới": "Publish in parallel as a new variant",
+    "Publish làm version mới": "Publish as a new version",
+    "Publish: {ok} thành công, {fail} thất bại.": "Publish: {ok} succeeded, {fail} failed.",
+    "Reject: {ok} thành công, {fail} thất bại.": "Reject: {ok} succeeded, {fail} failed.",
+    "Đã chọn: {n} tài liệu": "Selected: {n} documents",
+    "Đã cập nhật metadata: {ok} thành công, {fail} thất bại.": "Metadata updated: {ok} succeeded, {fail} failed.",
+    "Đã xóa: {ok} thành công, {fail} thất bại.": "Deleted: {ok} succeeded, {fail} failed.",
+    "Publish làm version mới (Archive bản cũ cùng variant)": "Publish as a new version (archive the old one in the same variant)",
+    "Publish song song như variant mới (Giữ nguyên bản cũ)": "Publish in parallel as a new variant (keep the old one)",
+    "Publish như tài liệu độc lập (Standalone)": "Publish as a standalone document (Standalone)",
+    "Lưu nháp / Cần sửa metadata": "Save draft / needs metadata edits",
+    "Từ chối (Reject)": "Reject",
+    "Không tìm thấy DocID tương ứng với job này.": "No DocID found for this job.",
+    "Publish thất bại: không tìm thấy tài liệu hoặc không update được Qdrant.": "Publish failed: document not found or Qdrant could not be updated.",
+    "Thiếu DocID để publish": "Missing DocID to publish",
+    "sửa metadata": "edit metadata",
+    "độc lập": "standalone",
+    "variant mới": "new variant",
+    # --- analytics.py ---
+    "Phân tích & báo cáo sử dụng": "Usage analytics & reports",
+    "Thống kê câu hỏi, tài liệu được hỏi nhiều và tỉ lệ không tìm thấy — để cải thiện kho tài liệu.": "Statistics on questions, most-asked documents and not-found rate — to improve the document repository.",
+    "Khoảng thời gian": "Time range",
+    "ngày gần nhất": "most recent days",
+    "Đang tổng hợp...": "Aggregating...",
+    "Tổng câu hỏi": "Total questions",
+    "Phiên / Người dùng": "Sessions / Users",
+    "Tỉ lệ không tìm thấy": "Not-found rate",
+    "Tỉ lệ câu trả lời cho thấy hệ thống không tìm được thông tin.": "Share of answers where the system could not find information.",
+    "Số câu hỏi theo ngày": "Questions per day",
+    "Chưa có dữ liệu chat trong khoảng thời gian này.": "No chat data in this time range.",
+    "Câu hỏi phổ biến": "Popular questions",
+    "Câu hỏi (đã chuẩn hóa)": "Question (normalized)",
+    "Tài liệu được tham chiếu nhiều": "Most-referenced documents",
+    "Tài liệu / bản vẽ": "Documents / drawings",
+    "Chưa có tham chiếu tài liệu trong câu trả lời.": "No document references in the answers yet.",
+    "Tỉ lệ 'không tìm thấy' cao ⇒ cân nhắc bổ sung tài liệu cho các chủ đề đó, hoặc kiểm tra quyền truy cập của người dùng.": "A high 'not found' rate ⇒ consider adding documents for those topics, or check users' access permissions.",
+    # --- audit.py ---
+    "Chỉ admin được xem audit log.": "Only admins can view the audit log.",
+    "Lọc action": "Filter action",
+    "Lọc username": "Filter username",
+    "Khoảng ngày (CreatedAt)": "Date range (CreatedAt)",
+    "Giới hạn dòng": "Row limit",
+    "Không có audit log.": "No audit logs.",
+    "Hiển thị {n} dòng (giới hạn {lim}).": "Showing {n} rows (limit {lim}).",
+    "Tải CSV": "Download CSV",
+    "Chỉ đọc tài liệu mật": "Confidential reads only",
+    "Chỉ hiển thị các lượt truy cập tài liệu confidential (action read_confidential).": "Only show confidential document accesses (action read_confidential).",
+    # --- documents.py ---
+    "Danh sách tài liệu đã được nạp vào hệ thống.": "List of documents ingested into the system.",
+    "Chọn tất cả tài liệu đang hiển thị": "Select all displayed documents",
+    "Đã chọn {n} tài liệu.": "Selected {n} documents.",
+    "Xác nhận xóa vĩnh viễn {n} tài liệu?": "Confirm permanently deleting {n} documents?",
+    "Xóa tất cả tài liệu đã chọn": "Delete all selected documents",
+    "Đánh dấu hiện hành": "Mark as current",
+    "Đánh dấu hết hiệu lực": "Mark as expired",
+    "Hiển các tài liệu có ExpiryDate hoặc ReviewDate trong vòng 60 ngày tới, hoặc đã quá hạn mà vẫn đang ở trạng thái active.": "Shows documents with an ExpiryDate or ReviewDate within the next 60 days, or already overdue but still active.",
+    "Đã đánh dấu hiện hành.": "Marked as current.",
+    "Đã cập nhật trạng thái.": "Status updated.",
+    "Tiêu đề:": "Title:",
+    "Đã xóa tài liệu.": "Document deleted.",
+    "Xóa tài liệu thất bại.": "Failed to delete document.",
+    "Đang hiệu lực": "Active",
+    "Đã bị thay thế": "Superseded",
+    "Đã hết hạn": "Expired",
+    # --- feedback.py ---
+    "Phân loại câu trả lời bị dislike để cải thiện RAG và golden set.": "Categorize disliked answers to improve RAG and the golden set.",
+    "Điểm tính từ like/dislike, có trọng số theo vai trò người đánh giá và giảm dần theo thời gian; bỏ qua feedback đã stale. Điểm thấp = cần xem lại.": "Score computed from likes/dislikes, weighted by reviewer role and decaying over time; stale feedback is ignored. A low score = needs review.",
+    "Tính lại điểm chất lượng": "Recalculate quality score",
+    "Tập câu hỏi chuẩn + đáp án kỳ vọng (DocID và/hoặc từ khóa). Bấm Chạy hồi quy để đối chiếu câu trả lời hiện tại của bot, phát hiện hồi quy sau khi cập nhật tài liệu/cấu hình.": "A set of standard questions + expected answers (DocID and/or keywords). Click 'Run regression' to compare against the bot's current answers and detect regressions after updating documents/config.",
+    "Đang có {active} câu active / {total} tổng.": "{active} active questions / {total} total.",
+    "Dọn dữ liệu mồ côi (tham chiếu tới tài liệu/chat đã xoà) để điểm chất lượng và golden set không bị sai lệch.": "Clean up orphaned data (references to deleted documents/chats) so quality scores and the golden set are not skewed.",
+    "Câu trả lời đúng": "Correct answer",
+    "Đã tính lại cho {n} tài liệu.": "Recalculated for {n} documents.",
+    "Chưa có dữ liệu. Hãy bấm nút Tính lại điểm chất lượng sau khi đã có like/dislike.": "No data yet. Click 'Recalculate quality score' after you have some likes/dislikes.",
+    "Chưa có kết quả hồi quy. Thêm câu hỏi và bấm Chạy hồi quy.": "No regression results yet. Add questions and click 'Run regression'.",
+    "Đang chạy bộ hồi quy qua engine RAG...": "Running the regression suite through the RAG engine...",
+    "Đã dọn: ": "Cleaned: ",
+    "Đã cập nhật feedback và lưu Golden Answer.": "Feedback updated and Golden Answer saved.",
+    "Đã cập nhật feedback.": "Feedback updated.",
+    "Đã thêm câu hỏi hồi quy.": "Regression question added.",
+    "Đã xóa feedback.": "Feedback deleted.",
+    # --- materials.py ---
+    "Từ điển mã vật tư & đồng nghĩa": "Material code & synonym dictionary",
+    "Quản trị danh mục vật liệu chuẩn + từ đồng nghĩa dùng cho trích xuất & chuẩn hóa khi ingest, và guard chống bịa vật liệu trong RAG. Chỉnh ở đây có hiệu lực ngay — không cần sửa code.": "Manage the standard material catalog + synonyms used for extraction & normalization during ingest, and to guard against fabricated materials in RAG. Changes here take effect immediately — no code changes needed.",
+    "Chưa có vật liệu nào. Hãy thêm ở trên hoặc chạy migration P2 để seed dữ liệu gốc.": "No materials yet. Add one above or run the P2 migration to seed initial data.",
+    "đồng nghĩa": "synonyms",
+    "Thêm vật liệu mới": "Add new material",
+    "Mã chuẩn (vd SUS304)": "Standard code (e.g. SUS304)",
+    "Tên hiển thị (vd SUS 304)": "Display name (e.g. SUS 304)",
+    "Nhóm (vd stainless steel)": "Group (e.g. stainless steel)",
+    "Tổng cộng: {n} vật liệu": "Total: {n} materials",
+    "Mã chuẩn": "Standard code",
+    "Nhóm": "Group",
+    "Lưu thay đổi": "Save changes",
+    "Xóa vật liệu": "Delete material",
+    "Thêm đồng nghĩa": "Add synonym",
+    "Đã thêm/cập nhật '{code}'.": "Added/updated '{code}'.",
+    "Phải nhập Mã chuẩn.": "Standard code is required.",
+    "Đã lưu.": "Saved.",
+    "Đã xóa '{code}'.": "Deleted '{code}'.",
+    "Từ đồng nghĩa": "Synonyms",
+    "Chưa có đồng nghĩa.": "No synonyms yet.",
+    # --- users.py ---
+    "Allowed sites/khu (để trống = không giới hạn)": "Allowed sites/zones (leave empty = no restriction)",
+    "Mức mật tối đa": "Maximum security level",
+    "Khu mặc định": "Default site",
+    "Lĩnh vực / kiểu đọc (domain)": "Field / reading type (domain)",
+    "Reassign / gộp phòng ban": "Reassign / merge departments",
+    "Phòng nguồn": "Source department",
+    "Phòng đích": "Target department",
+    "Chuyển luôn user assignments sang phòng đích": "Also move user assignments to the target department",
+    "Sẽ chuyển TaiLieu, IngestionJobs, UserDepartments và payload Qdrant; sau đó tự động tắt phòng nguồn.": "Will move TaiLieu, IngestionJobs, UserDepartments and the Qdrant payload; then automatically disable the source department.",
+    "Thực hiện reassign": "Run reassign",
+    "Bạn phải chọn đủ phòng nguồn và phòng đích.": "You must select both source and target departments.",
+    "Thao tác reassign thất bại.": "Reassign operation failed.",
+    "Đã tạo người dùng.": "User created.",
+    "Không tạo được user: {e}": "Could not create user: {e}",
+    "Đã cập nhật quyền.": "Permissions updated.",
+    "Đặt lại mật khẩu": "Reset password",
+    "Đã đặt lại mật khẩu.": "Password reset.",
+    "Lỗi đặt lại mật khẩu: {e}": "Error resetting password: {e}",
+    "User này đang còn quyền ở phòng đã đóng: {depts}": "This user still has permissions in closed departments: {depts}",
+    "Đã tắt phòng {code}.": "Department {code} disabled.",
+    "Đã bật phòng {code}.": "Department {code} enabled.",
+    "Đã lưu phòng ban.": "Department saved.",
+    "Đã lưu khu/site.": "Site/zone saved.",
+    # --- chatbot.py ---
+    "Hệ thống đang bận": "The system is busy",
+    "Không có output từ RAG worker": "No output from the RAG worker",
+    "Hôm nay": "Today",
+    "Hôm qua": "Yesterday",
+    "Cũ hơn": "Older",
+    "**{name}**: Đã lưu và đưa vào hàng đợi xử lý ngầm (JobID: {job_id})": "**{name}**: Saved and queued for background processing (JobID: {job_id})",
+    "**{name}**: Lỗi khi tạo Job": "**{name}**: Error creating job",
+    "Hoàn tất đưa vào hàng đợi! (Thành công {ok}/{total})": "Finished queuing! (Success {ok}/{total})",
+})
+
+# --- Phase 7: nhan song ngu con sot (English base -> Vietnamese base) ---
+_EN.update({
+    "Phòng ban được phép": "Allowed departments",
+    "Vai trò": "Roles",
+    "Tên đăng nhập": "Username",
+    "Đang hoạt động": "Active",
+    "Vòng phản hồi": "Feedback Loop",
+    "Nhật ký kiểm toán": "Audit Log",
+})
+
 # ---------------------------------------------------------------------------
 # Build lookup: normalized source text -> EN translation
 # ---------------------------------------------------------------------------

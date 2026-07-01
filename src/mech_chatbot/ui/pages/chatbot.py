@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from datetime import date, timedelta
 
 from mech_chatbot.ui.i18n import t, get_lang
+from mech_chatbot.ui.labels import dept_label
 
 load_dotenv()
 
@@ -138,7 +139,7 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
             _worker_logger.warning(f"RAG worker stderr (last 2000 chars): {result.stderr[-2000:]}")
 
         if not os.path.exists(out_path):
-            err = (result.stderr or result.stdout or "Không có output từ RAG worker")[-4000:]
+            err = (result.stderr or result.stdout or t("Không có output từ RAG worker"))[-4000:]
             raise RuntimeError(t("RAG worker không trả kết quả. returncode={rc}. Log: {log}",
                                   rc=result.returncode, log=err))
 
@@ -215,7 +216,7 @@ def chat_with_rag_api(user_question, image_path=None, chat_history=None,
         )
 
     if resp.status_code == 503:
-        detail = resp.json().get("detail", "Hệ thống đang bận")
+        detail = resp.json().get("detail", t("Hệ thống đang bận"))
         raise RuntimeError(detail)
 
     if resp.status_code != 200:
@@ -513,13 +514,13 @@ def run_chat():
             file_names_str = ", ".join(file_names)
             st.session_state.chat_history.append({"role": "user", "content": f"Hay hoc cac tai lieu nay: {file_names_str}"})
             with st.chat_message("user"):
-                st.markdown(f"Hay hoc cac tai lieu nay: **{file_names_str}**")
+                st.markdown(t("Hay hoc cac tai lieu nay: **{files}**", files=file_names_str))
  
             with st.chat_message("assistant"):
                 success_count = 0
                 fail_count = 0
                 responses = []
-                status_placeholder = st.status(f"Đã đưa {len(uploaded_files)} tài liệu vào hàng đợi (Queue)...", expanded=True)
+                status_placeholder = st.status(t("Đã đưa {n} tài liệu vào hàng đợi (Queue)...", n=len(uploaded_files)), expanded=True)
                 with status_placeholder:
                     user_dept_folder = safe_folder_name(current_user["department"])
                     _proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
@@ -527,7 +528,7 @@ def run_chat():
                     os.makedirs(tu_hoc_dir, exist_ok=True)
  
                     for idx, uf in enumerate(uploaded_files):
-                        st.write(f"---\n**[{idx+1}/{len(uploaded_files)}] Đang lưu file: {uf.name}**")
+                        st.write(t("---\n**[{i}/{total}] Đang lưu file: {name}**", i=idx+1, total=len(uploaded_files), name=uf.name))
                         raw_name = os.path.basename(uf.name)
                         safe_original_name = re.sub(r'[\\/*?:"<>|]', "_", raw_name)[:180]
                         safe_filename = f"{int(time.time())}_{idx}_{safe_original_name}"
@@ -544,12 +545,12 @@ def run_chat():
                         )
                         if job_id:
                             success_count += 1
-                            responses.append(f"**{uf.name}**: Đã lưu và đưa vào hàng đợi xử lý ngầm (JobID: {job_id})")
+                            responses.append(t("**{name}**: Đã lưu và đưa vào hàng đợi xử lý ngầm (JobID: {job_id})", name=uf.name, job_id=job_id))
                         else:
                             fail_count += 1
-                            responses.append(f"**{uf.name}**: Lỗi khi tạo Job")
+                            responses.append(t("**{name}**: Lỗi khi tạo Job", name=uf.name))
  
-                final_status = f"Hoàn tất đưa vào hàng đợi! (Thành công {success_count}/{len(uploaded_files)})"
+                final_status = t("Hoàn tất đưa vào hàng đợi! (Thành công {ok}/{total})", ok=success_count, total=len(uploaded_files))
                 state = "complete" if fail_count == 0 else "error"
                 status_placeholder.update(label=final_status, state=state, expanded=True)
  
@@ -837,7 +838,7 @@ def _render_answer_sources(debug_info):
             doc_id = d.get("doc_id")
             m = meta.get(doc_id, {})
             ten_file = m.get("ten_file") or d.get("file_goc") or t("(không rõ)")
-            phong_ban = m.get("thu_muc") or t("(không rõ)")
+            phong_ban = dept_label(m.get("thu_muc")) or t("(không rõ)")
             sec_level = m.get("security_level") or d.get("security_level") or "public"
             trang = d.get("trang")
             score = d.get("score")

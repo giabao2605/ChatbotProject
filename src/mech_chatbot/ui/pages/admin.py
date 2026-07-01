@@ -13,6 +13,7 @@ from mech_chatbot.db.repository import (
 )
 from mech_chatbot.ui import metadata_forms
 from mech_chatbot.ui.i18n import t
+from mech_chatbot.ui.labels import dept_label, gloss
 
 DOMAIN_OPTIONS = ["mechanical", "tabular", "generic"]
 SECURITY_LEVELS = ["public", "internal", "confidential"]
@@ -413,11 +414,12 @@ def render_bulk_meta_panel():
     with fc1:
         dept_f = st.selectbox(
             t("Ph\u00f2ng ban"), [t("T\u1ea5t c\u1ea3")] + _get_departments(),
+            format_func=dept_label,
             key="bulk_meta_dept",
         )
     with fc2:
         domain_f = st.selectbox(
-            "Domain", [t("T\u1ea5t c\u1ea3")] + DOMAIN_OPTIONS,
+            gloss("Domain"), [t("T\u1ea5t c\u1ea3")] + DOMAIN_OPTIONS,
             key="bulk_meta_domain",
         )
 
@@ -449,7 +451,7 @@ def render_bulk_meta_panel():
     selected_doc_ids = []
     for doc_id, fname, dept, dom in docs:
         if st.checkbox(
-            f"[{doc_id}] {fname} ({dept} / {dom})",
+            f"[{doc_id}] {fname} ({dept_label(dept)} / {dom})",
             key=f"bmeta_chk_{doc_id}",
         ):
             selected_doc_ids.append(doc_id)

@@ -168,8 +168,8 @@ GO
 
 -- >>> Cac cot phan loai/RBAC them RIENG bang ALTER idempotent <<<
 -- (Day chinh la cho truoc day bi loi: dat trong CREATE bi guard nen DB cu khong nhan)
-IF COL_LENGTH('dbo.TaiLieu','PhongBan')      IS NULL ALTER TABLE dbo.TaiLieu ADD PhongBan NVARCHAR(255) NULL;   -- = Departments.DeptCode (khoa phong ban duy nhat)
-GO
+-- E1: cot PhongBan (CSV) da bo — chia se phong ban chuyen sang bang nhieu-nhieu
+--     dbo.PhongBanChiaSe (dinh nghia o cuoi khoi TaiLieu ben duoi).
 IF COL_LENGTH('dbo.TaiLieu','Domain')        IS NULL ALTER TABLE dbo.TaiLieu ADD Domain NVARCHAR(50) NULL;        -- mechanical | tabular | generic
 GO
 IF COL_LENGTH('dbo.TaiLieu','SecurityLevel') IS NULL ALTER TABLE dbo.TaiLieu ADD SecurityLevel NVARCHAR(20) NOT NULL CONSTRAINT DF_TaiLieu_SecurityLevel DEFAULT 'internal';  -- public | internal | confidential
@@ -191,8 +191,22 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_TaiLieu_Site_Domain' AND object_id = OBJECT_ID('dbo.TaiLieu'))
     CREATE INDEX IX_TaiLieu_Site_Domain ON dbo.TaiLieu(Site, Domain, ReviewStatus);
 GO
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_TaiLieu_PhongBan' AND object_id = OBJECT_ID('dbo.TaiLieu'))
-    CREATE INDEX IX_TaiLieu_PhongBan ON dbo.TaiLieu(PhongBan, ReviewStatus);
+-- E1: bang nhieu-nhieu chia se phong ban (thay cho cot CSV TaiLieu.PhongBan cu).
+-- 1 tai lieu (DocID) <-> nhieu phong ban (DeptCode). DeptCode co the la sentinel
+-- SHARE_ALL ('CHUNG') nen KHONG rang buoc FK sang Departments.
+IF OBJECT_ID('dbo.PhongBanChiaSe', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.PhongBanChiaSe (
+        DocID    INT           NOT NULL,
+        DeptCode NVARCHAR(50)  NOT NULL,
+        CONSTRAINT PK_PhongBanChiaSe PRIMARY KEY (DocID, DeptCode),
+        CONSTRAINT FK_PhongBanChiaSe_TaiLieu
+            FOREIGN KEY (DocID) REFERENCES dbo.TaiLieu(DocID) ON DELETE CASCADE
+    );
+END
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_PhongBanChiaSe_Dept' AND object_id = OBJECT_ID('dbo.PhongBanChiaSe'))
+    CREATE INDEX IX_PhongBanChiaSe_Dept ON dbo.PhongBanChiaSe(DeptCode, DocID);
 GO
 -- Unique "ban hien hanh" — chi ap khi co BaseCode (tai lieu co khi). Tai lieu khong co
 -- ma ban ve (BaseCode NULL) duoc loai khoi rang buoc nho dieu kien BaseCode IS NOT NULL.
@@ -509,7 +523,7 @@ GO
 -- ==========================================================================
 -- PHAN 4B: DANH MUC PHONG BAN / SITE (data-driven, P1)
 --   Departments.DeptCode = KHOA PHONG BAN DUY NHAT cua he thong.
---   TaiLieu.PhongBan, UserDepartments.Department deu tham chieu khoa nay.
+--   PhongBanChiaSe.DeptCode, UserDepartments.Department deu tham chieu khoa nay.
 -- ==========================================================================
 IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'dbo.Departments') AND type = 'U')
 BEGIN

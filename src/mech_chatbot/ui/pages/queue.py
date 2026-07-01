@@ -66,7 +66,7 @@ def run_queue():
                 d for d in (current_user.get("allowed_departments") or [current_user.get("department")])
                 if d and d in _active_codes_q
             ]
-        dept_filter = st.selectbox(t("Ph\u00f2ng ban"), [t("T\u1ea5t c\u1ea3")] + sorted(set(dept_options)), key="queue_dept")
+        dept_filter = st.selectbox(t("Ph\u00f2ng ban"), [t("T\u1ea5t c\u1ea3")] + sorted(set(dept_options)), format_func=labels.dept_label, key="queue_dept")
     with fc3:
         search = st.text_input(t("T\u00ecm file"), key="queue_search")
 
@@ -133,7 +133,7 @@ def run_queue():
             ) = job
 
             if is_admin:
-                if st.checkbox(f"Chọn Job {job_id} · {ten_file}", value=select_all_jobs, key=f"queue_pick_{job_id}"):
+                if st.checkbox(t("Chọn Job {job_id} · {name}", job_id=job_id, name=ten_file), value=select_all_jobs, key=f"queue_pick_{job_id}"):
                     selected_job_ids.append(job_id)
 
             prio_badge = ("\U0001f525 GAP" if (priority or 100) < 50
@@ -143,7 +143,7 @@ def run_queue():
                 f"{labels.status_badge(status)} \u00b7 {ten_file} (Job: {job_id}) \u00b7 "
                 + t("\u01afu ti\u00ean:") + f" {prio_badge} - {created_at.strftime('%Y-%m-%d %H:%M:%S')}"
             ):
-                st.write(f"**" + t("Ph\u00f2ng ban:") + f"** {thu_muc} | **" + t("Ng\u01b0\u1eddi t\u1ea3i l\u00ean:") + f"** {uploaded_by or 'Unknown'}")
+                st.write(f"**" + t("Ph\u00f2ng ban:") + f"** {labels.dept_label(thu_muc)} | **" + t("Ng\u01b0\u1eddi t\u1ea3i l\u00ean:") + f"** {uploaded_by or 'Unknown'}")
                 st.write(
                     f"**Domain:** {domain_val or t('theo th\u01b0 m\u1ee5c')} | "
                     f"**" + t("M\u1ee9c m\u1eadt:") + f"** {security_val or t('theo th\u01b0 m\u1ee5c')}"

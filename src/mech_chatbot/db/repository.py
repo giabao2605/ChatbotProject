@@ -758,6 +758,40 @@ def _get_or_create_doc(conn, file_name, thu_muc):
         _apply_upload_meta_to_doc(conn, new_doc_id, (job[2] if job else None), domain)
     return new_doc_id
  
+def set_document_departments(conn, doc_id, dept_codes):
+    """E1: ghi lai danh sach phong ban duoc chia se cho 1 tai lieu vao bang
+    nhieu-nhieu dbo.PhongBanChiaSe (nguon su that). Xoa het dong cu cua doc_id
+    roi insert lai tap moi. Chay TRONG transaction cua caller (nhan `conn`).
+    dept_codes: list/tuple/set hoac chuoi CSV.
+    """
+    if doc_id is None:
+        return
+    codes = _split_csv_tokens(dept_codes)
+    conn.execute(text("DELETE FROM dbo.PhongBanChiaSe WHERE DocID = :d"), {"d": doc_id})
+    for code in codes:
+        conn.execute(
+            text("INSERT INTO dbo.PhongBanChiaSe (DocID, DeptCode) VALUES (:d, :c)"),
+            {"d": doc_id, "c": code},
+        )
+
+
+def get_document_departments(doc_id):
+    """E1: doc danh sach phong ban duoc chia se cua 1 tai lieu tu PhongBanChiaSe."""
+    if doc_id is None:
+        return []
+    _ensure_engine()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT DeptCode FROM dbo.PhongBanChiaSe WHERE DocID = :d ORDER BY DeptCode"),
+                {"d": doc_id},
+            ).fetchall()
+        return [r[0] for r in rows]
+    except Exception as e:
+        logger.error(f"get_document_departments loi doc_id={doc_id}: {e}", exc_info=True)
+        return []
+
+
 def update_document_classification(doc_id, domain=None, security_level=None, phong_ban=None):
     """GD5 fix ro ri: dong bo lai Domain/SecurityLevel/PhongBan cho TaiLieu sau khi co
     override tu form va escalation tu sensitive_scanner. Truoc day _get_or_create_doc ghi
@@ -776,23 +810,14 @@ def update_document_classification(doc_id, domain=None, security_level=None, pho
         if security_level is not None:
             sets.append("SecurityLevel = :seclvl")
             params["seclvl"] = security_level
-        if phong_ban is not None:
-            if isinstance(phong_ban, (list, tuple, set)):
-                items = []
-                for x in phong_ban:
-                    for part in str(x).split(","):
-                        p = part.strip()
-                        if p and p not in items:
-                            items.append(p)
-                pb_csv = ",".join(items)
-            else:
-                pb_csv = str(phong_ban).strip()
-            sets.append("PhongBan = :pb")
-            params["pb"] = pb_csv
-        if not sets:
+        # E1: PhongBan da chuyen sang bang nhieu-nhieu dbo.PhongBanChiaSe (khong con cot CSV).
+        if not sets and phong_ban is None:
             return
         with engine.begin() as conn:
-            conn.execute(text("UPDATE TaiLieu SET " + ", ".join(sets) + " WHERE DocID = :d"), params)
+            if sets:
+                conn.execute(text("UPDATE TaiLieu SET " + ", ".join(sets) + " WHERE DocID = :d"), params)
+            if phong_ban is not None:
+                set_document_departments(conn, doc_id, phong_ban)
     except Exception as e:
         logger.error(f"Loi update_document_classification doc_id={doc_id}: {e}", exc_info=True)
 
@@ -1232,14 +1257,12 @@ def search_bom_by_code(
                 dept_conditions = []
                 for i, dept in enumerate(allowed):
                     key = f"dept{i}"
-                    lk = f"deptlk{i}"
-                    # GD5 muc 4: ho tro tai lieu chia se nhieu phong (TaiLieu.PhongBan dang CSV).
-                    # Khop theo bien gioi dau phay de tranh sub-string match (vd 'QC' vs 'QC2').
+                    # E1: chia se nhieu phong qua bang nhieu-nhieu dbo.PhongBanChiaSe.
+                    # Khop chinh xac DeptCode (khong con substring match nhu CSV cu).
                     dept_conditions.append(
-                        "(t.ThuMuc = :" + key + " OR (t.PhongBan IS NOT NULL AND ',' + REPLACE(t.PhongBan, ' ', '') + ',' LIKE :" + lk + "))"
+                        "(t.ThuMuc = :" + key + " OR EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pbc WHERE pbc.DocID = t.DocID AND pbc.DeptCode = :" + key + "))"
                     )
                     params[key] = dept
-                    params[lk] = f"%,{dept},%"
 
                 filter_sql += " AND (" + " OR ".join(dept_conditions) + ")"
 
@@ -2247,9 +2270,10 @@ def get_department_summary(code):
             """), {"c": code}).fetchone()
             docs = conn.execute(text("SELECT COUNT(*) FROM dbo.TaiLieu WHERE ThuMuc = :c AND LifecycleStatus <> 'deleting'"), {"c": code}).fetchone()
             shared_docs = conn.execute(text("""
-                SELECT COUNT(*) FROM dbo.TaiLieu
-                WHERE ThuMuc <> :c AND LifecycleStatus <> 'deleting' AND PhongBan IS NOT NULL AND ',' + REPLACE(PhongBan, ' ', '') + ',' LIKE :lk
-            """), {"c": code, "lk": f"%,{code},%"}).fetchone()
+                SELECT COUNT(*) FROM dbo.TaiLieu t
+                WHERE t.ThuMuc <> :c AND t.LifecycleStatus <> 'deleting'
+                  AND EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pbc WHERE pbc.DocID = t.DocID AND pbc.DeptCode = :c)
+            """), {"c": code}).fetchone()
         return {
             "code": dept[0],
             "name": dept[1],
@@ -2342,21 +2366,35 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
     qdrant_failures = []
     try:
         with engine.begin() as conn:
-            # 1) TaiLieu
+            # 1) TaiLieu (E1: chia se phong ban nam o bang dbo.PhongBanChiaSe)
             doc_rows = conn.execute(text("""
-                SELECT DocID, ThuMuc, PhongBan
-                FROM dbo.TaiLieu
-                WHERE ThuMuc = :src OR (PhongBan IS NOT NULL AND ',' + REPLACE(PhongBan, ' ', '') + ',' LIKE :lk)
-            """), {"src": source_code, "lk": f"%,{source_code},%"}).fetchall()
+                SELECT DISTINCT t.DocID, t.ThuMuc
+                FROM dbo.TaiLieu t
+                WHERE t.ThuMuc = :src
+                   OR EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pbc WHERE pbc.DocID = t.DocID AND pbc.DeptCode = :src)
+            """), {"src": source_code}).fetchall()
             for row in doc_rows:
-                doc_id, thu_muc, phong_ban = row[0], row[1], row[2]
+                doc_id, thu_muc = row[0], row[1]
                 new_thu_muc = target_code if thu_muc == source_code else thu_muc
-                new_phong_ban = _replace_department_token_list(phong_ban, source_code, target_code)
-                if not new_phong_ban and new_thu_muc:
-                    new_phong_ban = new_thu_muc
-                conn.execute(text("UPDATE dbo.TaiLieu SET ThuMuc = :t, PhongBan = :pb WHERE DocID = :id"),
-                             {"t": new_thu_muc, "pb": new_phong_ban, "id": doc_id})
-                updated_doc_payloads.append((doc_id, _split_csv_tokens(new_phong_ban or new_thu_muc)))
+                if new_thu_muc != thu_muc:
+                    conn.execute(text("UPDATE dbo.TaiLieu SET ThuMuc = :t WHERE DocID = :id"),
+                                 {"t": new_thu_muc, "id": doc_id})
+                # Remap junction src -> target, tranh trung PK
+                conn.execute(text("DELETE FROM dbo.PhongBanChiaSe WHERE DocID = :id AND DeptCode = :src"),
+                             {"id": doc_id, "src": source_code})
+                conn.execute(text(
+                    "IF NOT EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe WHERE DocID = :id AND DeptCode = :dst) "
+                    "INSERT INTO dbo.PhongBanChiaSe (DocID, DeptCode) VALUES (:id, :dst)"),
+                    {"id": doc_id, "dst": target_code})
+                # Bao dam phong chu (ThuMuc moi) luon co trong junction
+                conn.execute(text(
+                    "IF NOT EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe WHERE DocID = :id AND DeptCode = :own) "
+                    "INSERT INTO dbo.PhongBanChiaSe (DocID, DeptCode) VALUES (:id, :own)"),
+                    {"id": doc_id, "own": new_thu_muc})
+                new_depts = [r[0] for r in conn.execute(text(
+                    "SELECT DeptCode FROM dbo.PhongBanChiaSe WHERE DocID = :id ORDER BY DeptCode"),
+                    {"id": doc_id}).fetchall()]
+                updated_doc_payloads.append((doc_id, new_depts))
 
             # 2) IngestionJobs
             job_rows = conn.execute(text("""
@@ -2612,20 +2650,15 @@ def dashboard_by_department():
             # Wrap rieng de fallback an toan neu DB cu khong ho tro.
             try:
                 shared_rows = conn.execute(text("""
-                    SELECT shared.Dept, COUNT(*) AS SharedAccess
-                    FROM (
-                        SELECT DISTINCT d.DocID, j.value AS Dept
-                        FROM dbo.TaiLieu d
-                        CROSS APPLY string_split(d.PhongBan, ',') j
-                        WHERE d.LifecycleStatus <> 'deleting'
-                          AND j.value IS NOT NULL
-                          AND LTRIM(RTRIM(j.value)) <> ''
-                          AND LTRIM(RTRIM(j.value)) <> ISNULL(d.ThuMuc, '')
-                    ) shared
-                    GROUP BY shared.Dept
+                    SELECT pbc.DeptCode AS Dept, COUNT(DISTINCT pbc.DocID) AS SharedAccess
+                    FROM dbo.PhongBanChiaSe pbc
+                    JOIN dbo.TaiLieu d ON d.DocID = pbc.DocID
+                    WHERE d.LifecycleStatus <> 'deleting'
+                      AND pbc.DeptCode <> ISNULL(d.ThuMuc, '')
+                    GROUP BY pbc.DeptCode
                 """)).fetchall()
-            except Exception as _split_err:
-                logger.warning(f"[P4.4] STRING_SPLIT khong kha dung (SQL compat level?): {_split_err}. Bo qua shared_access.")
+            except Exception as _shared_err:
+                logger.warning(f"[E1] Loi dem shared_access tu PhongBanChiaSe: {_shared_err}. Bo qua.")
                 shared_rows = []
             job_rows = conn.execute(text("""
                 SELECT ISNULL(ThuMuc, '(khong ro)') AS Dept,

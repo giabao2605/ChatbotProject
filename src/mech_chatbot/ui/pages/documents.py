@@ -48,11 +48,12 @@ def run_documents():
         dept_filter = st.selectbox(
             t("Ph\u00f2ng ban"),
             [t("T\u1ea5t c\u1ea3")] + sorted(set(dept_options)),
+            format_func=ui_labels.dept_label,
             key="docs_dept",
         )
     with fc2:
         domain_filter = st.selectbox(
-            "Domain",
+            ui_labels.gloss("Domain"),
             [t("T\u1ea5t c\u1ea3")] + DOMAIN_OPTIONS,
             key="docs_domain",
         )
@@ -153,7 +154,7 @@ def run_documents():
             doc_number, site, variant_group, branch_label, lifecycle_status, review_status
         ) = row
         if is_admin:
-            if st.checkbox(f"Chọn DocID {doc_id} · {original_file_name}", value=select_all_docs, key=f"docs_pick_{doc_id}"):
+            if st.checkbox(t("Chọn DocID {doc_id} · {name}", doc_id=doc_id, name=original_file_name), value=select_all_docs, key=f"docs_pick_{doc_id}"):
                 selected_doc_ids.append(doc_id)
         render_document_row(
             doc_id=doc_id, original_file_name=original_file_name, department=department,
@@ -208,7 +209,7 @@ def render_document_row(
     current_badge = "\u2705 " + t("Hi\u1ec7n h\u00e0nh") if is_current else "\U0001f4c4 " + t("C\u0169")
     display_title = title or original_file_name or f"DocID {doc_id}"
     with st.expander(
-        f"{current_badge} \u00b7 {display_title} \u00b7 v{version_no or 1} \u00b7 {department} \u00b7 {eff_label}"
+        f"{current_badge} \u00b7 {display_title} \u00b7 v{version_no or 1} \u00b7 {ui_labels.dept_label(department)} \u00b7 {eff_label}"
     ):
         c1, c2, c3 = st.columns(3)
         with c1:

@@ -9,6 +9,7 @@ from mech_chatbot.db.repository import (
     count_docs_by_department,
 )
 from mech_chatbot.ui.i18n import t
+from mech_chatbot.ui.labels import gloss
 
 
 def _check_database():
@@ -138,7 +139,7 @@ def run_settings():
 
     # ---------------- Thong tin RAG / Database ----------------
     st.markdown("---")
-    st.subheader("RAG")
+    st.subheader(gloss("RAG"))
     rag_server_url = os.getenv("RAG_SERVER_URL", "")
     if rag_server_url:
         st.success(t("Đang dùng RAG Server API"))

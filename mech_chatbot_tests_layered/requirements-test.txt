@@ -1,0 +1,4 @@
+# Phu thuoc rieng cho bo test theo tang.
+# (sqlalchemy, qdrant-client, python-dotenv... da co san trong moi truong chay app.)
+pytest>=7.4
+requests>=2.31
