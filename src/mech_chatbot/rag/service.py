@@ -779,7 +779,7 @@ def extract_mechanical_codes(question):
         codes.extend(re.findall(pattern, question, re.IGNORECASE))
     return sorted(set(codes))
 
-def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None):
+def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False):
     """Phan tich cau hoi de lay danh sach ma doi tuong va intent versioning bang LLM (co timeout)."""
     if current_part_ids is None:
         current_part_ids = []
@@ -907,12 +907,20 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         new_part_ids = current_part_ids
         is_inherited = True
         
-        if is_inherited and new_part_ids:
+        if is_inherited and new_part_ids and not force_part_ids:
             from mech_chatbot.rag.text_utils import remove_accents
             q_norm = remove_accents(question.lower())
             broad_keywords = ["toan bo", "tat ca", "danh sach", "co nhung ma", "co nhung san pham", "cac ma", "cac san pham"]
             if any(kw in q_norm for kw in broad_keywords):
                 logger.info(f"Phat hien cau hoi tong quat. Reset state (huy ke thua ma {new_part_ids}).")
+                new_part_ids = []
+                is_inherited = False
+            # FIX B: neu user mo ta tai lieu (ten/vat lieu/kich thuoc/model) -> coi nhu
+            # chi dinh tai lieu MOI. Huy ke thua ma cu de resolver chay tren mo ta,
+            # tranh dinh ma cu sai roi bao "khong tim thay ma".
+            _has_descr_ref = any(intent_data.get(_k) for _k in ("product_names", "materials", "dimensions", "models"))
+            if new_part_ids and _has_descr_ref:
+                logger.info(f"User mo ta tai lieu moi. Huy ke thua ma cu {new_part_ids}, chuyen sang resolver theo mo ta.")
                 new_part_ids = []
                 is_inherited = False
  
@@ -989,7 +997,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
 _CONTEXT_TIMEOUT = float(os.getenv("CONTEXT_TIMEOUT", "5.0"))
 
 
-def analyze_context(user_question, chat_history=None, current_part_ids=None):
+def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None):
     """P0-1: Phan doan ngu canh hoi thoai + query rewriting (1 LLM call, co timeout).
 
     Tra ve dict:
@@ -999,10 +1007,37 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None):
     Fallback AN TOAN (giu nguyen hanh vi cu = ke thua State Memory + cau goc) khi:
     tat tinh nang, chua co ngu canh, loi parse hoac timeout.
     """
-    fallback = {"context_action": "continue", "standalone_question": user_question}
+    fallback = {"context_action": "continue", "standalone_question": user_question, "llm_resolved": False}
     if not env_bool("ENABLE_QUERY_REWRITE", True):
         return fallback
-    if not chat_history or not current_part_ids:
+    if not chat_history:
+        return fallback
+
+    # P0-A: KHONG con yeu cau current_part_ids -> chay cho MOI luot co lich su.
+    # Phong ban phi co khi khong bao gio co part_ids van can decontextualize.
+    # Toi uu chi phi (volume cao): chi goi LLM khi cau co dau hieu phu thuoc
+    # ngu canh (dai tu / tinh luoc / cau ngan) HOAC dang co neo ngu canh.
+    from mech_chatbot.rag.text_utils import remove_accents as _ra_ctx
+    _q_ctx = _ra_ctx(str(user_question).lower())
+    _followup_markers = [
+        "no ", "no?", "cai do", "cai nay", "cai kia", "cai ay", "chung",
+        "ban truoc", "ban nay", "ban do", "phien ban truoc", "version truoc",
+        "con ", "the con", "vay con", "thi sao", "so voi", "so sanh voi",
+        "muc ", "phan ", "dieu ", "chuong ", "o tren", "ben tren", "vua roi",
+        "vua noi", "nhu vay", "tiep tuc", "chi tiet hon", "them", "the nao",
+        # KH-2: nhan dien cau "lam tiep" (tra loi loi moi cua bot) de van rewrite.
+        "trich", "liet ke", "cu the", "day du", "noi ro", "noi them",
+        "giai thich", "lam ro", "cho xem", "ra di", "lam di", "chi tiet",
+    ]
+    _has_followup_signal = (
+        any(m in _q_ctx for m in _followup_markers)
+        or len(_q_ctx.split()) <= 6
+    )
+    # Coi active_doc_refs nhu mot "neo" -> van cho LLM chay de phan biet continue /
+    # switch_topic ke ca voi cau dai KHONG co tu khoa tiep dien.
+    _has_anchor = bool(current_part_ids) or bool(active_doc_refs)
+    if not _has_anchor and not _has_followup_signal:
+        # Cau dau doc lap / khong phu thuoc ngu canh -> khoi goi LLM (tiet kiem cost)
         return fallback
 
     hist_lines = []
@@ -1033,9 +1068,16 @@ Quy tac:
 - switch_topic: cau hoi chuyen sang ma/san pham/chu de KHAC. Khong gan vao ma cu.
 - broaden: cau hoi tong quat/liet ke toan bo (vd co nhung ma nao, tat ca san pham). Khong gan vao mot ma cu the.
 - standalone_question bang tieng Viet, giu nguyen y dinh goc; chi bo sung ngu canh khi context_action = continue.
+- Neu chua ghim ma/tai lieu cu the (PARTIDS = chua ghim): VAN phai viet lai standalone_question bang cach thay dai tu (no, cai do, cai kia, chung, ban truoc...) va bo sung chu the con thieu dua tren lich su hoi thoai.
 - CHI tra ve JSON, khong giai thich."""
+    if current_part_ids:
+        part_ctx = str(current_part_ids)
+    elif active_doc_refs:
+        part_ctx = f"(chua ghim ma cu the; tai lieu dang trao doi: {active_doc_refs})"
+    else:
+        part_ctx = "(chua ghim ma/tai lieu cu the)"
     prompt = (template
-              .replace("__PARTIDS__", str(current_part_ids))
+              .replace("__PARTIDS__", part_ctx)
               .replace("__HIST__", hist_str)
               .replace("__QUESTION__", str(user_question)))
 
@@ -1053,7 +1095,7 @@ Quy tac:
         standalone = parsed.get("standalone_question") or user_question
         if not isinstance(standalone, str) or not standalone.strip():
             standalone = user_question
-        return {"context_action": action, "standalone_question": standalone.strip()}
+        return {"context_action": action, "standalone_question": standalone.strip(), "llm_resolved": True}
     except concurrent.futures.TimeoutError:
         try:
             future.cancel()
@@ -1579,7 +1621,7 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
         return False, None
 
 
-def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi"):
+def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None):
     if chat_history is None:
         chat_history = []
         
@@ -1599,8 +1641,15 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     # FIX HOI THOAI DAI: Thay vi co dinh 4 message (bot response dai chiem hang ngan token,
     # lan at context tai lieu khien LLM tra loi kem), dung budget ky tu co dinh.
     chat_history_str = ""
-    HISTORY_BUDGET = 1500  # ~375 tokens - du giu mach hoi thoai, khong lan at context
-    recent_history = chat_history[-6:]  # Xet nhieu message hon nhung cat theo budget
+    try:
+        HISTORY_BUDGET = int(os.getenv("HISTORY_BUDGET", "4000"))
+    except Exception:
+        HISTORY_BUDGET = 4000
+    try:
+        from mech_chatbot.rag import conversation_state as _cs_h
+        _overflow_msgs, recent_history = _cs_h.split_history_for_summary(chat_history or [])
+    except Exception:
+        _overflow_msgs, recent_history = [], (chat_history or [])[-12:]
  
     built_parts = []
     budget_used = 0
@@ -1611,14 +1660,58 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         if role == "Bot" and len(content) > 400:
             cut_pos = content[:400].rfind('.')
             content = (content[:cut_pos + 1] if cut_pos > 50 else content[:400]) + " [...]"
-        elif role == "Khach" and len(content) > 200:
-            content = content[:200] + " [...]"
+        elif role == "Khach" and len(content) > 1200:
+            content = content[:1200] + " [...]"
         line = f"{role}: {content}\n"
         if budget_used + len(line) > HISTORY_BUDGET:
             break
         built_parts.append(line)
         budget_used += len(line)
     chat_history_str = "".join(reversed(built_parts))
+
+    # KH-3 (V3): tom tat luy tien cho phan hoi thoai tran ra ngoai cua so nguyen van.
+    _history_summary_new = None
+    _summary_covered_new = None
+    try:
+        from mech_chatbot.rag import conversation_state as _cs_sum
+        if _cs_sum.history_summary_enabled():
+            _cc_prev = conversation_context or {}
+            _prev_summary = (_cc_prev.get("history_summary") or "").strip()
+            _prev_covered = int(_cc_prev.get("summary_covered") or 0)
+            _ov = _overflow_msgs or []
+            if _cs_sum.needs_summary_refresh(len(_ov), _prev_covered):
+                _to_sum = []
+                for _m in _ov:
+                    _r = "Khach" if _m.get("role") == "user" else "Bot"
+                    _c = str(_m.get("content") or "")
+                    if _r == "Bot" and len(_c) > 300:
+                        _c = _c[:300] + " [...]"
+                    _to_sum.append(f"{_r}: {_c}")
+                _sum_prompt = (
+                    "Ban la bo nho cua tro chuyen. Hay CAP NHAT ban tom tat hoi thoai "
+                    "(toi da 8 dong gach dau dong), giu: chu de dang ban, tai lieu/ma da nhac, "
+                    "cac ket luan/so lieu quan trong, va cau hoi con dang mo. "
+                    "Chi tra ve tom tat, khong giai thich.\n\n"
+                    f"TOM TAT HIEN CO:\n{_prev_summary or '(chua co)'}\n\n"
+                    "CAC LUOT MOI CAN GOP:\n" + "\n".join(_to_sum)
+                )
+                try:
+                    _history_summary_new = cohere_invoke([HumanMessage(content=_sum_prompt)]).content.strip()
+                    _summary_covered_new = len(_ov)
+                except Exception as _e_sum:
+                    logger.warning(f"[KH-3] Tom tat hoi thoai loi: {_e_sum}")
+                    _history_summary_new = _prev_summary or None
+                    _summary_covered_new = _prev_covered
+            else:
+                _history_summary_new = _prev_summary or None
+                _summary_covered_new = _prev_covered
+            _eff_summary = (_history_summary_new or _prev_summary or "").strip()
+            if _eff_summary:
+                _is_en = str(response_language or "").lower().startswith("en")
+                _summary_label = "=== EARLIER CONVERSATION SUMMARY ===" if _is_en else "=== TOM TAT HOI THOAI TRUOC DO ==="
+                chat_history_str = f"{_summary_label}\n{_eff_summary}\n\n{chat_history_str}"
+    except Exception as _e_sumwrap:
+        logger.warning(f"[KH-3] Summary buffer loi: {_e_sumwrap}")
  
     # BUOC A: XU LY ANH BANG GEMINI
     image_analysis = ""
@@ -1707,9 +1800,14 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         # va viet lai cau hoi noi tiep thanh cau doc lap TRUOC khi retrieve.
         effective_question = user_question
         effective_part_ids = current_part_ids
+        # Doc active_doc_refs SOM de (a) cho analyze_context biet tai lieu dang trao
+        # doi, (b) quyet dinh neo lai theo phan doan cua LLM.
+        _cc_in = conversation_context or {}
+        _active_doc_refs_in = _cc_in.get("active_doc_refs") if _cc_in else None
         t_ctx = time.time()
-        ctx_result = analyze_context(user_question, chat_history, current_part_ids)
+        ctx_result = analyze_context(user_question, chat_history, current_part_ids, active_doc_refs=_active_doc_refs_in)
         context_action = ctx_result["context_action"]
+        _ctx_llm_resolved = bool(ctx_result.get("llm_resolved"))
         if context_action in ("switch_topic", "broaden"):
             effective_part_ids = []  # Tu dong reset ngu canh khi doi chu de / hoi tong quat
         if ctx_result.get("standalone_question"):
@@ -1728,9 +1826,48 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                   part_ids_before=current_part_ids,
                   part_ids_after=effective_part_ids)
 
+        # === Tang B moi (ConvState): DST tat dinh - chon tu bang ung vien ===
+        _forced_sel = False
+        try:
+            from mech_chatbot.rag import conversation_state as _cs
+            _cc_in = conversation_context or {}
+            _cs_pending = _cc_in.get("pending_candidates") if _cc_in else None
+            if _cs_pending and _cs.is_enabled():
+                _sel_res = _cs.resolve_selection(user_question, _cs_pending)
+                if _sel_res.get("matched"):
+                    _cand = _sel_res["candidate"] or {}
+                    _code = str(_cand.get("base_code") or "").strip()
+                    if _code:
+                        effective_part_ids = [_code]
+                        _forced_sel = True
+                    else:
+                        effective_part_ids = []
+                        _desc = _cs.describe_candidate(_cand)
+                        if _desc:
+                            effective_question = _desc
+                    logger.info(f"[ConvState] Chon ung vien {_cand.get('key')} qua {_sel_res.get('match_type')} -> part_ids={effective_part_ids}, forced={_forced_sel}")
+            # KH-2 (sua V4) + NANG NEO: neo lai tai lieu dang hoi khi cau tiep dien
+            # khong kem ma moi. Quyet dinh dua tren 2 tin hieu: (1) heuristic tu vung
+            # is_continuation, HOAC (2) LLM phan doan context_action == "continue".
+            # TUYET DOI khong neo khi LLM bao switch_topic / broaden.
+            _llm_says_continue = (_ctx_llm_resolved and context_action == "continue")
+            _should_anchor = (
+                context_action not in ("switch_topic", "broaden")
+                and (_cs.is_continuation(user_question) or _llm_says_continue)
+            )
+            if (not _forced_sel and _cs.is_enabled() and not effective_part_ids
+                    and not _cs.has_explicit_code(user_question)
+                    and _should_anchor):
+                _adr = _active_doc_refs_in
+                if _adr:
+                    effective_part_ids = list(_adr)
+                    _forced_sel = True
+                    logger.info(f"[ConvState] Neo lai tai lieu {effective_part_ids} (is_cont={_cs.is_continuation(user_question)}, llm_continue={_llm_says_continue})")
+        except Exception as _cse:
+            logger.warning(f"[ConvState] resolve_selection loi: {_cse}")
         rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments, max_security_level=max_security_level, allowed_sites=allowed_sites)
         strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data = extract_search_intent(
-            effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites
+            effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel
         )
         
         log_trace("intent", trace_id, 
@@ -1760,7 +1897,11 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             query_to_search = tokenized_question
  
             # HyDE (Hypothetical Document Embeddings) Trigger
-            if len(tokenized_question.split()) < 25 and not new_part_ids:
+            try:
+                _skip_hyde_anchor = bool(_forced_sel) or (bool(_active_doc_refs_in) and _cs.is_continuation(user_question))
+            except Exception:
+                _skip_hyde_anchor = False
+            if len(tokenized_question.split()) < 25 and not new_part_ids and not _skip_hyde_anchor:
                 logger.info("Cau hoi ngan VA khong co ma ban ve, kich hoat HyDE de mo rong ngu canh...")
                 try:
                     hyde_prompt = f"Viet mot doan van ban ngan gon (1-2 cau) tra loi cho cau hoi sau dua tren tai lieu noi bo: '{effective_question}'"
@@ -1851,16 +1992,31 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
  
     # Kiem tra ket qua tim kiem ma cu the (khong fallback semantic lung tung)
     if not skip_retrieval and not retrieved_docs and new_part_ids:
-        logger.info(f"Khong tim thay bat ky tai lieu nao cho ma {new_part_ids}. Tu choi fallback semantic.")
-        _codes_str = ', '.join(new_part_ids)
-        if _normalize_lang(response_language) == "en":
-            _no_code_msg = f"Sorry, I couldn't find the code '{_codes_str}' in the current drawing system. Please double-check the code or provide more details."
+        if is_inherited:
+            # FIX C: ma nay do KE THUA (user khong go). Khong cung nhac "khong tim thay ma";
+            # ha ve tim kiem chung roi de resolver/generation xu ly.
+            logger.info(f"Khong co doc cho ma KE THUA {new_part_ids}. Huy ke thua, tim kiem chung.")
+            new_part_ids = []
+            try:
+                general_filter = current_published_filter(rbac_filter)
+                _retr_fb = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 30, "filter": general_filter})
+                active_filter = general_filter
+                retrieval_mode = "general_after_inherit_miss"
+                retrieved_docs = _retr_fb.invoke(query_to_search)
+            except Exception as _e_fb:
+                logger.warning(f"Fallback general sau inherit-miss loi: {_e_fb}")
+                retrieved_docs = []
         else:
-            _no_code_msg = f"Rất tiếc, mình không tìm thấy mã số '{_codes_str}' nào trong hệ thống bản vẽ hiện tại. Vui lòng kiểm tra lại mã hoặc mô tả rõ hơn."
-        def insufficient_evidence_stream():
-            yield _no_code_msg
-        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="no_docs_for_exact_code")
-        return insufficient_evidence_stream(), "", [], current_part_ids, make_debug_info([])
+            logger.info(f"Khong tim thay bat ky tai lieu nao cho ma {new_part_ids}. Tu choi fallback semantic.")
+            _codes_str = ', '.join(new_part_ids)
+            if _normalize_lang(response_language) == "en":
+                _no_code_msg = f"Sorry, I couldn't find the code '{_codes_str}' in the current drawing system. Please double-check the code or provide more details."
+            else:
+                _no_code_msg = f"Rất tiếc, mình không tìm thấy mã số '{_codes_str}' nào trong hệ thống bản vẽ hiện tại. Vui lòng kiểm tra lại mã hoặc mô tả rõ hơn."
+            def insufficient_evidence_stream():
+                yield _no_code_msg
+            log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="no_docs_for_exact_code")
+            return insufficient_evidence_stream(), "", [], current_part_ids, make_debug_info([])
 
     if not skip_retrieval:
         # Rule 3 (NANG CAP): khi co nhieu variant/base_code, KHONG voi tu choi.
@@ -1909,8 +2065,13 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     if _v and _v not in _constraints["dimensions"]:
                         _constraints["dimensions"].append(_v)
             _has_constraints = any(_constraints.values())
+            # KH-4: chi bung bang khi co tin hieu MANH (kich thuoc/vat lieu/ten trong ngoac)
+            # hoac nhieu variant cung base_code. Free-term chung chung KHONG bung bang nua.
+            _strong_constraints = bool(
+                _constraints.get("dimensions") or _constraints.get("materials") or _constraints.get("quoted_names")
+            )
             _need_disambig = (len(unique_variants) > 1) or (
-                not new_part_ids and _has_constraints and len(distinct_families) > 1
+                not new_part_ids and _strong_constraints and len(distinct_families) > 1
             )
 
             if _need_disambig:
@@ -1933,7 +2094,14 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                             + "\n\n" + _t_rag(_footer_vi, response_language)
                         )
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="multiple_candidates_need_choice")
-                    return variant_ambiguity_stream(), "", [], current_part_ids, make_debug_info([])
+                    _dbg_amb = make_debug_info([])
+                    try:
+                        from mech_chatbot.rag import conversation_state as _cs2
+                        if _cs2.is_enabled():
+                            _dbg_amb["conversation_context"] = {"pending_candidates": _cs2.public_candidates(resolution["candidates"]), "last_intent": "await_selection"}
+                    except Exception as _e_cs:
+                        logger.warning(f"[ConvState] luu pending loi: {_e_cs}")
+                    return variant_ambiguity_stream(), "", [], current_part_ids, _dbg_amb
                 elif resolution["decision"] == "insufficient":
                     # Co mo ta nhung khong tai lieu nao khop du chac -> xin them thong tin.
                     logger.info(f"Khong resolve duoc candidate du chac voi rang buoc {_constraints}.")
@@ -2168,7 +2336,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     stream_input = {
         "context": context_text,
-        "question": user_question,
+        # P0-B: dung cau da decontextualize (effective_question) neu co; fallback cau goc.
+        "question": (effective_question if ("effective_question" in locals() and effective_question) else user_question),
         "chat_history_str": chat_history_str
     }
 
@@ -2301,6 +2470,30 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)
     debug_info = make_debug_info(retrieved_docs)
+    # KH-2 (sua V4): neo lai tai lieu vua dung de tra loi cho luot tiep theo.
+    try:
+        from mech_chatbot.rag import conversation_state as _cs3
+        if _cs3.is_enabled() and retrieved_docs:
+            _adr_out = _cs3.dominant_doc_refs(retrieved_docs)
+            if _adr_out:
+                _cc_out = debug_info.get("conversation_context") or {}
+                _cc_out["active_doc_refs"] = _adr_out
+                _cc_out.setdefault("last_intent", "answered")
+                debug_info["conversation_context"] = _cc_out
+    except Exception as _e_adr:
+        logger.warning(f"[ConvState] luu active_doc_refs loi: {_e_adr}")
+
+    # KH-3: luu tom tat luy tien vao conversation_context (chi ton tai trong cuoc tro chuyen nay).
+    try:
+        if _history_summary_new is not None or _summary_covered_new is not None:
+            _cc_sum_out = debug_info.get("conversation_context") or {}
+            if _history_summary_new:
+                _cc_sum_out["history_summary"] = _history_summary_new
+            if _summary_covered_new is not None:
+                _cc_sum_out["summary_covered"] = _summary_covered_new
+            debug_info["conversation_context"] = _cc_sum_out
+    except Exception as _e_sumout:
+        logger.warning(f"[KH-3] luu history_summary loi: {_e_sumout}")
         
     # P2-9: Semantic cache STORE (best-effort, khong lam gay pipeline)
     try:

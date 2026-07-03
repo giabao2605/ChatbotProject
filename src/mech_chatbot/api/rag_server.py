@@ -100,6 +100,7 @@ class ChatRequest(BaseModel):
     max_security_level: Optional[str] = "internal"
     allowed_sites: List[str] = Field(default_factory=list)
     response_language: Optional[str] = "vi"
+    conversation_context: Optional[Dict[str, Any]] = None
 
 
 class ChatResponse(BaseModel):
@@ -212,6 +213,7 @@ def _run_rag_sync(req: ChatRequest) -> ChatResponse:
         max_security_level=req.max_security_level,
         allowed_sites=req.allowed_sites,
         response_language=req.response_language,
+        conversation_context=req.conversation_context,
     )
 
     # Consume the stream to get the full response text

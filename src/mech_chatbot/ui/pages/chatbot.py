@@ -87,7 +87,7 @@ import logging as _logging
 _worker_logger = _logging.getLogger("MechChatbot")
 
 
-def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="internal", allowed_sites=None, response_language="vi"):
+def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="internal", allowed_sites=None, response_language="vi", conversation_context=None):
     """Run RAG in a separate Python process so native libs cannot crash Streamlit."""
     acquired = _RAG_SEMAPHORE.acquire(timeout=120)
     if not acquired:
@@ -110,6 +110,7 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
         "max_security_level": max_security_level or "public",
         "allowed_sites": allowed_sites or [],
         "response_language": response_language or "vi",
+        "conversation_context": conversation_context or None,
     }
 
     os.makedirs(os.path.join(base_dir, "temp_logs"), exist_ok=True)
@@ -180,7 +181,7 @@ RAG_SERVER_URL = os.getenv("RAG_SERVER_URL", "")  # e.g. http://localhost:8100
 def chat_with_rag_api(user_question, image_path=None, chat_history=None,
                       current_part_ids=None, user_department=None,
                       user_roles=None, allowed_departments=None, max_security_level="internal",
-                      allowed_sites=None, response_language="vi"):
+                      allowed_sites=None, response_language="vi", conversation_context=None):
     """Call the persistent RAG FastAPI server via HTTP (Phase 2 mode)."""
     import requests as _requests
 
@@ -195,6 +196,7 @@ def chat_with_rag_api(user_question, image_path=None, chat_history=None,
         "max_security_level": max_security_level or "public",
         "allowed_sites": allowed_sites or [],
         "response_language": response_language or "vi",
+        "conversation_context": conversation_context or None,
     }
 
     timeout = int(os.getenv("RAG_WORKER_TIMEOUT", "240"))
@@ -257,6 +259,8 @@ def run_chat():
         st.session_state.session_id = str(uuid.uuid4())
     if "current_part_ids" not in st.session_state:
         st.session_state.current_part_ids = []
+    if "conversation_context" not in st.session_state:
+        st.session_state.conversation_context = {}
 
     from mech_chatbot.auth import service as auth
     current_user = auth.get_current_user()
@@ -345,6 +349,9 @@ def run_chat():
                     if st.button(label, key=f"btn_chat_{s['session_id']}", use_container_width=True, type=btn_type):
                         st.session_state.session_id = s['session_id']
                         st.session_state.chat_history = get_chat_history(s['session_id'], username=current_user["username"], is_admin=is_admin, user_clearance=current_user.get("max_security_level", "public"))
+                        # KH-3: doi cuoc tro chuyen -> reset ngu canh phien (mo neo + tom tat) de khong dinh sang cuoc khac
+                        st.session_state.conversation_context = {}
+                        st.session_state.current_part_ids = []
                         st.rerun()
                 with col2:
                     if st.button("X", key=f"btn_del_{s['session_id']}", help=t("Xóa cuộc trò chuyện"), use_container_width=True):
@@ -353,6 +360,8 @@ def run_chat():
                             st.session_state.session_id = str(uuid.uuid4())
                             st.session_state.chat_history = []
                             st.session_state.current_part_ids = []
+                            # KH-3: xoa cuoc tro chuyen hien tai -> xoa luon tom tat/ngu canh cua no
+                            st.session_state.conversation_context = {}
                         st.rerun()
  
         st.markdown("---")
@@ -630,6 +639,7 @@ def run_chat():
                             image_path=temp_img_path,
                             chat_history=history_for_rag,
                             current_part_ids=st.session_state.current_part_ids,
+                            conversation_context=st.session_state.get("conversation_context") or {},
                             user_department=current_user["department"],
                             user_roles=current_user["roles"],
                             allowed_departments=current_user.get("allowed_departments", []),
@@ -639,6 +649,10 @@ def run_chat():
                         )
                         # Cap nhat State Memory moi
                         st.session_state.current_part_ids = new_part_ids
+                        try:
+                            st.session_state.conversation_context = (debug_info or {}).get("conversation_context") or {}
+                        except Exception:
+                            st.session_state.conversation_context = {}
                     except (RuntimeError, Exception) as _e:
                         _rag_error = _e
                     finally:

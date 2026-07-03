@@ -194,7 +194,10 @@ def _score_doc(doc, constraints):
     for name in constraints.get("quoted_names", []):
         if not name:
             continue
-        toks = [t for t in name.split(" ") if len(t) >= 3]
+        _GENERIC_TOK = {"ban", "banve", "tai", "lieu", "tailieu", "thuat", "kythuat",
+                        "version", "model", "cua", "cho", "cai", "file", "document",
+                        "phien", "phienban", "ban ve"}
+        toks = [t for t in name.split(" ") if len(t) >= 3 and t not in _GENERIC_TOK]
         if not toks:
             continue
         hit = sum(1 for t in toks if t in name_field or t in hay)
@@ -258,13 +261,20 @@ def resolve_candidates_from_docs(
       - khong co rang buoc nao                     -> ambiguous (de hoi lai).
     """
     groups = {}
-    for doc in docs or []:
+    _n_docs = len(docs or [])
+    for _idx, doc in enumerate(docs or []):
         md = getattr(doc, "metadata", {}) or {}
         key = _candidate_key(md)
-        g = groups.setdefault(key, {"docs": [], "score": 0.0, "md": md})
+        g = groups.setdefault(key, {"docs": [], "max_s": 0.0, "hits": 0, "best_idx": _idx, "md": md})
         s, _ = _score_doc(doc, constraints)
         g["docs"].append(doc)
-        g["score"] += s
+        # KH-4: KHONG cong don theo so chunk (tranh thien lech PDF lon nhieu chunk).
+        if s > g["max_s"]:
+            g["max_s"] = s
+        if s > 0:
+            g["hits"] += 1
+        if _idx < g["best_idx"]:
+            g["best_idx"] = _idx
 
     if not groups:
         return {"decision": "pass", "selected": None, "selected_docs": list(docs or []), "candidates": []}
@@ -272,6 +282,16 @@ def resolve_candidates_from_docs(
     def _to_candidate(key, g):
         md = g["md"]
         base, variant, version = key
+        _max_s = g.get("max_s", 0.0)
+        _hits = g.get("hits", 0)
+        _best_idx = g.get("best_idx", 0)
+        # KH-4: diem = diem chunk khop TOT NHAT (khong phai tong) + bonus nho khi nhieu
+        # chunk cung ho (co tran) + rank_bonus theo vi tri retrieval (bam do lien quan cau hoi).
+        _multi_bonus = min(max(_hits - 1, 0), 3) * 0.15
+        _rank_bonus = 0.0
+        if _n_docs > 0:
+            _rank_bonus = round(max(0.0, (_n_docs - _best_idx) / float(_n_docs)), 3)
+        _final = round(_max_s + _multi_bonus + _rank_bonus, 3)
         return {
             "key": md.get("base_code") or md.get("file_goc") or str(base),
             "base_code": md.get("base_code") or "",
@@ -281,7 +301,8 @@ def resolve_candidates_from_docs(
             "dimensions": md.get("kich_thuoc_tong_the") or "",
             "materials": md.get("vat_lieu") or "",
             "file_goc": md.get("file_goc") or "",
-            "score": round(g["score"], 3),
+            "score": _final,
+            "_match": round(_max_s, 3),
             "num_docs": len(g["docs"]),
             "_docs": g["docs"],
         }
@@ -304,7 +325,7 @@ def resolve_candidates_from_docs(
         }
 
     top, second = cands[0], cands[1]
-    if has_constraints and top["score"] >= min_score and (top["score"] - second["score"]) >= margin:
+    if has_constraints and top["_match"] >= min_score and (top["score"] - second["score"]) >= margin:
         return {
             "decision": "single",
             "selected": _public(top),
@@ -313,7 +334,7 @@ def resolve_candidates_from_docs(
         }
 
     # Co mo ta nhung KHONG tai lieu nao khop (diem qua thap) -> xin them thong tin.
-    if has_constraints and top["score"] < floor_score:
+    if has_constraints and top["_match"] < floor_score:
         return {
             "decision": "insufficient",
             "selected": None,

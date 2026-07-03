@@ -23,6 +23,43 @@ from mech_chatbot.rag.service import vectorstore, client
 from mech_chatbot.llm.vision_client import describe_gemini_error, is_retryable_error
 from functools import lru_cache
 
+def _contextual_chunk_enabled():
+    return _env_bool("ENABLE_CONTEXTUAL_CHUNK", False)
+
+
+def _build_chunk_context_prefix(md):
+    """KH-4: 1-2 cau ngu canh mo ta chunk (tai lieu/ma/loai/cong doan/vat lieu) de chen
+    TRUOC noi dung khi embed + BM25 -> cau hoi ngan match dung tai lieu hon.
+    Chi anh huong page_content (embed/BM25); noi_dung_goc giu nguyen cho LLM.
+    """
+    md = md or {}
+    _name = md.get("ten_san_pham") or md.get("file_goc") or ""
+    _code = md.get("base_code") or ""
+    if not _code:
+        _mdt = md.get("ma_doi_tuong")
+        if isinstance(_mdt, (list, tuple)):
+            _code = _mdt[0] if _mdt else ""
+        else:
+            _code = _mdt or ""
+    _loai = md.get("loai_tai_lieu") or md.get("doc_type") or ""
+    _congdoan = md.get("cong_doan") or ""
+    _vl = md.get("vat_lieu") or ""
+    _bits = []
+    if _name:
+        _bits.append(f"Tai lieu: {_name}")
+    if _code:
+        _bits.append(f"Ma: {_code}")
+    if _loai:
+        _bits.append(f"Loai: {_loai}")
+    if _congdoan:
+        _bits.append(f"Cong doan/phong ban: {_congdoan}")
+    if _vl:
+        _bits.append(f"Vat lieu: {_vl}")
+    if not _bits:
+        return ""
+    return "[Ngu canh] " + "; ".join(str(b) for b in _bits) + "."
+
+
 def _env_bool(name, default=False):
     raw = os.getenv(name)
     if raw is None:
@@ -1141,7 +1178,12 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 # FIX #3: GIU text goc cho LLM (noi_dung_goc) TRUOC khi tokenize ban dung cho BM25
                 for chunk in all_chunks:
                     chunk.metadata["noi_dung_goc"] = chunk.page_content
-                    chunk.page_content = tokenize_cached(chunk.page_content)
+                    _embed_src = chunk.page_content
+                    if _contextual_chunk_enabled():
+                        _cpref = _build_chunk_context_prefix(chunk.metadata)
+                        if _cpref:
+                            _embed_src = _cpref + "\n" + chunk.page_content
+                    chunk.page_content = tokenize_cached(_embed_src)
  
                 # Document Versioning: Xoa vector cu cua file nay truoc khi add (chi xoa 1 lan o trang 1)
                 if page_num == 0:
@@ -1398,7 +1440,12 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         # FIX #3: GIU text goc cho LLM truoc khi tokenize cho BM25 (ap dung TOAN BO chunks)
         for chunk in all_chunks:
             chunk.metadata["noi_dung_goc"] = chunk.page_content
-            chunk.page_content = tokenize_cached(chunk.page_content)
+            _embed_src = chunk.page_content
+            if _contextual_chunk_enabled():
+                _cpref = _build_chunk_context_prefix(chunk.metadata)
+                if _cpref:
+                    _embed_src = _cpref + "\n" + chunk.page_content
+            chunk.page_content = tokenize_cached(_embed_src)
  
         if all_chunks:
             # Document Versioning: Xoa vector cu
