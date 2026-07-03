@@ -1668,6 +1668,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     retrieved_docs = []
     skip_retrieval = False
     query_to_search = user_question  # Mac dinh, cac nhanh ben duoi se override neu can
+    _sc_qemb = None   # P2-9 semantic cache: embedding cau hoi
+    _sc_scope = None  # P2-9 semantic cache: chu ky pham vi RBAC
  
     _chitchat_vi = ("Chào bạn! Mình là trợ lý AI kỹ thuật cơ khí. Bạn có thể hỏi mình về bản vẽ, "
                     "dung sai, vật liệu, quy trình gia công hoặc upload tài liệu để mình học thêm.")
@@ -1681,6 +1683,24 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     else:
         logger.info("Dang phan tich intent de tim kiem du lieu...")
         t_intent = time.time()
+
+        # P2-9: Semantic cache LOOKUP (best-effort). Hit -> tra ngay, bo qua retrieval + LLM.
+        try:
+            import mech_chatbot.rag.semantic_cache as _sc
+            if _sc.enabled():
+                _sc_qemb = vectorstore.embeddings.embed_query(user_question)
+                _sc_scope = _sc.scope_signature(user_department, allowed_departments, max_security_level, allowed_sites, user_roles)
+                _hit = _sc.lookup(user_question, _sc_qemb, _sc_scope)
+                if _hit:
+                    logger.info("Semantic cache HIT -> tra loi tu cache.")
+                    _dbg = make_debug_info([])
+                    _dbg["cache_hit"] = True
+                    def _cached_stream():
+                        yield _hit.get("answer", "")
+                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start) * 1000), refusal=False, cache_hit=True)
+                    return _cached_stream(), _hit.get("ref_text", ""), _hit.get("ref_images", []), current_part_ids, _dbg
+        except Exception as _sce:
+            logger.warning(f"semantic cache lookup loi: {_sce}")
 
         # === BUOC B0 (P0-1): PHAN DOAN NGU CANH + QUERY REWRITING ===
         # Tu dong quyet dinh GIU / CLEAR State Memory (thay vi phu thuoc nut "Xoa ngu canh")
@@ -2282,6 +2302,19 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)
     debug_info = make_debug_info(retrieved_docs)
         
+    # P2-9: Semantic cache STORE (best-effort, khong lam gay pipeline)
+    try:
+        import mech_chatbot.rag.semantic_cache as _sc2
+        if _sc2.enabled() and _sc_qemb is not None and retrieved_docs:
+            _sc_doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs if d is not None and d.metadata.get("doc_id") is not None]
+            _in_len = len(context_text) + len(user_question) + len(chat_history_str)
+            stream = _sc2.teeing_store_stream(
+                stream, question=user_question, embedding=_sc_qemb, scope_sig=_sc_scope,
+                ref_text=ref_text, ref_images=ref_images, source_doc_ids=_sc_doc_ids,
+                model=get_llm_model_name(), input_char_len=_in_len,
+            )
+    except Exception as _sce2:
+        logger.warning(f"semantic cache store loi: {_sce2}")
     return stream, ref_text, ref_images, new_part_ids, debug_info
  
 def build_source_citations(docs):

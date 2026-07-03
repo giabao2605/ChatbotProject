@@ -1,0 +1,395 @@
+# Prompt: Generate Fake Test Documents for RAG Chatbot
+
+---
+
+## Context (Read This First)
+
+I am building and testing an enterprise RAG (Retrieval-Augmented Generation) chatbot for a manufacturing company. The system has **14 departments**, each with a specific document domain and security level. I need you to generate **realistic-looking fake documents** (in Vietnamese, or mixed Vi/En as appropriate) to use as test data. The documents do not need to be real — they just need to look and feel authentic enough to test retrieval, classification, and Q&A.
+
+The system can ingest: **PDF, Word (.docx), Excel (.xlsx), CSV, plain text (.txt), Markdown (.md), and images (.jpg, .png)**.
+
+For each document below, I will tell you:
+
+- **File format** to produce
+- **Department** it belongs to
+- **Security level** (`public` / `internal` / `confidential`)
+- **Content requirements** (what data/structure it must contain)
+- **Test questions** the chatbot must be able to answer from it (so make sure the answers are in the document)
+
+---
+
+## Documents to Generate
+
+---
+
+### DOC-01 — Technical Department (Phòng Kỹ Thuật)
+
+- **File:** `Technical_BanVe_TrucVit_M10x1.5_v1.pdf`
+- **Department:** `Technical`
+- **Security:** `internal`
+- **Domain:** `mechanical` (engineering drawing with BOM)
+- **Content requirements:**
+  - A fake engineering drawing description for a part named **"Trục Vít M10x1.5"** (Worm Shaft)
+  - Part code: `TV-M10-001`
+  - **Bill of Materials (Bảng Kê Vật Tư)** table with at least 5 rows:
+    - Columns: STT | Tên chi tiết | Mã vật tư | Vật liệu | Số lượng | Đơn vị | Ghi chú
+    - Include items like: Trục vít, Ổ bi, Đai ốc M10, Vòng đệm, Chốt định vị
+  - Dimensions section: Đường kính ngoài Ø22mm, chiều dài 150mm, bước ren 1.5mm
+  - Surface roughness: Ra 1.6
+  - Material: C45 Steel
+  - Revision table: v1 (ngày hiệu lực: 2025-01-15)
+  - Approved by: Nguyễn Văn Kỹ Thuật
+- **Test questions:**
+  1. "Trục vít M10 làm từ vật liệu gì?"
+  2. "Bảng kê vật tư của bản vẽ TV-M10-001 gồm những gì?"
+  3. "Đường kính ngoài của trục vít là bao nhiêu?"
+
+---
+
+### DOC-02 — Production Department (Sản Xuất)
+
+- **File:** `Production_QuyTrinh_HanMIG_SP001_v2.docx`
+- **Department:** `Production`
+- **Security:** `internal`
+- **Domain:** `mechanical`
+- **Content requirements:**
+  - Title: "QUY TRÌNH HÀN MIG SẢN PHẨM SP001"
+  - Version 2, ngày hiệu lực: 2025-03-01, ngày hết hiệu lực: 2026-03-01
+  - Sections:
+    1. Mục đích và phạm vi áp dụng
+    2. Trang thiết bị (máy hàn MIG, dây hàn ER70S-6 Ø0.8mm, khí CO2)
+    3. Thông số hàn: Cường độ dòng điện 180A, điện áp 22V, tốc độ hàn 35cm/phút
+    4. Các bước thực hiện (ít nhất 6 bước rõ ràng)
+    5. Kiểm tra chất lượng: kiểm tra mối hàn theo tiêu chuẩn AWS D1.1
+    6. An toàn lao động
+  - Approved by: Trưởng phòng Sản Xuất
+- **Test questions:**
+  1. "Cường độ dòng điện hàn MIG cho sản phẩm SP001 là bao nhiêu?"
+  2. "Loại dây hàn nào được dùng trong quy trình hàn MIG?"
+  3. "Quy trình hàn MIG SP001 phiên bản hiện tại là version mấy?"
+
+---
+
+### DOC-03 — Maintenance Department (Bảo Trì)
+
+- **File:** `Maintenance_LichBaoTri_MayEP_ThangQ1_2026.xlsx`
+- **Department:** `Maintenance`
+- **Security:** `internal`
+- **Domain:** `mechanical`
+- **Content requirements:**
+  - Sheet 1: "Lịch Bảo Trì Quý 1/2026"
+  - Table columns: STT | Tên thiết bị | Mã thiết bị | Loại bảo trì | Ngày bảo trì | Kỹ thuật viên | Tình trạng | Ghi chú
+  - At least 10 rows covering machines like:
+    - Máy ép thủy lực EP-001 (bảo trì định kỳ, 2026-01-15, Nguyễn Văn A, Hoàn thành)
+    - Máy tiện CNC CNC-003 (bảo trì đột xuất, 2026-02-10, Trần Văn B, Đang thực hiện)
+    - Máy hàn MIG MIG-005 (kiểm tra điện, 2026-03-20, Lê Văn C, Chưa thực hiện)
+  - Sheet 2: "Danh Sách Phụ Tùng Thay Thế" with 5 spare parts and inventory
+- **Test questions:**
+  1. "Máy ép thủy lực EP-001 được bảo trì vào ngày nào trong quý 1/2026?"
+  2. "Kỹ thuật viên nào phụ trách bảo trì máy CNC-003?"
+  3. "Có bao nhiêu thiết bị chưa được bảo trì trong quý 1?"
+
+---
+
+### DOC-04 — Molding Department (Khuôn Mẫu)
+
+- **File:** `Molding_BanVe_KhuonDap_KD-205_v1.pdf`
+- **Department:** `Molding`
+- **Security:** `internal`
+- **Domain:** `mechanical`
+- **Content requirements:**
+  - Fake engineering drawing for a stamping die named **"Khuôn Dập KD-205"**
+  - Part code: `KD-205`
+  - BOM table with at least 6 rows:
+    - Tấm khuôn trên (Upper Die Plate): SKD11, 1 cái
+    - Tấm khuôn dưới (Lower Die Plate): SKD11, 1 cái
+    - Chốt dẫn hướng (Guide Pin): SKH51, 4 cái
+    - Lò xo khuôn (Die Spring): SUP6, 8 cái
+    - Dao cắt (Punch): SKD11, 2 cái
+    - Tấm đệm (Backing Plate): S45C, 1 cái
+  - Dimensions: 350mm × 280mm × 200mm
+  - Lực dập: 50 tấn
+  - Vật liệu sản phẩm: SUS304, dày 1.5mm
+- **Test questions:**
+  1. "Khuôn dập KD-205 sử dụng loại thép gì cho dao cắt?"
+  2. "Kích thước tổng thể của khuôn KD-205 là bao nhiêu?"
+  3. "Cần bao nhiêu lò xo khuôn trong bộ KD-205?"
+
+---
+
+### DOC-05 — Accountant Department (Kế Toán) ⚠️ CONFIDENTIAL
+
+- **File:** `Accountant_BangLuong_NhanVien_T06_2026.xlsx`
+- **Department:** `Accountant`
+- **Security:** `confidential`
+- **Domain:** `tabular`
+- **Content requirements:**
+  - Sheet 1: "Bảng Lương Tháng 06/2026"
+  - Columns: STT | Họ và Tên | Mã NV | Phòng Ban | Chức vụ | Lương Cơ Bản | Phụ Cấp | Thưởng | Khấu trừ | Lương Thực Nhận
+  - At least 15 fake employees across 5 different departments
+  - Total salary row at the bottom
+  - Sheet 2: "Tổng Hợp Chi Phí Lương Theo Phòng Ban" — pivot table by department
+  - Tổng quỹ lương tháng 6: **487,500,000 VNĐ**
+  - Phòng có lương cao nhất: Technical (95,200,000 VNĐ)
+  - Số nhân viên trong bảng lương: 15 người (across 5 departments)
+- **Test questions:**
+  1. "Tổng quỹ lương tháng 6/2026 là bao nhiêu?"
+  2. "Phòng ban nào có tổng lương cao nhất?"
+  3. "Bảng lương tháng 6 có bao nhiêu phòng ban?"
+
+---
+
+### DOC-06 — Purchasing Department (Mua Hàng)
+
+- **File:** `Purchasing_DanhSachNhaCungCap_2026.xlsx`
+- **Department:** `Purchasing`
+- **Security:** `internal`
+- **Domain:** `tabular`
+- **Content requirements:**
+  - Sheet 1: "Danh Sách Nhà Cung Cấp Đã Duyệt 2026"
+  - Columns: STT | Tên NCC | Mã NCC | Địa chỉ | Điện thoại | Loại vật tư | Thời gian giao hàng (ngày) | Điều khoản thanh toán | Đánh giá (A/B/C)
+  - At least 10 suppliers including:
+    - NCC thép: Công ty Thép Hòa Phát (đánh giá A, giao hàng 5 ngày, NET30)
+    - NCC ốc vít: Công ty Fastener Việt Nam (đánh giá B, giao hàng 3 ngày, NET15)
+    - NCC hóa chất: Công ty Hóa Chất ABC (đánh giá A, giao hàng 7 ngày, COD)
+  - Sheet 2: "Đơn Hàng Tháng 06/2026" with 8 purchase orders
+- **Test questions:**
+  1. "Nhà cung cấp thép nào có đánh giá A?"
+  2. "Thời gian giao hàng của Công ty Fastener Việt Nam là bao nhiêu ngày?"
+  3. "Điều khoản thanh toán của nhà cung cấp hóa chất là gì?"
+
+---
+
+### DOC-07 — Warehouse Department (Kho)
+
+- **File:** `Warehouse_TonKho_VatTu_Thang06_2026.xlsx`
+- **Department:** `Warehouse`
+- **Security:** `internal`
+- **Domain:** `tabular`
+- **Content requirements:**
+  - Sheet 1: "Báo Cáo Tồn Kho Tháng 06/2026"
+  - Columns: STT | Mã vật tư | Tên vật tư | ĐVT | Tồn đầu kỳ | Nhập kỳ | Xuất kỳ | Tồn cuối kỳ | Mức tồn tối thiểu | Trạng thái
+  - At least 15 items including:
+    - Thép tấm SS400 3mm: tồn 500 kg, tồn tối thiểu 200 kg → Bình thường
+    - Dây hàn ER70S-6: tồn 15 cuộn, tồn tối thiểu 20 cuộn → **Cần đặt hàng**
+    - Ổ bi 6205: tồn 8 cái, tồn tối thiểu 10 cái → **Cần đặt hàng**
+  - Sheet 2: "Danh Sách Vật Tư Cần Đặt Hàng" — filtered list
+- **Test questions:**
+  1. "Vật tư nào đang ở mức cần đặt hàng trong tháng 6?"
+  2. "Tồn kho hiện tại của dây hàn ER70S-6 là bao nhiêu cuộn?"
+  3. "Mức tồn tối thiểu của thép tấm SS400 3mm là bao nhiêu?"
+
+---
+
+### DOC-08 — Sales Department (Kinh Doanh)
+
+- **File:** `Sales_BaoCaoDoanhThu_Q2_2026.xlsx`
+- **Department:** `Sales`
+- **Security:** `internal`
+- **Domain:** `tabular`
+- **Content requirements:**
+  - Sheet 1: "Báo Cáo Doanh Thu Quý 2/2026"
+  - Columns: Tháng | Sản phẩm | Khách hàng | Số lượng | Đơn giá | Doanh thu | Vùng miền
+  - At least 20 rows
+  - Total Q2 revenue: **2,850,000,000 VNĐ**
+  - Best-selling product: "Linh kiện cơ khí SP-A02" — 850 cái
+  - Top customer: "Công ty TNHH Cơ Khí Tiến Đạt" — 35% doanh thu
+  - Sheet 2: So sánh Q1 vs Q2 — Q2 tăng 12% so với Q1
+- **Test questions:**
+  1. "Tổng doanh thu quý 2/2026 là bao nhiêu?"
+  2. "Sản phẩm nào bán chạy nhất trong Q2?"
+  3. "Doanh thu Q2 tăng hay giảm so với Q1, và bao nhiêu phần trăm?"
+
+---
+
+### DOC-09 — HR Department (Nhân Sự) ⚠️ CONFIDENTIAL
+
+- **File:** `HR_NoiQuyLaoDong_CongTyABC_2026.docx`
+- **Department:** `HR`
+- **Security:** `confidential`
+- **Domain:** `generic`
+- **Content requirements:**
+  - Title: "NỘI QUY LAO ĐỘNG CÔNG TY TNHH CƠ KHÍ ABC — NĂM 2026"
+  - Effective date: 2026-01-01, approved by: Giám Đốc
+  - Chapters:
+    1. Thời giờ làm việc: ca sáng 7:30–16:30, ca chiều 16:30–00:30, nghỉ trưa 45 phút
+    2. Tiền lương: trả vào ngày 15 hàng tháng, thưởng KPI theo quý
+    3. Nghỉ phép: 12 ngày phép năm, cộng dồn tối đa 1 năm
+    4. Kỷ luật lao động: 3 cấp độ vi phạm (cảnh cáo, trừ lương, sa thải)
+    5. Phúc lợi: bảo hiểm xã hội theo quy định nhà nước, bữa ăn ca 25,000đ/ca
+    6. An toàn lao động: yêu cầu đội mũ bảo hộ trong xưởng
+- **Test questions:**
+  1. "Giờ làm việc ca sáng bắt đầu và kết thúc lúc mấy giờ?"
+  2. "Lương được trả vào ngày nào hàng tháng?"
+  3. "Nhân viên được bao nhiêu ngày phép năm?"
+
+---
+
+### DOC-10 — Planning Department (Kế Hoạch)
+
+- **File:** `Planning_KeHoachSanXuat_Q3_2026.docx`
+- **Department:** `Planning`
+- **Security:** `internal`
+- **Domain:** `generic`
+- **Content requirements:**
+  - Title: "KẾ HOẠCH SẢN XUẤT QUÝ 3/2026"
+  - Tổng sản lượng mục tiêu Q3: 45,000 sản phẩm
+  - Breakdown theo tháng: Tháng 7: 14,000 sp | Tháng 8: 15,500 sp | Tháng 9: 15,500 sp
+  - Breakdown theo dây chuyền: DC-01 (20,000 sp), DC-02 (15,000 sp), DC-03 (10,000 sp)
+  - Nguồn lực: 120 công nhân, 3 ca/ngày, 25 ngày/tháng
+  - Rủi ro & biện pháp phòng ngừa (ít nhất 3 rủi ro)
+  - KPI theo dõi: OEE, tỷ lệ lỗi, năng suất trên đầu người
+- **Test questions:**
+  1. "Tổng sản lượng mục tiêu quý 3/2026 là bao nhiêu sản phẩm?"
+  2. "Dây chuyền nào có sản lượng mục tiêu cao nhất trong Q3?"
+  3. "Kế hoạch Q3 sử dụng bao nhiêu công nhân?"
+
+---
+
+### DOC-11 — Quality Control Department (QC)
+
+- **File:** `QualityControl_TieuChuanKiemTra_SP-A02_v3.pdf`
+- **Department:** `QualityControl`
+- **Security:** `internal`
+- **Domain:** `generic`
+- **Content requirements:**
+  - Title: "TIÊU CHUẨN KIỂM TRA CHẤT LƯỢNG SẢN PHẨM SP-A02 — PHIÊN BẢN 3"
+  - Effective: 2025-06-01
+  - Sections:
+    1. Phạm vi áp dụng
+    2. Tài liệu tham chiếu: ISO 9001:2015, TCVN 1234
+    3. Bảng thông số kiểm tra:
+       - Kích thước ngoài: 150±0.1mm → dụng cụ: thước kẹp 0.01mm
+       - Độ phẳng: ≤0.05mm → dụng cụ: đồng hồ so
+       - Độ cứng: 58-62 HRC → dụng cụ: máy đo độ cứng Rockwell
+       - Độ nhám bề mặt Ra: ≤1.6 μm → dụng cụ: máy đo nhám
+    4. Tần suất kiểm tra: 100% cho lô đầu tiên, AQL 1.0% cho lô sau
+    5. Xử lý sản phẩm không đạt: cách ly, đánh dấu đỏ, báo cáo NCR
+- **Test questions:**
+  1. "Độ cứng yêu cầu của sản phẩm SP-A02 là bao nhiêu HRC?"
+  2. "Dụng cụ nào dùng để kiểm tra độ phẳng của SP-A02?"
+  3. "Tần suất kiểm tra AQL cho lô sản xuất bình thường là bao nhiêu?"
+
+---
+
+### DOC-12 — ISO Department
+
+- **File:** `ISO_QuyTrinhKiemSoatTaiLieu_QP-04_v2.pdf`
+- **Department:** `ISO`
+- **Security:** `internal`
+- **Domain:** `generic`
+- **Content requirements:**
+  - Title: "QUY TRÌNH KIỂM SOÁT TÀI LIỆU — QP-04 — PHIÊN BẢN 2"
+  - Mã tài liệu: QP-04, phiên bản: 2.0, ngày hiệu lực: 2025-09-01
+  - Tham chiếu: ISO 9001:2015 điều khoản 7.5
+  - Sections:
+    1. Mục đích
+    2. Phạm vi áp dụng: toàn bộ tài liệu nội bộ
+    3. Trách nhiệm: ISO Manager kiểm soát tài liệu cấp 1; Trưởng phòng kiểm soát tài liệu cấp 2
+    4. Quy trình: soạn thảo → xem xét → phê duyệt → ban hành → phân phối → lưu trữ
+    5. Thời gian lưu trữ: tài liệu hết hiệu lực lưu 3 năm
+    6. Tài liệu liên quan: QP-05, QP-06
+- **Test questions:**
+  1. "Mã quy trình kiểm soát tài liệu là gì?"
+  2. "Ai chịu trách nhiệm kiểm soát tài liệu cấp 1?"
+  3. "Tài liệu hết hiệu lực được lưu trữ trong bao nhiêu năm?"
+
+---
+
+### DOC-13 — HSE & 5S Department
+
+- **File:** `HSE_NoiQuyAnToanLaoDong_Xuong_2026.pdf`
+- **Department:** `HSE_5S`
+- **Security:** `internal`
+- **Domain:** `generic`
+- **Content requirements:**
+  - Title: "NỘI QUY AN TOÀN LAO ĐỘNG KHU VỰC XƯỞNG — 2026"
+  - Sections:
+    1. Trang bị bảo hộ bắt buộc: mũ bảo hộ, giày mũi thép, kính bảo hộ, găng tay
+    2. Quy định 5S: Seiri, Seiton, Seiso, Seiketsu, Shitsuke — mô tả từng S
+    3. Quy định phòng cháy chữa cháy: bình chữa cháy CO2 và ABC, kiểm tra 6 tháng/lần
+    4. Quy định khu vực nguy hiểm: biển cảnh báo, khoảng cách an toàn 1.5m
+    5. Báo cáo sự cố: báo ngay cho HSE Manager trong vòng 15 phút
+    6. Mức phạt vi phạm: lần 1 cảnh cáo, lần 2 trừ 10% lương, lần 3 đình chỉ
+- **Test questions:**
+  1. "Những trang bị bảo hộ nào là bắt buộc trong xưởng?"
+  2. "Bình chữa cháy được kiểm tra định kỳ bao lâu một lần?"
+  3. "Khi xảy ra sự cố, phải báo cáo cho HSE Manager trong vòng bao nhiêu phút?"
+
+---
+
+### DOC-14 — IT Department
+
+- **File:** `IT_HuongDanSuDungVPN_NhanVien_v1.md`
+- **Department:** `IT`
+- **Security:** `internal`
+- **Domain:** `generic`
+- **Content requirements:**
+  - Title: "HƯỚNG DẪN SỬ DỤNG VPN CHO NHÂN VIÊN LÀM VIỆC TỪ XA"
+  - VPN software: **Cisco AnyConnect**
+  - VPN server address: `vpn.congtyabc.com.vn`
+  - Port: **443**
+  - Sections:
+    1. Cài đặt: Windows 10/11, link tải nội bộ: `\\server01\IT\Software\VPN\`
+    2. Đăng nhập: dùng username Windows domain + mật khẩu riêng VPN
+    3. Thay đổi mật khẩu VPN: 90 ngày/lần, tối thiểu 8 ký tự, phải có chữ hoa + số
+    4. Giải quyết sự cố thường gặp: lỗi kết nối, lỗi chứng chỉ, lỗi timeout
+    5. Liên hệ hỗ trợ: IT Helpdesk — nội bộ 1234 hoặc <it.support@congtyabc.com.vn>
+- **Test questions:**
+  1. "Phần mềm VPN công ty đang sử dụng là gì?"
+  2. "Địa chỉ server VPN là gì?"
+  3. "Mật khẩu VPN phải thay đổi bao lâu một lần?"
+
+---
+
+### DOC-15 — CHUNG (Shared — all departments)
+
+- **File:** `CHUNG_ThongBaoNghiLeTetNguyenDan_2026.pdf`
+- **Department:** `CHUNG`
+- **Security:** `public`
+- **Domain:** `generic`
+- **Content requirements:**
+  - Title: "THÔNG BÁO LỊCH NGHỈ TẾT NGUYÊN ĐÁN 2026"
+  - From: Ban Giám Đốc
+  - Lịch nghỉ Tết: từ ngày **24/01/2026 (28 tháng Chạp)** đến **04/02/2026 (mồng 7 Tết)**
+  - Tổng số ngày nghỉ: **12 ngày** (gồm cả cuối tuần)
+  - Ngày đi làm lại: **05/02/2026**
+  - Công nhân trực Tết: đăng ký trước ngày 10/01/2026, phụ cấp 300% lương ngày thường
+  - Yêu cầu bàn giao công việc trước khi nghỉ
+- **Test questions:**
+  1. "Nghỉ Tết 2026 bắt đầu từ ngày nào?"
+  2. "Ngày đi làm lại sau Tết Nguyên Đán 2026 là ngày mấy?"
+  3. "Phụ cấp trực Tết là bao nhiêu phần trăm lương?"
+
+---
+
+### DOC-16 — Technical (Version Test)
+
+- **File:** `Technical_BanVe_TrucVit_M10x1.5_v2.pdf`
+- **Department:** `Technical`
+- **Security:** `internal`
+- **Domain:** `mechanical`
+- **Note:** This is Version 2 of DOC-01, used to test the `current_only` version policy
+- **Content requirements:**
+  - Same part `TV-M10-001` but with these changes from v1:
+    - Vật liệu đổi: C45 → **42CrMo4** (alloy steel)
+    - Thêm xử lý nhiệt: tôi và ram đạt 52-55 HRC
+    - Kích thước thay đổi: đường kính ngoài Ø22mm → **Ø24mm**
+    - Revision table: v2 (ngày hiệu lực: 2026-02-10), lý do: "Tăng tải trọng thiết kế"
+- **Test questions (the chatbot should return V2 data):**
+  1. "Vật liệu hiện tại của trục vít M10 là gì?" → Expect: 42CrMo4
+  2. "Đường kính ngoài trục vít TV-M10-001 phiên bản mới nhất là bao nhiêu?" → Expect: Ø24mm
+
+---
+
+## Output Format Instructions
+
+For each document, please produce the actual file content in the specified format:
+
+- **PDF / Word / Markdown:** Provide full text content formatted appropriately
+- **Excel:** Provide as a Markdown table (I will copy it into Excel) with clear sheet separations labeled `--- Sheet: [Sheet Name] ---`
+- Use realistic Vietnamese names, numbers, and dates
+- Do NOT use placeholder text like "Lorem ipsum" — all content must be domain-specific and realistic
+- Ensure the answer to each "Test question" is explicitly and clearly stated in the document
+
+Generate all 16 documents one by one. Start with DOC-01.

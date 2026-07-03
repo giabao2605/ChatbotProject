@@ -17,6 +17,22 @@ def run_observability():
         st.error(t("Khong ket noi duoc Database."))
         return
 
+    with st.expander("💰 " + t("Semantic cache"), expanded=True):
+        try:
+            from mech_chatbot.db.repository import sc_stats, sc_clear_all
+            _s = sc_stats()
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric(t("So entry cache"), _s.get("entries", 0))
+            k2.metric(t("Ti le cache hit"), format(_s.get("hit_rate", 0.0), ".1f") + "%")
+            k3.metric(t("So luot hit"), _s.get("hits", 0))
+            k4.metric(t("Tien tiet kiem (USD)"), format(_s.get("cost_saved", 0.0), ".4f"))
+            if st.button(t("Xoa toan bo cache"), key="sc_clear"):
+                sc_clear_all()
+                st.success(t("Da xoa cache."))
+                st.rerun()
+        except Exception:
+            st.caption(t("Chua co du lieu cache (hoac chua chay migration V0014)."))
+
     period = st.selectbox(t("Khoang thoi gian"), [7, 30, 90, 365], index=1,
                           format_func=lambda d: str(d) + " " + t("ngay gan nhat"), key="obs_period")
     with st.spinner(t("Dang tong hop...")):
