@@ -16,7 +16,7 @@ import hashlib
 from mech_chatbot.config.logging import logger
 
 # Tang khi doi prompt/schema Vision de tu dong vo hieu cache cu.
-SCHEMA_VERSION = "v1"
+SCHEMA_VERSION = "v2"
 _DEFAULT_DIR = os.path.join("data", "cache", "vision")
 
 

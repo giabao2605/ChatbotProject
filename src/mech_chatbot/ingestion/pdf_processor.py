@@ -17,7 +17,7 @@ import underthesea
 from qdrant_client import models
 from mech_chatbot.config.logging import logger
 # FIX #1: dung 2 ham moi (reset 1 lan + insert tung trang). Giu save_document_metadata cho file 1 trang.
-from mech_chatbot.db.repository import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records, get_document_info, mark_document_ingest_failed, save_document_page, save_technical_attributes, save_document_attributes, update_document_classification
+from mech_chatbot.db.repository import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records, get_document_info, mark_document_ingest_failed, save_document_page, save_technical_attributes, save_document_attributes, update_document_classification, clear_reingest_snapshot, restore_document_children
 from mech_chatbot.rag.service import vectorstore, client
 # FIX Bug #4: predicate retry dung chung cho Gemini (google-genai)
 from mech_chatbot.llm.vision_client import describe_gemini_error, is_retryable_error
@@ -398,7 +398,19 @@ def call_gemini_vision(vision_model, prompt, image=None):
 def _add_docs_with_retry(chunks):
     vectorstore.add_documents(chunks)
 
-def _delete_vectors_for_file(ten_file, thu_muc):
+def _delete_vectors_for_file(ten_file, thu_muc, doc_id=None):
+    # Uu tien xoa theo doc_id (chinh xac nhat, bat duoc ca khi doi ten file/thu muc
+    # -> tranh sot vector cu gay trung lap/nhieu khi re-ingest).
+    if doc_id is not None:
+        try:
+            client.delete(
+                collection_name=QDRANT_COLLECTION,
+                points_selector=models.Filter(
+                    must=[models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=doc_id))]
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"Xoa vector theo doc_id={doc_id} loi (se thu tiep theo file): {e}")
     # Bug#4: khop theo metadata.thu_muc (thu muc goc, gia tri don) thay vi
     # metadata.phong_ban_quyen (danh sach quyen). phong_ban_quyen co the chua nhieu
     # phong chia se, dung MatchValue tren list de lai vector khi doi ten phong.
@@ -1188,7 +1200,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 # Document Versioning: Xoa vector cu cua file nay truoc khi add (chi xoa 1 lan o trang 1)
                 if page_num == 0:
                     try:
-                        _delete_vectors_for_file(ten_file, thu_muc)
+                        _delete_vectors_for_file(ten_file, thu_muc, doc_id=doc_id)
                     except Exception as e:
                         logger.warning(f"Khong xoa duoc vector cu (bo qua, tiep tuc): {ten_file}: {e}")
  
@@ -1226,6 +1238,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     if report["status"] == "success" and doc_id:
         _phong_ban_list = _normalize_phong_ban_quyen(thu_muc, phong_ban_override)
         update_document_classification(doc_id, domain=domain, security_level=security_level, phong_ban=_phong_ban_list)
+        clear_reingest_snapshot(doc_id)
         try:
             client.set_payload(
                 collection_name=QDRANT_COLLECTION,
@@ -1238,8 +1251,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
 
     if report["status"] == "error" and ROLLBACK_ON_INGEST_ERROR:
         try:
-            _delete_vectors_for_file(ten_file, thu_muc)
+            _delete_vectors_for_file(ten_file, thu_muc, doc_id=doc_id)
             mark_document_ingest_failed(ten_file, thu_muc, report.get("message"))
+            restore_document_children(doc_id)
             report["total_chunks"] = 0
             report["warnings"].append("Da rollback vector/metadata cua file nay vi ingest khong dat quality gate.")
         except Exception as e:
@@ -1450,7 +1464,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         if all_chunks:
             # Document Versioning: Xoa vector cu
             try:
-                _delete_vectors_for_file(ten_file, thu_muc)
+                _delete_vectors_for_file(ten_file, thu_muc, doc_id=doc_id)
             except Exception as e:
                 logger.warning(f"Khong xoa duoc vector cu (bo qua, tiep tuc): {ten_file}: {e}")
  
@@ -1472,6 +1486,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
     if report["status"] == "success" and doc_id:
         _phong_ban_list = _normalize_phong_ban_quyen(thu_muc, phong_ban_override)
         update_document_classification(doc_id, domain=domain, security_level=security_level, phong_ban=_phong_ban_list)
+        clear_reingest_snapshot(doc_id)
         try:
             client.set_payload(
                 collection_name=QDRANT_COLLECTION,
@@ -1484,8 +1499,9 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
 
     if report["status"] == "error" and ROLLBACK_ON_INGEST_ERROR:
         try:
-            _delete_vectors_for_file(ten_file, thu_muc)
+            _delete_vectors_for_file(ten_file, thu_muc, doc_id=doc_id)
             mark_document_ingest_failed(ten_file, thu_muc, report.get("message"))
+            restore_document_children(doc_id)
             report["total_chunks"] = 0
             report["warnings"].append("Da rollback vector/metadata cua file nay vi ingest khong dat quality gate.")
         except Exception as e:

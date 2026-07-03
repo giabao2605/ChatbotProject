@@ -107,13 +107,43 @@ def _throttle_gpt_call():
 
 
 def _pil_to_data_url(image):
+    """Ma hoa anh trang PDF thanh data URL cho Vision API.
+
+    Cau hinh qua env:
+      - GPT_VISION_IMAGE_FORMAT = jpeg (mac dinh) | png. Dung PNG cho ban ve line-art
+        de giu net (JPEG gay artifact lam mo net manh / chu nho).
+      - GPT_VISION_MAX_EDGE = 0 (mac dinh, giu nguyen) hoac so px canh dai toi da; giup
+        kiem soat viec downscale (tranh phu thuoc hoan toan vao downscale phia server).
+      - GPT_VISION_JPEG_QUALITY = 85 (chi ap dung khi format=jpeg).
+    """
+    fmt = os.getenv("GPT_VISION_IMAGE_FORMAT", "jpeg").strip().lower()
+
+    # Optional: gioi han canh dai (0 = giu nguyen).
+    try:
+        max_edge = int(os.getenv("GPT_VISION_MAX_EDGE", "0"))
+    except ValueError:
+        max_edge = 0
+    if max_edge and hasattr(image, "size"):
+        w, h = image.size
+        longest = max(w, h)
+        if longest > max_edge:
+            scale = max_edge / float(longest)
+            image = image.resize((max(1, int(w * scale)), max(1, int(h * scale))))
+
     buf = io.BytesIO()
-    # Anh render tu PDF thuong la RGB/RGBA; JPEG nhe hon PNG cho API vision.
-    if getattr(image, "mode", "RGB") not in ("RGB", "L"):
-        image = image.convert("RGB")
-    image.save(buf, format="JPEG", quality=int(os.getenv("GPT_VISION_JPEG_QUALITY", "85")), optimize=True)
+    if fmt == "png":
+        if getattr(image, "mode", "RGB") not in ("RGB", "L", "RGBA"):
+            image = image.convert("RGB")
+        image.save(buf, format="PNG", optimize=True)
+        mime = "image/png"
+    else:
+        # Anh render tu PDF thuong la RGB/RGBA; JPEG nhe hon PNG cho API vision.
+        if getattr(image, "mode", "RGB") not in ("RGB", "L"):
+            image = image.convert("RGB")
+        image.save(buf, format="JPEG", quality=int(os.getenv("GPT_VISION_JPEG_QUALITY", "85")), optimize=True)
+        mime = "image/jpeg"
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    return f"data:image/jpeg;base64,{b64}"
+    return f"data:{mime};base64,{b64}"
 
 
 class GPTVisionModel:
@@ -146,7 +176,7 @@ class GPTVisionModel:
             model=self.model_name,
             messages=[{"role": "user", "content": user_content}],
             temperature=float(os.getenv("GPT_VISION_TEMPERATURE", "0")),
-            max_tokens=int(os.getenv("GPT_VISION_MAX_OUTPUT_TOKENS", "2500")),
+            max_tokens=int(os.getenv("GPT_VISION_MAX_OUTPUT_TOKENS", "4096")),
             timeout=float(os.getenv("GPT_TIMEOUT_SECONDS", "180")),
         )
         text = resp.choices[0].message.content or ""

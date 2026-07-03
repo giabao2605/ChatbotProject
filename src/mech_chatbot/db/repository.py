@@ -890,13 +890,44 @@ def mark_document_ingest_failed(file_name, thu_muc, error_message=None):
     except Exception as e:
         logger.error(f"Loi mark_document_ingest_failed: {e}", exc_info=True)
 
-def reset_document_metadata(file_name, thu_muc):
-    """Fix #1: GOI MOT LAN truoc khi nap file. Xoa metadata cu, tra ve DocID dung chung."""
+_REINGEST_SNAPSHOT_TABLES = {
+    "TaiLieuKyThuat": "ID",
+    "BangKeVatTu": "ID",
+    "DocumentPages": "PageID",
+    "TechnicalAttributes": "AttributeID",
+}
+# Snapshot tam thoi (trong bo nho) de khoi phuc du lieu con cu neu re-ingest that bai giua chung.
+_reingest_snapshots = {}
+
+
+def _snapshot_document_children(conn, doc_id):
+    """Chup lai cac dong con truoc khi xoa de co the restore neu ingest moi loi."""
+    snap = {}
+    for tbl in _REINGEST_SNAPSHOT_TABLES:
+        try:
+            rows = conn.execute(text(f"SELECT * FROM {tbl} WHERE DocID = :d"), {"d": doc_id}).mappings().all()
+            snap[tbl] = [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(f"[reingest] snapshot {tbl} loi doc_id={doc_id}: {e}")
+            snap[tbl] = []
+    return snap
+
+
+def reset_document_metadata(file_name, thu_muc, keep_snapshot=True):
+    """Fix #1: GOI MOT LAN truoc khi nap file. Xoa metadata cu, tra ve DocID dung chung.
+
+    keep_snapshot=True: chup lai du lieu con cu (trong bo nho) TRUOC khi xoa, de
+    restore_document_children() co the khoi phuc neu ingest moi that bai giua chung
+    (tranh mat du lieu cu khi Vision/embedding loi). Goi clear_reingest_snapshot()
+    khi ingest thanh cong.
+    """
     _ensure_engine()
     try:
         with engine.begin() as conn:
             doc_id = _get_or_create_doc(conn, file_name, thu_muc)
             if doc_id is not None:
+                if keep_snapshot:
+                    _reingest_snapshots[doc_id] = _snapshot_document_children(conn, doc_id)
                 conn.execute(text("DELETE FROM TaiLieuKyThuat WHERE DocID = :d"), {"d": doc_id})
                 conn.execute(text("DELETE FROM BangKeVatTu WHERE DocID = :d"), {"d": doc_id})
                 conn.execute(text("DELETE FROM DocumentPages WHERE DocID = :d"), {"d": doc_id})
@@ -907,6 +938,50 @@ def reset_document_metadata(file_name, thu_muc):
         if isinstance(e, ValueError) and "published" in str(e):
             raise e
         return None
+
+
+def clear_reingest_snapshot(doc_id):
+    """Ingest thanh cong -> bo snapshot con cu (giai phong bo nho)."""
+    if doc_id is not None:
+        _reingest_snapshots.pop(doc_id, None)
+
+
+def restore_document_children(doc_id):
+    """Khoi phuc du lieu con cu tu snapshot khi re-ingest that bai (tranh mat data cu).
+
+    Chi restore cho tung bang khi bang do hien dang RONG cho doc_id (ingest moi chua
+    ghi duoc gi) -> tranh nhan doi voi du lieu ingest moi da ghi mot phan.
+    """
+    if doc_id is None:
+        return False
+    snap = _reingest_snapshots.pop(doc_id, None)
+    if not snap:
+        return False
+    _ensure_engine()
+    restored = 0
+    try:
+        with engine.begin() as conn:
+            for tbl, id_col in _REINGEST_SNAPSHOT_TABLES.items():
+                rows = snap.get(tbl) or []
+                if not rows:
+                    continue
+                cur = conn.execute(text(f"SELECT COUNT(*) FROM {tbl} WHERE DocID = :d"), {"d": doc_id}).scalar() or 0
+                if cur > 0:
+                    continue
+                for r in rows:
+                    cols = [c for c in r.keys() if c != id_col]
+                    if not cols:
+                        continue
+                    col_sql = ", ".join(f"[{c}]" for c in cols)
+                    par_sql = ", ".join(f":{c}" for c in cols)
+                    conn.execute(text(f"INSERT INTO {tbl} ({col_sql}) VALUES ({par_sql})"),
+                                 {c: r[c] for c in cols})
+                    restored += 1
+        logger.info(f"[reingest] restore_document_children doc_id={doc_id}: {restored} dong.")
+        return restored > 0
+    except Exception as e:
+        logger.error(f"[reingest] restore_document_children loi doc_id={doc_id}: {e}", exc_info=True)
+        return False
 
 def get_document_info(doc_id):
     _ensure_engine()
@@ -1839,20 +1914,28 @@ def delete_document_completely(doc_id, reviewer="System"):
         return False
 
     # ------------------------------------------------------------------
-    # Buoc 3: SQL hard-delete
+    # Buoc 3: SQL hard-delete (bo sung xoa PNG + DocumentAttributes)
     # Neu loi: vector da mat, SQL con trang thai 'deleting' (an khoi RAG)
     # -> co the retry bang cach goi lai ham nay
     # ------------------------------------------------------------------
+    img_rows = []
     try:
         with engine.begin() as conn:
+            # (a) Lay duong dan anh PNG de xoa file vat ly sau
+            img_rows = conn.execute(
+                text("SELECT ImagePath FROM DocumentPages WHERE DocID = :id AND ImagePath IS NOT NULL"),
+                {"id": doc_id},
+            ).fetchall()
+
             conn.execute(text("DELETE FROM DocumentPages       WHERE DocID = :id"), {"id": doc_id})
             conn.execute(text("DELETE FROM TechnicalAttributes WHERE DocID = :id"), {"id": doc_id})
-            # TaiLieuKyThuat + BangKeVatTu tu dong xoa theo ON DELETE CASCADE
+            conn.execute(text("DELETE FROM DocumentAttributes  WHERE DocID = :id"), {"id": doc_id})  # (b) truoc day khong xoa
+            # TaiLieuKyThuat + BangKeVatTu + PhongBanChiaSe + DocQualityScore tu xoa theo CASCADE
             conn.execute(text("DELETE FROM TaiLieu             WHERE DocID = :id"), {"id": doc_id})
             if ten_file and thu_muc:
                 conn.execute(
                     text("DELETE FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t"),
-                    {"f": ten_file, "t": thu_muc}
+                    {"f": ten_file, "t": thu_muc},
                 )
         logger.info(f"[delete] 3/3 OK — hard-delete SQL DocID {doc_id} ({ten_file})")
     except Exception as e:
@@ -1863,6 +1946,27 @@ def delete_document_completely(doc_id, reviewer="System"):
             exc_info=True
         )
         return False
+
+    # (c) Xoa file PNG vat ly (ngoai transaction, best-effort)
+    for r in img_rows:
+        p = r[0]
+        try:
+            if p and os.path.exists(p):
+                os.remove(p)
+        except Exception as _e:
+            logger.warning(f"[delete] khong xoa duoc anh {p}: {_e}")
+
+    # (d) Null hoa / don con tro mo coi o FeedbackReview/GoldenAnswer/AnswerSource/DocQualityScore
+    try:
+        cleanup_dangling_records()
+    except Exception as _e:
+        logger.warning(f"[delete] cleanup_dangling_records loi: {_e}")
+
+    # (e) Clear semantic cache lien quan (don gian nhat: clear all)
+    try:
+        sc_clear_all()
+    except Exception as _e:
+        logger.warning(f"[delete] sc_clear_all loi: {_e}")
 
     write_audit_log(reviewer, "delete_document", "TaiLieu", doc_id, {"ten_file": ten_file, "thu_muc": thu_muc})
     return True
