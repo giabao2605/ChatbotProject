@@ -50,19 +50,37 @@ def _security_filter(max_security_level):
         return models.FieldCondition(key="metadata.security_level", match=models.MatchAny(any=levels))
 
 
+def _strict_site_enabled():
+    """P0#2: doc LAZY co AppSettings 'rbac_strict_site_filter'.
+    Import repository TRONG ham de rbac.py van THUAN (unit test import duoc, khong keo DB/RAG).
+    Moi loi -> coi nhu strict=False (tuong thich nguoc)."""
+    try:
+        from mech_chatbot.db.repository import get_app_setting
+        raw = get_app_setting("rbac_strict_site_filter", "false")
+        return str(raw).strip().lower() in ("true", "1", "yes", "on")
+    except Exception:
+        return False
+
+
 def _site_filter(allowed_sites):
-    """P1.2: gioi han theo site. List rong/None -> KHONG loc theo site (tuong thich nguoc).
-    Cho phep tai lieu chua gan site (metadata.site rong) de khong an du lieu cu."""
+    """P1.2 + P0#2: gioi han theo site. List rong/None -> KHONG loc theo site (tuong thich nguoc).
+    - STRICT OFF (mac dinh): tai lieu thieu site (metadata.site rong) VAN hien (tranh an du lieu cu).
+    - STRICT ON: KHONG cho qua tai lieu thieu site -> chan leak cross-site."""
     sites = [s for s in (allowed_sites or []) if s]
     if not sites:
         return None
+    match_cond = models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites))
+    # STRICT ON: chi khop dung site duoc phep, khong noi long cho doc thieu site.
+    if _strict_site_enabled():
+        return match_cond
+    # STRICT OFF: giu hanh vi cu (cho qua doc thieu site).
     try:
         return models.Filter(should=[
             models.IsEmptyCondition(is_empty=models.PayloadField(key="metadata.site")),
-            models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites)),
+            match_cond,
         ])
     except Exception:
-        return models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites))
+        return match_cond
 
 
 def create_rbac_filter(user_department, user_roles, allowed_departments=None, max_security_level=None, allowed_sites=None):

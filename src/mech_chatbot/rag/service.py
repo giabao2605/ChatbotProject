@@ -1496,7 +1496,16 @@ def current_published_filter(rbac_filter=None):
     if rbac_filter:
         must.append(rbac_filter)
 
-    return models.Filter(must=must)
+    # P0#4: LOAI TRU tai lieu het hieu luc. Dung must_not (blacklist) de tai lieu CU
+    # thieu metadata.effective_status VAN qua (tuong thich nguoc); chi loai cac trang thai xau.
+    must_not = [
+        models.FieldCondition(
+            key="metadata.effective_status",
+            match=models.MatchAny(any=["expired", "superseded", "draft"]),
+        ),
+    ]
+
+    return models.Filter(must=must, must_not=must_not)
 
 # ==========================================
 # 4. HAM XU LY LOI (TRAI TIM CUA CHATBOT)

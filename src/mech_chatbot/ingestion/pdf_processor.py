@@ -1095,6 +1095,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     "security_level": security_level,
                     # Multi-site (P1.2)
                     "site": site,
+                    # P0#4: trang thai hieu luc (ingest moi mac dinh 'active';
+                    # refresh_expired_status() se dong bo 'expired' xuong payload sau nay)
+                    "effective_status": "active",
                 }
                 info['trang_so'] = page_num + 1
  
@@ -1423,6 +1426,8 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             "security_level": security_level,
             # Multi-site (P1.2)
             "site": site,
+            # P0#4: trang thai hieu luc (ingest moi mac dinh 'active')
+            "effective_status": "active",
         }
         info["trang_so"] = 1
  

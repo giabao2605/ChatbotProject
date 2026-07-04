@@ -638,6 +638,16 @@ def get_regression_runs(batch_id=None):
     return [dict(zip(cols, r)) for r in rows]
 
 
+def _invalidate_semantic_cache(reason=""):
+    """P0#3: best-effort xoa semantic cache sau mutation (quyen/tai lieu doi).
+    KHONG raise ra ngoai de khong lam vo ham chinh."""
+    try:
+        deleted = sc_clear_all()
+        logger.info(f"[semantic-cache] invalidated (reason={reason}, deleted={deleted})")
+    except Exception:
+        logger.warning(f"[semantic-cache] invalidate loi (reason={reason})", exc_info=True)
+
+
 def cleanup_dangling_records():
     """P3-6: don du lieu mo coi tham chieu toi Doc/Chat khong con ton tai."""
     _ensure_engine()
@@ -849,6 +859,7 @@ def update_document_classification(doc_id, domain=None, security_level=None, pho
                 conn.execute(text("UPDATE TaiLieu SET " + ", ".join(sets) + " WHERE DocID = :d"), params)
             if phong_ban is not None:
                 set_document_departments(conn, doc_id, phong_ban)
+        _invalidate_semantic_cache("doc.classification")
     except Exception as e:
         logger.error(f"Loi update_document_classification doc_id={doc_id}: {e}", exc_info=True)
 
@@ -2038,6 +2049,7 @@ def publish_as_new_version(doc_id, reviewer="System"):
     for _old in old_docs:
         mark_feedback_stale_for_doc(_old.DocID, resolved_by_doc_id=doc.DocID)
     write_audit_log(reviewer, "publish_new_version", "TaiLieu", doc.DocID, {"base_code": doc.BaseCode, "version": doc.VersionNo, "superseded": old_id})
+    _invalidate_semantic_cache("doc.publish_version")
     return True
 
 def publish_as_new_variant(doc_id, reviewer="System"):
@@ -2063,6 +2075,7 @@ def publish_as_new_variant(doc_id, reviewer="System"):
             raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc.DocID}")
         
     write_audit_log(reviewer, "publish_variant", "TaiLieu", doc.DocID, {"base_code": doc.BaseCode, "variant": doc.VariantCode})
+    _invalidate_semantic_cache("doc.publish_variant")
     return True
 
 def publish_as_standalone(doc_id, reviewer="System"):
@@ -2083,6 +2096,7 @@ def reject_document(doc_id, reviewer="System"):
             raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc_id}")
         
     write_audit_log(reviewer, "reject_document", "TaiLieu", doc_id, {})
+    _invalidate_semantic_cache("doc.reject")
     return True
 
 def archive_document(doc_id, reviewer="System"):
@@ -2101,6 +2115,7 @@ def archive_document(doc_id, reviewer="System"):
             raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc_id}")
         
     write_audit_log(reviewer, "archive_document", "TaiLieu", doc_id, {})
+    _invalidate_semantic_cache("doc.archive")
     return True
 
 def rollback_to_version(base_code, version_no, variant_code="default", reviewer="System"):
@@ -2196,6 +2211,7 @@ def rollback_to_version_by_family(family_id, version_no, variant_code="default",
                 raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {target_doc_id}")
 
             write_audit_log(reviewer, "rollback", "TaiLieu", target_doc_id, {"family_id": family_id, "target_version": version_no})
+            _invalidate_semantic_cache("doc.rollback")
             return True
 
     except Exception as e:
@@ -2582,6 +2598,7 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
             "docs": len(updated_doc_payloads),
             "qdrant_failures": qdrant_failures,
         })
+        _invalidate_semantic_cache("dept.reassign")
         return {
             "ok": True,
             "source": source_code,
@@ -2649,6 +2666,7 @@ def set_user_sites(user_id, sites):
             for s in (sites or []):
                 if s:
                     conn.execute(text("INSERT INTO dbo.UserSites (UserID, Site) VALUES (:uid, :s)"), {"uid": user_id, "s": s})
+        _invalidate_semantic_cache("user.sites")
         return True
     except Exception as e:
         logger.error(f"set_user_sites loi: {e}", exc_info=True)
@@ -2664,6 +2682,7 @@ def set_user_departments(user_id, departments):
             for d in (departments or []):
                 if d:
                     conn.execute(text("INSERT INTO dbo.UserDepartments (UserID, Department) VALUES (:uid, :d)"), {"uid": user_id, "d": d})
+        _invalidate_semantic_cache("user.departments")
         return True
     except Exception as e:
         logger.error(f"set_user_departments loi: {e}", exc_info=True)
@@ -2683,6 +2702,7 @@ def set_user_clearance(user_id, max_level):
                 WHEN MATCHED THEN UPDATE SET MaxLevel = :lvl
                 WHEN NOT MATCHED THEN INSERT (UserID, MaxLevel) VALUES (:uid, :lvl);
             """), {"uid": user_id, "lvl": max_level})
+        _invalidate_semantic_cache("user.clearance_set")
         return True
     except Exception as e:
         logger.error(f"set_user_clearance loi: {e}", exc_info=True)
@@ -3270,6 +3290,7 @@ def update_document_common_metadata(doc_id, reviewer="System", attributes=None, 
 
         write_audit_log(reviewer, "update_common_metadata", "TaiLieu", doc_id,
                         {"fields": list(params.keys()), "has_attributes": attributes is not None})
+        _invalidate_semantic_cache("doc.metadata")
         return True
     except Exception as e:
         logger.error(f"Loi update_document_common_metadata doc_id={doc_id}: {e}", exc_info=True)
@@ -3525,6 +3546,7 @@ def resolve_access_request(request_id, decision, reviewer_username, reviewer_id=
                             user_id=reviewer_id)
         except Exception:
             pass
+        _invalidate_semantic_cache("access_request.resolve")
         return {"ok": True, "applied": applied, "message": "da xu ly"}
     except Exception as e:
         logger.error(f"resolve_access_request loi: {e}", exc_info=True)
@@ -3586,6 +3608,7 @@ def revoke_user_clearance(user_id, new_level, actor_username, actor_id=None, rea
                             user_id=actor_id)
         except Exception:
             pass
+        _invalidate_semantic_cache("user.clearance_revoke")
         return {"ok": True, "from": old_level, "to": new_level, "message": "da cap nhat"}
     except Exception as e:
         logger.error(f"revoke_user_clearance loi: {e}", exc_info=True)
@@ -3609,6 +3632,7 @@ def revoke_user_department(user_id, dept, actor_username, actor_id=None, reason=
                             user_id=actor_id)
         except Exception:
             pass
+        _invalidate_semantic_cache("user.dept_revoke")
         return {"ok": True, "removed": removed, "message": "da thu hoi"}
     except Exception as e:
         logger.error(f"revoke_user_department loi: {e}", exc_info=True)
@@ -3722,6 +3746,7 @@ def upsert_glossary_term(term, domain, synonyms=None, expansion=None, is_active=
                 """), {"d": _cap_len(domain, 50), "t": _cap_len(term, 255), "s": syn_json,
                         "e": _cap_len(expansion, 1000), "a": 1 if is_active else 0}).fetchone()
                 gid = row[0] if row else None
+        _invalidate_semantic_cache("glossary.upsert")
         return {"ok": True, "glossary_id": gid}
     except Exception as e:
         logger.error(f"upsert_glossary_term loi: {e}", exc_info=True)
@@ -3734,6 +3759,7 @@ def set_glossary_active(glossary_id, is_active):
         with engine.begin() as conn:
             conn.execute(text("UPDATE dbo.DomainGlossary SET IsActive = :a, UpdatedAt = GETDATE() WHERE GlossaryID = :gid"),
                          {"a": 1 if is_active else 0, "gid": glossary_id})
+        _invalidate_semantic_cache("glossary.active")
         return True
     except Exception as e:
         logger.error(f"set_glossary_active loi: {e}", exc_info=True)
@@ -3745,6 +3771,7 @@ def delete_glossary_term(glossary_id):
     try:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM dbo.DomainGlossary WHERE GlossaryID = :gid"), {"gid": glossary_id})
+        _invalidate_semantic_cache("glossary.delete")
         return True
     except Exception as e:
         logger.error(f"delete_glossary_term loi: {e}", exc_info=True)
@@ -4006,16 +4033,28 @@ def mark_document_reviewed(doc_id, reviewer, next_review_days=180):
 
 
 def refresh_expired_status():
-    """P1-7: dat EffectiveStatus = 'expired' cho tai lieu da qua ExpiryDate. Tra so dong cap nhat."""
+    """P1-7: dat EffectiveStatus = 'expired' cho tai lieu da qua ExpiryDate. Tra so dong cap nhat.
+    P0#4: dong bo 'expired' xuong payload Qdrant + invalidate semantic cache de RAG loai ngay."""
     _ensure_engine()
+    _WHERE = (
+        "WHERE ExpiryDate IS NOT NULL AND ExpiryDate < CAST(GETDATE() AS DATE) "
+        "AND ISNULL(EffectiveStatus, '') NOT IN ('expired', 'superseded')"
+    )
     try:
         with engine.begin() as conn:
-            res = conn.execute(text(
-                "UPDATE TaiLieu SET EffectiveStatus = 'expired' "
-                "WHERE ExpiryDate IS NOT NULL AND ExpiryDate < CAST(GETDATE() AS DATE) "
-                "AND ISNULL(EffectiveStatus, '') NOT IN ('expired', 'superseded')"
-            ))
-        return getattr(res, "rowcount", 0) or 0
+            rows = conn.execute(text("SELECT DocID FROM TaiLieu " + _WHERE)).fetchall()
+            ids = [r[0] for r in rows]
+            if ids:
+                conn.execute(text("UPDATE TaiLieu SET EffectiveStatus = 'expired' " + _WHERE))
+        # Dong bo payload Qdrant cho tung doc (best-effort)
+        for _did in ids:
+            try:
+                update_qdrant_metadata(_did, {"effective_status": "expired"})
+            except Exception as _qe:
+                logger.warning(f"refresh_expired_status: dong bo Qdrant loi doc {_did}: {_qe}")
+        if ids:
+            _invalidate_semantic_cache("lifecycle.expired")
+        return len(ids)
     except Exception as e:
         logger.error(f"refresh_expired_status loi: {e}", exc_info=True)
         return 0

@@ -90,6 +90,22 @@ def authenticate_user(username, password):
             except Exception:
                 allowed_departments = []
 
+            # P0#1: loai bo phong ban da disable/archive khoi allowed_departments.
+            # Giu lai: sentinel CHUNG, phong khong co trong bang Departments (legacy), va phong active.
+            if allowed_departments:
+                try:
+                    from mech_chatbot.db.repository import list_known_departments
+                    _active_codes = {d["code"] for d in list_known_departments(active_only=True)}
+                    _all_codes = {d["code"] for d in list_known_departments(active_only=False)}
+                    allowed_departments = [
+                        d for d in allowed_departments
+                        if d == SHARE_ALL_DEPARTMENT or d not in _all_codes or d in _active_codes
+                    ]
+                    if not allowed_departments:
+                        allowed_departments = [SHARE_ALL_DEPARTMENT]
+                except Exception:
+                    pass  # loi tra cuu -> giu nguyen (tuong thich nguoc, khong pha login)
+
             # LUU Y: KHONG tu dong them user[3] (department display label nhu "Technical")
             # vao allowed_departments. Department chi la nhan hien thi; quyen xem tai lieu
             # duoc kiem soat duy nhat boi bang UserDepartments (chua DeptCode thuc te theo
