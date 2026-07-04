@@ -809,10 +809,11 @@ def set_document_departments(conn, doc_id, dept_codes):
         return
     codes = _split_csv_tokens(dept_codes)
     conn.execute(text("DELETE FROM dbo.PhongBanChiaSe WHERE DocID = :d"), {"d": doc_id})
-    for code in codes:
+    # Perf (GD1): bulk insert thay N+1 (executemany). Giu nguyen tap dong chen.
+    if codes:
         conn.execute(
             text("INSERT INTO dbo.PhongBanChiaSe (DocID, DeptCode) VALUES (:d, :c)"),
-            {"d": doc_id, "c": code},
+            [{"d": doc_id, "c": code} for code in codes],
         )
 
 
@@ -1263,27 +1264,32 @@ def save_bom_records(doc_id, trang_so, records):
         return
     _ensure_engine()
     try:
+        # Perf (GD1): bulk insert thay N+1 (executemany). Giu nguyen tung dong.
+        _rows = [
+            {
+                "doc_id": doc_id,
+                "trang_so": trang_so,
+                "ma_hang": _sanitize_text(rec.get("ma_hang"), 255),
+                "ten": _sanitize_text(rec.get("ten_vat_tu"), 500),
+                "vat_lieu": _sanitize_text(rec.get("vat_lieu"), 255),
+                "normalized_material": _sanitize_text(normalize_material_name(rec.get("vat_lieu")), 255),
+                "sl": _sanitize_int(rec.get("so_luong"), None),
+                "ghi_chu": _sanitize_text(rec.get("ghi_chu"), 4000),
+                "unit": _sanitize_text(rec.get("don_vi"), 50),
+                "conf": rec.get("confidence", None),
+                "raw": rec.get("raw_row_json", None),
+                "idx": rec.get("source_table_index", None)
+            }
+            for rec in records
+        ]
         with engine.begin() as conn:
-            for rec in records:
+            if _rows:
                 conn.execute(
                     text("""
                         INSERT INTO BangKeVatTu (DocID, TrangSo, MaHang, TenVatTu, VatLieu, NormalizedMaterial, SoLuong, GhiChu, Unit, Confidence, RawRowJson, SourceTableIndex)
                         VALUES (:doc_id, :trang_so, :ma_hang, :ten, :vat_lieu, :normalized_material, :sl, :ghi_chu, :unit, :conf, :raw, :idx)
                     """),
-                    {
-                        "doc_id": doc_id,
-                        "trang_so": trang_so,
-                        "ma_hang": _sanitize_text(rec.get("ma_hang"), 255),
-                        "ten": _sanitize_text(rec.get("ten_vat_tu"), 500),
-                        "vat_lieu": _sanitize_text(rec.get("vat_lieu"), 255),
-                        "normalized_material": _sanitize_text(normalize_material_name(rec.get("vat_lieu")), 255),
-                        "sl": _sanitize_int(rec.get("so_luong"), None),
-                        "ghi_chu": _sanitize_text(rec.get("ghi_chu"), 4000),
-                        "unit": _sanitize_text(rec.get("don_vi"), 50),
-                        "conf": rec.get("confidence", None),
-                        "raw": rec.get("raw_row_json", None),
-                        "idx": rec.get("source_table_index", None)
-                    }
+                    _rows,
                 )
     except Exception as e:
         logger.error(f"Loi save_bom_records cho doc_id {doc_id}, trang {trang_so}: {e}", exc_info=True)
@@ -2289,6 +2295,36 @@ def _replace_department_token_list(value, old_code, new_code=None):
     return ",".join(out) if out else None
 
 
+# ==========================================================================
+# Perf (GD2): cache ngan han cho DANH MUC TINH (khong phu thuoc quyen user).
+# Giam truy van lap o ca repository lan UI (Streamlit rerun). TTL ngan +
+# invalidate tuong minh khi CRUD danh muc de tranh du lieu "ma".
+# ==========================================================================
+_catalog_cache = {}
+_CATALOG_CACHE_TTL = float(os.getenv("CATALOG_CACHE_TTL", "60"))
+
+
+def _catalog_cache_get(key):
+    import time
+    ent = _catalog_cache.get(key)
+    if ent is not None and (time.time() - ent[1]) < _CATALOG_CACHE_TTL:
+        return ent[0]
+    return None
+
+
+def _catalog_cache_put(key, value):
+    import time
+    _catalog_cache[key] = (value, time.time())
+
+
+def _catalog_cache_invalidate(prefix=""):
+    if not prefix:
+        _catalog_cache.clear()
+        return
+    for k in [k for k in _catalog_cache if k.startswith(prefix)]:
+        _catalog_cache.pop(k, None)
+
+
 def list_known_departments(active_only=True):
     """Danh muc phong ban (bang Departments). Tra ve list dict.
 
@@ -2296,6 +2332,10 @@ def list_known_departments(active_only=True):
     - DB cu: chi co IsActive -> map sang status active/disabled.
     - DB moi: uu tien cot Status, nhung van giu IsActive de code cu tiep tuc chay.
     """
+    _ck = f"depts:{bool(active_only)}"  # Perf (GD2)
+    _c = _catalog_cache_get(_ck)
+    if _c is not None:
+        return list(_c)
     _ensure_engine()
     supports_status = _departments_support_status()
     if supports_status:
@@ -2318,7 +2358,7 @@ def list_known_departments(active_only=True):
     try:
         with engine.connect() as conn:
             rows = conn.execute(text(sql)).fetchall()
-        return [
+        result = [
             {
                 "code": r[0],
                 "name": r[1],
@@ -2331,6 +2371,8 @@ def list_known_departments(active_only=True):
             }
             for r in rows
         ]
+        _catalog_cache_put(_ck, result)
+        return list(result)
     except Exception as e:
         logger.error(f"list_known_departments loi: {e}", exc_info=True)
         return []
@@ -2384,6 +2426,7 @@ def upsert_department(code, name=None, domain=None, site=None, is_active=True, s
                     WHEN NOT MATCHED THEN INSERT (DeptCode, DeptName, Domain, Site, IsActive)
                         VALUES (:c, :n, :d, :site, :a);
                 """), {"c": code, "n": name, "d": domain, "site": site, "a": resolved_is_active})
+        _catalog_cache_invalidate("depts:")  # Perf (GD2): danh muc phong ban doi -> xoa cache
         return True
     except Exception as e:
         logger.error(f"upsert_department loi: {e}", exc_info=True)
@@ -2481,6 +2524,7 @@ def set_department_status(code, status, actor="System", force=False):
             "to": target_status,
             "force": bool(force),
         })
+        _catalog_cache_invalidate("depts:")  # Perf (GD2)
         return {"ok": True, "status": target_status, "summary": get_department_summary(code)}
     return {"ok": False, "message": f"Cap nhat trang thai phong '{code}' that bai."}
 
@@ -2615,6 +2659,10 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
 
 def list_known_sites(active_only=True):
     """Danh muc khu/site (bang Sites)."""
+    _ck = f"sites:{bool(active_only)}"  # Perf (GD2)
+    _c = _catalog_cache_get(_ck)
+    if _c is not None:
+        return list(_c)
     _ensure_engine()
     where = "WHERE IsActive = 1" if active_only else ""
     try:
@@ -2622,7 +2670,9 @@ def list_known_sites(active_only=True):
             rows = conn.execute(text(
                 f"SELECT SiteCode, SiteName, IsActive FROM dbo.Sites {where} ORDER BY SiteCode"
             )).fetchall()
-        return [{"code": r[0], "name": r[1], "is_active": bool(r[2])} for r in rows]
+        result = [{"code": r[0], "name": r[1], "is_active": bool(r[2])} for r in rows]
+        _catalog_cache_put(_ck, result)
+        return list(result)
     except Exception as e:
         logger.error(f"list_known_sites loi: {e}", exc_info=True)
         return []
@@ -2640,6 +2690,7 @@ def upsert_site(code, name=None, is_active=True):
                 WHEN MATCHED THEN UPDATE SET SiteName = :n, IsActive = :a
                 WHEN NOT MATCHED THEN INSERT (SiteCode, SiteName, IsActive) VALUES (:c, :n, :a);
             """), {"c": code, "n": name, "a": 1 if is_active else 0})
+        _catalog_cache_invalidate("sites:")  # Perf (GD2)
         return True
     except Exception as e:
         logger.error(f"upsert_site loi: {e}", exc_info=True)
@@ -2663,9 +2714,9 @@ def set_user_sites(user_id, sites):
     try:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM dbo.UserSites WHERE UserID = :uid"), {"uid": user_id})
-            for s in (sites or []):
-                if s:
-                    conn.execute(text("INSERT INTO dbo.UserSites (UserID, Site) VALUES (:uid, :s)"), {"uid": user_id, "s": s})
+            _vals = [{"uid": user_id, "s": s} for s in (sites or []) if s]
+            if _vals:
+                conn.execute(text("INSERT INTO dbo.UserSites (UserID, Site) VALUES (:uid, :s)"), _vals)  # Perf (GD1): bulk insert
         _invalidate_semantic_cache("user.sites")
         return True
     except Exception as e:
@@ -2679,9 +2730,9 @@ def set_user_departments(user_id, departments):
     try:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM dbo.UserDepartments WHERE UserID = :uid"), {"uid": user_id})
-            for d in (departments or []):
-                if d:
-                    conn.execute(text("INSERT INTO dbo.UserDepartments (UserID, Department) VALUES (:uid, :d)"), {"uid": user_id, "d": d})
+            _vals = [{"uid": user_id, "d": d} for d in (departments or []) if d]
+            if _vals:
+                conn.execute(text("INSERT INTO dbo.UserDepartments (UserID, Department) VALUES (:uid, :d)"), _vals)  # Perf (GD1): bulk insert
         _invalidate_semantic_cache("user.departments")
         return True
     except Exception as e:
@@ -3667,6 +3718,10 @@ def get_grant_history(limit=100):
 # ==========================================================================
 def get_active_glossary(domains=None):
     """Cac muc glossary dang bat. domains=None -> tat ca; nguoc lai loc theo list domain."""
+    _ck = "gloss_active:" + (",".join(sorted(domains)) if domains else "__all__")  # Perf (GD2)
+    _c = _catalog_cache_get(_ck)
+    if _c is not None:
+        return list(_c)
     _ensure_engine()
     try:
         with engine.connect() as conn:
@@ -3686,7 +3741,8 @@ def get_active_glossary(domains=None):
                 syn_list = [s.strip() for s in str(syn or "").split(",") if s.strip()]
             out.append({"glossary_id": gid, "domain": domain, "term": term,
                         "synonyms": syn_list, "expansion": exp})
-        return out
+        _catalog_cache_put(_ck, out)
+        return list(out)
     except Exception as e:
         logger.error(f"get_active_glossary loi: {e}", exc_info=True)
         return []
@@ -3747,6 +3803,7 @@ def upsert_glossary_term(term, domain, synonyms=None, expansion=None, is_active=
                         "e": _cap_len(expansion, 1000), "a": 1 if is_active else 0}).fetchone()
                 gid = row[0] if row else None
         _invalidate_semantic_cache("glossary.upsert")
+        _catalog_cache_invalidate("gloss_active:")  # Perf (GD2)
         return {"ok": True, "glossary_id": gid}
     except Exception as e:
         logger.error(f"upsert_glossary_term loi: {e}", exc_info=True)
@@ -3760,6 +3817,7 @@ def set_glossary_active(glossary_id, is_active):
             conn.execute(text("UPDATE dbo.DomainGlossary SET IsActive = :a, UpdatedAt = GETDATE() WHERE GlossaryID = :gid"),
                          {"a": 1 if is_active else 0, "gid": glossary_id})
         _invalidate_semantic_cache("glossary.active")
+        _catalog_cache_invalidate("gloss_active:")  # Perf (GD2)
         return True
     except Exception as e:
         logger.error(f"set_glossary_active loi: {e}", exc_info=True)
@@ -3772,6 +3830,7 @@ def delete_glossary_term(glossary_id):
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM dbo.DomainGlossary WHERE GlossaryID = :gid"), {"gid": glossary_id})
         _invalidate_semantic_cache("glossary.delete")
+        _catalog_cache_invalidate("gloss_active:")  # Perf (GD2)
         return True
     except Exception as e:
         logger.error(f"delete_glossary_term loi: {e}", exc_info=True)

@@ -56,6 +56,44 @@ from mech_chatbot.llm.vision_client import build_vision_model, is_retryable_erro
  
 _VISION_MODEL = build_vision_model()
  
+# Refactor (GD4): cac ham kiem tra cau tra loi da tach sang answer_checks.py.
+# Re-import de moi cho goi cu trong file nay + cac caller ngoai (tests, ...) van chay.
+from mech_chatbot.rag.answer_checks import (  # noqa: F401
+    _safe_json_loads,
+    _extract_numbers,
+    extract_units_and_symbols,
+    has_unsupported_units_symbols,
+    KNOWN_MATERIALS,
+    _known_materials,
+    extract_known_materials,
+    has_unsupported_materials,
+    extract_codes,
+    has_unsupported_codes,
+    requires_source_citation,
+    has_required_source_citation,
+)
+
+
+# Refactor (GD4 - lat cat 2): cum glossary da tach sang glossary_expand.py.
+from mech_chatbot.rag.glossary_expand import (  # noqa: F401
+    _GLOSSARY_TTL,
+    _GLOSSARY_CACHE,
+    _glossary_domains_for_department,
+    _load_glossary_cached,
+    glossary_expansion_terms,
+)
+
+
+# Refactor (GD4 - lat cat 3): cum context builders da tach sang context_builders.py.
+from mech_chatbot.rag.context_builders import (  # noqa: F401
+    _context_is_mechanical,
+    _context_domain,
+    build_structured_attributes_context,
+    build_common_metadata_context,
+    format_docs,
+)
+
+
 def env_bool(name, default=False):
     raw = os.getenv(name)
     if raw is None:
@@ -550,157 +588,21 @@ def _build_prompt_template(domain="generic", lang="vi"):
         ("human", "{question}"),
     ])
 
-def _context_is_mechanical(docs, part_ids=None):
-    """GD3: ngu canh co phai co khi khong (dua tren domain cua doc da truy hoi).
-    - Co metadata domain: True neu co bat ky doc domain==mechanical.
-    - Khong co metadata domain (du lieu cu): fallback theo part_ids (ma co khi).
-    """
-    domains = [d.metadata.get("domain") for d in docs if d is not None and d.metadata.get("domain")]
-    if domains:
-        return any(d == "mechanical" for d in domains)
-    return bool(part_ids)
 
 
-def _context_domain(docs, part_ids=None):
-    """F2: chon domain cho prompt theo tai lieu da truy hoi.
-    Uu tien 'mechanical' (co guard chuyen mon), roi 'tabular', roi 'generic'.
-    Du lieu cu khong co metadata.domain -> 'mechanical' neu co part_ids co khi, con lai 'generic'.
-    """
-    domains = [d.metadata.get("domain") for d in docs if d is not None and d.metadata.get("domain")]
-    if domains:
-        if any(d == "mechanical" for d in domains):
-            return "mechanical"
-        if any(d == "tabular" for d in domains):
-            return "tabular"
-        return "generic"
-    return "mechanical" if part_ids else "generic"
+
+
 
 # Mac dinh module-level: prompt trung lap (an toan cho moi domain).
 system_prompt = NEUTRAL_SYSTEM_PROMPT
 prompt_template = _build_prompt_template("generic")
 
-def build_structured_attributes_context(docs):
-    try:
-        from mech_chatbot.db.repository import get_technical_attributes_for_rag
-        import json
-        source_files = sorted(set(
-            d.metadata.get("file_goc")
-            for d in docs
-            if d.metadata.get("file_goc")
-        ))
-        blocks = []
-        for file_name in source_files:
-            attrs = get_technical_attributes_for_rag(file_name)
-            if attrs:
-                blocks.append(
-                    "[STRUCTURED DATA - HUMAN VERIFIED PRIORITY]\n"
-                    f"File: {file_name}\n"
-                    f"{json.dumps(attrs, ensure_ascii=False, indent=2)}"
-                )
-        return "\n\n".join(blocks)
-    except Exception as e:
-        logger.warning(f"Khong lay duoc structured attributes: {e}")
-        return ""
+
  
-def build_common_metadata_context(docs):
-    """P1.2: bo sung metadata tong quat (Tieu de/So van ban/Trang thai hieu luc/
-    ngay hieu luc...) tu SQL vao context. Giup chatbot tra loi co nhan dien tai lieu
-    va canh bao khi tai lieu het hieu luc / da bi thay the.
-    """
-    try:
-        from mech_chatbot.db.repository import get_common_metadata_for_rag
-        from datetime import date, datetime
-        _nl = chr(10)
-        doc_ids = [d.metadata.get("doc_id") for d in docs if d is not None and d.metadata.get("doc_id") is not None]
-        meta_map = get_common_metadata_for_rag(doc_ids)
-        if not meta_map:
-            return ""
-        blocks = []
-        for did, m in meta_map.items():
-            parts = []
-            if m.get("title"): parts.append(f"Tieu de: {m[chr(39)+chr(116)+chr(105)+chr(116)+chr(108)+chr(101)+chr(39)]}")
-            if m.get("doc_number"): parts.append("So van ban: " + str(m.get("doc_number")))
-            if m.get("effective_status"): parts.append("Trang thai hieu luc: " + str(m.get("effective_status")))
-            if m.get("effective_date"): parts.append("Ngay hieu luc: " + str(m.get("effective_date")))
-            if m.get("expiry_date"): parts.append("Ngay het hieu luc: " + str(m.get("expiry_date")))
-            if m.get("owner_signer"): parts.append("Nguoi ky/phu trach: " + str(m.get("owner_signer")))
-            if m.get("tags"): parts.append("Tu khoa: " + str(m.get("tags")))
-            if m.get("summary"): parts.append("Tom tat: " + str(m.get("summary")))
-            warn = ""
-            st_val = (m.get("effective_status") or "").lower()
-            if st_val in ("expired", "superseded"):
-                warn = " [CANH BAO: tai lieu co trang thai " + st_val + " - co the KHONG con hieu luc, can luu y nguoi dung]"
-            elif m.get("expiry_date"):
-                try:
-                    exp = datetime.strptime(str(m.get("expiry_date"))[:10], "%Y-%m-%d").date()
-                    if exp < date.today():
-                        warn = " [CANH BAO: tai lieu da qua ngay het hieu luc " + str(m.get("expiry_date")) + "]"
-                except Exception:
-                    pass
-            if parts:
-                blocks.append("[METADATA TAI LIEU - DocID " + str(did) + "]" + warn + _nl + _nl.join(parts))
-        if not blocks:
-            return ""
-        header = "[THONG TIN TONG QUAT TAI LIEU (tu CSDL - uu tien khi tra loi ve phong ban/hieu luc)]"
-        return header + _nl + (_nl + _nl).join(blocks)
-    except Exception as e:
-        logger.warning("Khong lay duoc common metadata context: " + str(e))
-        return ""
 
 
-def format_docs(docs):
-    """Format documents kem thong tin nguon ro rang de LLM co the trich dan va so sanh."""
-    formatted_texts = []
-    for doc in docs:
-        source_file = doc.metadata.get('file_goc', 'Khong ro nguon')
-        trang = doc.metadata.get('trang_so', '?')
-        cong_doan = doc.metadata.get('cong_doan', '')
-        loai = doc.metadata.get('loai_du_lieu', '')
- 
-        # FIX: metadata thuc te luu ma o 'ma_doi_tuong' (list), khong phai ma_thanh_pham/ma_ban_thanh_pham
-        # -> truoc day header luon ra 'CHUNG'. Gio doc dung key.
-        ma_doi_tuong = doc.metadata.get('ma_doi_tuong', [])
-        ma_chinh = doc.metadata.get('ma_chinh', [])
-        ma_btp = doc.metadata.get('ma_btp', [])
-        ma_vat_tu = doc.metadata.get('ma_vat_tu', [])
-        
-        # DAT MA LEN DAU DE LLM DE PHAN BIET KHI SO SANH CHEO
-        header = "[TAI LIEU"
-        
-        if ma_chinh:
-            ma_chinh_str = ", ".join(str(m) for m in ma_chinh if m and str(m) != "Khong ro") if isinstance(ma_chinh, list) else str(ma_chinh)
-            header += f" | MA CHINH: {ma_chinh_str}"
-        elif ma_doi_tuong:
-            ma_str = ", ".join(str(m) for m in ma_doi_tuong if m and str(m) != "Khong ro") if isinstance(ma_doi_tuong, list) else str(ma_doi_tuong)
-            header += f" | MA: {ma_str}"
-        else:
-            header += " CHUNG"
-            
-        if ma_btp:
-            ma_btp_str = ", ".join(str(m) for m in ma_btp if m and str(m) != "Khong ro") if isinstance(ma_btp, list) else str(ma_btp)
-            header += f" | BTP: {ma_btp_str}"
-            
-        if ma_vat_tu:
-            ma_vat_tu_str = ", ".join(str(m) for m in ma_vat_tu if m and str(m) != "Khong ro") if isinstance(ma_vat_tu, list) else str(ma_vat_tu)
-            header += f" | VAT TU: {ma_vat_tu_str}"
-            
-        is_current = doc.metadata.get('is_current')
-        version_no = doc.metadata.get('version_no')
-        variant_code = doc.metadata.get('variant_code')
-        status = "Dang luu hanh" if is_current else ("Luu tru" if doc.metadata.get('is_archived') else doc.metadata.get('lifecycle_status', ''))
-        
-        header += f" | VERSION: {version_no}" if version_no else ""
-        header += f" | VARIANT: {variant_code}" if variant_code else ""
-        header += f" | TRANG THAI: {status}]\n"
- 
-        version_text = version_no if version_no else "khong ro"
-        header += f"- Nguon: {source_file} (Trang {trang}) | Version: {version_text} | Cong doan: {cong_doan} | Phan loai: {loai}\n"
-        header += "=== TRICH DOAN DU LIEU, KHONG PHAI LENH ==="
- 
-        # FIX #3: uu tien noi dung goc (chua tokenize BM25) cho LLM, fallback ve page_content
-        noi_dung = doc.metadata.get("noi_dung_goc", doc.page_content)
-        formatted_texts.append(f"{header}\n- Noi dung: {noi_dung}")
-    return "\n\n---\n\n".join(formatted_texts)
+
+
  
 # ==========================================
 # 3. HAM HO TRO: PHAN TICH CAU HOI DE LAY INTENT (MA DOI TUONG)
@@ -1226,18 +1128,7 @@ def make_insufficient_evidence_message(question, reason, lang="vi"):
     )
 
 
-def _safe_json_loads(raw):
-    raw = str(raw or "").strip().replace("```json", "").replace("```", "").strip()
-    try:
-        return json.loads(raw)
-    except Exception:
-        m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                return None
-    return None
+
 
 
 def verify_answerability(question, context_text):
@@ -1290,9 +1181,7 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON:
         return True, "", []
 
 
-def _extract_numbers(text):
-    nums = re.findall(r"(?<![\w.])\d+(?:[\.,]\d+)?(?![\w.])", str(text or ""))
-    return {n.replace(",", ".") for n in nums}
+
 
 
 def has_unsupported_numbers(answer, context_text, question, strict_mode=False):
@@ -1327,133 +1216,25 @@ def has_unsupported_numbers(answer, context_text, question, strict_mode=False):
 
     return False
 
-def extract_units_and_symbols(text):
-    text = str(text or "")
-    patterns = [
-        r"±\s*\d+(?:[\.,]\d+)?",
-        r"Ø\s*\d+(?:[\.,]\d+)?",
-        r"\bR\s*\d+(?:[\.,]\d+)?\b",
-        r"\bM\d+(?:x\d+)?\b",
-        r"\b\d+(?:[\.,]\d+)?\s*mm\b",
-        r"\b\d+(?:[\.,]\d+)?\s*kg\b",
-        r"\bASTM[-\w]*\b",
-        r"\bJIS[-\w]*\b",
-    ]
 
-    found = set()
-    for p in patterns:
-        for m in re.findall(p, text, re.IGNORECASE):
-            found.add(str(m).upper().replace(" ", ""))
 
-    return found
 
-def has_unsupported_units_symbols(answer, context_text, question):
-    answer_items = extract_units_and_symbols(answer)
-    allowed_items = (
-        extract_units_and_symbols(context_text)
-        | extract_units_and_symbols(question)
-    )
 
-    unsupported = answer_items - allowed_items
 
-    return bool(unsupported), list(unsupported)
 
-KNOWN_MATERIALS = [
-    "SUS304", "SUS316", "SS400", "SPCC", "AL6061", "A5052", 
-    "S45C", "SKD11", "SKD61"
-]
 
-def _known_materials():
-    try:
-        from mech_chatbot.ingestion.material_registry import get_known_materials
-        mats = get_known_materials()
-        if mats:
-            return mats
-    except Exception:
-        pass
-    return KNOWN_MATERIALS
 
-def extract_known_materials(text):
-    text_upper = str(text or "").upper().replace(" ", "")
-    found = set()
-    for mat in _known_materials():
-        if mat.upper().replace(" ", "") in text_upper:
-            found.add(mat.upper())
-    return found
 
-def has_unsupported_materials(answer, context_text):
-    answer_mats = extract_known_materials(answer)
-    context_mats = extract_known_materials(context_text)
-    unsupported = answer_mats - context_mats
-    return bool(unsupported), list(unsupported)
 
-def extract_codes(text):
-    patterns = [
-        r"\b\d+\.\d+\.\d+\b",
-        r"\b\d{3}-\d{3}\b",
-        r"\b[A-Z]{2,}[A-Z0-9-]*\d+[A-Z0-9-]*\b",
-    ]
-    codes = []
-    for p in patterns:
-        codes.extend(re.findall(p, str(text or ""), re.IGNORECASE))
-    return set(c.upper() for c in codes)
 
-def has_unsupported_codes(answer, context_text, question):
-    answer_codes = extract_codes(answer)
-    allowed_codes = extract_codes(context_text) | extract_codes(question)
-    unsupported = answer_codes - allowed_codes
-    return bool(unsupported), list(unsupported)
 
-def requires_source_citation(question):
-    q = str(question or "").lower()
 
-    chitchat_keywords = [
-        "xin chào", "chào", "hello", "hi", "cảm ơn", "thank"
-    ]
 
-    if any(k in q for k in chitchat_keywords):
-        return False
 
-    return True
 
-def has_required_source_citation(answer, require_version=True):
-    """
-    Kiểm tra câu trả lời có nguồn rõ ràng không.
 
-    Yêu cầu tối thiểu:
-    - Có Nguồn/Source
-    - Có Trang/Page
-    - Nếu require_version=True thì phải có Version/ver/v
-    """
-    if not answer:
-        return False
 
-    text = str(answer)
 
-    has_source = bool(
-        re.search(r"(Ngu[oồ]n|Source)\s*:", text, re.IGNORECASE)
-    )
-
-    has_page = bool(
-        re.search(
-            r"(trang|page)\s*(số|#|:)?\s*\d+",
-            text,
-            re.IGNORECASE
-        )
-    )
-
-    if not require_version:
-        return has_source and has_page
-
-    has_version = bool(
-        re.search(
-            r"(version|ver|v)\s*[:#-]?\s*(\d+|khong ro|không rõ|unknown|n/?a)",
-            text,
-            re.IGNORECASE
-        )
-    )
-
-    return has_source and has_page and has_version
 
 def make_debug_info(docs=None):
     docs = docs or []
@@ -1510,84 +1291,17 @@ def current_published_filter(rbac_filter=None):
 # ==========================================
 # 4. HAM XU LY LOI (TRAI TIM CUA CHATBOT)
 # ==========================================
-_GLOSSARY_TTL = float(os.getenv("GLOSSARY_CACHE_TTL", "60"))
-_GLOSSARY_CACHE = {"ts": 0.0, "key": None, "data": []}
 
 
-def _glossary_domains_for_department(user_department):
-    """P0-3: domain glossary ap dung = generic + domain cua phong ban user."""
-    domains = ["generic"]
-    try:
-        if user_department:
-            from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department
-            d = resolve_domain_by_department(user_department)
-            if d and d not in domains:
-                domains.append(d)
-    except Exception:
-        pass
-    return domains
 
 
-def _load_glossary_cached(domains):
-    key = tuple(sorted(domains or []))
-    now = time.time()
-    if _GLOSSARY_CACHE["key"] == key and (now - _GLOSSARY_CACHE["ts"]) < _GLOSSARY_TTL:
-        return _GLOSSARY_CACHE["data"]
-    try:
-        from mech_chatbot.db.repository import get_active_glossary
-        data = get_active_glossary(list(key) if key else None)
-    except Exception as e:
-        logger.warning(f"load glossary loi: {e}")
-        data = []
-    _GLOSSARY_CACHE["ts"] = now
-    _GLOSSARY_CACHE["key"] = key
-    _GLOSSARY_CACHE["data"] = data
-    return data
 
 
-def glossary_expansion_terms(text_in, user_department=None):
-    """P0-3: tra ve chuoi tu dong nghia/mo rong cho cac term glossary xuat hien trong text_in,
-    gioi han theo domain cua phong ban user (+ generic). Khop theo ranh gioi tu."""
-    if not text_in:
-        return ""
-    try:
-        from mech_chatbot.rag.text_utils import remove_accents
-        domains = _glossary_domains_for_department(user_department)
-        entries = _load_glossary_cached(domains)
-        if not entries:
-            return ""
-        norm_q = remove_accents(str(text_in).lower())
-        _wb = chr(92) + "b"
 
-        def _has(vn):
-            if not vn:
-                return False
-            try:
-                return re.search(_wb + re.escape(vn) + _wb, norm_q) is not None
-            except Exception:
-                return vn in norm_q
 
-        adds = []
-        seen = set()
-        for e in entries:
-            variants = [e.get("term", "")] + list(e.get("synonyms") or [])
-            matched = any(_has(remove_accents(str(v).lower())) for v in variants if v)
-            if not matched:
-                continue
-            extra = list(variants)
-            if e.get("expansion"):
-                extra.append(e["expansion"])
-            for v in extra:
-                if not v:
-                    continue
-                vn = remove_accents(str(v).lower())
-                if vn and not _has(vn) and vn not in seen:
-                    seen.add(vn)
-                    adds.append(str(v))
-        return " ".join(adds)
-    except Exception as e:
-        logger.warning(f"glossary_expansion_terms loi: {e}")
-        return ""
+
+
+
 
 
 def probe_restricted_access(query_text, user_department=None, allowed_departments=None,

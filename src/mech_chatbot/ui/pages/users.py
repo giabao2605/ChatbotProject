@@ -260,10 +260,11 @@ def render_create_user():
                         INSERT INTO UserRoles (UserID, RoleID)
                         SELECT :uid, RoleID FROM Roles WHERE RoleName = :role
                     """), {"uid": user_id, "role": role})
-                for dept in depts:
+                _dept_vals = [{"uid": user_id, "dept": d} for d in depts if d]
+                if _dept_vals:
                     conn.execute(
                         text("INSERT INTO UserDepartments (UserID, Department) VALUES (:uid, :dept)"),
-                        {"uid": user_id, "dept": dept},
+                        _dept_vals,  # Perf (GD1): bulk insert
                     )
             if allowed_sites:
                 set_user_sites(user_id, allowed_sites)

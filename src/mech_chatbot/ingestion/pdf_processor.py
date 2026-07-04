@@ -790,6 +790,90 @@ def _normalize_phong_ban_quyen(thu_muc, phong_ban_override=None):
     return result
 
 
+def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress_callback=None):
+    """Perf (GD3, OPT-IN): lam nong Vision cache SONG SONG de tang toc ingest.
+
+    MAC DINH TAT: chi chay khi env INGEST_VISION_PREWARM_WORKERS > 1.
+    An toan: CHI ghi vao Vision cache (disk) theo hash anh; vong lap chinh KHONG doi.
+    Khi TAT -> no-op tuyet doi (hanh vi y het ban serial cu).
+    Render anh chay TUAN TU (PyMuPDF khong thread-safe); chi goi Vision API song song (I/O).
+
+    LUU Y QUAN TRONG: prompt + dieu kien `vision_required` o day PHAI KHOP voi vong lap
+    chinh ben duoi. Neu sua prompt/dieu kien trong vong lap, PHAI sua o ca day.
+    Bat buoc chay golden-file consistency test truoc khi bat that o production.
+    """
+    try:
+        max_workers = int(os.getenv("INGEST_VISION_PREWARM_WORKERS", "1"))
+    except ValueError:
+        max_workers = 1
+    if max_workers <= 1 or vision_model is None or doc is None:
+        return  # TAT -> khong lam gi (giu nguyen hanh vi serial)
+    try:
+        from mech_chatbot.ingestion.domain_handlers import get_handler as _gh
+        _mech = _gh(domain).vision_always
+        from mech_chatbot.ingestion import vision_cache as _vc
+        base_name = os.path.splitext(ten_file)[0]
+        safe_thu_muc = re.sub(r'[\\/*?:"<>|]', "", thu_muc) if thu_muc else ""
+        dpi = int(os.getenv("PDF_RENDER_DPI", "300"))
+        tasks = []  # (img_path, prompt, key)
+        for page_num in range(len(doc)):
+            try:
+                page = doc.load_page(page_num)
+                text = page.get_text("text")
+                is_text_heavy = len(text.strip()) > 1500
+                if not (_mech or not is_text_heavy):
+                    continue  # trang nay vong lap se KHONG goi Vision -> bo qua, khoi ton quota
+                pix = page.get_pixmap(dpi=dpi)
+                img_name = (f"{safe_thu_muc}_{base_name}_page{page_num+1}.png"
+                            if safe_thu_muc else f"{base_name}_page{page_num+1}.png")
+                img_path = os.path.join(IMAGE_DIR, img_name)
+                pix.save(img_path)
+                pix = None
+                key = _vc.hash_image_file(img_path)
+                if key is None or _vc.get(key) is not None:
+                    continue  # da co cache -> bo qua
+                prompt = (
+                    f"Day la trang so {page_num+1} cua file {ten_file}. "
+                    "Hay OCR va tra ve ket qua DUOI DANG JSON voi schema sau:\n"
+                    "{\n"
+                    '  "document_codes": [],\n'
+                    '  "part_names": [],\n'
+                    '  "materials": [],\n'
+                    '  "dimensions": [],\n'
+                    '  "tolerances": [],\n'
+                    '  "technical_notes": [],\n'
+                    '  "bom_rows": [],\n'
+                    '  "uncertain_fields": []\n'
+                    "}\n"
+                    "Luon tra ve dung dinh dang JSON (khong kem text mo dau/ket thuc ngoai block ```json). "
+                    "Dien vao cac mang cac thong tin ky thuat tuong ung ban nhin thay trong hinh."
+                )
+                tasks.append((img_path, prompt, key))
+            except Exception as _e:
+                logger.warning(f"[prewarm] render trang {page_num+1} loi: {_e}")
+        if not tasks:
+            return
+        if progress_callback:
+            progress_callback(f"Pre-warm Vision song song {len(tasks)} trang (workers={max_workers})...")
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _one(t):
+            img_path, prompt, key = t
+            try:
+                img = Image.open(img_path)
+                resp = call_gemini_vision(vision_model, prompt, img)
+                vd = parse_vision_json(resp.text)
+                if vd:
+                    _vc.put(key, vd)
+            except Exception as _e:
+                logger.warning(f"[prewarm] Vision loi ({img_path}): {_e}")
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            list(ex.map(_one, tasks))
+    except Exception as _e:
+        logger.warning(f"[prewarm] bo qua do loi: {_e}")
+
+
 def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progress_callback=None, domain_override=None, security_override=None, cong_doan_override=None, site_override=None, scan_sensitive=False, phong_ban_override=None):
     from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, resolve_security_by_department
     from mech_chatbot.ingestion.site_registry import resolve_site_by_department
@@ -837,6 +921,10 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
             pdf_table_reader = None
  
         base_name = os.path.splitext(ten_file)[0]  # FIX: thay ten_file.replace('.pdf', '')
+ 
+        # Perf (GD3, opt-in, mac dinh TAT): lam nong Vision cache song song truoc khi vao vong lap.
+        # Khi INGEST_VISION_PREWARM_WORKERS<=1 -> no-op, vong lap chay serial y het cu.
+        _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress_callback)
  
         for page_num in range(len(doc)):
             if progress_callback:
