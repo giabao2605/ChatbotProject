@@ -85,12 +85,12 @@ def _count_dept_pending_jobs(dept_code: str) -> int:
 def _status_badge(status: str) -> str:
     stt = (status or "").strip().lower()
     if stt == "active":
-        return "🟢 Active"
+        return t("Đang hoạt động")
     if stt == "disabled":
-        return "⚪ Disabled"
+        return t("Tạm tắt")
     if stt == "archived":
-        return "📦 Archived"
-    return f"❔ {status or 'unknown'}"
+        return t("Lưu trữ")
+    return t("Không rõ")
 
 
 def render_user_list():
@@ -107,10 +107,10 @@ def render_user_list():
 
     for user_id, username, display_name, department, is_active, created_at in users:
         with st.expander(f"{username} \u00b7 {display_name or ''}"):
-            st.write(f"**UserID:** {user_id}")
+            st.write(f"**{t("User ID:")}** {user_id}")
             st.write(f"**" + t("Ph\u00f2ng ban ch\u00ednh:") + f"** {department}")
-            st.write(f"**Created:** {created_at}")
-            st.write("**Roles:** " + ", ".join(get_user_roles(user_id)))
+            st.write(f"**{t("Ngày tạo:")}** {created_at}")
+            st.write("**" + t("Vai trò:") + "** " + ", ".join(get_user_roles(user_id)))
 
             cur_depts = get_user_departments(user_id)
             cur_sites = get_user_sites(user_id)
@@ -119,7 +119,7 @@ def render_user_list():
             _inactive_depts = [d for d in cur_depts if d not in active_dept_codes]
             if _inactive_depts:
                 st.warning(t("User này đang còn quyền ở phòng đã đóng: {depts}", depts=dept_labels_str(_inactive_depts)))
-            st.write("**Allowed sites/khu:** " + (", ".join(cur_sites) or t("(kh\u00f4ng gi\u1edbi h\u1ea1n)")))
+            st.write("**" + t("Khu/Site được phép:") + "** " + (", ".join(cur_sites) or t("(kh\u00f4ng gi\u1edbi h\u1ea1n)")))
             st.write(f"**" + t("M\u1ee9c m\u1eadt t\u1ed1i \u0111a:") + f"** {cur_level}")
 
             with st.form(f"rbac_{user_id}"):
@@ -136,7 +136,7 @@ def render_user_list():
                     t("Phòng ban được phép"), dept_opts, default=cur_depts, format_func=dept_label, key=f"d_{user_id}"
                 )
                 new_sites = st.multiselect(
-                    t("Allowed sites/khu (\u0111\u1ec3 tr\u1ed1ng = kh\u00f4ng gi\u1edbi h\u1ea1n)"),
+                    t("Khu/Site được phép (để trống = không giới hạn)"),
                     site_opts, default=cur_sites, key=f"s_{user_id}",
                 )
                 new_level = st.selectbox(
@@ -234,7 +234,7 @@ def render_create_user():
         format_func=dept_label,
     )
     allowed_sites = st.multiselect(
-        t("Allowed sites/khu (\u0111\u1ec3 tr\u1ed1ng = kh\u00f4ng gi\u1edbi h\u1ea1n)"),
+        t("Khu/Site được phép (để trống = không giới hạn)"),
         sorted(set(site_codes)),
     )
     max_level = st.selectbox(t("M\u1ee9c m\u1eadt t\u1ed1i \u0111a"), LEVEL_OPTIONS, index=1)
@@ -297,7 +297,7 @@ def render_org_management():
             use_container_width=True, hide_index=True,
         )
 
-        st.markdown("**" + t("Vòng đ���i từng phòng ban") + "**")
+        st.markdown("**" + t("Vòng đời từng phòng ban") + "**")
         for d in depts:
             code = d["code"]
             status = d.get("status") or ("active" if d.get("is_active") else "disabled")
@@ -325,7 +325,7 @@ def render_org_management():
                             st.session_state[_confirm_key] = True
                             st.warning(
                                 t(
-                                    "⚠️ Xác nhận tắt phòng **{code}**? "
+                                    "Xác nhận tắt phòng **{code}**? "
                                     "Hiện có **{n_docs}** tài liệu, **{n_users}** user, **{n_jobs}** job pending. "
                                     "Upload mới sẽ bị khóa. Bấm **Tắt** lần nữa để xác nhận.",
                                     code=code, n_docs=n_docs, n_users=n_users, n_jobs=n_jobs,
@@ -350,15 +350,15 @@ def render_org_management():
                             else:
                                 st.error(res.get("message") or t("Cập nhật thất bại."))
                     with c52:
-                        if st.button(t("Archive"), key=f"archive_{code}", use_container_width=True):
+                        if st.button(t("Lưu trữ"), key=f"archive_{code}", use_container_width=True):
                             _confirm_key = f"confirm_archive_{code}"
                             if not st.session_state.get(_confirm_key):
                                 st.session_state[_confirm_key] = True
                                 st.warning(
                                     t(
-                                        "📦 Xác nhận archive phòng **{code}**? "
+                                        "Xác nhận lưu trữ phòng **{code}**? "
                                         "Điều kiện: 0 user, 0 job pending. Hiện tại có **{n_users}** user, **{n_jobs}** job pending, **{n_docs}** tài liệu. "
-                                        "Bấm **Archive** lần nữa để xác nhận.",
+                                        "Bấm **Lưu trữ** lần nữa để xác nhận.",
                                         code=code, n_users=n_users, n_jobs=n_jobs, n_docs=n_docs,
                                     )
                                 )
@@ -366,21 +366,21 @@ def render_org_management():
                                 res = archive_department(code, actor=actor, force=False)
                                 st.session_state.pop(_confirm_key, None)
                                 if res.get("ok"):
-                                    st.success(t("Đã archive phòng {code}.", code=code))
+                                    st.success(t("Đã lưu trữ phòng {code}.", code=code))
                                     st.rerun()
                                 else:
                                     st.error(res.get("message") or t("Cập nhật thất bại."))
                 else:  # archived
                     # P4.6: Flow khoi phuc (unarchive) dan cho admin — 2 buoc xac nhan.
-                    if st.button(t("Khoi phuc"), key=f"unarchive_{code}", use_container_width=True):
+                    if st.button(t("Khôi phục"), key=f"unarchive_{code}", use_container_width=True):
                         _confirm_key = f"confirm_unarchive_{code}"
                         if not st.session_state.get(_confirm_key):
                             st.session_state[_confirm_key] = True
                             st.warning(
                                 t(
-                                    "♻️ Xac nhan khoi phuc phong **{code}** tu trang thai archived? "
-                                    "Phong se chuyen ve 'disabled' (chua nhan job/user moi). "
-                                    "Bam **Khoi phuc** lan nua de xac nhan.",
+                                    "Xác nhận khôi phục phòng **{code}** từ trạng thái lưu trữ? "
+                                    "Phòng sẽ chuyển về 'tạm tắt' (chưa nhận job/user mới). "
+                                    "Bấm **Khôi phục** lần nữa để xác nhận.",
                                     code=code,
                                 )
                             )
@@ -388,10 +388,10 @@ def render_org_management():
                             res = set_department_status(code, "disabled", actor=actor, force=True)
                             st.session_state.pop(_confirm_key, None)
                             if res.get("ok"):
-                                st.success(t("Da khoi phuc phong {code} ve disabled.", code=code))
+                                st.success(t("Đã khôi phục phòng {code} về tạm tắt.", code=code))
                                 st.rerun()
                             else:
-                                st.error(res.get("message") or t("Cap nhat that bai."))
+                                st.error(res.get("message") or t("Cập nhật thất bại."))
 
     st.markdown("---")
     st.markdown("**" + t("Reassign / gộp phòng ban") + "**")

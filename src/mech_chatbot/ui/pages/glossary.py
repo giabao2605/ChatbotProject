@@ -17,51 +17,51 @@ DOMAIN_OPTIONS = ["generic", "mechanical", "tabular"]
 
 
 def run_glossary():
-    st.title("📖 " + t("Tu dien dong nghia / viet tat theo domain"))
+    st.title(t("Từ điển đồng nghĩa / viết tắt theo domain"))
     if not auth.has_role("admin"):
-        st.error(t("Chi admin duoc quan ly tu dien dong nghia."))
+        st.error(t("Chỉ admin được quản lý từ điển đồng nghĩa."))
         return
     st.caption(t(
-        "Moi muc: mot 'thuat ngu chinh' + cac tu dong nghia/viet tat + cum mo rong. "
-        "RAG se tu them cac tu nay vao truy van de tang recall. Chinh o day co hieu luc ngay."
+        "Mỗi mục: một 'thuật ngữ chính' + các từ đồng nghĩa/viết tắt + cụm mở rộng. "
+        "RAG sẽ tự thêm các từ này vào truy vấn để tăng recall. Chỉnh ở đây có hiệu lực ngay."
     ))
 
-    with st.expander(t("+ Them muc moi"), expanded=False):
+    with st.expander(t("+ Thêm mục mới"), expanded=False):
         domain = st.selectbox(t("Domain"), DOMAIN_OPTIONS, key="gl_domain")
-        term = st.text_input(t("Thuat ngu chinh"), key="gl_term")
-        synonyms = st.text_input(t("Tu dong nghia / viet tat (phan cach bang dau phay)"), key="gl_syn")
-        expansion = st.text_input(t("Cum mo rong them (khong bat buoc)"), key="gl_exp")
-        if st.button(t("Luu muc"), type="primary", key="gl_add"):
+        term = st.text_input(t("Thuật ngữ chính"), key="gl_term")
+        synonyms = st.text_input(t("Từ đồng nghĩa / viết tắt (phân cách bằng dấu phẩy)"), key="gl_syn")
+        expansion = st.text_input(t("Cụm mở rộng thêm (không bắt buộc)"), key="gl_exp")
+        if st.button(t("Lưu mục"), type="primary", key="gl_add"):
             if not term.strip():
-                st.warning(t("Nhap thuat ngu chinh."))
+                st.warning(t("Nhập thuật ngữ chính."))
             else:
                 syn_list = [s.strip() for s in synonyms.split(",") if s.strip()]
                 out = upsert_glossary_term(term.strip(), domain, synonyms=syn_list,
                                            expansion=expansion.strip() or None)
                 if out.get("ok"):
-                    st.success(t("Da luu."))
+                    st.success(t("Đã lưu."))
                     st.rerun()
                 else:
                     st.error(out.get("message"))
 
-    filt_domain = st.selectbox(t("Loc theo domain"), ["(tat ca)"] + DOMAIN_OPTIONS, key="gl_filter")
-    rows = list_domain_glossary(domain=None if filt_domain == "(tat ca)" else filt_domain, active_only=False)
+    filt_domain = st.selectbox(t("Lọc theo domain"), ["(tất cả)"] + DOMAIN_OPTIONS, key="gl_filter")
+    rows = list_domain_glossary(domain=None if filt_domain == "(tất cả)" else filt_domain, active_only=False)
     if not rows:
-        st.info(t("Chua co muc nao."))
+        st.info(t("Chưa có mục nào."))
         return
     for r in rows:
         with st.container(border=True):
-            active_txt = "🟢" if r["is_active"] else "⚪"
+            active_txt = t("Đang hoạt động") if r["is_active"] else t("Tạm tắt")
             st.write(active_txt + " **" + str(r["term"]) + "** - _" + str(r["domain"]) + "_")
             if r["synonyms"]:
-                st.caption(t("Dong nghia:") + " " + ", ".join(r["synonyms"]))
+                st.caption(t("Đồng nghĩa:") + " " + ", ".join(r["synonyms"]))
             if r.get("expansion"):
-                st.caption(t("Mo rong:") + " " + str(r["expansion"]))
+                st.caption(t("Mở rộng:") + " " + str(r["expansion"]))
             c1, c2, c3 = st.columns([2, 2, 1])
             with c1:
-                new_syn = st.text_input(t("Sua dong nghia (CSV)"), value=", ".join(r["synonyms"]), key="gsyn_" + str(r["glossary_id"]))
+                new_syn = st.text_input(t("Sửa đồng nghĩa (CSV)"), value=", ".join(r["synonyms"]), key="gsyn_" + str(r["glossary_id"]))
             with c2:
-                new_exp = st.text_input(t("Sua mo rong"), value=r.get("expansion") or "", key="gexp_" + str(r["glossary_id"]))
+                new_exp = st.text_input(t("Sửa mở rộng"), value=r.get("expansion") or "", key="gexp_" + str(r["glossary_id"]))
             with c3:
                 st.write("")
                 st.write("")

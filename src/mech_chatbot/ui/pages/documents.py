@@ -170,7 +170,7 @@ def run_documents():
     if is_admin and selected_doc_ids:
         st.markdown("---")
         st.warning(t("Đã chọn {n} tài liệu.", n=len(selected_doc_ids)))
-        if st.button("🗑️ " + t("Xóa tất cả tài liệu đã chọn"), type="secondary", key="docs_bulk_delete_btn"):
+        if st.button(t("Xóa tất cả tài liệu đã chọn"), type="secondary", key="docs_bulk_delete_btn"):
             st.session_state["docs_confirm_bulk_delete"] = selected_doc_ids
 
     if is_admin and st.session_state.get("docs_confirm_bulk_delete"):
@@ -178,7 +178,7 @@ def run_documents():
         st.error(t("Xác nhận xóa vĩnh viễn {n} tài liệu?", n=len(ids)))
         c_ok, c_cancel = st.columns(2)
         with c_ok:
-            if st.button("✅ " + t("Xác nhận xóa"), key="docs_confirm_bulk_delete_btn", type="primary"):
+            if st.button(t("Xác nhận xóa"), key="docs_confirm_bulk_delete_btn", type="primary"):
                 actor = (auth.get_current_user() or {}).get("username") or "System"
                 ok, fail = 0, 0
                 for did in ids:

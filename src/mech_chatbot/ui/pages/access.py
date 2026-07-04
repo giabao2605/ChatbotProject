@@ -23,7 +23,7 @@ from mech_chatbot.ui.i18n import t
 
 LEVEL_OPTIONS = ["internal", "confidential"]
 LEVEL_OPTIONS_ALL = ["public", "internal", "confidential"]
-_STATUS_BADGE = {"pending": "⏳", "approved": "✅", "rejected": "❌"}
+_STATUS_BADGE = {"pending": "Đang chờ", "approved": "Đã duyệt", "rejected": "Từ chối"}
 _ACTION_LABEL = {
     "access_request_create": "Gửi yêu cầu",
     "access_request_approved": "Duyệt (cấp quyền)",
@@ -53,7 +53,7 @@ def _fmt_details(d):
 
 
 def run_access():
-    st.title("🔐 " + t("Yêu cầu quyền truy cập"))
+    st.title(t("Yêu cầu quyền truy cập"))
     user = auth.get_current_user()
     if not user:
         st.error(t("Bạn cần đăng nhập."))
@@ -127,10 +127,10 @@ def _render_mine(user):
     if not rows:
         st.info(t("Bạn chưa có yêu cầu nào."))
     for r in rows:
-        badge = _STATUS_BADGE.get(r["status"], "")
+        status_text = t(_STATUS_BADGE.get(r["status"], r["status"]))
         target = r.get("requested_level") or r.get("requested_dept") or ""
         with st.container(border=True):
-            st.write(f"{badge} **{r['request_type']}** · {target} · _{r['status']}_")
+            st.write(f"**{r['request_type']}** · {target} · _{status_text}_")
             if r.get("question_text"):
                 st.caption(t("Câu hỏi:") + " " + str(r["question_text"])[:200])
             if r.get("review_note"):

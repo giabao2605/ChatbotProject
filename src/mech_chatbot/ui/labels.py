@@ -103,19 +103,17 @@ STATUS_BADGES = {
 }
 
 
-def status_badge(status, fallback_icon="\u2022"):
-    """Tra ve chuoi markdown 'icon Nhan' thong nhat cho mot trang thai."""
+def status_badge(status, fallback_icon=""):
+    """Tra ve nhan trang thai thong nhat, khong kem icon."""
     if not status:
-        return f"{fallback_icon} {t('(kh\u00f4ng r\u00f5)')}"
-    icon, label = STATUS_BADGES.get(str(status).strip().lower(), (fallback_icon, str(status)))
-    return f"{icon} {t(label)}"
+        return t("(không rõ)")
+    _, label = STATUS_BADGES.get(str(status).strip().lower(), (fallback_icon, str(status)))
+    return t(label)
 
 
 def status_icon(status):
-    """Chi tra ve icon cho trang thai."""
-    if not status:
-        return "\u2022"
-    return STATUS_BADGES.get(str(status).strip().lower(), ("\u2022", ""))[0]
+    """UI khong dung icon trang thai."""
+    return ""
 
 
 # ---------------------------------------------------------------------------

@@ -804,25 +804,19 @@ _EN.update({
     "{n_docs} tài liệu · {n_users} user": "{n_docs} docs · {n_users} users",
     " · {n} shared": " · {n} shared",
     "{n_jobs} job pending": "{n_jobs} pending job(s)",
-    "⚠️ Xác nhận tắt phòng **{code}**? "
     "Hiện có **{n_docs}** tài liệu, **{n_users}** user, **{n_jobs}** job pending. "
     "Upload mới sẽ bị khóa. Bấm **Tắt** lần nữa để xác nhận.": (
-        "⚠️ Confirm disabling department **{code}**? "
         "There are **{n_docs}** document(s), **{n_users}** user(s), **{n_jobs}** pending job(s). "
         "New uploads will be locked. Click **Disable** again to confirm."
     ),
-    "📦 Xác nhận archive phòng **{code}**? "
     "Điều kiện: 0 user, 0 job pending. Hiện tại có **{n_users}** user, **{n_jobs}** job pending, **{n_docs}** tài liệu. "
     "Bấm **Archive** lần nữa để xác nhận.": (
-        "📦 Confirm archiving department **{code}**? "
         "Requirements: 0 users, 0 pending jobs. Currently there are **{n_users}** user(s), **{n_jobs}** pending job(s), **{n_docs}** document(s). "
         "Click **Archive** again to confirm."
     ),
     "Đã archive phòng {code}.": "Department {code} archived.",
-    "♻️ Xac nhan khoi phuc phong **{code}** tu trang thai archived? "
     "Phong se chuyen ve 'disabled' (chua nhan job/user moi). "
     "Bam **Khoi phuc** lan nua de xac nhan.": (
-        "♻️ Confirm restoring department **{code}** from archived status? "
         "The department will move back to 'disabled' (won't accept new jobs/users). "
         "Click **Restore** again to confirm."
     ),
@@ -1077,6 +1071,78 @@ _EN.update({
     "Đang hoạt động": "Active",
     "Vòng phản hồi": "Feedback Loop",
     "Nhật ký kiểm toán": "Audit Log",
+})
+
+# --- Phase 8: UI clean-up strings (accented + no icons) ---
+_EN.update({
+    "User ID:": "User ID:",
+    "Ngày tạo:": "Created:",
+    "Vai trò:": "Roles:",
+    "Khu/Site được phép:": "Allowed sites/zones:",
+    "Khu/Site được phép (để trống = không giới hạn)": "Allowed sites/zones (leave empty = unrestricted)",
+    "Đang hoạt động": "Active",
+    "Tạm tắt": "Disabled",
+    "Lưu trữ": "Archived",
+    "Không rõ": "Unknown",
+    "Khôi phục": "Restore",
+    "Vòng đời từng phòng ban": "Department lifecycle",
+    "Đã lưu trữ phòng {code}.": "Department {code} archived.",
+    "Xác nhận lưu trữ phòng **{code}**? Điều kiện: 0 user, 0 job pending. Hiện tại có **{n_users}** user, **{n_jobs}** job pending, **{n_docs}** tài liệu. Bấm **Lưu trữ** lần nữa để xác nhận.": "Confirm archiving department **{code}**? Requirement: 0 users, 0 pending jobs. Currently there are **{n_users}** users, **{n_jobs}** pending jobs, **{n_docs}** documents. Click **Archive** again to confirm.",
+    "Xác nhận khôi phục phòng **{code}** từ trạng thái lưu trữ? Phòng sẽ chuyển về 'tạm tắt' (chưa nhận job/user mới). Bấm **Khôi phục** lần nữa để xác nhận.": "Confirm restoring department **{code}** from archived status? The department will move to 'disabled' (not accepting new jobs/users yet). Click **Restore** again to confirm.",
+    "Đã khôi phục phòng {code} về tạm tắt.": "Department {code} restored to disabled.",
+    "Từ điển đồng nghĩa / viết tắt theo domain": "Domain synonym / abbreviation dictionary",
+    "Chỉ admin được quản lý từ điển đồng nghĩa.": "Only admins can manage the synonym dictionary.",
+    "+ Thêm mục mới": "+ Add new entry",
+    "Thuật ngữ chính": "Primary term",
+    "Từ đồng nghĩa / viết tắt (phân cách bằng dấu phẩy)": "Synonyms / abbreviations (comma-separated)",
+    "Cụm mở rộng thêm (không bắt buộc)": "Additional expansion phrase (optional)",
+    "Lưu mục": "Save entry",
+    "Nhập thuật ngữ chính.": "Enter the primary term.",
+    "Lọc theo domain": "Filter by domain",
+    "(tất cả)": "(all)",
+    "Chưa có mục nào.": "No entries yet.",
+    "Đồng nghĩa:": "Synonyms:",
+    "Mở rộng:": "Expansion:",
+    "Sửa đồng nghĩa (CSV)": "Edit synonyms (CSV)",
+    "Sửa mở rộng": "Edit expansion",
+    "Vòng đời tài liệu (hết hạn / nhắc review)": "Document lifecycle (expiry / review reminders)",
+    "trạng thái:": "status:",
+    "hết hạn:": "expiry:",
+    "hạn review:": "review due:",
+    "review gần nhất:": "last review:",
+    "Hạn review kế tiếp": "Next review due date",
+    "Lưu ngày": "Save dates",
+    "Đã lưu ngày vòng đời.": "Lifecycle dates saved.",
+    "Đánh dấu đã review (+180 ngày)": "Mark as reviewed (+180 days)",
+    "Đã ghi nhận review.": "Review recorded.",
+    "Cập nhật trạng thái hết hạn": "Refresh expiry status",
+    "Đã đánh dấu hết hạn cho N tài liệu.": "Marked N documents as expired.",
+    "Ngưỡng sắp hết hạn (ngày)": "Expiring soon threshold (days)",
+    "Đã hết hạn": "Expired",
+    "Cần review": "Needs review",
+    "Đã hết hiệu lực": "No longer effective",
+    "Không có.": "None.",
+    "Observability - Chi phí & hiệu năng RAG": "Observability - RAG cost & performance",
+    "Chỉ admin mới truy cập được trang này.": "Only admins can access this page.",
+    "Số entry cache": "Cache entries",
+    "Tỉ lệ cache hit": "Cache hit rate",
+    "Số lượt hit": "Cache hits",
+    "Tiền tiết kiệm (USD)": "Cost saved (USD)",
+    "Xóa toàn bộ cache": "Clear all cache",
+    "Đã xóa cache.": "Cache cleared.",
+    "Chưa có dữ liệu cache (hoặc chưa chạy migration V0014).": "No cache data yet (or migration V0014 has not been run).",
+    "Khoảng thời gian": "Time range",
+    "ngày gần nhất": "most recent days",
+    "Đang tổng hợp...": "Compiling...",
+    "Tổng lượt hỏi": "Total questions",
+    "Tổng chi phí (USD)": "Total cost (USD)",
+    "Tỉ lệ từ chối": "Refusal rate",
+    "Chưa có dữ liệu trace. Đặt vài câu hỏi để sinh dữ liệu, và đảm bảo đã chạy migration V0012.": "No trace data yet. Ask a few questions to generate data and make sure migration V0012 has been run.",
+    "Chi phí & token theo phòng ban": "Cost & tokens by department",
+    "Xu hướng theo ngày": "Daily trend",
+    "Latency trung bình từng bước (ms)": "Average latency by step (ms)",
+    "Lý do từ chối": "Refusal reasons",
+    "Top câu hỏi tốn kém": "Most expensive questions",
 })
 
 # ---------------------------------------------------------------------------

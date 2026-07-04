@@ -364,7 +364,7 @@ def _render_bulk_panel():
         st.warning(t("Xác nhận xóa {n} job/tài liệu? Không thể hoàn tác.", n=len(st.session_state["confirm_bulk_del"])))
         cc1, cc2 = st.columns(2)
         with cc1:
-            if st.button("✅ " + t("Xác nhận"), key="confirm_bulk_del_btn", type="primary"):
+            if st.button(t("Xác nhận"), key="confirm_bulk_del_btn", type="primary"):
                 ok, fail = _run_bulk_review(st.session_state["confirm_bulk_del"], action="delete")
                 st.session_state.pop("confirm_bulk_del", None)
                 st.success(t("Đã xóa: {ok} thành công, {fail} thất bại.", ok=ok, fail=fail))

@@ -77,7 +77,7 @@ function initPasswordToggle() {
   toggleBtn.addEventListener("click", () => {
     const isHidden = passwordInput.type === "password";
     passwordInput.type = isHidden ? "text" : "password";
-    icon.textContent = isHidden ? "🙈" : "👁️";
+    icon.textContent = "";
     toggleBtn.setAttribute("aria-label", isHidden ? "Ẩn mật khẩu" : "Hiện mật khẩu");
     toggleBtn.setAttribute("title", isHidden ? "Ẩn mật khẩu" : "Hiện mật khẩu");
     passwordInput.focus();

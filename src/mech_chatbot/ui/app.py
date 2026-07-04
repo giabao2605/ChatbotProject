@@ -43,8 +43,8 @@ PAGES = [
     {"key": "feedback", "label": "Feedback Loop", "roles": ["reviewer", "admin"]},
     {"key": "users", "label": "Người dùng", "roles": ["admin"]},
     {"key": "materials", "label": "Từ điển vật tư", "roles": ["admin"]},
-    {"key": "glossary", "label": "Tu dien dong nghia", "roles": ["admin"]},
-    {"key": "lifecycle", "label": "Vong doi tai lieu", "roles": ["reviewer", "admin"]},
+    {"key": "glossary", "label": "Từ điển đồng nghĩa", "roles": ["admin"]},
+    {"key": "lifecycle", "label": "Vòng đời tài liệu", "roles": ["reviewer", "admin"]},
     {"key": "analytics", "label": "Báo cáo sử dụng", "roles": ["admin"]},
     {"key": "observability", "label": "Observability", "roles": ["admin"]},
     {"key": "audit", "label": "Audit Log", "roles": ["admin"]},
@@ -77,7 +77,7 @@ with st.sidebar:
     st.caption(t("Role: ") + ", ".join(user.get("roles", [])))
 
     # C12: hien thi ro quyen cua nguoi dung (phong ban / khu / muc mat)
-    with st.expander("🔑 " + t("Quyền của tôi")):
+    with st.expander(t("Quyền của tôi")):
         _allowed_depts = user.get("allowed_departments") or ([user.get("department")] if user.get("department") else [])
         _allowed_sites = user.get("allowed_sites") or []
         st.markdown("**" + t("Phòng ban được xem:") + "**")

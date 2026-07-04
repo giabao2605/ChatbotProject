@@ -210,7 +210,7 @@ def run_queue():
         if is_admin and selected_job_ids:
             st.markdown("---")
             st.warning(t("Đã chọn {n} job.", n=len(selected_job_ids)))
-            if st.button("🗑️ " + t("Xóa tất cả jobs đã chọn"), key="queue_bulk_delete_btn", type="secondary"):
+            if st.button(t("Xóa tất cả jobs đã chọn"), key="queue_bulk_delete_btn", type="secondary"):
                 st.session_state["queue_confirm_bulk_delete"] = selected_job_ids
 
         if is_admin and st.session_state.get("queue_confirm_bulk_delete"):
@@ -218,7 +218,7 @@ def run_queue():
             st.error(t("Xác nhận xóa {n} job?", n=len(ids)))
             c_ok, c_cancel = st.columns(2)
             with c_ok:
-                if st.button("✅ " + t("Xác nhận xóa"), key="queue_confirm_bulk_delete_btn", type="primary"):
+                if st.button(t("Xác nhận xóa"), key="queue_confirm_bulk_delete_btn", type="primary"):
                     ok, fail = 0, 0
                     with engine.begin() as conn:
                         for jid in ids:

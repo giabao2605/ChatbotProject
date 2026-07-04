@@ -63,22 +63,22 @@ def render_department_breakdown():
     try:
         rows = dashboard_by_department()
     except Exception as e:
-        st.error(t("Khong tai duoc thong ke theo phong: {e}", e=e))
+        st.error(t("Không tải được thống kê theo phòng: {e}", e=e))
         return
     if not rows:
         st.info(t("Chưa có dữ liệu theo phòng ban."))
         return
     table = [
         {
-            t("Phong ban"): labels.dept_label(r["department"]),
-            t("Tai lieu so huu"): r.get("owned_total", r["total"]),
-            t("Tai lieu duoc chia se"): r.get("shared_access", 0),
-            t("Tong tai lieu"): r["total"],
-            t("Da publish"): r["published"],
-            t("Cho duyet"): r["pending_review"],
-            t("Mat (confidential)"): r["confidential"],
-            t("Job dang chay"): r["running_jobs"],
-            t("Job loi"): r["failed_jobs"],
+            t("Phòng ban"): labels.dept_label(r["department"]),
+            t("Tài liệu sở hữu"): r.get("owned_total", r["total"]),
+            t("Tài liệu được chia sẻ"): r.get("shared_access", 0),
+            t("Tổng tài liệu"): r["total"],
+            t("Đã publish"): r["published"],
+            t("Chờ duyệt"): r["pending_review"],
+            t("Mật (confidential)"): r["confidential"],
+            t("Job đang chạy"): r["running_jobs"],
+            t("Job lỗi"): r["failed_jobs"],
         }
         for r in rows
     ]
@@ -103,8 +103,8 @@ def render_department_breakdown():
     if depts_with_failures:
         _depts = ", ".join(f"{labels.dept_label(r['department'])} ({r['failed_jobs']})" for r in depts_with_failures)
         st.warning(
-            "⚠️ " + t(
-                "Co {n} job ingest dang loi. Phong can chu y: {depts} - kiem tra tab Hang doi.",
+            t(
+                "Có {n} job ingest đang lỗi. Phòng cần chú ý: {depts} - kiểm tra tab Hàng đợi.",
                 n=total_failed, depts=_depts,
             )
         )
@@ -119,7 +119,7 @@ def render_recent_documents():
                 ORDER BY NgayTaiLen DESC
             """)).fetchall()
     except Exception as e:
-        st.error(t("Khong tai duoc tai lieu moi: {e}", e=e))
+        st.error(t("Không tải được tài liệu mới: {e}", e=e))
         return
 
     if not rows:
@@ -139,7 +139,7 @@ def render_recent_failed_jobs():
                 ORDER BY UpdatedAt DESC
             """)).fetchall()
     except Exception as e:
-        st.error(t("Khong tai duoc job loi: {e}", e=e))
+        st.error(t("Không tải được job lỗi: {e}", e=e))
         return
 
     if not rows:

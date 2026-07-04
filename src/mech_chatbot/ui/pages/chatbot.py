@@ -664,10 +664,10 @@ def run_chat():
 
                     if _rag_error is not None:
                         _err_display = t(str(_rag_error)) if str(_rag_error) else t("Hệ thống gặp lỗi không xác định. Vui lòng thử lại.")
-                        st.error("⚠️ " + _err_display)
+                        st.error(_err_display)
                         st.session_state.chat_history.append({
                             "role": "assistant",
-                            "content": "⚠️ " + _err_display,
+                            "content": _err_display,
                         })
                         return
  
@@ -727,9 +727,9 @@ def run_chat():
                         except Exception:
                             _acc = None
                         if _acc and _acc.get("created"):
-                            st.info("🔒 " + t("Đã ghi nhận yêu cầu cấp quyền mức: ") + str(_needed) + ". " + t("Xem trạng thái ở trang 'Yêu cầu quyền'."))
+                            st.info(t("Đã ghi nhận yêu cầu cấp quyền mức: ") + str(_needed) + ". " + t("Xem trạng thái ở trang 'Yêu cầu quyền'."))
                         else:
-                            st.info("🔒 " + t("Bạn đã có yêu cầu cấp quyền đang chờ duyệt. Xem ở trang 'Yêu cầu quyền'."))
+                            st.info(t("Bạn đã có yêu cầu cấp quyền đang chờ duyệt. Xem ở trang 'Yêu cầu quyền'."))
  
             chat_id = save_chat_history(
                 session_id=st.session_state.session_id,
@@ -894,7 +894,7 @@ def _render_answer_sources(debug_info):
 
             # RBAC: chi cho tai file goc khi muc mat user >= muc mat tai lieu
             if _LEVEL_ORDER.get(sec_level, 1) > user_level:
-                st.caption("🔒 " + t("Bạn không đủ quyền tải file gốc của nguồn này."))
+                st.caption(t("Bạn không đủ quyền tải file gốc của nguồn này."))
                 continue
             file_path = m.get("file_path")
             if not file_path or doc_id is None:
@@ -906,16 +906,16 @@ def _render_answer_sources(debug_info):
             except Exception:
                 real, msg = None, t("Không đọc được file gốc.")
             if real is None:
-                st.caption("📎 %s" % msg)
+                st.caption(msg)
                 continue
             try:
                 with open(real, "rb") as f:
                     data = f.read()
             except Exception:
-                st.caption("📎 " + t("Không đọc được file gốc."))
+                st.caption(t("Không đọc được file gốc."))
                 continue
             clicked = st.download_button(
-                "⬇️ " + t("Tải file gốc"),
+                t("Tải file gốc"),
                 data=data,
                 file_name=_os.path.basename(real),
                 key="chat_src_dl_%s_%s" % (sid, doc_id),

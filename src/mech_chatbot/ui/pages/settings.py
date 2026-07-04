@@ -59,11 +59,10 @@ def _check_llm():
 
 
 def _status_line(label, ok, msg):
-    icon = "✅" if ok else "❌"
     if ok:
-        st.success(f"{icon} **{label}:** {msg}")
+        st.success(f"**{label}:** {msg}")
     else:
-        st.error(f"{icon} **{label}:** {msg}")
+        st.error(f"**{label}:** {msg}")
 
 
 def run_settings():

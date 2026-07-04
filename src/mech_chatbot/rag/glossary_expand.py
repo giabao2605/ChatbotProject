@@ -5,6 +5,7 @@ Chi phu thuoc stdlib (re, time) + logger, va cac lazy import (domain_registry, r
 text_utils) BEN TRONG ham -> KHONG the gay circular import voi service.py.
 service.py re-import cac ten nay nen moi cho goi cu + tests van chay.
 """
+import os
 import re
 import time
 
