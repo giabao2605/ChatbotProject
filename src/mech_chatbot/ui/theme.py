@@ -1,8 +1,13 @@
+"""P0 refactor: theme/CSS Streamlit chuyen tu config/ sang ui/ (day la moi quan tam UI).
+
+Truoc day `config/theme.py` import streamlit -> tang config (loi) bi cot vao UI.
+Di chuyen sang ui/ giup tang config thuan (khong phu thuoc Streamlit).
+"""
 import streamlit as st
 
 
 def inject_global_css():
-    """CSS dùng chung cho toàn bộ admin portal."""
+    """CSS dung chung cho toan bo admin portal."""
     st.markdown(
         """
         <style>

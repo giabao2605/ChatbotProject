@@ -74,25 +74,38 @@ ChatBotProject/
 │
 ├── .github/
 │   └── workflows/
-│       └── ragas_eval.yml        # CI: weekly RAGAS evaluation (or manual trigger)
+│       ├── ragas_eval.yml        # CI: weekly RAGAS evaluation (or manual trigger)
+│       └── tests.yml             # CI: automated test suite runner
+│
+├── components/
+│   └── liquid_login/                     # Custom Streamlit UI component for login
 │
 ├── database/
-│   ├── init/
-│   │   └── Mech_Chatbot_DB.sql           # Initial schema (tables, seed data)
-│   └── migrations/                       # Versioned SQL migrations (Flyway-style, idempotent)
-│       ├── V0001__backfill_clearance_safe_default.sql
-│       ├── V0002__deactivate_legacy_stage_departments.sql
-│       ├── V0003__add_filepath_to_tailieu.sql
-│       ├── V0004__add_common_document_metadata.sql  # Domain, SecurityLevel, Site, DocumentAttributes
-│       ├── V0005__add_app_settings.sql
-│       ├── V0006__department_status_archive_reassign.sql
-│       ├── V0007__add_login_attempts.sql             # Rate limiting support
-│       ├── V0008__add_site_to_departments.sql
-│       ├── V0009__normalize_phongban_sharing.sql
-│       ├── V0010__access_requests.sql                # Access Request Workflow table
-│       ├── V0011__domain_glossary.sql                # Domain synonym/abbreviation dictionary
-│       ├── V0012__rag_trace_summary.sql              # Per-request observability tracing
-│       └── V0013__doc_lifecycle_review.sql           # LastReviewedAt/By columns on TaiLieu
+│   ├── schema/
+│   │   └── 01_baseline.sql               # Base schema definitions
+│   ├── seed/
+│   │   ├── 01_roles.sql
+│   │   ├── 02_dev_accounts.sql
+│   │   └── 03_departments.sql
+│   ├── data_migrations/
+│   │   └── 0001_normalize_domain_values.sql
+│   ├── migrations/                       # Versioned SQL migrations (Flyway-style, idempotent)
+│   │   ├── V0001__backfill_clearance_safe_default.sql
+│   │   ├── V0002__deactivate_legacy_stage_departments.sql
+│   │   ├── V0003__add_filepath_to_tailieu.sql
+│   │   ├── V0004__add_common_document_metadata.sql
+│   │   ├── V0005__add_app_settings.sql
+│   │   ├── V0006__department_status_archive_reassign.sql
+│   │   ├── V0007__add_login_attempts.sql
+│   │   ├── V0008__add_site_to_departments.sql
+│   │   ├── V0009__normalize_phongban_sharing.sql
+│   │   ├── V0010__access_requests.sql
+│   │   ├── V0011__domain_glossary.sql
+│   │   ├── V0012__rag_trace_summary.sql
+│   │   ├── V0013__doc_lifecycle_review.sql
+│   │   ├── V0014__semantic_cache.sql                 # Semantic cache tables
+│   │   └── V0015__perf_index_userdepartments.sql     # Index for access checks
+│   └── MIGRATIONS.md                     # Migration documentation
 │
 ├── scripts/
 │   ├── create_qdrant_indexes.py          # Initialize Qdrant Cloud collections
@@ -103,11 +116,13 @@ ChatBotProject/
 │   │   ├── check_image_summary_coverage.py
 │   │   ├── check_qdrant_count.py
 │   │   └── check_qdrant_schema.py
+│   ├── route_dashboard.py                # Dashboard route analyzer
 │   ├── eval/
 │   │   ├── run_ragas_eval.py             # RAGAS evaluation entry point (used by CI)
 │   │   ├── run_eval.py                   # Manual evaluation runner
 │   │   ├── ragas_metrics.py              # RAGAS metric definitions
 │   │   ├── evaluate_chatbot.py           # Chatbot evaluation harness
+│   │   ├── eval_semantic_router.py       # Semantic router evaluation script
 │   │   ├── golden_set.jsonl              # Full golden question set
 │   │   └── golden_set_datagoc_real.jsonl # Real-data golden set
 │   ├── migrations/
@@ -174,7 +189,14 @@ ChatBotProject/
     │   ├── vision_cache.py               # Disk-based Vision OCR result cache
     │   └── file_ingestor.py              # Ingestion pipeline orchestrator
     ├── rag/
-    │   ├── service.py                    # Core RAG logic (intent → HyDE → retrieval → rerank → gate → generate)
+    │   ├── service.py                    # Core RAG service wrapper
+    │   ├── conversation_state.py         # Conversation state memory and management
+    │   ├── interaction_router.py         # RAG semantic routing controller
+    │   ├── semantic_cache.py             # Semantic caching layer
+    │   ├── route_*.py                    # Various routing logic (LLM, Safety, Responses, Config)
+    │   ├── context_builders.py           # Builders for RAG context framing
+    │   ├── answer_checks.py              # Verification & evidence checks
+    │   ├── glossary_expand.py            # Query expansion via domain glossary
     │   ├── rbac.py                       # RBAC-based Qdrant filter builder
     │   ├── entity_resolver.py            # Entity / material name normalizer
     │   ├── chitchat.py                   # Chitchat detection and bilingual handling
@@ -273,11 +295,19 @@ SQL_TRUSTED_CONNECTION=true
 # SQL_USERNAME=<user>
 # SQL_PASSWORD=<pass>
 
-# RAG Server
+# RAG Server & Advanced Routing
 RAG_SERVER_URL=http://localhost:8100
 RAG_SERVER_PORT=8100
 MAX_CONCURRENT_RAG=2
 RAG_WORKER_TIMEOUT=240
+
+SEMANTIC_CACHE_ENABLED=false
+ENABLE_CONV_STATE=true
+ENABLE_HISTORY_SUMMARY=true
+ENABLE_CONTEXTUAL_CHUNK=true
+SEMANTIC_ROUTER_ENABLED=true
+SEMANTIC_ROUTER_SIM_THRESHOLD=0.55
+SEMANTIC_ROUTER_MARGIN=0.04
 
 # Strict Modes
 STRICT_INGEST_REQUIRE_VISION=true

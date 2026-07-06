@@ -1,158 +1,28 @@
-from pathlib import Path
-import threading
-import time
-from collections import defaultdict
+"""Bien gioi Streamlit cho auth (session, login screen, role helpers).
 
-import bcrypt
+P0 refactor:
+- Logic xac thuc thuan da chuyen sang `auth/core.py` (khong phu thuoc Streamlit/i18n).
+- File nay chi con phan dung cham Streamlit: login screen, session_state, dieu huong.
+- `authenticate_user` duoc re-export tu core de tuong thich nguoc
+  (moi noi goi `auth.authenticate_user` van chay).
+
+i18n van duoc dung o day vi day la tang UI (khong phai tang core).
+"""
+from pathlib import Path
+
 import streamlit as st
 import streamlit.components.v1 as components
-from sqlalchemy import text
-from mech_chatbot.db.repository import engine
-from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
+
+from mech_chatbot.db.engine import engine
 from mech_chatbot.auth import rate_limit
-from mech_chatbot.auth.security_policy import resolve_clearance, DEFAULT_MAX_SECURITY_LEVEL
+from mech_chatbot.auth.core import authenticate_user  # re-export (backward compat)
+
 try:
     from mech_chatbot.ui.i18n import t, get_lang
 except ImportError:
     def t(s, **kw): return s.format(**kw) if kw else s  # noqa: E731
     def get_lang(): return "vi"  # noqa: E731
 
-
-
-def authenticate_user(username, password):
-    # Kiem tra rate-limit TRUOC khi truy van DB (tranh lo thong tin user ton tai)
-    if rate_limit.is_rate_limited(engine, username):
-        from mech_chatbot.config.logging import logger
-        logger.warning(f"[rate-limit] User '{username}' bi khoa do qua nhieu lan sai.")
-        return None
-
-    if engine is None:
-        return None
-    try:
-        with engine.connect() as conn:
-            user = conn.execute(
-                text(
-                    """
-                    SELECT UserID, Username, DisplayName, Department, IsActive, PasswordHash
-                    FROM Users
-                    WHERE Username = :u
-                    """
-                ),
-                {"u": username},
-            ).fetchone()
-            
-            if not user:
-                rate_limit.record_failure(engine, username)
-                return None
-            if not user[4]:  # IsActive = 0
-                rate_limit.record_failure(engine, username)
-                return None
-                
-            stored_hash = user[5]
-            
-            # Verify bcrypt hash
-            try:
-                if stored_hash is None:
-                    is_valid = False
-                else:
-                    is_valid = bcrypt.checkpw(
-                        password.encode("utf-8"),
-                        stored_hash.encode("utf-8"),
-                    )
-            except Exception:
-                is_valid = False
-                
-            if not is_valid:
-                rate_limit.record_failure(engine, username)
-                return None
-                
-            rate_limit.clear_failures(engine, username)  # Dang nhap thanh cong -> xoa bộ dem
-            roles = conn.execute(
-                text(
-                    """
-                    SELECT r.RoleName
-                    FROM Roles r
-                    JOIN UserRoles ur ON r.RoleID = ur.RoleID
-                    WHERE ur.UserID = :uid
-                    """
-                ),
-                {"uid": user[0]},
-            ).fetchall()
-            
-            role_list = [r[0] for r in roles]
-            
-            try:
-                dept_rows = conn.execute(
-                    text("SELECT Department FROM UserDepartments WHERE UserID = :uid"),
-                    {"uid": user[0]}
-                ).fetchall()
-                allowed_departments = [r[0] for r in dept_rows]
-            except Exception:
-                allowed_departments = []
-
-            # P0#1: loai bo phong ban da disable/archive khoi allowed_departments.
-            # Giu lai: sentinel CHUNG, phong khong co trong bang Departments (legacy), va phong active.
-            if allowed_departments:
-                try:
-                    from mech_chatbot.db.repository import list_known_departments
-                    _active_codes = {d["code"] for d in list_known_departments(active_only=True)}
-                    _all_codes = {d["code"] for d in list_known_departments(active_only=False)}
-                    allowed_departments = [
-                        d for d in allowed_departments
-                        if d == SHARE_ALL_DEPARTMENT or d not in _all_codes or d in _active_codes
-                    ]
-                    if not allowed_departments:
-                        allowed_departments = [SHARE_ALL_DEPARTMENT]
-                except Exception:
-                    pass  # loi tra cuu -> giu nguyen (tuong thich nguoc, khong pha login)
-
-            # LUU Y: KHONG tu dong them user[3] (department display label nhu "Technical")
-            # vao allowed_departments. Department chi la nhan hien thi; quyen xem tai lieu
-            # duoc kiem soat duy nhat boi bang UserDepartments (chua DeptCode thuc te theo
-            # seed 14 phong: Technical, Production, Accountant, HR, CHUNG...). Them "Technical"
-            # vao day se khien filter Qdrant tim gia tri khong ton tai trong metadata.phong_ban_quyen.
-            if not allowed_departments:
-                # Fallback an toan: neu UserDepartments chua co du lieu, chi cho xem CHUNG
-                allowed_departments = [SHARE_ALL_DEPARTMENT]
-                from mech_chatbot.config.logging import logger
-                logger.warning(
-                    f"User '{user[1]}' khong co ban ghi trong UserDepartments. "
-                    "Fallback cho phep xem CHUNG. Bo sung ban ghi vao dbo.UserDepartments de cap nhat."
-                )
-            
-            try:
-                clr = conn.execute(
-                    text("SELECT MaxLevel FROM UserSecurityClearance WHERE UserID = :uid"),
-                    {"uid": user[0]},
-                ).fetchone()
-                # An toan mac dinh: thieu/khong hop le -> 'public' (khong phai 'internal')
-                max_security_level = resolve_clearance(clr[0] if clr else None)
-            except Exception:
-                max_security_level = DEFAULT_MAX_SECURITY_LEVEL
-
-            # P1.2: RBAC chieu thu 3 — site. List rong = KHONG gioi han theo site.
-            try:
-                site_rows = conn.execute(
-                    text("SELECT Site FROM UserSites WHERE UserID = :uid"),
-                    {"uid": user[0]},
-                ).fetchall()
-                allowed_sites = [r[0] for r in site_rows]
-            except Exception:
-                allowed_sites = []
-
-            return {
-                "user_id": user[0],
-                "username": user[1],
-                "display_name": user[2],
-                "department": user[3],
-                "roles": role_list,
-                "allowed_departments": allowed_departments,
-                "max_security_level": max_security_level,
-                "allowed_sites": allowed_sites,
-            }
-    except Exception as e:
-        st.error(t("Lỗi truy vấn: {e}", e=e))
-        return None
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _LIQUID_LOGIN_COMPONENT = components.declare_component(
@@ -162,11 +32,11 @@ _LIQUID_LOGIN_COMPONENT = components.declare_component(
 
 
 def _inject_login_page_css():
-    """Chỉ reset layout Streamlit; hiệu ứng login nằm nguyên trong custom component."""
+    """Chi reset layout Streamlit; hieu ung login nam nguyen trong custom component."""
     st.markdown(
         """
         <style>
-        /* Giữ nền mặc định của Streamlit, chỉ reset layout cho trang login */
+        /* Giu nen mac dinh cua Streamlit, chi reset layout cho trang login */
         [data-testid="stAppViewContainer"] .block-container {
             max-width: 100% !important;
             padding: 0 !important;
@@ -195,6 +65,7 @@ def _inject_login_page_css():
         unsafe_allow_html=True,
     )
 
+
 def login_screen():
     _inject_login_page_css()
 
@@ -217,15 +88,16 @@ def login_screen():
         # Thong bao khac nhau: bi khoa vs sai mat khau thuong
         if rate_limit.is_rate_limited(engine, username):
             st.session_state["login_error"] = t(
-                "Tài khoản tạm thời bị khóa do đăng nhập sai quá {n} lần. "
-                "Vui lòng thử lại sau {m} phút.",
+                "Tai khoan tam thoi bi khoa do dang nhap sai qua {n} lan. "
+                "Vui long thu lai sau {m} phut.",
                 n=rate_limit.MAX_FAILURES, m=rate_limit.LOCKOUT_SECONDS // 60,
             )
         else:
-            st.session_state["login_error"] = t("Sai tên đăng nhập hoặc mật khẩu.")
+            st.session_state["login_error"] = t("Sai ten dang nhap hoac mat khau.")
         st.rerun()
 
     return False
+
 
 def check_auth():
     if "user" not in st.session_state:
@@ -233,14 +105,17 @@ def check_auth():
         if not logged_in:
             st.stop()
 
+
 def get_current_user():
     return st.session_state.get("user")
+
 
 def has_role(role_name):
     user = get_current_user()
     if not user:
         return False
     return role_name in user["roles"] or "admin" in user["roles"]
+
 
 def logout():
     # GD5 fix (lo ri du lieu): xoa SACH session khi dang xuat. Truoc day chi xoa "user"
@@ -250,16 +125,12 @@ def logout():
     st.rerun()
 
 
-
 def is_admin():
     return has_role("admin")
 
 
 def get_allowed_departments():
     # GD5 fix nhat quan RBAC: chi tra ve allowed_departments tu UserDepartments (nguon su that).
-    # Truoc day ham tu them user["department"] (nhan hien thi, vd "Ky_Thuat") vao danh sach,
-    # mau thuan voi authenticate_user (co tinh KHONG them) va co the chen ma phong khong ton tai
-    # trong metadata.phong_ban_quyen. Quyen xem tai lieu kiem soat duy nhat boi UserDepartments.
     user = get_current_user()
     if not user:
         return []

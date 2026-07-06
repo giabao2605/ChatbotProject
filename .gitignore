@@ -1,14 +1,14 @@
+# ==============================================================================
+# .gitignore — Mechanical Engineering RAG Chatbot
+# ==============================================================================
+
 # ===== Python virtual environments =====
-# Moi truong ban dang dung
 chat_env/
-# Thu muc env cu dang lam Source Control hien 1000+ file (co Lib/site-packages)
 source/
-# Chan them cac ten env thuong gap (phong khi tao moi)
 venv/
 .venv/
 env/
 ENV/
-# Chan bat ky thu muc env nao co cau truc chuan (theo file danh dau cua venv)
 **/pyvenv.cfg
 **/site-packages/
 
@@ -20,21 +20,32 @@ __pycache__/
 .eggs/
 build/
 dist/
+*.whl
+*.egg
+
+# ===== Testing & QA =====
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
 
-# ===== Data (raw & processed) =====
+# ===== Data (raw, processed & cache — large/generated files) =====
 data/raw/
 data/processed/
 data/cache/
 
-# ===== Logs & Temp =====
+# ===== Logs & Traces =====
 logs/
 temp_logs/
 *.log
+rag_trace.jsonl
 
-# ===== Secrets =====
+# ===== Generated Reports =====
+reports/
+
+# ===== Secrets & Environment =====
 .env
 .env.*
 !.env.example
@@ -50,12 +61,32 @@ plot.log
 # ===== IDE & OS =====
 .vscode/
 .idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 Thumbs.db
 .DS_Store
+desktop.ini
 
 # ===== Temp RAG worker files =====
 rag_in_*.json
 rag_out_*.json
 
-# ===== Refactor script (one-time use) =====
+# ===== Refactor scripts (one-time use) =====
 refactor_project.py
+
+# ===== Stale / accidental directories =====
+# "True/" directory sometimes created by buggy path logic
+True/
+
+# ===== Model / Embedding cache (sentence-transformers, HuggingFace) =====
+.cache/
+models/
+*.onnx
+*.bin
+*.safetensors
+
+# ===== Archive (historical/deprecated scripts) =====
+archive/

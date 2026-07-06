@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import streamlit as st
 from mech_chatbot.auth import service as auth
-from mech_chatbot.config import theme as ui_theme
+from mech_chatbot.ui import theme as ui_theme
 from mech_chatbot.ui import i18n
 from mech_chatbot.ui.i18n import t
 
