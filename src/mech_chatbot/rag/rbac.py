@@ -141,7 +141,9 @@ def compose_retrieval_filters(must_conditions, new_part_ids):
     Vi the production PHAI dung ham nay thay vi tu dung lai broad_musts tu dau.
     """
     strict_musts = list(must_conditions)
-    if new_part_ids and "CHITCHAT" not in new_part_ids:
+    # P1: routing da tach khoi trich ma -> new_part_ids KHONG con chua sentinel
+    # "CHITCHAT" (chitchat da bi chan tu truoc boi Interaction Router).
+    if new_part_ids:
         strict_musts.append(_part_id_should_filter(new_part_ids, broad=False))
     strict_filter = models.Filter(must=strict_musts)
 

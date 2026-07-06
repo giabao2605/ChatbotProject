@@ -114,16 +114,10 @@ def has_unsupported_codes(answer, context_text, question):
 
 
 def requires_source_citation(question):
-    q = str(question or "").lower()
-
-    chitchat_keywords = [
-        "xin chào", "chào", "hello", "hi", "cảm ơn", "thank"
-    ]
-
-    if any(k in q for k in chitchat_keywords):
-        return False
-
-    return True
+    # P0 (Interaction Router): DELEGATE ve NGUON DUY NHAT rag/chitchat.py.
+    # Truoc day dung SUBSTRING (k in q) -> "hi" khop trong "bao nhieu"... Da bo han.
+    from mech_chatbot.rag.chitchat import requires_source_citation as _rsc
+    return _rsc(question)
 
 
 def has_required_source_citation(answer, require_version=True):

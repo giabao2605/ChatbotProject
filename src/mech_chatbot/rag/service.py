@@ -518,10 +518,10 @@ def _normalize_lang(lang):
 # Khong import streamlit (service chay trong worker/server) -> dict rieng.
 # ---------------------------------------------------------------------------
 _RAG_RESPONSES_EN: dict[str, str] = {
-    "Chào bạn! Mình là trợ lý AI kỹ thuật cơ khí. Bạn có thể hỏi mình về bản vẽ, "
-    "dung sai, vật liệu, quy trình gia công hoặc upload tài liệu để mình học thêm.": (
-        "Hi there! I'm the AI technical assistant. You can ask me about drawings, "
-        "tolerances, materials, manufacturing processes or upload documents for me to learn."
+    "Chào bạn! Mình là Trợ lý Tài liệu Nội bộ của công ty. Bạn có thể hỏi mình về tài liệu, "
+    "quy trình, chính sách hay số liệu của các phòng ban, hoặc upload tài liệu để mình học thêm.": (
+        "Hi there! I'm the company's Internal Document Assistant. You can ask me about documents, "
+        "processes, policies or figures across departments, or upload documents for me to learn."
     ),
     "Bạn muốn so sánh tài liệu này với phiên bản nào? (Ví dụ: v1 và v2, hoặc bản "
     "đang lưu hành và bản bị lưu trữ gần nhất). Vui lòng chỉ định rõ phiên bản để "
@@ -726,6 +726,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         "models": [],
         "query_scope": "single_candidate",
         "need_disambiguation": False,
+        "is_chitchat": False,
     }
 
     force_llm = bool(re.search(r'\bv\d+\b|version|so sanh|khac nhau|cu\b|moi nhat|archive', question, re.IGNORECASE))
@@ -797,6 +798,12 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     if any(kw in _q_all_kw for kw in ALL_VARIANT_KEYWORDS):
         intent_data["version_policy"] = "all_current_variants"
         intent_data["query_scope"] = "compare_candidates"
+
+    # P1: TACH dinh tuyen khoi trich ma. Sentinel "CHITCHAT" (do LLM tra ve) ->
+    # co rieng intent_data["is_chitchat"], KHONG de ro ri vao base_codes/new_part_ids/rbac.
+    if any(str(c).strip().upper() == "CHITCHAT" for c in intent_data["base_codes"]):
+        intent_data["is_chitchat"] = True
+        intent_data["base_codes"] = [c for c in intent_data["base_codes"] if str(c).strip().upper() != "CHITCHAT"]
 
     from mech_chatbot.db.repository import normalize_base_code
     extracted_codes = [normalize_base_code(c) for c in intent_data["base_codes"] if c]
@@ -1476,10 +1483,44 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                       reason="no_vision_model")
  
     # BUOC B: TIM KIEM THONG MINH KET HOP STATE MEMORY
-    from mech_chatbot.rag.text_utils import remove_accents
-    text_clean_check = re.sub(r'[^\w\s]', '', remove_accents(user_question.lower())).strip()
-    chitchat_words_check = {"xin chao", "chao", "hi", "hello", "cam on", "thank", "thanks", "ok", "da", "vang", "tam biet", "bye", "alo", "chao ban"}
-    is_chitchat = text_clean_check in chitchat_words_check
+    # P0/P1 (Interaction Router): NGUON DUY NHAT cho dinh tuyen hoi thoai.
+    # L0 (chitchat.py) + L1 (semantic router). Thay set inline + substring cu.
+    from mech_chatbot.rag import interaction_router as _interaction_router
+    # P2: cache embedding cau hoi -> tai dung cho router + semantic cache (tranh embed 2 lan).
+    _qemb_cache = {}
+    def _embed_cached(_t):
+        _k = _t if isinstance(_t, str) else str(_t)
+        if _k in _qemb_cache:
+            return _qemb_cache[_k]
+        try:
+            _v = vectorstore.embeddings.embed_query(_k)
+        except Exception:
+            _v = None
+        _qemb_cache[_k] = _v
+        return _v
+    def _router_embedder(_t):
+        return _embed_cached(_t)
+    # P2: L2 LLM classifier fallback (chi chay khi L0/L1 khong du tu tin).
+    def _llm_classifier(_t, _ctx=None):
+        try:
+            from mech_chatbot.rag import route_llm as _route_llm
+            return _route_llm.classify_llm(_t, _ctx)
+        except Exception:
+            return None
+    _route_result = _interaction_router.classify(user_question, context=conversation_context, embedder=_router_embedder, llm_classifier=_llm_classifier)
+    is_chitchat = _route_result.is_chitchat()
+    log_trace("route", trace_id, route=_route_result.route, layer=_route_result.layer, confidence=_route_result.confidence)
+
+    # P2: safety_block -> chan NGAY truoc pipeline + log audit.
+    if _route_result.route == _interaction_router.ROUTE_SAFETY_BLOCK:
+        from mech_chatbot.rag import route_responses as _route_responses_sb
+        _safety_text = _route_responses_sb.build_safety_response(response_language, user_department, allowed_departments)
+        def safety_stream():
+            yield _safety_text
+        logger.warning("Route safety_block -> chan yeu cau (reason=%s).", getattr(_route_result, "reason", ""))
+        log_trace("safety", trace_id, reason=getattr(_route_result, "reason", ""), blocked=True)
+        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="safety_block", is_chitchat=False, route=_route_result.route)
+        return safety_stream(), "", [], current_part_ids, make_debug_info([])
  
     retrieved_docs = []
     skip_retrieval = False
@@ -1487,10 +1528,23 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     _sc_qemb = None   # P2-9 semantic cache: embedding cau hoi
     _sc_scope = None  # P2-9 semantic cache: chu ky pham vi RBAC
  
-    _chitchat_vi = ("Chào bạn! Mình là trợ lý AI kỹ thuật cơ khí. Bạn có thể hỏi mình về bản vẽ, "
-                    "dung sai, vật liệu, quy trình gia công hoặc upload tài liệu để mình học thêm.")
+    _chitchat_vi = ("Chào bạn! Mình là Trợ lý Tài liệu Nội bộ của công ty. Bạn có thể hỏi mình về tài liệu, "
+                    "quy trình, chính sách hay số liệu của các phòng ban, hoặc upload tài liệu để mình học thêm.")
     def mock_stream():
         yield _t_rag(_chitchat_vi, response_language)
+
+    # P1 (L1): route "meta" (nang luc / huong dan / ngoai pham vi) tra loi bang
+    # template DONG theo RBAC, BO QUA retrieval RAG.
+    if (not is_chitchat) and _route_result.route in _interaction_router.META_ROUTES:
+        from mech_chatbot.rag import route_responses as _route_responses
+        _meta_text = _route_responses.build_meta_response(
+            _route_result.route, response_language, user_department, allowed_departments)
+        if _meta_text:
+            def meta_stream():
+                yield _meta_text
+            logger.info("Route meta -> tra template, bo qua retrieval.")
+            log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=(_route_result.route == _interaction_router.ROUTE_OUT_OF_SCOPE), is_chitchat=False, route=_route_result.route)
+            return meta_stream(), "", [], current_part_ids, make_debug_info([])
 
     if is_chitchat:
         logger.info("Cau hoi la giao tiep co ban, bo qua truy xuat DB.")
@@ -1504,7 +1558,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         try:
             import mech_chatbot.rag.semantic_cache as _sc
             if _sc.enabled():
-                _sc_qemb = vectorstore.embeddings.embed_query(user_question)
+                _sc_qemb = _embed_cached(user_question)
                 _sc_scope = _sc.scope_signature(user_department, allowed_departments, max_security_level, allowed_sites, user_roles)
                 _hit = _sc.lookup(user_question, _sc_qemb, _sc_scope)
                 if _hit:
@@ -1610,8 +1664,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="missing_compare_versions")
             return ask_version_stream(), "", [], current_part_ids, make_debug_info([])
 
-        if new_part_ids == ["CHITCHAT"]:
+        if intent_data.get("is_chitchat"):
             logger.info("LLM xac nhan la cau hoi ngoai le/xa giao. Bo qua toan bo Retrieval va HyDE.")
+            log_trace("route", trace_id, route="chitchat", layer="L2_llm_intent", confidence=1.0)
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, is_chitchat=True)
             return mock_stream(), "", [], current_part_ids, make_debug_info([])
         else:

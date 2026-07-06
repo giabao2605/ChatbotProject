@@ -56,6 +56,7 @@ def create_indexes():
             "metadata.lifecycle_status": models.PayloadSchemaType.KEYWORD,
             "metadata.review_status": models.PayloadSchemaType.KEYWORD,
             "metadata.is_current": models.PayloadSchemaType.BOOL,
+            "metadata.effective_status": models.PayloadSchemaType.KEYWORD,
             "metadata.is_archived": models.PayloadSchemaType.BOOL,
         }
 

@@ -1,0 +1,114 @@
+text,expected_route
+"xin chào",chitchat
+"chào bạn",chitchat
+"chào sếp",chitchat
+"hi",chitchat
+"hello",chitchat
+"cảm ơn bạn nhé",chitchat
+"cảm ơn nhiều",chitchat
+"tạm biệt",chitchat
+"ok bạn",chitchat
+"dạ vâng",chitchat
+"bye",chitchat
+"alo",chitchat
+"chao ban",chitchat
+"cam on nha",chitchat
+"good morning",chitchat
+"thanks a lot",chitchat
+"bạn làm được những gì",capability
+"bạn giúp được gì cho tôi",capability
+"chức năng của bạn là gì",capability
+"bot này để làm gì",capability
+"bạn có thể làm gì",capability
+"bạn biết làm gì",capability
+"ban lam duoc gi",capability
+"ban giup gi duoc",capability
+"chuc nang cua ban la gi",capability
+"what can you do",capability
+"what are your capabilities",capability
+"how can you help me",capability
+"bạn hỗ trợ những gì",capability
+"em làm được gì",capability
+"làm sao để hỏi bạn",how_to_use
+"cách sử dụng hệ thống này",how_to_use
+"làm thế nào để upload tài liệu",how_to_use
+"hướng dẫn sử dụng chatbot",how_to_use
+"cách tra cứu bản vẽ như thế nào",how_to_use
+"làm sao để tải tài liệu lên",how_to_use
+"cach su dung the nao",how_to_use
+"lam sao de upload file",how_to_use
+"how do i use this",how_to_use
+"how to upload a document",how_to_use
+"tôi nên hỏi như thế nào",how_to_use
+"cách đặt câu hỏi cho đúng",how_to_use
+"thủ đô nước pháp là gì",out_of_scope
+"thời tiết hôm nay thế nào",out_of_scope
+"kết quả bóng đá tối qua",out_of_scope
+"giá vàng hôm nay bao nhiêu",out_of_scope
+"cách nấu phở bò",out_of_scope
+"tổng thống mỹ hiện nay là ai",out_of_scope
+"dịch câu này sang tiếng anh giúp tôi",out_of_scope
+"viết cho tôi một bài thơ",out_of_scope
+"1 cộng 1 bằng mấy",out_of_scope
+"hôm nay là thứ mấy",out_of_scope
+"gia vang hom nay",out_of_scope
+"thoi tiet ha noi",out_of_scope
+"what is the capital of france",out_of_scope
+"who won the world cup",out_of_scope
+"tell me a joke",out_of_scope
+"bitcoin giá bao nhiêu",out_of_scope
+"vật liệu chế tạo trục là gì",technical_query
+"kích thước trục chính là bao nhiêu",technical_query
+"dung sai của chi tiết này là bao nhiêu",technical_query
+"cho tôi bản vẽ 9.3.03844",technical_query
+"so sánh phiên bản v1 và v2 của bản vẽ",technical_query
+"quy trình gia công chi tiết này",technical_query
+"khối lượng của cụm lắp ráp này",technical_query
+"tiêu chuẩn áp dụng cho bản vẽ này",technical_query
+"độ nhám bề mặt yêu cầu là gì",technical_query
+"vật liệu thép C45 có đặc tính gì",technical_query
+"bản vẽ số 12.5 có mấy chi tiết",technical_query
+"dung sai lắp ghép H7/g6 nghĩa là gì",technical_query
+"momen xoắn cho phép của trục",technical_query
+"ban ve nay dung vat lieu gi",technical_query
+"kich thuoc lo khoan bao nhieu",technical_query
+"quy trinh nhiet luyen chi tiet",technical_query
+"cấp chính xác của ren là bao nhiêu",technical_query
+"khối lượng riêng của nhôm hợp kim",technical_query
+"yêu cầu xử lý nhiệt cho chi tiết trục",technical_query
+"đường kính danh nghĩa của bu lông",technical_query
+cong ty co bao nhieu ngay nghi le trong nam,technical_query
+phụ cấp thâm niên được tính thế nào,technical_query
+hồ sơ xin nghỉ thai sản gồm những gì,technical_query
+mức đóng bảo hiểm y tế của nhân viên,technical_query
+how many annual leave days do we have,technical_query
+báo cáo doanh thu tháng trước,technical_query
+hạn mức tạm ứng cho nhân viên là bao nhiêu,technical_query
+quy trình hoàn ứng chi phí công tác,technical_query
+danh sách nhà cung cấp được duyệt,technical_query
+danh sach nha cung cap duoc duyet,technical_query
+what is the approved supplier list,technical_query
+số lượng tồn của mã hàng a123,technical_query
+quy trình kiểm kê kho cuối tháng,technical_query
+what is the inventory of item a123,technical_query
+chính sách chiết khấu cho đại lý,technical_query
+mẫu hợp đồng bán hàng chuẩn,technical_query
+tiến độ đơn hàng tháng này,technical_query
+kế hoạch giao hàng tuần sau,technical_query
+tiêu chí nghiệm thu sản phẩm đầu ra,technical_query
+biên bản kiểm tra chất lượng lô hàng,technical_query
+quy trình kiểm soát tài liệu theo iso,technical_query
+hướng dẫn đánh giá nội bộ iso 9001,technical_query
+quy định sử dụng thiết bị bảo hộ lao động,technical_query
+checklist 5s tại khu vực sản xuất,technical_query
+cách đặt lại mật khẩu email công ty,technical_query
+chính sách sao lưu dữ liệu,technical_query
+how to reset my company email password,technical_query
+lịch bảo dưỡng máy cnc,technical_query
+hướng dẫn vận hành dây chuyền sơn,technical_query
+giá xăng hôm nay tăng không,out_of_scope
+tỷ giá usd hôm nay bao nhiêu,out_of_scope
+lịch thi đấu bóng đá cuối tuần,out_of_scope
+cách làm bánh chưng,out_of_scope
+dự báo thời tiết ngày mai,out_of_scope
+giá cổ phiếu vingroup hôm nay,out_of_scope
