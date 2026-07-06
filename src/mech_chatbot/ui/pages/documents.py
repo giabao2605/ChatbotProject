@@ -1,7 +1,14 @@
 import streamlit as st
-from sqlalchemy import text
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import engine, list_known_departments, delete_document_completely
+from mech_chatbot.services import (
+    list_known_departments,
+    delete_document_completely,
+    is_engine_ready,
+    list_documents,
+    set_document_current,
+    mark_document_expired,
+    list_expiring_documents,
+)
 from mech_chatbot.ui import labels as ui_labels
 from mech_chatbot.ui.i18n import t
 
@@ -24,7 +31,7 @@ _EXPIRY_SENTINELS = [_EXPIRY_SENTINEL_TAT_CA, _EXPIRY_SENTINEL_CON, _EXPIRY_SENT
 def run_documents():
     st.title(t("Kho T\u00e0i Li\u1ec7u"))
     st.caption(t("Danh s\u00e1ch t\u00e0i li\u1ec7u \u0111\u00e3 \u0111\u01b0\u1ee3c n\u1ea1p v\u00e0o h\u1ec7 th\u1ed1ng."))
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Kh\u00f4ng th\u1ec3 k\u1ebft n\u1ed1i Database."))
         return
 
@@ -74,63 +81,26 @@ def run_documents():
         search_kw = st.text_input(t("T\u00ecm ki\u1ebfm"), key="docs_search")
 
     _tat_ca = t("T\u1ea5t c\u1ea3")
-    params = {}
-    filters = []
-
-    filters.append("d.LifecycleStatus IN ('published', 'archived', 'superseded')")
-    filters.append("d.ReviewStatus = 'approved'")
-
-    if not is_admin:
-        if allowed_departments:
-            _dept_clauses = []
-            for _idx, _dept in enumerate(sorted(set(allowed_departments))):
-                _k = f"allowed_dept_{_idx}"
-                _dept_clauses.append(f"d.ThuMuc = :{_k}")
-                params[_k] = _dept
-            filters.append("(" + " OR ".join(_dept_clauses) + ")")
-        else:
-            filters.append("1 = 0")
-
-    if dept_filter != _tat_ca:
-        filters.append("d.ThuMuc = :dept")
-        params["dept"] = dept_filter
-
-    if domain_filter != _tat_ca:
-        filters.append("d.Domain = :domain")
-        params["domain"] = domain_filter
-
-    if sec_filter != _tat_ca:
-        filters.append("d.SecurityLevel = :sec")
-        params["sec"] = sec_filter
 
     if eff_filter == _EXPIRY_SENTINEL_CON:
-        filters.append("(d.ExpiryDate IS NULL OR d.ExpiryDate > GETDATE())")
-        filters.append("(d.EffectiveStatus IS NULL OR d.EffectiveStatus = 'active')")
+        eff_mode = "con"
     elif eff_filter == _EXPIRY_SENTINEL_SAP:
-        filters.append("d.ExpiryDate IS NOT NULL")
-        filters.append("d.ExpiryDate BETWEEN GETDATE() AND DATEADD(day, 30, GETDATE())")
+        eff_mode = "sap"
     elif eff_filter == _EXPIRY_SENTINEL_HET:
-        filters.append("d.ExpiryDate IS NOT NULL AND d.ExpiryDate < GETDATE()")
+        eff_mode = "het"
+    else:
+        eff_mode = None
 
-    if search_kw:
-        filters.append("(d.TenFile LIKE :kw OR d.Title LIKE :kw OR d.Tags LIKE :kw OR d.Summary LIKE :kw)")
-        params["kw"] = f"%{search_kw}%"
-
-    where_clause = ("WHERE " + " AND ".join(filters)) if filters else ""
-
-    q = f"""
-        SELECT d.DocID, d.TenFile AS OriginalFileName, d.ThuMuc AS Department, d.Domain, d.SecurityLevel,
-               d.Title, d.Tags, d.Summary, d.VersionNo, d.IsCurrent AS IsCurrentVersion,
-               d.UploadedBy, d.NgayTaiLen AS CreatedAt, d.ExpiryDate, d.EffectiveStatus,
-               d.EffectiveDate AS EffectiveDateStart, d.ReviewDate, d.OwnerSigner, d.DocLanguage AS Language,
-               d.DocNumber, d.Site, d.VariantGroup, d.VariantCode AS BranchLabel, d.LifecycleStatus, d.ReviewStatus
-        FROM TaiLieu d
-        {where_clause}
-        ORDER BY d.NgayTaiLen DESC
-    """
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(text(q), params).fetchall()
+        rows = list_documents(
+            is_admin=is_admin,
+            allowed_departments=allowed_departments,
+            dept=(None if dept_filter == _tat_ca else dept_filter),
+            domain=(None if domain_filter == _tat_ca else domain_filter),
+            sec=(None if sec_filter == _tat_ca else sec_filter),
+            eff_mode=eff_mode,
+            search_kw=(search_kw or None),
+        )
     except Exception as e:
         st.error(t("L\u1ed7i truy xu\u1ea5t: {e}", e=e))
         return
@@ -246,19 +216,7 @@ def render_doc_admin_actions(doc_id, is_current, file_name):
     with col1:
         if st.button(t("\u0110\u00e1nh d\u1ea5u hi\u1ec7n h\u00e0nh"), key=f"set_current_{doc_id}", disabled=bool(is_current)):
             try:
-                with engine.begin() as conn:
-                    # P4.3: Chi reset cac ban trong cung VariantGroup neu VariantGroup khong NULL.
-                    # Neu NULL, subquery tra ve NULL -> WHERE VariantGroup = NULL khong match gi
-                    # -> se co nhieu ban cung IsCurrent=1. Fix: them AND VariantGroup IS NOT NULL.
-                    conn.execute(text("""
-                        UPDATE TaiLieu SET IsCurrent = 0
-                        WHERE VariantGroup IS NOT NULL
-                          AND VariantGroup = (SELECT VariantGroup FROM TaiLieu WHERE DocID = :id)
-                    """), {"id": doc_id})
-                    conn.execute(
-                        text("UPDATE TaiLieu SET IsCurrent = 1 WHERE DocID = :id"),
-                        {"id": doc_id},
-                    )
+                set_document_current(doc_id)
                 st.success(t("\u0110\u00e3 \u0111\u00e1nh d\u1ea5u hi\u1ec7n h\u00e0nh."))
                 st.rerun()
             except Exception as e:
@@ -266,11 +224,7 @@ def render_doc_admin_actions(doc_id, is_current, file_name):
     with col2:
         if st.button(t("\u0110\u00e1nh d\u1ea5u h\u1ebft hi\u1ec7u l\u1ef1c"), key=f"expire_{doc_id}"):
             try:
-                with engine.begin() as conn:
-                    conn.execute(
-                        text("UPDATE TaiLieu SET EffectiveStatus = 'expired' WHERE DocID = :id"),
-                        {"id": doc_id},
-                    )
+                mark_document_expired(doc_id)
                 st.success(t("\u0110\u00e3 c\u1eadp nh\u1eadt tr\u1ea1ng th\u00e1i."))
                 st.rerun()
             except Exception as e:
@@ -308,20 +262,7 @@ def render_expiry_panel(is_admin):
             )
         )
         try:
-            with engine.connect() as conn:
-                q = text("""
-                    SELECT DocID, TenFile AS OriginalFileName, ThuMuc AS Department, EffectiveStatus,
-                           ExpiryDate, ReviewDate, IsCurrent AS IsCurrentVersion
-                    FROM TaiLieu
-                    WHERE (
-                        (ExpiryDate IS NOT NULL AND ExpiryDate <= DATEADD(day, 60, GETDATE()))
-                        OR (ReviewDate IS NOT NULL AND ReviewDate <= DATEADD(day, 60, GETDATE()))
-                    )
-                    AND IsCurrent = 1
-                    AND LifecycleStatus <> 'deleting'
-                    ORDER BY ExpiryDate ASC
-                """)
-                rows = conn.execute(q).fetchall()
+            rows = list_expiring_documents()
             if not rows:
                 st.info(t("Kh\u00f4ng c\u00f3 t\u00e0i li\u1ec7u n\u00e0o s\u1eafp h\u1ebft h\u1ea1n trong 60 ng\u00e0y t\u1edbi."))
             else:

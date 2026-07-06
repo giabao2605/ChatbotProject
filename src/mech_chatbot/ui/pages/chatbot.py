@@ -16,7 +16,7 @@ from mech_chatbot.ui.labels import dept_label
 
 load_dotenv()
 
-from mech_chatbot.db.repository import (
+from mech_chatbot.services import (
     save_chat_history,
     clear_chat_history,
     update_chat_feedback,
@@ -715,7 +715,7 @@ def run_chat():
                     if _hint and _hint.get("restricted") and "admin" not in (current_user.get("roles") or []):
                         _needed = _hint.get("needed_level", "confidential")
                         try:
-                            from mech_chatbot.db.repository import create_access_request
+                            from mech_chatbot.services import create_access_request
                             _acc = create_access_request(
                                 user_id=current_user.get("user_id"),
                                 username=current_user.get("username"),
@@ -821,18 +821,8 @@ def _lookup_sources_meta(doc_ids):
     if not ids:
         return {}
     try:
-        from mech_chatbot.db.repository import engine
-        from sqlalchemy import text
-        keys, params = [], {}
-        for i, did in enumerate(ids):
-            k = "id_%d" % i
-            params[k] = did
-            keys.append(":" + k)
-        with engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT DocID, TenFile, ThuMuc, SecurityLevel, FilePath "
-                "FROM TaiLieu WHERE DocID IN (" + ", ".join(keys) + ")"
-            ), params).fetchall()
+        from mech_chatbot.services import fetch_sources_meta_rows
+        rows = fetch_sources_meta_rows(ids)
         return {r[0]: {"ten_file": r[1], "thu_muc": r[2], "security_level": r[3], "file_path": r[4]} for r in rows}
     except Exception:
         return {}
@@ -922,7 +912,7 @@ def _render_answer_sources(debug_info):
             )
             if clicked:
                 try:
-                    from mech_chatbot.db.repository import write_audit_log
+                    from mech_chatbot.services import write_audit_log
                     write_audit_log(current_user.get("username"), "download_original", "TaiLieu", doc_id,
                                     {"file": ten_file, "security_level": sec_level, "source": "chatbot"})
                 except Exception:

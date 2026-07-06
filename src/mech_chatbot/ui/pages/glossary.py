@@ -5,7 +5,7 @@ cho cac phong phi co khi ma khong can sua code / deploy lai.
 """
 import streamlit as st
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import (
+from mech_chatbot.services import (
     list_domain_glossary,
     upsert_glossary_term,
     set_glossary_active,

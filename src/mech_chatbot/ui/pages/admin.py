@@ -3,13 +3,22 @@ import os
 from pathlib import Path
 
 import streamlit as st
-from sqlalchemy import text
 
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import (
-    engine, update_document_common_metadata,
+from mech_chatbot.services import (
+    update_document_common_metadata,
     publish_as_new_version, publish_as_new_variant, publish_as_standalone,
     delete_document_completely,
+    is_engine_ready,
+    list_pending_review_docs,
+    reject_ingestion_job,
+    mark_job_pending_review,
+    mark_job_published,
+    delete_ingestion_job,
+    list_bulk_action_jobs,
+    mark_job_rejected,
+    list_docs_for_bulk_meta,
+    list_bulk_meta_departments,
 )
 from mech_chatbot.ui import metadata_forms
 from mech_chatbot.ui.i18n import t
@@ -27,7 +36,7 @@ def run_admin():
     if not (auth.has_role("reviewer") or auth.has_role("admin")):
         st.error(t("B\u1ea1n kh\u00f4ng c\u00f3 quy\u1ec1n truy c\u1eadp trang n\u00e0y."))
         return
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Kh\u00f4ng th\u1ec3 k\u1ebft n\u1ed1i Database."))
         return
 
@@ -56,23 +65,7 @@ def render_doc_list():
         "c\u1ea7n Reviewer x\u00e1c nh\u1eadn tr\u01b0\u1edbc khi push l\u00ean Qdrant."
     ))
 
-    with engine.connect() as conn:
-        rows = conn.execute(text("""
-            SELECT j.JobID, j.TenFile, j.ThuMuc, j.UploadedBy, j.UpdatedAt, j.ExtractionReport,
-                   j.Domain, j.SecurityLevel, j.Site, j.UploadMetaJson,
-                   d.DocID, d.Title, d.Summary, d.Tags, d.DocNumber, d.DocLanguage AS Language,
-                   d.IssuedDate, d.EffectiveDate AS EffectiveDateStart, d.ExpiryDate, d.ReviewDate,
-                   d.OwnerSigner, d.EffectiveStatus, d.VersionNo, d.IsCurrent AS IsCurrentVersion,
-                   d.VariantGroup, d.VariantCode AS BranchLabel
-            FROM IngestionJobs j
-            LEFT JOIN TaiLieu d
-              ON d.TenFile = j.TenFile
-             AND d.ThuMuc = j.ThuMuc
-             AND d.ReviewStatus = 'pending_review'
-             AND d.LifecycleStatus <> 'deleting'
-            WHERE j.Status = 'pending_review'
-            ORDER BY j.UpdatedAt ASC
-        """)).fetchall()
+    rows = list_pending_review_docs()
 
     if not rows:
         st.info(t("Kh\u00f4ng c\u00f3 t\u00e0i li\u1ec7u n\u00e0o c\u1ea7n duy\u1ec7t hi\u1ec7n t\u1ea1i."))
@@ -186,22 +179,14 @@ def _render_review_item(
 def _process_review_action(job_id, action_choice, meta, doc_id, reject_reason, variant_group):
     try:
         if "T\u1eeb ch\u1ed1i" in action_choice:
-            with engine.begin() as conn:
-                conn.execute(text("""
-                    UPDATE IngestionJobs
-                    SET Status = 'rejected', RejectReason = :reason, UpdatedAt = GETDATE()
-                    WHERE JobID = :jid
-                """), {"reason": reject_reason, "jid": job_id})
+            reject_ingestion_job(job_id, reject_reason)
             st.success(t("\u0110\u00e3 t\u1eeb ch\u1ed1i t\u00e0i li\u1ec7u."))
             st.rerun()
             return
 
         if "s\u1eeda metadata" in action_choice:
             _save_meta_to_doc(doc_id, meta)
-            with engine.begin() as conn:
-                conn.execute(text("""
-                    UPDATE IngestionJobs SET Status = 'pending_review', UpdatedAt = GETDATE() WHERE JobID = :jid
-                """), {"jid": job_id})
+            mark_job_pending_review(job_id)
             st.success(t("\u0110\u00e3 l\u01b0u metadata, gi\u1eef tr\u1ea1ng th\u00e1i ch\u1edd duy\u1ec7t."))
             st.rerun()
             return
@@ -254,12 +239,7 @@ def _publish_doc_and_mark_job(job_id, doc_id, publish_mode="standalone"):
     if not ok:
         raise RuntimeError("Publish thất bại: không tìm thấy tài liệu hoặc không update được Qdrant.")
 
-    with engine.begin() as conn:
-        conn.execute(text("""
-            UPDATE IngestionJobs
-            SET Status = 'published', UpdatedAt = GETDATE()
-            WHERE JobID = :jid
-        """), {"jid": job_id})
+    mark_job_published(job_id)
 
 
 def _delete_review_job_and_doc(job_id, doc_id=None):
@@ -270,8 +250,7 @@ def _delete_review_job_and_doc(job_id, doc_id=None):
         except Exception:
             # Neu xoa doc loi, van tiep tuc xoa job de UI khong ket; loi se hien trong log.
             pass
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM IngestionJobs WHERE JobID = :jid"), {"jid": job_id})
+    delete_ingestion_job(job_id)
 
 
 def _save_meta_to_doc(doc_id, meta):
@@ -303,19 +282,9 @@ def _render_bulk_panel():
     st.subheader(t("Bulk action trên jobs"))
     st.caption(t(
         "Chọn nhiều job cùng lúc để publish, reject hoặc xóa. "
-        "Publish sẽ chạy trực tiếp, không còn kẹt ở trạng thái publishing."
+        "Publish s�� chạy trực tiếp, không còn kẹt ở trạng thái publishing."
     ))
-    with engine.connect() as conn:
-        rows = conn.execute(text("""
-            SELECT j.JobID, j.TenFile, j.ThuMuc, j.Status, j.UpdatedAt, d.DocID
-            FROM IngestionJobs j
-            LEFT JOIN TaiLieu d
-              ON d.TenFile = j.TenFile
-             AND d.ThuMuc = j.ThuMuc
-             AND d.LifecycleStatus <> 'deleting'
-            WHERE j.Status IN ('pending_review', 'failed', 'rejected', 'publishing')
-            ORDER BY j.UpdatedAt ASC
-        """)).fetchall()
+    rows = list_bulk_action_jobs()
 
     if not rows:
         st.info(t("Không có job nào đủ điều kiện."))
@@ -386,11 +355,7 @@ def _run_bulk_review(items, action, publish_mode="standalone"):
                     raise RuntimeError("Thiếu DocID để publish")
                 _publish_doc_and_mark_job(jid, did, publish_mode=publish_mode)
             elif action == "reject":
-                with engine.begin() as conn:
-                    conn.execute(text("""
-                        UPDATE IngestionJobs SET Status = 'rejected', UpdatedAt = GETDATE()
-                        WHERE JobID = :jid
-                    """), {"jid": jid})
+                mark_job_rejected(jid)
             elif action == "delete":
                 _delete_review_job_and_doc(jid, did)
             ok += 1
@@ -424,8 +389,6 @@ def render_bulk_meta_panel():
         )
 
     _tat_ca = t("T\u1ea5t c\u1ea3")
-    q = "SELECT DocID, TenFile, ThuMuc, Domain FROM TaiLieu WHERE IsCurrent = 1 AND LifecycleStatus <> 'deleting'"
-    params = {}
     # P4.5 fix: dropdown co the hien badge "(disabled)" / "(archived)" cho admin,
     # nhung gia tri query vao ThuMuc phai la ma phong ban goc.
     dept_value = dept_f
@@ -433,16 +396,11 @@ def render_bulk_meta_panel():
         if isinstance(dept_value, str) and dept_value.endswith(_suffix):
             dept_value = dept_value[: -len(_suffix)]
             break
-    if dept_f != _tat_ca:
-        q += " AND ThuMuc = :dept"
-        params["dept"] = dept_value
-    if domain_f != _tat_ca:
-        q += " AND Domain = :domain"
-        params["domain"] = domain_f
-    q += " ORDER BY ThuMuc, TenFile"
 
-    with engine.connect() as conn:
-        docs = conn.execute(text(q), params).fetchall()
+    docs = list_docs_for_bulk_meta(
+        dept=(dept_value if dept_f != _tat_ca else None),
+        domain=(domain_f if domain_f != _tat_ca else None),
+    )
 
     if not docs:
         st.info(t("Kh\u00f4ng c\u00f3 t\u00e0i li\u1ec7u n\u00e0o."))
@@ -489,33 +447,7 @@ def _get_departments():
     """P4.5: Lay danh sach phong ban tu TaiLieu.ThuMuc (bao gom ca phong da disabled/archived
     neu con tai lieu cu). The hien badge trang thai de admin nhan biet.
     Dieu nay la intentional: admin co the can sua metadata tai lieu cua phong da dong.
+
+    P2.5: logic DB da chuyen xuong service/repository (list_bulk_meta_departments).
     """
-    try:
-        with engine.connect() as conn:
-            # Join voi Departments de lay Status; fallback ve ThuMuc neu khong join duoc
-            try:
-                rows = conn.execute(text("""
-                    SELECT DISTINCT t.ThuMuc,
-                           ISNULL(d.Status, 'active') AS DeptStatus
-                    FROM TaiLieu t
-                    LEFT JOIN dbo.Departments d ON d.DeptCode = t.ThuMuc
-                    WHERE t.ThuMuc IS NOT NULL
-                    ORDER BY t.ThuMuc
-                """)).fetchall()
-                result = []
-                for thu_muc, dept_status in rows:
-                    if not thu_muc:
-                        continue
-                    if dept_status in ('disabled', 'archived'):
-                        result.append(f"{thu_muc} ({dept_status})")
-                    else:
-                        result.append(thu_muc)
-                return result
-            except Exception:
-                # Fallback: Departments chua co -> tra ve thuan tuy ThuMuc
-                rows = conn.execute(text(
-                    "SELECT DISTINCT ThuMuc FROM TaiLieu WHERE ThuMuc IS NOT NULL ORDER BY ThuMuc"
-                )).fetchall()
-                return [r[0] for r in rows if r[0]]
-    except Exception:
-        return []
+    return list_bulk_meta_departments()

@@ -1,8 +1,10 @@
 import streamlit as st
-from sqlalchemy import text
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import (
-    engine,
+from mech_chatbot.services import (
+    is_engine_ready,
+    list_feedbacks,
+    classify_feedback_and_get_source,
+    delete_feedback,
     upsert_golden_answer,
     recompute_doc_quality_scores,
     get_doc_quality_ranking,
@@ -28,7 +30,7 @@ def run_feedback():
     if not (auth.has_role("reviewer") or auth.has_role("admin")):
         st.error(t("B\u1ea1n kh\u00f4ng c\u00f3 quy\u1ec1n x\u1eed l\u00fd feedback."))
         return
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Kh\u00f4ng th\u1ec3 k\u1ebft n\u1ed1i Database."))
         return
 
@@ -138,18 +140,7 @@ def render_maintenance_panel():
 
 
 def load_feedbacks(only_pending):
-    query = """
-        SELECT FeedbackID, ChatID, Question, BotAnswer, FailureType,
-               CorrectAnswer, AddedToGoldenSet, CreatedAt,
-               DocVersionNo, Department, IsStale
-        FROM FeedbackReview
-        WHERE 1 = 1
-    """
-    if only_pending:
-        query += " AND ISNULL(AddedToGoldenSet, 0) = 0 AND ISNULL(IsStale, 0) = 0"
-    query += " ORDER BY CreatedAt DESC"
-    with engine.connect() as conn:
-        return conn.execute(text(query)).fetchall()
+    return list_feedbacks(only_pending)
 
 
 def render_feedback_item(fb):
@@ -170,19 +161,12 @@ def render_feedback_item(fb):
         correct_ans = st.text_area(t("C\u00e2u tr\u1ea3 l\u1eddi \u0111\u00fang"), value=(correct_answer if (correct_answer and str(correct_answer).strip()) else (bot_answer or "")), key=f"correct_{fid}")
         reviewer_note = st.text_area(t("Ghi ch\u00fa reviewer"), key=f"note_{fid}")
         if st.button(t("L\u01b0u ph\u00e2n lo\u1ea1i"), type="primary", key=f"save_{fid}"):
-            with engine.begin() as conn:
-                conn.execute(text("""
-                    UPDATE FeedbackReview
-                    SET FailureType = :ft,
-                        CorrectAnswer = :ca,
-                        ReviewerNote = :note,
-                        AddedToGoldenSet = 1
-                    WHERE FeedbackID = :fid
-                """), {"ft": selected_type, "ca": correct_ans, "note": reviewer_note, "fid": fid})
-                src_row = conn.execute(
-                    text("SELECT SourceDocID, Department, Site FROM FeedbackReview WHERE FeedbackID = :fid"),
-                    {"fid": fid},
-                ).fetchone()
+            src_row = classify_feedback_and_get_source(
+                fid=fid,
+                failure_type=selected_type,
+                correct_answer=correct_ans,
+                reviewer_note=reviewer_note,
+            )
             if correct_ans and correct_ans.strip():
                 upsert_golden_answer(
                     question=question, answer=correct_ans,
@@ -213,11 +197,7 @@ def render_feedback_item(fb):
             cdc1, cdc2 = st.columns(2)
             with cdc1:
                 if st.button("\u2705 " + t("X\u00e1c nh\u1eadn x\u00f3a"), key=f"confirm_del_fb_btn_{fid}", type="primary"):
-                    with engine.begin() as conn:
-                        conn.execute(
-                            text("DELETE FROM FeedbackReview WHERE FeedbackID = :fid"),
-                            {"fid": fid},
-                        )
+                    delete_feedback(fid)
                     st.session_state.pop(f"confirm_del_fb_{fid}", None)
                     st.success(t("\u0110\u00e3 x\u00f3a feedback."))
                     st.rerun()

@@ -113,6 +113,62 @@ def test_service_reexports_authenticate_user():
     assert "mech_chatbot.auth.core" in svc, "service.py phai re-export authenticate_user tu core"
 
 
+def test_ui_does_not_import_repository_directly():
+    """P2.3: UI phai di qua tang service (mech_chatbot.services), KHONG import
+    truc tiep tang truy cap du lieu (db.repository / db.repositories)."""
+    ui_dir = os.path.join(SRC, "ui")
+    offenders = []
+    for f in _iter_py(ui_dir):
+        for m in _imports(f):
+            if m == "mech_chatbot.db.repository" or m.startswith(
+                "mech_chatbot.db.repositories"
+            ):
+                offenders.append((os.path.relpath(f, SRC), m))
+    assert not offenders, f"UI phai import qua mech_chatbot.services, khong dung db.repository: {offenders}"
+
+
+def test_service_layer_is_pure():
+    """P2.3: tang services (L6) khong duoc import streamlit hay mech_chatbot.ui."""
+    svc_dir = os.path.join(SRC, "services")
+    assert os.path.isdir(svc_dir), "Thieu goi mech_chatbot/services"
+    offenders = []
+    for f in _iter_py(svc_dir):
+        for m in _imports(f):
+            if (
+                m == "streamlit"
+                or m.startswith("streamlit.")
+                or m == "mech_chatbot.ui"
+                or m.startswith("mech_chatbot.ui.")
+            ):
+                offenders.append((os.path.relpath(f, SRC), m))
+    assert not offenders, f"Tang services khong duoc import UI/streamlit: {offenders}"
+
+
+def test_ui_has_no_raw_sql():
+    """P2.4: UI khong duoc chua SQL tho / truy cap engine truc tiep.
+    Moi truy van phai di qua tang service (mech_chatbot.services)."""
+    ui_dir = os.path.join(SRC, "ui")
+    offenders = []
+    for f in _iter_py(ui_dir):
+        rel = os.path.relpath(f, SRC)
+        src = open(f, encoding="utf-8").read()
+        tree = ast.parse(src, filename=f)
+        # 1) Khong import sqlalchemy (text/Connection...) trong UI
+        for m in _imports(f):
+            if m == "sqlalchemy" or m.startswith("sqlalchemy."):
+                offenders.append((rel, f"import {m}"))
+        # 2) Khong import ten `engine` tu tang service
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("mech_chatbot.services"):
+                for a in node.names:
+                    if a.name == "engine":
+                        offenders.append((rel, "from mech_chatbot.services import engine"))
+        # 3) Khong goi engine.connect()/engine.begin() truc tiep trong UI
+        if "engine.connect(" in src or "engine.begin(" in src:
+            offenders.append((rel, "engine.connect/engine.begin"))
+    assert not offenders, f"UI con SQL tho / truy cap engine truc tiep: {offenders}"
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

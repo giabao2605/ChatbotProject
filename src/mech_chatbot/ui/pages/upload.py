@@ -3,7 +3,7 @@ import re
 import time
 import streamlit as st
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import create_ingestion_job
+from mech_chatbot.services import create_ingestion_job
 from mech_chatbot.ui import metadata_forms
 from mech_chatbot.ui.i18n import t
 from mech_chatbot.ui.labels import dept_label, gloss
@@ -68,7 +68,7 @@ def run_upload():
     # P0.1: Chi cho upload vao phong ban dang ACTIVE.
     # Intersect allowed_departments cua user voi danh sach phong dang bat.
     try:
-        from mech_chatbot.db.repository import list_known_departments as _list_active_depts
+        from mech_chatbot.services import list_known_departments as _list_active_depts
         _active_codes = {d["code"] for d in _list_active_depts(active_only=True)}
     except Exception:
         _active_codes = None  # fallback: khong loc neu DB loi

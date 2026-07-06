@@ -1,9 +1,9 @@
 import os
 import streamlit as st
-from sqlalchemy import text
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import (
-    engine,
+from mech_chatbot.services import (
+    is_engine_ready,
+    ping_database,
     get_all_app_settings,
     set_app_setting,
     count_docs_by_department,
@@ -13,11 +13,10 @@ from mech_chatbot.ui.labels import gloss
 
 
 def _check_database():
-    if engine is None:
+    if not is_engine_ready():
         return False, t("Engine chưa khởi tạo.")
     try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        ping_database()
         return True, t("Kết nối Database OK.")
     except Exception as e:
         return False, t("Lỗi: {e}", e=e)

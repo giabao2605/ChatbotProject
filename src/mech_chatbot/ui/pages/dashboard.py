@@ -1,14 +1,14 @@
 import streamlit as st
-from sqlalchemy import text
-from mech_chatbot.db.repository import engine, dashboard_by_department
+from mech_chatbot.services import (
+    is_engine_ready,
+    dashboard_by_department,
+    get_dashboard_stats,
+    list_recent_documents,
+    list_recent_failed_jobs,
+)
 from mech_chatbot.auth import service as auth
 from mech_chatbot.ui import labels
 from mech_chatbot.ui.i18n import t
-def _scalar(conn, sql, params=None):
-    try:
-        return conn.execute(text(sql), params or {}).scalar() or 0
-    except Exception:
-        return 0
 
 
 def run_dashboard():
@@ -18,20 +18,11 @@ def run_dashboard():
     if not auth.has_role("admin"):
         st.error(t("Chỉ admin được xem trang tổng quan."))
         return
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Không thể kết nối Database."))
         return
 
-    with engine.connect() as conn:
-        stats = {
-            "total_docs": _scalar(conn, "SELECT COUNT(*) FROM TaiLieu WHERE LifecycleStatus <> 'deleting'"),
-            "pending_review": _scalar(conn, "SELECT COUNT(*) FROM TaiLieu WHERE LifecycleStatus <> 'deleting' AND ReviewStatus = 'pending_review'"),
-            "published_docs": _scalar(conn, "SELECT COUNT(*) FROM TaiLieu WHERE LifecycleStatus = 'published' AND ReviewStatus = 'approved'"),
-            "running_jobs": _scalar(conn, "SELECT COUNT(*) FROM dbo.IngestionJobs WHERE Status IN ('pending','pending_retry','classifying','extracting','embedding','publishing')"),
-            "failed_jobs": _scalar(conn, "SELECT COUNT(*) FROM dbo.IngestionJobs WHERE Status IN ('failed','waiting_quota')"),
-            "today_chats": _scalar(conn, "SELECT COUNT(*) FROM LichSuChat WHERE CAST(ThoiGian AS DATE) = CAST(GETDATE() AS DATE)"),
-            "pending_feedback": _scalar(conn, "SELECT COUNT(*) FROM FeedbackReview WHERE ISNULL(AddedToGoldenSet, 0) = 0 AND ISNULL(IsStale, 0) = 0"),
-        }
+    stats = get_dashboard_stats()
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(t("Tổng tài liệu"), stats["total_docs"])
@@ -112,12 +103,7 @@ def render_department_breakdown():
 
 def render_recent_documents():
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT TOP 10 DocID, TenFile, ThuMuc, ReviewStatus, LifecycleStatus, NgayTaiLen
-                FROM TaiLieu
-                ORDER BY NgayTaiLen DESC
-            """)).fetchall()
+        rows = list_recent_documents()
     except Exception as e:
         st.error(t("Không tải được tài liệu mới: {e}", e=e))
         return
@@ -131,13 +117,7 @@ def render_recent_documents():
 
 def render_recent_failed_jobs():
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT TOP 10 JobID, TenFile, ThuMuc, Status, ErrorMessage, UpdatedAt
-                FROM dbo.IngestionJobs
-                WHERE Status IN ('failed','waiting_quota')
-                ORDER BY UpdatedAt DESC
-            """)).fetchall()
+        rows = list_recent_failed_jobs()
     except Exception as e:
         st.error(t("Không tải được job lỗi: {e}", e=e))
         return

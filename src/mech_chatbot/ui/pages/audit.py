@@ -2,9 +2,8 @@ import io
 import json
 from datetime import datetime, timedelta, time as dtime
 import streamlit as st
-from sqlalchemy import text
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import engine
+from mech_chatbot.services import is_engine_ready, list_audit_logs
 from mech_chatbot.ui.i18n import t
 
 
@@ -13,7 +12,7 @@ def run_audit():
     if not auth.has_role("admin"):
         st.error(t("Ch\u1ec9 admin \u0111\u01b0\u1ee3c xem audit log."))
         return
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Kh\u00f4ng th\u1ec3 k\u1ebft n\u1ed1i Database."))
         return
 
@@ -50,31 +49,19 @@ def run_audit():
             key="audit_limit",
         )
 
-    query = f"""
-        SELECT TOP {int(row_limit)} AuditID, Username, Action, EntityType, EntityID, Details, CreatedAt
-        FROM AuditLog
-        WHERE 1 = 1
-    """
-    params = {}
-    if only_confidential:
-        query += " AND Action = :action"
-        params["action"] = "read_confidential"
-    elif action_filter:
-        query += " AND Action LIKE :action"
-        params["action"] = f"%{action_filter}%"
-    if username_filter:
-        query += " AND Username LIKE :username"
-        params["username"] = f"%{username_filter}%"
+    start_dt = end_dt = None
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2 and all(date_range):
         start_dt = datetime.combine(date_range[0], dtime.min)
         end_dt = datetime.combine(date_range[1], dtime.max)
-        query += " AND CreatedAt BETWEEN :start_dt AND :end_dt"
-        params["start_dt"] = start_dt
-        params["end_dt"] = end_dt
-    query += " ORDER BY CreatedAt DESC"
 
-    with engine.connect() as conn:
-        rows = conn.execute(text(query), params).fetchall()
+    rows = list_audit_logs(
+        row_limit=row_limit,
+        only_confidential=only_confidential,
+        action_filter=action_filter,
+        username_filter=username_filter,
+        start_dt=start_dt,
+        end_dt=end_dt,
+    )
     if not rows:
         st.info(t("Kh\u00f4ng c\u00f3 audit log."))
         return

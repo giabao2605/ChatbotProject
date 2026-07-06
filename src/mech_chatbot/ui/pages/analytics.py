@@ -9,7 +9,7 @@ Tong hop tu lich su chat (LichSuChat):
 import streamlit as st
 
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import engine, get_usage_analytics
+from mech_chatbot.services import is_engine_ready, get_usage_analytics
 from mech_chatbot.ui.i18n import t
 
 
@@ -20,7 +20,7 @@ def run_analytics():
     if not auth.has_role("admin"):
         st.warning(t("Ch\u1ec9 admin m\u1edbi truy c\u1eadp \u0111\u01b0\u1ee3c trang n\u00e0y."))
         return
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Kh\u00f4ng k\u1ebft n\u1ed1i \u0111\u01b0\u1ee3c Database."))
         return
 

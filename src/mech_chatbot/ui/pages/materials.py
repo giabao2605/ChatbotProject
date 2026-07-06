@@ -6,8 +6,8 @@ ngay (registry tu refresh cache) cho ca trich xuat khi ingest lan guard RAG.
 import streamlit as st
 
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import (
-    engine,
+from mech_chatbot.services import (
+    is_engine_ready,
     list_materials,
     upsert_material,
     delete_material,
@@ -30,7 +30,7 @@ def run_materials():
     if not auth.has_role("admin"):
         st.warning(t("Ch\u1ec9 admin m\u1edbi truy c\u1eadp \u0111\u01b0\u1ee3c trang n\u00e0y."))
         return
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Kh\u00f4ng k\u1ebft n\u1ed1i \u0111\u01b0\u1ee3c Database."))
         return
 

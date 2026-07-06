@@ -2,8 +2,8 @@
 import datetime
 import streamlit as st
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import (
-    engine,
+from mech_chatbot.services import (
+    is_engine_ready,
     get_lifecycle_overview,
     set_document_lifecycle,
     mark_document_reviewed,
@@ -68,7 +68,7 @@ def run_lifecycle():
     if not (auth.has_role("reviewer") or auth.has_role("admin")):
         st.error(t("Bạn không có quyền truy cập trang này."))
         return
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Không kết nối được Database."))
         return
 

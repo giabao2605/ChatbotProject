@@ -4,7 +4,7 @@ Doc tu bang RagTraceSummary (log_trace tu dong ghi moi luot hoi). Khong gui du l
 """
 import streamlit as st
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import engine, get_observability
+from mech_chatbot.services import is_engine_ready, get_observability
 from mech_chatbot.ui.i18n import t
 
 
@@ -13,13 +13,13 @@ def run_observability():
     if not auth.has_role("admin"):
         st.warning(t("Chỉ admin mới truy cập được trang này."))
         return
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Không kết nối được Database."))
         return
 
     with st.expander(t("Semantic cache"), expanded=True):
         try:
-            from mech_chatbot.db.repository import sc_stats, sc_clear_all
+            from mech_chatbot.services import sc_stats, sc_clear_all
             _s = sc_stats()
             k1, k2, k3, k4 = st.columns(4)
             k1.metric(t("Số entry cache"), _s.get("entries", 0))

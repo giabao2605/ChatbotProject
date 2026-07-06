@@ -1,15 +1,18 @@
 import bcrypt
 import streamlit as st
-from sqlalchemy import text
 from mech_chatbot.auth import service as auth
-from mech_chatbot.db.repository import (
-    engine,
+from mech_chatbot.services import (
     list_known_departments, upsert_department,
     list_known_sites, upsert_site,
     get_user_sites, set_user_sites, set_user_departments, set_user_clearance,
     count_docs_by_department,
     get_department_summary, set_department_status,
     archive_department, reassign_department_data,
+    is_engine_ready,
+    count_dept_users, count_dept_pending_jobs,
+    list_users_basic,
+    update_user_active_and_roles, update_user_password, create_user_with_roles,
+    get_user_roles, get_user_departments, get_user_clearance,
 )
 from mech_chatbot.ui.i18n import t
 from mech_chatbot.ui.labels import dept_label, dept_labels_str
@@ -23,7 +26,7 @@ def run_users():
     if not auth.has_role("admin"):
         st.error(t("Ch\u1ec9 admin \u0111\u01b0\u1ee3c truy c\u1eadp trang n\u00e0y."))
         return
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Kh\u00f4ng th\u1ec3 k\u1ebft n\u1ed1i Database."))
         return
     tab_list, tab_create, tab_org = st.tabs([
@@ -50,35 +53,12 @@ def _site_codes():
 # P0.3: helper lay so lieu anh huong khi tat phong ban
 def _count_dept_users(dept_code: str) -> int:
     """So user dang duoc gan vao phong ban nay (qua UserDepartments)."""
-    try:
-        with engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT COUNT(*) FROM dbo.UserDepartments WHERE Department = :c"),
-                {"c": dept_code},
-            ).fetchone()
-            return int(row[0]) if row else 0
-    except Exception:
-        return 0
+    return count_dept_users(dept_code)
 
 
 def _count_dept_pending_jobs(dept_code: str) -> int:
     """So jobs dang pending/pending_review/processing cho phong ban nay."""
-    try:
-        with engine.connect() as conn:
-            row = conn.execute(
-                text("""
-                    SELECT COUNT(*) FROM dbo.IngestionJobs
-                    WHERE ThuMuc = :c
-                    AND Status IN (
-                        'pending', 'pending_retry', 'pending_review',
-                        'extracting', 'embedding', 'classifying'
-                    )
-                """),
-                {"c": dept_code},
-            ).fetchone()
-            return int(row[0]) if row else 0
-    except Exception:
-        return 0
+    return count_dept_pending_jobs(dept_code)
 
 
 
@@ -94,12 +74,7 @@ def _status_badge(status: str) -> str:
 
 
 def render_user_list():
-    with engine.connect() as conn:
-        users = conn.execute(text("""
-            SELECT UserID, Username, DisplayName, Department, IsActive, CreatedAt
-            FROM Users
-            ORDER BY CreatedAt DESC
-        """)).fetchall()
+    users = list_users_basic()
 
     dept_codes = _dept_codes(active_only=False)
     active_dept_codes = _dept_codes(active_only=True)
@@ -168,26 +143,12 @@ def render_user_list():
                     set_user_clearance(user_id, new_level)
                     add_roles = [r for r in new_roles if r not in cur_roles]
                     del_roles = [r for r in cur_roles if r not in new_roles]
-                    with engine.begin() as conn:
-                        conn.execute(
-                            text("UPDATE Users SET IsActive = :active WHERE UserID = :uid"),
-                            {"active": 1 if new_active else 0, "uid": user_id},
-                        )
-                        for _role in add_roles:
-                            conn.execute(text("""
-                                INSERT INTO UserRoles (UserID, RoleID)
-                                SELECT :uid, r.RoleID FROM Roles r
-                                WHERE r.RoleName = :role
-                                  AND NOT EXISTS (
-                                      SELECT 1 FROM UserRoles ur WHERE ur.UserID = :uid AND ur.RoleID = r.RoleID
-                                  )
-                            """), {"uid": user_id, "role": _role})
-                        for _role in del_roles:
-                            conn.execute(text("""
-                                DELETE ur FROM UserRoles ur
-                                JOIN Roles r ON ur.RoleID = r.RoleID
-                                WHERE ur.UserID = :uid AND r.RoleName = :role
-                            """), {"uid": user_id, "role": _role})
+                    update_user_active_and_roles(
+                        user_id,
+                        is_active=new_active,
+                        add_roles=add_roles,
+                        del_roles=del_roles,
+                    )
                     st.success(t("\u0110\u00e3 c\u1eadp nh\u1eadt quy\u1ec1n."))
                     st.rerun()
                 except Exception as e:
@@ -205,11 +166,7 @@ def render_user_list():
                 else:
                     try:
                         ph = bcrypt.hashpw(new_pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-                        with engine.begin() as conn:
-                            conn.execute(
-                                text("UPDATE Users SET PasswordHash = :p WHERE UserID = :uid"),
-                                {"p": ph, "uid": user_id},
-                            )
+                        update_user_password(user_id, ph)
                         st.success(t("\u0110\u00e3 \u0111\u1eb7t l\u1ea1i m\u1eadt kh\u1ea9u."))
                     except Exception as e:
                         st.error(t("L\u1ed7i \u0111\u1eb7t l\u1ea1i m\u1eadt kh\u1ea9u: {e}", e=e))
@@ -248,24 +205,14 @@ def render_create_user():
         if department and department not in depts:
             depts.append(department)
         try:
-            with engine.begin() as conn:
-                row = conn.execute(text("""
-                    INSERT INTO Users (Username, PasswordHash, DisplayName, Department, IsActive)
-                    OUTPUT INSERTED.UserID
-                    VALUES (:u, :p, :d, :dept, 1)
-                """), {"u": username, "p": password_hash, "d": display_name, "dept": department}).fetchone()
-                user_id = row[0]
-                for role in selected_roles:
-                    conn.execute(text("""
-                        INSERT INTO UserRoles (UserID, RoleID)
-                        SELECT :uid, RoleID FROM Roles WHERE RoleName = :role
-                    """), {"uid": user_id, "role": role})
-                _dept_vals = [{"uid": user_id, "dept": d} for d in depts if d]
-                if _dept_vals:
-                    conn.execute(
-                        text("INSERT INTO UserDepartments (UserID, Department) VALUES (:uid, :dept)"),
-                        _dept_vals,  # Perf (GD1): bulk insert
-                    )
+            user_id = create_user_with_roles(
+                username=username,
+                password_hash=password_hash,
+                display_name=display_name,
+                department=department,
+                selected_roles=selected_roles,
+                depts=depts,
+            )
             if allowed_sites:
                 set_user_sites(user_id, allowed_sites)
             set_user_clearance(user_id, max_level)
@@ -474,30 +421,5 @@ def render_org_management():
                 st.error(t("Lưu khu/site thất bại."))
 
 
-def get_user_roles(user_id):
-    with engine.connect() as conn:
-        rows = conn.execute(text("""
-            SELECT r.RoleName FROM Roles r JOIN UserRoles ur ON r.RoleID = ur.RoleID WHERE ur.UserID = :uid
-        """), {"uid": user_id}).fetchall()
-    return [r[0] for r in rows]
-
-
-def get_user_departments(user_id):
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT Department FROM UserDepartments WHERE UserID = :uid"),
-            {"uid": user_id},
-        ).fetchall()
-    return [r[0] for r in rows]
-
-
-def get_user_clearance(user_id):
-    try:
-        with engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT MaxLevel FROM UserSecurityClearance WHERE UserID = :uid"),
-                {"uid": user_id},
-            ).fetchone()
-        return row[0] if row else "internal"
-    except Exception:
-        return "internal"
+# P2.5: get_user_roles / get_user_departments / get_user_clearance da chuyen xuong
+# service/repository (import o dau file). UI khong con truy van SQL truc tiep.

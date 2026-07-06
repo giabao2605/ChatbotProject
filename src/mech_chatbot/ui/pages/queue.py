@@ -1,8 +1,8 @@
 import streamlit as st
-from sqlalchemy import text
-from mech_chatbot.db.repository import (
-    engine, queue_eta_seconds, set_job_priority, cancel_job, requeue_job,
+from mech_chatbot.services import (
+    queue_eta_seconds, set_job_priority, cancel_job, requeue_job,
     list_known_departments, list_known_sites,
+    is_engine_ready, list_ingestion_jobs, bulk_delete_ingestion_jobs,
 )
 from mech_chatbot.ui import labels
 from mech_chatbot.ui.i18n import t
@@ -25,7 +25,7 @@ def run_queue():
     st.title(t("Qu\u1ea3n L\u00fd Ti\u1ebfn Tr\u00ecnh N\u1ea1p D\u1eef Li\u1ec7u"))
     st.markdown(t("Xem danh s\u00e1ch c\u00e1c file \u0111ang \u0111\u01b0\u1ee3c \u0111\u01b0a v\u00e0o x\u1eed l\u00fd b\u00f3c t\u00e1ch (Worker Queue)."))
 
-    if engine is None:
+    if not is_engine_ready():
         st.error(t("Kh\u00f4ng th\u1ec3 k\u1ebft n\u1ed1i \u0111\u1ebfn Database."))
         return
 
@@ -72,44 +72,14 @@ def run_queue():
 
     _tat_ca = t("T\u1ea5t c\u1ea3")
     try:
-        with engine.connect() as conn:
-            query_str = """
-            SELECT 
-                JobID, TenFile, ThuMuc, Status, ErrorMessage, 
-                CreatedAt, UploadedBy, RetryCount, MaxRetry, 
-                LockedBy, LockedAt, ProgressPercent, UpdatedAt,
-                FailureType, NextRetryAt, QualityScore, QualityStatus, ExtractionReport,
-                ISNULL(Priority, 100) AS Priority,
-                Domain, SecurityLevel, CongDoan, Site
-            FROM dbo.IngestionJobs
-            WHERE Status NOT IN ('pending_review', 'published', 'archived', 'superseded')
-            """
-            params = {}
-            if status_filter != _tat_ca:
-                query_str += " AND Status = :status"
-                params["status"] = status_filter
-            if dept_filter and dept_filter != _tat_ca:
-                query_str += " AND ThuMuc = :dept_pick"
-                params["dept_pick"] = dept_filter
-            if search:
-                query_str += " AND TenFile LIKE :search"
-                params["search"] = f"%{search}%"
-            if not is_admin:
-                params["uname"] = current_user["username"]
-                if non_admin_allowed_departments:
-                    _dept_clauses = []
-                    for _idx, _dept in enumerate(sorted(set(non_admin_allowed_departments))):
-                        _k = f"allowed_dept_{_idx}"
-                        _dept_clauses.append(f"ThuMuc = :{_k}")
-                        params[_k] = _dept
-                    query_str += " AND ((" + " OR ".join(_dept_clauses) + ") OR UploadedBy = :uname)"
-                else:
-                    query_str += " AND UploadedBy = :uname"
-
-            query_str += " ORDER BY ISNULL(Priority, 100) ASC, CreatedAt DESC"
-
-            result = conn.execute(text(query_str), params)
-            jobs = result.fetchall()
+        jobs = list_ingestion_jobs(
+            status=(None if status_filter == _tat_ca else status_filter),
+            dept=(None if (not dept_filter or dept_filter == _tat_ca) else dept_filter),
+            search=(search or None),
+            is_admin=is_admin,
+            username=(current_user["username"] if not is_admin else None),
+            allowed_departments=non_admin_allowed_departments,
+        )
 
         if not jobs:
             st.info(t("Hi\u1ec7n kh\u00f4ng c\u00f3 file n\u00e0o trong h\u00e0ng \u0111\u1ee3i."))
@@ -219,14 +189,7 @@ def run_queue():
             c_ok, c_cancel = st.columns(2)
             with c_ok:
                 if st.button(t("Xác nhận xóa"), key="queue_confirm_bulk_delete_btn", type="primary"):
-                    ok, fail = 0, 0
-                    with engine.begin() as conn:
-                        for jid in ids:
-                            try:
-                                conn.execute(text("DELETE FROM dbo.IngestionJobs WHERE JobID = :jid"), {"jid": jid})
-                                ok += 1
-                            except Exception:
-                                fail += 1
+                    ok, fail = bulk_delete_ingestion_jobs(ids)
                     st.session_state.pop("queue_confirm_bulk_delete", None)
                     st.success(t("Đã xóa: {ok} thành công, {fail} thất bại.", ok=ok, fail=fail))
                     st.rerun()
