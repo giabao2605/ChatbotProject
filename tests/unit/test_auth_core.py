@@ -115,3 +115,34 @@ def test_successful_login_returns_profile(monkeypatch):
     assert "Technical" in out["allowed_departments"]
     assert out["max_security_level"] == "internal"
     assert out["allowed_sites"] == ["HN"]
+
+
+def test_load_user_profile_returns_current_db_permissions(monkeypatch):
+    user_row = (7, "bob", "Bob", "Technical", True, "unused")
+    script = [
+        _FakeResult(one=user_row),                 # SELECT user
+        _FakeResult(many=[("viewer",)]),           # roles
+        _FakeResult(many=[("Technical",)]),        # UserDepartments
+        _FakeResult(one=("public",)),              # UserSecurityClearance
+        _FakeResult(many=[("HN",)]),               # UserSites
+    ]
+    monkeypatch.setattr(core, "engine", _FakeEngine(_FakeConn(script)))
+    import mech_chatbot.db.repository as repo
+    monkeypatch.setattr(repo, "list_known_departments",
+                        lambda active_only=True: [{"code": "Technical"}], raising=False)
+
+    out = core.load_user_profile(user_id=7, username="bob")
+
+    assert out is not None
+    assert out["user_id"] == 7
+    assert out["roles"] == ["viewer"]
+    assert out["allowed_departments"] == ["Technical"]
+    assert out["max_security_level"] == "public"
+
+
+def test_load_user_profile_rejects_mismatched_username(monkeypatch):
+    user_row = (7, "bob", "Bob", "Technical", True, "unused")
+    conn = _FakeConn([_FakeResult(one=user_row)])
+    monkeypatch.setattr(core, "engine", _FakeEngine(conn))
+
+    assert core.load_user_profile(user_id=7, username="alice") is None

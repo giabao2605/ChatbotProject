@@ -87,7 +87,7 @@ import logging as _logging
 _worker_logger = _logging.getLogger("MechChatbot")
 
 
-def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="internal", allowed_sites=None, response_language="vi", conversation_context=None):
+def chat_with_rag_worker(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="internal", allowed_sites=None, response_language="vi", conversation_context=None, user_id=None, username=None):
     """Run RAG in a separate Python process so native libs cannot crash Streamlit."""
     acquired = _RAG_SEMAPHORE.acquire(timeout=120)
     if not acquired:
@@ -101,6 +101,8 @@ def chat_with_rag_worker(user_question, image_path=None, chat_history=None, curr
     worker_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "workers", "rag_worker.py")
     payload = {
         "user_question": user_question,
+        "user_id": user_id,
+        "username": username,
         "image_path": image_path,
         "chat_history": chat_history or [],
         "current_part_ids": current_part_ids or [],
@@ -181,12 +183,15 @@ RAG_SERVER_URL = os.getenv("RAG_SERVER_URL", "")  # e.g. http://localhost:8100
 def chat_with_rag_api(user_question, image_path=None, chat_history=None,
                       current_part_ids=None, user_department=None,
                       user_roles=None, allowed_departments=None, max_security_level="internal",
-                      allowed_sites=None, response_language="vi", conversation_context=None):
+                      allowed_sites=None, response_language="vi", conversation_context=None,
+                      user_id=None, username=None):
     """Call the persistent RAG FastAPI server via HTTP (Phase 2 mode)."""
     import requests as _requests
 
     payload = {
         "user_question": user_question,
+        "user_id": user_id,
+        "username": username,
         "image_path": image_path,
         "chat_history": chat_history or [],
         "current_part_ids": current_part_ids or [],
@@ -200,11 +205,14 @@ def chat_with_rag_api(user_question, image_path=None, chat_history=None,
     }
 
     timeout = int(os.getenv("RAG_WORKER_TIMEOUT", "240"))
+    service_token = os.getenv("RAG_SERVICE_TOKEN", "").strip()
+    headers = {"X-RAG-Service-Token": service_token} if service_token else {}
 
     try:
         resp = _requests.post(
             f"{RAG_SERVER_URL}/chat",
             json=payload,
+            headers=headers,
             timeout=timeout,
         )
     except _requests.ConnectionError:
@@ -640,6 +648,8 @@ def run_chat():
                             chat_history=history_for_rag,
                             current_part_ids=st.session_state.current_part_ids,
                             conversation_context=st.session_state.get("conversation_context") or {},
+                            user_id=current_user.get("user_id"),
+                            username=current_user.get("username"),
                             user_department=current_user["department"],
                             user_roles=current_user["roles"],
                             allowed_departments=current_user.get("allowed_departments", []),

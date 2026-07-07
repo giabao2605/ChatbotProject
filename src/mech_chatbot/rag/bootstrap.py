@@ -78,11 +78,12 @@ class RAGSystem:
         )
  
         embed_model = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
-        logger.info(f"   -> Dang tai model Embedding: {embed_model}")
+        embed_device = os.getenv("EMBEDDING_DEVICE", "cpu").strip() or "cpu"
+        logger.info(f"   -> Dang tai model Embedding: {embed_model} tren {embed_device}")
 
         embeddings = HuggingFaceEmbeddings(
             model_name=embed_model,
-            model_kwargs={"device": "cpu"},
+            model_kwargs={"device": embed_device},
             encode_kwargs={"normalize_embeddings": True}
         )
  

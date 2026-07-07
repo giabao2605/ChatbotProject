@@ -13,6 +13,7 @@ Environment variables:
 
 import asyncio
 import os
+import secrets
 import sys
 import time
 import traceback
@@ -21,7 +22,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -34,6 +35,10 @@ from mech_chatbot.config.logging import logger
 MAX_CONCURRENT_RAG = int(os.getenv("MAX_CONCURRENT_RAG", "2"))
 RAG_SERVER_PORT = int(os.getenv("RAG_SERVER_PORT", "8100"))
 RAG_SERVER_HOST = os.getenv("RAG_SERVER_HOST", "0.0.0.0")
+RAG_REQUIRE_SERVICE_AUTH = os.getenv("RAG_REQUIRE_SERVICE_AUTH", "true").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+RAG_SERVICE_TOKEN = os.getenv("RAG_SERVICE_TOKEN", "").strip()
 
 # ---------------------------------------------------------------------------
 # Lifespan: load RAG system once at startup, clean up at shutdown
@@ -44,7 +49,7 @@ _rag_ready = False
 async def lifespan(app: FastAPI):
     global _rag_ready
     from mech_chatbot.config.validate import assert_config_valid, safe_config_summary
-    assert_config_valid()
+    assert_config_valid(require_service_auth=RAG_REQUIRE_SERVICE_AUTH)
     logger.info("Config OK: %s", safe_config_summary())
     logger.info("=" * 60)
     logger.info("RAG Server starting — loading models (one-time)...")
@@ -90,6 +95,8 @@ _rag_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RAG)
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 class ChatRequest(BaseModel):
+    user_id: Optional[int] = None
+    username: Optional[str] = None
     user_question: str = Field(..., min_length=1, max_length=20000)
     image_path: Optional[str] = None
     chat_history: List[Dict[str, Any]] = Field(default_factory=list)
@@ -123,6 +130,29 @@ class HealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+async def require_service_auth(
+    x_rag_service_token: Optional[str] = Header(default=None, alias="X-RAG-Service-Token"),
+):
+    if not RAG_REQUIRE_SERVICE_AUTH:
+        return
+    if not RAG_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG service auth is enabled but RAG_SERVICE_TOKEN is not configured.",
+        )
+    if not x_rag_service_token or not secrets.compare_digest(x_rag_service_token, RAG_SERVICE_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid RAG service token.")
+
+
+def resolve_user_profile(req: ChatRequest) -> Dict[str, Any]:
+    from mech_chatbot.auth.core import load_user_profile
+
+    profile = load_user_profile(user_id=req.user_id, username=req.username)
+    if not profile:
+        raise HTTPException(status_code=403, detail="User identity is invalid or inactive.")
+    return profile
+
+
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check():
     """Health check endpoint for monitoring/load balancer."""
@@ -135,7 +165,7 @@ async def health_check():
     )
 
 
-@app.post("/chat", response_model=ChatResponse, tags=["RAG"])
+@app.post("/chat", response_model=ChatResponse, tags=["RAG"], dependencies=[Depends(require_service_auth)])
 async def chat_endpoint(req: ChatRequest):
     """
     Process a RAG chat question.
@@ -153,6 +183,8 @@ async def chat_endpoint(req: ChatRequest):
                 else "Hệ thống RAG chưa sẵn sàng. Vui lòng chờ và thử lại."
             ),
         )
+
+    user_profile = resolve_user_profile(req)
 
     # Try to acquire semaphore with timeout
     try:
@@ -178,7 +210,7 @@ async def chat_endpoint(req: ChatRequest):
         # Run the synchronous RAG pipeline in a thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, _run_rag_sync, req
+            None, _run_rag_sync, req, user_profile
         )
         result.elapsed_ms = int((time.time() - t_start) * 1000)
         logger.info(
@@ -198,7 +230,7 @@ async def chat_endpoint(req: ChatRequest):
         _rag_semaphore.release()
 
 
-def _run_rag_sync(req: ChatRequest) -> ChatResponse:
+def _run_rag_sync(req: ChatRequest, user_profile: Dict[str, Any]) -> ChatResponse:
     """Synchronous wrapper around chat_with_rag (called in thread pool)."""
     from mech_chatbot.rag.service import chat_with_rag
 
@@ -207,11 +239,11 @@ def _run_rag_sync(req: ChatRequest) -> ChatResponse:
         image_path=req.image_path,
         chat_history=req.chat_history,
         current_part_ids=req.current_part_ids,
-        user_department=req.user_department,
-        user_roles=req.user_roles,
-        allowed_departments=req.allowed_departments,
-        max_security_level=req.max_security_level,
-        allowed_sites=req.allowed_sites,
+        user_department=user_profile.get("department"),
+        user_roles=user_profile.get("roles") or [],
+        allowed_departments=user_profile.get("allowed_departments") or [],
+        max_security_level=user_profile.get("max_security_level") or "public",
+        allowed_sites=user_profile.get("allowed_sites") or [],
         response_language=req.response_language,
         conversation_context=req.conversation_context,
     )

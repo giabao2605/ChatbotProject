@@ -38,16 +38,18 @@ NUMERIC_FLOAT = [
 # Cac key la BI MAT -> KHONG BAO GIO log gia tri that
 SECRET_KEYS = {
     "QDRANT_API_KEY", "PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY",
-    "SQL_PASSWORD",
+    "SQL_PASSWORD", "RAG_SERVICE_TOKEN",
 }
 
 # Cac key dung de in summary (khong bao gom secret value)
 _SUMMARY_KEYS = (
     REQUIRED_QDRANT + LLM_KEY_ANY + LLM_BASE_ANY + REQUIRED_EMBEDDING + [
+        "EMBEDDING_DEVICE",
         "SQL_SERVER", "SQL_DATABASE", "SQL_DRIVER", "SQL_USERNAME",
         "SQL_TRUSTED_CONNECTION", "SQL_PASSWORD",
         "QDRANT_COLLECTION", "GPT_MODEL_NAME", "MAX_CONCURRENT_RAG",
-        "RAG_SERVER_HOST", "RAG_SERVER_PORT",
+        "RAG_SERVER_HOST", "RAG_SERVER_PORT", "RAG_REQUIRE_SERVICE_AUTH",
+        "RAG_SERVICE_TOKEN",
     ]
 )
 
@@ -77,7 +79,8 @@ def _truthy(v):
 
 
 def validate_config(env=None, *, require_qdrant=True, require_llm=True,
-                    require_sql=True, require_embedding=True):
+                    require_sql=True, require_embedding=True,
+                    require_service_auth=False):
     """Tra ve (errors, warnings). KHONG raise (de test/ in summary linh hoat).
 
     env: dict-like (mac dinh os.environ). Truyen dict gia de test.
@@ -112,6 +115,10 @@ def validate_config(env=None, *, require_qdrant=True, require_llm=True,
                 errors.append(
                     "SQL_TRUSTED_CONNECTION khong bat -> can ca SQL_USERNAME va SQL_PASSWORD"
                 )
+
+    if require_service_auth:
+        if not _get(env, "RAG_SERVICE_TOKEN"):
+            errors.append("Thieu RAG_SERVICE_TOKEN (bat buoc de xac thuc UI -> RAG server)")
 
     # Kiem tra kieu so (chi kiem khi co dat gia tri)
     for k in NUMERIC_INT:

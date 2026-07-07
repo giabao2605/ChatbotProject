@@ -26,10 +26,14 @@ services:
     environment:
       - RAG_SERVER_HOST=0.0.0.0
       - RAG_SERVER_PORT=8100
-      - MAX_CONCURRENT_RAG=2
+      - MAX_CONCURRENT_RAG=4
+      - RAG_REQUIRE_SERVICE_AUTH=true
+      - SEMANTIC_CACHE_ENABLED=true
+      - SEMANTIC_CACHE_SIM_THRESHOLD=0.93
+      - SEMANTIC_CACHE_TTL_HOURS=24
       - PYTHONPATH=/app/src
     ports:
-      - "8100:8100"
+      - "127.0.0.1:8100:8100"
     volumes:
       - ../data/processed:/app/data/processed:ro
       - ../data/raw:/app/data/raw:ro

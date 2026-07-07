@@ -110,6 +110,7 @@ class Settings(BaseModel):
 
     # --- Embedding (ingestion/pdf/config, rag/bootstrap, ui/pages/settings) -
     EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    EMBEDDING_DEVICE: str = "cpu"
     EMBEDDING_DIM: int = 1024
     EMBEDDING_CHUNK_SIZE: int = 220
     EMBEDDING_CHUNK_OVERLAP: int = 40
@@ -188,6 +189,7 @@ class Settings(BaseModel):
             QDRANT_API_KEY=_str("QDRANT_API_KEY"),
             # Embedding
             EMBEDDING_MODEL=_str("EMBEDDING_MODEL", "BAAI/bge-m3"),
+            EMBEDDING_DEVICE=_str("EMBEDDING_DEVICE", "cpu"),
             EMBEDDING_DIM=_int("EMBEDDING_DIM", 1024),
             EMBEDDING_CHUNK_SIZE=_int("EMBEDDING_CHUNK_SIZE", 220),
             EMBEDDING_CHUNK_OVERLAP=_int("EMBEDDING_CHUNK_OVERLAP", 40),

@@ -22,6 +22,7 @@ def _full_env():
         "SQL_SERVER": "localhost\\SQLEXPRESS",
         "SQL_DATABASE": "Mech_Chatbot_DB",
         "SQL_TRUSTED_CONNECTION": "yes",
+        "RAG_SERVICE_TOKEN": "secret-rag-token-789",
     }
 
 
@@ -90,6 +91,12 @@ class TestValidateConfig:
         )
         assert errors == []
 
+    def test_missing_rag_service_token_is_error_when_required(self):
+        env = _full_env()
+        del env["RAG_SERVICE_TOKEN"]
+        errors, _ = cfg.validate_config(env, require_service_auth=True)
+        assert any("RAG_SERVICE_TOKEN" in e for e in errors)
+
 
 class TestAssertConfigValid:
     def test_raises_on_invalid(self):
@@ -120,6 +127,7 @@ class TestSecretMasking:
         # Gia tri secret that KHONG duoc xuat hien
         assert "secret-qdrant-key-123" not in blob
         assert "secret-llm-key-456" not in blob
+        assert "secret-rag-token-789" not in blob
         # Nhung phai bao la da SET
         assert "SET(" in summary["QDRANT_API_KEY"]
 
