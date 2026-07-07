@@ -64,6 +64,10 @@ ChatBotProject/
 ├── Dockerfile                    # Python 3.11 image used by all services
 ├── docker/
 │   └── docker-compose.yml        # Orchestration: UI + API server + Worker
+├── docs/
+│   └── go-live-demo.md           # Demo and go-live notes
+├── eval/
+│   └── golden_routes.csv         # Router evaluation fixture
 ├── run.py                        # Entry point: Streamlit UI
 ├── run_server.py                 # Launcher: FastAPI RAG server
 ├── run_worker.py                 # Launcher: Ingestion worker
@@ -71,6 +75,9 @@ ChatBotProject/
 ├── requirements.lock.txt         # Pinned dependencies
 ├── requirements-test.txt         # Test dependencies
 ├── pytest.ini                    # Test configuration
+│
+├── .streamlit/
+│   └── config.toml                # Streamlit runtime configuration
 │
 ├── .github/
 │   └── workflows/
@@ -104,7 +111,8 @@ ChatBotProject/
 │   │   ├── V0012__rag_trace_summary.sql
 │   │   ├── V0013__doc_lifecycle_review.sql
 │   │   ├── V0014__semantic_cache.sql                 # Semantic cache tables
-│   │   └── V0015__perf_index_userdepartments.sql     # Index for access checks
+│   │   ├── V0015__perf_index_userdepartments.sql     # Index for access checks
+│   │   └── V0016__add_rejectreason_to_ingestionjobs.sql
 │   └── MIGRATIONS.md                     # Migration documentation
 │
 ├── scripts/
@@ -122,9 +130,9 @@ ChatBotProject/
 │   │   ├── run_eval.py                   # Manual evaluation runner
 │   │   ├── ragas_metrics.py              # RAGAS metric definitions
 │   │   ├── evaluate_chatbot.py           # Chatbot evaluation harness
-│   │   ├── eval_semantic_router.py       # Semantic router evaluation script
 │   │   ├── golden_set.jsonl              # Full golden question set
 │   │   └── golden_set_datagoc_real.jsonl # Real-data golden set
+│   ├── eval_semantic_router.py           # Semantic router evaluation script
 │   ├── migrations/
 │   │   ├── migrate.py                    # Run pending SQL migrations in order
 │   │   ├── migrate_qdrant_collection.py
@@ -184,12 +192,20 @@ ChatBotProject/
     │   ├── material_registry.py          # Material registry
     │   ├── mechanical_extractors.py      # Extractor for mechanical documents
     │   ├── generic_extractors.py         # General-purpose extractor
-    │   ├── pdf_processor.py              # PDF rendering, Vision OCR, and chunking
+    │   ├── pdf_processor.py              # Backward-compatible PDF ingestion facade
+    │   ├── pdf/                          # Split PDF pipeline: readers, vision, BOM, metadata, quality, chunking
     │   ├── sensitive_scanner.py          # Sensitive content detection on ingest
     │   ├── vision_cache.py               # Disk-based Vision OCR result cache
     │   └── file_ingestor.py              # Ingestion pipeline orchestrator
     ├── rag/
-    │   ├── service.py                    # Core RAG service wrapper
+    │   ├── service.py                    # Backward-compatible RAG shim / re-export surface
+    │   ├── pipeline.py                   # RAG orchestration: chat_with_rag + citations
+    │   ├── pipeline_steps.py             # P0 helper slices extracted from chat_with_rag
+    │   ├── bootstrap.py                  # Qdrant, embedding, BM25, and LLM bootstrap
+    │   ├── prompt.py                     # Prompt templates and response language helpers
+    │   ├── retrieval.py                  # Retrieval helpers and lifecycle filters
+    │   ├── rerank.py                     # Reranking and long-context ordering
+    │   ├── intent.py                     # Query intent, filters, version policy
     │   ├── conversation_state.py         # Conversation state memory and management
     │   ├── interaction_router.py         # RAG semantic routing controller
     │   ├── semantic_cache.py             # Semantic caching layer
@@ -207,7 +223,19 @@ ChatBotProject/
     │   ├── security_policy.py            # Security clearance policy (resolve_clearance)
     │   └── rate_limit.py                 # Login rate limiting & lockout
     ├── db/
-    │   └── repository.py                 # All SQL Server queries and data operations
+    │   ├── engine.py                     # SQLAlchemy engine and SQL Server connection settings
+    │   ├── repository.py                 # Backward-compatible shim re-exporting repositories/*
+    │   └── repositories/                 # Split SQL repositories by domain
+    │       ├── access.py / audit.py / analytics.py
+    │       ├── chat.py / feedback.py / lifecycle.py
+    │       ├── document.py / document_pages.py / doc_metadata.py
+    │       ├── glossary.py / jobs.py / material.py / bom.py
+    │       └── qdrant.py / semantic_cache.py / settings.py / ui_queries.py / version.py
+    ├── services/                         # Thin service layer used by UI modules
+    │   ├── access_service.py / audit_service.py / analytics_service.py
+    │   ├── chat_service.py / document_service.py / feedback_service.py
+    │   ├── glossary_service.py / job_service.py / lifecycle_service.py
+    │   └── material_service.py / org_service.py / settings_service.py / ui_query_service.py
     ├── llm/
     │   ├── llm_client.py                 # LLM client (OpenAI-compatible, with retry)
     │   └── vision_client.py              # Vision model client (with retry)
@@ -243,6 +271,7 @@ ChatBotProject/
 | `AuditLog` | Immutable audit trail for permission changes and confidential access |
 | `DomainGlossary` | Per-domain synonym and abbreviation dictionary |
 | `RagTraceSummary` | Per-request observability: cost, tokens, per-step latency, refusal |
+| `SemanticCache` | Cached RAG answers keyed by embedding similarity and RBAC scope |
 | `AppSettings` | Key-value application configuration stored in DB |
 
 ---
@@ -331,9 +360,9 @@ For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QD
 
 ```bash
 # Step 1: Create the base schema
-#   Run: database/init/Mech_Chatbot_DB.sql on your SQL Server instance
+#   Run: database/schema/01_baseline.sql on your SQL Server instance
 
-# Step 2: Apply versioned migrations in order (V0001 → V0013)
+# Step 2: Apply versioned migrations in order (V0001 -> V0016)
 python scripts/migrations/migrate.py
 # or run each file in database/migrations/ manually
 
@@ -415,35 +444,44 @@ Access pages via the Streamlit sidebar (visibility depends on your role and clea
 
 ```
 User question
-    │
-    ▼
-Intent Extraction (LLM / Regex fallback)
-    │  → Detect part IDs, BOM queries, language, version policy
-    ▼
-Chitchat Check → respond directly if casual
-    │
-    ▼
+    |
+    v
+Interaction Router
+    |-- safety/meta/chitchat routes can return early
+    v
+Semantic Cache Lookup
+    |-- cache hit can return early
+    v
+Context Rewrite + Conversation Anchor
+    |-- decontextualize follow-up questions and resolve active document refs
+    v
+Intent Extraction (LLM / regex fallback)
+    |-- detect part IDs, BOM queries, language, version policy
+    v
 Domain Glossary Expansion (TTL-cached from DB)
-    │  → Synonyms & abbreviations added to query
-    ▼
+    |-- synonyms and abbreviations added to query
+    v
 HyDE (Hypothetical Document Embedding)
-    │  → Activated for short/ambiguous questions
-    ▼
+    |-- activated for short or ambiguous questions
+    v
 Hybrid Search (Dense + BM25) on Qdrant
-    │  → RBAC filter: department + security clearance + site + lifecycle status
-    ▼
+    |-- RBAC filter: department + security clearance + site + lifecycle status
+    v
+Variant Disambiguation
+    |-- asks the user to choose when multiple variants match
+    v
 GPT Reranking
-    │  → Filter top-N by relevance score
-    ▼
+    |-- filter top-N by relevance score
+    v
 Evidence Gate (LLM)
-    │  → Verify context is sufficient to answer; else refusal
-    ▼
+    |-- verify context is sufficient to answer; else refusal
+    v
 Answer Generation (LLM)
-    │  → Response language: Vi / En
-    ▼
+    |-- response language: Vi / En
+    v
 Answer + Visual Citations + Source Tracking
-    │  → Saved to LichSuChat, AnswerSources, RagTraceSummary
-    ▼
+    |-- saved to LichSuChat, AnswerSources, RagTraceSummary
+    v
 Audit log (confidential document access if applicable)
 ```
 
@@ -465,7 +503,11 @@ The project includes a GitHub Actions workflow (`.github/workflows/ragas_eval.ym
 ```bash
 pip install -r requirements-test.txt
 
-# Full test suite
+# Fast local suite (skips integration and eval tests)
+pytest -m "not integration and not eval"
+
+# Full pytest collection. Integration/eval tests are skipped unless their
+# required environment variables are enabled in tests/conftest.py.
 pytest
 
 # Run by layer
@@ -481,6 +523,10 @@ PYTHONPATH=src python scripts/eval/run_eval.py
 
 Evaluation reports are stored in the `reports/` directory.
 
+Current baseline note: the fast suite has one known pre-existing failure in
+`tests/unit/test_retrieval_filters.py::TestComposeReturnsTwoFilters::test_chitchat_skips_strict_part_id`.
+Treat any additional failure as a regression.
+
 ---
 
 ## Useful Scripts
@@ -492,6 +538,7 @@ Evaluation reports are stored in the `reports/` directory.
 | `scripts/migrations/migrate.py` | Run pending SQL migrations in order |
 | `scripts/eval/run_ragas_eval.py` | Run RAGAS quality evaluation (also used by CI) |
 | `scripts/eval/run_eval.py` | Manual evaluation with detailed output |
+| `scripts/eval_semantic_router.py` | Semantic router evaluation script |
 | `scripts/diagnostics/check_qdrant_count.py` | Verify document count in Qdrant |
 | `scripts/diagnostics/check_qdrant_schema.py` | Inspect Qdrant collection schema |
 | `scripts/diagnostics/check_image_summary_coverage.py` | Check Vision OCR coverage per document |

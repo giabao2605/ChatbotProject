@@ -70,6 +70,10 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
+# ===== Local agent/Codex workspace state =====
+.agents/
+.codex/
+
 # ===== Temp RAG worker files =====
 rag_in_*.json
 rag_out_*.json

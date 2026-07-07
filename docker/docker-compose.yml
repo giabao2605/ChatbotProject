@@ -22,7 +22,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     command: python -m mech_chatbot.api.rag_server
-    env_file: .env
+    env_file: ../.env
     environment:
       - RAG_SERVER_HOST=0.0.0.0
       - RAG_SERVER_PORT=8100
@@ -60,7 +60,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     command: streamlit run run.py --server.port 8501 --server.address 0.0.0.0
-    env_file: .env
+    env_file: ../.env
     environment:
       - RAG_SERVER_URL=http://rag-server:8100
       - PYTHONPATH=/app/src
@@ -87,7 +87,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     command: python -m mech_chatbot.workers.ingestion_worker
-    env_file: .env
+    env_file: ../.env
     environment:
       - PYTHONPATH=/app/src
     volumes:
