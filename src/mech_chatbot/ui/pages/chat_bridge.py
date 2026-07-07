@@ -71,4 +71,30 @@ def render_nextjs_chat() -> None:
 
     lang = get_lang() or "vi"
     src = f"{base_url}/?ctx={token}&lang={lang}"
-    components.iframe(src, height=780, scrolling=True)
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            max-width: 100% !important;
+            padding: 0 !important;
+        }
+
+        div[data-testid="stVerticalBlock"],
+        div[data-testid="stElementContainer"] {
+            gap: 0 !important;
+        }
+
+        div[data-testid="stIFrame"],
+        div[data-testid="stIFrame"] iframe,
+        iframe[title="streamlit-component-lib"] {
+            width: 100% !important;
+            height: calc(100vh - 3.25rem) !important;
+            min-height: calc(100vh - 3.25rem) !important;
+            border: 0 !important;
+            display: block !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    components.iframe(src, height=900, scrolling=False)

@@ -357,51 +357,57 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-screen bg-[#0f0f12] text-gray-100">
-      <aside className="hidden w-72 shrink-0 border-r border-white/10 bg-[#121218] md:flex md:flex-col">
-        <div className="border-b border-white/10 p-3">
+    <div className="flex h-screen overflow-hidden bg-transparent text-gray-100 font-sans selection:bg-emerald-500/30">
+      <aside className="hidden h-screen w-72 shrink-0 overflow-hidden border-r border-white/5 bg-neutral-900/40 backdrop-blur-xl md:flex md:flex-col shadow-[4px_0_24px_rgba(0,0,0,0.2)] z-10 relative">
+        <div className="border-b border-white/5 p-4">
           <button
             onClick={newChat}
-            className="w-full rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-black transition hover:bg-emerald-400 disabled:opacity-40"
+            className="w-full rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2.5 text-sm font-semibold text-neutral-950 transition-all hover:from-emerald-400 hover:to-teal-400 disabled:opacity-40 shadow-[0_0_15px_rgba(16,185,129,0.3)] hover:shadow-[0_0_20px_rgba(16,185,129,0.5)] flex items-center justify-center gap-2"
             disabled={busy}
           >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             Cuoc tro chuyen moi
           </button>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Tim kiem lich su"
-            className="mt-3 w-full rounded-md border border-white/10 bg-[#17171d] px-3 py-2 text-sm outline-none focus:border-emerald-400/60"
-          />
+          <div className="relative mt-4">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Tim kiem lich su..."
+              className="w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 py-2 text-sm outline-none transition-all hover:border-white/20 focus:border-emerald-500/50 focus:bg-white/10 shadow-inner placeholder:text-gray-500"
+            />
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-2">
+        <div className="flex-1 overflow-y-auto p-3 space-y-1">
           {filteredSessions.map((s) => (
             <div
               key={s.session_id}
-              className={`mb-1 rounded-md border px-2 py-2 ${
+              className={`group rounded-xl border px-3 py-2.5 transition-all duration-200 ${
                 s.session_id === sessionId
-                  ? "border-emerald-400/50 bg-emerald-400/10"
-                  : "border-transparent hover:bg-white/5"
+                  ? "border-emerald-500/30 bg-emerald-500/10 shadow-[inset_0_0_10px_rgba(16,185,129,0.05)]"
+                  : "border-transparent hover:bg-white/5 hover:border-white/5"
               }`}
             >
               <button
                 onClick={() => loadSession(s.session_id)}
-                className="block w-full text-left text-sm text-gray-100"
+                className="block w-full text-left text-sm text-gray-200 group-hover:text-white transition-colors"
                 disabled={busy}
                 title={s.cau_hoi}
               >
-                <span className="line-clamp-2">{s.cau_hoi}</span>
+                <span className="line-clamp-2 leading-relaxed">{s.cau_hoi}</span>
                 {s.owner ? (
-                  <span className="mt-1 block text-xs text-gray-500">
+                  <span className="mt-1.5 flex items-center gap-1.5 text-xs text-gray-500 font-medium">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                     {s.owner}
                   </span>
                 ) : null}
               </button>
               <button
                 onClick={() => deleteSession(s.session_id)}
-                className="mt-2 text-xs text-red-300 hover:text-red-200"
+                className="mt-2.5 flex items-center gap-1 text-[11px] font-medium text-gray-500 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
                 disabled={busy}
               >
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                 Xoa
               </button>
             </div>
@@ -414,33 +420,40 @@ export default function ChatPage() {
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-          <div>
-            <h1 className="text-sm font-semibold text-gray-100">
-              Tro ly tai lieu noi bo
-            </h1>
-            <p className="text-xs text-gray-500">
-              Chat Next.js, history SQL Server
-            </p>
+      <main className="relative flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="z-20 flex shrink-0 items-center justify-between border-b border-white/5 bg-neutral-950/40 px-6 py-4 backdrop-blur-md">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/30">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-400"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>
+            </div>
+            <div>
+              <h1 className="text-base font-semibold text-gray-100 tracking-tight">
+                Tro ly tai lieu noi bo
+              </h1>
+              <p className="text-xs text-gray-400 font-medium">
+                Du lieu noi bo & RAG Engine
+              </p>
+            </div>
           </div>
           <button
             onClick={newChat}
-            className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-gray-300 transition hover:bg-white/5 md:hidden"
+            className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-gray-200 transition-all hover:bg-white/10 hover:border-white/20 md:hidden"
             disabled={busy}
           >
             Chat moi
           </button>
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto">
-          <div className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-6">
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
+          <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-8">
             {messages.length === 0 && (
-              <div className="mt-16 text-center text-gray-400">
-                <p className="text-lg font-medium text-gray-200">Xin chao</p>
-                <p className="mt-2 text-sm">
-                  Dat cau hoi ve tai lieu, quy trinh, chinh sach hoac du lieu
-                  noi bo.
+              <div className="mt-20 flex flex-col items-center justify-center text-center animate-msg">
+                <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.15)]">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="url(#emerald-gradient)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><defs><linearGradient id="emerald-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#34d399" /><stop offset="100%" stopColor="#14b8a6" /></linearGradient></defs><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>
+                </div>
+                <h2 className="text-2xl font-semibold bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent">Xin chao, toi co the giup gi cho ban?</h2>
+                <p className="mt-3 text-sm text-gray-400 max-w-md leading-relaxed">
+                  Dat cau hoi ve tai lieu, quy trinh, chinh sach hoac du lieu noi bo. Toi se tim kiem va tra loi ban dua tren co so du lieu cua chung ta.
                 </p>
               </div>
             )}
@@ -448,15 +461,13 @@ export default function ChatPage() {
             {messages.map((m, i) => (
               <div
                 key={`${m.role}-${i}`}
-                className={
-                  m.role === "user" ? "flex justify-end" : "flex justify-start"
-                }
+                className={`animate-msg ${m.role === "user" ? "flex justify-end" : "flex justify-start"}`}
               >
                 <div
                   className={
                     m.role === "user"
-                      ? "max-w-[85%] rounded-xl bg-[#2b2b36] px-4 py-3 text-gray-100"
-                      : "max-w-[85%] rounded-xl bg-[#1e1e26] px-4 py-3 text-gray-100"
+                      ? "max-w-[85%] rounded-2xl rounded-tr-sm bg-gradient-to-br from-neutral-800 to-neutral-900 border border-white/5 px-5 py-4 text-gray-100 shadow-md"
+                      : "max-w-[85%] rounded-2xl rounded-tl-sm bg-neutral-900/60 backdrop-blur-md border border-white/5 px-5 py-4 text-gray-100 shadow-sm"
                   }
                 >
                   {m.imageUrl ? (
@@ -495,26 +506,28 @@ export default function ChatPage() {
                   ) : null}
 
                   {m.role === "assistant" && m.chatId ? (
-                    <div className="mt-3 flex gap-2 text-xs">
+                    <div className="mt-4 flex gap-2 text-xs border-t border-white/5 pt-3">
                       <button
                         onClick={() => sendFeedback(m.chatId as number, 1)}
-                        className={`rounded border px-2 py-1 ${
+                        className={`rounded-lg border px-2.5 py-1.5 transition-all flex items-center gap-1.5 ${
                           m.feedback === 1
-                            ? "border-emerald-400 text-emerald-300"
-                            : "border-white/10 text-gray-400 hover:text-gray-200"
+                            ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
+                            : "border-white/5 bg-white/5 text-gray-400 hover:text-gray-200 hover:bg-white/10"
                         }`}
                       >
-                        Thich
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
+                        Huu ich
                       </button>
                       <button
                         onClick={() => sendFeedback(m.chatId as number, -1)}
-                        className={`rounded border px-2 py-1 ${
+                        className={`rounded-lg border px-2.5 py-1.5 transition-all flex items-center gap-1.5 ${
                           m.feedback === -1
-                            ? "border-red-400 text-red-300"
-                            : "border-white/10 text-gray-400 hover:text-gray-200"
+                            ? "border-red-500/50 bg-red-500/10 text-red-400"
+                            : "border-white/5 bg-white/5 text-gray-400 hover:text-gray-200 hover:bg-white/10"
                         }`}
                       >
-                        Khong thich
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path></svg>
+                        Khong tot
                       </button>
                     </div>
                   ) : null}
@@ -539,23 +552,27 @@ export default function ChatPage() {
           </div>
         )}
 
-        <footer className="border-t border-white/10 px-4 py-3">
-          <div className="mx-auto max-w-3xl">
+        <footer className="z-10 shrink-0 px-4 pb-6 pt-2 bg-gradient-to-t from-[#050505] via-[#050505]/80 to-transparent">
+          <div className="mx-auto max-w-4xl relative">
             {selectedFile ? (
-              <div className="mb-2 flex items-center justify-between rounded-md border border-white/10 bg-[#17171d] px-3 py-2 text-sm text-gray-300">
-                <span className="truncate">File: {selectedFile.name}</span>
+              <div className="absolute -top-12 left-0 right-0 flex items-center justify-between rounded-xl border border-emerald-500/30 bg-neutral-900/90 backdrop-blur-md px-4 py-2.5 text-sm text-gray-200 shadow-lg animate-msg">
+                <div className="flex items-center gap-2 truncate">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-400"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                  <span className="truncate">{selectedFile.name}</span>
+                </div>
                 <button
                   onClick={clearSelectedFile}
-                  className="ml-3 text-xs text-red-300 hover:text-red-200"
+                  className="ml-3 p-1 text-gray-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition-colors"
                   disabled={busy}
+                  title="Bo file"
                 >
-                  Bo file
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
               </div>
             ) : null}
-            <div className="flex items-end gap-2">
-              <label className="cursor-pointer rounded-xl border border-white/10 px-3 py-3 text-sm text-gray-300 transition hover:bg-white/5">
-                Upload
+            <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-neutral-900/80 backdrop-blur-2xl p-2 shadow-2xl transition-all focus-within:border-emerald-500/40 focus-within:ring-1 focus-within:ring-emerald-500/40">
+              <label className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition hover:bg-white/10 hover:text-gray-200" title="Tai len">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                 <input
                   ref={fileRef}
                   type="file"
@@ -571,20 +588,24 @@ export default function ChatPage() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={onKeyDown}
                 rows={1}
-                placeholder="Nhap cau hoi cua ban..."
-                className="max-h-40 flex-1 resize-none rounded-xl border border-white/10 bg-[#17171d] px-4 py-3 text-[15px] text-gray-100 outline-none focus:border-emerald-400/60"
+                placeholder="Nhap tin nhan vao day..."
+                className="max-h-40 flex-1 resize-none bg-transparent px-2 py-2.5 text-[15px] text-gray-100 outline-none placeholder:text-gray-500"
               />
               <button
                 onClick={send}
                 disabled={busy || !input.trim()}
-                className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-medium text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-neutral-950 transition-all hover:from-emerald-400 hover:to-teal-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-400 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)]"
+                title="Gui"
               >
-                {busy ? "Dang tra loi..." : "Gui"}
+                {busy ? (
+                   <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                )}
               </button>
             </div>
-            <p className="mt-2 text-center text-[11px] text-gray-500">
-              Upload trong chat chi ho tro anh cau hoi. Tai lieu hoc moi van
-              dung trang upload rieng.
+            <p className="mt-3 text-center text-xs font-medium text-gray-500/70">
+              Upload trong chat chi ho tro hinh anh.
             </p>
           </div>
         </footer>
