@@ -254,6 +254,12 @@ def chat_with_rag_dispatch(user_question, **kwargs):
 
 
 def run_chat():
+    # --- Nhung giao dien chat Next.js (bat bang USE_NEXTJS_CHAT trong moi truong) ---
+    if os.getenv("USE_NEXTJS_CHAT", "").strip().lower() in ("1", "true", "yes", "on"):
+        from mech_chatbot.ui.pages.chat_bridge import render_nextjs_chat
+        render_nextjs_chat()
+        return
+
     # ==========================================
     # 1. CAU HINH TRANG (Moved to app.py)
     # ==========================================

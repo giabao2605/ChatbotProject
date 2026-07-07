@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+/* Danh cho noi dung markdown cua bot */
+.md-body p {
+  margin: 0 0 0.6rem;
+}
+.md-body p:last-child {
+  margin-bottom: 0;
+}
+.md-body ul,
+.md-body ol {
+  margin: 0.3rem 0 0.6rem;
+  padding-left: 1.25rem;
+}
+.md-body li {
+  margin: 0.15rem 0;
+}
+.md-body pre {
+  background: rgba(0, 0, 0, 0.35);
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+}
+.md-body code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.25rem;
+  font-size: 0.9em;
+}
+.md-body pre code {
+  background: transparent;
+  padding: 0;
+}
+.md-body table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 0.35rem 0.6rem;
+}
+.md-body a {
+  color: #6ee7b7;
+  text-decoration: underline;
+}
