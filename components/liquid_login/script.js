@@ -71,13 +71,13 @@ function initDraggable() {
 function initPasswordToggle() {
   const passwordInput = document.getElementById("password");
   const toggleBtn = document.getElementById("togglePassword");
-  const icon = document.getElementById("passwordEyeIcon");
-  if (!passwordInput || !toggleBtn || !icon) return;
+  const toggleText = document.getElementById("passwordToggleText");
+  if (!passwordInput || !toggleBtn || !toggleText) return;
 
   toggleBtn.addEventListener("click", () => {
     const isHidden = passwordInput.type === "password";
     passwordInput.type = isHidden ? "text" : "password";
-    icon.textContent = "";
+    toggleText.textContent = isHidden ? "Ẩn" : "Hiện";
     toggleBtn.setAttribute("aria-label", isHidden ? "Ẩn mật khẩu" : "Hiện mật khẩu");
     toggleBtn.setAttribute("title", isHidden ? "Ẩn mật khẩu" : "Hiện mật khẩu");
     passwordInput.focus();

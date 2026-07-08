@@ -14,7 +14,7 @@ from mech_chatbot.ui.i18n import t
 
 
 def run_analytics():
-    st.title("\U0001f4ca " + t("Ph\u00e2n t\u00edch & b\u00e1o c\u00e1o s\u1eed d\u1ee5ng"))
+    st.title(t("Ph\u00e2n t\u00edch & b\u00e1o c\u00e1o s\u1eed d\u1ee5ng"))
     st.caption(t("Th\u1ed1ng k\u00ea c\u00e2u h\u1ecfi, t\u00e0i li\u1ec7u \u0111\u01b0\u1ee3c h\u1ecfi nhi\u1ec1u v\u00e0 t\u1ec9 l\u1ec7 kh\u00f4ng t\u00ecm th\u1ea5y \u2014 \u0111\u1ec3 c\u1ea3i thi\u1ec7n kho t\u00e0i li\u1ec7u."))
 
     if not auth.has_role("admin"):
@@ -41,7 +41,7 @@ def run_analytics():
     c2.metric(t("Phi\u00ean / Ng\u01b0\u1eddi d\u00f9ng"), f"{data['total_sessions']} / {data['total_users']}")
     c3.metric(t("T\u1ec9 l\u1ec7 kh\u00f4ng t\u00ecm th\u1ea5y"), f"{data['no_answer_rate']}%",
               help=t("T\u1ec9 l\u1ec7 c\u00e2u tr\u1ea3 l\u1eddi cho th\u1ea5y h\u1ec7 th\u1ed1ng kh\u00f4ng t\u00ecm \u0111\u01b0\u1ee3c th\u00f4ng tin."))
-    c4.metric("\U0001f44d / \U0001f44e", f"{data['likes']} / {data['dislikes']}")
+    c4.metric(t("Like / Dislike"), f"{data['likes']} / {data['dislikes']}")
 
     if data["total_questions"] == 0:
         st.info(t("Ch\u01b0a c\u00f3 d\u1eef li\u1ec7u chat trong kho\u1ea3ng th\u1eddi gian n\u00e0y."))
@@ -84,7 +84,7 @@ def run_analytics():
 
     st.markdown("---")
     st.caption(
-        "\U0001f4a1 " + t(
+        t(
             "T\u1ec9 l\u1ec7 'kh\u00f4ng t\u00ecm th\u1ea5y' cao \u21d2 c\u00e2n nh\u1eafc b\u1ed5 sung t\u00e0i li\u1ec7u cho c\u00e1c ch\u1ee7 \u0111\u1ec1 \u0111\u00f3, "
             "ho\u1eb7c ki\u1ec3m tra quy\u1ec1n truy c\u1eadp c\u1ee7a ng\u01b0\u1eddi d\u00f9ng."
         )

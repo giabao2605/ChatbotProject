@@ -11,7 +11,8 @@ from mech_chatbot.services import (
     is_engine_ready,
     count_dept_users, count_dept_pending_jobs,
     list_users_basic,
-    update_user_active_and_roles, update_user_password, create_user_with_roles,
+    update_user_active_and_roles, set_user_active_status, delete_user_account,
+    update_user_password, create_user_with_roles,
     get_user_roles, get_user_departments, get_user_clearance,
 )
 from mech_chatbot.ui.i18n import t
@@ -75,16 +76,21 @@ def _status_badge(status: str) -> str:
 
 def render_user_list():
     users = list_users_basic()
+    current_user = auth.get_current_user() or {}
+    actor_id = current_user.get("user_id")
+    actor_username = current_user.get("username") or "System"
 
     dept_codes = _dept_codes(active_only=False)
     active_dept_codes = _dept_codes(active_only=True)
     site_codes = _site_codes()
 
     for user_id, username, display_name, department, is_active, created_at in users:
-        with st.expander(f"{username} \u00b7 {display_name or ''}"):
+        status_text = t("Đang hoạt động") if bool(is_active) else t("Tạm tắt")
+        with st.expander(f"{username} \u00b7 {display_name or ''} \u00b7 {status_text}"):
             st.write(f"**{t("User ID:")}** {user_id}")
             st.write(f"**" + t("Ph\u00f2ng ban ch\u00ednh:") + f"** {department}")
             st.write(f"**{t("Ngày tạo:")}** {created_at}")
+            st.write("**" + t("Trạng thái tài khoản:") + "** " + status_text)
             st.write("**" + t("Vai trò:") + "** " + ", ".join(get_user_roles(user_id)))
 
             cur_depts = get_user_departments(user_id)
@@ -120,7 +126,6 @@ def render_user_list():
                     index=LEVEL_OPTIONS.index(cur_level) if cur_level in LEVEL_OPTIONS else 1,
                     key=f"l_{user_id}",
                 )
-                new_active = st.checkbox(t("Đang hoạt động"), value=bool(is_active), key=f"active_{user_id}")
                 saved = st.form_submit_button(t("L\u01b0u quy\u1ec1n"), type="primary")
             if saved:
                 try:
@@ -145,7 +150,7 @@ def render_user_list():
                     del_roles = [r for r in cur_roles if r not in new_roles]
                     update_user_active_and_roles(
                         user_id,
-                        is_active=new_active,
+                        is_active=bool(is_active),
                         add_roles=add_roles,
                         del_roles=del_roles,
                     )
@@ -171,32 +176,82 @@ def render_user_list():
                     except Exception as e:
                         st.error(t("L\u1ed7i \u0111\u1eb7t l\u1ea1i m\u1eadt kh\u1ea9u: {e}", e=e))
 
+            st.markdown("**" + t("Hành động tài khoản") + "**")
+            st.caption(t("Vô hiệu hóa sẽ chặn đăng nhập nhưng giữ lại dữ liệu và phân quyền. Xóa tài khoản sẽ xóa bản ghi đăng nhập và các phân quyền liên quan."))
+            is_self = actor_id is not None and int(actor_id) == int(user_id)
+            if is_self:
+                st.info(t("Bạn không thể vô hiệu hóa hoặc xóa tài khoản đang đăng nhập."))
+            c_disable, c_delete = st.columns(2)
+            with c_disable:
+                if bool(is_active):
+                    if st.button(t("Vô hiệu hóa tài khoản"), key=f"disable_user_{user_id}", disabled=is_self, use_container_width=True):
+                        confirm_key = f"confirm_disable_user_{user_id}"
+                        if not st.session_state.get(confirm_key):
+                            st.session_state[confirm_key] = True
+                            st.warning(t("Xác nhận vô hiệu hóa tài khoản **{username}**? Người dùng này sẽ không đăng nhập được cho tới khi được kích hoạt lại.", username=username))
+                        else:
+                            res = set_user_active_status(user_id, False, actor_username=actor_username, actor_id=actor_id)
+                            st.session_state.pop(confirm_key, None)
+                            if res.get("ok"):
+                                st.success(t("Đã vô hiệu hóa tài khoản {username}.", username=username))
+                                st.rerun()
+                            else:
+                                st.error(t(res.get("message") or "Cập nhật thất bại."))
+                else:
+                    if st.button(t("Kích hoạt lại tài khoản"), key=f"enable_user_{user_id}", use_container_width=True):
+                        res = set_user_active_status(user_id, True, actor_username=actor_username, actor_id=actor_id)
+                        if res.get("ok"):
+                            st.success(t("Đã kích hoạt lại tài khoản {username}.", username=username))
+                            st.rerun()
+                        else:
+                            st.error(t(res.get("message") or "Cập nhật thất bại."))
+            with c_delete:
+                if st.button(t("Xóa tài khoản"), key=f"delete_user_{user_id}", disabled=is_self, use_container_width=True):
+                    confirm_key = f"confirm_delete_user_{user_id}"
+                    if not st.session_state.get(confirm_key):
+                        st.session_state[confirm_key] = True
+                        st.error(t("Xác nhận xóa tài khoản **{username}**? Thao tác này xóa bản ghi đăng nhập và phân quyền liên quan, không thể hoàn tác.", username=username))
+                    else:
+                        res = delete_user_account(user_id, actor_username=actor_username, actor_id=actor_id)
+                        st.session_state.pop(confirm_key, None)
+                        if res.get("ok"):
+                            st.success(t("Đã xóa tài khoản {username}.", username=username))
+                            st.rerun()
+                        else:
+                            st.error(t(res.get("message") or "Xóa tài khoản thất bại."))
+
 
 def render_create_user():
     dept_codes = _dept_codes(active_only=True)
     site_codes = _site_codes()
+    form_version = st.session_state.get("create_user_form_version", 0)
 
-    username = st.text_input(t("Tên đăng nhập"))
-    display_name = st.text_input(t("T\u00ean hi\u1ec3n th\u1ecb"))
+    def form_key(name):
+        return f"create_user_{form_version}_{name}"
+
+    username = st.text_input(t("Tên đăng nhập"), key=form_key("username"))
+    display_name = st.text_input(t("T\u00ean hi\u1ec3n th\u1ecb"), key=form_key("display_name"))
     department = (
-        st.selectbox(t("Ph\u00f2ng ban ch\u00ednh"), [""] + dept_codes, format_func=dept_label)
+        st.selectbox(t("Ph\u00f2ng ban ch\u00ednh"), [""] + dept_codes, format_func=dept_label, key=form_key("department"))
         if dept_codes
-        else st.text_input(t("Ph\u00f2ng ban ch\u00ednh"))
+        else st.text_input(t("Ph\u00f2ng ban ch\u00ednh"), key=form_key("department_text"))
     )
-    password = st.text_input(t("M\u1eadt kh\u1ea9u"), type="password")
-    selected_roles = st.multiselect(t("Vai trò"), ROLE_OPTIONS, default=["viewer"])
+    password = st.text_input(t("M\u1eadt kh\u1ea9u"), type="password", key=form_key("password"))
+    selected_roles = st.multiselect(t("Vai trò"), ROLE_OPTIONS, default=["viewer"], key=form_key("roles"))
     allowed_departments = st.multiselect(
         t("Phòng ban được phép"), sorted(set(dept_codes)),
         default=([department] if department else []),
         format_func=dept_label,
+        key=form_key("allowed_departments"),
     )
     allowed_sites = st.multiselect(
         t("Khu/Site được phép (để trống = không giới hạn)"),
         sorted(set(site_codes)),
+        key=form_key("allowed_sites"),
     )
-    max_level = st.selectbox(t("M\u1ee9c m\u1eadt t\u1ed1i \u0111a"), LEVEL_OPTIONS, index=1)
+    max_level = st.selectbox(t("M\u1ee9c m\u1eadt t\u1ed1i \u0111a"), LEVEL_OPTIONS, index=1, key=form_key("max_level"))
 
-    if st.button(t("T\u1ea1o user"), type="primary"):
+    if st.button(t("T\u1ea1o user"), type="primary", key=form_key("submit")):
         if not username or not password:
             st.error(t("Username v\u00e0 m\u1eadt kh\u1ea9u l\u00e0 b\u1eaft bu\u1ed9c."))
             return
@@ -217,6 +272,7 @@ def render_create_user():
                 set_user_sites(user_id, allowed_sites)
             set_user_clearance(user_id, max_level)
             st.success(t("\u0110\u00e3 t\u1ea1o ng\u01b0\u1eddi d\u00f9ng."))
+            st.session_state["create_user_form_version"] = form_version + 1
             st.rerun()
         except Exception as e:
             st.error(t("Kh\u00f4ng t\u1ea1o \u0111\u01b0\u1ee3c user: {e}", e=e))

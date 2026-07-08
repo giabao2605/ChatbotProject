@@ -9,7 +9,7 @@ from mech_chatbot.services import (
     count_docs_by_department,
 )
 from mech_chatbot.ui.i18n import t
-from mech_chatbot.ui.labels import gloss
+from mech_chatbot.ui.labels import dept_label, gloss
 
 
 def _check_database():
@@ -97,7 +97,7 @@ def run_settings():
             _col_dept = t("Phòng ban")
             _col_docs = t("Số tài liệu")
             st.dataframe(
-                [{_col_dept: k, _col_docs: v} for k, v in sorted(doc_counts.items(), key=lambda x: -x[1])],
+                [{_col_dept: dept_label(k), _col_docs: v} for k, v in sorted(doc_counts.items(), key=lambda x: -x[1])],
                 use_container_width=True, hide_index=True,
             )
     except Exception as e:

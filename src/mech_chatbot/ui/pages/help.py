@@ -4,7 +4,7 @@ Danh cho nguoi dung phong KHONG ranh ky thuat: huong dan dat cau hoi tot,
 cach doc nguon trich dan, hieu gioi han he thong, quy trinh tai tai lieu, va FAQ.
 Hien thi tuy theo role. Khong phu thuoc DB -> luon hien thi duoc.
 
-Luu y trinh bay: KHONG dung icon / emoji. Chi dung tieu de, gach dau dong, bang,
+Luu y trinh bay: chi dung tieu de, gach dau dong, bang,
 va muc mo rong (expander).
 """
 import streamlit as st

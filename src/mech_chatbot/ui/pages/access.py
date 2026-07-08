@@ -20,6 +20,7 @@ from mech_chatbot.services import (
     get_grant_history,
 )
 from mech_chatbot.ui.i18n import t
+from mech_chatbot.ui.labels import dept_label, dept_labels_str
 
 LEVEL_OPTIONS = ["internal", "confidential"]
 LEVEL_OPTIONS_ALL = ["public", "internal", "confidential"]
@@ -103,7 +104,7 @@ def _render_send(user):
         req_level = st.selectbox(t("Mức mật muốn được cấp"), LEVEL_OPTIONS,
                                  index=LEVEL_OPTIONS.index("confidential"), key="acc_level")
     else:
-        req_dept = st.selectbox(t("Phòng ban muốn xem"), [""] + _dept_codes(), key="acc_dept")
+        req_dept = st.selectbox(t("Phòng ban muốn xem"), [""] + _dept_codes(), format_func=dept_label, key="acc_dept")
     reason = st.text_area(t("Lý do (không bắt buộc)"), key="acc_reason")
     if st.button(t("Gửi yêu cầu"), type="primary", key="acc_submit"):
         if req_kind == "department" and not req_dept:
@@ -128,7 +129,7 @@ def _render_mine(user):
         st.info(t("Bạn chưa có yêu cầu nào."))
     for r in rows:
         status_text = t(_STATUS_BADGE.get(r["status"], r["status"]))
-        target = r.get("requested_level") or r.get("requested_dept") or ""
+        target = dept_label(r.get("requested_dept")) if r.get("requested_dept") else (r.get("requested_level") or "")
         with st.container(border=True):
             st.write(f"**{r['request_type']}** · {target} · _{status_text}_")
             if r.get("question_text"):
@@ -142,7 +143,7 @@ def _render_review(user):
     if not pend:
         st.success(t("Không có yêu cầu nào đang chờ."))
     for r in pend:
-        target = r.get("requested_level") or r.get("requested_dept") or ""
+        target = dept_label(r.get("requested_dept")) if r.get("requested_dept") else (r.get("requested_level") or "")
         with st.container(border=True):
             st.write(f"**{r['username']}** · {r['request_type']} · **{target}**")
             if r.get("question_text"):
@@ -187,7 +188,7 @@ def _render_manage(actor):
             continue
         with st.container(border=True):
             st.write(f"**{u['username']}** · {u.get('display_name') or ''} · " + t("mức mật:") + f" `{u['max_level']}`")
-            st.caption(t("Phòng ban được xem:") + " " + (", ".join(deps) if deps else "—"))
+            st.caption(t("Phòng ban được xem:") + " " + (dept_labels_str(deps) if deps else "—"))
             c1, c2 = st.columns([2, 1])
             with c1:
                 new_lvl = st.selectbox(
@@ -207,7 +208,7 @@ def _render_manage(actor):
             if deps:
                 dc1, dc2 = st.columns([2, 1])
                 with dc1:
-                    dsel = st.selectbox(t("Chọn phòng ban thu hồi"), [""] + deps, key=f"drev_{u['user_id']}")
+                    dsel = st.selectbox(t("Chọn phòng ban thu hồi"), [""] + deps, format_func=dept_label, key=f"drev_{u['user_id']}")
                 with dc2:
                     st.write("")
                     if st.button(t("Thu hồi phòng ban"), key=f"drevbtn_{u['user_id']}", use_container_width=True):
@@ -217,7 +218,7 @@ def _render_manage(actor):
                             out = revoke_user_department(u["user_id"], dsel,
                                                          actor_username=actor.get("username"), actor_id=actor.get("user_id"))
                             if out.get("ok"):
-                                st.success(t("Đã thu hồi phòng ban:") + f" {dsel}")
+                                st.success(t("Đã thu hồi phòng ban:") + f" {dept_label(dsel)}")
                                 st.rerun()
                             else:
                                 st.error(out.get("message"))

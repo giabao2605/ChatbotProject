@@ -24,6 +24,14 @@ type RagResponse = {
   debug_info?: Record<string, unknown>;
 };
 
+function isEnglish(lang?: string | null) {
+  return String(lang || "").toLowerCase().startsWith("en");
+}
+
+function tr(lang: string | undefined | null, vi: string, en: string) {
+  return isEnglish(lang) ? en : vi;
+}
+
 export async function POST(req: NextRequest) {
   let body: ClientBody;
   try {
@@ -32,7 +40,7 @@ export async function POST(req: NextRequest) {
     return new Response("Bad request", { status: 400 });
   }
 
-  if (!body.ctx) return new Response("Missing ctx", { status: 401 });
+  if (!body.ctx) return new Response("Thiếu ctx", { status: 401 });
 
   let ctx;
   try {
@@ -43,10 +51,11 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  const lang = ctx.response_language ?? "vi";
   const question = (body.question ?? "").trim();
-  if (!question) return new Response("Empty question", { status: 400 });
+  if (!question) return new Response(tr(lang, "Câu hỏi trống", "Empty question"), { status: 400 });
   const sessionId = (body.session_id ?? "").trim();
-  if (!sessionId) return new Response("Missing session_id", { status: 400 });
+  if (!sessionId) return new Response(tr(lang, "Thiếu session_id", "Missing session_id"), { status: 400 });
 
   const ragPayload = {
     user_id: ctx.user_id ?? null,
@@ -60,7 +69,7 @@ export async function POST(req: NextRequest) {
     allowed_departments: ctx.allowed_departments ?? [],
     max_security_level: ctx.max_security_level ?? "internal",
     allowed_sites: ctx.allowed_sites ?? [],
-    response_language: ctx.response_language ?? "vi",
+    response_language: lang,
     conversation_context: body.conversation_context ?? null,
   };
 
@@ -114,7 +123,11 @@ export async function POST(req: NextRequest) {
           chatId = saved.chat_id ?? null;
         } catch (saveError) {
           send("warning", {
-            message: "Khong luu duoc lich su chat vao SQL Server",
+            message: tr(
+              lang,
+              "Không lưu được lịch sử chat vào SQL Server",
+              "Could not save chat history to SQL Server",
+            ),
             detail: (saveError as Error).message,
           });
         }

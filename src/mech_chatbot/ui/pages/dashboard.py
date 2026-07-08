@@ -86,7 +86,7 @@ def render_department_breakdown():
         st.bar_chart(chart_df[_col_docs])
     except Exception:
         # fallback neu thieu pandas
-        st.bar_chart({r["department"]: r["total"] for r in rows})
+        st.bar_chart({labels.dept_label(r["department"]): r["total"] for r in rows})
 
     # B6: lam noi cac phong dang co job loi
     depts_with_failures = [r for r in rows if r["failed_jobs"]]
@@ -128,6 +128,6 @@ def render_recent_failed_jobs():
     for job_id, ten_file, thu_muc, status, error_message, updated_at in rows:
         with st.expander(f"{labels.status_badge(status)} · {ten_file}"):
             st.write(f"**JobID:** {job_id}")
-            st.write("**" + t("Phòng ban:") + f"** {thu_muc}")
+            st.write("**" + t("Phòng ban:") + f"** {labels.dept_label(thu_muc)}")
             st.write("**" + t("Cập nhật:") + f"** {updated_at}")
             st.error(error_message or t("Không có thông báo lỗi."))

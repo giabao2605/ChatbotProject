@@ -29,7 +29,7 @@ SECURITY_LEVELS = ["public", "internal", "confidential"]
 
 
 def run_admin():
-    st.title("\U0001f6e0\ufe0f " + t("Qu\u1ea3n tr\u1ecb h\u1ec7 th\u1ed1ng"))
+    st.title(t("Qu\u1ea3n tr\u1ecb h\u1ec7 th\u1ed1ng"))
     st.markdown(t(
         "Duy\u1ec7t t\u00e0i li\u1ec7u pending_review, s\u1eeda metadata, v\u00e0 v\u1eadn h\u00e0nh h\u1ec7 th\u1ed1ng."
     ))
@@ -41,9 +41,9 @@ def run_admin():
         return
 
     tab_review, tab_bulk, tab_meta = st.tabs([
-        "\U0001f4cb " + t("Duy\u1ec7t t\u00e0i li\u1ec7u"),
-        "\U0001f4e6 " + t("Bulk action"),
-        "\U0001f527 " + t("S\u1eeda metadata h\u00e0ng lo\u1ea1t"),
+        t("Duy\u1ec7t t\u00e0i li\u1ec7u"),
+        t("Thao tác hàng loạt"),
+        t("S\u1eeda metadata h\u00e0ng lo\u1ea1t"),
     ])
 
     with tab_review:
@@ -279,10 +279,10 @@ def _save_meta_to_doc(doc_id, meta):
 # ---------------------------------------------------------------------------
 
 def _render_bulk_panel():
-    st.subheader(t("Bulk action trên jobs"))
+    st.subheader(t("Thao tác hàng loạt trên jobs"))
     st.caption(t(
         "Chọn nhiều job cùng lúc để publish, reject hoặc xóa. "
-        "Publish s�� chạy trực tiếp, không còn kẹt ở trạng thái publishing."
+        "Publish sẽ chạy trực tiếp, không còn kẹt ở trạng thái publishing."
     ))
     rows = list_bulk_action_jobs()
 

@@ -9,6 +9,7 @@ from mech_chatbot.auth import service as auth
 from mech_chatbot.ui import theme as ui_theme
 from mech_chatbot.ui import i18n
 from mech_chatbot.ui.i18n import t
+from mech_chatbot.ui.labels import dept_label, dept_labels_str
 
 st.set_page_config(page_title=t("Trợ Lý Tài Liệu Nội Bộ"), layout="wide", initial_sidebar_state="expanded")
 from mech_chatbot.config.validate import assert_config_valid
@@ -70,10 +71,10 @@ with st.sidebar:
     st.caption(t("Quản trị dữ liệu kỹ thuật & hỏi đáp RAG"))
 
     # Cong tac chon ngon ngu DUY NHAT: dieu khien CA giao dien lan chatbot tra loi.
-    i18n.language_selector()
+    i18n.language_selector(label=t("Ngôn ngữ"))
     st.markdown("---")
     st.markdown("**" + t("Xin chào, {name}!", name=user['display_name']) + "**")
-    st.caption(t("Phòng ban: {dept}", dept=user.get('department')))
+    st.caption(t("Phòng ban: {dept}", dept=dept_label(user.get('department')) or t("(chưa gán)")))
     st.caption(t("Role: ") + ", ".join(user.get("roles", [])))
 
     # C12: hien thi ro quyen cua nguoi dung (phong ban / khu / muc mat)
@@ -81,7 +82,7 @@ with st.sidebar:
         _allowed_depts = user.get("allowed_departments") or ([user.get("department")] if user.get("department") else [])
         _allowed_sites = user.get("allowed_sites") or []
         st.markdown("**" + t("Phòng ban được xem:") + "**")
-        st.write(", ".join([d for d in _allowed_depts if d]) or t("(chưa gán)"))
+        st.write(dept_labels_str(_allowed_depts) or t("(chưa gán)"))
         st.markdown("**" + t("Khu / Site được xem:") + "**")
         st.write(", ".join([s for s in _allowed_sites if s]) or t("(không giới hạn)"))
         st.markdown("**" + t("Mức mật tối đa:") + "**")

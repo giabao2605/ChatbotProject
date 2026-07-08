@@ -205,7 +205,7 @@ def get_chat_history(session_id, username=None, is_admin=False, user_clearance="
                 _assistant_imgs = ref_images
                 if row[0] in _redact_ids:
                     _assistant_content = (
-                        "🔒 Nội dung câu trả lời này dựa trên tài liệu MẬT mà bạn hiện "
+                        "Nội dung câu trả lời này dựa trên tài liệu MẬT mà bạn hiện "
                         "không còn quyền xem. Nội dung đã được ẩn theo phân quyền."
                     )
                     _assistant_imgs = []
@@ -227,15 +227,31 @@ def get_chat_history(session_id, username=None, is_admin=False, user_clearance="
 def clear_chat_history(session_id, username=None, is_admin=False):
     """Xoa session chat — user thuong chi xoa duoc session cua minh."""
     _ensure_engine()
-    try:
-        params = {"session_id": session_id}
-        user_filter = ""
-        if not is_admin:
-            user_filter = "AND Username = :username"
-            params["username"] = username
+    params = {"session_id": session_id}
+    user_filter = ""
+    if not is_admin:
+        user_filter = "AND Username = :username"
+        params["username"] = username
 
+    target_chat_ids_sql = f"""
+        SELECT ChatID FROM LichSuChat
+        WHERE SessionID = :session_id
+        {user_filter}
+    """
+
+    try:
         with engine.begin() as conn:
+            # DB moi co ON DELETE CASCADE, nhung DB cu co the thieu cascade.
+            # Xoa bang con truoc de thao tac xoa session khong bi chan FK.
             conn.execute(
+                text(f"DELETE FROM AnswerSource WHERE ChatID IN ({target_chat_ids_sql})"),
+                params,
+            )
+            conn.execute(
+                text(f"DELETE FROM FeedbackReview WHERE ChatID IN ({target_chat_ids_sql})"),
+                params,
+            )
+            res = conn.execute(
                 text(
                     f"""
                     DELETE FROM LichSuChat
@@ -245,5 +261,7 @@ def clear_chat_history(session_id, username=None, is_admin=False):
                 ),
                 params,
             )
+            return int(getattr(res, "rowcount", 0) or 0)
     except Exception as e:
         logger.error(f"Loi khi xoa lich su chat: {e}", exc_info=True)
+        raise

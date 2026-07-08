@@ -51,7 +51,7 @@ def run_feedback():
 
 
 def render_quality_ranking():
-    with st.expander("\U0001f4ca " + t("B\u1ea3ng x\u1ebfp h\u1ea1ng ch\u1ea5t l\u01b0\u1ee3ng t\u00e0i li\u1ec7u (P3-3)"), expanded=False):
+    with st.expander(t("B\u1ea3ng x\u1ebfp h\u1ea1ng ch\u1ea5t l\u01b0\u1ee3ng t\u00e0i li\u1ec7u (P3-3)"), expanded=False):
         st.caption(t("\u0110i\u1ec3m t\u00ednh t\u1eeb like/dislike, c\u00f3 tr\u1ecdng s\u1ed1 theo vai tr\u00f2 ng\u01b0\u1eddi \u0111\u00e1nh gi\u00e1 v\u00e0 gi\u1ea3m d\u1ea7n theo th\u1eddi gian; b\u1ecf qua feedback \u0111\u00e3 stale. \u0110i\u1ec3m th\u1ea5p = c\u1ea7n xem l\u1ea1i."))
         if st.button(t("T\u00ednh l\u1ea1i \u0111i\u1ec3m ch\u1ea5t l\u01b0\u1ee3ng"), key="recompute_quality"):
             n = recompute_doc_quality_scores()
@@ -70,7 +70,7 @@ def render_quality_ranking():
 
 
 def render_regression_panel():
-    with st.expander("\U0001f9ea " + t("B\u1ed9 ki\u1ec3m th\u1eed h\u1ed3i quy (P3-5)"), expanded=False):
+    with st.expander(t("B\u1ed9 ki\u1ec3m th\u1eed h\u1ed3i quy (P3-5)"), expanded=False):
         st.caption(t("T\u1eadp c\u00e2u h\u1ecfi chu\u1ea9n + \u0111\u00e1p \u00e1n k\u1ef3 v\u1ecdng (DocID v\u00e0/ho\u1eb7c t\u1eeb kh\u00f3a). B\u1ea5m Ch\u1ea1y h\u1ed3i quy \u0111\u1ec3 \u0111\u1ed1i chi\u1ebfu c\u00e2u tr\u1ea3 l\u1eddi hi\u1ec7n t\u1ea1i c\u1ee7a bot, ph\u00e1t hi\u1ec7n h\u1ed3i quy sau khi c\u1eadp nh\u1eadt t\u00e0i li\u1ec7u/c\u1ea5u h\u00ecnh."))
         with st.form("add_reg_q"):
             st.markdown("**" + t("Th\u00eam c\u00e2u h\u1ecfi h\u1ed3i quy") + "**")
@@ -97,7 +97,7 @@ def render_regression_panel():
         qs = list_regression_questions(active_only=False)
         st.caption(t("\u0110ang c\u00f3 {active} c\u00e2u active / {total} t\u1ed5ng.",
                      active=len([q for q in qs if q['is_active']]), total=len(qs)))
-        if st.button("\u25b6\ufe0f " + t("Ch\u1ea1y h\u1ed3i quy ngay"), key="run_regression", type="primary"):
+        if st.button(t("Ch\u1ea1y h\u1ed3i quy ngay"), key="run_regression", type="primary"):
             with st.spinner(t("\u0110ang ch\u1ea1y b\u1ed9 h\u1ed3i quy qua engine RAG...")):
                 from mech_chatbot.rag.regression import run_regression_batch
                 summary = run_regression_batch(run_by=(st.session_state.get("username") or "reviewer"))
@@ -132,7 +132,7 @@ def render_regression_panel():
 
 
 def render_maintenance_panel():
-    with st.expander("\U0001f9f9 " + t("B\u1ea3o tr\u00ec & Guardrails (P3-6)"), expanded=False):
+    with st.expander(t("B\u1ea3o tr\u00ec & Guardrails (P3-6)"), expanded=False):
         st.caption(t("D\u1ecdn d\u1eef li\u1ec7u m\u1ed3 c\u00f4i (tham chi\u1ebfu t\u1edbi t\u00e0i li\u1ec7u/chat \u0111\u00e3 xo\u00e0) \u0111\u1ec3 \u0111i\u1ec3m ch\u1ea5t l\u01b0\u1ee3ng v\u00e0 golden set kh\u00f4ng b\u1ecb sai l\u1ec7ch."))
         if st.button(t("D\u1ecdn d\u1eef li\u1ec7u m\u1ed3 c\u00f4i ngay"), key="cleanup_dangling"):
             counts = cleanup_dangling_records()
@@ -146,7 +146,7 @@ def load_feedbacks(only_pending):
 def render_feedback_item(fb):
     fid, cid, question, bot_answer, failure_type, correct_answer, added, created, doc_ver, dept, is_stale = fb
     title_q = (question or "")[:80]
-    stale_badge = " \u00b7 \u26a0\ufe0fSTALE" if is_stale else ""
+    stale_badge = " \u00b7 STALE" if is_stale else ""
     with st.expander(f"[{created}] ChatID {cid} \u00b7 v{doc_ver or '?'} \u00b7 {dept_label(dept) or '-'}{stale_badge} \u00b7 {title_q}"):
         st.write("### " + t("C\u00e2u h\u1ecfi"))
         st.write(question or "")
@@ -190,7 +190,7 @@ def render_feedback_item(fb):
             st.rerun()
 
         st.divider()
-        if st.button("\U0001f5d1\ufe0f " + t("X\u00f3a feedback"), key=f"del_fb_{fid}"):
+        if st.button(t("X\u00f3a feedback"), key=f"del_fb_{fid}"):
             st.session_state[f"confirm_del_fb_{fid}"] = True
         if st.session_state.get(f"confirm_del_fb_{fid}"):
             st.warning(t("X\u00e1c nh\u1eadn x\u00f3a v\u0129nh vi\u1ec5n feedback n\u00e0y? Kh\u00f4ng th\u1ec3 ho\u00e0n t\u00e1c."))

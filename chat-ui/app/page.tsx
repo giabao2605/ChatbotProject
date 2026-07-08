@@ -37,6 +37,65 @@ type SessionsResponse = {
   sessions?: SessionItem[];
 };
 
+type Lang = "vi" | "en";
+
+const COPY = {
+  vi: {
+    newChat: "Cuộc trò chuyện mới",
+    searchHistory: "Tìm kiếm lịch sử...",
+    noMatchingHistory: "Chưa có lịch sử phù hợp.",
+    delete: "Xóa",
+    title: "Trợ lý tài liệu nội bộ",
+    subtitle: "Dữ liệu nội bộ & RAG Engine",
+    mobileNewChat: "Chat mới",
+    greeting: "Xin chào, tôi có thể giúp gì cho bạn?",
+    intro:
+      "Đặt câu hỏi về tài liệu, quy trình, chính sách hoặc dữ liệu nội bộ. Tôi sẽ tìm kiếm và trả lời bạn dựa trên cơ sở dữ liệu của chúng ta.",
+    missingContext:
+      "Thiếu thông tin phiên đăng nhập. Hãy mở chat từ tab Chatbot trong Streamlit.",
+    warning: "Cảnh báo",
+    unknownError: "Lỗi không xác định",
+    errorPrefix: "Lỗi",
+    uploadedImageAlt: "Ảnh upload",
+    filePrefix: "File",
+    references: "Nguồn tham khảo",
+    helpful: "Hữu ích",
+    notGood: "Không tốt",
+    removeFile: "Bỏ file",
+    upload: "Tải lên",
+    inputPlaceholder: "Nhập tin nhắn vào đây...",
+    send: "Gửi",
+    imageOnlyUpload: "Upload trong chat chỉ hỗ trợ hình ảnh.",
+  },
+  en: {
+    newChat: "New conversation",
+    searchHistory: "Search history...",
+    noMatchingHistory: "No matching history.",
+    delete: "Delete",
+    title: "Internal Document Assistant",
+    subtitle: "Internal data & RAG Engine",
+    mobileNewChat: "New chat",
+    greeting: "Hello, how can I help you?",
+    intro:
+      "Ask about documents, processes, policies, or internal data. I will search and answer based on our knowledge base.",
+    missingContext:
+      "Missing login session information. Open chat from the Chatbot tab in Streamlit.",
+    warning: "Warning",
+    unknownError: "Unknown error",
+    errorPrefix: "Error",
+    uploadedImageAlt: "Uploaded image",
+    filePrefix: "File",
+    references: "References",
+    helpful: "Helpful",
+    notGood: "Not good",
+    removeFile: "Remove file",
+    upload: "Upload",
+    inputPlaceholder: "Type your message here...",
+    send: "Send",
+    imageOnlyUpload: "Chat upload only supports images.",
+  },
+} satisfies Record<Lang, Record<string, string>>;
+
 function createSessionId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -46,6 +105,7 @@ function createSessionId() {
 
 export default function ChatPage() {
   const [ctx, setCtx] = useState<string | null>(null);
+  const [lang, setLang] = useState<Lang>("vi");
   const [sessionId, setSessionId] = useState(createSessionId);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [search, setSearch] = useState("");
@@ -65,7 +125,10 @@ export default function ChatPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setCtx(params.get("ctx"));
+    setLang(params.get("lang")?.toLowerCase().startsWith("en") ? "en" : "vi");
   }, []);
+
+  const text = COPY[lang];
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -215,7 +278,7 @@ export default function ChatPage() {
     if (!question || busy) return;
     if (!ctx) {
       setError(
-        "Thieu thong tin phien dang nhap. Hay mo chat tu tab Chatbot trong Streamlit.",
+        text.missingContext,
       );
       return;
     }
@@ -291,7 +354,7 @@ export default function ChatPage() {
             appendToLast(data.text as string);
           } else if (ev === "warning") {
             setWarning(
-              `${data.message || "Canh bao"}${data.detail ? `: ${data.detail}` : ""}`,
+              `${data.message || text.warning}${data.detail ? `: ${data.detail}` : ""}`,
             );
           } else if (ev === "done") {
             setPartIds((data.new_part_ids as string[]) ?? []);
@@ -305,9 +368,9 @@ export default function ChatPage() {
             await refreshSessions();
           } else if (ev === "error") {
             throw new Error(
-              (data.detail as string) ||
+                (data.detail as string) ||
                 (data.message as string) ||
-                "Loi khong xac dinh",
+                text.unknownError,
             );
           }
         }
@@ -320,10 +383,10 @@ export default function ChatPage() {
         if (last && last.role === "assistant") {
           copy[copy.length - 1] = {
             ...last,
-            content: last.content || `Loi: ${msg}`,
+            content: last.content || `${text.errorPrefix}: ${msg}`,
           };
         } else {
-          copy.push({ role: "assistant", content: `Loi: ${msg}` });
+          copy.push({ role: "assistant", content: `${text.errorPrefix}: ${msg}` });
         }
         return copy;
       });
@@ -366,14 +429,14 @@ export default function ChatPage() {
             disabled={busy}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            Cuoc tro chuyen moi
+            {text.newChat}
           </button>
           <div className="relative mt-4">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Tim kiem lich su..."
+              placeholder={text.searchHistory}
               className="w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 py-2 text-sm outline-none transition-all hover:border-white/20 focus:border-emerald-500/50 focus:bg-white/10 shadow-inner placeholder:text-gray-500"
             />
           </div>
@@ -408,13 +471,13 @@ export default function ChatPage() {
                 disabled={busy}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                Xoa
+                {text.delete}
               </button>
             </div>
           ))}
           {filteredSessions.length === 0 ? (
             <p className="px-2 py-4 text-sm text-gray-500">
-              Chua co lich su phu hop.
+              {text.noMatchingHistory}
             </p>
           ) : null}
         </div>
@@ -428,10 +491,10 @@ export default function ChatPage() {
             </div>
             <div>
               <h1 className="text-base font-semibold text-gray-100 tracking-tight">
-                Tro ly tai lieu noi bo
+                {text.title}
               </h1>
               <p className="text-xs text-gray-400 font-medium">
-                Du lieu noi bo & RAG Engine
+                {text.subtitle}
               </p>
             </div>
           </div>
@@ -440,7 +503,7 @@ export default function ChatPage() {
             className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-gray-200 transition-all hover:bg-white/10 hover:border-white/20 md:hidden"
             disabled={busy}
           >
-            Chat moi
+            {text.mobileNewChat}
           </button>
         </header>
 
@@ -451,9 +514,9 @@ export default function ChatPage() {
                 <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.15)]">
                    <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="url(#emerald-gradient)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><defs><linearGradient id="emerald-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#34d399" /><stop offset="100%" stopColor="#14b8a6" /></linearGradient></defs><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>
                 </div>
-                <h2 className="text-2xl font-semibold bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent">Xin chao, toi co the giup gi cho ban?</h2>
+                <h2 className="text-2xl font-semibold bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent">{text.greeting}</h2>
                 <p className="mt-3 text-sm text-gray-400 max-w-md leading-relaxed">
-                  Dat cau hoi ve tai lieu, quy trinh, chinh sach hoac du lieu noi bo. Toi se tim kiem va tra loi ban dua tren co so du lieu cua chung ta.
+                  {text.intro}
                 </p>
               </div>
             )}
@@ -473,12 +536,12 @@ export default function ChatPage() {
                   {m.imageUrl ? (
                     <img
                       src={m.imageUrl}
-                      alt={m.imageName || "Anh upload"}
+                      alt={m.imageName || text.uploadedImageAlt}
                       className="mb-3 max-h-64 rounded-md border border-white/10 object-contain"
                     />
                   ) : m.imageName ? (
                     <div className="mb-2 text-xs text-gray-400">
-                      File: {m.imageName}
+                      {text.filePrefix}: {m.imageName}
                     </div>
                   ) : null}
 
@@ -499,7 +562,7 @@ export default function ChatPage() {
                   {m.refText ? (
                     <details className="mt-3 rounded-md bg-black/20 p-2 text-xs text-gray-400">
                       <summary className="cursor-pointer select-none text-gray-300">
-                        Nguon tham khao
+                        {text.references}
                       </summary>
                       <div className="mt-2 whitespace-pre-wrap">{m.refText}</div>
                     </details>
@@ -516,7 +579,7 @@ export default function ChatPage() {
                         }`}
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
-                        Huu ich
+                        {text.helpful}
                       </button>
                       <button
                         onClick={() => sendFeedback(m.chatId as number, -1)}
@@ -527,7 +590,7 @@ export default function ChatPage() {
                         }`}
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path></svg>
-                        Khong tot
+                        {text.notGood}
                       </button>
                     </div>
                   ) : null}
@@ -564,14 +627,14 @@ export default function ChatPage() {
                   onClick={clearSelectedFile}
                   className="ml-3 p-1 text-gray-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition-colors"
                   disabled={busy}
-                  title="Bo file"
+                  title={text.removeFile}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
               </div>
             ) : null}
             <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-neutral-900/80 backdrop-blur-2xl p-2 shadow-2xl transition-all focus-within:border-emerald-500/40 focus-within:ring-1 focus-within:ring-emerald-500/40">
-              <label className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition hover:bg-white/10 hover:text-gray-200" title="Tai len">
+              <label className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition hover:bg-white/10 hover:text-gray-200" title={text.upload}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                 <input
                   ref={fileRef}
@@ -588,14 +651,14 @@ export default function ChatPage() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={onKeyDown}
                 rows={1}
-                placeholder="Nhap tin nhan vao day..."
+                placeholder={text.inputPlaceholder}
                 className="max-h-40 flex-1 resize-none bg-transparent px-2 py-2.5 text-[15px] text-gray-100 outline-none placeholder:text-gray-500"
               />
               <button
                 onClick={send}
                 disabled={busy || !input.trim()}
                 className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-neutral-950 transition-all hover:from-emerald-400 hover:to-teal-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-400 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)]"
-                title="Gui"
+                title={text.send}
               >
                 {busy ? (
                    <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
@@ -605,7 +668,7 @@ export default function ChatPage() {
               </button>
             </div>
             <p className="mt-3 text-center text-xs font-medium text-gray-500/70">
-              Upload trong chat chi ho tro hinh anh.
+              {text.imageOnlyUpload}
             </p>
           </div>
         </footer>

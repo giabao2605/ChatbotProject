@@ -2,7 +2,7 @@
 
 Muc tieu (A1 + B4):
 - A1: Nhan truong (field label) thay doi theo linh vuc (domain) cua tai lieu.
-- B4: status_badge() tra ve icon + nhan thong nhat, dung markdown.
+- B4: status_badge() tra ve nhan thong nhat, dung markdown.
 
 Dung cho moi domain / moi loai file. Khong phu thuoc DB nen luon import duoc.
 """
@@ -79,41 +79,36 @@ def is_field_visible(domain, field_key):
 # ----------------------------- B4: Status badges -----------------------------
 STATUS_BADGES = {
     # Review / lifecycle
-    "pending_review": ("\U0001f7e1", "Ch\u1edd duy\u1ec7t"),
-    "approved": ("\u2705", "\u0110\u00e3 duy\u1ec7t"),
-    "published": ("\U0001f7e2", "\u0110\u00e3 xu\u1ea5t b\u1ea3n"),
-    "draft": ("\U0001f4dd", "B\u1ea3n nh\u00e1p"),
-    "rejected": ("\u274c", "T\u1eeb ch\u1ed1i"),
-    "archived": ("\U0001f4e6", "L\u01b0u tr\u1eef"),
-    "superseded": ("\U0001f501", "\u0110\u00e3 thay th\u1ebf"),
+    "pending_review": ("", "Ch\u1edd duy\u1ec7t"),
+    "approved": ("", "\u0110\u00e3 duy\u1ec7t"),
+    "published": ("", "\u0110\u00e3 xu\u1ea5t b\u1ea3n"),
+    "draft": ("", "B\u1ea3n nh\u00e1p"),
+    "rejected": ("", "T\u1eeb ch\u1ed1i"),
+    "archived": ("", "L\u01b0u tr\u1eef"),
+    "superseded": ("", "\u0110\u00e3 thay th\u1ebf"),
     # Job / ingest pipeline
-    "pending": ("\u23f3", "\u0110ang ch\u1edd"),
-    "pending_retry": ("\U0001f504", "Ch\u1edd th\u1eed l\u1ea1i"),
-    "classifying": ("\U0001f50d", "\u0110ang ph\u00e2n lo\u1ea1i"),
-    "extracting": ("\u2699\ufe0f", "\u0110ang b\u00f3c t\u00e1ch"),
-    "embedding": ("\U0001f9ee", "\u0110ang t\u1ea1o vector"),
-    "publishing": ("\U0001f4e4", "\u0110ang xu\u1ea5t b\u1ea3n"),
-    "failed": ("\U0001f534", "L\u1ed7i"),
-    "waiting_quota": ("\u23f8\ufe0f", "Ch\u1edd quota"),
-    "canceled": ("\U0001f6b7", "\u0110\u00e3 h\u1ee7y"),
+    "pending": ("", "\u0110ang ch\u1edd"),
+    "pending_retry": ("", "Ch\u1edd th\u1eed l\u1ea1i"),
+    "classifying": ("", "\u0110ang ph\u00e2n lo\u1ea1i"),
+    "extracting": ("", "\u0110ang b\u00f3c t\u00e1ch"),
+    "embedding": ("", "\u0110ang t\u1ea1o vector"),
+    "publishing": ("", "\u0110ang xu\u1ea5t b\u1ea3n"),
+    "failed": ("", "L\u1ed7i"),
+    "waiting_quota": ("", "Ch\u1edd quota"),
+    "canceled": ("", "\u0110\u00e3 h\u1ee7y"),
     # Quality gate
-    "blocked": ("\U0001f6ab", "B\u1ecb ch\u1eb7n (ch\u1ea5t l\u01b0\u1ee3ng)"),
-    "passed": ("\u2705", "\u0110\u1ea1t"),
-    "warning": ("\u26a0\ufe0f", "C\u1ea3nh b\u00e1o"),
+    "blocked": ("", "B\u1ecb ch\u1eb7n (ch\u1ea5t l\u01b0\u1ee3ng)"),
+    "passed": ("", "\u0110\u1ea1t"),
+    "warning": ("", "C\u1ea3nh b\u00e1o"),
 }
 
 
-def status_badge(status, fallback_icon=""):
-    """Tra ve nhan trang thai thong nhat, khong kem icon."""
+def status_badge(status, fallback_label=""):
+    """Tra ve nhan trang thai thong nhat."""
     if not status:
         return t("(không rõ)")
-    _, label = STATUS_BADGES.get(str(status).strip().lower(), (fallback_icon, str(status)))
+    _, label = STATUS_BADGES.get(str(status).strip().lower(), (fallback_label, str(status)))
     return t(label)
-
-
-def status_icon(status):
-    """UI khong dung icon trang thai."""
-    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -138,13 +133,16 @@ DEPARTMENT_LABELS = {
 }
 
 # Hau to trang thai admin co the gan vao ma phong ban khi hien thi.
-_DEPT_DISPLAY_SUFFIXES = (" (disabled)", " (archived)")
+_DEPT_DISPLAY_SUFFIXES = {
+    " (disabled)": {"vi": "tạm tắt", "en": "disabled"},
+    " (archived)": {"vi": "lưu trữ", "en": "archived"},
+}
 
 
 def dept_label(code):
-    """Hien thi phong ban dang 'Nghia (MA)'. Giu MA goc, fallback ve MA neu la.
+    """Hien thi phong ban dang 'MA - Nghia'. Giu MA goc, fallback ve MA neu la.
 
-    - VI: 'Nhân sự (HR)'  | EN: 'Human Resources (HR)'
+    - VI: 'HR - Nhân sự'  | EN: 'HR - Human Resources'
     - Ten trung ma -> chi hien mot lan (vd ISO).
     - Giu hau to ' (disabled)' / ' (archived)'.
     - code rong/None -> ''.
@@ -154,9 +152,10 @@ def dept_label(code):
     raw = str(code)
     core = raw
     suffix = ""
-    for suf in _DEPT_DISPLAY_SUFFIXES:
+    for suf, suffix_names in _DEPT_DISPLAY_SUFFIXES.items():
         if core.endswith(suf):
-            suffix = suf
+            lang = get_lang()
+            suffix = f" ({suffix_names.get(lang) or suffix_names.get('vi') or suf.strip()})"
             core = core[: -len(suf)]
             break
     names = DEPARTMENT_LABELS.get(core)
@@ -166,7 +165,7 @@ def dept_label(code):
         name = core
     if name == core:
         return f"{core}{suffix}"
-    return f"{name} ({core}){suffix}"
+    return f"{core} - {name}{suffix}"
 
 
 def dept_labels_str(codes, sep=", "):
@@ -176,24 +175,26 @@ def dept_labels_str(codes, sep=", "):
     return sep.join(dept_label(c) for c in codes if c)
 
 
-# Thuat ngu chuyen nganh: giu tu goc, them nghia tieng Viet trong ngoac khi o che do VI.
+# Thuat ngu chuyen nganh: giu tu goc, them nghia theo ngon ngu dang chon.
 GLOSSARY = {
-    "Domain": "lĩnh vực",
-    "RAG": "truy hồi tăng cường",
-    "Qdrant": "cơ sở dữ liệu vector",
-    "metadata": "siêu dữ liệu",
-    "variant": "biến thể",
-    "payload": "dữ liệu đính kèm",
-    "embedding": "vector ngữ nghĩa",
-    "worker": "tiến trình xử lý nền",
+    "Domain": {"vi": "lĩnh vực", "en": "domain"},
+    "RAG": {"vi": "truy hồi tăng cường", "en": "retrieval augmented generation"},
+    "Qdrant": {"vi": "cơ sở dữ liệu vector", "en": "vector database"},
+    "metadata": {"vi": "siêu dữ liệu", "en": "metadata"},
+    "variant": {"vi": "biến thể", "en": "variant"},
+    "payload": {"vi": "dữ liệu đính kèm", "en": "payload data"},
+    "embedding": {"vi": "vector ngữ nghĩa", "en": "semantic vector"},
+    "worker": {"vi": "tiến trình xử lý nền", "en": "background worker"},
 }
 
 
 def gloss(term):
-    """Giu nguyen thuat ngu; khi o che do tieng Viet thi them nghia trong ngoac."""
+    """Giu nguyen thuat ngu va them nghia theo ngon ngu hien tai."""
     if not term:
         return ""
-    meaning = GLOSSARY.get(term)
-    if meaning and get_lang() == "vi":
-        return f"{term} ({meaning})"
+    meanings = GLOSSARY.get(term)
+    if meanings:
+        meaning = meanings.get(get_lang()) or meanings.get("vi")
+        if meaning and meaning.strip().lower() != str(term).strip().lower():
+            return f"{term} - {meaning}"
     return term

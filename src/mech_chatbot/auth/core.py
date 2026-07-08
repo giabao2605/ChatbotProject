@@ -21,6 +21,28 @@ from mech_chatbot.config.logging import logger
 from mech_chatbot.auth import rate_limit
 from mech_chatbot.auth.security_policy import resolve_clearance, DEFAULT_MAX_SECURITY_LEVEL
 
+_VALID_PREFERRED_LANGUAGES = {"vi", "en"}
+_DEFAULT_PREFERRED_LANGUAGE = "vi"
+
+
+def _normalize_preferred_language(lang):
+    value = str(lang or "").strip().lower()
+    if value in _VALID_PREFERRED_LANGUAGES:
+        return value
+    return _DEFAULT_PREFERRED_LANGUAGE
+
+
+def _load_user_preferred_language(conn, user_id):
+    try:
+        row = conn.execute(
+            text("SELECT PreferredLanguage FROM Users WHERE UserID = :uid"),
+            {"uid": user_id},
+        ).fetchone()
+        return _normalize_preferred_language(row[0] if row else None)
+    except Exception:
+        # DB chua chay migration van cho login binh thuong.
+        return _DEFAULT_PREFERRED_LANGUAGE
+
 
 def _build_user_profile(conn, user):
     roles = conn.execute(
@@ -102,7 +124,32 @@ def _build_user_profile(conn, user):
         "allowed_departments": allowed_departments,
         "max_security_level": max_security_level,
         "allowed_sites": allowed_sites,
+        "preferred_language": _load_user_preferred_language(conn, user[0]),
     }
+
+
+def update_user_preferred_language(user_id, lang):
+    """Luu ngon ngu UI uu tien cho user. Tra ve True neu update thanh cong."""
+    normalized = str(lang or "").strip().lower()
+    if normalized not in _VALID_PREFERRED_LANGUAGES:
+        return False
+    if engine is None or user_id in (None, ""):
+        return False
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("UPDATE Users SET PreferredLanguage = :lang WHERE UserID = :uid"),
+                {"lang": normalized, "uid": user_id},
+            )
+        return getattr(result, "rowcount", 1) != 0
+    except Exception as e:
+        logger.error(
+            "Loi cap nhat ngon ngu uu tien cho user_id=%s: %s",
+            user_id,
+            e,
+            exc_info=True,
+        )
+        return False
 
 
 def load_user_profile(user_id=None, username=None):

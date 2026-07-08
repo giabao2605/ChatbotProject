@@ -19,9 +19,10 @@ import bcrypt  # noqa: E402
 
 
 class _FakeResult:
-    def __init__(self, one=None, many=None):
+    def __init__(self, one=None, many=None, rowcount=1):
         self._one = one
         self._many = many or []
+        self.rowcount = rowcount
 
     def fetchone(self):
         return self._one
@@ -53,6 +54,9 @@ class _FakeEngine:
         self._conn = conn
 
     def connect(self):
+        return self._conn
+
+    def begin(self):
         return self._conn
 
 
@@ -100,6 +104,7 @@ def test_successful_login_returns_profile(monkeypatch):
         _FakeResult(many=[("Technical",)]),         # UserDepartments
         _FakeResult(one=("internal",)),            # UserSecurityClearance
         _FakeResult(many=[("HN",)]),               # UserSites
+        _FakeResult(one=("en",)),                  # PreferredLanguage
     ]
     monkeypatch.setattr(core, "engine", _FakeEngine(_FakeConn(script)))
     # tranh goi DB that trong nhanh loc phong ban da archive
@@ -115,6 +120,7 @@ def test_successful_login_returns_profile(monkeypatch):
     assert "Technical" in out["allowed_departments"]
     assert out["max_security_level"] == "internal"
     assert out["allowed_sites"] == ["HN"]
+    assert out["preferred_language"] == "en"
 
 
 def test_load_user_profile_returns_current_db_permissions(monkeypatch):
@@ -125,6 +131,7 @@ def test_load_user_profile_returns_current_db_permissions(monkeypatch):
         _FakeResult(many=[("Technical",)]),        # UserDepartments
         _FakeResult(one=("public",)),              # UserSecurityClearance
         _FakeResult(many=[("HN",)]),               # UserSites
+        _FakeResult(one=("en",)),                  # PreferredLanguage
     ]
     monkeypatch.setattr(core, "engine", _FakeEngine(_FakeConn(script)))
     import mech_chatbot.db.repository as repo
@@ -138,6 +145,7 @@ def test_load_user_profile_returns_current_db_permissions(monkeypatch):
     assert out["roles"] == ["viewer"]
     assert out["allowed_departments"] == ["Technical"]
     assert out["max_security_level"] == "public"
+    assert out["preferred_language"] == "en"
 
 
 def test_load_user_profile_rejects_mismatched_username(monkeypatch):
@@ -146,3 +154,18 @@ def test_load_user_profile_rejects_mismatched_username(monkeypatch):
     monkeypatch.setattr(core, "engine", _FakeEngine(conn))
 
     assert core.load_user_profile(user_id=7, username="alice") is None
+
+
+def test_update_user_preferred_language_persists_valid_lang(monkeypatch):
+    conn = _FakeConn([_FakeResult(rowcount=1)])
+    monkeypatch.setattr(core, "engine", _FakeEngine(conn))
+
+    assert core.update_user_preferred_language(7, "en") is True
+
+
+def test_update_user_preferred_language_rejects_invalid_lang(monkeypatch):
+    conn = _FakeConn([_FakeResult(rowcount=1)])
+    monkeypatch.setattr(core, "engine", _FakeEngine(conn))
+
+    assert core.update_user_preferred_language(7, "fr") is False
+    assert conn._i == 0

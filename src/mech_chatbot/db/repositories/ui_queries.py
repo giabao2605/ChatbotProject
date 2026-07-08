@@ -488,7 +488,115 @@ def update_user_active_and_roles(user_id, is_active, add_roles, del_roles):
                                 DELETE ur FROM UserRoles ur
                                 JOIN Roles r ON ur.RoleID = r.RoleID
                                 WHERE ur.UserID = :uid AND r.RoleName = :role
-                            """), {"uid": user_id, "role": _role})
+			"""), {"uid": user_id, "role": _role})
+
+
+def _user_is_admin(conn, user_id):
+	row = conn.execute(text("""
+		SELECT 1
+		FROM Users u
+		JOIN UserRoles ur ON ur.UserID = u.UserID
+		JOIN Roles r ON r.RoleID = ur.RoleID
+		WHERE u.UserID = :uid AND r.RoleName = 'admin'
+	"""), {"uid": user_id}).fetchone()
+	return bool(row)
+
+
+def _other_active_admin_count(conn, user_id):
+	row = conn.execute(text("""
+		SELECT COUNT(*)
+		FROM Users u
+		JOIN UserRoles ur ON ur.UserID = u.UserID
+		JOIN Roles r ON r.RoleID = ur.RoleID
+		WHERE u.UserID <> :uid
+		  AND u.IsActive = 1
+		  AND r.RoleName = 'admin'
+	"""), {"uid": user_id}).fetchone()
+	return int(row[0]) if row else 0
+
+
+def set_user_active_status(user_id, is_active, actor_username=None, actor_id=None):
+	with engine.begin() as conn:
+		target = conn.execute(text("""
+			SELECT UserID, Username, DisplayName, IsActive
+			FROM Users
+			WHERE UserID = :uid
+		"""), {"uid": user_id}).fetchone()
+		if not target:
+			return {"ok": False, "message": "Không tìm thấy tài khoản."}
+		if actor_id is not None and int(actor_id) == int(user_id) and not is_active:
+			return {"ok": False, "message": "Không thể vô hiệu hóa tài khoản đang đăng nhập."}
+		if not is_active and _user_is_admin(conn, user_id) and _other_active_admin_count(conn, user_id) <= 0:
+			return {"ok": False, "message": "Không thể vô hiệu hóa admin hoạt động cuối cùng."}
+
+		old_active = bool(target[3])
+		conn.execute(
+			text("UPDATE Users SET IsActive = :active WHERE UserID = :uid"),
+			{"active": 1 if is_active else 0, "uid": user_id},
+		)
+		conn.execute(text("""
+			INSERT INTO AuditLog (UserID, Username, Action, EntityType, EntityID, Details)
+			VALUES (:actor_id, :actor_username, :action, 'Users', :target_id, :details)
+		"""), {
+			"actor_id": actor_id,
+			"actor_username": actor_username,
+			"action": "user_activate" if is_active else "user_disable",
+			"target_id": user_id,
+			"details": f"target={target[1]}; from={old_active}; to={bool(is_active)}",
+		})
+	return {"ok": True, "message": "Đã cập nhật trạng thái tài khoản."}
+
+
+def delete_user_account(user_id, actor_username=None, actor_id=None):
+	with engine.begin() as conn:
+		target = conn.execute(text("""
+			SELECT UserID, Username, DisplayName, IsActive
+			FROM Users
+			WHERE UserID = :uid
+		"""), {"uid": user_id}).fetchone()
+		if not target:
+			return {"ok": False, "message": "Không tìm thấy tài khoản."}
+		if actor_id is not None and int(actor_id) == int(user_id):
+			return {"ok": False, "message": "Không thể xóa tài khoản đang đăng nhập."}
+		if _user_is_admin(conn, user_id) and _other_active_admin_count(conn, user_id) <= 0:
+			return {"ok": False, "message": "Không thể xóa admin hoạt động cuối cùng."}
+
+		username = target[1]
+		conn.execute(text("""
+			IF OBJECT_ID(N'dbo.AccessRequests', N'U') IS NOT NULL
+				UPDATE dbo.AccessRequests
+				SET Status = 'rejected',
+					ReviewerID = :actor_id,
+					ReviewerUsername = :actor_username,
+					ReviewNote = COALESCE(ReviewNote + CHAR(10), '') + :note,
+					ReviewedAt = GETDATE()
+				WHERE UserID = :uid AND Status = 'pending'
+		"""), {
+			"uid": user_id,
+			"actor_id": actor_id,
+			"actor_username": actor_username,
+			"note": "Account deleted by admin.",
+		})
+		conn.execute(text("DELETE FROM UserRoles WHERE UserID = :uid"), {"uid": user_id})
+		conn.execute(text("DELETE FROM UserDepartments WHERE UserID = :uid"), {"uid": user_id})
+		conn.execute(text("DELETE FROM UserSites WHERE UserID = :uid"), {"uid": user_id})
+		conn.execute(text("DELETE FROM UserSecurityClearance WHERE UserID = :uid"), {"uid": user_id})
+		conn.execute(text("""
+			IF OBJECT_ID(N'dbo.LoginAttempts', N'U') IS NOT NULL
+				DELETE FROM dbo.LoginAttempts WHERE Username = :username
+		"""), {"username": username})
+		res = conn.execute(text("DELETE FROM Users WHERE UserID = :uid"), {"uid": user_id})
+		deleted = getattr(res, "rowcount", 0) or 0
+		conn.execute(text("""
+			INSERT INTO AuditLog (UserID, Username, Action, EntityType, EntityID, Details)
+			VALUES (:actor_id, :actor_username, 'user_delete', 'Users', :target_id, :details)
+		"""), {
+			"actor_id": actor_id,
+			"actor_username": actor_username,
+			"target_id": user_id,
+			"details": f"target={username}; deleted={deleted}",
+		})
+	return {"ok": bool(deleted), "deleted": deleted, "message": "Đã xóa tài khoản." if deleted else "Xóa tài khoản thất bại."}
 
 
 def update_user_password(user_id, password_hash):
@@ -596,6 +704,8 @@ __all__ = [
 	"count_dept_pending_jobs",
 	"list_users_basic",
 	"update_user_active_and_roles",
+	"set_user_active_status",
+	"delete_user_account",
 	"update_user_password",
 	"create_user_with_roles",
 	"get_user_roles",

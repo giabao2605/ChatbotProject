@@ -20,7 +20,7 @@ from typing import Any
 
 import streamlit as st
 
-LANGUAGES: dict[str, str] = {"vi": "Tieng Viet", "en": "English"}
+LANGUAGES: dict[str, str] = {"vi": "Tiếng Việt", "en": "English"}
 DEFAULT_LANG = "vi"
 
 _SESSION_KEY = "_mech_lang"
@@ -73,13 +73,35 @@ _NORM_EN: dict[str, str] = {_norm(k): v for k, v in _EN.items()}
 
 def get_lang() -> str:
     """Tra ve lang hien tai (vi/en). Mac dinh vi."""
-    return st.session_state.get(_SESSION_KEY, DEFAULT_LANG)
+    session_lang = st.session_state.get(_SESSION_KEY)
+    if session_lang in LANGUAGES:
+        return session_lang
+
+    user = st.session_state.get("user") or {}
+    if isinstance(user, dict):
+        preferred = user.get("preferred_language")
+        if preferred in LANGUAGES:
+            st.session_state[_SESSION_KEY] = preferred
+            return preferred
+
+    return DEFAULT_LANG
 
 
 def set_lang(lang: str) -> None:
-    """Dat lang trong session."""
+    """Dat lang trong session va luu theo tai khoan neu da dang nhap."""
     if lang in LANGUAGES:
         st.session_state[_SESSION_KEY] = lang
+        user = st.session_state.get("user") or {}
+        if isinstance(user, dict):
+            user["preferred_language"] = lang
+            user_id = user.get("user_id")
+            if user_id not in (None, ""):
+                try:
+                    from mech_chatbot.auth.core import update_user_preferred_language
+
+                    update_user_preferred_language(user_id, lang)
+                except Exception:
+                    pass
 
 
 def t(text: str, **kwargs: Any) -> str:

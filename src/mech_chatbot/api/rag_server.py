@@ -296,12 +296,12 @@ async def delete_chat_history(req: SessionHistoryRequest):
     from mech_chatbot.services import clear_chat_history
 
     profile = resolve_user_profile(req)
-    clear_chat_history(
+    deleted = clear_chat_history(
         req.session_id,
         username=profile.get("username"),
         is_admin=_is_admin(profile),
     )
-    return {"ok": True}
+    return {"ok": True, "deleted": deleted}
 
 
 @app.post("/chat/history/save", tags=["Chat History"], dependencies=[Depends(require_service_auth)])

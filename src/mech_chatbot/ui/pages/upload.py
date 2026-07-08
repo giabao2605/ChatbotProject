@@ -223,7 +223,7 @@ def run_upload():
         elif uploaded_files and len(uploaded_files) > 1:
             _batch_info_placeholder.info(
                 t(
-                    "ℹ️ Đang chuẩn bị upload **{n} file** — tất cả sẽ được gán vào phòng **{dept}**. "
+                    "Đang chuẩn bị upload **{n} file** — tất cả sẽ được gán vào phòng **{dept}**. "
                     "Nếu các file thuộc nhiều phòng khác nhau, hãy chuyển sang chế độ gán riêng từng file.",
                     n=len(uploaded_files), dept=dept_label(target_department),
                 )
@@ -286,14 +286,14 @@ def save_uploaded_files(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     )
 
-    with st.status(t("Đang l��u file và tạo job ingest..."), expanded=True) as status_box:
+    with st.status(t("Đang lưu file và tạo job ingest..."), expanded=True) as status_box:
         if file_assignments:
             st.write(
                 t("Chế độ nhiều phòng ban: mỗi file sẽ được lưu và tạo job theo phòng bạn đã gán riêng.")
             )
         else:
             st.write(
-                f"" + t("Phòng:") + f" **{target_department}** | Domain: **{domain}** | "
+                f"" + t("Phòng:") + f" **{dept_label(target_department)}** | Domain: **{domain}** | "
                 + t("Mức mật:") + f" **{security_level}**"
                 + (f" | Site: **{site}**" if site else "")
             )
@@ -338,19 +338,19 @@ def save_uploaded_files(
                     success_count += 1
                     st.write(
                         f"[{uploaded_file.name}] → JobID `{job_id}` · "
-                        + t("Phòng") + f": `{_target_department}`"
+                        + t("Phòng") + f": `{dept_label(_target_department)}`"
                     )
                 else:
                     fail_count += 1
                     st.write(
                         f"[{uploaded_file.name}] → " + t("Không tạo được job")
-                        + f" · " + t("Phòng") + f": `{_target_department}`"
+                        + f" · " + t("Phòng") + f": `{dept_label(_target_department)}`"
                     )
             except Exception as e:
                 fail_count += 1
                 st.write(
                     f"[{uploaded_file.name}] → " + t("Lỗi: {e}", e=e)
-                    + f" · " + t("Phòng") + f": `{_target_department}`"
+                    + f" · " + t("Phòng") + f": `{dept_label(_target_department)}`"
                 )
 
         if fail_count == 0:

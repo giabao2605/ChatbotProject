@@ -27,7 +27,7 @@ def run_audit():
         username_filter = st.text_input(t("L\u1ecdc username"), key="audit_username")
     with c3:
         only_confidential = st.checkbox(
-            "\U0001f512 " + t("Ch\u1ec9 \u0111\u1ecdc t\u00e0i li\u1ec7u m\u1eadt"),
+            t("Ch\u1ec9 \u0111\u1ecdc t\u00e0i li\u1ec7u m\u1eadt"),
             help=t("Ch\u1ec9 hi\u1ec3n th\u1ecb c\u00e1c l\u01b0\u1ee3t truy c\u1eadp t\u00e0i li\u1ec7u confidential (action read_confidential)."),
             key="audit_confidential",
         )
@@ -89,7 +89,7 @@ def run_audit():
             writer.writerow([r[0], r[1], r[2], r[3], r[4], r[5], r[6]])
         csv_bytes = buf.getvalue().encode("utf-8-sig")
     st.download_button(
-        "\u2b07\ufe0f " + t("T\u1ea3i CSV"),
+        t("T\u1ea3i CSV"),
         data=csv_bytes,
         file_name=f"audit_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",

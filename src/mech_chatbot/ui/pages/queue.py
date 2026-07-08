@@ -106,8 +106,8 @@ def run_queue():
                 if st.checkbox(t("Chọn Job {job_id} · {name}", job_id=job_id, name=ten_file), value=select_all_jobs, key=f"queue_pick_{job_id}"):
                     selected_job_ids.append(job_id)
 
-            prio_badge = ("\U0001f525 GAP" if (priority or 100) < 50
-                          else ("\u2b07\ufe0f " + t("th\u1ea5p") if (priority or 100) > 150
+            prio_badge = ("GAP" if (priority or 100) < 50
+                          else (t("th\u1ea5p") if (priority or 100) > 150
                                 else t("th\u01b0\u1eddng")))
             with st.expander(
                 f"{labels.status_badge(status)} \u00b7 {ten_file} (Job: {job_id}) \u00b7 "

@@ -83,6 +83,9 @@ def login_screen():
         user_data = authenticate_user(username, password)
         if user_data:
             st.session_state["user"] = user_data
+            preferred_language = user_data.get("preferred_language")
+            if preferred_language:
+                st.session_state["_mech_lang"] = preferred_language
             st.rerun()
 
         # Thong bao khac nhau: bi khoa vs sai mat khau thuong

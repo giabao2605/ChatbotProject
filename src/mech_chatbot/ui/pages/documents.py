@@ -176,7 +176,7 @@ def render_document_row(
     is_admin=False,
 ):
     eff_label = t(EFFECTIVE_STATUS_LABELS.get(effective_status or "active", effective_status or ""))
-    current_badge = "\u2705 " + t("Hi\u1ec7n h\u00e0nh") if is_current else "\U0001f4c4 " + t("C\u0169")
+    current_badge = "\u2705 " + t("Hi\u1ec7n h\u00e0nh") if is_current else t("C\u0169")
     display_title = title or original_file_name or f"DocID {doc_id}"
     with st.expander(
         f"{current_badge} \u00b7 {display_title} \u00b7 v{version_no or 1} \u00b7 {ui_labels.dept_label(department)} \u00b7 {eff_label}"
@@ -230,7 +230,7 @@ def render_doc_admin_actions(doc_id, is_current, file_name):
             except Exception as e:
                 st.error(t("L\u1ed7i: {e}", e=e))
     with col3:
-        if st.button("\U0001f5d1\ufe0f " + t("X\u00f3a t\u00e0i li\u1ec7u"), key=f"del_doc_{doc_id}", type="secondary"):
+        if st.button(t("X\u00f3a t\u00e0i li\u1ec7u"), key=f"del_doc_{doc_id}", type="secondary"):
             st.session_state[f"confirm_del_{doc_id}"] = True
     if st.session_state.get(f"confirm_del_{doc_id}"):
         st.warning(t("X\u00e1c nh\u1eadn x\u00f3a v\u0129nh vi\u1ec5n? Kh\u00f4ng th\u1ec3 ho\u00e0n t\u00e1c."))
@@ -254,7 +254,7 @@ def render_doc_admin_actions(doc_id, is_current, file_name):
 
 
 def render_expiry_panel(is_admin):
-    with st.expander("\u23f0 " + t("T\u00e0i li\u1ec7u s\u1eafp h\u1ebft hi\u1ec7u l\u1ef1c / c\u1ea7n so\u00e1t x\u00e9t"), expanded=False):
+    with st.expander(t("T\u00e0i li\u1ec7u s\u1eafp h\u1ebft hi\u1ec7u l\u1ef1c / c\u1ea7n so\u00e1t x\u00e9t"), expanded=False):
         st.caption(
             t(
                 "Hi\u1ec3n c\u00e1c t\u00e0i li\u1ec7u c\u00f3 ExpiryDate ho\u1eb7c ReviewDate trong v\u00f2ng 60 ng\u00e0y t\u1edbi, "

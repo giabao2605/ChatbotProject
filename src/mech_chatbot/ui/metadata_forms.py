@@ -55,7 +55,7 @@ def _date_value(label, value, key):
     raw = st.text_input(t(label), value=_fmt_date(value), key=key, placeholder="YYYY-MM-DD")
     raw = _s(raw)
     if raw and not _DATE_RE.match(raw):
-        st.caption("\u26a0\ufe0f `" + t(label) + "` " + t("n\u00ean theo \u0111\u1ecbnh d\u1ea1ng YYYY-MM-DD (vd 2026-06-29). Gi\u00e1 tr\u1ecb hi\u1ec7n t\u1ea1i s\u1ebd kh\u00f4ng \u0111\u01b0\u1ee3c l\u01b0u n\u1ebfu sai \u0111\u1ecbnh d\u1ea1ng."))
+        st.caption("`" + t(label) + "` " + t("n\u00ean theo \u0111\u1ecbnh d\u1ea1ng YYYY-MM-DD (vd 2026-06-29). Gi\u00e1 tr\u1ecb hi\u1ec7n t\u1ea1i s\u1ebd kh\u00f4ng \u0111\u01b0\u1ee3c l\u01b0u n\u1ebfu sai \u0111\u1ecbnh d\u1ea1ng."))
     return raw
 
 

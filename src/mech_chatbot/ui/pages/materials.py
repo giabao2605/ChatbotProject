@@ -35,7 +35,7 @@ def run_materials():
         return
 
     # ---- Form them moi ----
-    with st.expander("\u2795 " + t("Th\u00eam v\u1eadt li\u1ec7u m\u1edbi"), expanded=False):
+    with st.expander(t("Th\u00eam v\u1eadt li\u1ec7u m\u1edbi"), expanded=False):
         with st.form("add_material"):
             c1, c2, c3 = st.columns(3)
             code = c1.text_input(t("M\u00e3 chu\u1ea9n (vd SUS304)"))
@@ -57,7 +57,7 @@ def run_materials():
 
     st.markdown("**" + t("T\u1ed5ng c\u1ed9ng: {n} v\u1eadt li\u1ec7u", n=len(materials)) + "**")
     for m in materials:
-        status = "\U0001f7e2" if m["is_active"] else "\u26aa"
+        status = t("Đang hoạt động") if m["is_active"] else t("Tạm tắt")
         header = (
             f"{status} {m['code']} \u2014 {m['display']}  \u00b7  "
             f"{m['category'] or '\u2014'}  \u00b7  {len(m['synonyms'])} " + t("\u0111\u1ed3ng ngh\u0129a")

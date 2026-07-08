@@ -13,6 +13,8 @@ $uiOutLog = Join-Path $logsDir "streamlit.out.log"
 $uiErrLog = Join-Path $logsDir "streamlit.err.log"
 $chatOutLog = Join-Path $logsDir "chat-ui.out.log"
 $chatErrLog = Join-Path $logsDir "chat-ui.err.log"
+$workerOutLog = Join-Path $logsDir "worker.out.log"
+$workerErrLog = Join-Path $logsDir "worker.err.log"
 
 if (!(Test-Path $pythonExe)) {
     throw "Khong tim thay chat_env\Scripts\python.exe. Hay tao/khai bao dung virtualenv truoc khi chay demo."
@@ -67,6 +69,23 @@ function Stop-ProcessesOnPort {
     }
 }
 
+function Stop-ProcessesByCommandLine {
+    # Kill cac tien trinh theo noi dung dong lenh (vd worker khong nghe cong nao).
+    # Vi du pattern (regex): 'run_worker\.py', 'run_server\.py', '\brun\.py\b'
+    param([string[]]$Patterns)
+    $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+    foreach ($proc in $procs) {
+        if ($proc.ProcessId -eq $PID) { continue }        # khong tu kill chinh script nay
+        if (-not $proc.CommandLine) { continue }
+        foreach ($pattern in $Patterns) {
+            if ($proc.CommandLine -match $pattern) {
+                Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                break
+            }
+        }
+    }
+}
+
 function Start-ProcessWithEnv {
     param(
         [string]$FilePath,
@@ -92,7 +111,8 @@ function Start-ProcessWithEnv {
             -RedirectStandardError $RedirectStandardError `
             -WindowStyle Hidden `
             -PassThru
-    } finally {
+    }
+    finally {
         foreach ($key in $Environment.Keys) {
             [Environment]::SetEnvironmentVariable($key, $oldValues[$key], "Process")
         }
@@ -109,7 +129,8 @@ function Wait-RestMethod {
     do {
         try {
             return Invoke-RestMethod -Uri $Uri -TimeoutSec 5
-        } catch {
+        }
+        catch {
             Start-Sleep -Seconds 2
         }
     } while ((Get-Date) -lt $deadline)
@@ -128,7 +149,8 @@ function Wait-WebOk {
         try {
             $resp = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 5
             if ($resp.StatusCode -eq 200) { return $true }
-        } catch {
+        }
+        catch {
             Start-Sleep -Seconds 2
         }
     } while ((Get-Date) -lt $deadline)
@@ -136,7 +158,9 @@ function Wait-WebOk {
     return $false
 }
 
+# --- Don sach: kill theo cong VA theo dong lenh (bat ca worker khong nghe cong) ---
 Stop-ProcessesOnPort -Ports @(8100, 8501, 3000)
+Stop-ProcessesByCommandLine -Patterns @('run_worker\.py', 'run_server\.py', '\brun\.py\b')
 Start-Sleep -Seconds 2
 
 # --- Xac dinh IP LAN cua may host (tranh bay localhost) ---
@@ -150,7 +174,8 @@ try {
             break
         }
     }
-} catch {
+}
+catch {
     $lanIp = $null
 }
 if (!$lanIp) { $lanIp = "localhost" }
@@ -165,6 +190,16 @@ $ragProc = Start-ProcessWithEnv `
     -RedirectStandardOutput $ragOutLog `
     -RedirectStandardError $ragErrLog `
     -Environment $ragEnv
+
+# --- 1b. Ingestion worker (chay nen, KHONG nghe cong) ---
+$workerEnv = @{ PYTHONPATH = "src" }
+$workerProc = Start-ProcessWithEnv `
+    -FilePath $pythonExe `
+    -ArgumentList @("run_worker.py") `
+    -WorkingDirectory $projectRoot `
+    -RedirectStandardOutput $workerOutLog `
+    -RedirectStandardError $workerErrLog `
+    -Environment $workerEnv
 
 # --- 2. Next.js chat UI (cong 3000, mo ra LAN) ---
 $chatEnv = @{
@@ -202,6 +237,7 @@ $chatOk = Wait-WebOk -Uri "http://127.0.0.1:3000" -TimeoutSeconds 30
 $uiOk = Wait-WebOk -Uri "http://127.0.0.1:8501" -TimeoutSeconds 30
 
 Write-Output ("RAG PID: {0}" -f $ragProc.Id)
+Write-Output ("Worker PID: {0}" -f $workerProc.Id)
 Write-Output ("Chat UI PID: {0}" -f $chatProc.Id)
 Write-Output ("Streamlit PID: {0}" -f $uiProc.Id)
 Write-Output ("RAG Health: {0}" -f ($(if ($ragHealth) { ($ragHealth | ConvertTo-Json -Compress) } else { "UNAVAILABLE" })))
