@@ -1,5 +1,6 @@
 import sys
 import os
+import html
 
 # Đảm bảo src/ luôn trong sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -67,15 +68,35 @@ if "_nav_request" in st.session_state:
         st.session_state["nav_page"] = _req
 
 with st.sidebar:
-    st.markdown("### " + t("Trợ Lý Tài Liệu Nội Bộ"))
-    st.caption(t("Quản trị dữ liệu kỹ thuật & hỏi đáp RAG"))
+    st.markdown(
+        f"""
+        <div class="app-sidebar-brand">
+            <div class="app-sidebar-logo">ID</div>
+            <div>
+                <div class="app-sidebar-title">{html.escape(t("Trợ Lý Tài Liệu Nội Bộ"))}</div>
+                <div class="app-sidebar-subtitle">{html.escape(t("Quản trị dữ liệu kỹ thuật & hỏi đáp RAG"))}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Cong tac chon ngon ngu DUY NHAT: dieu khien CA giao dien lan chatbot tra loi.
     i18n.language_selector(label=t("Ngôn ngữ"))
     st.markdown("---")
-    st.markdown("**" + t("Xin chào, {name}!", name=user['display_name']) + "**")
-    st.caption(t("Phòng ban: {dept}", dept=dept_label(user.get('department')) or t("(chưa gán)")))
-    st.caption(t("Role: ") + ", ".join(user.get("roles", [])))
+    display_name = str(user.get("display_name") or user.get("username") or "")
+    dept = dept_label(user.get("department")) or t("(chưa gán)")
+    roles = ", ".join(user.get("roles", [])) or t("(chưa gán)")
+    st.markdown(
+        f"""
+        <div class="app-sidebar-user">
+            <div class="app-sidebar-user-name">{html.escape(t("Xin chào, {name}!", name=display_name))}</div>
+            <div class="app-sidebar-meta">{html.escape(t("Phòng ban: {dept}", dept=dept))}</div>
+            <div class="app-sidebar-meta">{html.escape(t("Role: "))}{html.escape(roles)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # C12: hien thi ro quyen cua nguoi dung (phong ban / khu / muc mat)
     with st.expander(t("Quyền của tôi")):
@@ -100,6 +121,13 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    if (
+        st.session_state.get("nav_page") == "chatbot"
+        and os.getenv("USE_NEXTJS_CHAT", "").strip().lower() in ("1", "true", "yes", "on")
+    ):
+        from mech_chatbot.ui.pages.chat_bridge import render_nextjs_chat_sidebar
+        render_nextjs_chat_sidebar()
+
     if st.button(t("Đăng xuất"), use_container_width=True):
         auth.logout()
 

@@ -290,20 +290,77 @@ def run_chat():
         # CSS Canh le trai cho toan bo nut trong sidebar de trong giong ChatGPT
         st.markdown("""
             <style>
-            [data-testid="stSidebar"] button {
-                justify-content: flex-start;
-                text-align: left;
-                border-radius: 8px;
-                transition: all 0.2s ease-in-out !important;
+            /* Reset button base styles with high specificity */
+            [data-testid="stSidebar"] button,
+            [data-testid="stSidebar"] .stButton > button {
+                border: none !important;
+                background-color: transparent !important;
+                box-shadow: none !important;
+                justify-content: flex-start !important;
+                text-align: left !important;
+                border-radius: 6px !important;
+                transition: background-color 0.2s ease !important;
+                padding: 0.5rem !important;
             }
-            [data-testid="stSidebar"] button:hover {
-                transform: translateY(-1px);
-                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            
+            /* Hide the default Streamlit button border element if present */
+            [data-testid="stSidebar"] button::before,
+            [data-testid="stSidebar"] button::after,
+            [data-testid="stSidebar"] .stButton > button::before,
+            [data-testid="stSidebar"] .stButton > button::after {
+                display: none !important;
             }
-            [data-testid="stSidebar"] div[data-testid="column"]:nth-of-type(2) button {
-                justify-content: center;
-                text-align: center;
-                padding: 0;
+            
+            /* History Items (Inside Columns) */
+            [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button,
+            [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] .stButton > button {
+                font-weight: 400 !important;
+            }
+            
+            /* Hover state for all sidebar buttons */
+            [data-testid="stSidebar"] button:hover,
+            [data-testid="stSidebar"] .stButton > button:hover {
+                background-color: #2a2b32 !important;
+                border: none !important;
+            }
+
+            /* Active history item & New Chat button */
+            [data-testid="stSidebar"] button[kind="primary"],
+            [data-testid="stSidebar"] .stButton > button[kind="primary"] {
+                background-color: #343541 !important;
+                font-weight: 500 !important;
+                border: none !important;
+            }
+            
+            /* Truncate long labels */
+            [data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] p {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                margin-bottom: 0;
+            }
+
+            /* Delete (X) button specific */
+            [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) button,
+            [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) .stButton > button {
+                justify-content: center !important;
+                text-align: center !important;
+                color: #888 !important;
+                opacity: 0;
+                border: none !important;
+                background-color: transparent !important;
+            }
+            
+            /* Show X on row hover */
+            [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:hover div[data-testid="column"]:nth-of-type(2) button,
+            [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:hover div[data-testid="column"]:nth-of-type(2) .stButton > button {
+                opacity: 1;
+            }
+
+            [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) button:hover,
+            [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) .stButton > button:hover {
+                color: #ff4b4b !important;
+                background-color: transparent !important;
             }
             </style>
         """, unsafe_allow_html=True)
@@ -356,8 +413,8 @@ def run_chat():
             for s in group_sessions:
                 is_current = (s['session_id'] == st.session_state.session_id)
                 btn_type = "primary" if is_current else "secondary"
-                # Label tren 1 dong (admin: kem ten chu phien de de phan biet history cua tung account)
-                label = f"[{s.get('owner') or '?'}] {s['cau_hoi']}" if is_admin else f"{s['cau_hoi']}"
+                # Label tren 1 dong (loại bỏ admin prefix để giống ChatGPT)
+                label = f"{s['cau_hoi']}"
                 col1, col2 = st.columns([85, 15])
                 with col1:
                     if st.button(label, key=f"btn_chat_{s['session_id']}", use_container_width=True, type=btn_type):

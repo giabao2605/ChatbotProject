@@ -47,7 +47,26 @@ const COPY = {
     delete: "Xóa",
     title: "Trợ lý tài liệu nội bộ",
     subtitle: "Dữ liệu nội bộ & RAG Engine",
+    sidebarPlan: "RAG Q&A",
     mobileNewChat: "Chat mới",
+    qaMode: "Hỏi đáp tài liệu",
+    readyStatus: "Sẵn sàng",
+    busyStatus: "Đang tra cứu",
+    recents: "Gần đây",
+    searchChats: "Tìm kiếm cuộc trò chuyện",
+    conversationCount: "{count} cuộc trò chuyện",
+    currentChat: "Đang mở",
+    accountLabel: "Tài khoản",
+    appStatus: "Sẵn sàng",
+    assistantLabel: "Trợ lý",
+    userLabel: "Bạn",
+    promptTitle: "Gợi ý câu hỏi",
+    sourceSummary: "Mở đoạn nguồn đã truy xuất",
+    feedbackPrompt: "Đánh giá câu trả lời",
+    typing: "Đang tìm trong tài liệu và soạn câu trả lời",
+    attachPreview: "File đã chọn",
+    typeHint: "Enter để gửi, Shift Enter để xuống dòng.",
+    sending: "Đang gửi",
     greeting: "Xin chào, tôi có thể giúp gì cho bạn?",
     intro:
       "Đặt câu hỏi về tài liệu, quy trình, chính sách hoặc dữ liệu nội bộ. Tôi sẽ tìm kiếm và trả lời bạn dựa trên cơ sở dữ liệu của chúng ta.",
@@ -62,20 +81,39 @@ const COPY = {
     helpful: "Hữu ích",
     notGood: "Không tốt",
     removeFile: "Bỏ file",
-    upload: "Tải lên",
-    inputPlaceholder: "Nhập tin nhắn vào đây...",
+    upload: "Đính kèm",
+    inputPlaceholder: "Hỏi bất cứ điều gì",
     send: "Gửi",
     imageOnlyUpload: "Upload trong chat chỉ hỗ trợ hình ảnh.",
   },
   en: {
-    newChat: "New conversation",
-    searchHistory: "Search history...",
+    newChat: "New chat",
+    searchHistory: "Search chats",
     noMatchingHistory: "No matching history.",
     delete: "Delete",
     title: "Internal Document Assistant",
     subtitle: "Internal data & RAG Engine",
+    sidebarPlan: "RAG Q&A",
     mobileNewChat: "New chat",
-    greeting: "Hello, how can I help you?",
+    qaMode: "Document Q&A",
+    readyStatus: "Ready",
+    busyStatus: "Searching",
+    recents: "Recents",
+    searchChats: "Search chats",
+    conversationCount: "{count} conversations",
+    currentChat: "Current",
+    accountLabel: "Account",
+    appStatus: "Ready",
+    assistantLabel: "Assistant",
+    userLabel: "You",
+    promptTitle: "Suggested questions",
+    sourceSummary: "Open retrieved source text",
+    feedbackPrompt: "Rate this answer",
+    typing: "Searching documents and drafting the answer",
+    attachPreview: "Selected file",
+    typeHint: "Enter to send, Shift Enter for a new line.",
+    sending: "Sending",
+    greeting: "How can I help you?",
     intro:
       "Ask about documents, processes, policies, or internal data. I will search and answer based on our knowledge base.",
     missingContext:
@@ -89,12 +127,25 @@ const COPY = {
     helpful: "Helpful",
     notGood: "Not good",
     removeFile: "Remove file",
-    upload: "Upload",
-    inputPlaceholder: "Type your message here...",
+    upload: "Attach",
+    inputPlaceholder: "Ask anything",
     send: "Send",
     imageOnlyUpload: "Chat upload only supports images.",
   },
 } satisfies Record<Lang, Record<string, string>>;
+
+const SUGGESTIONS = {
+  vi: [
+    "Tóm tắt quy trình bảo trì theo tài liệu mới nhất",
+    "Tìm thông tin về mã part hoặc vật tư này",
+    "So sánh yêu cầu kiểm tra giữa hai tài liệu",
+  ],
+  en: [
+    "Summarize the latest maintenance process",
+    "Find information about this part or material code",
+    "Compare inspection requirements across two documents",
+  ],
+} satisfies Record<Lang, string[]>;
 
 function createSessionId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -106,6 +157,8 @@ function createSessionId() {
 export default function ChatPage() {
   const [ctx, setCtx] = useState<string | null>(null);
   const [lang, setLang] = useState<Lang>("vi");
+  const [embedded, setEmbedded] = useState(false);
+  const [requestedSessionId, setRequestedSessionId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState(createSessionId);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [search, setSearch] = useState("");
@@ -126,19 +179,40 @@ export default function ChatPage() {
     const params = new URLSearchParams(window.location.search);
     setCtx(params.get("ctx"));
     setLang(params.get("lang")?.toLowerCase().startsWith("en") ? "en" : "vi");
+    setEmbedded(params.get("embed") === "1");
+    setRequestedSessionId(params.get("session"));
   }, []);
 
   const text = COPY[lang];
+  const conversationCount = text.conversationCount.replace(
+    "{count}",
+    String(sessions.length),
+  );
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = messages.length === 0 ? 0 : el.scrollHeight;
   }, [messages]);
+
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
 
   useEffect(() => {
     if (!ctx) return;
     refreshSessions(ctx).catch((e) => setWarning((e as Error).message));
   }, [ctx]);
+
+  useEffect(() => {
+    if (!ctx || !requestedSessionId || busy || requestedSessionId === sessionId) {
+      return;
+    }
+    loadSession(requestedSessionId);
+  }, [ctx, requestedSessionId, busy, sessionId]);
 
   useEffect(() => {
     return () => {
@@ -164,12 +238,12 @@ export default function ChatPage() {
     setSessions(data.sessions ?? []);
   }
 
-  function appendToLast(text: string) {
+  function appendToLast(textChunk: string) {
     setMessages((prev) => {
       const copy = [...prev];
       const last = copy[copy.length - 1];
       if (last && last.role === "assistant") {
-        copy[copy.length - 1] = { ...last, content: last.content + text };
+        copy[copy.length - 1] = { ...last, content: last.content + textChunk };
       }
       return copy;
     });
@@ -196,6 +270,12 @@ export default function ChatPage() {
     setWarning(null);
     clearSelectedFile();
     taRef.current?.focus();
+  }
+
+  function suggestQuestion(question: string) {
+    if (busy) return;
+    setInput(question);
+    window.setTimeout(() => taRef.current?.focus(), 0);
   }
 
   async function loadSession(nextSessionId: string) {
@@ -277,9 +357,7 @@ export default function ChatPage() {
     const question = input.trim();
     if (!question || busy) return;
     if (!ctx) {
-      setError(
-        text.missingContext,
-      );
+      setError(text.missingContext);
       return;
     }
     setError(null);
@@ -354,7 +432,9 @@ export default function ChatPage() {
             appendToLast(data.text as string);
           } else if (ev === "warning") {
             setWarning(
-              `${data.message || text.warning}${data.detail ? `: ${data.detail}` : ""}`,
+              `${data.message || text.warning}${
+                data.detail ? `: ${data.detail}` : ""
+              }`,
             );
           } else if (ev === "done") {
             setPartIds((data.new_part_ids as string[]) ?? []);
@@ -368,7 +448,7 @@ export default function ChatPage() {
             await refreshSessions();
           } else if (ev === "error") {
             throw new Error(
-                (data.detail as string) ||
+              (data.detail as string) ||
                 (data.message as string) ||
                 text.unknownError,
             );
@@ -419,177 +499,191 @@ export default function ChatPage() {
     }
   }
 
+  const showEmptyState = messages.length === 0;
+
   return (
-    <div className="flex h-screen overflow-hidden bg-transparent text-gray-100 font-sans selection:bg-emerald-500/30">
-      <aside className="hidden h-screen w-72 shrink-0 overflow-hidden border-r border-white/5 bg-neutral-900/40 backdrop-blur-xl md:flex md:flex-col shadow-[4px_0_24px_rgba(0,0,0,0.2)] z-10 relative">
-        <div className="border-b border-white/5 p-4">
-          <button
-            onClick={newChat}
-            className="w-full rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2.5 text-sm font-semibold text-neutral-950 transition-all hover:from-emerald-400 hover:to-teal-400 disabled:opacity-40 shadow-[0_0_15px_rgba(16,185,129,0.3)] hover:shadow-[0_0_20px_rgba(16,185,129,0.5)] flex items-center justify-center gap-2"
-            disabled={busy}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+    <div className={embedded ? "chatgpt-shell embedded" : "chatgpt-shell"}>
+      {!embedded ? (
+      <aside className="chatgpt-sidebar">
+        <div className="sidebar-top">
+          <div className="sidebar-brand-row">
+            <div className="sidebar-avatar">ID</div>
+            <div className="sidebar-brand-copy">
+              <div className="sidebar-brand">{text.title}</div>
+              <div className="sidebar-subtitle">{text.sidebarPlan}</div>
+            </div>
+          </div>
+          <button onClick={newChat} disabled={busy} className="sidebar-action">
             {text.newChat}
           </button>
-          <div className="relative mt-4">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <label className="sidebar-search-box">
+            <span>{text.searchChats}</span>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={text.searchHistory}
-              className="w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 py-2 text-sm outline-none transition-all hover:border-white/20 focus:border-emerald-500/50 focus:bg-white/10 shadow-inner placeholder:text-gray-500"
+              className="sidebar-search"
             />
+          </label>
+          <div className="sidebar-metrics">
+            <span>{conversationCount}</span>
+            <span>{text.appStatus}</span>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-3 space-y-1">
+
+        <div className="sidebar-recents">
+          <div className="sidebar-section-title">{text.recents}</div>
           {filteredSessions.map((s) => (
             <div
               key={s.session_id}
-              className={`group rounded-xl border px-3 py-2.5 transition-all duration-200 ${
+              className={
                 s.session_id === sessionId
-                  ? "border-emerald-500/30 bg-emerald-500/10 shadow-[inset_0_0_10px_rgba(16,185,129,0.05)]"
-                  : "border-transparent hover:bg-white/5 hover:border-white/5"
-              }`}
+                  ? "session-row session-row-active"
+                  : "session-row"
+              }
             >
               <button
                 onClick={() => loadSession(s.session_id)}
-                className="block w-full text-left text-sm text-gray-200 group-hover:text-white transition-colors"
                 disabled={busy}
                 title={s.cau_hoi}
+                className="session-title"
               >
-                <span className="line-clamp-2 leading-relaxed">{s.cau_hoi}</span>
-                {s.owner ? (
-                  <span className="mt-1.5 flex items-center gap-1.5 text-xs text-gray-500 font-medium">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                    {s.owner}
-                  </span>
-                ) : null}
+                {s.cau_hoi}
               </button>
-              <button
-                onClick={() => deleteSession(s.session_id)}
-                className="mt-2.5 flex items-center gap-1 text-[11px] font-medium text-gray-500 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
-                disabled={busy}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                {text.delete}
-              </button>
+              <div className="session-meta">
+                <span>{s.owner || text.accountLabel}</span>
+                {s.session_id === sessionId ? <span>{text.currentChat}</span> : null}
+              </div>
+              <div className="session-actions">
+                <button
+                  onClick={() => deleteSession(s.session_id)}
+                  disabled={busy}
+                  className="session-delete"
+                >
+                  {text.delete}
+                </button>
+              </div>
             </div>
           ))}
           {filteredSessions.length === 0 ? (
-            <p className="px-2 py-4 text-sm text-gray-500">
-              {text.noMatchingHistory}
-            </p>
+            <p className="empty-sidebar">{text.noMatchingHistory}</p>
           ) : null}
         </div>
-      </aside>
-
-      <main className="relative flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="z-20 flex shrink-0 items-center justify-between border-b border-white/5 bg-neutral-950/40 px-6 py-4 backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/30">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-400"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>
-            </div>
-            <div>
-              <h1 className="text-base font-semibold text-gray-100 tracking-tight">
-                {text.title}
-              </h1>
-              <p className="text-xs text-gray-400 font-medium">
-                {text.subtitle}
-              </p>
-            </div>
+        <div className="sidebar-footer">
+          <div className="sidebar-footer-avatar">AD</div>
+          <div>
+            <div className="sidebar-footer-title">{text.accountLabel}</div>
+            <div className="sidebar-footer-subtitle">{text.subtitle}</div>
           </div>
-          <button
-            onClick={newChat}
-            className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-gray-200 transition-all hover:bg-white/10 hover:border-white/20 md:hidden"
-            disabled={busy}
-          >
+        </div>
+      </aside>
+      ) : null}
+
+      <main className="chatgpt-main" aria-busy={busy}>
+        <div className="chat-topbar">
+          <div>
+            <div className="topbar-kicker">{text.qaMode}</div>
+            <h1>{text.title}</h1>
+          </div>
+          <div className={busy ? "status-pill status-pill-busy" : "status-pill"}>
+            {busy ? text.busyStatus : text.readyStatus}
+          </div>
+        </div>
+
+        <div className="mobile-bar">
+          <div className="mobile-title">{text.title}</div>
+          <button onClick={newChat} disabled={busy} className="mobile-new">
             {text.mobileNewChat}
           </button>
-        </header>
+        </div>
 
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
-          <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-8">
-            {messages.length === 0 && (
-              <div className="mt-20 flex flex-col items-center justify-center text-center animate-msg">
-                <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.15)]">
-                   <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="url(#emerald-gradient)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><defs><linearGradient id="emerald-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#34d399" /><stop offset="100%" stopColor="#14b8a6" /></linearGradient></defs><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>
+        <div ref={scrollRef} className="chat-scroll" role="log" aria-live="polite">
+          <div className={showEmptyState ? "empty-stage" : "message-stage"}>
+            {showEmptyState ? (
+              <div className="empty-content">
+                <div className="empty-kicker">{text.qaMode}</div>
+                <h1>{text.greeting}</h1>
+                <p>{text.intro}</p>
+                <div className="suggestion-panel">
+                  <div className="suggestion-title">{text.promptTitle}</div>
+                  <div className="suggestion-grid">
+                    {SUGGESTIONS[lang].map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => suggestQuestion(item)}
+                        disabled={busy}
+                        className="suggestion-chip"
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <h2 className="text-2xl font-semibold bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent">{text.greeting}</h2>
-                <p className="mt-3 text-sm text-gray-400 max-w-md leading-relaxed">
-                  {text.intro}
-                </p>
               </div>
-            )}
+            ) : null}
 
             {messages.map((m, i) => (
               <div
                 key={`${m.role}-${i}`}
-                className={`animate-msg ${m.role === "user" ? "flex justify-end" : "flex justify-start"}`}
+                className={m.role === "user" ? "message user" : "message assistant"}
               >
-                <div
-                  className={
-                    m.role === "user"
-                      ? "max-w-[85%] rounded-2xl rounded-tr-sm bg-gradient-to-br from-neutral-800 to-neutral-900 border border-white/5 px-5 py-4 text-gray-100 shadow-md"
-                      : "max-w-[85%] rounded-2xl rounded-tl-sm bg-neutral-900/60 backdrop-blur-md border border-white/5 px-5 py-4 text-gray-100 shadow-sm"
-                  }
-                >
+                <div className="message-inner">
+                  <div className="message-label">
+                    {m.role === "user" ? text.userLabel : text.assistantLabel}
+                  </div>
                   {m.imageUrl ? (
                     <img
                       src={m.imageUrl}
                       alt={m.imageName || text.uploadedImageAlt}
-                      className="mb-3 max-h-64 rounded-md border border-white/10 object-contain"
+                      className="message-image"
                     />
                   ) : m.imageName ? (
-                    <div className="mb-2 text-xs text-gray-400">
+                    <div className="message-file">
                       {text.filePrefix}: {m.imageName}
                     </div>
                   ) : null}
 
                   {m.role === "assistant" && m.content === "" ? (
-                    <TypingDots />
+                    <div className="typing-block">
+                      <TypingDots />
+                      <span>{text.typing}</span>
+                    </div>
                   ) : m.role === "assistant" ? (
-                    <div className="md-body text-[15px] leading-relaxed">
+                    <div className="md-body">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {m.content}
                       </ReactMarkdown>
                     </div>
                   ) : (
-                    <div className="whitespace-pre-wrap text-[15px] leading-relaxed">
-                      {m.content}
-                    </div>
+                    <div className="message-text">{m.content}</div>
                   )}
 
                   {m.refText ? (
-                    <details className="mt-3 rounded-md bg-black/20 p-2 text-xs text-gray-400">
-                      <summary className="cursor-pointer select-none text-gray-300">
-                        {text.references}
+                    <details className="references">
+                      <summary>
+                        <span>{text.references}</span>
+                        <span>{text.sourceSummary}</span>
                       </summary>
-                      <div className="mt-2 whitespace-pre-wrap">{m.refText}</div>
+                      <pre>{m.refText}</pre>
                     </details>
                   ) : null}
 
                   {m.role === "assistant" && m.chatId ? (
-                    <div className="mt-4 flex gap-2 text-xs border-t border-white/5 pt-3">
+                    <div className="feedback-row">
+                      <span>{text.feedbackPrompt}</span>
                       <button
                         onClick={() => sendFeedback(m.chatId as number, 1)}
-                        className={`rounded-lg border px-2.5 py-1.5 transition-all flex items-center gap-1.5 ${
-                          m.feedback === 1
-                            ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
-                            : "border-white/5 bg-white/5 text-gray-400 hover:text-gray-200 hover:bg-white/10"
-                        }`}
+                        className={m.feedback === 1 ? "feedback selected" : "feedback"}
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
                         {text.helpful}
                       </button>
                       <button
                         onClick={() => sendFeedback(m.chatId as number, -1)}
-                        className={`rounded-lg border px-2.5 py-1.5 transition-all flex items-center gap-1.5 ${
-                          m.feedback === -1
-                            ? "border-red-500/50 bg-red-500/10 text-red-400"
-                            : "border-white/5 bg-white/5 text-gray-400 hover:text-gray-200 hover:bg-white/10"
-                        }`}
+                        className={
+                          m.feedback === -1 ? "feedback selected" : "feedback"
+                        }
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path></svg>
                         {text.notGood}
                       </button>
                     </div>
@@ -601,46 +695,35 @@ export default function ChatPage() {
         </div>
 
         {(error || warning) && (
-          <div className="mx-auto w-full max-w-3xl px-4">
-            {error ? (
-              <div className="mb-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-                {error}
-              </div>
-            ) : null}
-            {warning ? (
-              <div className="mb-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-200">
-                {warning}
-              </div>
-            ) : null}
+          <div className="notice-wrap">
+            {error ? <div className="notice error">{error}</div> : null}
+            {warning ? <div className="notice warning">{warning}</div> : null}
           </div>
         )}
 
-        <footer className="z-10 shrink-0 px-4 pb-6 pt-2 bg-gradient-to-t from-[#050505] via-[#050505]/80 to-transparent">
-          <div className="mx-auto max-w-4xl relative">
+        <footer className={showEmptyState ? "composer-wrap centered" : "composer-wrap"}>
+          <div className="composer">
             {selectedFile ? (
-              <div className="absolute -top-12 left-0 right-0 flex items-center justify-between rounded-xl border border-emerald-500/30 bg-neutral-900/90 backdrop-blur-md px-4 py-2.5 text-sm text-gray-200 shadow-lg animate-msg">
-                <div className="flex items-center gap-2 truncate">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-400"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
-                  <span className="truncate">{selectedFile.name}</span>
+              <div className="selected-file">
+                {selectedPreview ? (
+                  <img src={selectedPreview} alt={text.attachPreview} />
+                ) : null}
+                <div>
+                  <span>{text.attachPreview}</span>
+                  <strong>{selectedFile.name}</strong>
                 </div>
-                <button
-                  onClick={clearSelectedFile}
-                  className="ml-3 p-1 text-gray-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition-colors"
-                  disabled={busy}
-                  title={text.removeFile}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                <button onClick={clearSelectedFile} disabled={busy}>
+                  {text.removeFile}
                 </button>
               </div>
             ) : null}
-            <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-neutral-900/80 backdrop-blur-2xl p-2 shadow-2xl transition-all focus-within:border-emerald-500/40 focus-within:ring-1 focus-within:ring-emerald-500/40">
-              <label className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition hover:bg-white/10 hover:text-gray-200" title={text.upload}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            <div className="composer-row">
+              <label className="attach-button">
+                {text.upload}
                 <input
                   ref={fileRef}
                   type="file"
                   accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff"
-                  className="hidden"
                   onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
                   disabled={busy}
                 />
@@ -652,25 +735,23 @@ export default function ChatPage() {
                 onKeyDown={onKeyDown}
                 rows={1}
                 placeholder={text.inputPlaceholder}
-                className="max-h-40 flex-1 resize-none bg-transparent px-2 py-2.5 text-[15px] text-gray-100 outline-none placeholder:text-gray-500"
+                className="composer-input"
+                aria-label={text.inputPlaceholder}
               />
               <button
                 onClick={send}
                 disabled={busy || !input.trim()}
-                className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-neutral-950 transition-all hover:from-emerald-400 hover:to-teal-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-400 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)]"
+                className="send-button"
                 title={text.send}
               >
-                {busy ? (
-                   <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                )}
+                {busy ? text.sending : text.send}
               </button>
             </div>
-            <p className="mt-3 text-center text-xs font-medium text-gray-500/70">
-              {text.imageOnlyUpload}
-            </p>
           </div>
+          <p className="composer-hint">
+            <span>{text.typeHint}</span>
+            <span>{text.imageOnlyUpload}</span>
+          </p>
         </footer>
       </main>
     </div>
@@ -679,10 +760,10 @@ export default function ChatPage() {
 
 function TypingDots() {
   return (
-    <div className="flex items-center gap-1 py-1">
-      <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
-      <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]" />
-      <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400" />
+    <div className="typing-dots">
+      <span />
+      <span />
+      <span />
     </div>
   );
 }

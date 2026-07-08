@@ -1,5 +1,6 @@
 """P2.3 — Access/clearance service (L6). Pass-through toi db repositories."""
 from mech_chatbot.db.repository import (
+    count_pending_access_requests,
     create_access_request,
     get_grant_history,
     get_user_access_requests,
@@ -12,6 +13,7 @@ from mech_chatbot.db.repository import (
 )
 
 __all__ = [
+    "count_pending_access_requests",
     "create_access_request",
     "get_grant_history",
     "get_user_access_requests",

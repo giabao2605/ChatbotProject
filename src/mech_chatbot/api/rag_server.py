@@ -39,6 +39,11 @@ RAG_REQUIRE_SERVICE_AUTH = os.getenv("RAG_REQUIRE_SERVICE_AUTH", "true").strip()
     "1", "true", "yes", "on"
 }
 RAG_SERVICE_TOKEN = os.getenv("RAG_SERVICE_TOKEN", "").strip()
+RAG_CORS_ALLOW_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("RAG_CORS_ALLOW_ORIGINS", "").split(",")
+    if origin.strip()
+]
 
 # ---------------------------------------------------------------------------
 # Lifespan: load RAG system once at startup, clean up at shutdown
@@ -80,13 +85,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if RAG_CORS_ALLOW_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=RAG_CORS_ALLOW_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Semaphore to limit concurrent RAG processing
 _rag_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RAG)

@@ -2,18 +2,46 @@
 # Docker Compose — Mechanical Engineering RAG Chatbot
 # ============================================================
 # Services:
-#   1. streamlit       — Web UI (port 8501)
-#   2. rag-server      — FastAPI RAG backend (port 8100)
-#   3. ingestion-worker — Background document processing
+#   1. app             — Vue static UI + FastAPI browser API (port 8080)
+#   2. streamlit       — Legacy Web UI kept until parity (port 8501)
+#   3. rag-server      — internal FastAPI RAG backend (port 8100)
+#   4. ingestion-worker — Background document processing
 # ============================================================
 # External dependencies (not managed by this compose):
 #   - SQL Server       — localhost\SQLEXPRESS or remote
 #   - Qdrant Cloud     — managed service (QDRANT_URL in .env)
 # ============================================================
 
-version: '3.8'
-
 services:
+  # ----------------------------------------------------------
+  # App UI/API — Vue static files + browser-facing FastAPI
+  # ----------------------------------------------------------
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile.app
+    env_file: ../.env
+    environment:
+      - APP_SERVER_HOST=0.0.0.0
+      - APP_SERVER_PORT=8080
+      - APP_SESSION_TTL_SECONDS=2700
+      - RAG_SERVER_URL=http://rag-server:8100
+      - PYTHONPATH=/app/src
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../data/processed:/app/data/processed:ro
+      - ../data/raw:/app/data/raw
+      - ../logs:/app/logs
+    depends_on:
+      rag-server:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
   # ----------------------------------------------------------
   # RAG Backend — FastAPI (persistent model server)
   # ----------------------------------------------------------

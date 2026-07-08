@@ -20,6 +20,7 @@ from mech_chatbot.ui.labels import dept_label, dept_labels_str
 
 ROLE_OPTIONS = ["admin", "reviewer", "uploader", "viewer"]
 LEVEL_OPTIONS = ["public", "internal", "confidential"]
+MIN_PASSWORD_LENGTH = 3
 
 
 def run_users():
@@ -166,8 +167,8 @@ def render_user_list():
                 )
                 pw_saved = st.form_submit_button(t("\u0110\u1eb7t l\u1ea1i m\u1eadt kh\u1ea9u"))
             if pw_saved:
-                if not new_pw or len(new_pw) < 6:
-                    st.error(t("M\u1eadt kh\u1ea9u ph\u1ea3i c\u00f3 \u00edt nh\u1ea5t 6 k\u00fd t\u1ef1."))
+                if not new_pw or len(new_pw) < MIN_PASSWORD_LENGTH:
+                    st.error(t("Mật khẩu phải có ít nhất {n} ký tự.", n=MIN_PASSWORD_LENGTH))
                 else:
                     try:
                         ph = bcrypt.hashpw(new_pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -254,6 +255,9 @@ def render_create_user():
     if st.button(t("T\u1ea1o user"), type="primary", key=form_key("submit")):
         if not username or not password:
             st.error(t("Username v\u00e0 m\u1eadt kh\u1ea9u l\u00e0 b\u1eaft bu\u1ed9c."))
+            return
+        if len(password) < MIN_PASSWORD_LENGTH:
+            st.error(t("Mật khẩu phải có ít nhất {n} ký tự.", n=MIN_PASSWORD_LENGTH))
             return
         password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         depts = list(allowed_departments)
