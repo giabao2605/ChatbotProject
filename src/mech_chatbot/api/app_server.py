@@ -18,7 +18,7 @@ from uuid import uuid4
 import bcrypt
 import requests
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -381,6 +381,24 @@ def update_preferences(req: LanguageRequest, profile: dict[str, Any] = Depends(c
     return {"ok": True}
 
 
+@auth_router.post("/refresh")
+def refresh_session(request: Request, response: Response):
+    """Xoay vong (rotate) session token dua tren cookie hien tai va tra ve
+    profile + csrf_token moi. Yeu cau CSRF de tranh bi lam dung tu cross-site.
+    Frontend goi dinh ky/khi gan het han de giu phien lien tuc."""
+    payload = _session_payload(request)
+    app_security.require_csrf(request, payload)
+    profile = load_user_profile(user_id=payload.user_id, username=payload.username)
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or invalid")
+    token, new_payload = app_security.create_session_token(
+        user_id=int(profile["user_id"]),
+        username=str(profile["username"]),
+    )
+    app_security.set_session_cookie(response, token)
+    return {"ok": True, "user": _public_profile(profile, csrf=new_payload.csrf)}
+
+
 chat_router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
@@ -680,6 +698,56 @@ def documents(
         search_kw=search,
     )
     return {"documents": [dict(row._mapping) if hasattr(row, "_mapping") else list(row) for row in rows]}
+
+
+@data_router.post("/documents/upload")
+def documents_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    thu_muc: str = Form(...),
+    domain: str | None = Form(None),
+    security_level: str | None = Form(None),
+    cong_doan: str | None = Form(None),
+    site: str | None = Form(None),
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    """Nhan file tai len tu web-ui, luu vao Uploads/<thu_muc> va tao IngestionJob
+    (Status='pending') de worker xu ly. Yeu cau vai tro uploader/reviewer/admin
+    + CSRF. Tra ve job_id de UI dieu huong sang trang tien trinh ingest."""
+    _assert_any_role(profile, "uploader", "reviewer", "admin")
+    allowed_ext = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".csv", ".pptx"}
+    original_name = file.filename or ""
+    ext = Path(original_name).suffix.lower()
+    if ext not in allowed_ext:
+        raise HTTPException(status_code=400, detail="Định dạng tệp không được hỗ trợ")
+    raw = file.file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Tệp rỗng")
+    if len(raw) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Tệp quá lớn (giới hạn 100MB)")
+    safe_dept = re.sub(r"[^A-Za-z0-9_\-]", "_", (thu_muc or "").strip()) or "CHUNG"
+    out_dir = data_raw_root() / "Uploads" / safe_dept
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stored_path = out_dir / f"{uuid4().hex}{ext}"
+    stored_path.write_bytes(raw)
+    from mech_chatbot.db.repositories.jobs import create_ingestion_job
+    job_id = create_ingestion_job(
+        file_name=original_name,
+        file_path=str(stored_path),
+        thu_muc=(thu_muc or "").strip(),
+        uploaded_by=profile.get("username"),
+        domain=domain,
+        security_level=security_level,
+        cong_doan=cong_doan,
+        site=site,
+    )
+    if not job_id:
+        try:
+            stored_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail="Không tạo được job (phòng ban có thể bị vô hiệu)")
+    return {"ok": True, "job_id": job_id, "file_name": original_name}
 
 
 @data_router.get("/ingestion/jobs")

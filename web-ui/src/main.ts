@@ -7,6 +7,7 @@ import Button from "primevue/button";
 import Card from "primevue/card";
 import Column from "primevue/column";
 import DataTable from "primevue/datatable";
+import Dialog from "primevue/dialog";
 import InputText from "primevue/inputtext";
 import Message from "primevue/message";
 import Password from "primevue/password";
@@ -15,7 +16,12 @@ import Tag from "primevue/tag";
 import Textarea from "primevue/textarea";
 import App from "./App.vue";
 import { router } from "./router";
+import { initLocale } from "@/i18n";
 import "./styles.css";
+
+// Resolve the initial locale from local storage before mount; the auth store
+// re-syncs it with the user's preferred_language after login / session load.
+initLocale();
 
 const app = createApp(App);
 
@@ -35,6 +41,7 @@ app.component("Button", Button);
 app.component("Card", Card);
 app.component("Column", Column);
 app.component("DataTable", DataTable);
+app.component("Dialog", Dialog);
 app.component("InputText", InputText);
 app.component("Message", Message);
 app.component("Password", Password);

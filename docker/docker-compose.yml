@@ -3,9 +3,8 @@
 # ============================================================
 # Services:
 #   1. app             — Vue static UI + FastAPI browser API (port 8080)
-#   2. streamlit       — Legacy Web UI kept until parity (port 8501)
-#   3. rag-server      — internal FastAPI RAG backend (port 8100)
-#   4. ingestion-worker — Background document processing
+#   2. rag-server      — internal FastAPI RAG backend (port 8100)
+#   3. ingestion-worker — Background document processing
 # ============================================================
 # External dependencies (not managed by this compose):
 #   - SQL Server       — localhost\SQLEXPRESS or remote
@@ -79,33 +78,6 @@ services:
           memory: 4G
         reservations:
           memory: 2G
-
-  # ----------------------------------------------------------
-  # Streamlit UI
-  # ----------------------------------------------------------
-  streamlit:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    command: streamlit run run.py --server.port 8501 --server.address 0.0.0.0
-    env_file: ../.env
-    environment:
-      - RAG_SERVER_URL=http://rag-server:8100
-      - PYTHONPATH=/app/src
-    ports:
-      - "8501:8501"
-    volumes:
-      - ../data/processed:/app/data/processed:ro
-      - ../data/raw:/app/data/raw
-      - ../logs:/app/logs
-    depends_on:
-      rag-server:
-        condition: service_healthy
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 1G
 
   # ----------------------------------------------------------
   # Ingestion Worker — Background document processing

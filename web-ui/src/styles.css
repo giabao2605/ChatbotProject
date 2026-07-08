@@ -434,3 +434,27 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+
+/* -------------------------------------------------------------------------
+ * Operations views (P5) - shared utilities for ResourcePage / StatView / forms.
+ * ------------------------------------------------------------------------- */
+.page-subtitle { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.page-actions, .row-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin: 12px 0 16px; }
+.filter-field { display: flex; flex-direction: column; gap: 4px; min-width: 160px; }
+.filter-field > span { color: var(--muted); font-size: 12px; }
+.stack-form { display: flex; flex-direction: column; gap: 14px; max-width: 520px; }
+.stack-field { display: flex; flex-direction: column; gap: 6px; }
+.stack-field > span { color: var(--muted); font-size: 13px; }
+.form-actions { display: flex; gap: 8px; margin-top: 4px; }
+.native-select { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.native-select:focus { outline: none; border-color: var(--accent); }
+.lang-switch { display: inline-flex; gap: 4px; margin: 10px 0; }
+.lang-button { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.lang-button.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.muted-text { color: var(--muted); font-size: 13px; }
+.json-block { background: var(--surface-strong); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text); white-space: pre-wrap; }
+.stacked-pages { display: flex; flex-direction: column; gap: 24px; }
+.help-body { display: flex; flex-direction: column; gap: 6px; color: var(--text); line-height: 1.55; }
+.help-body h3 { margin: 16px 0 2px; font-size: 15px; }
+.help-body p { margin: 0; color: var(--muted); }

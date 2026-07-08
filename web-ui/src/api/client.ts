@@ -7,6 +7,10 @@ export function setCsrfToken(token: string) {
   csrfToken = token;
 }
 
+export function getCsrfToken() {
+  return csrfToken;
+}
+
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) {
@@ -25,9 +29,50 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `HTTP ${response.status}`);
   }
-  return (await response.json()) as T;
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  const text = await response.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
+// ---------------------------------------------------------------------------
+// Generic REST verbs used by operations views. Query params are appended when
+// provided; undefined/null values are skipped.
+// ---------------------------------------------------------------------------
+function withQuery(path: string, params?: Record<string, unknown>): string {
+  if (!params) return path;
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    search.append(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
+export function apiGet<T = unknown>(path: string, params?: Record<string, unknown>): Promise<T> {
+  return apiFetch<T>(withQuery(path, params));
+}
+
+export function apiSend<T = unknown>(
+  path: string,
+  method: "POST" | "PATCH" | "PUT" | "DELETE",
+  body?: unknown,
+): Promise<T> {
+  return apiFetch<T>(path, {
+    method,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+export function apiUpload<T = unknown>(path: string, form: FormData): Promise<T> {
+  return apiFetch<T>(path, { method: "POST", body: form });
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
 export async function login(username: string, password: string) {
   const data = await apiFetch<{ user: UserProfile }>("/api/auth/login", {
     method: "POST",
@@ -43,11 +88,27 @@ export async function loadMe() {
   return data.user;
 }
 
+export async function refreshSession() {
+  const data = await apiFetch<{ user: UserProfile }>("/api/auth/refresh", { method: "POST" });
+  setCsrfToken(data.user.csrf_token);
+  return data.user;
+}
+
 export async function logout() {
   await apiFetch("/api/auth/logout", { method: "POST" });
   setCsrfToken("");
 }
 
+export async function updatePreferredLanguage(language: "vi" | "en") {
+  await apiFetch("/api/auth/me/preferences", {
+    method: "PATCH",
+    body: JSON.stringify({ language }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
 export async function listSessions() {
   const data = await apiFetch<{ sessions: SessionItem[] }>("/api/chat/sessions");
   return data.sessions ?? [];
@@ -140,6 +201,9 @@ export async function sendFeedback(chatId: number, rating: number) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
 export async function loadDashboard() {
   return apiFetch<{
     stats: Record<string, number>;

@@ -93,8 +93,11 @@ class TestComposeReturnsTwoFilters:
         assert isinstance(strict, models.Filter)
         assert isinstance(broad, models.Filter)
 
-    def test_chitchat_skips_strict_part_id(self):
-        # new_part_ids = CHITCHAT -> strict KHONG them dieu kien part id
+    def test_empty_part_ids_skips_strict_part_id(self):
+        # P1: routing da tach khoi trich ma. Khi new_part_ids RONG (vd chitchat
+        # da bi Interaction Router chan tu truoc), strict KHONG them dieu kien
+        # part id; nhung broad VAN mo rong should ve part id.
         mc = _make_must_conditions(None)
-        strict, broad = svc.compose_retrieval_filters(mc, new_part_ids=["CHITCHAT"])
-        assert "CHITCHAT" not in _blob(strict)
+        strict, broad = svc.compose_retrieval_filters(mc, new_part_ids=[])
+        assert len(strict.must) == len(mc)
+        assert len(broad.must) == len(mc) + 1
