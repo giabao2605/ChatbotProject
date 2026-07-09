@@ -12,7 +12,8 @@ NHOM DU LIEU
 ----------------------------------------------------------------------------------
 [LUON XOA]  Tai lieu da ingest + dan xuat theo tai lieu (cac \"cuon vo\"):
     IngestionJobs, DocumentFamily, TaiLieu, TaiLieuKyThuat, BangKeVatTu,
-    DocumentPages, TechnicalAttributes, DocumentAttributes, DocQualityScore
+    DocumentPages, TechnicalAttributes, DocumentAttributes, DocQualityScore,
+    PhongBanChiaSe, Documents (neu DB cu co), SemanticCache
     + toan bo diem vector tren collection Qdrant.
 
 [TUY CHON] (mac dinh GIU LAI, them co de xoa):
@@ -20,6 +21,7 @@ NHOM DU LIEU
     --with-eval   -> GoldenAnswer, RegressionRun, RegressionQuestion
     --with-audit  -> AuditLog
     --with-files  -> xoa anh da tach trong data/processed (giu nguyen data/raw)
+    --with-raw-files -> xoa file nguon trong data/raw
 
 [KHONG BAO GIO XOA] (chinh la \"chiec cap\"):
     Users, Roles, UserRoles, UserDepartments, UserSecurityClearance,
@@ -40,6 +42,9 @@ CACH DUNG
 
     # Xoa sau hon:
     python scripts/danger_ops/empty_bag.py --with-chat --with-eval --with-audit --with-files
+
+    # Xoa ca file nguon da upload / dung de ingest trong data/raw:
+    python scripts/danger_ops/empty_bag.py --with-raw-files
 
     # Xoa han collection Qdrant (thay vi chi xoa diem ben trong):
     python scripts/danger_ops/empty_bag.py --drop-collection
@@ -76,9 +81,16 @@ CORE_DOC_TABLES = [
     "DocQualityScore",
     "TaiLieuKyThuat",
     "DocumentAttributes",
+    "PhongBanChiaSe",
     "TaiLieu",
     "DocumentFamily",
+    "Documents",
     "IngestionJobs",
+    "SemanticCache",
+]
+
+CACHE_STAT_TABLES = [
+    "SemanticCacheStat",
 ]
 
 CHAT_TABLES = [
@@ -181,6 +193,12 @@ def do_dry_run(args):
                 else:
                     total += c
                     print(f"   - {t:<22} {c:>10,} dong")
+            for t in CACHE_STAT_TABLES:
+                c = sql_count(conn, t)
+                if c is None:
+                    print(f"   - {t:<22} (bang khong ton tai, bo qua)")
+                else:
+                    print(f"   - {t:<22} {c:>10,} dong (reset thong ke cache)")
         print(f"   => Tong cong: {total:,} dong tren {len(tables)} bang.")
     except Exception as e:
         print(f"   [!] Loi truy van SQL: {e}")
@@ -202,6 +220,10 @@ def do_dry_run(args):
         anh_dir = os.path.join(BASE_DIR, "data", "processed")
         n = len(os.listdir(anh_dir)) if os.path.isdir(anh_dir) else 0
         print(f"\nFile he thong: se don thu muc data/processed ({n} muc).")
+    if args.with_raw_files:
+        raw_dir = os.path.join(BASE_DIR, "data", "raw")
+        n = sum(len(files) for _, _, files in os.walk(raw_dir)) if os.path.isdir(raw_dir) else 0
+        print(f"\nFile nguon: se don thu muc data/raw ({n} file).")
 
     print("\nCac bang LUON DUOC GIU NGUYEN (chiec cap):")
     print("   " + ", ".join(PROTECTED_TABLES))
@@ -234,6 +256,23 @@ def wipe_sql(args):
                 conn.execute(text(f"DBCC CHECKIDENT ('dbo.{t}', RESEED, 0)"))
             except Exception:
                 pass
+        # SemanticCacheStat la bang 1 dong thong ke, khong nen DELETE mat StatID=1.
+        # Reset rieng de semantic cache sau khi nap lai bat dau tu trang thai sach.
+        try:
+            conn.execute(text("""
+                IF OBJECT_ID(N'dbo.SemanticCacheStat', N'U') IS NOT NULL
+                BEGIN
+                    MERGE dbo.SemanticCacheStat AS tgt
+                    USING (SELECT 1 AS StatID) AS src ON tgt.StatID = src.StatID
+                    WHEN MATCHED THEN
+                        UPDATE SET Lookups = 0, Hits = 0, CostSaved = 0
+                    WHEN NOT MATCHED THEN
+                        INSERT (StatID, Lookups, Hits, CostSaved) VALUES (1, 0, 0, 0);
+                END
+            """))
+            print("   - SemanticCacheStat     da reset thong ke cache")
+        except Exception as e:
+            print(f"   [!] Loi reset SemanticCacheStat: {e}")
     print(f"   => Xong SQL: {sum(deleted.values()):,} dong tren {len(deleted)} bang.")
 
 
@@ -283,11 +322,28 @@ def wipe_files():
         print(f"   [!] Loi don thu muc: {e}")
 
 
+def wipe_raw_files():
+    print("4) Dang don thu muc file nguon (data/raw)...")
+    raw_dir = os.path.abspath(os.path.join(BASE_DIR, "data", "raw"))
+    data_dir = os.path.abspath(os.path.join(BASE_DIR, "data"))
+    try:
+        if os.path.commonpath([data_dir, raw_dir]) != data_dir:
+            raise RuntimeError(f"Duong dan data/raw khong nam trong data: {raw_dir}")
+        if os.path.isdir(raw_dir):
+            shutil.rmtree(raw_dir)
+        os.makedirs(raw_dir, exist_ok=True)
+        print(f"   - Da don sach: {raw_dir}")
+    except Exception as e:
+        print(f"   [!] Loi don thu muc data/raw: {e}")
+
+
 def do_wipe(args):
     wipe_sql(args)
     wipe_qdrant(args)
     if args.with_files:
         wipe_files()
+    if args.with_raw_files:
+        wipe_raw_files()
     print("\nHOAN TAT. Chiec cap gio da trong — san sang nap lai tai lieu tu dau.")
 
 
@@ -307,6 +363,8 @@ def build_parser():
                    help="Xoa kem nhat ky kiem toan (AuditLog).")
     p.add_argument("--with-files", action="store_true",
                    help="Xoa kem anh da tach trong data/processed (giu nguyen data/raw).")
+    p.add_argument("--with-raw-files", action="store_true",
+                   help="Xoa kem file nguon trong data/raw.")
     p.add_argument("--drop-collection", action="store_true",
                    help="Xoa han collection Qdrant thay vi chi xoa diem ben trong.")
     return p

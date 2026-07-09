@@ -135,6 +135,8 @@ function openCreate(): Promise<void> {
     form.display_name = "";
     form.department = "";
     resetSelections();
+    sel.roles = ["viewer"];
+    sel.max_level = "internal";
     dlg.visible = true;
   });
 }
@@ -186,6 +188,8 @@ async function submit() {
         department: form.department || null,
         roles: [...sel.roles],
         departments: [...sel.departments],
+        sites: [...sel.sites],
+        max_level: sel.max_level,
       });
     } else if (dlg.mode === "roles") {
       const addRoles = sel.roles.filter((r) => !originalRoles.includes(r));
@@ -297,6 +301,20 @@ const rowActions: RowAction[] = [
           </label>
           <p v-if="!mergedDeptOptions.length" class="muted-text">Chưa có danh mục phòng ban.</p>
         </div>
+        <div class="field">
+          <span>Site được phép (để trống = không giới hạn)</span>
+          <label v-for="opt in mergedSiteOptions" :key="opt.value" class="check-row">
+            <input type="checkbox" :value="opt.value" v-model="sel.sites" />
+            <span v-text="opt.label"></span>
+          </label>
+          <p v-if="!mergedSiteOptions.length" class="muted-text">Chưa có danh mục site.</p>
+        </div>
+        <label class="field">
+          <span>Mức mật tối đa</span>
+          <select v-model="sel.max_level" class="native-select">
+            <option v-for="opt in SECURITY_LEVELS" :key="opt.value" :value="opt.value" v-text="opt.label"></option>
+          </select>
+        </label>
       </template>
 
       <!-- Đổi vai trò -->

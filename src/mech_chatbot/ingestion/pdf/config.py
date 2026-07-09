@@ -18,13 +18,13 @@ EMBEDDING_CHUNK_SIZE = int(os.getenv("EMBEDDING_CHUNK_SIZE", "220"))
 EMBEDDING_CHUNK_OVERLAP = int(os.getenv("EMBEDDING_CHUNK_OVERLAP", "40"))
 
 
-STRICT_INGEST_REQUIRE_VISION = _env_bool("STRICT_INGEST_REQUIRE_VISION", True)
+STRICT_INGEST_REQUIRE_VISION = _env_bool("STRICT_INGEST_REQUIRE_VISION", False)
 
 
 ROLLBACK_ON_INGEST_ERROR = _env_bool("ROLLBACK_ON_INGEST_ERROR", True)
 
 
-GEMINI_METADATA_MODE = os.getenv("GEMINI_METADATA_MODE", "missing_only").strip().lower()
+LLM_METADATA_MODE = os.getenv("LLM_METADATA_MODE", "missing_only").strip().lower()
 
 
 def remove_accents(text: str) -> str:
@@ -93,7 +93,7 @@ __all__ = [
     'EMBEDDING_CHUNK_OVERLAP',
     'STRICT_INGEST_REQUIRE_VISION',
     'ROLLBACK_ON_INGEST_ERROR',
-    'GEMINI_METADATA_MODE',
+    'LLM_METADATA_MODE',
     'remove_accents',
     'EMBEDDING_MODEL_NAME',
     'BASE_DIR',

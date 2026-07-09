@@ -4,17 +4,17 @@
 import re
 import json
 from mech_chatbot.config.logging import logger
-from mech_chatbot.llm.vision_client import describe_gemini_error, is_retryable_error
+from mech_chatbot.llm.vision_client import describe_vision_error, is_retryable_error
 
 # cross-module (owned) imports
-from mech_chatbot.ingestion.pdf.config import GEMINI_METADATA_MODE
-from mech_chatbot.ingestion.pdf.vision import call_gemini_vision
+from mech_chatbot.ingestion.pdf.config import LLM_METADATA_MODE
+from mech_chatbot.ingestion.pdf.vision import call_vision_model
 
 
 def _metadata_needs_llm(result):
-    if GEMINI_METADATA_MODE in {"off", "false", "0", "none"}:
+    if LLM_METADATA_MODE in {"off", "false", "0", "none"}:
         return False
-    if GEMINI_METADATA_MODE == "always":
+    if LLM_METADATA_MODE == "always":
         return True
     
     if not result.get("ma_doi_tuong"):
@@ -30,7 +30,7 @@ def _metadata_needs_llm(result):
 
 def extract_metadata_smart(text, ten_file, thu_muc, vision_model=None, quality_warnings=None):
     """
-    Chien luoc: Regex-first -> Gemini-fallback.
+    Chien luoc: Regex-first -> LLM-fallback.
     Luu y: LLM chi duoc goi khi Regex tra ve "Khong ro".
     Regex sai (false positive) se khong duoc LLM tu dong sua.
     Neu format ban ve thay doi dot ngot, kiem tra Regex truoc.
@@ -177,7 +177,7 @@ def extract_metadata_smart(text, ten_file, thu_muc, vision_model=None, quality_w
     }
  
     # HYBRID APPROACH: LLM Extraction de doc moi ma (V2).
-    # Mac dinh chi goi Gemini khi metadata quan trong con thieu de giam rate limit.
+    # Mac dinh chi goi LLM khi metadata quan trong con thieu de giam rate limit.
     if vision_model and _metadata_needs_llm(result):
         prompt = f"""
         Ban la chuyen gia doc tai lieu co khi. Hay trich xuat cac thong tin sau tu doan text, tra ve dung dinh dang JSON:
@@ -201,7 +201,7 @@ def extract_metadata_smart(text, ten_file, thu_muc, vision_model=None, quality_w
         """
         try:
             import json
-            response = call_gemini_vision(vision_model, prompt)
+            response = call_vision_model(vision_model, prompt)
             raw_json = response.text.replace('```json', '').replace('```', '').strip()
             llm_result = json.loads(raw_json)
             
@@ -224,7 +224,7 @@ def extract_metadata_smart(text, ten_file, thu_muc, vision_model=None, quality_w
                     if w not in quality_warnings:
                         quality_warnings.append(str(w))
         except Exception as e:
-            detail = describe_gemini_error(e)
+            detail = describe_vision_error(e)
             msg = f"Loi LLM Fallback boc tach metadata cho {ten_file}: {detail}"
             logger.error(msg)
             if quality_warnings is not None:

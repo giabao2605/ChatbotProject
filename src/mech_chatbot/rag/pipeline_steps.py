@@ -145,11 +145,11 @@ def _analyze_image(image_path, user_question, trace_id):
     # _VISION_MODEL doc qua module attribute (gan 1 lan luc bootstrap, khong reassign)
     from mech_chatbot.rag import bootstrap as _bootstrap
     _VISION_MODEL = _bootstrap._VISION_MODEL
-    # BUOC A: XU LY ANH BANG GEMINI
+    # BUOC A: XU LY ANH BANG VISION MODEL
     image_analysis = ""
     if image_path:
         t_img_start = time.time()
-        logger.info("Dang dung Gemini de phan tich anh tai len...")
+        logger.info("Dang dung vision model de phan tich anh tai len...")
         if _VISION_MODEL:
             try:
                 img_to_analyze = Image.open(image_path)
@@ -160,25 +160,25 @@ def _analyze_image(image_path, user_question, trace_id):
                     wait=wait_exponential(multiplier=2, min=2, max=30),
                     stop=stop_after_attempt(5)
                 )
-                def call_gemini():
+                def call_vision():
                     return _VISION_MODEL.generate_content([prompt, img_to_analyze])
  
-                response = call_gemini()
+                response = call_vision()
                 image_analysis = response.text
-                logger.info("Phan tich anh bang Gemini thanh cong.")
+                logger.info("Phan tich anh bang vision model thanh cong.")
                 
                 log_trace("image_analysis", trace_id, 
                           latency_ms=int((time.time() - t_img_start)*1000),
                           success=True,
                           analysis_chars=len(image_analysis))
             except Exception as e:
-                logger.error(f"Loi khi doc anh bang Gemini: {e}", exc_info=True)
+                logger.error(f"Loi khi doc anh bang vision model: {e}", exc_info=True)
                 log_trace("image_analysis", trace_id, 
                           latency_ms=int((time.time() - t_img_start)*1000),
                           success=False,
                           error=str(e))
         else:
-            logger.warning("Chua co API Key Gemini hop le, bo qua phan tich anh.")
+            logger.warning("Chua co API key vision hop le, bo qua phan tich anh.")
             log_trace("image_analysis", trace_id, 
                       latency_ms=int((time.time() - t_img_start)*1000),
                       success=False,

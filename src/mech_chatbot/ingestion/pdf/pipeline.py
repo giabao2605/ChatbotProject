@@ -31,12 +31,12 @@ class _LazyRagAttr:
 
 vectorstore = _LazyRagAttr("vectorstore")
 client = _LazyRagAttr("client")
-from mech_chatbot.llm.vision_client import describe_gemini_error, is_retryable_error
+from mech_chatbot.llm.vision_client import describe_vision_error, is_retryable_error
 
 # cross-module (owned) imports
 from mech_chatbot.ingestion.pdf.config import IMAGE_DIR, IMAGE_EXTENSIONS, ROLLBACK_ON_INGEST_ERROR, STRICT_INGEST_REQUIRE_VISION
 from mech_chatbot.ingestion.pdf.chunking import _build_chunk_context_prefix, _contextual_chunk_enabled, token_splitter, tokenize_cached
-from mech_chatbot.ingestion.pdf.vision import _prewarm_vision_cache, call_gemini_vision, format_vision_data, parse_vision_json
+from mech_chatbot.ingestion.pdf.vision import _prewarm_vision_cache, call_vision_model, format_vision_data, parse_vision_json
 from mech_chatbot.ingestion.pdf.quality import _normalize_phong_ban_quyen, calculate_quality_status
 from mech_chatbot.ingestion.pdf.bom import extract_bom_records
 from mech_chatbot.ingestion.pdf.readers import extract_text_from_supported_file
@@ -97,10 +97,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
         "total_chunks": 0,
         "pages_text_extracted": [],
         "pages_table_extracted": [],
-        "pages_local_ocr_success": [],
-        "pages_gemini_success": [],
+        "pages_vision_success": [],
         "failed_pages": [],
-        "vision_failed_pages": [],
+        "vision_warnings": [],
         "pages_vision_cache_hit": [],
         "metadata_llm_failed_pages": [],
         "bom_rows_count": 0,
@@ -158,24 +157,22 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 if len(text.strip()) > 100:
                     report["pages_text_extracted"].append(page_num + 1)
                 
-                # Luon goi Gemini cho PDF ky thuat, tru trang toan text
+                # Phan tich anh qua GPT-5.4 Vision khi can.
                 from mech_chatbot.ingestion.domain_handlers import get_handler as _gh_vision
                 _is_mech_domain_vision = _gh_vision(domain).vision_always
                 # P0: chi day anh/scan qua GPT Vision. Trang co lop text day (van ban thuan)
                 # thuoc domain phi co khi thi doc truc tiep tu text layer, tiet kiem quota Vision.
                 vision_required = os.path.exists(img_path) and (_is_mech_domain_vision or not is_text_heavy)
                 vision_failed = False
-                local_ocr_text = ""
-                local_ocr_confidence = 0.0
+                ocr_text = ""
+                ocr_confidence = 0.0
                 vision_data = {}
                 
                 if vision_required:
-                    # Che do chinh xac cao: bo qua Local OCR/Tesseract hoan toan.
-                    # Luon dua anh trang PDF sang GPT-5.4 Vision de OCR + trich xuat JSON.
-                    local_ocr_text = ""
-                    local_ocr_confidence = 0.0
+                    ocr_text = ""
+                    ocr_confidence = 0.0
                     if progress_callback:
-                        progress_callback(f"Trang {page_num+1}: Bỏ qua Local OCR, dùng GPT-5.4 Vision để phân tích ảnh.")
+                        progress_callback(f"Trang {page_num+1}: dùng GPT-5.4 Vision để phân tích ảnh.")
 
                 if vision_model and vision_required:
                     if progress_callback:
@@ -208,14 +205,14 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                             if progress_callback:
                                 progress_callback(f"Trang {page_num+1}: dung lai ket qua Vision tu cache (tiet kiem chi phi).")
                         else:
-                            response = call_gemini_vision(vision_model, prompt, img_to_analyze)
+                            response = call_vision_model(vision_model, prompt, img_to_analyze)
                             vision_data = parse_vision_json(response.text)
                             if vision_data:
                                 _vc.put(_page_key, vision_data)
                         
                         if vision_data:
                             image_summary = format_vision_data(vision_data)
-                            report["pages_gemini_success"].append(page_num + 1)
+                            report["pages_vision_success"].append(page_num + 1)
                             
                             # Add to vision_metadata
                             if vision_data.get("document_codes"): vision_metadata["vision_document_codes"] = ", ".join([str(x) for x in vision_data["document_codes"]])
@@ -248,15 +245,15 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                             image_summary = response.text
                     except Exception as e:
                         vision_failed = True
-                        detail = describe_gemini_error(e)
+                        detail = describe_vision_error(e)
                         warn = f"Trang {page_num+1}: GPT-5.4 Vision/OCR lỗi cho {img_name}: {detail}"
-                        report["vision_failed_pages"].append(page_num+1)
+                        report["vision_warnings"].append({"page": page_num + 1, "detail": detail})
                         report["warnings"].append(warn)
                         logger.error(warn)
                 elif vision_required and not vision_model:
                     vision_failed = True
                     warn = f"Trang {page_num+1}: cần GPT-5.4 Vision/OCR nhưng chưa cấu hình PROXYLLM_API_KEY hợp lệ."
-                    report["vision_failed_pages"].append(page_num+1)
+                    report["vision_warnings"].append({"page": page_num + 1, "detail": "no_vision_model"})
                     report["warnings"].append(warn)
                     logger.error(warn)
 
@@ -310,12 +307,12 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 add_attr("note", info.get("yckt"), text[:200], "llm_text")
 
                 if vision_data:
-                    add_attr("material", vision_data.get("materials"), image_summary[:500], "gemini_vision", 0.9)
-                    add_attr("dimension", vision_data.get("dimensions"), image_summary[:500], "gemini_vision", 0.9)
-                    add_attr("tolerance", vision_data.get("tolerances"), image_summary[:500], "gemini_vision", 0.9)
-                    add_attr("part_name", vision_data.get("part_names"), image_summary[:500], "gemini_vision", 0.9)
-                    add_attr("drawing_code", vision_data.get("document_codes"), image_summary[:500], "gemini_vision", 0.9)
-                    add_attr("note", vision_data.get("technical_notes"), image_summary[:500], "gemini_vision", 0.9)
+                    add_attr("material", vision_data.get("materials"), image_summary[:500], "vision", 0.9)
+                    add_attr("dimension", vision_data.get("dimensions"), image_summary[:500], "vision", 0.9)
+                    add_attr("tolerance", vision_data.get("tolerances"), image_summary[:500], "vision", 0.9)
+                    add_attr("part_name", vision_data.get("part_names"), image_summary[:500], "vision", 0.9)
+                    add_attr("drawing_code", vision_data.get("document_codes"), image_summary[:500], "vision", 0.9)
+                    add_attr("note", vision_data.get("technical_notes"), image_summary[:500], "vision", 0.9)
 
                 from mech_chatbot.ingestion.mechanical_extractors import extract_mechanical_attributes
                 from mech_chatbot.ingestion.domain_handlers import get_handler as _gh_attr
@@ -403,9 +400,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     file_name=ten_file,
                     page_no=page_num + 1,
                     text_extract=text,
-                    local_ocr_text=local_ocr_text,
+                    ocr_text=ocr_text,
                     vision_summary=image_summary,
-                    local_ocr_confidence=local_ocr_confidence,
+                    ocr_confidence=ocr_confidence,
                     extraction_status="success",
                     image_path=img_path
                 )
@@ -570,10 +567,11 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
         message_parts.append(report["message"])
     if report["failed_pages"]:
         message_parts.append(f"Cac trang loi/bo qua: {report['failed_pages']}")
-    if report["vision_failed_pages"]:
-        message_parts.append(f"Trang lỗi GPT-5.4 Vision/OCR: {report['vision_failed_pages']}")
+    if report["vision_warnings"]:
+        pages = [item.get("page") for item in report["vision_warnings"] if isinstance(item, dict)]
+        message_parts.append(f"Trang cảnh báo GPT-5.4 Vision: {pages}")
     if report["metadata_llm_failed_pages"]:
-        message_parts.append(f"Trang lỗi GPT-5.4 metadata fallback: {report['metadata_llm_failed_pages']}")
+        message_parts.append(f"Trang lỗi LLM metadata fallback: {report['metadata_llm_failed_pages']}")
     if report["warnings"]:
         message_parts.append("Canh bao chat luong: " + " | ".join(report["warnings"][:5]))
     if not message_parts:
@@ -597,10 +595,9 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         "total_chunks": 0,
         "pages_text_extracted": [],
         "pages_table_extracted": [],
-        "pages_local_ocr_success": [],
-        "pages_gemini_success": [],
+        "pages_vision_success": [],
         "failed_pages": [],
-        "vision_failed_pages": [],
+        "vision_warnings": [],
         "metadata_llm_failed_pages": [],
         "bom_rows_count": 0,
         "technical_attributes_count": 0,
@@ -820,7 +817,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
     if report["message"]:
         message_parts.append(report["message"])
     if report["metadata_llm_failed_pages"]:
-        message_parts.append(f"Trang loi Gemini metadata fallback: {report['metadata_llm_failed_pages']}")
+        message_parts.append(f"Trang loi LLM metadata fallback: {report['metadata_llm_failed_pages']}")
     if report["warnings"]:
         message_parts.append("Canh bao chat luong: " + " | ".join(report["warnings"][:5]))
     if not message_parts:

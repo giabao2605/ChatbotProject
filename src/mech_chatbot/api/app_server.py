@@ -78,6 +78,8 @@ from mech_chatbot.services import (
     list_audit_logs,
     list_access_requests,
     list_bulk_action_jobs,
+    list_bulk_meta_departments,
+    list_docs_for_bulk_meta,
     list_domain_glossary,
     list_documents,
     list_expiring_documents,
@@ -128,10 +130,12 @@ from mech_chatbot.services import (
     update_document_common_metadata,
     update_user_active_and_roles,
     update_user_password,
+    upsert_golden_answer,
     upsert_department,
     upsert_glossary_term,
     upsert_material,
     upsert_site,
+    ensure_regression_question,
     write_audit_log,
 )
 
@@ -236,6 +240,79 @@ def _safe_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_json_obj(raw: str | None, field_name: str) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{field_name} không hợp lệ (JSON)")
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail=f"{field_name} phải là object JSON")
+    return {k: v for k, v in parsed.items() if v not in (None, "")} or None
+
+
+def _parse_json_list(raw: str | None, field_name: str) -> list[Any]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{field_name} không hợp lệ (JSON)")
+    if not isinstance(parsed, list):
+        raise HTTPException(status_code=400, detail=f"{field_name} phải là array JSON")
+    return parsed
+
+
+def _split_csv(value: Any) -> list[str]:
+    if isinstance(value, list):
+        source = value
+    elif isinstance(value, str):
+        source = re.split(r"[\s,]+", value)
+    else:
+        source = []
+    return [str(x).strip() for x in source if str(x).strip()]
+
+
+def _parse_json_or_csv_list(raw: str | None, field_name: str) -> list[str]:
+    if not raw:
+        return []
+    stripped = raw.strip()
+    if stripped.startswith("["):
+        return _split_csv(_parse_json_list(stripped, field_name))
+    return _split_csv(stripped)
+
+
+def _assert_upload_department(profile: dict[str, Any], dept: str) -> None:
+    if _is_admin(profile):
+        return
+    allowed = set(profile.get("allowed_departments") or [])
+    if dept not in allowed:
+        raise HTTPException(status_code=403, detail=f"Không có quyền upload vào phòng ban {dept}")
+
+
+def _store_upload_file(file: UploadFile, dept: str) -> tuple[str, str]:
+    allowed_ext = {
+        ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".csv", ".pptx",
+        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff",
+    }
+    original_name = file.filename or ""
+    ext = Path(original_name).suffix.lower()
+    if ext not in allowed_ext:
+        raise HTTPException(status_code=400, detail=f"Định dạng tệp không được hỗ trợ: {original_name}")
+    raw = file.file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail=f"Tệp rỗng: {original_name}")
+    if len(raw) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Tệp quá lớn (giới hạn 100MB): {original_name}")
+    safe_dept = re.sub(r"[^A-Za-z0-9_\-]", "_", (dept or "").strip()) or "CHUNG"
+    out_dir = data_raw_root() / "Uploads" / safe_dept
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stored_path = out_dir / f"{uuid4().hex}{ext}"
+    stored_path.write_bytes(raw)
+    return original_name, str(stored_path)
 
 
 def _row_to_json(row: Any) -> Any:
@@ -705,6 +782,7 @@ def documents(
     dept: str | None = None,
     domain: str | None = None,
     sec: str | None = None,
+    eff_mode: str | None = None,
     search: str | None = None,
     profile: dict[str, Any] = Depends(current_profile),
 ):
@@ -714,6 +792,7 @@ def documents(
         dept=dept,
         domain=domain,
         sec=sec,
+        eff_mode=eff_mode,
         search_kw=search,
     )
     return {"documents": [dict(row._mapping) if hasattr(row, "_mapping") else list(row) for row in rows]}
@@ -729,57 +808,104 @@ def documents_upload(
     cong_doan: str | None = Form(None),
     site: str | None = Form(None),
     meta_json: str | None = Form(None),
+    extra_departments_json: str | None = Form(None),
     profile: dict[str, Any] = Depends(csrf_profile),
 ):
     """Nhan file tai len tu web-ui, luu vao Uploads/<thu_muc> va tao IngestionJob
     (Status='pending') de worker xu ly. Yeu cau vai tro uploader/reviewer/admin
     + CSRF. Tra ve job_id de UI dieu huong sang trang tien trinh ingest."""
     _assert_any_role(profile, "uploader", "reviewer", "admin")
-    allowed_ext = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".csv", ".pptx"}
-    original_name = file.filename or ""
-    ext = Path(original_name).suffix.lower()
-    if ext not in allowed_ext:
-        raise HTTPException(status_code=400, detail="Định dạng tệp không được hỗ trợ")
-    raw = file.file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Tệp rỗng")
-    if len(raw) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Tệp quá lớn (giới hạn 100MB)")
-    safe_dept = re.sub(r"[^A-Za-z0-9_\-]", "_", (thu_muc or "").strip()) or "CHUNG"
-    out_dir = data_raw_root() / "Uploads" / safe_dept
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stored_path = out_dir / f"{uuid4().hex}{ext}"
-    stored_path.write_bytes(raw)
+    dept = (thu_muc or "").strip()
+    _assert_upload_department(profile, dept)
+    original_name, stored_path = _store_upload_file(file, dept)
     from mech_chatbot.db.repositories.jobs import create_ingestion_job
-    # GD2: metadata chi tiet nhap tu form upload duoc gui duoi dang JSON string
-    # (meta_json) -> parse thanh dict va truyen vao upload_meta de worker ap xuong TaiLieu.
-    upload_meta = None
-    if meta_json:
-        try:
-            import json as _json
-            _parsed_meta = _json.loads(meta_json)
-        except Exception:
-            raise HTTPException(status_code=400, detail="meta_json không hợp lệ (JSON)")
-        if isinstance(_parsed_meta, dict):
-            upload_meta = {k: v for k, v in _parsed_meta.items() if v not in (None, "")} or None
+    upload_meta = _parse_json_obj(meta_json, "meta_json")
+    extra_departments = _parse_json_or_csv_list(extra_departments_json, "extra_departments_json")
+    phong_ban = [dept] + [d for d in extra_departments if d != dept]
     job_id = create_ingestion_job(
         file_name=original_name,
-        file_path=str(stored_path),
-        thu_muc=(thu_muc or "").strip(),
+        file_path=stored_path,
+        thu_muc=dept,
         uploaded_by=profile.get("username"),
         domain=domain,
         security_level=security_level,
         cong_doan=cong_doan,
         site=site,
+        phong_ban=phong_ban,
         upload_meta=upload_meta,
     )
     if not job_id:
         try:
-            stored_path.unlink(missing_ok=True)
+            Path(stored_path).unlink(missing_ok=True)
         except Exception:
             pass
         raise HTTPException(status_code=400, detail="Không tạo được job (phòng ban có thể bị vô hiệu)")
     return {"ok": True, "job_id": job_id, "file_name": original_name}
+
+
+@data_router.post("/documents/upload-batch")
+def documents_upload_batch(
+    files: list[UploadFile] = File(...),
+    thu_muc: str | None = Form(None),
+    domain: str | None = Form(None),
+    security_level: str | None = Form(None),
+    cong_doan: str | None = Form(None),
+    site: str | None = Form(None),
+    meta_json: str | None = Form(None),
+    extra_departments_json: str | None = Form(None),
+    assignments_json: str | None = Form(None),
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    _assert_any_role(profile, "uploader", "reviewer", "admin")
+    if not files:
+        raise HTTPException(status_code=400, detail="Chưa chọn tệp")
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail="Một lần upload tối đa 50 tệp")
+
+    from mech_chatbot.db.repositories.jobs import create_ingestion_job
+
+    upload_meta = _parse_json_obj(meta_json, "meta_json")
+    assignments = _parse_json_list(assignments_json, "assignments_json")
+    default_dept = (thu_muc or "").strip()
+    default_extra = _parse_json_or_csv_list(extra_departments_json, "extra_departments_json")
+    created: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for index, upload in enumerate(files):
+        assignment = assignments[index] if index < len(assignments) and isinstance(assignments[index], dict) else {}
+        dept = str(assignment.get("thu_muc") or default_dept).strip()
+        if not dept:
+            errors.append({"file_name": upload.filename, "error": "Thiếu phòng ban"})
+            continue
+        try:
+            _assert_upload_department(profile, dept)
+            original_name, stored_path = _store_upload_file(upload, dept)
+            extra = _split_csv(assignment.get("extra_departments") or default_extra)
+            phong_ban = [dept] + [d for d in extra if d != dept]
+            job_id = create_ingestion_job(
+                file_name=original_name,
+                file_path=stored_path,
+                thu_muc=dept,
+                uploaded_by=profile.get("username"),
+                domain=assignment.get("domain") or domain,
+                security_level=assignment.get("security_level") or security_level,
+                cong_doan=assignment.get("cong_doan") or cong_doan,
+                site=assignment.get("site") or site,
+                phong_ban=phong_ban,
+                upload_meta=upload_meta,
+            )
+            if not job_id:
+                Path(stored_path).unlink(missing_ok=True)
+                errors.append({"file_name": original_name, "error": "Không tạo được job"})
+            else:
+                created.append({"job_id": job_id, "file_name": original_name, "thu_muc": dept})
+        except HTTPException as exc:
+            errors.append({"file_name": upload.filename, "error": exc.detail})
+        except Exception as exc:
+            logger.exception("upload batch failed for %s", upload.filename)
+            errors.append({"file_name": upload.filename, "error": str(exc)})
+
+    return {"ok": not errors, "jobs": created, "errors": errors, "created": len(created), "failed": len(errors)}
 
 
 @data_router.get("/ingestion/jobs")
@@ -844,7 +970,7 @@ def my_access_requests(limit: int = 50, profile: dict[str, Any] = Depends(curren
 
 @data_router.post("/access/requests/{request_id}/resolve")
 def access_request_resolve(request_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin")
+    _assert_any_role(profile, "admin", "reviewer")
     result = resolve_access_request(
         request_id=request_id,
         decision=str(body.get("decision") or ""),
@@ -899,6 +1025,109 @@ def documents_pending_review(profile: dict[str, Any] = Depends(require_any_role(
 @data_router.get("/documents/expiring")
 def documents_expiring(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
     return {"documents": _rows_to_json(list_expiring_documents())}
+
+
+@data_router.get("/documents/bulk-meta")
+def documents_bulk_meta(
+    dept: str | None = None,
+    domain: str | None = None,
+    profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin")),
+):
+    if dept:
+        for suffix in (" (disabled)", " (archived)"):
+            if dept.endswith(suffix):
+                dept = dept[: -len(suffix)]
+                break
+    return {
+        "documents": _rows_to_json(list_docs_for_bulk_meta(dept=dept, domain=domain)),
+        "departments": list_bulk_meta_departments(),
+    }
+
+
+@data_router.patch("/documents/bulk-metadata")
+def documents_bulk_metadata(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
+    _assert_any_role(profile, "reviewer", "admin")
+    raw_ids = body.get("doc_ids") or []
+    metadata = body.get("metadata") or {}
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=400, detail="doc_ids không hợp lệ")
+    if not isinstance(metadata, dict) or not metadata:
+        raise HTTPException(status_code=400, detail="metadata không hợp lệ")
+    ok = 0
+    fail = 0
+    fields = {k: v for k, v in metadata.items() if k not in {"attributes", "domain"} and v not in (None, "")}
+    attrs = metadata.get("attributes")
+    domain = metadata.get("domain")
+    for raw_id in raw_ids:
+        doc_id = _safe_int(raw_id)
+        if not doc_id:
+            fail += 1
+            continue
+        try:
+            result = update_document_common_metadata(
+                doc_id,
+                reviewer=profile.get("username") or "System",
+                attributes=attrs,
+                domain=domain,
+                **fields,
+            )
+            ok += 1 if result else 0
+            fail += 0 if result else 1
+        except Exception:
+            logger.exception("bulk metadata update failed for doc_id=%s", doc_id)
+            fail += 1
+    return {"ok": fail == 0, "updated": ok, "failed": fail}
+
+
+@data_router.post("/documents/review/bulk")
+def documents_review_bulk(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
+    _assert_any_role(profile, "reviewer", "admin")
+    items = body.get("items") or []
+    action = str(body.get("action") or "").strip()
+    publish_mode = str(body.get("publish_mode") or "standalone").strip()
+    reason = str(body.get("reason") or "")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="items không hợp lệ")
+    if action not in {"publish", "reject", "delete"}:
+        raise HTTPException(status_code=400, detail="action không hợp lệ")
+    ok = 0
+    fail = 0
+    reviewer = profile.get("username") or "System"
+    for item in items:
+        if not isinstance(item, dict):
+            fail += 1
+            continue
+        job_id = _safe_int(item.get("job_id"))
+        doc_id = _safe_int(item.get("doc_id"))
+        try:
+            if action == "publish":
+                if not doc_id or not job_id:
+                    raise RuntimeError("Thiếu DocID hoặc JobID")
+                if publish_mode == "new_version":
+                    result = publish_as_new_version(doc_id, reviewer=reviewer)
+                elif publish_mode == "new_variant":
+                    result = publish_as_new_variant(doc_id, reviewer=reviewer)
+                else:
+                    result = publish_as_standalone(doc_id, reviewer=reviewer)
+                if not result:
+                    raise RuntimeError("Publish thất bại")
+                mark_job_published(job_id)
+            elif action == "reject":
+                if not job_id:
+                    raise RuntimeError("Thiếu JobID")
+                reject_ingestion_job(job_id, reason) or mark_job_rejected(job_id)
+                if doc_id:
+                    reject_document(doc_id, reviewer=reviewer)
+            elif action == "delete":
+                if doc_id:
+                    delete_document_completely(doc_id, reviewer=reviewer)
+                if job_id:
+                    delete_ingestion_job(job_id)
+            ok += 1
+        except Exception:
+            logger.exception("bulk review action failed: action=%s job_id=%s doc_id=%s", action, job_id, doc_id)
+            fail += 1
+    return {"ok": fail == 0, "updated": ok, "failed": fail}
 
 
 @data_router.patch("/documents/{doc_id}/current")
@@ -1053,6 +1282,11 @@ def user_create(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_pro
         selected_roles=body.get("roles") or [],
         depts=body.get("departments") or [],
     )
+    if result:
+        user_id = _safe_int(result.get("user_id") if isinstance(result, dict) else result)
+        if user_id:
+            set_user_sites(user_id, body.get("sites") or [])
+            set_user_clearance(user_id, body.get("max_level") or "public")
     return {"ok": bool(result), "result": result}
 
 
@@ -1342,14 +1576,43 @@ def feedbacks(only_pending: bool = False, profile: dict[str, Any] = Depends(requ
 @data_router.post("/feedback/{feedback_id}/classify")
 def feedback_classify(feedback_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
-    return {
-        "result": classify_feedback_and_get_source(
-            feedback_id,
-            failure_type=body.get("failure_type"),
-            correct_answer=body.get("correct_answer"),
-            reviewer_note=body.get("reviewer_note"),
-        )
-    }
+    correct_answer = body.get("correct_answer")
+    result = classify_feedback_and_get_source(
+        feedback_id,
+        failure_type=body.get("failure_type"),
+        correct_answer=correct_answer,
+        reviewer_note=body.get("reviewer_note"),
+    )
+    golden_hash = None
+    regression_qid = None
+    if correct_answer and str(correct_answer).strip():
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT Question, SourceDocID, Department, Site "
+                    "FROM FeedbackReview WHERE FeedbackID = :fid"
+                ),
+                {"fid": feedback_id},
+            ).fetchone()
+        if row:
+            question, source_doc_id, department, site = row
+            golden_hash = upsert_golden_answer(
+                question=question,
+                answer=correct_answer,
+                source_doc_id=source_doc_id,
+                department=department,
+                site=site,
+                created_by=profile.get("username") or "reviewer",
+                feedback_id=feedback_id,
+            )
+            regression_qid = ensure_regression_question(
+                question=question,
+                expected_doc_id=source_doc_id,
+                department=department,
+                site=site,
+                created_by=profile.get("username") or "reviewer",
+            )
+    return {"result": result, "golden_hash": golden_hash, "regression_qid": regression_qid}
 
 
 @data_router.delete("/feedback/{feedback_id}")

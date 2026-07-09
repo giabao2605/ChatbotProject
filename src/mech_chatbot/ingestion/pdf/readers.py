@@ -9,7 +9,7 @@ from PIL import Image
 
 # cross-module (owned) imports
 from mech_chatbot.ingestion.pdf.config import HTML_EXTENSIONS, IMAGE_EXTENSIONS, PRESENTATION_EXTENSIONS, SUPPORTED_LEARNING_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS, WORD_EXTENSIONS
-from mech_chatbot.ingestion.pdf.vision import call_gemini_vision, format_vision_data, parse_vision_json
+from mech_chatbot.ingestion.pdf.vision import call_vision_model, format_vision_data, parse_vision_json
 
 
 try:
@@ -172,7 +172,7 @@ def _read_image_file(file_path, ten_file, vision_model):
         "Luon tra ve dung dinh dang JSON (khong kem text mo dau/ket thuc ngoai block ```json). "
         "Dien vao cac mang cac thong tin ky thuat tuong ung ban nhin thay trong anh."
     )
-    response = call_gemini_vision(vision_model, prompt, image)
+    response = call_vision_model(vision_model, prompt, image)
     vision_data = parse_vision_json(response.text)
 
     if vision_data:

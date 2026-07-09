@@ -7,7 +7,7 @@ import json
 from PIL import Image
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception
 from mech_chatbot.config.logging import logger
-from mech_chatbot.llm.vision_client import describe_gemini_error, is_retryable_error
+from mech_chatbot.llm.vision_client import is_retryable_error
 
 # cross-module (owned) imports
 from mech_chatbot.ingestion.pdf.config import IMAGE_DIR
@@ -18,7 +18,7 @@ from mech_chatbot.ingestion.pdf.config import IMAGE_DIR
     wait=wait_exponential(multiplier=2, min=4, max=60),
     stop=stop_after_attempt(5)
 )
-def call_gemini_vision(vision_model, prompt, image=None):
+def call_vision_model(vision_model, prompt, image=None):
     if image:
         return vision_model.generate_content([prompt, image])
     else:
@@ -26,7 +26,7 @@ def call_gemini_vision(vision_model, prompt, image=None):
 
 
 def parse_vision_json(raw_text):
-    """Parse JSON tu Gemini tra ve, ho tro fallback regex"""
+    """Parse JSON tu vision model tra ve, ho tro fallback regex."""
     try:
         json_str = raw_text
         if "```json" in json_str:
@@ -142,7 +142,7 @@ def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress
             img_path, prompt, key = t
             try:
                 img = Image.open(img_path)
-                resp = call_gemini_vision(vision_model, prompt, img)
+                resp = call_vision_model(vision_model, prompt, img)
                 vd = parse_vision_json(resp.text)
                 if vd:
                     _vc.put(key, vd)
@@ -155,7 +155,7 @@ def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress
         logger.warning(f"[prewarm] bo qua do loi: {_e}")
 
 __all__ = [
-    'call_gemini_vision',
+    'call_vision_model',
     'parse_vision_json',
     'format_vision_data',
     '_prewarm_vision_cache',

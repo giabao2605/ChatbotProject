@@ -4,12 +4,18 @@ import * as api from "@/api/client";
 import { useChatStore } from "@/stores/chat";
 import type { ChatMessage, SessionItem } from "@/types";
 
+type UiMessage = ChatMessage & {
+  progress?: string[];
+  progressState?: "running" | "done" | "error";
+};
+
 const chatStore = useChatStore();
 const sessions = ref<SessionItem[]>([]);
-const messages = ref<ChatMessage[]>([]);
+const messages = ref<UiMessage[]>([]);
 const input = ref("");
 const busy = ref(false);
 const thinking = ref(false);
+const historyOpen = ref(false);
 const warning = ref("");
 const error = ref("");
 const selectedFile = ref<File | null>(null);
@@ -18,6 +24,7 @@ const uploadToken = ref("");
 const scrollEl = ref<HTMLElement | null>(null);
 
 const sessionId = computed(() => chatStore.sessionId);
+const latestAssistant = computed(() => [...messages.value].reverse().find((message) => message.role === "assistant"));
 
 async function refreshSessions() {
   sessions.value = await api.listSessions();
@@ -41,6 +48,7 @@ async function openSession(id: string) {
   if (busy.value) return;
   chatStore.openSession(id);
   messages.value = await api.loadHistory(id);
+  historyOpen.value = false;
   await scrollToBottom();
 }
 
@@ -55,6 +63,15 @@ function clearFile() {
   selectedFile.value = null;
   selectedPreview.value = "";
   uploadToken.value = "";
+}
+
+function setAssistantProgress(step: string, state: UiMessage["progressState"] = "running") {
+  const last = messages.value[messages.value.length - 1];
+  if (last?.role !== "assistant") return;
+  const current = last.progress ?? [];
+  if (!current.includes(step)) current.push(step);
+  last.progress = current;
+  last.progressState = state;
 }
 
 async function onFileChange(event: Event) {
@@ -87,7 +104,12 @@ async function send() {
     image_url: selectedPreview.value || null,
     image_name: selectedFile.value?.name || null,
   };
-  messages.value.push(userMessage, { role: "assistant", content: "" });
+  messages.value.push(userMessage, {
+    role: "assistant",
+    content: "",
+    progress: ["Đã nhận câu hỏi"],
+    progressState: "running",
+  });
   const imageToken = uploadToken.value || null;
   clearFile();
   await scrollToBottom();
@@ -106,9 +128,12 @@ async function send() {
       {
         onThinking() {
           thinking.value = true;
+          setAssistantProgress("Đang phân tích ý định và tra cứu tài liệu");
+          scrollToBottom();
         },
         onDelta(text) {
           thinking.value = false;
+          setAssistantProgress("Đang soạn câu trả lời từ tài liệu");
           const last = messages.value[messages.value.length - 1];
           if (last?.role === "assistant") last.content += text;
           scrollToBottom();
@@ -118,11 +143,13 @@ async function send() {
         },
         onError(message) {
           error.value = message;
+          setAssistantProgress("Có lỗi khi xử lý câu hỏi", "error");
           const last = messages.value[messages.value.length - 1];
           if (last?.role === "assistant" && !last.content) last.content = `Lỗi: ${message}`;
         },
         onDone(data) {
           thinking.value = false;
+          setAssistantProgress("Hoàn tất", "done");
           const last = messages.value[messages.value.length - 1];
           if (last?.role === "assistant") {
             last.chat_id = data.chat_id ?? null;
@@ -139,6 +166,7 @@ async function send() {
     );
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Gửi câu hỏi thất bại";
+    setAssistantProgress("Có lỗi khi gửi câu hỏi", "error");
   } finally {
     busy.value = false;
     thinking.value = false;
@@ -158,82 +186,478 @@ onMounted(async () => {
 
 <template>
   <div class="chat-page">
-    <aside class="chat-history">
-      <Button label="Cuộc trò chuyện mới" class="full-width" @click="newChat" />
-      <div class="history-list">
-        <div v-for="session in sessions" :key="session.session_id" class="history-row">
-          <button class="history-title" @click="openSession(session.session_id)">
-            {{ session.cau_hoi }}
-          </button>
-          <button class="text-button" @click="removeSession(session.session_id)">Xóa</button>
-        </div>
-      </div>
-    </aside>
-
     <section class="chat-main">
-      <header class="page-header">
+      <header class="chat-header">
         <div>
           <div class="eyebrow">RAG Q&A</div>
           <h1>Trợ lý tài liệu nội bộ</h1>
+          <p class="page-subtitle">Hỏi đáp theo tài liệu, có nguồn tham khảo và ảnh đính kèm khi cần.</p>
         </div>
-        <Tag :value="busy ? 'Đang xử lý' : 'Sẵn sàng'" :severity="busy ? 'warn' : 'success'" />
+        <div class="chat-header-actions">
+          <Button label="Cuộc trò chuyện mới" severity="secondary" outlined :disabled="busy" @click="newChat" />
+          <Button
+            :label="historyOpen ? 'Ẩn lịch sử' : 'Lịch sử'"
+            severity="secondary"
+            outlined
+            @click="historyOpen = !historyOpen"
+          />
+          <Tag :value="busy ? 'Đang xử lý' : 'Sẵn sàng'" :severity="busy ? 'warn' : 'success'" />
+        </div>
       </header>
 
-      <div ref="scrollEl" class="message-scroll">
-        <div v-if="messages.length === 0" class="empty-state">
-          <h2>Xin chào, tôi có thể giúp gì cho bạn?</h2>
-          <p>Đặt câu hỏi về tài liệu, quy trình, chính sách hoặc dữ liệu nội bộ.</p>
-        </div>
-
-        <article v-for="(message, index) in messages" :key="`${message.role}-${index}`" :class="['message', message.role]">
-          <div class="message-card">
-            <div class="message-label">{{ message.role === "user" ? "Bạn" : "Trợ lý" }}</div>
-            <img v-if="message.image_url" :src="message.image_url" :alt="message.image_name || 'Ảnh upload'" class="upload-preview" />
-            <div v-if="message.role === 'assistant' && !message.content && thinking" class="thinking-row">
-              <ProgressSpinner stroke-width="4" class="small-spinner" />
-              <span>Đang suy nghĩ và tra cứu tài liệu...</span>
-            </div>
-            <p v-else class="message-text">{{ message.content }}</p>
-
-            <details v-if="message.ref_text" class="source-block">
-              <summary>Nguồn tham khảo</summary>
-              <pre>{{ message.ref_text }}</pre>
-            </details>
-
-            <div v-if="message.citations?.length" class="citation-grid">
-              <a v-for="citation in message.citations" :key="`${citation.doc_id}-${citation.page_no}`" :href="citation.original_url" target="_blank" class="citation-card">
-                <img :src="citation.page_url" :alt="`Doc ${citation.doc_id} trang ${citation.page_no}`" />
-                <span>{{ citation.file_name || `Doc ${citation.doc_id}` }} · trang {{ citation.page_no }}</span>
-              </a>
+      <div :class="['chat-body', { 'with-history': historyOpen }]">
+        <div class="chat-column">
+          <div ref="scrollEl" class="message-scroll">
+            <div v-if="messages.length === 0" class="empty-state">
+              <h2>Xin chào, tôi có thể giúp gì cho bạn?</h2>
+              <p>Đặt câu hỏi về tài liệu, quy trình, chính sách hoặc dữ liệu nội bộ.</p>
+              <div class="prompt-grid">
+                <button type="button" @click="input = 'Tóm tắt quy trình mới nhất của phòng Production'">
+                  Tóm tắt quy trình theo phòng ban
+                </button>
+                <button type="button" @click="input = 'So sánh hai tài liệu liên quan tới chính sách nghỉ phép'">
+                  So sánh nội dung giữa tài liệu
+                </button>
+                <button type="button" @click="input = 'Tìm bảng lương tháng 6 và nêu các điểm cần chú ý'">
+                  Tra cứu tài liệu cụ thể
+                </button>
+              </div>
             </div>
 
-            <div v-if="message.role === 'assistant' && message.chat_id" class="feedback-row">
-              <span>Đánh giá câu trả lời</span>
-              <Button label="Hữu ích" size="small" :outlined="message.feedback !== 1" @click="rate(message, 1)" />
-              <Button label="Không tốt" size="small" severity="secondary" :outlined="message.feedback !== -1" @click="rate(message, -1)" />
-            </div>
+            <article
+              v-for="(message, index) in messages"
+              :key="`${message.role}-${index}`"
+              :class="['message', message.role]"
+            >
+              <div class="message-card">
+                <div class="message-label">{{ message.role === "user" ? "Bạn" : "Trợ lý" }}</div>
+                <img
+                  v-if="message.image_url"
+                  :src="message.image_url"
+                  :alt="message.image_name || 'Ảnh upload'"
+                  class="upload-preview"
+                />
+                <div v-if="message.role === 'assistant' && !message.content" class="thinking-row">
+                  <div class="typing-dots" aria-label="Đang trả lời">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                  <span>Đang trả lời</span>
+                </div>
+                <p v-else class="message-text">{{ message.content }}</p>
+
+                <ol v-if="message.role === 'assistant' && message.progress?.length" class="progress-list">
+                  <li
+                    v-for="step in message.progress"
+                    :key="step"
+                    :class="{
+                      active: message.progressState === 'running' && step === message.progress[message.progress.length - 1],
+                      done: message.progressState === 'done',
+                      error: message.progressState === 'error' && step === message.progress[message.progress.length - 1],
+                    }"
+                  >
+                    <span v-text="step"></span>
+                  </li>
+                </ol>
+
+                <details v-if="message.ref_text" class="source-block">
+                  <summary>Nguồn tham khảo</summary>
+                  <pre>{{ message.ref_text }}</pre>
+                </details>
+
+                <div v-if="message.citations?.length" class="citation-grid">
+                  <a
+                    v-for="citation in message.citations"
+                    :key="`${citation.doc_id}-${citation.page_no}`"
+                    :href="citation.original_url"
+                    target="_blank"
+                    class="citation-card"
+                  >
+                    <img :src="citation.page_url" :alt="`Doc ${citation.doc_id} trang ${citation.page_no}`" />
+                    <span>{{ citation.file_name || `Doc ${citation.doc_id}` }} · trang {{ citation.page_no }}</span>
+                  </a>
+                </div>
+
+                <div v-if="message.role === 'assistant' && message.chat_id" class="feedback-row">
+                  <span>Đánh giá câu trả lời</span>
+                  <Button label="Hữu ích" size="small" :outlined="message.feedback !== 1" @click="rate(message, 1)" />
+                  <Button
+                    label="Không tốt"
+                    size="small"
+                    severity="secondary"
+                    :outlined="message.feedback !== -1"
+                    @click="rate(message, -1)"
+                  />
+                </div>
+              </div>
+            </article>
           </div>
-        </article>
+
+          <Message v-if="warning" severity="warn">{{ warning }}</Message>
+          <Message v-if="error" severity="error">{{ error }}</Message>
+
+          <footer class="composer">
+            <div v-if="selectedPreview" class="selected-file">
+              <img :src="selectedPreview" alt="Ảnh đã chọn" />
+              <span>{{ selectedFile?.name }}</span>
+              <Button label="Bỏ file" severity="secondary" text @click="clearFile" />
+            </div>
+            <div class="composer-row">
+              <label class="file-button">
+                Đính kèm
+                <input type="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff" @change="onFileChange" />
+              </label>
+              <Textarea
+                v-model="input"
+                auto-resize
+                rows="1"
+                placeholder="Hỏi bất cứ điều gì"
+                @keydown.enter.exact.prevent="send"
+              />
+              <Button :label="busy ? 'Đang gửi' : 'Gửi'" :disabled="busy || !input.trim()" @click="send" />
+            </div>
+          </footer>
+        </div>
+
+        <aside v-if="historyOpen" class="history-panel">
+          <div class="history-panel-header">
+            <strong>Lịch sử trò chuyện</strong>
+            <Button label="Tạo mới" size="small" @click="newChat" />
+          </div>
+          <div class="history-list">
+            <div v-for="session in sessions" :key="session.session_id" class="history-row">
+              <button class="history-title" @click="openSession(session.session_id)">
+                {{ session.cau_hoi }}
+              </button>
+              <button class="text-button" @click="removeSession(session.session_id)">Xóa</button>
+            </div>
+            <p v-if="!sessions.length" class="muted-text">Chưa có lịch sử.</p>
+          </div>
+        </aside>
       </div>
-
-      <Message v-if="warning" severity="warn">{{ warning }}</Message>
-      <Message v-if="error" severity="error">{{ error }}</Message>
-
-      <footer class="composer">
-        <div v-if="selectedPreview" class="selected-file">
-          <img :src="selectedPreview" alt="Ảnh đã chọn" />
-          <span>{{ selectedFile?.name }}</span>
-          <Button label="Bỏ file" severity="secondary" text @click="clearFile" />
-        </div>
-        <div class="composer-row">
-          <label class="file-button">
-            Đính kèm
-            <input type="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff" @change="onFileChange" />
-          </label>
-          <Textarea v-model="input" auto-resize rows="1" placeholder="Hỏi bất cứ điều gì" @keydown.enter.exact.prevent="send" />
-          <Button label="Gửi" :loading="busy" :disabled="!input.trim()" @click="send" />
-        </div>
-      </footer>
     </section>
   </div>
 </template>
+
+<style scoped>
+.chat-page {
+  min-height: 100dvh;
+}
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--border);
+  padding: 1rem clamp(1rem, 2vw, 2rem);
+}
+.chat-header h1 {
+  margin: 0.2rem 0 0;
+  font-size: 1.2rem;
+}
+.chat-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+.chat-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  min-height: calc(100dvh - 82px);
+  padding: 1rem clamp(1rem, 2vw, 2rem);
+}
+.chat-body.with-history {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+}
+.chat-column {
+  display: flex;
+  min-width: 0;
+  min-height: calc(100dvh - 114px);
+  flex-direction: column;
+  width: min(100%, 1080px);
+  margin: 0 auto;
+}
+.with-history .chat-column {
+  width: 100%;
+}
+.message-scroll {
+  flex: 1;
+  min-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(11, 18, 32, 0.48);
+  padding: clamp(1rem, 2vw, 1.5rem);
+}
+.empty-state {
+  display: grid;
+  gap: 0.85rem;
+  width: min(760px, 100%);
+  margin: 10vh auto 0;
+  text-align: center;
+}
+.empty-state h2 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+.empty-state p {
+  margin: 0;
+  color: var(--muted);
+}
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+.prompt-grid button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0.85rem;
+  text-align: left;
+}
+.prompt-grid button:hover {
+  border-color: var(--accent);
+}
+.message {
+  display: flex;
+  margin: 0 auto 1rem;
+  width: min(920px, 100%);
+}
+.message.user {
+  justify-content: flex-end;
+}
+.message-card {
+  max-width: min(760px, 92%);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(23, 32, 51, 0.78);
+  padding: 0.85rem 1rem;
+}
+.message.assistant .message-card {
+  background: rgba(15, 23, 42, 0.72);
+}
+.message.user .message-card {
+  background: var(--surface-strong);
+}
+.message-label {
+  color: var(--faint);
+  font-size: 0.75rem;
+  font-weight: 760;
+  margin-bottom: 0.4rem;
+}
+.message.user .message-label {
+  text-align: right;
+}
+.message-text {
+  line-height: 1.7;
+  margin: 0;
+  white-space: pre-wrap;
+}
+.thinking-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--muted);
+}
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  height: 1rem;
+}
+.typing-dots span {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: dotPulse 1.1s infinite ease-in-out;
+}
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+@keyframes dotPulse {
+  0%, 80%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+.progress-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.progress-list li {
+  position: relative;
+  padding-left: 1rem;
+  color: var(--faint);
+  font-size: 0.82rem;
+}
+.progress-list li::before {
+  position: absolute;
+  top: 0.45rem;
+  left: 0;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: var(--border);
+  content: "";
+}
+.progress-list li.active {
+  color: var(--text);
+}
+.progress-list li.active::before {
+  background: var(--accent);
+  animation: dotPulse 1.1s infinite ease-in-out;
+}
+.progress-list li.done::before {
+  background: var(--accent);
+}
+.progress-list li.error {
+  color: #fca5a5;
+}
+.progress-list li.error::before {
+  background: #f87171;
+}
+.composer {
+  margin-top: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(23, 32, 51, 0.88);
+  padding: 0.75rem;
+}
+.composer-row,
+.selected-file,
+.feedback-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+.composer .p-textarea {
+  flex: 1;
+}
+.file-button {
+  border: 1px solid var(--action-border);
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.09);
+  color: #aee7ff;
+  cursor: pointer;
+  padding: 0.65rem 0.75rem;
+  white-space: nowrap;
+}
+.file-button:hover {
+  background: var(--action-hover);
+  color: #ffffff;
+}
+.file-button input {
+  display: none;
+}
+.selected-file {
+  color: var(--muted);
+  margin-bottom: 0.65rem;
+}
+.selected-file img {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.feedback-row {
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+.history-panel {
+  align-self: start;
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100dvh - 114px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(23, 32, 51, 0.86);
+  padding: 0.9rem;
+}
+.history-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+.history-list {
+  display: grid;
+  gap: 0.5rem;
+}
+.history-row {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.65rem;
+}
+.history-row:hover {
+  background: var(--surface);
+}
+.history-title,
+.text-button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+.history-title {
+  width: 100%;
+}
+.text-button {
+  color: #fca5a5;
+  font-size: 0.75rem;
+  margin-top: 0.35rem;
+}
+.text-button:hover {
+  color: #ffffff;
+}
+@media (max-width: 1180px) {
+  .chat-body.with-history {
+    grid-template-columns: 1fr;
+  }
+  .history-panel {
+    position: static;
+    max-height: 260px;
+    order: -1;
+  }
+}
+@media (max-width: 720px) {
+  .chat-header,
+  .composer-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .chat-header-actions {
+    justify-content: flex-start;
+  }
+  .composer-row .p-textarea,
+  .composer-row .p-button,
+  .file-button {
+    width: 100%;
+  }
+  .message-card {
+    max-width: 100%;
+  }
+}
+</style>

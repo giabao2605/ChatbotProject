@@ -22,7 +22,7 @@ export const SECURITY_LEVELS = [
 ];
 
 export const ROLES = [
-  { label: "user", value: "user" },
+  { label: "viewer", value: "viewer" },
   { label: "uploader", value: "uploader" },
   { label: "reviewer", value: "reviewer" },
   { label: "admin", value: "admin" },

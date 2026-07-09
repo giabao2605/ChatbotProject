@@ -3,7 +3,7 @@ import { reactive, ref } from "vue";
 import ResourcePage from "@/components/ResourcePage.vue";
 import { apiGet, apiSend } from "@/api/client";
 import { num, pickStr, SECURITY_LEVELS } from "@/utils/rows";
-import type { ApiRow, ResourceColumn, ResourceFilter, RowAction } from "@/types";
+import type { ApiRow, ResourceColumn, ResourceFilter, RowAction, ToolbarAction } from "@/types";
 
 const columns: ResourceColumn[] = [
   { field: "DocID", header: "DocID" },
@@ -24,6 +24,16 @@ const filters: ResourceFilter[] = [
   { key: "dept", label: "Phòng ban", type: "text" },
   { key: "domain", label: "Domain", type: "text" },
   { key: "sec", label: "Mức mật", type: "select", options: SECURITY_LEVELS },
+  {
+    key: "eff_mode",
+    label: "Hiệu lực",
+    type: "select",
+    options: [
+      { label: "Còn hiệu lực", value: "con" },
+      { label: "Sắp hết hạn", value: "sap" },
+      { label: "Đã hết hạn", value: "het" },
+    ],
+  },
 ];
 
 async function load(f: Record<string, unknown>): Promise<ApiRow[]> {
@@ -146,6 +156,57 @@ const rowActions: RowAction[] = [
     run: (row) => apiSend(`/api/documents/${num(row, "DocID")}`, "DELETE"),
   },
 ];
+
+const bulk = reactive({ visible: false, busy: false, error: "", ids: "" });
+let resolveBulk: (() => void) | null = null;
+let rejectBulk: ((e: unknown) => void) | null = null;
+
+function openBulkDelete(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    resolveBulk = resolve;
+    rejectBulk = reject;
+    bulk.ids = "";
+    bulk.error = "";
+    bulk.visible = true;
+  });
+}
+
+async function submitBulkDelete() {
+  const ids = bulk.ids
+    .split(/[\s,]+/)
+    .map((x) => Number(x.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) {
+    bulk.error = "Nhập ít nhất một DocID.";
+    return;
+  }
+  bulk.busy = true;
+  bulk.error = "";
+  try {
+    for (const id of ids) {
+      await apiSend(`/api/documents/${id}`, "DELETE");
+    }
+    bulk.visible = false;
+    resolveBulk?.();
+    resolveBulk = null;
+    rejectBulk = null;
+  } catch (err) {
+    bulk.error = err instanceof Error ? err.message : "Lỗi";
+  } finally {
+    bulk.busy = false;
+  }
+}
+
+function cancelBulkDelete() {
+  bulk.visible = false;
+  rejectBulk?.(new Error(""));
+  resolveBulk = null;
+  rejectBulk = null;
+}
+
+const toolbar: ToolbarAction[] = [
+  { label: "Xóa nhiều DocID", severity: "danger", outlined: true, run: () => openBulkDelete() },
+];
 </script>
 
 <template>
@@ -157,6 +218,7 @@ const rowActions: RowAction[] = [
     :filters="filters"
     :load="load"
     :row-actions="rowActions"
+    :toolbar="toolbar"
   />
 
   <Dialog v-model:visible="editVisible" header="Sửa metadata tài liệu" modal :style="{ width: '560px' }">
@@ -191,5 +253,20 @@ const rowActions: RowAction[] = [
         <Button type="submit" label="Lưu" :loading="editBusy" />
       </div>
     </form>
+  </Dialog>
+
+  <Dialog v-model:visible="bulk.visible" header="Xóa nhiều tài liệu" modal :style="{ width: '460px' }" @hide="cancelBulkDelete">
+    <div class="stack-form">
+      <Message v-if="bulk.error" severity="error" v-text="bulk.error"></Message>
+      <label class="stack-field">
+        <span>Danh sách DocID</span>
+        <textarea v-model="bulk.ids" rows="3" class="native-select" placeholder="ví dụ: 12, 15, 20"></textarea>
+      </label>
+      <p class="muted-text">Thao tác xóa vĩnh viễn tài liệu và vector liên quan.</p>
+    </div>
+    <template #footer>
+      <Button label="Huỷ" severity="secondary" outlined :disabled="bulk.busy" @click="cancelBulkDelete" />
+      <Button label="Xóa" severity="danger" :loading="bulk.busy" @click="submitBulkDelete" />
+    </template>
   </Dialog>
 </template>

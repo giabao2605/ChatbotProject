@@ -1,8 +1,5 @@
 """
 OpenAI-compatible vision client for ProxyLLM GPT-5.4.
-
-Giu lai ten file/ham cu (gemini_client.py, build_vision_model, describe_gemini_error)
-de cac call-site hien tai trong pdf_processor.py/rag_logic.py khong can doi nhieu.
 """
 
 import base64
@@ -50,8 +47,8 @@ def _unwrap_retry_error(exc):
     return exc
 
 
-def classify_gemini_error(exc) -> str:
-    """Ten ham cu, nhung phan loai loi cho GPT/ProxyLLM."""
+def classify_vision_error(exc) -> str:
+    """Phan loai loi cho GPT/ProxyLLM vision."""
     root = _unwrap_retry_error(exc)
     msg = str(root).lower()
     code = getattr(root, "status_code", None) or getattr(root, "code", None)
@@ -68,14 +65,14 @@ def classify_gemini_error(exc) -> str:
 
 
 def is_retryable_error(exc) -> bool:
-    err_type = classify_gemini_error(exc)
+    err_type = classify_vision_error(exc)
     return err_type in ["rate_limit_temporary", "server_error"]
 
 
-def describe_gemini_error(exc) -> str:
-    """Ten ham cu de code hien tai khong bi vo; noi dung mo ta GPT/ProxyLLM error."""
+def describe_vision_error(exc) -> str:
+    """Mo ta loi GPT/ProxyLLM vision."""
     root = _unwrap_retry_error(exc)
-    err_type = classify_gemini_error(exc)
+    err_type = classify_vision_error(exc)
     code = getattr(root, "status_code", None) or getattr(root, "code", None)
     message = getattr(root, "message", None) or str(root)
     parts = [f"[{err_type.upper()}]", type(root).__name__]
@@ -148,9 +145,9 @@ def _pil_to_data_url(image):
 
 class GPTVisionModel:
     """
-    Wrapper giu interface cu `.generate_content(...)`.
+    Wrapper `.generate_content(...)`.
     contents co the la str hoac list [prompt, PIL.Image].
-    Tra ve object co `.text` giong Gemini response cu.
+    Tra ve object co `.text`.
     """
 
     def __init__(self, api_key: str, model_name: str = DEFAULT_VISION_MODEL):

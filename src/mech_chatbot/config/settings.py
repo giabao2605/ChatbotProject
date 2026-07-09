@@ -153,8 +153,8 @@ class Settings(BaseModel):
     LLM_ROUTER_MIN_CONFIDENCE: float = 0.5
 
     # --- Ingestion (ingestion/*) -----------------------------------------
-    GEMINI_METADATA_MODE: str = "missing_only"  # goc: .strip().lower()
-    STRICT_INGEST_REQUIRE_VISION: bool = True
+    LLM_METADATA_MODE: str = "missing_only"
+    STRICT_INGEST_REQUIRE_VISION: bool = False
     ROLLBACK_ON_INGEST_ERROR: bool = True
     PDF_RENDER_DPI: int = 300
     METADATA_TEXT_LIMIT: int = 20000
@@ -228,8 +228,8 @@ class Settings(BaseModel):
             GLOSSARY_CACHE_TTL=_float("GLOSSARY_CACHE_TTL", 60.0),
             LLM_ROUTER_MIN_CONFIDENCE=_float("LLM_ROUTER_MIN_CONFIDENCE", 0.5),
             # Ingestion
-            GEMINI_METADATA_MODE=_str("GEMINI_METADATA_MODE", "missing_only").strip().lower(),
-            STRICT_INGEST_REQUIRE_VISION=_bool("STRICT_INGEST_REQUIRE_VISION", True, _TRUTHY_5),
+            LLM_METADATA_MODE=_str("LLM_METADATA_MODE", "missing_only").strip().lower(),
+            STRICT_INGEST_REQUIRE_VISION=_bool("STRICT_INGEST_REQUIRE_VISION", False, _TRUTHY_5),
             ROLLBACK_ON_INGEST_ERROR=_bool("ROLLBACK_ON_INGEST_ERROR", True, _TRUTHY_5),
             PDF_RENDER_DPI=_int("PDF_RENDER_DPI", 300),
             METADATA_TEXT_LIMIT=_int("METADATA_TEXT_LIMIT", 20000),

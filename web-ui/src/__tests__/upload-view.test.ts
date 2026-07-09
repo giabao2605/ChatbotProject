@@ -10,6 +10,7 @@ vi.mock("vue-router", () => ({
 }));
 
 vi.mock("@/api/client", () => ({
+  apiGet: vi.fn().mockResolvedValue({ departments: [], sites: [] }),
   apiUpload: vi.fn(),
 }));
 
@@ -63,7 +64,8 @@ describe("UploadView validation", () => {
     });
 
     await input.trigger("change");
-    await wrapper.findAll("input").at(1)?.setValue("CoKhi");
+    const textInputs = wrapper.findAll('input:not([type="file"]):not([type="radio"]):not([type="checkbox"])');
+    await textInputs.at(0)?.setValue("CoKhi");
     await wrapper.find("form").trigger("submit");
 
     expect(api.apiUpload).toHaveBeenCalledOnce();

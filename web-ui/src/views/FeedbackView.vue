@@ -21,12 +21,18 @@ const filters: ResourceFilter[] = [{ key: "only_pending", label: "Chỉ chưa ph
 
 // Cac loai loi thuong gap (goi y qua datalist; van cho phep go tu do).
 const FAILURE_TYPES = [
+  "wrong_version",
+  "wrong_source",
   "wrong_answer",
   "missing_doc",
   "outdated_doc",
   "incomplete_answer",
-  "hallucination",
   "retrieval_miss",
+  "ocr_error",
+  "bom_parse_error",
+  "hallucination",
+  "should_refuse",
+  "permission_error",
   "other",
 ];
 

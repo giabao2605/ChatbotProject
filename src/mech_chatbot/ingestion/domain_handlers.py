@@ -38,12 +38,11 @@ def quality_mechanical(report):
     score = 100
     if attrs == 0:
         score -= 30
-    if (len(report.get("pages_text_extracted", [])) == 0
-            and len(report.get("pages_local_ocr_success", [])) == 0
-            and len(report.get("pages_gemini_success", [])) == 0):
+    extracted_pages = set(report.get("pages_text_extracted", []) or [])
+    extracted_pages.update(report.get("pages_table_extracted", []) or [])
+    extracted_pages.update(report.get("pages_vision_success", []) or [])
+    if not extracted_pages:
         score -= 40
-    if report.get("vision_failed_pages"):
-        score -= 30
     if score >= 90:
         return score, "ready_for_review"
     elif score >= 70:
@@ -64,9 +63,10 @@ def quality_generic(report):
     if failed_pages:
         return 0, "blocked"
     score = 100
-    if (len(report.get("pages_text_extracted", [])) == 0
-            and len(report.get("pages_local_ocr_success", [])) == 0
-            and len(report.get("pages_gemini_success", [])) == 0):
+    extracted_pages = set(report.get("pages_text_extracted", []) or [])
+    extracted_pages.update(report.get("pages_table_extracted", []) or [])
+    extracted_pages.update(report.get("pages_vision_success", []) or [])
+    if not extracted_pages:
         score -= 50
     if score >= 90:
         return score, "ready_for_review"

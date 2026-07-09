@@ -116,7 +116,7 @@ def restore_document_children(doc_id):
         logger.error(f"[reingest] restore_document_children loi doc_id={doc_id}: {e}", exc_info=True)
         return False
  
-def save_document_page(doc_id, file_name, page_no, text_extract, local_ocr_text, vision_summary, local_ocr_confidence, extraction_status, image_path):
+def save_document_page(doc_id, file_name, page_no, text_extract, ocr_text, vision_summary, ocr_confidence, extraction_status, image_path):
     _ensure_engine()
     try:
         with engine.begin() as conn:
@@ -134,9 +134,9 @@ def save_document_page(doc_id, file_name, page_no, text_extract, local_ocr_text,
                     "f": file_name,
                     "p": page_no,
                     "t": text_extract,
-                    "o": local_ocr_text,
+                    "o": ocr_text,
                     "v": vision_summary,
-                    "c": local_ocr_confidence,
+                    "c": ocr_confidence,
                     "s": extraction_status,
                     "i": image_path
                 }

@@ -8,7 +8,7 @@ from mech_chatbot.ingestion.pdf_processor import (
 )
 from mech_chatbot.config.logging import logger
 
-# Cau hinh Gemini API (Vision) - migrate sang google-genai qua gemini_client
+# Cau hinh ProxyLLM/GPT Vision.
 vision_model = build_vision_model()
 
 
@@ -17,7 +17,7 @@ def learn_new_file(file_path, ten_file, thu_muc="Tu_Hoc", progress_callback=None
                    cong_doan_override=None, site_override=None,
                    scan_sensitive=False, phong_ban_override=None):
     """
-    Doc file moi, trich xuat metadata, goi Gemini Vision va nap vao Qdrant DB.
+    Doc file moi, trich xuat metadata, goi vision model khi can va nap vao Qdrant DB.
 
     GD4: cac override (domain/security/cong_doan/site) den tu form upload;
     neu None thi ingest tu suy theo folder. scan_sensitive=True (duong nap hang

@@ -278,7 +278,7 @@ def mark_job_waiting_quota(job_id, error_message, retry_after_hours=24):
             conn.execute(text("""
                 UPDATE dbo.IngestionJobs
                 SET Status = 'waiting_quota',
-                    FailureType = 'gemini_quota',
+                    FailureType = 'vision_quota',
                     ErrorMessage = :e,
                     NextRetryAt = DATEADD(hour, :h, GETDATE()),
                     LockedBy = NULL,

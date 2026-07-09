@@ -24,6 +24,13 @@ __all__ = [
     'update_document_full_metadata',
 ]
 
+def _sync_qdrant_metadata_best_effort(doc_id, metadata, action):
+    ok = _r_qdrant.update_qdrant_metadata(doc_id, metadata)
+    if not ok:
+        logger.warning(f"{action}: khong dong bo duoc Qdrant metadata cho DocID {doc_id}; SQL van duoc cap nhat.")
+    return ok
+
+
 def update_document_full_metadata(doc_id, base_code=None, version_no=None, version_label=None,
                                   variant_code=None, variant_group=None, loai_tai_lieu=None,
                                   domain=None, security_level=None, site=None, cong_doan=None,
@@ -71,7 +78,7 @@ def update_document_full_metadata(doc_id, base_code=None, version_no=None, versi
     if site is not None: qmeta["site"] = (site or None)
     if cong_doan is not None: qmeta["cong_doan"] = (cong_doan or None)
 
-    ok = _r_qdrant.update_qdrant_metadata(doc_id, qmeta) if qmeta else True
+    ok = _sync_qdrant_metadata_best_effort(doc_id, qmeta, "update_metadata") if qmeta else True
     # P3-2: metadata da doi -> feedback cu cua tai lieu nay tro thanh stale
     _r_feedback.mark_feedback_stale_for_doc(doc_id, resolved_by_doc_id=doc_id)
     _r_audit.write_audit_log(reviewer, "update_metadata", "TaiLieu", doc_id,
@@ -90,13 +97,11 @@ def publish_as_new_version(doc_id, reviewer="System"):
             conn.execute(text("""
                 UPDATE TaiLieu SET IsCurrent = 0, IsArchived = 1, LifecycleStatus = 'superseded', ArchivedAt = GETDATE() WHERE DocID = :id
             """), {"id": old.DocID})
-            ok_old = _r_qdrant.update_qdrant_metadata(old.DocID, {
+            _sync_qdrant_metadata_best_effort(old.DocID, {
                 "is_current": False,
                 "is_archived": True,
                 "lifecycle_status": "superseded"
-            })
-            if not ok_old:
-                raise RuntimeError(f"Update Qdrant metadata that bai cho old DocID {old.DocID}")
+            }, "publish_new_version.old")
             
         conn.execute(text("""
             UPDATE TaiLieu SET IsCurrent = 1, IsArchived = 0, LifecycleStatus = 'published', ReviewStatus = 'approved',
@@ -105,7 +110,7 @@ def publish_as_new_version(doc_id, reviewer="System"):
             WHERE DocID = :id
         """), {"id": doc.DocID, "rev": reviewer, "old_id": old_id})
         
-        ok_new = _r_qdrant.update_qdrant_metadata(doc.DocID, {
+        _sync_qdrant_metadata_best_effort(doc.DocID, {
             "doc_status": "published",
             "lifecycle_status": "published",
             "review_status": "approved",
@@ -113,9 +118,7 @@ def publish_as_new_version(doc_id, reviewer="System"):
             "is_archived": False,
             "published_at": datetime.now().isoformat(),
             "supersedes_doc_id": old_id
-        })
-        if not ok_new:
-            raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc.DocID}")
+        }, "publish_new_version.new")
         
     # P3-2: tai lieu cu da bi thay the -> feedback dislike cu cua chung tro thanh stale
     for _old in old_docs:
@@ -135,16 +138,14 @@ def publish_as_new_variant(doc_id, reviewer="System"):
             WHERE DocID = :id
         """), {"id": doc.DocID, "rev": reviewer})
         
-        ok_var = _r_qdrant.update_qdrant_metadata(doc.DocID, {
+        _sync_qdrant_metadata_best_effort(doc.DocID, {
             "doc_status": "published",
             "lifecycle_status": "published",
             "review_status": "approved",
             "is_current": True,
             "is_archived": False,
             "published_at": datetime.now().isoformat()
-        })
-        if not ok_var:
-            raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc.DocID}")
+        }, "publish_variant")
         
     _r_audit.write_audit_log(reviewer, "publish_variant", "TaiLieu", doc.DocID, {"base_code": doc.BaseCode, "variant": doc.VariantCode})
     _r_semantic_cache._invalidate_semantic_cache("doc.publish_variant")
@@ -160,12 +161,10 @@ def reject_document(doc_id, reviewer="System"):
             WHERE DocID = :id
         """), {"id": doc_id, "rev": reviewer})
         
-        ok_rej = _r_qdrant.update_qdrant_metadata(doc_id, {
+        _sync_qdrant_metadata_best_effort(doc_id, {
             "lifecycle_status": "rejected",
             "review_status": "rejected"
-        })
-        if not ok_rej:
-            raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc_id}")
+        }, "reject_document")
         
     _r_audit.write_audit_log(reviewer, "reject_document", "TaiLieu", doc_id, {})
     _r_semantic_cache._invalidate_semantic_cache("doc.reject")
@@ -178,13 +177,11 @@ def archive_document(doc_id, reviewer="System"):
             WHERE DocID = :id
         """), {"id": doc_id})
         
-        ok_arch = _r_qdrant.update_qdrant_metadata(doc_id, {
+        _sync_qdrant_metadata_best_effort(doc_id, {
             "is_current": False,
             "is_archived": True,
             "lifecycle_status": "archived"
-        })
-        if not ok_arch:
-            raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {doc_id}")
+        }, "archive_document")
         
     _r_audit.write_audit_log(reviewer, "archive_document", "TaiLieu", doc_id, {})
     _r_semantic_cache._invalidate_semantic_cache("doc.archive")

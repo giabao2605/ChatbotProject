@@ -220,12 +220,13 @@ defineExpose({ refresh });
     <Card v-else>
       <template #content>
         <p v-if="!rows.length" class="muted-text" v-text="t('common.empty')"></p>
-        <DataTable v-else :value="rows" paginator :rows="15" removable-sort scrollable>
+        <DataTable v-else :value="rows" paginator :rows="15" removable-sort>
           <Column
             v-for="col in columns"
             :key="col.field"
             :field="col.field"
             :header="col.header"
+            :style="col.width ? { width: col.width } : undefined"
             sortable
           >
             <template #body="{ data }">
@@ -234,7 +235,7 @@ defineExpose({ refresh });
               <span v-else v-text="cellText(data, col)"></span>
             </template>
           </Column>
-          <Column v-if="rowActions && rowActions.length" :header="t('common.actions')">
+          <Column v-if="rowActions && rowActions.length" :header="t('common.actions')" style="width: 220px">
             <template #body="{ data }">
               <div class="row-actions">
                 <Button
@@ -242,8 +243,8 @@ defineExpose({ refresh });
                   :key="action.label"
                   :label="action.label"
                   size="small"
-                  :severity="action.severity || 'secondary'"
-                  :outlined="action.outlined !== false"
+                  :severity="action.severity || 'info'"
+                  :outlined="action.outlined === true"
                   :disabled="busy"
                   @click="runAction(action, data)"
                 />
