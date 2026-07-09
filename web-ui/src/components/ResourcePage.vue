@@ -90,7 +90,7 @@ async function runAction(action: RowAction | ToolbarAction, row?: ApiRow) {
   error.value = "";
   notice.value = "";
   try {
-    if (row && "visible" in action) {
+    if (row) {
       await (action as RowAction).run(row);
     } else {
       await (action as ToolbarAction).run();

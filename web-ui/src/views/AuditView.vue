@@ -3,15 +3,15 @@ import ResourcePage from "@/components/ResourcePage.vue";
 import { apiGet } from "@/api/client";
 import type { ApiRow, ResourceColumn } from "@/types";
 
-// Positional columns from list_recent_audit (see ui_queries.py).
+// GD4: backend nay tra dict co ten cot (_rows_to_json) thay vi mang vi tri.
 const columns: ResourceColumn[] = [
-  { field: "c0", header: "AuditID" },
-  { field: "c1", header: "Người dùng" },
-  { field: "c2", header: "Hành động", kind: "tag" },
-  { field: "c3", header: "Loại đối tượng" },
-  { field: "c4", header: "Đối tượng" },
-  { field: "c5", header: "Chi tiết" },
-  { field: "c6", header: "Thời gian" },
+  { field: "AuditID", header: "AuditID" },
+  { field: "Username", header: "Người dùng" },
+  { field: "Action", header: "Hành động", kind: "tag" },
+  { field: "EntityType", header: "Loại đối tượng" },
+  { field: "EntityID", header: "Đối tượng" },
+  { field: "Details", header: "Chi tiết" },
+  { field: "CreatedAt", header: "Thời gian" },
 ];
 
 async function load(): Promise<ApiRow[]> {

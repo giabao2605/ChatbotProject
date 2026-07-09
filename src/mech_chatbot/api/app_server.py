@@ -695,8 +695,8 @@ data_router = APIRouter(prefix="/api", tags=["operations"])
 def dashboard(profile: dict[str, Any] = Depends(current_profile)):
     return {
         "stats": get_dashboard_stats(),
-        "recent_documents": [list(row) for row in list_recent_documents()],
-        "recent_failed_jobs": [list(row) for row in list_recent_failed_jobs()],
+        "recent_documents": _rows_to_json(list_recent_documents()),
+        "recent_failed_jobs": _rows_to_json(list_recent_failed_jobs()),
     }
 
 
@@ -728,6 +728,7 @@ def documents_upload(
     security_level: str | None = Form(None),
     cong_doan: str | None = Form(None),
     site: str | None = Form(None),
+    meta_json: str | None = Form(None),
     profile: dict[str, Any] = Depends(csrf_profile),
 ):
     """Nhan file tai len tu web-ui, luu vao Uploads/<thu_muc> va tao IngestionJob
@@ -750,6 +751,17 @@ def documents_upload(
     stored_path = out_dir / f"{uuid4().hex}{ext}"
     stored_path.write_bytes(raw)
     from mech_chatbot.db.repositories.jobs import create_ingestion_job
+    # GD2: metadata chi tiet nhap tu form upload duoc gui duoi dang JSON string
+    # (meta_json) -> parse thanh dict va truyen vao upload_meta de worker ap xuong TaiLieu.
+    upload_meta = None
+    if meta_json:
+        try:
+            import json as _json
+            _parsed_meta = _json.loads(meta_json)
+        except Exception:
+            raise HTTPException(status_code=400, detail="meta_json không hợp lệ (JSON)")
+        if isinstance(_parsed_meta, dict):
+            upload_meta = {k: v for k, v in _parsed_meta.items() if v not in (None, "")} or None
     job_id = create_ingestion_job(
         file_name=original_name,
         file_path=str(stored_path),
@@ -759,6 +771,7 @@ def documents_upload(
         security_level=security_level,
         cong_doan=cong_doan,
         site=site,
+        upload_meta=upload_meta,
     )
     if not job_id:
         try:
@@ -777,7 +790,7 @@ def ingestion_jobs(status_value: str | None = None, profile: dict[str, Any] = De
         username=profile.get("username"),
         allowed_departments=profile.get("allowed_departments") or [],
     )
-    return {"jobs": [list(row) for row in rows]}
+    return {"jobs": _rows_to_json(rows)}
 
 
 @data_router.get("/analytics/usage")
@@ -793,7 +806,7 @@ def observability(days: int = 30, profile: dict[str, Any] = Depends(require_any_
 @data_router.get("/audit")
 def audit(limit: int = 100, profile: dict[str, Any] = Depends(require_any_role("admin"))):
     rows = list_audit_logs(row_limit=limit)
-    return {"logs": [list(row) for row in rows]}
+    return {"logs": _rows_to_json(rows)}
 
 
 @data_router.post("/access/request")
@@ -1213,18 +1226,20 @@ def glossary(domain: str | None = None, active_only: bool = False, profile: dict
 @data_router.post("/glossary")
 def glossary_upsert(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "admin", "reviewer")
-    return {
-        "ok": bool(
-            upsert_glossary_term(
-                term=str(body.get("term") or ""),
-                domain=body.get("domain"),
-                synonyms=body.get("synonyms"),
-                expansion=body.get("expansion"),
-                is_active=bool(body.get("is_active", True)),
-                glossary_id=body.get("glossary_id"),
-            )
-        )
-    }
+    result = upsert_glossary_term(
+        term=str(body.get("term") or ""),
+        domain=body.get("domain"),
+        synonyms=body.get("synonyms"),
+        expansion=body.get("expansion"),
+        is_active=bool(body.get("is_active", True)),
+        glossary_id=body.get("glossary_id"),
+    )
+    # upsert_glossary_term tra ve dict {"ok": bool, ...}; bool(dict) luon True nen phai lay .get("ok").
+    if isinstance(result, dict):
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("message") or "Khong luu duoc thuat ngu")
+        return result
+    return {"ok": bool(result)}
 
 
 @data_router.patch("/glossary/{glossary_id}/active")
@@ -1374,6 +1389,16 @@ def regression_question_active(reg_qid: int, body: dict[str, Any], profile: dict
 @data_router.get("/regression/runs")
 def regression_runs(batch_id: str | None = None, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
     return {"runs": _rows_to_json(get_regression_runs(batch_id=batch_id))}
+
+
+@data_router.post("/regression/run")
+def regression_run(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
+    _assert_any_role(profile, "reviewer", "admin")
+    from mech_chatbot.rag.regression import run_regression_batch
+    raw_limit = body.get("limit")
+    limit = int(raw_limit) if raw_limit else None
+    summary = run_regression_batch(limit=limit, run_by=profile.get("username") or "System")
+    return {"ok": True, "summary": summary}
 
 
 @data_router.get("/quality/documents")
