@@ -16,13 +16,11 @@ COPY requirements.txt ./
 # Cai dat Python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code va cac thu muc can thiet
+# Copy source code
 COPY src/ ./src/
-COPY run.py ./
 
 # Set PYTHONPATH de Python nhan dien module src/
 ENV PYTHONPATH=/app/src
 
 # Port mac dinh (co the bi override boi docker-compose)
-EXPOSE 8501
 EXPOSE 8100

@@ -109,8 +109,16 @@ class ChatRequest(BaseModel):
     current_part_ids: List[str] = Field(default_factory=list)
     user_department: Optional[str] = None
     user_roles: List[str] = Field(default_factory=list)
-    allowed_departments: List[str] = Field(default_factory=list)
-    max_security_level: Optional[str] = "internal"
+    allowed_departments: List[str] = Field(
+        default_factory=list,
+        description="Deprecated and ignored. Effective RBAC is resolved server-side from the authenticated user profile.",
+        json_schema_extra={"deprecated": True},
+    )
+    max_security_level: Optional[str] = Field(
+        default="internal",
+        description="Deprecated and ignored. Effective clearance is resolved server-side from the authenticated user profile.",
+        json_schema_extra={"deprecated": True},
+    )
     allowed_sites: List[str] = Field(default_factory=list)
     response_language: Optional[str] = "vi"
     conversation_context: Optional[Dict[str, Any]] = None

@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHistory, type RouterHistory } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import ChatView from "@/views/ChatView.vue";
 import DashboardView from "@/views/DashboardView.vue";
@@ -22,7 +22,7 @@ import ObservabilityView from "@/views/ObservabilityView.vue";
 import AuditView from "@/views/AuditView.vue";
 import HelpView from "@/views/HelpView.vue";
 
-const routes = [
+export const routes = [
   { path: "/login", name: "login", component: LoginView, meta: { public: true } },
   { path: "/", redirect: "/chat" },
   { path: "/chat", name: "chat", component: ChatView },
@@ -47,21 +47,24 @@ const routes = [
   { path: "/help", name: "help", component: HelpView },
 ];
 
-export const router = createRouter({
-  history: createWebHistory(),
-  routes,
-});
+export function createAppRouter(history: RouterHistory = createWebHistory()) {
+  const router = createRouter({ history, routes });
 
-router.beforeEach(async (to) => {
-  const auth = useAuthStore();
-  if (!auth.ready) {
-    await auth.loadMe();
-  }
-  if (!to.meta.public && !auth.user) {
-    return { name: "login", query: { next: to.fullPath } };
-  }
-  if (to.meta.public && auth.user) {
-    return { name: "chat" };
-  }
-  return true;
-});
+  router.beforeEach(async (to) => {
+    const auth = useAuthStore();
+    if (!auth.ready) {
+      await auth.loadMe();
+    }
+    if (!to.meta.public && !auth.user) {
+      return { name: "login", query: { next: to.fullPath } };
+    }
+    if (to.meta.public && auth.user) {
+      return { name: "chat" };
+    }
+    return true;
+  });
+
+  return router;
+}
+
+export const router = createAppRouter();

@@ -328,7 +328,8 @@ def set_department_status(code, status, actor="System", force=False):
         is_active=(target_status == "active"),
     )
     if ok:
-        _r_audit.write_audit_log(actor or "System", "department_status", "Departments", code, {
+        _r_audit.write_audit_log(actor or "System", "department_status", "Departments", None, {
+            "code": code,
             "from": current_status,
             "to": target_status,
             "force": bool(force),
@@ -445,7 +446,8 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
 
         # 5) Disable phong nguon sau khi move
         status_res = set_department_status(source_code, "disabled", actor=actor, force=True)
-        _r_audit.write_audit_log(actor or "System", "department_reassign", "Departments", source_code, {
+        _r_audit.write_audit_log(actor or "System", "department_reassign", "Departments", None, {
+            "source": source_code,
             "to": target_code,
             "move_users": bool(move_users),
             "docs": len(updated_doc_payloads),

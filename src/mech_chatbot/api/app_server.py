@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from mech_chatbot.api import app_security
 from mech_chatbot.api.file_access import (
@@ -46,6 +47,7 @@ from mech_chatbot.services import (
     cancel_job,
     classify_feedback_and_get_source,
     clear_chat_history,
+    cleanup_dangling_records,
     create_access_request,
     count_pending_access_requests,
     create_user_with_roles,
@@ -136,6 +138,23 @@ from mech_chatbot.services import (
 load_dotenv()
 
 app = FastAPI(title="Mech Chatbot App API", version="0.1.0")
+
+
+@app.get("/api/health", tags=["system"])
+def app_health():
+    db_status = "unavailable"
+    if engine is not None:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            db_status = "ok"
+        except Exception as exc:
+            logger.warning("App health DB probe failed: %s", exc)
+    return {
+        "status": "ok" if db_status == "ok" else "degraded",
+        "app": "mech-chatbot-app-api",
+        "db": db_status,
+    }
 
 
 def _project_root() -> Path:
@@ -1332,17 +1351,17 @@ def regression_questions(active_only: bool = True, profile: dict[str, Any] = Dep
 @data_router.post("/regression/questions")
 def regression_question_add(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    result = add_regression_question(
+        question=str(body.get("question") or ""),
+        expected_doc_id=body.get("expected_doc_id"),
+        expected_keywords=body.get("expected_keywords"),
+        department=body.get("department"),
+        site=body.get("site"),
+        created_by=profile.get("username") or "System",
+    )
     return {
-        "ok": bool(
-            add_regression_question(
-                question=str(body.get("question") or ""),
-                expected_doc_id=body.get("expected_doc_id"),
-                expected_keywords=body.get("expected_keywords"),
-                department=body.get("department"),
-                site=body.get("site"),
-                created_by=profile.get("username") or "System",
-            )
-        )
+        "ok": result is not None,
+        "result": result,
     }
 
 
@@ -1365,7 +1384,8 @@ def quality_documents(limit: int = 50, worst_first: bool = True, profile: dict[s
 @data_router.post("/quality/recompute")
 def quality_recompute(profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(recompute_doc_quality_scores())}
+    recomputed = recompute_doc_quality_scores()
+    return {"ok": recomputed is not None, "recomputed": recomputed}
 
 
 @data_router.post("/quality/cleanup")
@@ -1400,9 +1420,32 @@ app.include_router(chat_router)
 app.include_router(files_router)
 app.include_router(data_router)
 
+
+class SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: dict[str, Any]):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and self._should_fallback_to_index(path, scope):
+                return await super().get_response("index.html", scope)
+            raise
+
+    @staticmethod
+    def _should_fallback_to_index(path: str, scope: dict[str, Any]) -> bool:
+        request_path = str(scope.get("path") or "")
+        raw_path = scope.get("raw_path") or b""
+        raw_path_text = raw_path.decode("latin-1", errors="ignore").lower()
+        if request_path == "/api" or request_path.startswith("/api/"):
+            return False
+        if ".." in request_path or ".." in path or "%2f" in raw_path_text or "%5c" in raw_path_text:
+            return False
+        leaf = path.rsplit("/", 1)[-1]
+        return "." not in leaf
+
+
 static_dir = _project_root() / "web-ui" / "dist"
 if static_dir.exists():
-    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="web")
+    app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="web")
 
 
 if __name__ == "__main__":

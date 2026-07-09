@@ -61,3 +61,12 @@ def test_resolve_user_profile_uses_db_identity_not_body_rbac(monkeypatch):
     assert profile["roles"] == ["viewer"]
     assert profile["allowed_departments"] == ["Technical"]
     assert profile["max_security_level"] == "public"
+
+
+def test_chat_request_marks_client_rbac_fields_deprecated():
+    schema = rag_server.ChatRequest.model_json_schema()
+
+    assert schema["properties"]["allowed_departments"]["deprecated"] is True
+    assert "ignored" in schema["properties"]["allowed_departments"]["description"]
+    assert schema["properties"]["max_security_level"]["deprecated"] is True
+    assert "server-side" in schema["properties"]["max_security_level"]["description"]

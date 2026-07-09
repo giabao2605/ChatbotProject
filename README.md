@@ -45,7 +45,7 @@ An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for 
 | Component | Technology |
 |---|---|
 | Language | Python 3.11 |
-| Frontend / UI | [Streamlit](https://streamlit.io/) |
+| Frontend / UI | Vue 3 + Vite + PrimeVue served by FastAPI |
 | API Backend | [FastAPI](https://fastapi.tiangolo.com/) + Uvicorn |
 | LLM & Vision | OpenAI-compatible endpoint (ProxyLLM) — configured via `GPT_MODEL_NAME`, `GPT_VISION_MODEL_NAME` |
 | Embedding Model | `BAAI/bge-m3` (sentence-transformers, 1024 dims) + BM25 hybrid search |
@@ -68,7 +68,7 @@ ChatBotProject/
 │   └── go-live-demo.md           # Demo and go-live notes
 ├── eval/
 │   └── golden_routes.csv         # Router evaluation fixture
-├── run.py                        # Entry point: Streamlit UI
+├── web-ui/                       # Vue 3 browser UI
 ├── run_server.py                 # Launcher: FastAPI RAG server
 ├── run_worker.py                 # Launcher: Ingestion worker
 ├── requirements.txt              # Python dependencies
@@ -76,16 +76,10 @@ ChatBotProject/
 ├── requirements-test.txt         # Test dependencies
 ├── pytest.ini                    # Test configuration
 │
-├── .streamlit/
-│   └── config.toml                # Streamlit runtime configuration
-│
 ├── .github/
 │   └── workflows/
 │       ├── ragas_eval.yml        # CI: weekly RAGAS evaluation (or manual trigger)
 │       └── tests.yml             # CI: automated test suite runner
-│
-├── components/
-│   └── liquid_login/                     # Custom Streamlit UI component for login
 │
 ├── database/
 │   ├── schema/
@@ -156,7 +150,7 @@ ChatBotProject/
 │
 └── src/mech_chatbot/                     # Core application source code
     ├── ui/
-    │   ├── app.py                        # Streamlit main router & sidebar nav
+    │   ├── app_server.py                 # Browser-facing FastAPI app and Vue static server
     │   ├── i18n.py                       # Centralized translation layer (t() function, Vi/En)
     │   ├── labels.py                     # Department/site display label helpers
     │   ├── metadata_forms.py             # Reusable document metadata form components
@@ -243,7 +237,7 @@ ChatBotProject/
         ├── constants.py                  # System-wide constants (SHARE_ALL_DEPARTMENT sentinel)
         ├── logging.py                    # Centralized structured logging
         ├── settings.py                   # Runtime settings loader
-        ├── theme.py                      # Streamlit theme configuration
+        ├── theme.py                      # Legacy UI theme configuration
         └── validate.py                   # Fail-fast config validation (assert_config_valid)
 ```
 
@@ -381,8 +375,8 @@ docker-compose -f docker/docker-compose.yml up -d --build
 ```
 
 This launches:
-- Streamlit UI → `http://localhost:8501`
-- FastAPI RAG server → `http://localhost:8100`
+- Vue UI + browser API → `http://localhost:8080`
+- FastAPI RAG server → `http://localhost:8100` (bound to localhost by compose)
 - Ingestion worker (background)
 
 **Option B: Local Development**
@@ -402,21 +396,22 @@ python run_server.py
 # Terminal 2 — Ingestion worker
 $env:PYTHONPATH="src"; python run_worker.py
 
-# Terminal 3 — Streamlit UI
-streamlit run run.py
+# Terminal 3 — Vue UI + browser-facing FastAPI
+$env:PYTHONPATH="src"; $env:APP_SERVER_HOST="0.0.0.0"; $env:APP_SERVER_PORT="8080"; python -m mech_chatbot.api.app_server
 ```
 
 > Alternatively, run with `PYTHONPATH=src` explicitly:
 > ```bash
 > PYTHONPATH=src python -m mech_chatbot.api.rag_server
 > PYTHONPATH=src python -m mech_chatbot.workers.ingestion_worker
+> PYTHONPATH=src APP_SERVER_HOST=0.0.0.0 APP_SERVER_PORT=8080 python -m mech_chatbot.api.app_server
 > ```
 
 ---
 
 ## Application Pages
 
-Access pages via the Streamlit sidebar (visibility depends on your role and clearance):
+Access pages via the Vue sidebar (visibility depends on your role and clearance):
 
 | Page | Description | Required Role |
 |---|---|---|

@@ -1,13 +1,14 @@
 :root {
   color-scheme: dark;
-  --bg: #080a0b;
-  --panel: #0d1112;
-  --surface: #121718;
-  --surface-strong: #171d1e;
-  --border: #273031;
-  --text: #f2f5f4;
-  --muted: #aab6b4;
-  --faint: #75817f;
+  --bg: #111827;
+  --panel: #0b1220;
+  --surface: #172033;
+  --surface-strong: #1f2a3d;
+  --surface-soft: #243149;
+  --border: #344155;
+  --text: #edf4ff;
+  --muted: #b9c6d8;
+  --faint: #8fa0b6;
   --accent: #69d69f;
   --accent-ink: #082416;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -23,6 +24,38 @@ body {
   color: var(--text);
 }
 
+.app-dark {
+  --p-content-background: var(--surface);
+  --p-content-color: var(--text);
+  --p-text-color: var(--text);
+  --p-text-muted-color: var(--muted);
+  --p-surface-0: var(--surface);
+  --p-surface-50: var(--surface);
+  --p-surface-100: var(--surface-strong);
+  --p-surface-200: var(--surface-soft);
+  --p-surface-300: var(--border);
+  --p-surface-700: var(--surface-strong);
+  --p-surface-800: var(--surface);
+  --p-surface-900: var(--panel);
+  --p-card-background: var(--surface);
+  --p-card-color: var(--text);
+  --p-datatable-header-cell-background: var(--surface-strong);
+  --p-datatable-header-cell-color: var(--text);
+  --p-datatable-row-background: var(--surface);
+  --p-datatable-row-color: var(--text);
+  --p-datatable-row-hover-background: var(--surface-strong);
+  --p-datatable-body-cell-border-color: var(--border);
+  --p-inputtext-background: #eef3f8;
+  --p-inputtext-color: #0f172a;
+  --p-inputtext-border-color: #cbd5e1;
+  --p-select-background: var(--surface);
+  --p-select-color: var(--text);
+  --p-select-border-color: var(--border);
+  --p-button-secondary-background: var(--surface);
+  --p-button-secondary-color: var(--text);
+  --p-button-secondary-border-color: var(--border);
+}
+
 button,
 input,
 textarea {
@@ -32,7 +65,7 @@ textarea {
 .app-shell {
   display: flex;
   min-height: 100dvh;
-  background: var(--bg);
+  background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
 }
 
 .sidebar {
@@ -41,7 +74,7 @@ textarea {
   min-width: 288px;
   flex-direction: column;
   border-right: 1px solid var(--border);
-  background: var(--panel);
+  background: #0b1220;
 }
 
 .brand {
@@ -93,7 +126,7 @@ textarea {
 
 .nav-link.router-link-active,
 .nav-link:hover {
-  background: var(--surface);
+  background: #172033;
   color: var(--text);
 }
 
@@ -114,6 +147,7 @@ textarea {
 .main-panel {
   min-width: 0;
   flex: 1;
+  background: var(--bg);
 }
 
 .login-page {
@@ -386,6 +420,55 @@ textarea {
 
 .content-page {
   padding: 24px;
+}
+
+.content-page > .p-card,
+.stacked-pages .p-card {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.p-datatable {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.p-datatable-table {
+  background: var(--surface);
+}
+
+.p-datatable-thead > tr > th {
+  border-color: var(--border);
+  background: var(--surface-strong);
+  color: var(--text);
+}
+
+.p-datatable-tbody > tr {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.p-datatable-tbody > tr:nth-child(even) {
+  background: #1a2538;
+}
+
+.p-datatable-tbody > tr > td {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.p-datatable-tbody > tr:hover {
+  background: var(--surface-strong);
+}
+
+.p-paginator {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--muted);
 }
 
 .stat-grid {

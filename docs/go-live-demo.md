@@ -6,9 +6,9 @@ Runbook nay danh cho demo noi bo nho. Khong bat buoc Docker.
 
 Co 3 cach phu hop:
 
-- Noi bo LAN/VPN: chay app tren mot may trong cong ty, nguoi dung vao `http://<server-ip>:8501`.
+- Noi bo LAN/VPN: chay app tren mot may trong cong ty, nguoi dung vao `http://<server-ip>:8080`.
 - Link HTTPS qua tunnel: chay app tren may cua ban/server noi bo, dung Cloudflare Tunnel de cap link HTTPS.
-- Ten mien that: dat app tren VM/server, dung reverse proxy nhu Caddy/Nginx tro vao Streamlit.
+- Ten mien that: dat app tren VM/server, dung reverse proxy nhu Caddy/Nginx tro vao app-api.
 
 Cho demo 5-10 nguoi, nen bat dau bang LAN/VPN neu tat ca cung mang. Neu can gui link ngoai mang ma khong mo firewall, dung tunnel.
 
@@ -69,8 +69,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\ops\start_demo_lan.ps1
 
 Script se:
 
-- dung process cu dang chiem `8100` va `8501`
-- bat lai RAG server va Streamlit
+- dung process cu dang chiem `8100` va `8080`
+- bat lai RAG server, app-api/Vue va worker
 - kiem tra `RAG /health`
 - in ra link LAN neu tu xac dinh duoc IPv4 cua may host
 
@@ -83,17 +83,19 @@ $env:PYTHONPATH="src"
 python -m mech_chatbot.api.rag_server
 ```
 
-Mo terminal 2, chay Streamlit UI:
+Mo terminal 2, chay app-api + Vue static UI:
 
 ```powershell
 $env:PYTHONPATH="src"
-streamlit run run.py --server.port 8501 --server.address 0.0.0.0
+$env:APP_SERVER_HOST="0.0.0.0"
+$env:APP_SERVER_PORT="8080"
+python -m mech_chatbot.api.app_server
 ```
 
 Nguoi dung trong cung mang/VPN truy cap:
 
 ```text
-http://<server-ip>:8501
+http://<server-ip>:8080
 ```
 
 Khong publish port `8100` ra ngoai. RAG server nen chi lang nghe `127.0.0.1`.
@@ -102,20 +104,20 @@ Khong publish port `8100` ra ngoai. RAG server nen chi lang nghe `127.0.0.1`.
 
 ### Phuong an tunnel
 
-Dung tunnel khi server nam trong mang noi bo va ban khong muon mo inbound firewall. Tunnel se tro ve Streamlit `http://localhost:8501`.
+Dung tunnel khi server nam trong mang noi bo va ban khong muon mo inbound firewall. Tunnel se tro ve app-api `http://localhost:8080`.
 
 Chi expose UI, khong expose RAG:
 
 ```text
-http://localhost:8501
+http://localhost:8080
 ```
 
 ### Phuong an ten mien that
 
-Neu co domain va server public, dung reverse proxy tro domain ve Streamlit:
+Neu co domain va server public, dung reverse proxy tro domain ve app-api:
 
 ```text
-https://chatbot.example.com -> http://127.0.0.1:8501
+https://chatbot.example.com -> http://127.0.0.1:8080
 ```
 
 RAG van giu noi bo:
@@ -153,7 +155,7 @@ docker compose -f docker/docker-compose.yml ps
 docker compose -f docker/docker-compose.yml logs -f rag-server
 ```
 
-Trong Docker Compose, RAG port `8100` chi bind `127.0.0.1`. Nguoi dung demo chi truy cap Streamlit qua port `8501`.
+Trong Docker Compose, RAG port `8100` chi bind `127.0.0.1`. Nguoi dung demo chi truy cap app-api/Vue qua port `8080`.
 
 ## 9. Rollback nhanh
 
@@ -169,4 +171,4 @@ Neu server qua tai:
 MAX_CONCURRENT_RAG=2
 ```
 
-Restart lai 2 process Python/Streamlit sau khi doi `.env`.
+Restart lai cac process RAG/app-api/worker sau khi doi `.env`.

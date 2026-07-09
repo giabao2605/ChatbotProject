@@ -54,7 +54,7 @@ from dotenv import load_dotenv
 # ----------------------------------------------------------------------------------
 # Thiet lap duong dan de import duoc package mech_chatbot. Script nam o
 # scripts/danger_ops/ -> goc du an la 3 cap tren, va package nam trong src/
-# (giong cach run.py them 'src' vao sys.path).
+# (giong cach cac launcher them 'src' vao sys.path).
 # ----------------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC_DIR = os.path.join(BASE_DIR, "src")

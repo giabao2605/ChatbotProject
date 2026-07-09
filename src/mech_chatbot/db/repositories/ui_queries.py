@@ -325,32 +325,36 @@ def list_pending_review_docs():
 
 def reject_ingestion_job(job_id, reason):
 	with engine.begin() as conn:
-		conn.execute(text("""
+		res = conn.execute(text("""
                     UPDATE IngestionJobs
                     SET Status = 'rejected', RejectReason = :reason, UpdatedAt = GETDATE()
                     WHERE JobID = :jid
                 """), {"reason": reason, "jid": job_id})
+	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
 def mark_job_pending_review(job_id):
 	with engine.begin() as conn:
-		conn.execute(text("""
+		res = conn.execute(text("""
                     UPDATE IngestionJobs SET Status = 'pending_review', UpdatedAt = GETDATE() WHERE JobID = :jid
                 """), {"jid": job_id})
+	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
 def mark_job_published(job_id):
 	with engine.begin() as conn:
-		conn.execute(text("""
+		res = conn.execute(text("""
             UPDATE IngestionJobs
             SET Status = 'published', UpdatedAt = GETDATE()
             WHERE JobID = :jid
         """), {"jid": job_id})
+	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
 def delete_ingestion_job(job_id):
 	with engine.begin() as conn:
-		conn.execute(text("DELETE FROM IngestionJobs WHERE JobID = :jid"), {"jid": job_id})
+		res = conn.execute(text("DELETE FROM IngestionJobs WHERE JobID = :jid"), {"jid": job_id})
+	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
 def list_bulk_action_jobs():
@@ -369,10 +373,11 @@ def list_bulk_action_jobs():
 
 def mark_job_rejected(job_id):
 	with engine.begin() as conn:
-		conn.execute(text("""
+		res = conn.execute(text("""
                         UPDATE IngestionJobs SET Status = 'rejected', UpdatedAt = GETDATE()
                         WHERE JobID = :jid
                     """), {"jid": job_id})
+	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
 def list_docs_for_bulk_meta(dept=None, domain=None):
@@ -489,6 +494,7 @@ def update_user_active_and_roles(user_id, is_active, add_roles, del_roles):
                                 JOIN Roles r ON ur.RoleID = r.RoleID
                                 WHERE ur.UserID = :uid AND r.RoleName = :role
 			"""), {"uid": user_id, "role": _role})
+	return True
 
 
 def _user_is_admin(conn, user_id):
@@ -601,10 +607,11 @@ def delete_user_account(user_id, actor_username=None, actor_id=None):
 
 def update_user_password(user_id, password_hash):
 	with engine.begin() as conn:
-		conn.execute(
+		res = conn.execute(
 			text("UPDATE Users SET PasswordHash = :p WHERE UserID = :uid"),
 			{"p": password_hash, "uid": user_id},
 		)
+	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
 def create_user_with_roles(username, password_hash, display_name, department, selected_roles, depts):
