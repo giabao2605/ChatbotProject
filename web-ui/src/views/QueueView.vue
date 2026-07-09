@@ -20,7 +20,7 @@ const columns: ResourceColumn[] = [
 
 const filters: ResourceFilter[] = [{ key: "status_value", label: "Lọc trạng thái", type: "text" }];
 
-const eta = ref<number | null>(null);
+const eta = ref<{ pending: number; avgSeconds: number; etaSeconds: number } | null>(null);
 
 async function load(f: Record<string, unknown>): Promise<ApiRow[]> {
   const data = await apiGet<{ jobs: ApiRow[] }>("/api/ingestion/jobs", f);
@@ -29,8 +29,17 @@ async function load(f: Record<string, unknown>): Promise<ApiRow[]> {
 
 async function loadEta() {
   try {
-    const data = await apiGet<{ eta_seconds: number }>("/api/ingestion/eta");
-    eta.value = data.eta_seconds ?? null;
+    const data = await apiGet<{
+      pending?: number;
+      avg_seconds?: number;
+      eta_seconds?: number | { pending?: number; avg_seconds?: number; eta_seconds?: number };
+    }>("/api/ingestion/eta");
+    const raw = typeof data.eta_seconds === "object" && data.eta_seconds !== null ? data.eta_seconds : data;
+    eta.value = {
+      pending: Number(raw.pending ?? 0),
+      avgSeconds: Number(raw.avg_seconds ?? 0),
+      etaSeconds: Number(raw.eta_seconds ?? 0),
+    };
   } catch {
     eta.value = null;
   }
@@ -100,6 +109,14 @@ function cancelBulk() {
 }
 
 const toolbar: ToolbarAction[] = [{ label: "Xoá nhiều job", severity: "danger", outlined: true, run: () => openBulk() }];
+
+function formatEta() {
+  if (!eta.value) return "Hàng đợi ingest hiện tại.";
+  const pending = Number.isFinite(eta.value.pending) ? eta.value.pending : 0;
+  const avg = Number.isFinite(eta.value.avgSeconds) ? eta.value.avgSeconds : 0;
+  const seconds = Number.isFinite(eta.value.etaSeconds) ? eta.value.etaSeconds : 0;
+  return `Hàng đợi: ${pending} job chờ, trung bình ${avg}s/job, ước tính ${seconds}s.`;
+}
 </script>
 
 <template>
@@ -107,7 +124,7 @@ const toolbar: ToolbarAction[] = [{ label: "Xoá nhiều job", severity: "danger
     <ResourcePage
       title="Tiến trình ingest"
       eyebrow="Ingestion"
-      :description="eta != null ? `Thời gian xử lý hàng đợi ước tính: ${eta}s` : 'Hàng đợi ingest hiện tại.'"
+      :description="formatEta()"
       :columns="columns"
       :filters="filters"
       :load="load"

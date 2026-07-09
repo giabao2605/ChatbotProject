@@ -48,6 +48,20 @@ def _events(body):
     return parsed
 
 
+def test_ingestion_eta_returns_flat_queue_metrics(monkeypatch):
+    monkeypatch.setattr(
+        app_server,
+        "queue_eta_seconds",
+        lambda: {"pending": 2, "avg_seconds": 4.5, "eta_seconds": 9},
+    )
+
+    assert app_server.ingestion_eta(profile={"roles": ["admin"]}) == {
+        "pending": 2,
+        "avg_seconds": 4.5,
+        "eta_seconds": 9,
+    }
+
+
 @pytest.fixture
 def client():
     app_server.app.dependency_overrides[app_server.csrf_profile] = _profile

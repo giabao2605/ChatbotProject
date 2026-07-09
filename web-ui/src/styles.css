@@ -133,10 +133,14 @@ textarea {
 }
 
 .app-shell {
-  display: grid;
-  grid-template-columns: 288px minmax(0, 1fr);
+  display: block;
   min-height: 100dvh;
   background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
+}
+
+.app-shell.has-sidebar {
+  display: grid;
+  grid-template-columns: 288px minmax(0, 1fr);
 }
 
 .sidebar {
@@ -232,6 +236,7 @@ textarea {
 
 .login-card {
   width: min(420px, 100%);
+  margin: 0 auto;
 }
 
 .login-form,
@@ -436,7 +441,7 @@ textarea {
 }
 
 @media (max-width: 980px) {
-  .app-shell {
+  .app-shell, .app-shell.has-sidebar {
     display: block;
   }
 

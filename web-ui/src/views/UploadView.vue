@@ -26,7 +26,7 @@ const assignments = reactive<Record<number, { thu_muc: string; extra_departments
 const meta = reactive({
   thu_muc: "",
   domain: "",
-  security_level: "internal",
+  security_level: "",
   cong_doan: "",
   site: "",
 });
@@ -324,8 +324,10 @@ async function submit() {
               <label class="stack-field">
                 <span v-text="t('upload.security')"></span>
                 <select v-model="meta.security_level" class="native-select">
+                  <option value="">Tự động theo phòng ban và nội dung</option>
                   <option v-for="opt in SECURITY_LEVELS" :key="opt.value" :value="opt.value" v-text="opt.label"></option>
                 </select>
+                <small class="field-help">Để tự động nếu muốn worker tự gán mức mật, rồi nâng lên confidential khi phát hiện dữ liệu nhạy cảm.</small>
               </label>
               <label class="stack-field">
                 <span v-text="t('upload.stage')"></span>
@@ -531,6 +533,10 @@ async function submit() {
 }
 .check-row {
   font-weight: 400;
+}
+.field-help {
+  color: var(--faint);
+  line-height: 1.45;
 }
 .detail-block summary {
   cursor: pointer;

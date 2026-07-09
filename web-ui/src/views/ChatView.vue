@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref } from "vue";
 import * as api from "@/api/client";
 import { useChatStore } from "@/stores/chat";
+import { renderMarkdown } from "@/utils/markdown";
 import type { ChatMessage, SessionItem } from "@/types";
 
 type UiMessage = ChatMessage & {
@@ -245,6 +246,11 @@ onMounted(async () => {
                   </div>
                   <span>Đang trả lời</span>
                 </div>
+                <div
+                  v-else-if="message.role === 'assistant'"
+                  class="message-content"
+                  v-html="renderMarkdown(message.content)"
+                ></div>
                 <p v-else class="message-text">{{ message.content }}</p>
 
                 <ol v-if="message.role === 'assistant' && message.progress?.length" class="progress-list">
@@ -342,7 +348,10 @@ onMounted(async () => {
 
 <style scoped>
 .chat-page {
-  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
 }
 .chat-header {
   display: flex;
@@ -367,7 +376,8 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
-  min-height: calc(100dvh - 82px);
+  flex: 1;
+  min-height: 0;
   padding: 1rem clamp(1rem, 2vw, 2rem);
 }
 .chat-body.with-history {
@@ -376,7 +386,7 @@ onMounted(async () => {
 .chat-column {
   display: flex;
   min-width: 0;
-  min-height: calc(100dvh - 114px);
+  min-height: 0;
   flex-direction: column;
   width: min(100%, 1080px);
   margin: 0 auto;
@@ -386,8 +396,8 @@ onMounted(async () => {
 }
 .message-scroll {
   flex: 1;
-  min-height: 420px;
-  overflow: auto;
+  min-height: 0;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: rgba(11, 18, 32, 0.48);
@@ -460,6 +470,68 @@ onMounted(async () => {
   line-height: 1.7;
   margin: 0;
   white-space: pre-wrap;
+}
+.message-content {
+  display: grid;
+  gap: 0.75rem;
+  line-height: 1.65;
+}
+.message-content :deep(p),
+.message-content :deep(ul),
+.message-content :deep(ol) {
+  margin: 0;
+}
+.message-content :deep(ul),
+.message-content :deep(ol) {
+  padding-left: 1.25rem;
+}
+.message-content :deep(li + li) {
+  margin-top: 0.25rem;
+}
+.message-content :deep(h3),
+.message-content :deep(h4),
+.message-content :deep(h5) {
+  margin: 0.45rem 0 0;
+  color: #e5edf8;
+  font-size: 0.98rem;
+}
+.message-content :deep(code) {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: rgba(148, 163, 184, 0.12);
+  padding: 0.05rem 0.3rem;
+}
+.message-content :deep(.md-table-wrap) {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.message-content :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 0.86rem;
+}
+.message-content :deep(th),
+.message-content :deep(td) {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+.message-content :deep(th) {
+  background: rgba(56, 189, 248, 0.12);
+  color: #dff6ff;
+  font-weight: 760;
+  white-space: nowrap;
+}
+.message-content :deep(td) {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.message-content :deep(tbody tr:nth-child(even)) {
+  background: rgba(148, 163, 184, 0.05);
 }
 .thinking-row {
   display: flex;
@@ -536,6 +608,7 @@ onMounted(async () => {
   background: #f87171;
 }
 .composer {
+  flex-shrink: 0;
   margin-top: 0.85rem;
   border: 1px solid var(--border);
   border-radius: 8px;

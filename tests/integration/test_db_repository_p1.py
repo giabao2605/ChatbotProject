@@ -41,19 +41,23 @@ def published_doc(engine):
                 INSERT INTO TaiLieu (
                     TenFile, ThuMuc, TrangThaiVector,
                     LifecycleStatus, ReviewStatus, IsCurrent,
-                    Domain, SecurityLevel, PhongBan
+                    Domain, SecurityLevel
                 )
                 OUTPUT INSERTED.DocID
                 VALUES (
                     :f, :t, 1,
                     'published', 'approved', 1,
-                    'generic', 'internal', 'CHUNG'
+                    'generic', 'internal'
                 )
                 """
             ),
             {"f": filename, "t": folder},
         ).fetchone()
         doc_id = int(row[0])
+        conn.execute(
+            text("INSERT INTO dbo.PhongBanChiaSe (DocID, DeptCode) VALUES (:d, :dept)"),
+            {"d": doc_id, "dept": folder},
+        )
 
     yield {"DocID": doc_id, "TenFile": filename, "ThuMuc": folder}
 
@@ -103,7 +107,7 @@ class TestMigrationObjects:
         assert exists == 1
 
     def test_tailieu_has_rbac_metadata_columns(self, engine):
-        required = {"PhongBan", "Domain", "SecurityLevel", "Site"}
+        required = {"Domain", "SecurityLevel", "Site"}
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
@@ -112,12 +116,30 @@ class TestMigrationObjects:
                     FROM INFORMATION_SCHEMA.COLUMNS
                     WHERE TABLE_SCHEMA = 'dbo'
                       AND TABLE_NAME = 'TaiLieu'
-                      AND COLUMN_NAME IN ('PhongBan', 'Domain', 'SecurityLevel', 'Site')
+                      AND COLUMN_NAME IN ('Domain', 'SecurityLevel', 'Site')
                     """
                 )
             ).fetchall()
         found = {r[0] for r in rows}
         assert required.issubset(found)
+
+    def test_phong_ban_chia_se_table_exists_for_document_departments(self, engine):
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT OBJECT_ID('dbo.PhongBanChiaSe', 'U')")
+            ).scalar()
+            index_exists = conn.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM sys.indexes
+                    WHERE name = 'IX_PhongBanChiaSe_Dept'
+                      AND object_id = OBJECT_ID('dbo.PhongBanChiaSe')
+                    """
+                )
+            ).scalar()
+        assert exists is not None
+        assert index_exists == 1
 
     def test_lifecycle_review_constraints_exist(self, engine):
         """Guard migration/schema: lifecycle states phai bi rang buoc hop le."""

@@ -116,17 +116,16 @@ def restore_document_children(doc_id):
         logger.error(f"[reingest] restore_document_children loi doc_id={doc_id}: {e}", exc_info=True)
         return False
  
-def save_document_page(doc_id, file_name, page_no, text_extract, ocr_text, vision_summary, ocr_confidence, extraction_status, image_path):
+def save_document_page(doc_id, file_name, page_no, text_extract, vision_summary, extraction_status, image_path):
     _ensure_engine()
     try:
         with engine.begin() as conn:
             conn.execute(
                 text("""
                     INSERT INTO dbo.DocumentPages (
-                        DocID, FileName, PageNo, TextExtract, LocalOCRText, 
-                        VisionSummary, LocalOCRConfidence, ExtractionStatus, ImagePath
+                        DocID, FileName, PageNo, TextExtract, VisionSummary, ExtractionStatus, ImagePath
                     ) VALUES (
-                        :d, :f, :p, :t, :o, :v, :c, :s, :i
+                        :d, :f, :p, :t, :v, :s, :i
                     )
                 """),
                 {
@@ -134,9 +133,7 @@ def save_document_page(doc_id, file_name, page_no, text_extract, ocr_text, visio
                     "f": file_name,
                     "p": page_no,
                     "t": text_extract,
-                    "o": ocr_text,
                     "v": vision_summary,
-                    "c": ocr_confidence,
                     "s": extraction_status,
                     "i": image_path
                 }

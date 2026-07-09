@@ -58,7 +58,7 @@ async function doLogout() {
 </script>
 
 <template>
-  <div class="app-dark app-shell">
+  <div class="app-dark app-shell" :class="{ 'has-sidebar': auth.user }">
     <aside v-if="auth.user" class="sidebar">
       <div class="brand">
         <div class="brand-mark">ID</div>

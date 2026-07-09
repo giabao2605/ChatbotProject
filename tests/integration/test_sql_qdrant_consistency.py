@@ -9,7 +9,7 @@ Chay khi co CA SQL Server va Qdrant staging/test:
 Bat bien can bao ve:
 - Moi doc da vector hoa (TaiLieu.TrangThaiVector=1) phai co it nhat 1 point Qdrant.
 - Payload Qdrant metadata phai khop cac field RBAC/phan loai trong SQL:
-  SecurityLevel, Domain, PhongBan/phong_ban_quyen, Site.
+  SecurityLevel, Domain, PhongBanChiaSe/phong_ban_quyen, Site.
 
 Luu y an toan:
 - Test chi READ SQL/Qdrant, khong sua du lieu.
@@ -62,7 +62,6 @@ def _sample_vectorized_docs(engine):
                     ThuMuc,
                     Domain,
                     SecurityLevel,
-                    PhongBan,
                     Site
                 FROM TaiLieu
                 WHERE TrangThaiVector = 1
@@ -72,6 +71,16 @@ def _sample_vectorized_docs(engine):
             )
         ).mappings().all()
     return rows
+
+
+def _document_departments(engine, doc_id, fallback_dept):
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT DeptCode FROM dbo.PhongBanChiaSe WHERE DocID = :d"),
+            {"d": doc_id},
+        ).fetchall()
+    depts = [r[0] for r in rows if r and r[0]]
+    return depts or [fallback_dept]
 
 
 def _scroll_points_for_doc(qdrant, qmodels, collection, doc_id, limit=10):
@@ -158,9 +167,9 @@ def test_qdrant_payload_matches_sql_rbac_metadata(engine, qdrant, qmodels):
         if sql_site and q_site != sql_site:
             mismatches.append((doc_id, "site", sql_site, q_site))
 
-        sql_depts = _csv_tokens(doc["PhongBan"] or doc["ThuMuc"])
+        sql_depts = _csv_tokens(_document_departments(engine, doc_id, doc["ThuMuc"]))
         q_depts = _csv_tokens(meta.get("phong_ban_quyen"))
-        # SQL PhongBan/ThuMuc la source-of-truth toi thieu; payload co the them CHUNG.
+        # SQL PhongBanChiaSe/ThuMuc la source-of-truth toi thieu; payload co the them CHUNG.
         if sql_depts and not set(sql_depts).issubset(set(q_depts)):
             mismatches.append((doc_id, "phong_ban_quyen", sql_depts, q_depts))
 

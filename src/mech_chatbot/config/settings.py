@@ -120,7 +120,7 @@ class Settings(BaseModel):
     LLM_API_KEY: Optional[str] = None
     # goc: PROXYLLM_BASE_URL or OPENAI_BASE_URL
     LLM_BASE_URL: Optional[str] = None
-    GPT_MODEL_NAME: str = "glm-5.2"
+    GPT_MODEL_NAME: str = "gpt-5.4"
     GPT_TEMPERATURE: float = 0.0
     GPT_MAX_OUTPUT_TOKENS: int = 4000
     GPT_TIMEOUT_SECONDS: float = 120.0  # llm_client=120; vision_client fallback=180
@@ -196,7 +196,7 @@ class Settings(BaseModel):
             # LLM
             LLM_API_KEY=_first("PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY"),
             LLM_BASE_URL=_first("PROXYLLM_BASE_URL", "OPENAI_BASE_URL"),
-            GPT_MODEL_NAME=_str("GPT_MODEL_NAME", "glm-5.2"),
+            GPT_MODEL_NAME=_str("GPT_MODEL_NAME", "gpt-5.4"),
             GPT_TEMPERATURE=_float("GPT_TEMPERATURE", 0.0),
             GPT_MAX_OUTPUT_TOKENS=_int("GPT_MAX_OUTPUT_TOKENS", 4000),
             GPT_TIMEOUT_SECONDS=_float("GPT_TIMEOUT_SECONDS", 120.0),

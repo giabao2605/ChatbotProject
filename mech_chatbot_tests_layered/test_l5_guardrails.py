@@ -78,14 +78,6 @@ class TestSourceCitation:
         # Cau hoi ky thuat -> bat buoc trich nguon. Tranh chu chua chuoi con 'hi'.
         assert g.requires_source_citation("Vật liệu chế tạo trục là gì?") is True
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG da biet: keyword 'hi' khop CHUOI CON trong 'nhieu'/'nhi\u1ec1u' -> cau "
-            "ky thuat 'bao nhieu?' bi hieu nham la chao hoi va BO QUA yeu cau trich nguon. "
-            "Nen khop nguyen tu (word boundary) thay vi 'in'."
-        ),
-        strict=False,
-    )
     def test_bao_nhieu_should_still_require_citation(self, g):
         assert g.requires_source_citation("Kích thước trục là bao nhiêu?") is True
 

@@ -1194,7 +1194,10 @@ def document_delete(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)
 
 @data_router.get("/ingestion/eta")
 def ingestion_eta(profile: dict[str, Any] = Depends(require_any_role("uploader", "reviewer", "admin"))):
-    return {"eta_seconds": queue_eta_seconds()}
+    eta = queue_eta_seconds()
+    if isinstance(eta, dict):
+        return eta
+    return {"pending": 0, "avg_seconds": 0, "eta_seconds": eta}
 
 
 @data_router.get("/ingestion/bulk-action-jobs")

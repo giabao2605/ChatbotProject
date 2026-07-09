@@ -164,13 +164,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 # thuoc domain phi co khi thi doc truc tiep tu text layer, tiet kiem quota Vision.
                 vision_required = os.path.exists(img_path) and (_is_mech_domain_vision or not is_text_heavy)
                 vision_failed = False
-                ocr_text = ""
-                ocr_confidence = 0.0
                 vision_data = {}
                 
                 if vision_required:
-                    ocr_text = ""
-                    ocr_confidence = 0.0
                     if progress_callback:
                         progress_callback(f"Trang {page_num+1}: dùng GPT-5.4 Vision để phân tích ảnh.")
 
@@ -400,9 +396,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     file_name=ten_file,
                     page_no=page_num + 1,
                     text_extract=text,
-                    ocr_text=ocr_text,
                     vision_summary=image_summary,
-                    ocr_confidence=ocr_confidence,
                     extraction_status="success",
                     image_path=img_path
                 )
