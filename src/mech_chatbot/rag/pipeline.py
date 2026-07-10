@@ -13,7 +13,7 @@ from tenacity import retry, retry_if_exception_type, retry_if_exception, wait_ex
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage
-from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, gpt_rerank_documents, get_llm_model_name
+from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
 from mech_chatbot.db.repository import search_bom_by_code
 from mech_chatbot.rag.rbac import (
     compose_retrieval_filters,
@@ -389,13 +389,13 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
         return empty_stream(), "", [], current_part_ids, make_debug_info([])
  
-    # BUOC B2: CROSS-ENCODER RE-RANK & REORDER (CHONG LOST IN THE MIDDLE)
+    # BUOC B2: VOYAGE RE-RANK & REORDER (CHONG LOST IN THE MIDDLE)
     if retrieved_docs:
         # Tach fake_doc (anh nguoi dung upload) ra khoi qua trinh rerank
         fake_docs = [d for d in retrieved_docs if d.metadata.get("loai_du_lieu") == "image_summary" and d.metadata.get("file_goc") == "Anh dinh kem tu nguoi dung"]
         real_docs = [d for d in retrieved_docs if d not in fake_docs]
  
-        if real_docs and use_gpt_rerank():
+        if real_docs and use_voyage_rerank():
             try:
                 target_top_n = RERANK_PER_PART * max(1, len(new_part_ids) if new_part_ids else 1)
                 
@@ -408,24 +408,14 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     logger.info(f"Phat hien tu khoa liet ke, mo rong target_top_n len {target_top_n}")
 
                 top_n = min(RERANK_TOP_N_CAP, target_top_n)
-                logger.info(f"Dang su dung GPT-5.4 Rerank de filter {len(real_docs)} tai lieu (top_n={top_n})...")
+                logger.info(f"Dang su dung Voyage Rerank de filter {len(real_docs)} tai lieu (top_n={top_n})...")
                 t_rerank = time.time()
-                compressed_docs = cohere_rerank(None, real_docs, user_question, top_n=top_n)
-                
-                # LOP PHONG THU 1: Score Cutoff
-                # Chi lay cac tai lieu co relevance_score >= RERANK_SCORE_CUTOFF (da duoc calibrated boi Cohere)
-                filtered_docs = [doc for doc in compressed_docs if doc.metadata.get("relevance_score", 1.0) >= RERANK_SCORE_CUTOFF]
-                
-                if not filtered_docs and compressed_docs:
-                    logger.info("Tat ca tai lieu deu duoi nguong relevance_score. Fallback giu lai top 3 tai lieu thay vi xoa sach.")
-                    real_docs = compressed_docs[:3]
-                else:
-                    real_docs = filtered_docs
+                real_docs = voyage_rerank_documents(real_docs, effective_question, top_n=top_n)
                 
                 scores = [{"file": d.metadata.get("file_goc"), "page": d.metadata.get("trang_so"), "score": d.metadata.get("relevance_score", 1.0)} for d in real_docs[:5]]
                 log_trace("rerank", trace_id, latency_ms=int((time.time() - t_rerank)*1000), input_docs=len(retrieved_docs), output_docs=len(real_docs), scores=scores)
             except Exception as e:
-                logger.error(f"Loi khi su dung GPT-5.4 Rerank: {e}. Fallback to manual rerank.")
+                logger.error(f"Loi khi su dung Voyage Rerank: {e}. Fallback to manual rerank.")
                 real_docs = rerank_docs(real_docs)
                 log_trace("rerank", trace_id, error=str(e))
         else:

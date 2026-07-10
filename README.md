@@ -18,7 +18,7 @@ An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for 
 | **Rate Limiting** | Login rate limiting with lockout to prevent brute-force attacks (`auth/rate_limit.py`). |
 | **Anti-Hallucination Guardrails** | A strict evidence-based verification layer (evidence gate) refuses to answer when quantitative data (fabrication time, costs, quantities) is absent from retrieved context. Reasons are logged per trace. |
 | **HyDE (Hypothetical Document Embedding)** | Automatically activated for short or ambiguous questions to expand retrieval context before hybrid search. |
-| **GPT Reranking** | LLM-based reranking filters retrieved chunks by relevance before generation (`USE_GPT_RERANK`, `GPT_RERANK_MAX_DOCS`). |
+| **Voyage Reranking** | Voyage `rerank-2.5-lite` reranks retrieved chunks before generation. It supports multilingual queries, including Vietnamese, and falls back to deterministic ordering if the API is unavailable. |
 | **Domain Glossary** | Admins manage a per-domain synonym/abbreviation dictionary (`DomainGlossary` table, `glossary.py`). Changes take effect immediately — the RAG engine queries the glossary (with a short TTL cache) to expand queries and improve recall without code changes. |
 | **Entity Resolver** | `rag/entity_resolver.py` normalizes material names and product codes before vector lookup. |
 | **Intelligent Chitchat Handling** | `rag/chitchat.py` distinguishes casual conversation from technical queries, with bilingual (Vietnamese/English) responses. |
@@ -296,9 +296,12 @@ GPT_VISION_MAX_OUTPUT_TOKENS=16000
 GPT_TIMEOUT_SECONDS=300
 GPT_VISION_JPEG_QUALITY=95
 
-# Reranking
-USE_GPT_RERANK=true
-GPT_RERANK_MAX_DOCS=30
+# Voyage Reranking
+# Reranking sends the question and candidate chunks to Voyage AI.
+VOYAGE_API_KEY=<your-voyage-api-key>
+USE_VOYAGE_RERANK=true
+VOYAGE_RERANK_MODEL=rerank-2.5-lite
+VOYAGE_RERANK_TIMEOUT_SECONDS=15
 
 # Vector Database
 QDRANT_URL=<your-qdrant-cloud-url>

@@ -16,6 +16,7 @@ import os
 import secrets
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 import traceback
 from contextlib import asynccontextmanager
 
@@ -96,6 +97,7 @@ if RAG_CORS_ALLOW_ORIGINS:
 
 # Semaphore to limit concurrent RAG processing
 _rag_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RAG)
+_rag_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_RAG, thread_name_prefix="rag")
 
 # ---------------------------------------------------------------------------
 # Request / Response schemas
@@ -254,7 +256,7 @@ async def chat_endpoint(req: ChatRequest):
         # Run the synchronous RAG pipeline in a thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, _run_rag_sync, req, user_profile
+            _rag_executor, _run_rag_sync, req, user_profile
         )
         result.elapsed_ms = int((time.time() - t_start) * 1000)
         logger.info(

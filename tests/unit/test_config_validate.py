@@ -83,6 +83,12 @@ class TestValidateConfig:
         errors, _ = cfg.validate_config(env)
         assert any("GPT_TEMPERATURE" in e for e in errors)
 
+    def test_bad_voyage_timeout_is_error(self):
+        env = _full_env()
+        env["VOYAGE_RERANK_TIMEOUT_SECONDS"] = "too-slow"
+        errors, _ = cfg.validate_config(env)
+        assert any("VOYAGE_RERANK_TIMEOUT_SECONDS" in e for e in errors)
+
     def test_can_skip_groups(self):
         # Chi kiem qdrant, bo qua llm/sql/embedding
         env = {"QDRANT_URL": "x", "QDRANT_API_KEY": "y"}
@@ -122,14 +128,17 @@ class TestSecretMasking:
 
     def test_summary_never_leaks_secret_value(self):
         env = _full_env()
+        env["VOYAGE_API_KEY"] = "secret-voyage-key-999"
         summary = cfg.safe_config_summary(env)
         blob = str(summary)
         # Gia tri secret that KHONG duoc xuat hien
         assert "secret-qdrant-key-123" not in blob
         assert "secret-llm-key-456" not in blob
         assert "secret-rag-token-789" not in blob
+        assert "secret-voyage-key-999" not in blob
         # Nhung phai bao la da SET
         assert "SET(" in summary["QDRANT_API_KEY"]
+        assert "SET(" in summary["VOYAGE_API_KEY"]
 
     def test_summary_marks_missing_secret(self):
         env = _full_env()

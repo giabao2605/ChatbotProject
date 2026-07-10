@@ -162,7 +162,7 @@ $ragProc = Start-ProcessWithEnv `
     -WorkingDirectory $projectRoot `
     -RedirectStandardOutput $ragOutLog `
     -RedirectStandardError $ragErrLog `
-    -Environment @{ PYTHONPATH = "src" }
+    -Environment @{ PYTHONPATH = "src"; OMP_NUM_THREADS = "4" }
 
 $workerProc = Start-ProcessWithEnv `
     -FilePath $pythonExe `

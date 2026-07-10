@@ -9,7 +9,7 @@ from mech_chatbot.config.logging import logger, log_trace
 from qdrant_client import QdrantClient, models
 from langchain_qdrant import QdrantVectorStore, FastEmbedSparse, RetrievalMode
 from langchain_huggingface import HuggingFaceEmbeddings
-from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, gpt_rerank_documents, get_llm_model_name
+from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
 import threading
 from mech_chatbot.llm.vision_client import build_vision_model, is_retryable_error
 
@@ -45,8 +45,9 @@ RERANK_PER_PART = int(os.getenv("RERANK_PER_PART", "10"))
 RERANK_TOP_N_CAP = int(os.getenv("RERANK_TOP_N_CAP", "40"))
 
 
-def use_gpt_rerank():
-    return str(os.getenv("USE_GPT_RERANK", "true")).strip().lower() in {"1", "true", "yes", "y", "on"}
+def use_voyage_rerank():
+    enabled = env_bool("USE_VOYAGE_RERANK", True)
+    return enabled and bool((os.getenv("VOYAGE_API_KEY") or "").strip())
 
 
 class RAGSystem:
@@ -130,12 +131,10 @@ class RAGSystem:
 client, vectorstore, llm = RAGSystem.get_instance()
 
 
-RERANK_SCORE_CUTOFF = float(os.getenv("RERANK_SCORE_CUTOFF", "0.3"))
-
 __all__ = [
     '_VISION_MODEL',
     'env_bool',
-    'use_gpt_rerank',
+    'use_voyage_rerank',
     'STRICT_ANSWER_MODE',
     'RERANK_PER_PART',
     'RERANK_TOP_N_CAP',
@@ -143,5 +142,4 @@ __all__ = [
     'client',
     'vectorstore',
     'llm',
-    'RERANK_SCORE_CUTOFF',
 ]

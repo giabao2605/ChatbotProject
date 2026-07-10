@@ -54,8 +54,8 @@ def create_db_engine():
     try:
         eng = create_engine(
             f"mssql+pyodbc:///?odbc_connect={params}",
-            pool_size=5,
-            max_overflow=10,
+            pool_size=20,
+            max_overflow=30,
             pool_pre_ping=True,
             pool_recycle=3600,
         )

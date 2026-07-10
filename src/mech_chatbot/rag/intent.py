@@ -7,7 +7,7 @@ from mech_chatbot.config.logging import logger, log_trace
 from qdrant_client import QdrantClient, models
 from langchain_core.messages import HumanMessage
 import json
-from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, gpt_rerank_documents, get_llm_model_name
+from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
 from mech_chatbot.rag.rbac import (
     compose_retrieval_filters,
     create_rbac_filter,

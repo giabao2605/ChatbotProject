@@ -15,7 +15,7 @@ from mech_chatbot.rag.pipeline import *
 # --- backward-compat: cac ten truoc day service.py surface qua import passthrough ---
 from mech_chatbot.config.settings import QDRANT_COLLECTION
 from mech_chatbot.config.logging import logger, log_trace
-from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, gpt_rerank_documents, get_llm_model_name
+from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
 from mech_chatbot.db.repository import search_bom_by_code
 from mech_chatbot.rag.rbac import (
     compose_retrieval_filters,

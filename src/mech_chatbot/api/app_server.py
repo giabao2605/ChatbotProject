@@ -11,6 +11,7 @@ import mimetypes
 import os
 import re
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -141,7 +142,21 @@ from mech_chatbot.services import (
 
 load_dotenv()
 
-app = FastAPI(title="Mech Chatbot App API", version="0.1.0")
+# ---------------------------------------------------------------------------
+# Lifespan: raise anyio thread limiter so blocking def endpoints don't starve
+# ---------------------------------------------------------------------------
+_APP_THREAD_LIMIT = int(os.getenv("APP_THREAD_LIMIT", "60"))
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    import anyio
+    anyio.to_thread.current_default_thread_limiter().total_tokens = _APP_THREAD_LIMIT
+    logger.info("App server anyio thread limiter raised to %d", _APP_THREAD_LIMIT)
+    yield
+
+
+app = FastAPI(title="Mech Chatbot App API", version="0.1.0", lifespan=_lifespan)
 
 
 @app.get("/api/health", tags=["system"])

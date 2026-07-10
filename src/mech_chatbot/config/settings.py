@@ -125,7 +125,6 @@ class Settings(BaseModel):
     GPT_MAX_OUTPUT_TOKENS: int = 4000
     GPT_TIMEOUT_SECONDS: float = 120.0  # llm_client=120; vision_client fallback=180
     GPT_MIN_INTERVAL_SECONDS: float = 0.0
-    GPT_RERANK_MAX_DOCS: int = 30
 
     # --- Vision (llm/vision_client, ingestion/pdf/vision) -----------------
     GPT_VISION_MODEL_NAME: str = "gpt-5.4"  # goc: GPT_VISION_MODEL_NAME or GPT_MODEL_NAME or gpt-5.4
@@ -139,8 +138,10 @@ class Settings(BaseModel):
     # --- RAG core (rag/*) -------------------------------------------------
     RERANK_PER_PART: int = 10
     RERANK_TOP_N_CAP: int = 40
-    RERANK_SCORE_CUTOFF: float = 0.3
-    USE_GPT_RERANK: bool = True
+    VOYAGE_API_KEY: Optional[str] = None
+    VOYAGE_RERANK_MODEL: str = "rerank-2.5-lite"
+    VOYAGE_RERANK_TIMEOUT_SECONDS: float = 15.0
+    USE_VOYAGE_RERANK: bool = True
     STRICT_ANSWER_MODE: bool = True
     INTENT_MAX_WORKERS: int = 8
     INTENT_TIMEOUT: float = 6.0
@@ -201,7 +202,6 @@ class Settings(BaseModel):
             GPT_MAX_OUTPUT_TOKENS=_int("GPT_MAX_OUTPUT_TOKENS", 4000),
             GPT_TIMEOUT_SECONDS=_float("GPT_TIMEOUT_SECONDS", 120.0),
             GPT_MIN_INTERVAL_SECONDS=_float("GPT_MIN_INTERVAL_SECONDS", 0.0),
-            GPT_RERANK_MAX_DOCS=_int("GPT_RERANK_MAX_DOCS", 30),
             # Vision
             GPT_VISION_MODEL_NAME=_first(
                 "GPT_VISION_MODEL_NAME", "GPT_MODEL_NAME", default="gpt-5.4"
@@ -215,8 +215,10 @@ class Settings(BaseModel):
             # RAG core
             RERANK_PER_PART=_int("RERANK_PER_PART", 10),
             RERANK_TOP_N_CAP=_int("RERANK_TOP_N_CAP", 40),
-            RERANK_SCORE_CUTOFF=_float("RERANK_SCORE_CUTOFF", 0.3),
-            USE_GPT_RERANK=_bool("USE_GPT_RERANK", True, _TRUTHY_5),
+            VOYAGE_API_KEY=_str("VOYAGE_API_KEY"),
+            VOYAGE_RERANK_MODEL=_str("VOYAGE_RERANK_MODEL", "rerank-2.5-lite"),
+            VOYAGE_RERANK_TIMEOUT_SECONDS=_float("VOYAGE_RERANK_TIMEOUT_SECONDS", 15.0),
+            USE_VOYAGE_RERANK=_bool("USE_VOYAGE_RERANK", True, _TRUTHY_5),
             STRICT_ANSWER_MODE=_bool("STRICT_ANSWER_MODE", True, _TRUTHY_5),
             INTENT_MAX_WORKERS=_int("INTENT_MAX_WORKERS", 8),
             INTENT_TIMEOUT=_float("INTENT_TIMEOUT", 6.0),
