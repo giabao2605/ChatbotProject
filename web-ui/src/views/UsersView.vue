@@ -302,7 +302,7 @@ const rowActions: RowAction[] = [
           <p v-if="!mergedDeptOptions.length" class="muted-text">Chưa có danh mục phòng ban.</p>
         </div>
         <div class="field">
-          <span>Site được phép (để trống = không giới hạn)</span>
+          <span>Site được phép (bắt buộc chọn; để trống sẽ bị chặn)</span>
           <label v-for="opt in mergedSiteOptions" :key="opt.value" class="check-row">
             <input type="checkbox" :value="opt.value" v-model="sel.sites" />
             <span v-text="opt.label"></span>
@@ -338,7 +338,7 @@ const rowActions: RowAction[] = [
 
       <!-- Site -->
       <div v-else-if="dlg.mode === 'sites'" class="field">
-        <span>Site được phép (để trống = không giới hạn)</span>
+        <span>Site được phép (bắt buộc chọn; để trống sẽ bị chặn)</span>
         <label v-for="opt in mergedSiteOptions" :key="opt.value" class="check-row">
           <input type="checkbox" :value="opt.value" v-model="sel.sites" />
           <span v-text="opt.label"></span>

@@ -29,6 +29,21 @@ sqlcmd -S localhost\SQLEXPRESS -d Mech_Chatbot_DB -I -i database/seed/02_dev_acc
 sqlcmd -S localhost\SQLEXPRESS -d Mech_Chatbot_DB -I -i database/data_migrations/0001_normalize_domain_values.sql
 ```
 
+## Xac minh clean migration
+
+`V0001` khong phai bootstrap tu database rong: no phu thuoc baseline va seed.
+Dung harness sau voi **database test co chu `test` trong ten**; harness se xoa
+va tao lai database do, chay baseline + toan bo seed, sau do chay V0001--V0025
+hai lan de kiem tra idempotency.
+
+```powershell
+$env:PYTHONPATH = 'src'
+.\chat_env\Scripts\python.exe scripts\migrations\verify_clean_migration.py `
+  --database Mech_Chatbot_Test_Migrations --recreate
+```
+
+Khong dung lenh nay voi database dang van hanh.
+
 ## Nguyen tac (tranh tai pham loi cu)
 
 1. **1 nguon su that:** moi bang dinh nghia DUY NHAT trong `schema/01_baseline.sql`. Khong dinh nghia lai bang o cho khac.

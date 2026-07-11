@@ -29,6 +29,11 @@ class DocumentAccessRecord:
     lifecycle_status: str | None
     review_status: str | None
     departments: tuple[str, ...]
+    # Defaults preserve compatibility for isolated callers that construct an
+    # in-memory record, while database-backed access always reads the serving
+    # state below and therefore fails closed for staged documents.
+    servable: bool = True
+    publication_state: str = "published"
 
 
 @dataclass(frozen=True)
@@ -73,13 +78,8 @@ def _profile_allowed_departments(profile: dict[str, Any]) -> set[str]:
 
 
 def _strict_site_enabled() -> bool:
-    try:
-        from mech_chatbot.db.repository import get_app_setting
-
-        raw = get_app_setting("rbac_strict_site_filter", "false")
-        return str(raw).strip().lower() in {"true", "1", "yes", "on"}
-    except Exception:
-        return False
+    raw = os.getenv("RBAC_STRICT_SITE_FILTER", "true")
+    return str(raw).strip().lower() in {"true", "1", "yes", "on"}
 
 
 def load_document_access_record(doc_id: int) -> DocumentAccessRecord | None:
@@ -90,7 +90,7 @@ def load_document_access_record(doc_id: int) -> DocumentAccessRecord | None:
             text(
                 """
                 SELECT DocID, TenFile, FilePath, ThuMuc, SecurityLevel, Site,
-                       LifecycleStatus, ReviewStatus
+                       LifecycleStatus, ReviewStatus, Servable, PublicationState
                 FROM dbo.TaiLieu
                 WHERE DocID = :doc_id
                 """
@@ -114,15 +114,36 @@ def load_document_access_record(doc_id: int) -> DocumentAccessRecord | None:
         lifecycle_status=row[6],
         review_status=row[7],
         departments=departments,
+        servable=bool(row[8]),
+        publication_state=str(row[9] or "").strip().lower(),
     )
 
 
 def evaluate_document_access(profile: dict[str, Any], record: DocumentAccessRecord | None) -> AccessDecision:
     if record is None:
         return AccessDecision(False, "document_not_found")
-    if "admin" in _profile_roles(profile):
-        return AccessDecision(True, "admin", security_level=record.security_level)
 
+    # Citation/original-file endpoints are serving surfaces too.  A document
+    # may already have been embedded for review, but it must never be opened
+    # until the publication outbox has made it explicitly servable.
+    lifecycle = str(record.lifecycle_status or "").strip().lower()
+    review = str(record.review_status or "").strip().lower()
+    if (
+        not record.servable
+        or record.publication_state != "published"
+        or lifecycle != "published"
+        or review != "approved"
+    ):
+        return AccessDecision(False, "document_not_servable", security_level=record.security_level)
+
+    if "admin" in _profile_roles(profile):
+        # Revised plan v3 explicitly retains legacy-admin global read.  The
+        # endpoint performs an audit write for every successful access; new
+        # platform/security control-plane roles do not inherit this bypass.
+        return AccessDecision(True, "global_admin", security_level=record.security_level)
+
+    # Platform/security administrators are not document-read roles.  File
+    # bytes follow the same department, clearance, and site checks as RAG.
     doc_departments = {d for d in record.departments if d}
     if not doc_departments:
         return AccessDecision(False, "document_has_no_department_grants", security_level=record.security_level)
@@ -134,6 +155,8 @@ def evaluate_document_access(profile: dict[str, Any], record: DocumentAccessReco
         return AccessDecision(False, "security_denied", security_level=record.security_level)
 
     allowed_sites = {_normalize_site(s) for s in (profile.get("allowed_sites") or []) if _normalize_site(s)}
+    if not allowed_sites:
+        return AccessDecision(False, "site_assignment_missing", security_level=record.security_level)
     if allowed_sites:
         doc_site = _normalize_site(record.site)
         if _strict_site_enabled():
@@ -182,7 +205,54 @@ def page_image_path(doc_id: int, page_no: int) -> Path | None:
         ).fetchone()
     if not row:
         return None
-    return resolve_under_root(row[0], [data_processed_root()])
+    stored = row[0]
+    resolved = resolve_under_root(stored, [data_processed_root()])
+    if resolved is not None and resolved.exists() and resolved.is_file():
+        return resolved
+
+    # ImagePath may have been written by a worker running in another
+    # environment (for example /app/... in Docker, or a Windows host path).
+    # All rendered page images are stored flat under data/processed, so safely
+    # retry by basename inside the local approved root. Never trust parent
+    # directories from the database for this fallback.
+    try:
+        basename = Path(str(stored).replace("\\", "/")).name
+    except Exception:
+        basename = ""
+    if basename:
+        fallback = (data_processed_root() / basename).resolve(strict=False)
+        root = data_processed_root().resolve(strict=False)
+        if root in fallback.parents and fallback.exists() and fallback.is_file():
+            return fallback
+    return None
+
+
+def page_has_vision(doc_id: int, page_no: int) -> bool:
+    """True only when this page was successfully processed by Vision.
+
+    A rendered PDF page alone is not enough: text-heavy PDF pages are rendered
+    for internal processing too, but the chat UI must only display an image
+    when VisionSummary proves that Vision/OCR actually ran successfully.
+    """
+    if engine is None:
+        return False
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT TOP 1 VisionSummary, ImagePath
+                    FROM dbo.DocumentPages
+                    WHERE DocID = :doc_id AND PageNo = :page_no
+                    """
+                ),
+                {"doc_id": int(doc_id), "page_no": int(page_no)},
+            ).fetchone()
+        if not row or not str(row[0] or "").strip() or not row[1]:
+            return False
+        return page_image_path(int(doc_id), int(page_no)) is not None
+    except Exception:
+        return False
 
 
 def original_file_path(record: DocumentAccessRecord) -> Path | None:

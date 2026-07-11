@@ -4,13 +4,14 @@ import ResourcePage from "@/components/ResourcePage.vue";
 import { apiGet, apiSend } from "@/api/client";
 import { num, pickStr, SECURITY_LEVELS } from "@/utils/rows";
 import { useAuthStore } from "@/stores/auth";
+import { isRoleAllowed } from "@/authorization";
 import type { ApiRow, CreateForm, ResourceColumn, RowAction } from "@/types";
 
 const auth = useAuthStore();
 const canReview = computed(
-  () => auth.user?.roles.includes("admin") || auth.user?.roles.includes("reviewer"),
+  () => isRoleAllowed(auth.user?.roles, ["security_admin"]),
 );
-const canAdmin = computed(() => !!auth.user?.roles.includes("admin"));
+const canAdmin = computed(() => isRoleAllowed(auth.user?.roles, ["security_admin"]));
 
 // Danh sach phong ban active -> dropdown cho o "Phong ban mong muon".
 const deptOptions = ref<Array<{ label: string; value: string }>>([]);

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Auto-split tu rag/service.py (P1.2 refactor). Giu nguyen logic goc; chi tach file + import."""
 
+import os
 import re
 from mech_chatbot.config.logging import logger, log_trace
 from langchain_core.messages import HumanMessage
@@ -22,7 +23,9 @@ from mech_chatbot.rag.answer_checks import (  # noqa: F401
 
 # cross-module (owned) refs
 from mech_chatbot.rag.prompt import _normalize_lang
-from mech_chatbot.rag.bootstrap import STRICT_ANSWER_MODE
+STRICT_ANSWER_MODE = os.getenv("STRICT_ANSWER_MODE", "true").strip().lower() in {
+    "1", "true", "yes", "on"
+}
 
 
 RISKY_QUESTION_KEYWORDS = [
@@ -112,7 +115,7 @@ def make_insufficient_evidence_message(question, reason, lang="vi"):
     )
 
 
-def verify_answerability(question, context_text):
+def verify_answerability(question, context_text, docs=None, trace_id=None):
     """LLM evidence gate: kiem tra co du bang chung truc tiep truoc khi cho final answer."""
     if not STRICT_ANSWER_MODE and not is_high_risk_question(question):
         return True, "", []
@@ -120,6 +123,14 @@ def verify_answerability(question, context_text):
     quick_reason = heuristic_missing_evidence_reason(question, context_text)
     if quick_reason:
         return False, quick_reason, []
+
+    # Final prompt, source-citation gate and deterministic post-check already
+    # validate the generated answer. A second GPT call here doubles latency and
+    # can exhaust provider capacity; keep it as an explicit opt-in for audits.
+    if os.getenv("LLM_EVIDENCE_VERIFIER_ENABLED", "false").strip().lower() not in {
+        "1", "true", "yes", "on"
+    }:
+        return True, "deterministic_evidence_gate_passed", []
 
     verifier_prompt = f"""
 Ban la bo kiem dinh RAG cho chatbot ky thuat co khi. Nhiem vu: kiem tra CONTEXT co DU BANG CHUNG TRUC TIEP de tra loi QUESTION hay khong.
@@ -145,7 +156,15 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON:
 
 """
     try:
-        response = cohere_invoke([HumanMessage(content=verifier_prompt)]).content
+        evidence_docs = list(docs or [])
+        response = cohere_invoke(
+            [HumanMessage(content=verifier_prompt)],
+            surface="evidence_verification",
+            trace_id=trace_id,
+            doc_ids=[(getattr(doc, "metadata", {}) or {}).get("doc_id") for doc in evidence_docs],
+            security_levels=[(getattr(doc, "metadata", {}) or {}).get("security_level") for doc in evidence_docs],
+            policies=[(getattr(doc, "metadata", {}) or {}).get("external_processing_policy") or "all_external" for doc in evidence_docs],
+        ).content
         data = _safe_json_loads(response)
         if not isinstance(data, dict):
             logger.warning("Evidence gate khong parse duoc JSON, fallback cho phep final answer nhung van dung prompt nghiem ngat.")

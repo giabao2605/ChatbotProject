@@ -65,7 +65,7 @@ def min_confidence():
 def _default_invoke(messages):
     # Lazy import de module THUAN khi test (khong keo theo langchain/llm_client).
     from mech_chatbot.llm.llm_client import gpt_invoke
-    return gpt_invoke(messages)
+    return gpt_invoke(messages, surface="interaction_routing")
 
 
 def _build_messages(text, context=None):

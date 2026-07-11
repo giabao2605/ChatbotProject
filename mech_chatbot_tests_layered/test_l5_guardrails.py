@@ -82,14 +82,14 @@ class TestSourceCitation:
         assert g.requires_source_citation("Kích thước trục là bao nhiêu?") is True
 
     def test_full_citation_passes(self, g):
-        ans = "Nguon: ban_ve.pdf, trang 3, version 2"
+        ans = "Nguon: ban_ve.pdf, trang 3, version 2, SourceID D12P3"
         assert g.has_required_source_citation(ans, require_version=True) is True
 
     def test_missing_citation_fails(self, g):
         assert g.has_required_source_citation("Cau tra loi khong co nguon") is False
 
     def test_version_optional(self, g):
-        ans = "Nguon: ban_ve.pdf, trang 3"
+        ans = "Nguon: ban_ve.pdf, trang 3, SourceID D12P3"
         assert g.has_required_source_citation(ans, require_version=False) is True
         assert g.has_required_source_citation(ans, require_version=True) is False
 

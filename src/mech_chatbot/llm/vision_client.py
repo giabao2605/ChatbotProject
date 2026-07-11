@@ -4,17 +4,25 @@ OpenAI-compatible vision client for ProxyLLM GPT-5.4.
 
 import base64
 import io
+import json
 import os
 import threading
 import time
 from dataclasses import dataclass
 from tenacity import RetryError
 from openai import OpenAI
+from mech_chatbot.llm.external_ai import (
+    audited_external_call,
+    get_provider_runtime,
+    normalize_text_result,
+)
 
 DEFAULT_VISION_MODEL = os.getenv("GPT_VISION_MODEL_NAME", os.getenv("GPT_MODEL_NAME", "gpt-5.4"))
 _PLACEHOLDER_KEY = "DIEN_KEY_CUA_BAN_VAO_DAY"
 _GPT_CALL_LOCK = threading.Lock()
 _LAST_GPT_CALL_AT = 0.0
+_VISION_MODEL_CACHE = None
+_VISION_MODEL_SIGNATURE = None
 
 
 @dataclass
@@ -22,20 +30,29 @@ class GPTVisionResponse:
     text: str
 
 
-def _get_api_key():
-    return (
-        os.getenv("PROXYLLM_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-        or os.getenv("GPT_API_KEY")
+def _vision_runtime():
+    return get_provider_runtime(
+        "proxyllm",
+        fallback_endpoint=(
+            os.getenv("PROXYLLM_BASE_URL")
+            or os.getenv("OPENAI_BASE_URL")
+            or "https://api.proxyllm.eu/v1"
+        ),
+        fallback_model=(
+            os.getenv("GPT_VISION_MODEL_NAME")
+            or os.getenv("GPT_MODEL_NAME")
+            or "gpt-5.4"
+        ),
+        fallback_secret_envs=("PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY"),
     )
+
+
+def _get_api_key():
+    return _vision_runtime().api_key
 
 
 def _get_base_url():
-    return (
-        os.getenv("PROXYLLM_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
-        or "https://api.proxyllm.eu/v1"
-    )
+    return _vision_runtime().endpoint
 
 
 def _unwrap_retry_error(exc):
@@ -150,8 +167,9 @@ class GPTVisionModel:
     Tra ve object co `.text`.
     """
 
-    def __init__(self, api_key: str, model_name: str = DEFAULT_VISION_MODEL):
-        self._client = OpenAI(api_key=api_key, base_url=_get_base_url())
+    def __init__(self, api_key: str, model_name: str = DEFAULT_VISION_MODEL, endpoint: str | None = None):
+        self._endpoint = endpoint or _get_base_url()
+        self._client = OpenAI(api_key=api_key, base_url=self._endpoint)
         self.model_name = model_name
 
     def generate_content(self, contents):
@@ -169,20 +187,46 @@ class GPTVisionModel:
             else:
                 user_content.append({"type": "text", "text": str(part)})
 
-        resp = self._client.chat.completions.create(
+        serialized_content = json.dumps(user_content, ensure_ascii=False)
+        input_chars = len(serialized_content)
+        with audited_external_call(
+            provider="proxyllm",
             model=self.model_name,
-            messages=[{"role": "user", "content": user_content}],
-            temperature=float(os.getenv("GPT_VISION_TEMPERATURE", "0")),
-            max_tokens=int(os.getenv("GPT_VISION_MAX_OUTPUT_TOKENS", "4096")),
-            timeout=float(os.getenv("GPT_TIMEOUT_SECONDS", "180")),
+            endpoint=self._endpoint,
+            surface="vision_ocr",
+            input_chars=input_chars,
+            input_bytes=len(serialized_content.encode("utf-8")),
+        ):
+            resp = self._client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": user_content}],
+                temperature=float(os.getenv("GPT_VISION_TEMPERATURE", "0")),
+                max_tokens=int(os.getenv("GPT_VISION_MAX_OUTPUT_TOKENS", "4096")),
+                timeout=float(os.getenv("GPT_TIMEOUT_SECONDS", "180")),
+            )
+        normalized = normalize_text_result(
+            resp.choices[0].message,
+            provider="proxyllm",
+            model=self.model_name,
+            kind="vision_extraction",
         )
-        text = resp.choices[0].message.content or ""
+        text = normalized.text or ""
         return GPTVisionResponse(text=text)
 
 
-def build_vision_model(model_name: str = DEFAULT_VISION_MODEL):
+def build_vision_model(model_name: str | None = None):
     """Tra ve GPTVisionModel neu co ProxyLLM/OpenAI API key hop le, nguoc lai None."""
-    api_key = _get_api_key()
-    if api_key and api_key != _PLACEHOLDER_KEY:
-        return GPTVisionModel(api_key, model_name)
-    return None
+    global _VISION_MODEL_CACHE, _VISION_MODEL_SIGNATURE
+    runtime = _vision_runtime()
+    api_key = runtime.api_key
+    selected_model = model_name or runtime.model or DEFAULT_VISION_MODEL
+    signature = (runtime.endpoint, selected_model, api_key)
+    with _GPT_CALL_LOCK:
+        if _VISION_MODEL_SIGNATURE == signature:
+            return _VISION_MODEL_CACHE
+        _VISION_MODEL_SIGNATURE = signature
+        _VISION_MODEL_CACHE = (
+            GPTVisionModel(api_key, selected_model, runtime.endpoint)
+            if api_key and api_key != _PLACEHOLDER_KEY else None
+        )
+        return _VISION_MODEL_CACHE

@@ -103,6 +103,19 @@ class TestValidateConfig:
         errors, _ = cfg.validate_config(env, require_service_auth=True)
         assert any("RAG_SERVICE_TOKEN" in e for e in errors)
 
+    def test_external_ai_local_escape_is_rejected_outside_local_development(self):
+        env = _full_env()
+        env["APP_ENV"] = "pilot"
+        env["EXTERNAL_AI_LOCAL_DEVELOPMENT"] = "true"
+        errors, _ = cfg.validate_config(env)
+        assert any("EXTERNAL_AI_LOCAL_DEVELOPMENT" in error for error in errors)
+
+    def test_realtime_strict_streaming_is_rejected_until_sentence_verification_exists(self):
+        env = _full_env()
+        env["STRICT_REALTIME_STREAMING"] = "true"
+        errors, _ = cfg.validate_config(env)
+        assert any("STRICT_REALTIME_STREAMING" in error for error in errors)
+
 
 class TestAssertConfigValid:
     def test_raises_on_invalid(self):

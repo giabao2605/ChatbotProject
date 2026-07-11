@@ -15,8 +15,10 @@ export type Citation = {
   doc_id: number;
   page_no: number;
   file_name?: string | null;
+  version_no?: number | string | null;
   score?: number | null;
-  page_url: string;
+  has_vision: boolean;
+  page_url?: string | null;
   original_url: string;
 };
 

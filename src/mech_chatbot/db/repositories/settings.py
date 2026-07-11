@@ -19,7 +19,10 @@ __all__ = [
 # ============================================================================
 # P1: Cau hinh ung dung (AppSettings) + metadata tong quat cho RAG
 # ============================================================================
-_APP_SETTINGS_DEFAULTS = {"expiry_warning_days": "30", "rag_general_top_k": "30"}
+_APP_SETTINGS_DEFAULTS = {
+    "expiry_warning_days": "30",
+    "rag_general_top_k": "30",
+}
 _app_settings_cache = {"data": None, "ts": 0.0}
 _APP_SETTINGS_TTL = 30  # giay
 

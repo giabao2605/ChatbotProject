@@ -10,6 +10,7 @@ __all__ = [
     '_get_qdrant_client',
     '_qdrant_client_singleton',
     'update_qdrant_metadata',
+    'batch_update_qdrant_metadata',
 ]
 
 _qdrant_client_singleton = None
@@ -27,62 +28,118 @@ def _get_qdrant_client():
         )
     return _qdrant_client_singleton
 
-def update_qdrant_metadata(doc_id, metadata_updates):
+def update_qdrant_metadata(doc_id, metadata_updates, require_points=False):
     """Cap nhat payload metadata cho tat ca Qdrant points cua doc_id.
 
-    Dung cursor pagination thay vi limit=10000 co dinh de xu ly tai lieu
-    co so luong chunk tuy y (> 10k trang).
+    Dung mot filter-based write voi ``key=metadata`` de Qdrant merge cac field
+    nested trong mot operation. Cach nay tranh trang thai nua point da cap nhat,
+    nua point chua cap nhat khi publish/unpublish.
     """
     from qdrant_client import models
     client = _get_qdrant_client()
-    BATCH = 500   # so points lay moi lan scroll
     try:
-        total_updated = 0
-        next_offset = None
-        found_any = False
-
-        while True:
-            scroll_res = client.scroll(
-                collection_name=QDRANT_COLLECTION,
-                scroll_filter=models.Filter(
-                    must=[models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=doc_id))]
-                ),
-                limit=BATCH,
-                offset=next_offset,
-                with_payload=True,
-            )
-            points, next_offset = scroll_res
-
-            if not points:
-                break  # het du lieu hoac khong co points nao
-
-            found_any = True
-            ids_to_update = []
-            for p in points:
-                meta = p.payload.get("metadata", {}) if p.payload else {}
-                meta.update(metadata_updates)
-                # Batch set_payload theo tung point (Qdrant chua ho tro batch update payload)
-                client.set_payload(
-                    collection_name=QDRANT_COLLECTION,
-                    payload={"metadata": meta},
-                    points=[p.id],
+        doc_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.doc_id",
+                    match=models.MatchValue(value=doc_id),
                 )
-                ids_to_update.append(p.id)
-
-            total_updated += len(ids_to_update)
-
-            if next_offset is None:
-                break  # het trang
-
-        if not found_any:
+            ]
+        )
+        count_result = client.count(
+            collection_name=QDRANT_COLLECTION,
+            count_filter=doc_filter,
+            exact=True,
+        )
+        total_updated = int(getattr(count_result, "count", 0) or 0)
+        if total_updated <= 0:
             logger.warning(
                 f"update_qdrant_metadata: khong co Qdrant points cho DocID {doc_id}. "
                 "Tai lieu co the chua embed hoac da bi xoa truoc do."
             )
-            return True  # giu True de khong lam gay publish/reject flow
+            # Cac flow metadata thong thuong giu tuong thich nguoc. Rieng publish
+            # phai fail-closed: khong duoc danh dau SQL la published khi khong co
+            # staging points de kich hoat trong Qdrant.
+            return not require_points
 
+        client.set_payload(
+            collection_name=QDRANT_COLLECTION,
+            payload=dict(metadata_updates or {}),
+            key="metadata",
+            points=doc_filter,
+            wait=True,
+            ordering=models.WriteOrdering.STRONG,
+        )
         logger.info(f"Updated Qdrant payload cho {total_updated} chunks cua DocID {doc_id}")
         return True
     except Exception as e:
         logger.error(f"Loi update Qdrant payload cho DocID {doc_id}: {e}", exc_info=True)
+        return False
+
+
+def batch_update_qdrant_metadata(updates_by_doc_id, require_points=False):
+    """Apply all document metadata changes in one strongly-ordered Qdrant batch.
+
+    Version publication needs opposite visibility mutations for old and new
+    documents. Sending them through ``batch_update_points`` avoids a sequence
+    of independent network writes that could expose a prolonged mixed state.
+    """
+    from qdrant_client import models
+
+    normalized = {}
+    for raw_doc_id, raw_updates in (updates_by_doc_id or {}).items():
+        try:
+            doc_id = int(raw_doc_id)
+        except (TypeError, ValueError):
+            return False
+        if raw_updates:
+            normalized[doc_id] = dict(raw_updates)
+    if not normalized:
+        return True
+
+    client = _get_qdrant_client()
+    try:
+        operations = []
+        for doc_id, metadata_updates in normalized.items():
+            doc_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="metadata.doc_id",
+                        match=models.MatchValue(value=doc_id),
+                    )
+                ]
+            )
+            count_result = client.count(
+                collection_name=QDRANT_COLLECTION,
+                count_filter=doc_filter,
+                exact=True,
+            )
+            point_count = int(getattr(count_result, "count", 0) or 0)
+            if point_count <= 0:
+                logger.warning("batch_update_qdrant_metadata: khong co points cho DocID %s", doc_id)
+                if require_points:
+                    return False
+                continue
+            operations.append(
+                models.SetPayloadOperation(
+                    set_payload=models.SetPayload(
+                        payload=metadata_updates,
+                        key="metadata",
+                        filter=doc_filter,
+                    )
+                )
+            )
+
+        if not operations:
+            return not require_points
+        client.batch_update_points(
+            collection_name=QDRANT_COLLECTION,
+            update_operations=operations,
+            wait=True,
+            ordering=models.WriteOrdering.STRONG,
+        )
+        logger.info("Batch updated Qdrant payload for %s document(s)", len(operations))
+        return True
+    except Exception as exc:
+        logger.error("Loi batch update Qdrant payload: %s", exc, exc_info=True)
         return False

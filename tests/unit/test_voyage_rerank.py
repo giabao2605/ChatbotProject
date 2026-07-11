@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,7 @@ def _doc(text):
 
 def test_voyage_rerank_preserves_documents_and_order(monkeypatch):
     posted = {}
+    audit = {}
 
     def fake_post(url, **kwargs):
         posted["url"] = url
@@ -35,9 +37,15 @@ def test_voyage_rerank_preserves_documents_and_order(monkeypatch):
             ]
         })
 
+    @contextmanager
+    def fake_audit(**kwargs):
+        audit.update(kwargs)
+        yield
+
     monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
     monkeypatch.setenv("VOYAGE_RERANK_MODEL", "rerank-2.5-lite")
     monkeypatch.setattr(rerank.requests, "post", fake_post)
+    monkeypatch.setattr(rerank, "audited_external_call", fake_audit)
     docs = [_doc("zero"), _doc("one"), _doc("two")]
 
     result = rerank.voyage_rerank_documents(docs, "cau hoi", top_n=2)
@@ -54,6 +62,9 @@ def test_voyage_rerank_preserves_documents_and_order(monkeypatch):
         "return_documents": False,
         "truncation": True,
     }
+    assert audit["provider"] == "voyage"
+    assert audit["surface"] == "reranking"
+    assert audit["policies"] == ["all_external", "all_external", "all_external"]
 
 
 def test_voyage_rerank_requires_api_key(monkeypatch):

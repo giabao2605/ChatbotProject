@@ -21,10 +21,15 @@ if str(_SRC) not in sys.path:
 def pytest_collection_modifyitems(config, items):
     run_db = os.getenv("RUN_DB_TESTS") == "1"
     run_qdrant = os.getenv("RUN_QDRANT_TESTS") == "1"
-    run_eval = bool(os.getenv("RAG_SERVER_URL"))
+    # A configured URL is common in a developer .env and must not make the
+    # default test suite issue paid/external RAG requests.  Live evaluation is
+    # intentionally an explicit opt-in.
+    run_eval = os.getenv("RUN_EVAL_TESTS") == "1" and bool(os.getenv("RAG_SERVER_URL"))
     skip_db = pytest.mark.skip(reason="Can SQL Server that: dat RUN_DB_TESTS=1")
     skip_qdrant = pytest.mark.skip(reason="Can Qdrant that: dat RUN_QDRANT_TESTS=1")
-    skip_eval = pytest.mark.skip(reason="Can RAG server: dat RAG_SERVER_URL=...")
+    skip_eval = pytest.mark.skip(
+        reason="Can RAG server that: dat RUN_EVAL_TESTS=1 va RAG_SERVER_URL=..."
+    )
     for item in items:
         if "integration" in item.keywords:
             needs_qdrant = "qdrant" in item.name.lower() or "consistency" in item.name.lower()

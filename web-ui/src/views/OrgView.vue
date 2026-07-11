@@ -17,6 +17,33 @@ async function loadSites(): Promise<ApiRow[]> {
   return data.sites ?? [];
 }
 
+async function loadKnowledgeGovernance(): Promise<ApiRow[]> {
+  const data = await apiGet<{ governance: ApiRow[] }>("/api/catalog/knowledge-governance");
+  return data.governance ?? [];
+}
+
+async function loadDomainProfiles(): Promise<ApiRow[]> {
+  const data = await apiGet<{ profiles: ApiRow[] }>("/api/catalog/domain-profiles");
+  return data.profiles ?? [];
+}
+
+async function loadMissingSiteDocuments(): Promise<ApiRow[]> {
+  const data = await apiGet<{ documents: ApiRow[] }>("/api/catalog/missing-site-documents", { limit: 500 });
+  return data.documents ?? [];
+}
+
+async function loadRolloutReadiness(): Promise<ApiRow[]> {
+  const data = await apiGet<{ departments: ApiRow[] }>("/api/catalog/rollout/readiness");
+  return data.departments ?? [];
+}
+
+function csvList(value: unknown): string[] {
+  return String(value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 // Danh sach phong ban cho dropdown "chuyen du lieu".
 const deptOptions = ref<Opt[]>([]);
 onMounted(async () => {
@@ -52,6 +79,178 @@ const siteForm: CreateForm = {
     { key: "name", label: "Tên", required: true },
   ],
   submit: (values) => apiSend("/api/catalog/sites", "POST", values),
+};
+
+const governanceColumns = [
+  { field: "department_code", header: "Phòng ban", kind: "code" as const },
+  { field: "knowledge_owner_user_id", header: "Owner UserID" },
+  { field: "knowledge_approver_user_id", header: "Approver UserID" },
+  { field: "taxonomy_version", header: "Taxonomy" },
+  { field: "external_processing_policy", header: "External policy", kind: "tag" as const },
+  { field: "is_active", header: "Đang áp dụng", kind: "bool" as const },
+];
+
+const governanceForm: CreateForm = {
+  title: "Thiết lập Knowledge Owner / Approver",
+  triggerLabel: "Thiết lập governance",
+  fields: [
+    { key: "department_code", label: "Mã phòng ban", required: true },
+    { key: "knowledge_owner_user_id", label: "Knowledge Owner UserID", type: "number", required: true },
+    { key: "knowledge_approver_user_id", label: "Knowledge Approver UserID", type: "number", required: true },
+    { key: "taxonomy_version", label: "Taxonomy version", required: true, placeholder: "v1" },
+    {
+      key: "external_processing_policy",
+      label: "External processing policy",
+      type: "select",
+      options: [
+        { label: "all_external", value: "all_external" },
+        { label: "internal_only", value: "internal_only" },
+      ],
+      required: true,
+    },
+  ],
+  submit: (values) => {
+    const code = String(values.department_code ?? "").trim();
+    return apiSend(`/api/catalog/departments/${encodeURIComponent(code)}/knowledge-governance`, "PUT", {
+      knowledge_owner_user_id: values.knowledge_owner_user_id,
+      knowledge_approver_user_id: values.knowledge_approver_user_id,
+      taxonomy_version: values.taxonomy_version,
+      external_processing_policy: values.external_processing_policy || "all_external",
+      is_active: true,
+    });
+  },
+};
+
+const domainProfileColumns = [
+  { field: "department_code", header: "Phòng ban", kind: "code" as const },
+  { field: "document_types", header: "Loại tài liệu" },
+  { field: "required_metadata", header: "Metadata bắt buộc" },
+  { field: "router_patterns", header: "Router patterns" },
+  { field: "parent_context_enabled", header: "Parent context", kind: "bool" as const },
+];
+
+const domainProfileForm: CreateForm = {
+  title: "Thiết lập Domain Profile",
+  triggerLabel: "Thiết lập profile",
+  fields: [
+    { key: "department_code", label: "Mã phòng ban", required: true },
+    { key: "document_types", label: "Loại tài liệu, ngăn cách dấu phẩy", type: "textarea", required: true },
+    { key: "required_metadata", label: "Metadata bắt buộc, ngăn cách dấu phẩy", type: "textarea", required: true },
+    { key: "router_patterns", label: "Router patterns, ngăn cách dấu phẩy", type: "textarea" },
+    { key: "disable_parent_context", label: "Tắt parent context", type: "checkbox" },
+  ],
+  submit: (values) => {
+    const code = String(values.department_code ?? "").trim();
+    return apiSend(`/api/catalog/departments/${encodeURIComponent(code)}/domain-profile`, "PUT", {
+      document_types: csvList(values.document_types),
+      required_metadata: csvList(values.required_metadata),
+      router_patterns: csvList(values.router_patterns),
+      parent_context_enabled: !Boolean(values.disable_parent_context),
+      is_active: true,
+    });
+  },
+};
+
+const missingSiteColumns = [
+  { field: "doc_id", header: "DocID", kind: "code" as const },
+  { field: "file_name", header: "Tài liệu" },
+  { field: "owner_department", header: "Phòng ban" },
+  { field: "lifecycle_status", header: "Lifecycle", kind: "tag" as const },
+  { field: "review_status", header: "Review", kind: "tag" as const },
+];
+
+const siteBackfillForm: CreateForm = {
+  title: "Backfill site cho tài liệu",
+  triggerLabel: "Backfill site",
+  fields: [
+    { key: "doc_id", label: "DocID", type: "number", required: true },
+    { key: "site", label: "Mã site", required: true },
+  ],
+  submit: (values) => {
+    const docId = String(values.doc_id ?? "").trim();
+    return apiSend(`/api/documents/${encodeURIComponent(docId)}/site`, "PATCH", {
+      site: values.site,
+    });
+  },
+};
+
+const rolloutReadinessColumns = [
+  { field: "department_code", header: "Phòng ban", kind: "code" as const },
+  { field: "wave_number", header: "Wave" },
+  { field: "rollout_status", header: "Trạng thái", kind: "tag" as const },
+  { field: "evaluation_question_count", header: "Câu eval" },
+  { field: "evaluation_question_target", header: "Mục tiêu" },
+  { field: "missing_site_documents", header: "Thiếu site" },
+  { field: "ready_for_next_wave", header: "Đủ gate", kind: "bool" as const },
+];
+
+const rolloutPlanForm: CreateForm = {
+  title: "Xếp phòng ban vào rollout wave",
+  triggerLabel: "Cập nhật rollout plan",
+  fields: [
+    { key: "department_code", label: "Mã phòng ban", required: true },
+    {
+      key: "wave_number",
+      label: "Wave",
+      type: "select",
+      options: [
+        { label: "1 - Pilot", value: 1 },
+        { label: "2", value: 2 },
+        { label: "3", value: 3 },
+        { label: "4", value: 4 },
+      ],
+      required: true,
+    },
+    {
+      key: "rollout_status",
+      label: "Trạng thái",
+      type: "select",
+      options: [
+        { label: "planned", value: "planned" },
+        { label: "pilot", value: "pilot" },
+        { label: "dark_launch", value: "dark_launch" },
+        { label: "active", value: "active" },
+        { label: "blocked", value: "blocked" },
+      ],
+      required: true,
+    },
+    { key: "evaluation_question_target", label: "Số câu evaluation tối thiểu", type: "number", required: true },
+  ],
+  submit: (values) => {
+    const code = String(values.department_code ?? "").trim();
+    return apiSend(`/api/catalog/departments/${encodeURIComponent(code)}/rollout-plan`, "PUT", {
+      wave_number: values.wave_number,
+      rollout_status: values.rollout_status || "planned",
+      evaluation_question_target: values.evaluation_question_target || 75,
+    });
+  },
+};
+
+const evaluationGateForm: CreateForm = {
+  title: "Ghi nhận evaluation gate thực tế",
+  triggerLabel: "Ghi nhận kết quả gate",
+  fields: [
+    { key: "department_code", label: "Mã phòng ban", required: true },
+    { key: "batch_id", label: "Batch ID", required: true, placeholder: "pilot-kythuat-2026-07" },
+    { key: "question_count", label: "Số câu đã chạy", type: "number", required: true },
+    { key: "source_top5_rate", label: "Source trong top 5 (0..1)", type: "number", required: true },
+    { key: "citation_or_refusal_rate", label: "Citation hoặc refusal đúng (0..1)", type: "number", required: true },
+    { key: "evidence_support_rate", label: "Evidence support (0..1)", type: "number", required: true },
+    { key: "rbac_site_publication_leaks", label: "Số lỗi RBAC/site/publication", type: "number", required: true },
+    { key: "notes", label: "Ghi chú evidence", type: "textarea" },
+  ],
+  submit: (values) => {
+    const code = String(values.department_code ?? "").trim();
+    return apiSend(`/api/catalog/departments/${encodeURIComponent(code)}/evaluation-gate`, "POST", {
+      batch_id: values.batch_id,
+      question_count: values.question_count,
+      source_top5_rate: values.source_top5_rate,
+      citation_or_refusal_rate: values.citation_or_refusal_rate,
+      evidence_support_rate: values.evidence_support_rate,
+      rbac_site_publication_leaks: values.rbac_site_publication_leaks,
+      notes: values.notes || null,
+    });
+  },
 };
 
 function deptCode(row: ApiRow): string {
@@ -183,6 +382,46 @@ const deptActions: RowAction[] = [
       :load="loadSites"
       :create-form="siteForm"
       :row-actions="siteActions"
+    />
+    <ResourcePage
+      title="Knowledge governance"
+      eyebrow="Knowledge platform"
+      description="Mỗi phòng cần Owner và Approver thật trước khi tài liệu có thể publish. Admin global-read không tự động có quyền duyệt thay."
+      :load="loadKnowledgeGovernance"
+      :columns="governanceColumns"
+      :create-form="governanceForm"
+    />
+    <ResourcePage
+      title="Domain profiles"
+      eyebrow="Knowledge platform"
+      description="Catalog loại tài liệu, metadata bắt buộc và rule router riêng cho từng phòng ban."
+      :load="loadDomainProfiles"
+      :columns="domainProfileColumns"
+      :create-form="domainProfileForm"
+    />
+    <ResourcePage
+      title="Tài liệu thiếu site"
+      eyebrow="Migration gate"
+      description="Các tài liệu này phải được backfill site và duyệt lại trước khi publish."
+      :load="loadMissingSiteDocuments"
+      :columns="missingSiteColumns"
+      :create-form="siteBackfillForm"
+    />
+    <ResourcePage
+      title="Rollout readiness"
+      eyebrow="3 → 4 → 4 → 4"
+      description="Chỉ chuyển sang dark launch hoặc active khi owner/approver, site, 75 câu đánh giá và toàn bộ gate đều đạt."
+      :load="loadRolloutReadiness"
+      :columns="rolloutReadinessColumns"
+      :create-form="rolloutPlanForm"
+    />
+    <ResourcePage
+      title="Evaluation gate"
+      eyebrow="Evidence required"
+      description="Chỉ nhập kết quả từ bộ câu hỏi và benchmark đã chạy thực tế; hệ thống tự tính pass/fail theo threshold của plan."
+      :load="loadRolloutReadiness"
+      :columns="rolloutReadinessColumns"
+      :create-form="evaluationGateForm"
     />
   </div>
 

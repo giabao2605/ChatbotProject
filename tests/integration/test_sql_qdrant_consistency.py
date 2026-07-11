@@ -62,7 +62,11 @@ def _sample_vectorized_docs(engine):
                     ThuMuc,
                     Domain,
                     SecurityLevel,
-                    Site
+                    Site,
+                    Servable,
+                    PublicationState,
+                    PublicationVersion,
+                    ExternalProcessingPolicy
                 FROM TaiLieu
                 WHERE TrangThaiVector = 1
                   AND (LifecycleStatus IS NULL OR LifecycleStatus <> 'deleting')
@@ -166,6 +170,15 @@ def test_qdrant_payload_matches_sql_rbac_metadata(engine, qdrant, qmodels):
         q_site = meta.get("site")
         if sql_site and q_site != sql_site:
             mismatches.append((doc_id, "site", sql_site, q_site))
+
+        if bool(meta.get("servable")) != bool(doc["Servable"]):
+            mismatches.append((doc_id, "servable", bool(doc["Servable"]), meta.get("servable")))
+        if meta.get("publication_state") != doc["PublicationState"]:
+            mismatches.append((doc_id, "publication_state", doc["PublicationState"], meta.get("publication_state")))
+        if int(meta.get("publication_version") or 0) != int(doc["PublicationVersion"] or 0):
+            mismatches.append((doc_id, "publication_version", doc["PublicationVersion"], meta.get("publication_version")))
+        if meta.get("external_processing_policy") != doc["ExternalProcessingPolicy"]:
+            mismatches.append((doc_id, "external_processing_policy", doc["ExternalProcessingPolicy"], meta.get("external_processing_policy")))
 
         sql_depts = _csv_tokens(_document_departments(engine, doc_id, doc["ThuMuc"]))
         q_depts = _csv_tokens(meta.get("phong_ban_quyen"))

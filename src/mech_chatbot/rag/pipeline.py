@@ -56,6 +56,7 @@ from mech_chatbot.rag.context_builders import (  # noqa: F401
     build_structured_attributes_context,
     build_common_metadata_context,
     format_docs,
+    hydrate_parent_context,
 )
 
 # owned names tu cac module con (bao gom ca ten _underscore qua __all__)
@@ -82,6 +83,12 @@ def make_debug_info(docs=None):
                 "lifecycle_status": d.metadata.get("lifecycle_status"),
                 "review_status": d.metadata.get("review_status"),
                 "trang": d.metadata.get("trang_so"),
+                "source_id": (
+                    f"D{d.metadata.get('doc_id')}P{d.metadata.get('trang_so')}"
+                    if d.metadata.get("doc_id") is not None and d.metadata.get("trang_so") is not None
+                    else None
+                ),
+                "vision_used": bool(d.metadata.get("vision_used", False)),
                 "score": d.metadata.get("relevance_score"),
                 # GD5 muc 3: kem muc mat de tang audit doc tai lieu confidential o tang UI.
                 "security_level": d.metadata.get("security_level"),
@@ -92,11 +99,54 @@ def make_debug_info(docs=None):
     }
 
 
-def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None):
+def make_source_snapshot(docs=None):
+    """Return citation/evidence metadata without retaining document text.
+
+    This payload is safe to persist with a semantic-cache entry and is enough
+    for the browser to resolve final SourceIDs and for history to record the
+    complete authorization basis of the answer.
+    """
+    snapshots = []
+    for doc in docs or []:
+        metadata = getattr(doc, "metadata", {}) or {}
+        doc_id = metadata.get("doc_id")
+        page_no = metadata.get("trang_so")
+        try:
+            normalized_doc_id = int(doc_id) if doc_id is not None else None
+        except (TypeError, ValueError):
+            normalized_doc_id = None
+        try:
+            normalized_page_no = int(page_no) if page_no is not None else None
+        except (TypeError, ValueError):
+            normalized_page_no = None
+        if normalized_doc_id is None:
+            continue
+        snapshots.append(
+            {
+                "file_goc": metadata.get("file_goc"),
+                "doc_id": normalized_doc_id,
+                "version_no": metadata.get("version_no"),
+                "variant_code": metadata.get("variant_code"),
+                "is_current": metadata.get("is_current"),
+                "lifecycle_status": metadata.get("lifecycle_status"),
+                "review_status": metadata.get("review_status"),
+                "trang": normalized_page_no,
+                "source_id": (
+                    f"D{normalized_doc_id}P{normalized_page_no}"
+                    if normalized_page_no is not None else None
+                ),
+                "score": metadata.get("relevance_score"),
+                "security_level": metadata.get("security_level"),
+            }
+        )
+    return snapshots
+
+
+def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None, trace_id=None, cancel_event=None):
     if chat_history is None:
         chat_history = []
         
-    trace_id = f"rag_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    trace_id = trace_id or f"rag_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     t_start = time.time()
     
     log_trace("rag_start", trace_id, 
@@ -107,6 +157,80 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
               department=user_department,
               role=",".join(user_roles) if user_roles else "",
               model=get_llm_model_name())
+
+    # Deterministic safety must run before every cache lookup. Otherwise an
+    # entry produced under an older rule set could bypass a tightened policy.
+    try:
+        from mech_chatbot.rag import route_safety as _pre_cache_safety
+        _safety_reason = (_pre_cache_safety.detect(user_question)
+                          if _pre_cache_safety.enabled() else None)
+    except Exception as _safety_error:
+        logger.error("Pre-cache safety check failed: %s", _safety_error, exc_info=True)
+        _safety_reason = "safety_check_unavailable"
+    if _safety_reason:
+        from mech_chatbot.rag import route_responses as _route_responses_sb
+        _safety_text = _route_responses_sb.build_safety_response(
+            response_language, user_department, allowed_departments
+        )
+        def _pre_cache_safety_stream():
+            yield _safety_text
+        log_trace("safety", trace_id, reason=_safety_reason, blocked=True, layer="pre_cache")
+        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="safety_block")
+        return _pre_cache_safety_stream(), "", [], current_part_ids or [], make_debug_info([])
+
+    _sc_qemb = None
+    _sc_scope = None
+    _sc_cache_eligible = not any(
+        [image_path, chat_history, current_part_ids, bool(conversation_context)]
+    )
+    _exact_cache_started = time.time()
+    if _sc_cache_eligible:
+        try:
+            import mech_chatbot.rag.semantic_cache as _sc_fast
+
+            if _sc_fast.enabled():
+                _sc_scope = _sc_fast.scope_signature(
+                    user_department,
+                    allowed_departments,
+                    max_security_level,
+                    allowed_sites,
+                    user_roles,
+                )
+                _exact_hit = _sc_fast.lookup_exact(user_question, _sc_scope)
+                if _exact_hit:
+                    logger.info("Exact cache HIT -> tra loi truoc router/embedding.")
+                    _dbg = {
+                        "retrieved_docs": _exact_hit.get("evidence_snapshot") or [],
+                        "citation_docs": _exact_hit.get("citation_snapshot") or [],
+                    }
+                    _dbg["cache_hit"] = True
+                    _dbg["cache_type"] = "exact"
+
+                    def _exact_cached_stream():
+                        yield _exact_hit.get("answer", "")
+
+                    log_trace("cache", trace_id, cache_type="exact", hit=True,
+                              latency_ms=int((time.time() - _exact_cache_started) * 1000))
+                    log_trace(
+                        "rag_end",
+                        trace_id,
+                        final_latency_ms=int((time.time() - t_start) * 1000),
+                        refusal=False,
+                        cache_hit=True,
+                        cache_type="exact",
+                    )
+                    return (
+                        _exact_cached_stream(),
+                        _exact_hit.get("ref_text", ""),
+                        _exact_hit.get("ref_images", []),
+                        current_part_ids or [],
+                        _dbg,
+                    )
+        except Exception as _sce_fast:
+            logger.warning(f"exact cache lookup loi: {_sce_fast}")
+    if _sc_cache_eligible:
+        log_trace("cache", trace_id, cache_type="exact", hit=False,
+                  latency_ms=int((time.time() - _exact_cache_started) * 1000))
 
     # P0 slice #1: lich su hoi thoai tach sang pipeline_steps._prepare_history
     chat_history_str, _history_summary_new, _summary_covered_new = _prepare_history(
@@ -138,29 +262,36 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     retrieved_docs = []
     skip_retrieval = False
     query_to_search = user_question  # Mac dinh, cac nhanh ben duoi se override neu can
-    _sc_qemb = None   # P2-9 semantic cache: embedding cau hoi
-    _sc_scope = None  # P2-9 semantic cache: chu ky pham vi RBAC
-
     logger.info("Dang phan tich intent de tim kiem du lieu...")
     t_intent = time.time()
 
     # P2-9: Semantic cache LOOKUP (best-effort). Hit -> tra ngay, bo qua retrieval + LLM.
+    _semantic_cache_started = time.time()
     try:
         import mech_chatbot.rag.semantic_cache as _sc
-        if _sc.enabled():
+        if _sc.enabled() and _sc_cache_eligible:
             _sc_qemb = _embed_cached(user_question)
-            _sc_scope = _sc.scope_signature(user_department, allowed_departments, max_security_level, allowed_sites, user_roles)
+            if _sc_scope is None:
+                _sc_scope = _sc.scope_signature(user_department, allowed_departments, max_security_level, allowed_sites, user_roles)
             _hit = _sc.lookup(user_question, _sc_qemb, _sc_scope)
             if _hit:
                 logger.info("Semantic cache HIT -> tra loi tu cache.")
-                _dbg = make_debug_info([])
+                _dbg = {
+                    "retrieved_docs": _hit.get("evidence_snapshot") or [],
+                    "citation_docs": _hit.get("citation_snapshot") or [],
+                }
                 _dbg["cache_hit"] = True
                 def _cached_stream():
                     yield _hit.get("answer", "")
+                log_trace("cache", trace_id, cache_type="semantic", hit=True,
+                          latency_ms=int((time.time() - _semantic_cache_started) * 1000))
                 log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start) * 1000), refusal=False, cache_hit=True)
                 return _cached_stream(), _hit.get("ref_text", ""), _hit.get("ref_images", []), current_part_ids, _dbg
     except Exception as _sce:
         logger.warning(f"semantic cache lookup loi: {_sce}")
+    if _sc_cache_eligible:
+        log_trace("cache", trace_id, cache_type="semantic", hit=False,
+                  latency_ms=int((time.time() - _semantic_cache_started) * 1000))
 
     # === BUOC B0 (P0-1): PHAN DOAN NGU CANH + QUERY REWRITING + NEO STATE MEMORY ===
     # P0 slice #5: tach sang pipeline_steps._rewrite_and_anchor (analyze_context + rewrite + anchor + intent)
@@ -199,18 +330,14 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         tokenized_question = tokenize_cached(effective_question)
         query_to_search = tokenized_question
 
-        # HyDE (Hypothetical Document Embeddings) Trigger
-        if len(tokenized_question.split()) < 25 and not new_part_ids and not _skip_hyde_anchor:
-            logger.info("Cau hoi ngan VA khong co ma ban ve, kich hoat HyDE de mo rong ngu canh...")
-            try:
-                hyde_prompt = f"Viet mot doan van ban ngan gon (1-2 cau) tra loi cho cau hoi sau dua tren tai lieu noi bo: '{effective_question}'"
-                t_hyde = time.time()
-                hyde_response = cohere_invoke([HumanMessage(content=hyde_prompt)]).content
-                query_to_search = tokenize_cached(hyde_response)
-                log_trace("hyde", trace_id, latency_ms=int((time.time() - t_hyde)*1000), used=True, hyde_chars=len(hyde_response))
-            except Exception as e:
-                logger.warning(f"Loi HyDE: {e}")
-                log_trace("hyde", trace_id, used=True, error=str(e))
+        # Retrieval-first: HyDE is an expensive recall fallback, not a mandatory
+        # pre-retrieval call for every short question.
+        _hyde_eligible = (
+            env_bool("HYDE_ENABLED", True)
+            and len(tokenized_question.split()) < 25
+            and not new_part_ids
+            and not _skip_hyde_anchor
+        )
 
         # P0-3: mo rong truy van bang glossary/synonym theo domain (tang recall cho phong phi co khi)
         try:
@@ -228,9 +355,46 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             is_bom_query=is_bom_query,
             query_to_search=query_to_search,
             rbac_filter=rbac_filter,
+            trace_id=trace_id,
         )
         if _af is not _RETRIEVE_UNSET:
             active_filter = _af
+
+        if not retrieved_docs and _hyde_eligible:
+            logger.info("Retrieval rong; kich hoat HyDE fallback mot lan.")
+            try:
+                hyde_prompt = (
+                    "Viet mot doan van ban ngan gon (1-2 cau) tra loi cho cau hoi sau "
+                    f"dua tren tai lieu noi bo: '{effective_question}'"
+                )
+                t_hyde = time.time()
+                hyde_response = cohere_invoke(
+                    [HumanMessage(content=hyde_prompt)], surface="hyde"
+                ).content
+                hyde_query = tokenize_cached(hyde_response)
+                (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = _retrieve(
+                    new_part_ids=new_part_ids,
+                    strict_filter=strict_filter,
+                    broad_filter=broad_filter,
+                    is_bom_query=is_bom_query,
+                    query_to_search=hyde_query,
+                    rbac_filter=rbac_filter,
+                    trace_id=trace_id,
+                )
+                retrieval_mode = f"{retrieval_mode}_hyde_fallback"
+                if _af is not _RETRIEVE_UNSET:
+                    active_filter = _af
+                log_trace(
+                    "hyde",
+                    trace_id,
+                    latency_ms=int((time.time() - t_hyde) * 1000),
+                    used=True,
+                    hyde_chars=len(hyde_response),
+                    fallback_docs=len(retrieved_docs),
+                )
+            except Exception as e:
+                logger.warning(f"Loi HyDE fallback: {e}")
+                log_trace("hyde", trace_id, used=True, error=str(e))
  
     # Kiem tra ket qua tim kiem ma cu the (khong fallback semantic lung tung)
     if not skip_retrieval and not retrieved_docs and new_part_ids:
@@ -301,23 +465,77 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 user_roles=user_roles,
                 allowed_departments=allowed_departments,
                 max_security_level=max_security_level,
+                allowed_sites=allowed_sites,
             )
             if bom_results:
-                bom_text = "Dữ liệu cấu trúc Bảng Kê Vật Tư (BOM) từ SQL Database (Rất chính xác):\n"
+                # Keep structured BOM facts tied to the originating document
+                # page.  A synthetic aggregate with no DocID/PageNo cannot be
+                # attributed safely in the final answer or chat history.
+                bom_by_source = {}
                 for row in bom_results:
-                    ma, ten, vat_lieu, sl, gc, file, version_no = row
-                    bom_text += f"- Mã: {ma}, Tên: {ten}, Vật liệu: {vat_lieu}, SL: {sl}, Ghi chú: {gc} (Nguồn: {file}, Version: {version_no})\n"
-                
-                bom_doc = Document(
-                    page_content=bom_text,
-                    metadata={
-                        "file_goc": "SQL_Database_BOM",
-                        "loai_du_lieu": "sql_bom",
-                        "doc_status": "published"
-                    }
-                )
-                retrieved_docs.insert(0, bom_doc)
-                logger.info(f"Da them {len(bom_results)} dong BOM tu SQL vao context.")
+                    (
+                        doc_id,
+                        page_no,
+                        ma,
+                        ten,
+                        vat_lieu,
+                        sl,
+                        gc,
+                        file,
+                        version_no,
+                        security_level,
+                        site,
+                        external_processing_policy,
+                    ) = row
+                    try:
+                        source_key = (int(doc_id), int(page_no))
+                    except (TypeError, ValueError):
+                        # The SQL query excludes NULL pages, but keep the
+                        # context fail-closed if a legacy row is malformed.
+                        continue
+                    source = bom_by_source.setdefault(
+                        source_key,
+                        {
+                            "file_goc": file,
+                            "version_no": version_no,
+                            "security_level": security_level,
+                            "site": site,
+                            "external_processing_policy": external_processing_policy,
+                            "lines": [],
+                        },
+                    )
+                    source["lines"].append(
+                        f"- Mã: {ma}, Tên: {ten}, Vật liệu: {vat_lieu}, "
+                        f"SL: {sl}, Ghi chú: {gc}"
+                    )
+
+                bom_docs = []
+                for (doc_id, page_no), source in bom_by_source.items():
+                    bom_text = (
+                        "Dữ liệu cấu trúc Bảng Kê Vật Tư (BOM) đã trích xuất "
+                        "từ đúng trang tài liệu:\n" + "\n".join(source["lines"])
+                    )
+                    bom_docs.append(
+                        Document(
+                            page_content=bom_text,
+                            metadata={
+                                "doc_id": doc_id,
+                                "trang_so": page_no,
+                                "file_goc": source["file_goc"],
+                                "version_no": source["version_no"],
+                                "security_level": source["security_level"],
+                                "site": source["site"],
+                                "domain": "mechanical",
+                                "loai_du_lieu": "sql_bom",
+                                "doc_status": "published",
+                                "external_processing_policy": (
+                                    source["external_processing_policy"] or "all_external"
+                                ),
+                            },
+                        )
+                    )
+                retrieved_docs = bom_docs + retrieved_docs
+                logger.info("Da them %s dong BOM tu SQL vao context (%s nguon co the citation).", len(bom_results), len(bom_docs))
                 log_trace("sql_bom", trace_id, latency_ms=int((time.time() - t_sql)*1000), rows=len(bom_results), part_ids=new_part_ids)
             else:
                 log_trace("sql_bom", trace_id, latency_ms=int((time.time() - t_sql)*1000), rows=0, part_ids=new_part_ids)
@@ -394,8 +612,19 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         # Tach fake_doc (anh nguoi dung upload) ra khoi qua trinh rerank
         fake_docs = [d for d in retrieved_docs if d.metadata.get("loai_du_lieu") == "image_summary" and d.metadata.get("file_goc") == "Anh dinh kem tu nguoi dung"]
         real_docs = [d for d in retrieved_docs if d not in fake_docs]
+        real_docs = prioritize_document_types(
+            real_docs,
+            (intent_data.get("document_type_hints") if "intent_data" in locals() else None),
+        )
+        real_docs = diversify_candidates(
+            real_docs,
+            max_per_document=int(os.getenv("RERANK_MAX_CHUNKS_PER_DOCUMENT", "4")),
+            max_per_section=int(os.getenv("RERANK_MAX_CHUNKS_PER_SECTION", "1")),
+            cap=int(os.getenv("RERANK_CANDIDATE_CAP", "20")),
+        )
  
-        if real_docs and use_voyage_rerank():
+        rerank_backend = RerankPolicy().select_backend(real_docs)
+        if real_docs and rerank_backend == "voyage":
             try:
                 target_top_n = RERANK_PER_PART * max(1, len(new_part_ids) if new_part_ids else 1)
                 
@@ -410,7 +639,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 top_n = min(RERANK_TOP_N_CAP, target_top_n)
                 logger.info(f"Dang su dung Voyage Rerank de filter {len(real_docs)} tai lieu (top_n={top_n})...")
                 t_rerank = time.time()
-                real_docs = voyage_rerank_documents(real_docs, effective_question, top_n=top_n)
+                real_docs = voyage_rerank_documents(
+                    real_docs, effective_question, top_n=top_n, trace_id=trace_id
+                )
                 
                 scores = [{"file": d.metadata.get("file_goc"), "page": d.metadata.get("trang_so"), "score": d.metadata.get("relevance_score", 1.0)} for d in real_docs[:5]]
                 log_trace("rerank", trace_id, latency_ms=int((time.time() - t_rerank)*1000), input_docs=len(retrieved_docs), output_docs=len(real_docs), scores=scores)
@@ -419,6 +650,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 real_docs = rerank_docs(real_docs)
                 log_trace("rerank", trace_id, error=str(e))
         else:
+            if real_docs:
+                logger.info("Dung %s cho rerank candidate set", rerank_backend)
             real_docs = rerank_docs(real_docs)
 
         # LOP PHONG THU 1 (CODE): Chan hoan toan LLM neu khong co tai lieu that (va khong phai chitchat/co anh)
@@ -432,6 +665,14 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="empty_context", docs_count=0, version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, user_department=user_department, user_roles=user_roles)
             return mock_stream(), "", [], new_part_ids, make_debug_info([])
 
+        t_parent_context = time.time()
+        real_docs = hydrate_parent_context(real_docs)
+        log_trace(
+            "parent_context",
+            trace_id,
+            latency_ms=int((time.time() - t_parent_context) * 1000),
+            sections=len(real_docs),
+        )
         retrieved_docs = fake_docs + real_docs
 
         retrieved_docs = long_context_reorder(retrieved_docs)
@@ -439,15 +680,28 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     # BUOC C: SINH CAU TRA LOI (STREAMING)
     context_text = _assemble_context(retrieved_docs, user_question)
 
-    # Tao trich dan truoc de neu evidence gate tu choi van co the hien thi tai lieu da tim thay
-    ref_text, ref_images = build_source_citations(retrieved_docs)
+    # Citations are evidence actually relevant to the answer, not every
+    # candidate that happened to survive retrieval/reranking. BOM questions in
+    # particular must not display unrelated HR/procedure thumbnails.
+    citation_docs = select_citation_docs(
+        retrieved_docs,
+        question=user_question,
+        is_bom_query=is_bom_query,
+        part_ids=new_part_ids,
+    )
+    ref_text, ref_images = build_source_citations(citation_docs)
     _conf_docs = [d.metadata.get("file_goc") for d in retrieved_docs if d.metadata.get("security_level") == "confidential"]
     if _conf_docs:
         logger.warning(f"[audit][confidential] dept={user_department} roles={user_roles} truy cap tai lieu mat: {_conf_docs}")
 
     # LOP PHONG THU 2: Evidence Gate cho cau hoi bay / cau hoi can so lieu
     t_gate = time.time()
-    answerable, evidence_reason, evidence_quotes = verify_answerability(user_question, context_text)
+    answerable, evidence_reason, evidence_quotes = verify_answerability(
+        user_question,
+        context_text,
+        docs=retrieved_docs,
+        trace_id=trace_id,
+    )
     log_trace("evidence_gate", trace_id, latency_ms=int((time.time() - t_gate)*1000), answerable=answerable, reason=evidence_reason)
     
     if not answerable:
@@ -456,7 +710,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         def refusal_stream():
             yield safe_msg
         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="evidence_gate", docs_count=len(retrieved_docs), doc_ids=[d.metadata.get("doc_id") for d in retrieved_docs], retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=[d.metadata.get("relevance_score") for d in retrieved_docs], user_department=user_department, user_roles=user_roles)
-        return refusal_stream(), ref_text, ref_images, new_part_ids, make_debug_info(retrieved_docs)
+        _refusal_debug = make_debug_info(retrieved_docs)
+        _refusal_debug["citation_docs"] = make_debug_info(retrieved_docs)["retrieved_docs"]
+        return refusal_stream(), ref_text, ref_images, new_part_ids, _refusal_debug
 
     stream = _generate(
         context_text=context_text,
@@ -475,10 +731,16 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         retrieval_mode=retrieval_mode,
         _has_active_filter=("active_filter" in locals()),
         _active_filter=(active_filter if "active_filter" in locals() else None),
+        cancel_event=cancel_event,
     )
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)
     debug_info = make_debug_info(retrieved_docs)
+    # Keep the full source registry. The browser-facing API will resolve the
+    # stable SourceIDs emitted in the final answer and expose only those cards.
+    _citation_snapshot = make_source_snapshot(retrieved_docs)
+    _evidence_snapshot = make_source_snapshot(retrieved_docs)
+    debug_info["citation_docs"] = _citation_snapshot
     # KH-2 (sua V4): neo lai tai lieu vua dung de tra loi cho luot tiep theo.
     try:
         from mech_chatbot.rag import conversation_state as _cs3
@@ -514,10 +776,76 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 stream, question=user_question, embedding=_sc_qemb, scope_sig=_sc_scope,
                 ref_text=ref_text, ref_images=ref_images, source_doc_ids=_sc_doc_ids,
                 model=get_llm_model_name(), input_char_len=_in_len,
+                citation_snapshot=_citation_snapshot,
+                evidence_snapshot=_evidence_snapshot,
             )
     except Exception as _sce2:
         logger.warning(f"semantic cache store loi: {_sce2}")
     return stream, ref_text, ref_images, new_part_ids, debug_info
+
+
+def select_citation_docs(docs, question="", is_bom_query=False, part_ids=None, limit=None):
+    """Return a small, evidence-focused citation set.
+
+    Retrieval candidates remain available to generation and diagnostics, while
+    the UI only receives sources relevant to the requested answer type.
+    """
+    docs = list(docs or [])
+    if not docs:
+        return []
+    try:
+        from mech_chatbot.rag.text_utils import remove_accents
+        q_norm = remove_accents(str(question or "").lower())
+    except Exception:
+        q_norm = str(question or "").lower()
+    bom_mode = bool(is_bom_query) or any(
+        token in q_norm for token in ("bom", "bang ke vat tu", "vat tu", "bill of materials")
+    )
+    wanted_codes = {str(value).strip().lower() for value in (part_ids or []) if value}
+
+    def _values(md, *keys):
+        out = []
+        for key in keys:
+            value = md.get(key)
+            if isinstance(value, (list, tuple, set)):
+                out.extend(value)
+            elif value is not None:
+                out.append(value)
+        return {str(value).strip().lower() for value in out if str(value).strip()}
+
+    def _is_bom_evidence(doc):
+        md = getattr(doc, "metadata", {}) or {}
+        kind = str(md.get("loai_du_lieu") or "").lower()
+        source = str(md.get("file_goc") or "").lower()
+        if kind in {"sql_bom", "bang_ke_vat_tu", "bom"} or "bom" in source:
+            return True
+        if wanted_codes:
+            codes = _values(md, "base_code", "ma_chinh", "ma_doi_tuong", "ma_btp", "ma_vat_tu")
+            return bool(codes & wanted_codes)
+        return False
+
+    pool = [doc for doc in docs if _is_bom_evidence(doc)] if bom_mode else docs
+    if not pool:
+        pool = docs
+    max_sources = int(limit or os.getenv("CITATION_MAX_SOURCES", "5"))
+    if bom_mode:
+        max_sources = min(max_sources, int(os.getenv("BOM_CITATION_MAX_SOURCES", "3")))
+
+    selected = []
+    seen = set()
+    for doc in pool:
+        md = getattr(doc, "metadata", {}) or {}
+        key = (
+            md.get("doc_id") or md.get("file_goc"),
+            md.get("trang_so") or md.get("parent_page"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(doc)
+        if len(selected) >= max_sources:
+            break
+    return selected
 
 
 def build_source_citations(docs):
@@ -579,5 +907,6 @@ def build_source_citations(docs):
 __all__ = [
     'make_debug_info',
     'chat_with_rag',
+    'select_citation_docs',
     'build_source_citations',
 ]

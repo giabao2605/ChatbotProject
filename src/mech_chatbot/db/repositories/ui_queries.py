@@ -7,6 +7,8 @@ Mọi việc render (st.*) và dịch (t()) ở lại UI; module này chỉ tr�
 
 KHÔNG import streamlit / ui ở tầng này.
 """
+import os
+
 from sqlalchemy import text
 
 from mech_chatbot.db.engine import engine
@@ -100,7 +102,7 @@ def list_recent_failed_jobs():
 # queue.py
 # ---------------------------------------------------------------------------
 
-def list_ingestion_jobs(status=None, dept=None, search=None, is_admin=True,
+def list_ingestion_jobs(status=None, dept=None, search=None, is_admin=False,
                         username=None, allowed_departments=None):
 	query_str = """
             SELECT 
@@ -123,17 +125,19 @@ def list_ingestion_jobs(status=None, dept=None, search=None, is_admin=True,
 	if search:
 		query_str += " AND TenFile LIKE :search"
 		params["search"] = f"%{search}%"
-	if not is_admin:
-		params["uname"] = username
-		if allowed_departments:
-			_dept_clauses = []
-			for _idx, _dept in enumerate(sorted(set(allowed_departments))):
-				_k = f"allowed_dept_{_idx}"
-				_dept_clauses.append(f"ThuMuc = :{_k}")
-				params[_k] = _dept
-			query_str += " AND ((" + " OR ".join(_dept_clauses) + ") OR UploadedBy = :uname)"
-		else:
-			query_str += " AND UploadedBy = :uname"
+	# Queue rows expose filenames, extraction reports, and failure details. Like
+	# document browse, they are never globally visible because of an admin role.
+	# ``is_admin`` is retained only for backwards-compatible callers and ignored.
+	params["uname"] = username
+	if allowed_departments:
+		_dept_clauses = []
+		for _idx, _dept in enumerate(sorted(set(allowed_departments))):
+			_k = f"allowed_dept_{_idx}"
+			_dept_clauses.append(f"ThuMuc = :{_k}")
+			params[_k] = _dept
+		query_str += " AND ((" + " OR ".join(_dept_clauses) + ") OR UploadedBy = :uname)"
+	else:
+		query_str += " AND UploadedBy = :uname"
 
 	query_str += " ORDER BY ISNULL(Priority, 100) ASC, CreatedAt DESC"
 	with engine.connect() as conn:
@@ -200,24 +204,74 @@ def delete_feedback(fid):
 # documents.py
 # ---------------------------------------------------------------------------
 
-def list_documents(is_admin, allowed_departments=None, dept=None, domain=None,
-                   sec=None, eff_mode=None, search_kw=None):
+def _strict_site_filter_enabled():
+	raw = os.getenv("RBAC_STRICT_SITE_FILTER", "true")
+	return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _allowed_security_levels(max_security_level):
+	levels = {"public": 0, "internal": 1, "confidential": 2}
+	max_order = levels.get(str(max_security_level or "public").strip().lower(), 0)
+	return [name for name, order in levels.items() if order <= max_order]
+
+
+def list_documents(allowed_departments=None, max_security_level="public", allowed_sites=None,
+                   dept=None, domain=None, sec=None, eff_mode=None, search_kw=None,
+                   global_read_admin=False):
 	params = {}
 	filters = []
 
 	filters.append("d.LifecycleStatus IN ('published', 'archived', 'superseded')")
 	filters.append("d.ReviewStatus = 'approved'")
+	# The catalog must expose the exact same serving set as retrieval.  Pending
+	# staging points can exist in Qdrant for publish latency, but they are never
+	# browser-searchable or visible through document metadata APIs.
+	filters.append("d.Servable = 1")
+	filters.append("d.PublicationState = 'published'")
 
-	if not is_admin:
-		if allowed_departments:
-			_dept_clauses = []
-			for _idx, _dept in enumerate(sorted(set(allowed_departments))):
-				_k = f"allowed_dept_{_idx}"
-				_dept_clauses.append(f"d.ThuMuc = :{_k}")
-				params[_k] = _dept
-			filters.append("(" + " OR ".join(_dept_clauses) + ")")
+	# The legacy admin role is the single business-approved global-read role.
+	# Every newer control-plane role remains subject to normal document RBAC.
+	if not global_read_admin and allowed_departments:
+		_dept_placeholders = []
+		for _idx, _dept in enumerate(sorted({str(value).strip() for value in allowed_departments if str(value).strip()})):
+			_k = f"allowed_dept_{_idx}"
+			_dept_placeholders.append(f":{_k}")
+			params[_k] = _dept
+		if _dept_placeholders:
+			filters.append(
+				"EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pb "
+				"WHERE pb.DocID = d.DocID AND pb.DeptCode IN (" + ", ".join(_dept_placeholders) + "))"
+			)
 		else:
 			filters.append("1 = 0")
+	elif not global_read_admin:
+		filters.append("1 = 0")
+
+	if not global_read_admin:
+		_security_placeholders = []
+		for _idx, _level in enumerate(_allowed_security_levels(max_security_level)):
+			_k = f"allowed_level_{_idx}"
+			_security_placeholders.append(f":{_k}")
+			params[_k] = _level
+		filters.append(
+			"COALESCE(NULLIF(LOWER(LTRIM(RTRIM(d.SecurityLevel))), ''), 'confidential') "
+			"IN (" + ", ".join(_security_placeholders) + ")"
+		)
+
+		_normalized_sites = sorted({str(value).strip() for value in (allowed_sites or []) if str(value).strip()})
+		if not _normalized_sites:
+			filters.append("1 = 0")
+		else:
+			_site_placeholders = []
+			for _idx, _site in enumerate(_normalized_sites):
+				_k = f"allowed_site_{_idx}"
+				_site_placeholders.append(f":{_k}")
+				params[_k] = _site
+			_site_match = "d.Site IN (" + ", ".join(_site_placeholders) + ")"
+			if _strict_site_filter_enabled():
+				filters.append(_site_match)
+			else:
+				filters.append("(" + _site_match + " OR d.Site IS NULL OR LTRIM(RTRIM(d.Site)) = '')")
 
 	if dept:
 		filters.append("d.ThuMuc = :dept")

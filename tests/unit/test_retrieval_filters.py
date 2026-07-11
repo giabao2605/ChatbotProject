@@ -27,6 +27,7 @@ def _blob(flt):
 def _make_must_conditions(rbac_filter):
     """Gia lap must_conditions giong production: vai dieu kien lifecycle + rbac."""
     mc = [
+        models.FieldCondition(key="metadata.servable", match=models.MatchValue(value=True)),
         models.FieldCondition(key="metadata.is_current", match=models.MatchValue(value=True)),
     ]
     if rbac_filter is not None:
@@ -41,6 +42,7 @@ class TestStrictBroadKeepRbac:
             user_roles=roles or ["viewer"],
             allowed_departments=["CHUNG"],
             max_security_level=max_security_level,
+            allowed_sites=["HQ"],
         )
         mc = _make_must_conditions(rbac)
         strict, broad = svc.compose_retrieval_filters(mc, new_part_ids=["P123"])
@@ -101,3 +103,11 @@ class TestComposeReturnsTwoFilters:
         strict, broad = svc.compose_retrieval_filters(mc, new_part_ids=[])
         assert len(strict.must) == len(mc)
         assert len(broad.must) == len(mc) + 1
+
+
+def test_production_current_filter_requires_servable():
+    from mech_chatbot.rag.retrieval import current_published_filter
+
+    blob = _blob(current_published_filter())
+    assert "metadata.servable" in blob
+    assert "true" in blob.lower()

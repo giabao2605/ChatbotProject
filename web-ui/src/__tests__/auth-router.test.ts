@@ -79,4 +79,14 @@ describe("route guards", () => {
 
     expect(router.currentRoute.value.name).toBe("chat");
   });
+
+  it("redirects a viewer away from the admin dashboard", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue(user);
+    const router = createAppRouter(createMemoryHistory());
+
+    await router.push("/dashboard");
+    await router.isReady();
+
+    expect(router.currentRoute.value.name).toBe("chat");
+  });
 });

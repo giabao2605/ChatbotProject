@@ -12,12 +12,16 @@ from mech_chatbot.rag.rbac import (
     LEVEL_ORDER,
 )
 
-# cross-module (owned) refs
-from mech_chatbot.rag.bootstrap import vectorstore
-
-
 def current_published_filter(rbac_filter=None):
     must = [
+        models.FieldCondition(
+            key="metadata.servable",
+            match=models.MatchValue(value=True)
+        ),
+        models.FieldCondition(
+            key="metadata.publication_state",
+            match=models.MatchValue(value="published")
+        ),
         models.FieldCondition(
             key="metadata.lifecycle_status",
             match=models.MatchValue(value="published")
@@ -54,6 +58,9 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
     Best-effort, stateless; loi -> (False, None) de khong pha luong RAG.
     """
     try:
+        # Lazy import de module filter van thuan va unit test khong tai model.
+        from mech_chatbot.rag.bootstrap import vectorstore
+
         user_order = LEVEL_ORDER.get((max_security_level or "public"), 0)
         allowed = list(allowed_departments) if allowed_departments else []
         if user_department and user_department not in allowed:
@@ -62,6 +69,8 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
         if _SHARE not in allowed:
             allowed.append(_SHARE)
         must = [
+            models.FieldCondition(key="metadata.servable", match=models.MatchValue(value=True)),
+            models.FieldCondition(key="metadata.publication_state", match=models.MatchValue(value="published")),
             models.FieldCondition(key="metadata.lifecycle_status", match=models.MatchValue(value="published")),
             models.FieldCondition(key="metadata.review_status", match=models.MatchValue(value="approved")),
             models.FieldCondition(key="metadata.is_current", match=models.MatchValue(value=True)),

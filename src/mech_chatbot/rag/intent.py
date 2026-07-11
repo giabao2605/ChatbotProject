@@ -3,6 +3,7 @@
 
 import os
 import re
+import unicodedata
 from mech_chatbot.config.logging import logger, log_trace
 from qdrant_client import QdrantClient, models
 from langchain_core.messages import HumanMessage
@@ -18,10 +19,17 @@ from mech_chatbot.rag.rbac import (
 )
 import atexit
 import concurrent.futures
+from contextvars import copy_context
 from concurrent.futures import ThreadPoolExecutor
 
 # cross-module (owned) refs
-from mech_chatbot.rag.bootstrap import env_bool
+
+
+def env_bool(name, default=False):
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 _INTENT_MAX_WORKERS = int(os.getenv("INTENT_MAX_WORKERS", "8"))
@@ -95,6 +103,57 @@ def extract_mechanical_codes(question):
     return sorted(set(codes))
 
 
+def _business_normalize(value):
+    normalized = unicodedata.normalize("NFD", str(value or "").lower())
+    normalized = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def deterministic_business_document_intent(question):
+    """Recognize PO, contract and form requests without an LLM round trip."""
+    raw = str(question or "")
+    normalized = _business_normalize(raw)
+    document_types = []
+    if (
+        re.search(r"\bpo\s*[-/]?\s*\d+", raw, re.IGNORECASE)
+        or "purchase order" in normalized
+        or "don dat hang" in normalized
+        or "lenh dat hang" in normalized
+    ):
+        document_types.append("purchase_order")
+    if (
+        re.search(r"\b(?:hd|hop\s*dong|contract)\s*[-/]?\s*\d+", normalized, re.IGNORECASE)
+        or "hop dong" in normalized
+        or "contract" in normalized
+    ):
+        document_types.append("contract")
+    if (
+        re.search(r"\b(?:bm|fm|form)\s*[-/]?\s*\d+", normalized, re.IGNORECASE)
+        or "bieu mau" in normalized
+        or "mau don" in normalized
+        or "form" in normalized
+    ):
+        document_types.append("form")
+    references = re.findall(
+        r"\b(?:PO|P/O|HD|HĐ|BM|FM|FORM|CONTRACT)\s*[-/]?\s*[A-Z0-9]{2,}\b",
+        raw,
+        re.IGNORECASE,
+    )
+    aliases = {
+        "purchase_order": ["purchase_order", "po", "purchase order", "đơn đặt hàng", "don dat hang"],
+        "contract": ["contract", "hợp đồng", "hop dong"],
+        "form": ["form", "biểu mẫu", "bieu mau", "mẫu đơn", "mau don"],
+    }
+    filter_values = []
+    for kind in document_types:
+        filter_values.extend(aliases[kind])
+    return {
+        "document_types": list(dict.fromkeys(document_types)),
+        "document_type_values": list(dict.fromkeys(filter_values)),
+        "document_references": list(dict.fromkeys(reference.upper() for reference in references)),
+    }
+
+
 def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False):
     """Phan tich cau hoi de lay danh sach ma doi tuong va intent versioning bang LLM (co timeout)."""
     if current_part_ids is None:
@@ -141,10 +200,23 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         "query_scope": "single_candidate",
         "need_disambiguation": False,
         "is_chitchat": False,
+        "document_type_hints": [],
+        "document_references": [],
     }
 
     force_llm = bool(re.search(r'\bv\d+\b|version|so sanh|khac nhau|cu\b|moi nhat|archive', question, re.IGNORECASE))
     regex_codes = extract_mechanical_codes(question)
+    # Generic policy/HR/finance/procurement questions do not need an LLM just
+    # to produce the default current-only intent. Only use it for explicit
+    # candidate/version descriptors that affect filtering/disambiguation.
+    needs_candidate_extraction = bool(
+        re.search(
+            r"\b(model|variant|rev(?:ision)?|sus\s*\d+|ss\s*\d+|inox|thep|nhom)\b"
+            r"|\b\d+(?:[\.,]\d+)?\s*[x×]\s*\d+",
+            question,
+            re.IGNORECASE,
+        )
+    )
  
     if regex_codes and not force_llm:
         seen_rc = set()
@@ -153,13 +225,18 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
                 seen_rc.add(c)
                 intent_data["base_codes"].append(c)
         logger.info(f"H4: Trich ma bang regex (bo qua LLM intent): {intent_data['base_codes']}")
+    elif not force_llm and not needs_candidate_extraction:
+        logger.info("Fast intent: dung current_only/general_lookup, bo qua LLM intent.")
     else:
         def call_llm():
-            response = cohere_invoke([HumanMessage(content=prompt_intent)])
+            response = cohere_invoke(
+                [HumanMessage(content=prompt_intent)], surface="intent_routing"
+            )
             return response.content
  
         try:
-            future = _INTENT_EXECUTOR.submit(call_llm)
+            request_context = copy_context()
+            future = _INTENT_EXECUTOR.submit(request_context.run, call_llm)
             raw_response = future.result(timeout=_INTENT_TIMEOUT)
             clean_json = raw_response.replace('```json', '').replace('```', '').strip()
             parsed = json.loads(clean_json)
@@ -193,6 +270,10 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
             logger.warning(f"Loi LLM Intent Extraction: {e}. Fallback ve Regex.")
 
     det_policy, det_versions = deterministic_version_intent(question)
+
+    business_intent = deterministic_business_document_intent(question)
+    intent_data["document_type_hints"] = business_intent["document_types"]
+    intent_data["document_references"] = business_intent["document_references"]
 
     if det_versions:
         intent_data["detected_versions"] = det_versions
@@ -248,7 +329,23 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
                 is_inherited = False
  
     # Build Must conditions based on version policy
-    must_conditions = []
+    # Bat bien serving dung chung cho moi version policy. Tai lieu staged,
+    # rejected, superseded hoac publication dang loi khong duoc truy xuat.
+    must_conditions = [
+        models.FieldCondition(
+            key="metadata.servable",
+            match=models.MatchValue(value=True),
+        ),
+        models.FieldCondition(
+            key="metadata.publication_state",
+            match=models.MatchValue(value="published"),
+        ),
+    ]
+    # Record a rule-first metadata preference for PO, contracts and forms.
+    # It is applied after retrieval rather than as a hard filter so legacy
+    # documents missing the new family field remain discoverable during pilot.
+    if business_intent["document_type_values"]:
+        intent_data["metadata_document_type_preference"] = business_intent["document_types"]
     vp = intent_data["version_policy"]
     d_vers = intent_data["detected_versions"]
     
@@ -406,10 +503,13 @@ Quy tac:
               .replace("__QUESTION__", str(user_question)))
 
     def call_llm():
-        return cohere_invoke([HumanMessage(content=prompt)]).content
+        return cohere_invoke(
+            [HumanMessage(content=prompt)], surface="query_disambiguation"
+        ).content
 
     try:
-        future = _INTENT_EXECUTOR.submit(call_llm)
+        request_context = copy_context()
+        future = _INTENT_EXECUTOR.submit(request_context.run, call_llm)
         raw_response = future.result(timeout=_CONTEXT_TIMEOUT)
         clean_json = raw_response.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(clean_json)

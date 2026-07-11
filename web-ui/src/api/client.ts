@@ -186,7 +186,7 @@ export async function sendChatMessage(
     for (const item of parsed.events) {
       const data = item.data as Record<string, unknown>;
       if (item.event === "thinking") callbacks.onThinking();
-      if (item.event === "delta") callbacks.onDelta(String(data.text ?? ""));
+      if (item.event === "delta" || item.event === "token") callbacks.onDelta(String(data.text ?? ""));
       if (item.event === "warning") callbacks.onWarning(String(data.message ?? ""));
       if (item.event === "done") callbacks.onDone(data);
       if (item.event === "error") callbacks.onError(String(data.detail || data.message || "Unknown error"));

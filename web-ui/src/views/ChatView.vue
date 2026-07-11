@@ -273,16 +273,37 @@ onMounted(async () => {
                 </details>
 
                 <div v-if="message.citations?.length" class="citation-grid">
-                  <a
+                  <article
                     v-for="citation in message.citations"
                     :key="`${citation.doc_id}-${citation.page_no}`"
-                    :href="citation.original_url"
-                    target="_blank"
                     class="citation-card"
                   >
-                    <img :src="citation.page_url" :alt="`Doc ${citation.doc_id} trang ${citation.page_no}`" />
-                    <span>{{ citation.file_name || `Doc ${citation.doc_id}` }} · trang {{ citation.page_no }}</span>
-                  </a>
+                    <a
+                      v-if="citation.has_vision && citation.page_url"
+                      :href="citation.page_url"
+                      target="_blank"
+                      class="citation-preview-link"
+                      :aria-label="`Mở ảnh nguồn ${citation.file_name || citation.doc_id}, trang ${citation.page_no}`"
+                    >
+                      <img :src="citation.page_url" :alt="`Doc ${citation.doc_id} trang ${citation.page_no}`" />
+                    </a>
+                    <div class="citation-card-body">
+                      <span>
+                        {{ citation.file_name || `Doc ${citation.doc_id}` }} · trang {{ citation.page_no }}
+                        <template v-if="citation.version_no !== undefined && citation.version_no !== null">
+                          · version {{ citation.version_no }}
+                        </template>
+                      </span>
+                      <a
+                        :href="citation.original_url"
+                        class="citation-download"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        Tải bản gốc
+                      </a>
+                    </div>
+                  </article>
                 </div>
 
                 <div v-if="message.role === 'assistant' && message.chat_id" class="feedback-row">

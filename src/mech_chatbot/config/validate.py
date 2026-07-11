@@ -51,6 +51,8 @@ _SUMMARY_KEYS = (
         "RAG_SERVER_HOST", "RAG_SERVER_PORT", "RAG_REQUIRE_SERVICE_AUTH",
         "RAG_SERVICE_TOKEN", "USE_VOYAGE_RERANK", "VOYAGE_RERANK_MODEL",
         "VOYAGE_RERANK_TIMEOUT_SECONDS", "VOYAGE_API_KEY",
+        "APP_ENV", "EXTERNAL_AI_LOCAL_DEVELOPMENT",
+        "STRICT_ANSWER_MODE", "STRICT_REALTIME_STREAMING",
     ]
 )
 
@@ -120,6 +122,19 @@ def validate_config(env=None, *, require_qdrant=True, require_llm=True,
     if require_service_auth:
         if not _get(env, "RAG_SERVICE_TOKEN"):
             errors.append("Thieu RAG_SERVICE_TOKEN (bat buoc de xac thuc UI -> RAG server)")
+
+    app_env = _get(env, "APP_ENV").lower()
+    if _truthy(_get(env, "EXTERNAL_AI_LOCAL_DEVELOPMENT")) and app_env not in {"development", "local"}:
+        errors.append(
+            "EXTERNAL_AI_LOCAL_DEVELOPMENT chi duoc dung khi APP_ENV=development hoac local"
+        )
+
+    # Character holdback cannot prove the prefix is factual.  Keep the pilot
+    # server fail-closed until a sentence-level verifier is implemented.
+    if _truthy(_get(env, "STRICT_REALTIME_STREAMING")):
+        errors.append(
+            "STRICT_REALTIME_STREAMING hien chua duoc phep; dung buffered strict streaming"
+        )
 
     # Kiem tra kieu so (chi kiem khi co dat gia tri)
     for k in NUMERIC_INT:

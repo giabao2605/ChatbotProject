@@ -12,11 +12,11 @@ def _profile(clearance="internal", departments=None, sites=None, roles=None):
         "roles": roles or ["viewer"],
         "allowed_departments": departments if departments is not None else ["Technical"],
         "max_security_level": clearance,
-        "allowed_sites": sites or [],
+        "allowed_sites": sites if sites is not None else ["HQ"],
     }
 
 
-def _doc(security="internal", departments=None, site=None):
+def _doc(security="internal", departments=None, site="HQ", *, servable=True, publication_state="published"):
     return file_access.DocumentAccessRecord(
         doc_id=1,
         ten_file="a.pdf",
@@ -27,6 +27,8 @@ def _doc(security="internal", departments=None, site=None):
         lifecycle_status="published",
         review_status="approved",
         departments=tuple(departments if departments is not None else ["Technical"]),
+        servable=servable,
+        publication_state=publication_state,
     )
 
 
@@ -64,6 +66,26 @@ def test_admin_bypasses_document_department_grants():
     assert decision.allowed is True
 
 
+def test_platform_admin_is_not_a_global_document_reader():
+    decision = file_access.evaluate_document_access(
+        _profile(roles=["platform_admin"], departments=[]),
+        _doc(security="confidential", departments=[]),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "document_has_no_department_grants"
+
+
+def test_staged_document_is_denied_even_for_legacy_admin():
+    decision = file_access.evaluate_document_access(
+        _profile(roles=["admin"], departments=[]),
+        _doc(servable=False, publication_state="qdrant_synced"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "document_not_servable"
+
+
 @pytest.mark.parametrize(
     ("clearance", "security", "allowed"),
     [
@@ -97,6 +119,16 @@ def test_cross_site_denied_when_user_has_site_scope(monkeypatch):
 
     assert decision.allowed is False
     assert decision.reason == "site_denied"
+
+
+def test_missing_site_assignment_fails_closed():
+    decision = file_access.evaluate_document_access(
+        _profile(sites=[]),
+        _doc(site="HQ"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "site_assignment_missing"
 
 
 def test_path_resolution_stays_under_allowed_root(tmp_path):

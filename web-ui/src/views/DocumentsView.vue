@@ -53,6 +53,7 @@ const META_FIELDS: ReadonlyArray<{ key: string; label: string; type: MetaFieldTy
   { key: "expiry_date", label: "Ngày hết hạn", type: "date" },
   { key: "review_date", label: "Ngày rà soát", type: "date" },
   { key: "owner_signer", label: "Người ký / chủ quản", type: "text" },
+  { key: "site", label: "Site", type: "text" },
   { key: "language", label: "Ngôn ngữ", type: "lang" },
   { key: "effective_status", label: "Trạng thái hiệu lực", type: "status" },
 ];

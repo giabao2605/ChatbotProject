@@ -48,6 +48,17 @@ if not trace_logger.handlers:
     
 # --- P1-4: Observability accumulator (gom event theo trace_id -> 1 dong summary vao SQL) ---
 _TRACE_ACC = {}
+_TRACE_STAGE_METRICS = {}
+_BENCHMARK_STAGE_EVENTS = {
+    "route",
+    "cache",
+    "embed",
+    "dense_retrieval",
+    "bm25_retrieval",
+    "rrf_grouping",
+    "rerank",
+    "parent_context",
+}
 _STEP_COL = {
     "context_analysis": "context_ms",
     "intent": "intent_ms",
@@ -71,6 +82,46 @@ def _persist_rag_trace(trace_id, acc):
         logger.error(f"Loi persist rag trace summary: {e}")
 
 
+def pop_trace_stage_metrics(trace_id):
+    """Return numeric per-stage latency for one completed browser stream.
+
+    The JSONL log remains the audit source of truth.  This small in-memory copy
+    exists only long enough for the SSE ``done`` event, so the benchmark client
+    can report P50/P95 without receiving prompts, chunks, or provider payloads.
+    """
+    if not trace_id:
+        return {}
+    values = _TRACE_STAGE_METRICS.pop(trace_id, {})
+    return {
+        stage: {"latency_ms": int(item.get("latency_ms", 0))}
+        for stage, item in values.items()
+        if isinstance(item, dict) and item.get("latency_ms") is not None
+    }
+
+
+def _record_benchmark_stage(event_name, trace_id, kwargs):
+    if event_name not in _BENCHMARK_STAGE_EVENTS or not trace_id:
+        return
+    latency = kwargs.get("latency_ms")
+    if latency is None:
+        return
+    try:
+        latency = max(0, int(latency))
+    except (TypeError, ValueError):
+        return
+    stages = _TRACE_STAGE_METRICS.setdefault(trace_id, {})
+    current = stages.get(event_name, {"latency_ms": 0})
+    if event_name == "cache":
+        # Exact and semantic lookups are consecutive parts of the same stage.
+        latency += int(current.get("latency_ms", 0) or 0)
+    elif event_name == "embed":
+        # The final embed event is an aggregate; never double-count it.
+        latency = max(latency, int(current.get("latency_ms", 0) or 0))
+    stages[event_name] = {"latency_ms": latency}
+    if len(_TRACE_STAGE_METRICS) > 1000:
+        _TRACE_STAGE_METRICS.clear()
+
+
 def log_trace(event_name, trace_id, **kwargs):
     """Ghi 1 event JSONL vao log trace + gom vao summary theo trace_id (P1-4)."""
     try:
@@ -88,6 +139,7 @@ def log_trace(event_name, trace_id, **kwargs):
     try:
         if not trace_id:
             return
+        _record_benchmark_stage(event_name, trace_id, kwargs)
         acc = _TRACE_ACC.setdefault(trace_id, {})
         if event_name == "rag_start":
             acc["question"] = str(kwargs.get("question", ""))[:490]

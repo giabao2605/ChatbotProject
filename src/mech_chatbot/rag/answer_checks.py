@@ -127,6 +127,7 @@ def has_required_source_citation(answer, require_version=True):
     Yêu cầu tối thiểu:
     - Có Nguồn/Source
     - Có Trang/Page
+    - Có SourceID chuẩn D<DocID>P<PageNo>
     - Nếu require_version=True thì phải có Version/ver/v
     """
     if not answer:
@@ -145,9 +146,10 @@ def has_required_source_citation(answer, require_version=True):
             re.IGNORECASE
         )
     )
+    has_source_id = bool(extract_source_ids(text))
 
     if not require_version:
-        return has_source and has_page
+        return has_source and has_page and has_source_id
 
     has_version = bool(
         re.search(
@@ -157,4 +159,33 @@ def has_required_source_citation(answer, require_version=True):
         )
     )
 
-    return has_source and has_page and has_version
+    return has_source and has_page and has_version and has_source_id
+
+
+def extract_source_ids(value):
+    """Extract canonical source identifiers emitted by the RAG prompt."""
+    text = str(value or "")
+    matches = re.findall(
+        r"(?:source[_\s-]?id\s*[:#]?\s*|\[src:\s*)(D\d+P\d+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return {match.upper() for match in matches}
+
+
+def has_valid_source_citation(answer, documents, require_version=True):
+    """Require exact SourceIDs that map to the generation evidence set."""
+    if not has_required_source_citation(answer, require_version=require_version):
+        return False
+    cited = extract_source_ids(answer)
+    expected = set()
+    for document in documents or []:
+        metadata = getattr(document, "metadata", {}) or {}
+        try:
+            doc_id = int(metadata.get("doc_id"))
+            page_no = int(metadata.get("trang_so"))
+        except (TypeError, ValueError):
+            continue
+        if page_no > 0:
+            expected.add(f"D{doc_id}P{page_no}")
+    return bool(cited and expected and cited.issubset(expected))

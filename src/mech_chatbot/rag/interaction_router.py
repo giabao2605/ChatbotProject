@@ -20,6 +20,7 @@ unit-test offline duoc bang embedder/classifier gia dinh, khong can model/mang.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence, Tuple
 
@@ -52,6 +53,73 @@ DEFAULT_ROUTE = ROUTE_TECHNICAL
 Embedder = Callable[[str], Optional[Sequence[float]]]
 # llm_classifier(text, context) -> Optional[(route, confidence)]
 LlmClassifier = Callable[[str, Optional[object]], Optional[Tuple[str, float]]]
+
+
+_FAST_TECHNICAL_KEYWORDS = (
+    "tai lieu", "quy trinh", "chinh sach", "noi quy", "huong dan cong viec",
+    "nhan su", "nghi phep", "bao hiem", "tien luong", "cham cong",
+    "ke toan", "hoa don", "cong no", "thanh toan", "bao cao tai chinh",
+    "mua hang", "nha cung cap", "ton kho", "xuat kho", "nhap kho",
+    "san xuat", "ban ve", "vat lieu", "dung sai", "gia cong", "bao tri",
+    "chat luong", "kiem tra", "iso", "an toan lao dong", "hse", "5s",
+    "cong nghe thong tin", "hop dong", "bao gia", "ke hoach",
+)
+_HOW_TO_META_CUES = (
+    "cach su dung", "huong dan su dung", "lam the nao de upload",
+    "cach upload", "cach tai len", "lam sao de tai len",
+)
+
+
+def _department_router_pattern_match(text: str, department_codes) -> str | None:
+    """Apply active department profile patterns as an additive L0 rule."""
+    normalized = chitchat.normalize(text)
+    for department in department_codes or []:
+        try:
+            from mech_chatbot.db.repository import get_department_domain_profile
+
+            profile = get_department_domain_profile(str(department))
+        except Exception:
+            profile = None
+        if not profile or not profile.get("is_active"):
+            continue
+        for raw_pattern in profile.get("router_patterns") or []:
+            pattern = str(raw_pattern or "").strip()
+            if not pattern:
+                continue
+            try:
+                if pattern.lower().startswith("re:"):
+                    if re.search(pattern[3:], text, flags=re.IGNORECASE):
+                        return pattern
+                elif chitchat.normalize(pattern) in normalized:
+                    return pattern
+            except re.error:
+                # A bad administrative pattern must not break routing or make
+                # a request fall through to an unsafe default.
+                continue
+    return None
+
+
+def _fast_technical_route(text, department_codes=None) -> Optional[RouteResult]:
+    """Skip embedding/LLM for clear internal-document questions."""
+    q = chitchat.normalize(text)
+    if any(cue in q for cue in _HOW_TO_META_CUES):
+        return None
+    if any(keyword in q for keyword in _FAST_TECHNICAL_KEYWORDS):
+        return RouteResult(
+            ROUTE_TECHNICAL,
+            LAYER_RULE,
+            confidence=0.98,
+            reason="internal_keyword",
+        )
+    profile_pattern = _department_router_pattern_match(text, department_codes)
+    if profile_pattern:
+        return RouteResult(
+            ROUTE_TECHNICAL,
+            LAYER_RULE,
+            confidence=0.97,
+            reason="department_profile:" + profile_pattern[:80],
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -217,6 +285,13 @@ def classify(text, context=None, embedder=None, llm_classifier=None) -> RouteRes
     # L0: luat tat dinh (chitchat).
     if chitchat.is_chitchat(text):
         return RouteResult(ROUTE_CHITCHAT, LAYER_RULE, confidence=1.0)
+
+    context_departments = None
+    if isinstance(context, dict):
+        context_departments = context.get("allowed_departments") or context.get("department_codes")
+    fast_technical = _fast_technical_route(text, context_departments)
+    if fast_technical is not None:
+        return fast_technical
 
     # L1: semantic router (neu bat + co embedder).
     if route_config.semantic_enabled():

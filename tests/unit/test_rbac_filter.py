@@ -7,7 +7,7 @@ Kiem tra cac BAT BIEN (invariants):
 - Khong co role nao        -> filter DENY (__DENY__), khong tra ve gi.
 - admin                    -> None (khong gioi han).
 - User thuong              -> luon co dieu kien phong_ban_quyen + security_level.
-- allowed_sites rong       -> KHONG gioi han theo site.
+- allowed_sites rong       -> DENY site fail-closed.
 - clearance public         -> KHONG bao gio lo 'confidential'.
 """
 import json
@@ -59,13 +59,15 @@ class TestRbacFilter:
         )
         assert "CHUNG" in _blob(flt)
 
-    def test_no_sites_means_no_site_restriction(self):
+    def test_no_sites_denies_fail_closed(self):
         flt = svc.create_rbac_filter(
             user_department="CHUNG", user_roles=["viewer"],
             allowed_departments=["CHUNG"], max_security_level="internal",
             allowed_sites=[],
         )
-        assert "metadata.site" not in _blob(flt)
+        blob = _blob(flt)
+        assert "metadata.site" in blob
+        assert "__DENY_SITE__" in blob
 
     def test_sites_apply_when_provided(self):
         flt = svc.create_rbac_filter(

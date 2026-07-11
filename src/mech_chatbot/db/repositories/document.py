@@ -37,7 +37,7 @@ __all__ = [
 def _get_or_create_doc(conn, file_name, thu_muc):
     # Fetch classification json tu IngestionJobs (neu co) de update metadata
     job = conn.execute(
-        text("SELECT TOP 1 ClassificationJson, FilePath, UploadMetaJson FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t ORDER BY CreatedAt DESC"),
+        text("SELECT TOP 1 ClassificationJson, FilePath, UploadMetaJson, Site FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t ORDER BY CreatedAt DESC"),
         {"f": file_name, "t": thu_muc}
     ).fetchone()
     
@@ -54,12 +54,54 @@ def _get_or_create_doc(conn, file_name, thu_muc):
     version_label = cls_data.get("version_label")
     version_no = cls_data.get("version_no", 1)
     variant_code = cls_data.get("variant_code") or "default"
+    classification_rationale = (
+        cls_data.get("classification_rationale")
+        or cls_data.get("reason")
+        or cls_data.get("classification_reason")
+        or "folder_and_content_classification"
+    )
+    classification_model = (
+        cls_data.get("classification_model")
+        or cls_data.get("model")
+        or os.getenv("GPT_MODEL_NAME")
+        or "rule_based"
+    )
 
     # GD2: luon ghi Domain + SecurityLevel vao TaiLieu (truoc day chi ghi Site/family).
     # Uu tien gia tri tu classification; fallback resolve theo phong ban (data-driven Departments).
     from mech_chatbot.db.registry_ports import resolve_domain_by_department, resolve_security_by_department
     domain = cls_data.get("domain") or resolve_domain_by_department(thu_muc)
     security_level = cls_data.get("security_level") or resolve_security_by_department(thu_muc)
+
+    # Every new document inherits its department's governance assignment and
+    # taxonomy version.  Empty values are intentional: publication validation
+    # will hold a document in review until a real owner/approver is configured.
+    governance = conn.execute(
+        text(
+            """
+            SELECT KnowledgeOwnerUserID, KnowledgeApproverUserID,
+                   TaxonomyVersion, ExternalProcessingPolicy
+            FROM dbo.DepartmentKnowledgeGovernance
+            WHERE DeptCode = :dept AND IsActive = 1
+            """
+        ),
+        {"dept": thu_muc or "CHUNG"},
+    ).mappings().first()
+    knowledge_owner_user_id = (
+        governance["KnowledgeOwnerUserID"] if governance else None
+    )
+    knowledge_approver_user_id = (
+        governance["KnowledgeApproverUserID"] if governance else None
+    )
+    taxonomy_version = (
+        (governance["TaxonomyVersion"] if governance else None) or "v1"
+    )
+    external_processing_policy = (
+        (governance["ExternalProcessingPolicy"] if governance else None)
+        or cls_data.get("external_processing_policy")
+        or "all_external"
+    )
+    resolved_site = (job[3] if job and len(job) > 3 else None) or _r_catalog._resolve_site(thu_muc)
     
     f_id = None
     if base_code:
@@ -90,20 +132,39 @@ def _get_or_create_doc(conn, file_name, thu_muc):
             text("""UPDATE TaiLieu SET 
                 ReviewStatus = 'pending_review',
                 FamilyID = :fid, BaseCode = :bc, VersionNo = :vn, VersionLabel = :vl, VariantCode = :vc,
-                Site = :site, Domain = :domain, SecurityLevel = :seclvl, FilePath = :fp
+                Site = :site, Domain = :domain, SecurityLevel = :seclvl, FilePath = :fp,
+                OwnerDepartment = :owner_department, SourceSystem = 'upload',
+                ExternalProcessingPolicy = :external_processing_policy,
+                ClassificationRationale = :classification_rationale,
+                ClassificationModel = :classification_model,
+                KnowledgeOwnerUserID = COALESCE(KnowledgeOwnerUserID, :knowledge_owner_user_id),
+                KnowledgeApproverUserID = COALESCE(KnowledgeApproverUserID, :knowledge_approver_user_id),
+                TaxonomyVersion = COALESCE(NULLIF(TaxonomyVersion, ''), :taxonomy_version),
+                PublicationState = 'draft', PublicationError = NULL, Servable = 0
                 WHERE DocID = :d"""),
-            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _r_catalog._resolve_site(thu_muc), "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None)}
+            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": resolved_site, "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None), "owner_department": thu_muc or "CHUNG", "external_processing_policy": external_processing_policy, "classification_rationale": str(classification_rationale)[:1000], "classification_model": str(classification_model)[:100], "knowledge_owner_user_id": knowledge_owner_user_id, "knowledge_approver_user_id": knowledge_approver_user_id, "taxonomy_version": str(taxonomy_version)[:100]}
         )
         _r_doc_metadata._apply_upload_meta_to_doc(conn, doc_id, (job[2] if job else None), domain)
         return doc_id
         
     res = conn.execute(
         text(
-            """INSERT INTO TaiLieu (TenFile, ThuMuc, TrangThaiVector, ReviewStatus, FamilyID, BaseCode, VersionNo, VersionLabel, VariantCode, Site, Domain, SecurityLevel, FilePath) 
+            """INSERT INTO TaiLieu (
+                TenFile, ThuMuc, TrangThaiVector, ReviewStatus, FamilyID, BaseCode,
+                VersionNo, VersionLabel, VariantCode, Site, Domain, SecurityLevel,
+                FilePath, OwnerDepartment, SourceSystem, ExternalProcessingPolicy,
+                ClassificationRationale, ClassificationModel, KnowledgeOwnerUserID,
+                KnowledgeApproverUserID, TaxonomyVersion, PublicationState, Servable
+            )
             OUTPUT INSERTED.DocID 
-            VALUES (:f, :t, 1, 'pending_review', :fid, :bc, :vn, :vl, :vc, :site, :domain, :seclvl, :fp)"""
+            VALUES (
+                :f, :t, 1, 'pending_review', :fid, :bc, :vn, :vl, :vc, :site,
+                :domain, :seclvl, :fp, :owner_department, 'upload', :external_processing_policy,
+                :classification_rationale, :classification_model, :knowledge_owner_user_id,
+                :knowledge_approver_user_id, :taxonomy_version, 'draft', 0
+            )"""
         ),
-        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": _r_catalog._resolve_site(thu_muc), "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None)},
+        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": resolved_site, "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None), "owner_department": thu_muc or "CHUNG", "external_processing_policy": external_processing_policy, "classification_rationale": str(classification_rationale)[:1000], "classification_model": str(classification_model)[:100], "knowledge_owner_user_id": knowledge_owner_user_id, "knowledge_approver_user_id": knowledge_approver_user_id, "taxonomy_version": str(taxonomy_version)[:100]},
     )
     row = res.fetchone()
     new_doc_id = row[0] if row else None
@@ -218,8 +279,15 @@ def get_document_info(doc_id):
     _ensure_engine()
     try:
         with engine.connect() as conn:
-            row = conn.execute(text("SELECT FamilyID, BaseCode, VersionNo, VersionLabel, VariantCode, VariantGroup, LifecycleStatus, ReviewStatus, IsCurrent, IsArchived, SupersedesDocID FROM TaiLieu WHERE DocID = :d"), {"d": doc_id}).fetchone()
+            row = conn.execute(text("SELECT t.FamilyID, t.BaseCode, t.VersionNo, t.VersionLabel, t.VariantCode, t.VariantGroup, t.LifecycleStatus, t.ReviewStatus, t.IsCurrent, t.IsArchived, t.SupersedesDocID, t.PublicationState, t.Servable, t.PublicationVersion, t.OwnerDepartment, t.SourceSystem, t.ExternalProcessingPolicy, t.KnowledgeOwnerUserID, t.KnowledgeApproverUserID, t.TaxonomyVersion, t.ParentApplicable, t.ParentSection, t.ParentPage, t.ServingEpoch, ISNULL(p.ParentContextEnabled, 1) AS ParentContextEnabled, t.ClassificationJson, t.Title, t.DocNumber FROM TaiLieu t LEFT JOIN dbo.DepartmentDomainProfile p ON p.DeptCode = t.OwnerDepartment AND p.IsActive = 1 WHERE t.DocID = :d"), {"d": doc_id}).fetchone()
             if row:
+                try:
+                    classification = json.loads(row[25] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    classification = {}
+                document_type = ""
+                if isinstance(classification, dict):
+                    document_type = str(classification.get("document_type") or "").strip()
                 return {
                     "family_id": row[0],
                     "base_code": row[1] or "",
@@ -232,6 +300,23 @@ def get_document_info(doc_id):
                     "is_current": bool(row[8]),
                     "is_archived": bool(row[9]),
                     "supersedes_doc_id": row[10],
+                    "publication_state": row[11] or "draft",
+                    "servable": bool(row[12]),
+                    "publication_version": row[13] or 1,
+                    "owner_department": row[14] or "",
+                    "source_system": row[15] or "upload",
+                    "external_processing_policy": row[16] or "all_external",
+                    "knowledge_owner_user_id": row[17],
+                    "knowledge_approver_user_id": row[18],
+                    "taxonomy_version": row[19] or "v1",
+                    "parent_applicable": bool(row[20]),
+                    "parent_section": row[21] or "",
+                    "parent_page": row[22],
+                    "serving_epoch": row[23] or 0,
+                    "parent_context_enabled": bool(row[24]),
+                    "document_type": document_type,
+                    "title": row[26] or "",
+                    "doc_number": row[27] or "",
                 }
             return {}
     except Exception as e:

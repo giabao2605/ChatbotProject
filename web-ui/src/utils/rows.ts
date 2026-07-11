@@ -23,8 +23,12 @@ export const SECURITY_LEVELS = [
 
 export const ROLES = [
   { label: "viewer", value: "viewer" },
+  { label: "knowledge_consumer", value: "knowledge_consumer" },
   { label: "uploader", value: "uploader" },
   { label: "reviewer", value: "reviewer" },
+  { label: "knowledge_approver", value: "knowledge_approver" },
+  { label: "security_admin", value: "security_admin" },
+  { label: "platform_admin", value: "platform_admin" },
   { label: "admin", value: "admin" },
 ];
 

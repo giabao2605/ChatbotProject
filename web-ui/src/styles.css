@@ -320,21 +320,47 @@ textarea {
   border-radius: 8px;
   color: var(--text);
   overflow: hidden;
-  text-decoration: none;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
 }
 
+.citation-preview-link,
 .citation-card img {
   display: block;
   width: 100%;
+}
+
+.citation-card img {
   aspect-ratio: 4 / 3;
   object-fit: cover;
 }
 
-.citation-card span {
+.citation-card-body {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+}
+
+.citation-card-body span {
   display: block;
   color: var(--muted);
   font-size: 12px;
-  padding: 8px;
+}
+
+.citation-download {
+  align-items: center;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 600;
+  justify-content: center;
+  padding: 7px 10px;
+  text-decoration: none;
+}
+
+.citation-download:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .feedback-row,

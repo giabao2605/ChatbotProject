@@ -39,15 +39,10 @@ def env_bool(name, default=False):
 STRICT_ANSWER_MODE = env_bool("STRICT_ANSWER_MODE", True)
 
 
-RERANK_PER_PART = int(os.getenv("RERANK_PER_PART", "10"))
+RERANK_PER_PART = int(os.getenv("RERANK_PER_PART", "8"))
 
 
-RERANK_TOP_N_CAP = int(os.getenv("RERANK_TOP_N_CAP", "40"))
-
-
-def use_voyage_rerank():
-    enabled = env_bool("USE_VOYAGE_RERANK", True)
-    return enabled and bool((os.getenv("VOYAGE_API_KEY") or "").strip())
+RERANK_TOP_N_CAP = int(os.getenv("RERANK_TOP_N_CAP", "20"))
 
 
 class RAGSystem:
@@ -134,7 +129,6 @@ client, vectorstore, llm = RAGSystem.get_instance()
 __all__ = [
     '_VISION_MODEL',
     'env_bool',
-    'use_voyage_rerank',
     'STRICT_ANSWER_MODE',
     'RERANK_PER_PART',
     'RERANK_TOP_N_CAP',

@@ -5,7 +5,7 @@ KHONG doi logic — chi di chuyen nguyen van + truyen state qua tham so/return.
 """
 import os
 from mech_chatbot.config.logging import logger
-from mech_chatbot.llm.llm_client import cohere_invoke
+from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_gpt_rate_limit
 from langchain_core.messages import HumanMessage
 import time
 from mech_chatbot.config.logging import log_trace
@@ -20,20 +20,22 @@ from mech_chatbot.rag.context_builders import (
 
 
 from langchain_core.output_parsers import StrOutputParser
-from mech_chatbot.llm.llm_client import get_llm_model_name
+from mech_chatbot.llm.llm_client import get_llm_endpoint, get_llm_model_name
+from mech_chatbot.llm.external_ai import audited_external_call, ExternalAICallCancelled
 from mech_chatbot.rag.answer_checks import (
     has_unsupported_units_symbols,
     has_unsupported_materials,
     has_unsupported_codes,
     requires_source_citation,
-    has_required_source_citation,
+    has_valid_source_citation,
 )
 from mech_chatbot.rag.evidence_gate import (
     is_high_risk_question,
     has_unsupported_numbers,
     make_insufficient_evidence_message,
 )
-from mech_chatbot.rag.bootstrap import llm, STRICT_ANSWER_MODE
+from mech_chatbot.rag.bootstrap import STRICT_ANSWER_MODE
+from mech_chatbot.rag.streaming_policy import strict_realtime_streaming_enabled
 from mech_chatbot.rag.prompt import _build_prompt_template
 from mech_chatbot.rag.intent import serialize_qdrant_filter
 from mech_chatbot.rag.context_builders import _context_is_mechanical, _context_domain
@@ -53,6 +55,152 @@ from mech_chatbot.rag.entity_resolver import (
 )
 
 _RETRIEVE_UNSET = object()
+
+
+def _env_int(name, default):
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return max(1, int(default))
+
+
+def _rrf_document_key(doc):
+    metadata = getattr(doc, "metadata", {}) or {}
+    doc_id = metadata.get("doc_id")
+    section = metadata.get("parent_section") or metadata.get("parent_page") or metadata.get("trang_so")
+    chunk = metadata.get("chunk_index")
+    content = str(metadata.get("noi_dung_goc") or getattr(doc, "page_content", "") or "")[:240]
+    return (doc_id, section, chunk, content)
+
+
+def _rrf_fuse(rankings, result_cap, k=60):
+    """Reciprocal-rank fusion over dense and BM25 ranked lists."""
+    score_by_key = {}
+    doc_by_key = {}
+    ranks_by_key = {}
+    for source_name, docs in rankings:
+        for rank, doc in enumerate(docs or [], start=1):
+            key = _rrf_document_key(doc)
+            score_by_key[key] = score_by_key.get(key, 0.0) + 1.0 / (k + rank)
+            doc_by_key.setdefault(key, doc)
+            ranks_by_key.setdefault(key, {})[source_name] = rank
+    ordered = sorted(score_by_key, key=lambda key: score_by_key[key], reverse=True)
+    out = []
+    for key in ordered[: max(1, int(result_cap))]:
+        doc = doc_by_key[key]
+        metadata = getattr(doc, "metadata", None)
+        if isinstance(metadata, dict):
+            metadata["retrieval_rrf_score"] = round(score_by_key[key], 8)
+            metadata["retrieval_dense_rank"] = ranks_by_key[key].get("dense")
+            metadata["retrieval_bm25_rank"] = ranks_by_key[key].get("bm25")
+        out.append(doc)
+    return out
+
+
+def _explicit_hybrid_rrf(
+    query,
+    payload_filter,
+    dense_top_k,
+    sparse_top_k,
+    result_cap,
+    *,
+    trace_id=None,
+    phase="general",
+):
+    """Run dense and BM25 independently, then fuse their ranks explicitly.
+
+    A provider/library change cannot silently alter the retrieval policy because
+    the fusion is performed in this module.  If the installed Qdrant adapter
+    lacks a requested mode, the existing HYBRID vectorstore remains a safe
+    availability fallback and is marked in the returned mode.
+    """
+    dense_top_k = max(1, int(dense_top_k))
+    sparse_top_k = max(1, int(sparse_top_k))
+    result_cap = max(1, int(result_cap))
+    try:
+        from langchain_qdrant import QdrantVectorStore, RetrievalMode
+        from mech_chatbot.rag.bootstrap import client
+        from mech_chatbot.config.settings import QDRANT_COLLECTION
+
+        dense_embedding = getattr(vectorstore, "embeddings", None)
+        sparse_embedding = getattr(vectorstore, "sparse_embeddings", None)
+        if dense_embedding is None or sparse_embedding is None:
+            raise RuntimeError("Qdrant vectorstore khong expose dense/sparse embeddings")
+        dense_store = QdrantVectorStore(
+            client=client,
+            collection_name=QDRANT_COLLECTION,
+            embedding=dense_embedding,
+            retrieval_mode=RetrievalMode.DENSE,
+        )
+        sparse_store = QdrantVectorStore(
+            client=client,
+            collection_name=QDRANT_COLLECTION,
+            embedding=dense_embedding,
+            sparse_embedding=sparse_embedding,
+            sparse_vector_name="sparse",
+            retrieval_mode=RetrievalMode.SPARSE,
+        )
+        t_dense = time.perf_counter()
+        dense_docs = dense_store.similarity_search(
+            query,
+            k=dense_top_k,
+            filter=payload_filter,
+        )
+        dense_ms = int((time.perf_counter() - t_dense) * 1000)
+        t_bm25 = time.perf_counter()
+        sparse_docs = sparse_store.similarity_search(
+            query,
+            k=sparse_top_k,
+            filter=payload_filter,
+        )
+        bm25_ms = int((time.perf_counter() - t_bm25) * 1000)
+        t_rrf = time.perf_counter()
+        fused_docs = _rrf_fuse(
+            (("dense", dense_docs), ("bm25", sparse_docs)),
+            result_cap=result_cap,
+        )
+        rrf_ms = int((time.perf_counter() - t_rrf) * 1000)
+        if trace_id:
+            log_trace(
+                "dense_retrieval",
+                trace_id,
+                latency_ms=dense_ms,
+                phase=phase,
+                docs_count=len(dense_docs),
+            )
+            log_trace(
+                "bm25_retrieval",
+                trace_id,
+                latency_ms=bm25_ms,
+                phase=phase,
+                docs_count=len(sparse_docs),
+            )
+            log_trace(
+                "rrf_grouping",
+                trace_id,
+                latency_ms=rrf_ms,
+                phase=phase,
+                docs_count=len(fused_docs),
+                ranks=[
+                    {
+                        "doc_id": (getattr(doc, "metadata", {}) or {}).get("doc_id"),
+                        "rrf_score": (getattr(doc, "metadata", {}) or {}).get("retrieval_rrf_score"),
+                        "dense_rank": (getattr(doc, "metadata", {}) or {}).get("retrieval_dense_rank"),
+                        "bm25_rank": (getattr(doc, "metadata", {}) or {}).get("retrieval_bm25_rank"),
+                    }
+                    for doc in fused_docs[:20]
+                ],
+            )
+        return fused_docs, "explicit_dense_bm25_rrf"
+    except Exception as exc:
+        logger.warning("Explicit dense+BM25 RRF unavailable, fallback HYBRID: %s", exc)
+        if trace_id:
+            log_trace("hybrid_fallback", trace_id, phase=phase, error=type(exc).__name__)
+        fallback = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": result_cap, "filter": payload_filter},
+        ).invoke(query)
+        return list(fallback or []), "hybrid_fallback"
 
 
 def _prepare_history(chat_history, conversation_context, response_language):
@@ -119,7 +267,10 @@ def _prepare_history(chat_history, conversation_context, response_language):
                     "CAC LUOT MOI CAN GOP:\n" + "\n".join(_to_sum)
                 )
                 try:
-                    _history_summary_new = cohere_invoke([HumanMessage(content=_sum_prompt)]).content.strip()
+                    _history_summary_new = cohere_invoke(
+                        [HumanMessage(content=_sum_prompt)],
+                        surface="chat_history_summary",
+                    ).content.strip()
                     _summary_covered_new = len(_ov)
                 except Exception as _e_sum:
                     logger.warning(f"[KH-3] Tom tat hoi thoai loi: {_e_sum}")
@@ -142,9 +293,11 @@ def _analyze_image(image_path, user_question, trace_id):
     """BUOC A: phan tich anh nguoi dung tai len (Vision). Tra ve image_analysis (str).
     Tach nguyen van tu chat_with_rag (P0 slice #2).
     """
-    # _VISION_MODEL doc qua module attribute (gan 1 lan luc bootstrap, khong reassign)
-    from mech_chatbot.rag import bootstrap as _bootstrap
-    _VISION_MODEL = _bootstrap._VISION_MODEL
+    # Resolve the cached adapter through the managed provider profile on each
+    # image request, so an approved endpoint/model change takes effect without
+    # changing retrieval code or retaining a stale provider client forever.
+    from mech_chatbot.llm.vision_client import build_vision_model
+    _VISION_MODEL = build_vision_model()
     # BUOC A: XU LY ANH BANG VISION MODEL
     image_analysis = ""
     if image_path:
@@ -219,9 +372,10 @@ def _assemble_context(retrieved_docs, user_question):
 
 
 def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
-              new_part_ids, response_language, trace_id, t_start,
-              user_department, user_roles, effective_question, intent_data,
-              base_k, retrieval_mode, _has_active_filter=False, _active_filter=None):
+               new_part_ids, response_language, trace_id, t_start,
+               user_department, user_roles, effective_question, intent_data,
+               base_k, retrieval_mode, _has_active_filter=False, _active_filter=None,
+               cancel_event=None):
     """BUOC C/D: sinh cau tra loi streaming (guarded_stream / normal_stream).
     Tra ve stream. Tach nguyen van tu chat_with_rag (P0 slice #4).
     active_filter bind co dieu kien de bao toan ngu nghia locals() nhu ban goc.
@@ -231,7 +385,7 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
     # GD3: chon prompt + gate guard co khi theo ngu canh truy hoi
     _ctx_is_mech = _context_is_mechanical(retrieved_docs, new_part_ids)
     _ctx_domain = _context_domain(retrieved_docs, new_part_ids)
-    chain = _build_prompt_template(_ctx_domain, response_language) | llm | StrOutputParser()
+    chain = _build_prompt_template(_ctx_domain, response_language) | get_cohere_llm() | StrOutputParser()
 
     stream_input = {
         "context": context_text,
@@ -239,8 +393,40 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
         "question": (effective_question if ("effective_question" in locals() and effective_question) else user_question),
         "chat_history_str": chat_history_str
     }
+    _external_doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
+    _external_security = [d.metadata.get("security_level") for d in retrieved_docs]
+    _external_policies = [
+        d.metadata.get("external_processing_policy") or "all_external"
+        for d in retrieved_docs
+    ]
+    _external_input_chars = len(context_text + user_question + chat_history_str)
+    _external_input_bytes = len((context_text + user_question + chat_history_str).encode("utf-8"))
+    _external_call_args = {
+        "provider": "proxyllm",
+        "model": get_llm_model_name(),
+        "endpoint": get_llm_endpoint(),
+        "surface": "generation",
+        "trace_id": trace_id,
+        "doc_ids": _external_doc_ids,
+        "security_levels": _external_security,
+        "policies": _external_policies,
+        "input_chars": _external_input_chars,
+        "input_bytes": _external_input_bytes,
+    }
+    _stream_attempts = max(1, int(os.getenv("GPT_STREAM_MAX_ATTEMPTS", "3")))
+    _strict_realtime = strict_realtime_streaming_enabled(STRICT_ANSWER_MODE)
 
-    if STRICT_ANSWER_MODE or is_high_risk_question(user_question):
+    def _raise_if_cancelled():
+        if cancel_event is not None and cancel_event.is_set():
+            raise ExternalAICallCancelled("RAG stream da bi client huy")
+    try:
+        _strict_holdback_chars = max(
+            64, int(os.getenv("STRICT_STREAMING_HOLDBACK_CHARS", "160"))
+        )
+    except (TypeError, ValueError):
+        _strict_holdback_chars = 160
+
+    if (STRICT_ANSWER_MODE or is_high_risk_question(user_question)) and not _strict_realtime:
         # LOP PHONG THU 3: Post-check so lieu. Voi cau hoi rui ro, tam hoan streaming de kiem tra
         # LLM co tu tao so lieu moi (vd 24 gio) khong co trong context/user question hay khong.
         def guarded_stream():
@@ -249,8 +435,29 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
             has_error = False
             error_msg = ""
             try:
-                for chunk in chain.stream(stream_input):
-                    chunks.append(chunk)
+                _raise_if_cancelled()
+                for attempt in range(1, _stream_attempts + 1):
+                    _raise_if_cancelled()
+                    chunks.clear()
+                    try:
+                        with audited_external_call(**_external_call_args):
+                            for chunk in chain.stream(stream_input):
+                                _raise_if_cancelled()
+                                chunks.append(chunk)
+                        break
+                    except Exception as stream_error:
+                        if attempt >= _stream_attempts or not _is_gpt_rate_limit(stream_error):
+                            raise
+                        delay = min(8, 2 ** attempt)
+                        logger.warning(
+                            "LLM stream tam thoi loi; retry %s/%s sau %ss: %s",
+                            attempt,
+                            _stream_attempts,
+                            delay,
+                            stream_error,
+                        )
+                        time.sleep(delay)
+                _raise_if_cancelled()
                 answer = "".join(chunks)
                 
                 input_tokens = len(context_text + user_question + chat_history_str) // 4
@@ -299,7 +506,9 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                 elif (
                     STRICT_ANSWER_MODE
                     and requires_source_citation(user_question)
-                    and not has_required_source_citation(answer, require_version=True)
+                    and not has_valid_source_citation(
+                        answer, retrieved_docs, require_version=True
+                    )
                 ):
                     ans = make_insufficient_evidence_message(
                         user_question,
@@ -319,6 +528,8 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                     yield answer
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
+            except ExternalAICallCancelled:
+                raise
             except Exception as e:
                 has_error = True
                 error_msg = str(e)
@@ -334,12 +545,45 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
         def normal_stream():
             t_llm = time.time()
             chunks = []
+            pending = ""
             has_error = False
+            cancelled = False
             error_msg = ""
             try:
-                for chunk in chain.stream(stream_input):
-                    chunks.append(chunk)
-                    yield chunk
+                _raise_if_cancelled()
+                for attempt in range(1, _stream_attempts + 1):
+                    _raise_if_cancelled()
+                    try:
+                        with audited_external_call(**_external_call_args):
+                            for chunk in chain.stream(stream_input):
+                                _raise_if_cancelled()
+                                chunks.append(chunk)
+                                if _strict_realtime:
+                                    pending += chunk
+                                    if len(pending) > _strict_holdback_chars:
+                                        safe_prefix = pending[:-_strict_holdback_chars]
+                                        pending = pending[-_strict_holdback_chars:]
+                                        if safe_prefix:
+                                            yield safe_prefix
+                                else:
+                                    yield chunk
+                        break
+                    except Exception as stream_error:
+                        if chunks or attempt >= _stream_attempts or not _is_gpt_rate_limit(stream_error):
+                            raise
+                        delay = min(8, 2 ** attempt)
+                        logger.warning(
+                            "LLM stream tam thoi loi; retry %s/%s sau %ss: %s",
+                            attempt,
+                            _stream_attempts,
+                            delay,
+                            stream_error,
+                        )
+                        time.sleep(delay)
+                _raise_if_cancelled()
+            except ExternalAICallCancelled:
+                cancelled = True
+                raise
             except Exception as e:
                 has_error = True
                 error_msg = str(e)
@@ -349,7 +593,7 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                 if has_error:
                     log_trace("rag_error", trace_id, error=error_msg, stage="llm_generation")
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="llm_error", has_error=True)
-                else:
+                elif not cancelled:
                     answer = "".join(chunks)
                     input_tokens = len(context_text + user_question + chat_history_str) // 4
                     output_tokens = len(answer) // 4
@@ -362,6 +606,44 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                     variant_code = [d.metadata.get("variant_code") for d in retrieved_docs]
                     is_current = [d.metadata.get("is_current") for d in retrieved_docs]
                     lifecycle_status = [d.metadata.get("lifecycle_status") for d in retrieved_docs]
+
+                    if _strict_realtime:
+                        violation_reason = ""
+                        if _ctx_is_mech:
+                            bad_mats, unsupported_mats = has_unsupported_materials(answer, context_text)
+                            bad_codes, unsupported_codes = has_unsupported_codes(answer, context_text, user_question)
+                            bad_units, unsupported_units = has_unsupported_units_symbols(answer, context_text, user_question)
+                            if bad_mats or bad_codes:
+                                violation_reason = "materials_or_codes"
+                            elif bad_units:
+                                violation_reason = "units"
+                        if not violation_reason and has_unsupported_numbers(answer, context_text, user_question, strict_mode=True):
+                            violation_reason = "numbers"
+                        if (
+                            not violation_reason
+                            and requires_source_citation(user_question)
+                            and not has_valid_source_citation(
+                                answer, retrieved_docs, require_version=True
+                            )
+                        ):
+                            violation_reason = "missing_source_page_version"
+                        if violation_reason:
+                            refusal = make_insufficient_evidence_message(
+                                user_question,
+                                "streaming post-check khong xac nhan duoc bang chung cua cau tra loi",
+                                lang=response_language,
+                            )
+                            yield refusal
+                            log_trace(
+                                "rag_end", trace_id,
+                                final_latency_ms=int((time.time() - t_start) * 1000),
+                                refusal=True,
+                                refusal_reason="strict_stream_" + violation_reason,
+                                docs_count=len(retrieved_docs),
+                            )
+                            return
+                        if pending:
+                            yield pending
                     
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=retrieved_file_goc, version_no=version_no, variant_code=variant_code, is_current=is_current, lifecycle_status=lifecycle_status, review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
@@ -370,7 +652,7 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
 
 
 def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
-              query_to_search, rbac_filter):
+              query_to_search, rbac_filter, trace_id=None):
     """BUOC: truy xuat tai lieu (strict_exact / broad_fallback / general).
     Tra ve (retrieved_docs, base_k, retrieval_mode, t_retrieval, active_filter_or_sentinel).
     active_filter tra _RETRIEVE_UNSET neu chua set (duong hiem) de caller bind co dieu kien,
@@ -385,12 +667,17 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
         logger.info(f"Dang truy xuat CHINH XAC (strict) cho ma chinh: {new_part_ids} (k={base_k})...")
         retrieval_mode = "strict_exact"
         try:
-            retriever_strict = vectorstore.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": base_k, "filter": strict_filter}
+            strict_docs, strict_mode = _explicit_hybrid_rrf(
+                query_to_search,
+                strict_filter,
+                dense_top_k=_env_int("RAG_DENSE_TOP_K", base_k),
+                sparse_top_k=_env_int("RAG_BM25_TOP_K", base_k),
+                result_cap=base_k,
+                trace_id=trace_id,
+                phase="strict_exact",
             )
+            retrieval_mode = f"strict_exact:{strict_mode}"
             active_filter = strict_filter
-            strict_docs = retriever_strict.invoke(query_to_search)
         except Exception as e:
             logger.warning(f"Strict retrieval that bai: {e}")
             strict_docs = []
@@ -402,12 +689,17 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
             logger.info(f"Khong co ket qua strict hoac hoi BOM, mo rong truy xuat (broad) cho cac ma: {new_part_ids}...")
             retrieval_mode = "broad_fallback"
             try:
-                retriever_broad = vectorstore.as_retriever(
-                    search_type="similarity",
-                    search_kwargs={"k": base_k * 2, "filter": broad_filter}
+                broad_docs, broad_mode = _explicit_hybrid_rrf(
+                    query_to_search,
+                    broad_filter,
+                dense_top_k=_env_int("RAG_DENSE_TOP_K", base_k * 2),
+                sparse_top_k=_env_int("RAG_BM25_TOP_K", base_k * 2),
+                result_cap=base_k * 2,
+                trace_id=trace_id,
+                phase="broad_fallback",
                 )
+                retrieval_mode = f"broad_fallback:{broad_mode}"
                 active_filter = broad_filter
-                broad_docs = retriever_broad.invoke(query_to_search)
                         
                 # Merge if bom query, otherwise just use broad
                 if strict_docs:
@@ -435,15 +727,20 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
         if not base_k or base_k < 1:
             base_k = 30
         retrieval_mode = "general"
-        logger.info(f"Khong co ma cu tinh, dang tim kiem tren toan bo Database (Pure Hybrid Search) k={base_k}...")
+        logger.info(f"Khong co ma cu tinh, dang tim kiem dense+BM25+RRF tren toan bo Database k={base_k}...")
                 
         general_filter = current_published_filter(rbac_filter)
-        retriever = vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": base_k, "filter": general_filter}
+        retrieved_docs, general_mode = _explicit_hybrid_rrf(
+            query_to_search,
+            general_filter,
+            dense_top_k=_env_int("RAG_DENSE_TOP_K", base_k),
+            sparse_top_k=_env_int("RAG_BM25_TOP_K", base_k),
+            result_cap=base_k,
+            trace_id=trace_id,
+            phase="general",
         )
+        retrieval_mode = f"general:{general_mode}"
         active_filter = general_filter
-        retrieved_docs = retriever.invoke(query_to_search)
     return retrieved_docs, base_k, retrieval_mode, t_retrieval, (active_filter if "active_filter" in locals() else _RETRIEVE_UNSET)
 
 
@@ -460,14 +757,27 @@ def _route(*, user_question, conversation_context, response_language,
     from mech_chatbot.rag import interaction_router as _interaction_router
     # P2: cache embedding cau hoi -> tai dung cho router + semantic cache (tranh embed 2 lan).
     _qemb_cache = {}
+    _embed_latency_ms = 0
+    _embed_calls = 0
     def _embed_cached(_t):
+        nonlocal _embed_latency_ms, _embed_calls
         _k = _t if isinstance(_t, str) else str(_t)
         if _k in _qemb_cache:
             return _qemb_cache[_k]
+        _embed_started = time.time()
         try:
             _v = vectorstore.embeddings.embed_query(_k)
         except Exception:
             _v = None
+        _embed_latency_ms += int((time.time() - _embed_started) * 1000)
+        _embed_calls += 1
+        log_trace(
+            "embed",
+            trace_id,
+            calls=_embed_calls,
+            latency_ms=int((time.time() - _embed_started) * 1000),
+            cache_hit=False,
+        )
         _qemb_cache[_k] = _v
         return _v
     def _router_embedder(_t):
@@ -479,9 +789,15 @@ def _route(*, user_question, conversation_context, response_language,
             return _route_llm.classify_llm(_t, _ctx)
         except Exception:
             return None
-    _route_result = _interaction_router.classify(user_question, context=conversation_context, embedder=_router_embedder, llm_classifier=_llm_classifier)
+    _route_started = time.time()
+    _router_context = dict(conversation_context or {})
+    _router_context["allowed_departments"] = list(allowed_departments or [])
+    _route_result = _interaction_router.classify(user_question, context=_router_context, embedder=_router_embedder, llm_classifier=_llm_classifier)
     is_chitchat = _route_result.is_chitchat()
-    log_trace("route", trace_id, route=_route_result.route, layer=_route_result.layer, confidence=_route_result.confidence)
+    log_trace("route", trace_id, route=_route_result.route, layer=_route_result.layer,
+              confidence=_route_result.confidence,
+              latency_ms=int((time.time() - _route_started) * 1000))
+    log_trace("embed", trace_id, calls=_embed_calls, latency_ms=_embed_latency_ms)
 
     # P2: safety_block -> chan NGAY truoc pipeline + log audit.
     if _route_result.route == _interaction_router.ROUTE_SAFETY_BLOCK:

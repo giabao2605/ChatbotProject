@@ -32,6 +32,7 @@ class _LazyRagAttr:
 vectorstore = _LazyRagAttr("vectorstore")
 client = _LazyRagAttr("client")
 from mech_chatbot.llm.vision_client import describe_vision_error, is_retryable_error
+from mech_chatbot.llm.external_ai import external_document_context
 
 # cross-module (owned) imports
 from mech_chatbot.ingestion.pdf.config import IMAGE_DIR, IMAGE_EXTENSIONS, ROLLBACK_ON_INGEST_ERROR, STRICT_INGEST_REQUIRE_VISION
@@ -89,6 +90,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     domain = domain_override or resolve_domain_by_department(thu_muc)
     security_level = security_override or resolve_security_by_department(thu_muc)
     site = site_override or resolve_site_by_department(thu_muc)  # P1.2
+    site_missing = not str(site or "").strip()
     start_time = time.time()
     report = {
         "status": "success",
@@ -110,6 +112,11 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
         "time_taken": 0,
         "message": ""
     }
+    if site_missing:
+        report["warnings"].append(
+            "Thieu site: tai lieu se o trang thai needs_review va khong duoc publish cho den khi backfill."
+        )
+        report["missing_metadata"] = ["site"]
     doc = None
     pdf_table_reader = None
     doc_id = None
@@ -132,7 +139,12 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
  
         # Perf (GD3, opt-in, mac dinh TAT): lam nong Vision cache song song truoc khi vao vong lap.
         # Khi INGEST_VISION_PREWARM_WORKERS<=1 -> no-op, vong lap chay serial y het cu.
-        _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress_callback)
+        with external_document_context(
+            doc_ids=[doc_id],
+            security_levels=[security_level],
+            policies=[doc_info.get("external_processing_policy") or "all_external"],
+        ):
+            _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress_callback)
  
         for page_num in range(len(doc)):
             if progress_callback:
@@ -201,7 +213,12 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                             if progress_callback:
                                 progress_callback(f"Trang {page_num+1}: dung lai ket qua Vision tu cache (tiet kiem chi phi).")
                         else:
-                            response = call_vision_model(vision_model, prompt, img_to_analyze)
+                            with external_document_context(
+                                doc_ids=[doc_id],
+                                security_levels=[security_level],
+                                policies=[doc_info.get("external_processing_policy") or "all_external"],
+                            ):
+                                response = call_vision_model(vision_model, prompt, img_to_analyze)
                             vision_data = parse_vision_json(response.text)
                             if vision_data:
                                 _vc.put(_page_key, vision_data)
@@ -262,13 +279,18 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
 
                 combined_text_for_metadata = text + "\n\n" + image_summary
                 warning_count_before_metadata = len(report["warnings"])
-                info = extract_metadata_smart(
-                    combined_text_for_metadata,
-                    ten_file,
-                    thu_muc,
-                    vision_model,
-                    quality_warnings=report["warnings"],
-                )
+                with external_document_context(
+                    doc_ids=[doc_id],
+                    security_levels=[security_level],
+                    policies=[doc_info.get("external_processing_policy") or "all_external"],
+                ):
+                    info = extract_metadata_smart(
+                        combined_text_for_metadata,
+                        ten_file,
+                        thu_muc,
+                        vision_model,
+                        quality_warnings=report["warnings"],
+                    )
                 if len(report["warnings"]) > warning_count_before_metadata:
                     report["metadata_llm_failed_pages"].append(page_num+1)
                 
@@ -363,10 +385,23 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     "product_name": info.get("ten_tai_lieu", "") or "",
                     "model": doc_info.get("variant_code", "default"),
                     "doc_type": info.get("loai_tai_lieu", "") or "",
+                    "document_type": doc_info.get("document_type") or info.get("loai_tai_lieu", "") or "",
+                    "document_type_family": doc_info.get("document_type") or "",
+                    "title": doc_info.get("title", "") or "",
+                    "doc_number": doc_info.get("doc_number", "") or "",
                     "material_list": ([info["vat_lieu"]] if info.get("vat_lieu") and str(info.get("vat_lieu")).strip() not in ("", "Khong ro", "Không rõ") else []),
                     "dimensions_list": ([info["kich_thuoc"]] if info.get("kich_thuoc") else []),
                     "ten_san_pham_norm": (info.get("ten_tai_lieu", "") or "").strip().lower(),
                     "trang_so": page_num + 1,
+                    "parent_page": page_num + 1,
+                    "parent_section": (
+                        doc_info.get("parent_section")
+                        or
+                        info.get("cong_doan")
+                        or info.get("ten_tai_lieu")
+                        or info.get("loai_tai_lieu")
+                        or ""
+                    ),
                     "doc_status": "pending_review",
                     "doc_id": doc_id,
                     "family_id": doc_info.get("family_id"),
@@ -380,6 +415,21 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     "is_current": doc_info.get("is_current", False),
                     "is_archived": doc_info.get("is_archived", False),
                     "supersedes_doc_id": doc_info.get("supersedes_doc_id"),
+                    "publication_state": doc_info.get("publication_state", "draft"),
+                    "publication_version": doc_info.get("publication_version", 1),
+                    "serving_epoch": doc_info.get("serving_epoch", 0),
+                    "servable": bool(doc_info.get("servable", False)),
+                    "owner_department": doc_info.get("owner_department") or thu_muc,
+                    "knowledge_owner_user_id": doc_info.get("knowledge_owner_user_id"),
+                    "knowledge_approver_user_id": doc_info.get("knowledge_approver_user_id"),
+                    "taxonomy_version": doc_info.get("taxonomy_version", "v1"),
+                    "parent_applicable": bool(doc_info.get("parent_applicable", True)),
+                    "parent_context_enabled": bool(doc_info.get("parent_context_enabled", True)),
+                    "source_system": doc_info.get("source_system", "upload"),
+                    "external_processing_policy": doc_info.get("external_processing_policy", "all_external"),
+                    # Source-of-truth for chat presentation: show the rendered
+                    # page only when Vision/OCR produced a non-empty summary.
+                    "vision_used": bool(image_summary.strip()),
                     # Multi-domain (P0)
                     "domain": domain,
                     "security_level": security_level,
@@ -553,7 +603,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
 
     score, status = calculate_quality_status(report, domain)
     report["quality_score"] = score
-    report["quality_status"] = status
+    report["quality_status"] = "needs_review" if site_missing and report["status"] == "success" else status
 
     report["time_taken"] = round(time.time() - start_time, 2)
     message_parts = []
@@ -580,6 +630,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
     domain = domain_override or resolve_domain_by_department(thu_muc)
     security_level = security_override or resolve_security_by_department(thu_muc)
     site = site_override or resolve_site_by_department(thu_muc)  # P1.2
+    site_missing = not str(site or "").strip()
     ext = os.path.splitext(file_path)[1].lower()
     start_time = time.time()
     report = {
@@ -601,7 +652,13 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         "time_taken": 0,
         "message": ""
     }
+    if site_missing:
+        report["warnings"].append(
+            "Thieu site: tai lieu se o trang thai needs_review va khong duoc publish cho den khi backfill."
+        )
+        report["missing_metadata"] = ["site"]
     doc_id = None
+    rendered_image_path = None
     try:
         if progress_callback:
             progress_callback(f"Dang doc noi dung file {ext}...")
@@ -634,6 +691,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             else:
                 img_name = f"{base_name}_page1.png"
             img_path = os.path.join(IMAGE_DIR, img_name)
+            rendered_image_path = img_path
             # Convert sang PNG va luu
             try:
                 img = Image.open(file_path)
@@ -658,6 +716,18 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         doc_id = reset_document_metadata(ten_file, thu_muc)
         save_page_metadata(ten_file, thu_muc, info, doc_id=doc_id)
         doc_info = get_document_info(doc_id)
+        vision_used = bool(data_type == "image_summary" and text_content.strip())
+        if vision_used:
+            report["pages_vision_success"].append(1)
+            save_document_page(
+                doc_id=doc_id,
+                file_name=ten_file,
+                page_no=1,
+                text_extract="",
+                vision_summary=text_content,
+                extraction_status="success",
+                image_path=rendered_image_path,
+            )
 
         # GD4: duong nap hang loat khong tin folder tuyet doi -> quet noi dung nhay cam
         if scan_sensitive:
@@ -692,10 +762,23 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             "product_name": info.get("ten_tai_lieu", "") or "",
             "model": doc_info.get("variant_code", "default"),
             "doc_type": info.get("loai_tai_lieu", "") or "",
+            "document_type": doc_info.get("document_type") or info.get("loai_tai_lieu", "") or "",
+            "document_type_family": doc_info.get("document_type") or "",
+            "title": doc_info.get("title", "") or "",
+            "doc_number": doc_info.get("doc_number", "") or "",
             "material_list": ([info["vat_lieu"]] if info.get("vat_lieu") and str(info.get("vat_lieu")).strip() not in ("", "Khong ro", "Không rõ") else []),
             "dimensions_list": ([info["kich_thuoc"]] if info.get("kich_thuoc") else []),
             "ten_san_pham_norm": (info.get("ten_tai_lieu", "") or "").strip().lower(),
             "trang_so": 1,
+            "parent_page": 1,
+            "parent_section": (
+                doc_info.get("parent_section")
+                or
+                info.get("cong_doan")
+                or info.get("ten_tai_lieu")
+                or info.get("loai_tai_lieu")
+                or ""
+            ),
             "dinh_dang_file": ext,
             "doc_status": "pending_review",
             "doc_id": doc_id,
@@ -710,6 +793,19 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             "is_current": doc_info.get("is_current", False),
             "is_archived": doc_info.get("is_archived", False),
             "supersedes_doc_id": doc_info.get("supersedes_doc_id"),
+            "publication_state": doc_info.get("publication_state", "draft"),
+            "publication_version": doc_info.get("publication_version", 1),
+            "serving_epoch": doc_info.get("serving_epoch", 0),
+            "servable": bool(doc_info.get("servable", False)),
+            "owner_department": doc_info.get("owner_department") or thu_muc,
+            "knowledge_owner_user_id": doc_info.get("knowledge_owner_user_id"),
+            "knowledge_approver_user_id": doc_info.get("knowledge_approver_user_id"),
+            "taxonomy_version": doc_info.get("taxonomy_version", "v1"),
+            "parent_applicable": bool(doc_info.get("parent_applicable", True)),
+            "parent_context_enabled": bool(doc_info.get("parent_context_enabled", True)),
+            "source_system": doc_info.get("source_system", "upload"),
+            "external_processing_policy": doc_info.get("external_processing_policy", "all_external"),
+            "vision_used": vision_used,
             # Multi-domain (P0)
             "domain": domain,
             "security_level": security_level,
@@ -804,7 +900,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
 
     score, status = calculate_quality_status(report, domain)
     report["quality_score"] = score
-    report["quality_status"] = status
+    report["quality_status"] = "needs_review" if site_missing and report["status"] == "success" else status
 
     report["time_taken"] = round(time.time() - start_time, 2)
     message_parts = []

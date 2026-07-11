@@ -2,7 +2,6 @@
 Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
-from datetime import datetime
 from sqlalchemy import text
 from ..engine import _ensure_engine, engine
 from mech_chatbot.config.logging import logger
@@ -11,6 +10,7 @@ from . import audit as _r_audit
 from . import document as _r_document
 from . import feedback as _r_feedback
 from . import qdrant as _r_qdrant
+from . import publication as _r_publication
 from . import semantic_cache as _r_semantic_cache
 
 __all__ = [
@@ -85,109 +85,79 @@ def update_document_full_metadata(doc_id, base_code=None, version_no=None, versi
                     {"base_code": norm_base, "version": version_no, "variant": variant_code})
     return ok
 
-def publish_as_new_version(doc_id, reviewer="System"):
-    doc = _r_document.get_doc(doc_id)
-    if not doc: return False
-    
-    old_docs = _r_document.find_current_docs(base_code=doc.BaseCode, variant_code=doc.VariantCode)
-    old_id = old_docs[0].DocID if old_docs else None
-    
-    with engine.begin() as conn:
-        for old in old_docs:
-            conn.execute(text("""
-                UPDATE TaiLieu SET IsCurrent = 0, IsArchived = 1, LifecycleStatus = 'superseded', ArchivedAt = GETDATE() WHERE DocID = :id
-            """), {"id": old.DocID})
-            _sync_qdrant_metadata_best_effort(old.DocID, {
-                "is_current": False,
-                "is_archived": True,
-                "lifecycle_status": "superseded"
-            }, "publish_new_version.old")
-            
-        conn.execute(text("""
-            UPDATE TaiLieu SET IsCurrent = 1, IsArchived = 0, LifecycleStatus = 'published', ReviewStatus = 'approved',
-                PublishedAt = GETDATE(), NgayDuyet = GETDATE(), NguoiDuyet = :rev, ReviewedBy = :rev,
-                SupersedesDocID = :old_id, TrangThai = 'published'
-            WHERE DocID = :id
-        """), {"id": doc.DocID, "rev": reviewer, "old_id": old_id})
-        
-        _sync_qdrant_metadata_best_effort(doc.DocID, {
-            "doc_status": "published",
-            "lifecycle_status": "published",
-            "review_status": "approved",
-            "is_current": True,
-            "is_archived": False,
-            "published_at": datetime.now().isoformat(),
-            "supersedes_doc_id": old_id
-        }, "publish_new_version.new")
-        
-    # P3-2: tai lieu cu da bi thay the -> feedback dislike cu cua chung tro thanh stale
-    for _old in old_docs:
-        _r_feedback.mark_feedback_stale_for_doc(_old.DocID, resolved_by_doc_id=doc.DocID)
-    _r_audit.write_audit_log(reviewer, "publish_new_version", "TaiLieu", doc.DocID, {"base_code": doc.BaseCode, "version": doc.VersionNo, "superseded": old_id})
-    _r_semantic_cache._invalidate_semantic_cache("doc.publish_version")
-    return True
+def publish_as_new_version(doc_id, reviewer="System", reviewer_id=None, reviewer_roles=None):
+    return bool(
+        _r_publication.publish_document(
+            doc_id, action="new_version", reviewer=reviewer,
+            reviewer_id=reviewer_id, reviewer_roles=reviewer_roles,
+        )
+    )
 
-def publish_as_new_variant(doc_id, reviewer="System"):
-    doc = _r_document.get_doc(doc_id)
-    if not doc: return False
-    
-    with engine.begin() as conn:
-        conn.execute(text("""
-            UPDATE TaiLieu SET IsCurrent = 1, IsArchived = 0, LifecycleStatus = 'published', ReviewStatus = 'approved',
-                PublishedAt = GETDATE(), NgayDuyet = GETDATE(), NguoiDuyet = :rev, ReviewedBy = :rev, TrangThai = 'published'
-            WHERE DocID = :id
-        """), {"id": doc.DocID, "rev": reviewer})
-        
-        _sync_qdrant_metadata_best_effort(doc.DocID, {
-            "doc_status": "published",
-            "lifecycle_status": "published",
-            "review_status": "approved",
-            "is_current": True,
-            "is_archived": False,
-            "published_at": datetime.now().isoformat()
-        }, "publish_variant")
-        
-    _r_audit.write_audit_log(reviewer, "publish_variant", "TaiLieu", doc.DocID, {"base_code": doc.BaseCode, "variant": doc.VariantCode})
-    _r_semantic_cache._invalidate_semantic_cache("doc.publish_variant")
-    return True
+def publish_as_new_variant(doc_id, reviewer="System", reviewer_id=None, reviewer_roles=None):
+    return bool(
+        _r_publication.publish_document(
+            doc_id, action="new_variant", reviewer=reviewer,
+            reviewer_id=reviewer_id, reviewer_roles=reviewer_roles,
+        )
+    )
 
-def publish_as_standalone(doc_id, reviewer="System"):
-    return publish_as_new_variant(doc_id, reviewer=reviewer)
+def publish_as_standalone(doc_id, reviewer="System", reviewer_id=None, reviewer_roles=None):
+    return bool(
+        _r_publication.publish_document(
+            doc_id, action="standalone", reviewer=reviewer,
+            reviewer_id=reviewer_id, reviewer_roles=reviewer_roles,
+        )
+    )
 
 def reject_document(doc_id, reviewer="System"):
+    if not _r_qdrant.update_qdrant_metadata(
+        doc_id,
+        {
+            "servable": False,
+            "publication_state": "failed",
+            "lifecycle_status": "rejected",
+            "review_status": "rejected",
+        },
+    ):
+        logger.error("reject_document: khong disable duoc Qdrant cho DocID %s", doc_id)
+        return False
     with engine.begin() as conn:
         conn.execute(text("""
-            UPDATE TaiLieu SET LifecycleStatus = 'rejected', ReviewStatus = 'rejected', NguoiDuyet = :rev, ReviewedBy = :rev
+            UPDATE TaiLieu SET LifecycleStatus = 'rejected', ReviewStatus = 'rejected',
+                NguoiDuyet = :rev, ReviewedBy = :rev, Servable = 0,
+                PublicationState = 'failed', PublicationUpdatedAt = GETDATE()
             WHERE DocID = :id
         """), {"id": doc_id, "rev": reviewer})
-        
-        _sync_qdrant_metadata_best_effort(doc_id, {
-            "lifecycle_status": "rejected",
-            "review_status": "rejected"
-        }, "reject_document")
-        
+
     _r_audit.write_audit_log(reviewer, "reject_document", "TaiLieu", doc_id, {})
     _r_semantic_cache._invalidate_semantic_cache("doc.reject")
     return True
 
 def archive_document(doc_id, reviewer="System"):
-    with engine.begin() as conn:
-        conn.execute(text("""
-            UPDATE TaiLieu SET IsCurrent = 0, IsArchived = 1, LifecycleStatus = 'archived', ArchivedAt = GETDATE()
-            WHERE DocID = :id
-        """), {"id": doc_id})
-        
-        _sync_qdrant_metadata_best_effort(doc_id, {
+    if not _r_qdrant.update_qdrant_metadata(
+        doc_id,
+        {
+            "servable": False,
             "is_current": False,
             "is_archived": True,
-            "lifecycle_status": "archived"
-        }, "archive_document")
-        
+            "lifecycle_status": "archived",
+        },
+        require_points=True,
+    ):
+        logger.error("archive_document: khong disable duoc Qdrant cho DocID %s", doc_id)
+        return False
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE TaiLieu SET IsCurrent = 0, IsArchived = 1, Servable = 0,
+                LifecycleStatus = 'archived', ArchivedAt = GETDATE(),
+                PublicationState = 'published', PublicationUpdatedAt = GETDATE()
+            WHERE DocID = :id
+        """), {"id": doc_id})
     _r_audit.write_audit_log(reviewer, "archive_document", "TaiLieu", doc_id, {})
     _r_semantic_cache._invalidate_semantic_cache("doc.archive")
     return True
 
-def rollback_to_version(base_code, version_no, variant_code="default", reviewer="System"):
+def rollback_to_version(base_code, version_no, variant_code="default", reviewer="System", reviewer_id=None, reviewer_roles=None):
     """
     [DEPRECATED] Chuyen sang dung rollback_to_version_by_family.
     Wrapper tam thoi de giu tuong thich nguoc.
@@ -200,89 +170,32 @@ def rollback_to_version(base_code, version_no, variant_code="default", reviewer=
             if not row or not row[0]:
                 logger.error(f"Cannot find FamilyID for BaseCode {base_code}")
                 return False
-            return rollback_to_version_by_family(row[0], version_no, variant_code, reviewer)
+            return rollback_to_version_by_family(
+                row[0], version_no, variant_code, reviewer,
+                reviewer_id=reviewer_id, reviewer_roles=reviewer_roles,
+            )
     except Exception as e:
         logger.error(f"Loi wrapper rollback: {e}")
         return False
 
-def rollback_to_version_by_family(family_id, version_no, variant_code="default", reviewer="System"):
+def rollback_to_version_by_family(family_id, version_no, variant_code="default", reviewer="System", reviewer_id=None, reviewer_roles=None):
+    """Restore a historical row through the publication outbox."""
     _ensure_engine()
     try:
-        with engine.begin() as conn:
-            current_rows = conn.execute(text("""
-                SELECT DocID FROM TaiLieu
-                WHERE FamilyID = :fid
-                  AND VariantCode = :vc
-                  AND IsCurrent = 1
-                  AND LifecycleStatus = 'published'
-            """), {
-                "fid": family_id,
-                "vc": variant_code
-            }).fetchall()
-
-            for row in current_rows:
-                old_doc_id = row[0]
-                conn.execute(text("""
-                    UPDATE TaiLieu
-                    SET IsCurrent = 0,
-                        IsArchived = 1,
-                        LifecycleStatus = 'superseded',
-                        ArchivedAt = GETDATE()
-                    WHERE DocID = :id
-                """), {"id": old_doc_id})
-
-                ok_rb_old = _r_qdrant.update_qdrant_metadata(old_doc_id, {
-                    "is_current": False,
-                    "is_archived": True,
-                    "lifecycle_status": "superseded"
-                })
-                if not ok_rb_old:
-                    raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {old_doc_id}")
-
+        with engine.connect() as conn:
             target = conn.execute(text("""
-                SELECT DocID FROM TaiLieu
+                SELECT TOP 1 DocID FROM TaiLieu
                 WHERE FamilyID = :fid
-                  AND VariantCode = :vc
+                  AND ISNULL(VariantCode, 'default') = :vc
                   AND VersionNo = :vn
-            """), {
-                "fid": family_id,
-                "vc": variant_code,
-                "vn": version_no
-            }).fetchone()
-
-            if not target:
-                return False
-
-            target_doc_id = target[0]
-
-            conn.execute(text("""
-                UPDATE TaiLieu
-                SET IsCurrent = 1,
-                    IsArchived = 0,
-                    LifecycleStatus = 'published',
-                    ReviewStatus = 'approved',
-                    ReviewedBy = :rev,
-                    NguoiDuyet = :rev,
-                    PublishedAt = GETDATE()
-                WHERE DocID = :id
-            """), {
-                "id": target_doc_id,
-                "rev": reviewer
-            })
-
-            ok_rb_new = _r_qdrant.update_qdrant_metadata(target_doc_id, {
-                "is_current": True,
-                "is_archived": False,
-                "lifecycle_status": "published",
-                "review_status": "approved"
-            })
-            if not ok_rb_new:
-                raise RuntimeError(f"Update Qdrant metadata that bai cho DocID {target_doc_id}")
-
-            _r_audit.write_audit_log(reviewer, "rollback", "TaiLieu", target_doc_id, {"family_id": family_id, "target_version": version_no})
-            _r_semantic_cache._invalidate_semantic_cache("doc.rollback")
-            return True
-
+                ORDER BY DocID DESC
+            """), {"fid": family_id, "vc": variant_code or "default", "vn": version_no}).fetchone()
+        if not target:
+            return False
+        return bool(_r_publication.publish_document(
+            int(target[0]), action="new_version", reviewer=reviewer,
+            reviewer_id=reviewer_id, reviewer_roles=reviewer_roles,
+        ))
     except Exception as e:
         logger.error(f"Loi rollback_to_version_by_family: {e}", exc_info=True)
         return False

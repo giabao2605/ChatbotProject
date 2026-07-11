@@ -78,8 +78,8 @@ WHERE u.Username = 'uploader1'
   );
 GO
 
-IF NOT EXISTS (SELECT 1 FROM dbo.SchemaMigrations WHERE Version = 'V0018')
-    INSERT INTO dbo.SchemaMigrations(Version, Description)
+IF NOT EXISTS (SELECT 1 FROM dbo._SchemaVersions WHERE Version = 'V0018')
+    INSERT INTO dbo._SchemaVersions(Version, Description)
     VALUES ('V0018', 'Backfill dev account RBAC links when users already existed before seed.');
 GO
 

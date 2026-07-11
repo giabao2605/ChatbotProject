@@ -68,11 +68,13 @@ def test_rbac_matrix_invariants(roles, clearance, depts, sites, user_dept):
     if clearance in ("public", "internal", None, "superadmin"):
         assert "confidential" not in blob
 
-    # site: chi gioi han khi co allowed_sites
+    # Pilot policy fail-closed theo site: khong co site assignment phai DENY,
+    # khong duoc tro lai hanh vi legacy "site trong = khong gioi han".
     if sites:
         assert "metadata.site" in blob
     else:
-        assert "metadata.site" not in blob
+        assert "metadata.site" in blob
+        assert "__DENY_SITE__" in blob
 
 
 class TestComposeRetrievalFilters:

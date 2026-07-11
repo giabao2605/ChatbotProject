@@ -6,6 +6,8 @@ Nho vay unit test import duoc ma KHONG bi tai model / goi mang / crash.
 
 Logic giu NGUYEN BAN tu service.py (khong doi hanh vi).
 """
+import os
+
 from qdrant_client import models
 
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
@@ -51,24 +53,24 @@ def _security_filter(max_security_level):
 
 
 def _strict_site_enabled():
-    """P0#2: doc LAZY co AppSettings 'rbac_strict_site_filter'.
-    Import repository TRONG ham de rbac.py van THUAN (unit test import duoc, khong keo DB/RAG).
-    Moi loi -> coi nhu strict=False (tuong thich nguoc)."""
-    try:
-        from mech_chatbot.db.repository import get_app_setting
-        raw = get_app_setting("rbac_strict_site_filter", "false")
-        return str(raw).strip().lower() in ("true", "1", "yes", "on")
-    except Exception:
-        return False
+    """Fail-closed theo config process, khong mo ket noi DB trong hot path."""
+    raw = os.getenv("RBAC_STRICT_SITE_FILTER", "true")
+    return str(raw).strip().lower() in ("true", "1", "yes", "on")
 
 
 def _site_filter(allowed_sites):
-    """P1.2 + P0#2: gioi han theo site. List rong/None -> KHONG loc theo site (tuong thich nguoc).
-    - STRICT OFF (mac dinh): tai lieu thieu site (metadata.site rong) VAN hien (tranh an du lieu cu).
-    - STRICT ON: KHONG cho qua tai lieu thieu site -> chan leak cross-site."""
+    """Fail closed by site when strict mode is enabled (the default).
+
+    An empty site assignment is denied. In the temporary legacy compatibility
+    mode, documents without a site can be returned only when a user still has
+    at least one assigned site.
+    """
     sites = [s for s in (allowed_sites or []) if s]
     if not sites:
-        return None
+        return models.FieldCondition(
+            key="metadata.site",
+            match=models.MatchValue(value="__DENY_SITE__"),
+        )
     match_cond = models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites))
     # STRICT ON: chi khop dung site duoc phep, khong noi long cho doc thieu site.
     if _strict_site_enabled():
@@ -84,10 +86,18 @@ def _site_filter(allowed_sites):
 
 
 def create_rbac_filter(user_department, user_roles, allowed_departments=None, max_security_level=None, allowed_sites=None):
-    # Chi admin moi duoc bo filter (None = khong gioi han)
-    if user_roles and "admin" in user_roles:
+    # Revised plan v3 retains global read only for the legacy ``admin`` role.
+    # It is intentionally narrow: new platform/security control-plane roles
+    # are never retrieval bypasses.  The RAG API records an audit event for
+    # every legacy-admin query and semantic cache uses the dedicated ``admin``
+    # scope, so this has one coherent policy across all retrieval branches.
+    normalized_roles = {str(role).strip().lower() for role in (user_roles or []) if str(role).strip()}
+    if "admin" in normalized_roles:
         return None
 
+    # Control-plane roles never imply document-read access. Every non-legacy
+    # administrator must satisfy the explicit department, clearance, and site
+    # conditions below.
     # Khong co role nao -> DENY tat ca
     if not user_roles:
         return models.Filter(

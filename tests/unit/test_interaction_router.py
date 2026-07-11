@@ -61,6 +61,35 @@ def test_backward_compat_no_embedder():
         assert r.requires_source_citation()
 
 
+@pytest.mark.parametrize(
+    "q",
+    [
+        "nội quy lao động",
+        "quy trình nghỉ phép của nhân sự",
+        "chính sách thanh toán mua hàng",
+        "kiểm tra tồn kho hiện tại",
+        "cho tôi bản vẽ và dung sai",
+        "quy trình ISO an toàn lao động",
+    ],
+)
+def test_fast_internal_rule_skips_embedding_and_llm(q):
+    calls = {"embed": 0, "llm": 0}
+
+    def embedder(_):
+        calls["embed"] += 1
+        return [1.0]
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_OUT_OF_SCOPE, 1.0)
+
+    result = router.classify(q, embedder=embedder, llm_classifier=classifier)
+
+    assert result.route == router.ROUTE_TECHNICAL
+    assert result.layer == router.LAYER_RULE
+    assert calls == {"embed": 0, "llm": 0}
+
+
 # ------------------------- L1 (P1) -------------------------
 @pytest.fixture(autouse=True)
 def _low_threshold(monkeypatch):

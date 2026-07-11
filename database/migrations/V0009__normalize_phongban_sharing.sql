@@ -34,27 +34,29 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_PhongBanChiaSe_Dept' A
     CREATE INDEX IX_PhongBanChiaSe_Dept ON dbo.PhongBanChiaSe(DeptCode, DocID);
 GO
 
--- 2) Backfill tu du lieu CSV cu (chi khi cot PhongBan con ton tai)
+-- 2a) Phong chu (ThuMuc) luon co quyen doc, ca tren baseline moi khong con cot CSV.
+INSERT INTO dbo.PhongBanChiaSe (DocID, DeptCode)
+SELECT DISTINCT t.DocID, LTRIM(RTRIM(t.ThuMuc))
+FROM dbo.TaiLieu t
+WHERE t.ThuMuc IS NOT NULL AND LTRIM(RTRIM(t.ThuMuc)) <> ''
+  AND NOT EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe p
+                  WHERE p.DocID = t.DocID AND p.DeptCode = LTRIM(RTRIM(t.ThuMuc)));
+
+-- 2b) Cac phong chia se them tu CSV cu. SQL Server bind cot o compile time,
+-- nen phai dung dynamic SQL: IF COL_LENGTH ben ngoai khong du de bao ve DB moi
+-- da khong con TaiLieu.PhongBan.
 IF COL_LENGTH('dbo.TaiLieu', 'PhongBan') IS NOT NULL
 BEGIN
-    -- 2a) Phong chu (ThuMuc) luon co quyen doc
-    INSERT INTO dbo.PhongBanChiaSe (DocID, DeptCode)
-    SELECT DISTINCT t.DocID, LTRIM(RTRIM(t.ThuMuc))
-    FROM dbo.TaiLieu t
-    WHERE t.ThuMuc IS NOT NULL AND LTRIM(RTRIM(t.ThuMuc)) <> ''
-      AND NOT EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe p
-                      WHERE p.DocID = t.DocID AND p.DeptCode = LTRIM(RTRIM(t.ThuMuc)));
-
-    -- 2b) Cac phong chia se them tu CSV. STRING_SPLIT can compat level >= 130; bao TRY/CATCH.
     BEGIN TRY
-        INSERT INTO dbo.PhongBanChiaSe (DocID, DeptCode)
-        SELECT DISTINCT t.DocID, LTRIM(RTRIM(s.value))
-        FROM dbo.TaiLieu t
-        CROSS APPLY STRING_SPLIT(t.PhongBan, ',') s
-        WHERE t.PhongBan IS NOT NULL
-          AND LTRIM(RTRIM(s.value)) <> ''
-          AND NOT EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe p
-                          WHERE p.DocID = t.DocID AND p.DeptCode = LTRIM(RTRIM(s.value)));
+        EXEC sys.sp_executesql N'
+            INSERT INTO dbo.PhongBanChiaSe (DocID, DeptCode)
+            SELECT DISTINCT t.DocID, LTRIM(RTRIM(s.value))
+            FROM dbo.TaiLieu t
+            CROSS APPLY STRING_SPLIT(t.PhongBan, '','') s
+            WHERE t.PhongBan IS NOT NULL
+              AND LTRIM(RTRIM(s.value)) <> ''''
+              AND NOT EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe p
+                              WHERE p.DocID = t.DocID AND p.DeptCode = LTRIM(RTRIM(s.value)));';
     END TRY
     BEGIN CATCH
         PRINT 'V0009 WARNING: STRING_SPLIT khong kha dung, bo qua backfill CSV chia se. Loi: ' + ERROR_MESSAGE();

@@ -137,6 +137,7 @@ def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress
         if progress_callback:
             progress_callback(f"Pre-warm Vision song song {len(tasks)} trang (workers={max_workers})...")
         from concurrent.futures import ThreadPoolExecutor
+        from contextvars import copy_context
 
         def _one(t):
             img_path, prompt, key = t
@@ -150,7 +151,9 @@ def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress
                 logger.warning(f"[prewarm] Vision loi ({img_path}): {_e}")
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            list(ex.map(_one, tasks))
+            futures = [ex.submit(copy_context().run, _one, task) for task in tasks]
+            for future in futures:
+                future.result()
     except Exception as _e:
         logger.warning(f"[prewarm] bo qua do loi: {_e}")
 

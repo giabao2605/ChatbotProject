@@ -139,7 +139,9 @@ def classify_document(file_path, original_filename=None, thu_muc=None):
     }
     
     try:
-        resp = cohere_invoke([HumanMessage(content=prompt)])
+        resp = cohere_invoke(
+            [HumanMessage(content=prompt)], surface="document_classification"
+        )
         clean_json = resp.content.replace('```json', '').replace('```', '').strip()
         parsed = json.loads(clean_json)
         

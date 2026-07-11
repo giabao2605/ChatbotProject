@@ -69,6 +69,17 @@ function docId(row: ApiRow): number | null {
 
 type ReviewStep = { path: string; method: "POST" | "DELETE"; body?: unknown };
 
+function actionError(result: unknown): string | null {
+  if (!result || typeof result !== "object" || !("ok" in result)) return null;
+  if ((result as { ok?: boolean }).ok !== false) return null;
+  const payload = result as {
+    error?: string;
+    validation?: { issues?: Array<{ message?: string }> };
+  };
+  const issues = payload.validation?.issues?.map((item) => item.message).filter(Boolean) ?? [];
+  return issues.length ? issues.join("; ") : payload.error || "Thao tác thất bại.";
+}
+
 async function reviewAction(
   row: ApiRow,
   opts: {
@@ -86,7 +97,9 @@ async function reviewAction(
 
   if (opts.doc && doc !== null) {
     const step = opts.doc(doc);
-    await apiSend(step.path, step.method, step.body);
+    const result = await apiSend(step.path, step.method, step.body);
+    const error = actionError(result);
+    if (error) throw new Error(error);
   }
 
   if (job === null) throw new Error("Không tìm thấy JobID của dòng này.");
@@ -191,13 +204,24 @@ async function runBulk(action: "publish" | "reject" | "delete") {
   bulk.error = "";
   bulk.notice = "";
   try {
-    const result = await apiSend<{ updated: number; failed: number }>("/api/documents/review/bulk", "POST", {
+    const result = await apiSend<{
+      updated: number;
+      failed: number;
+      failures?: Array<{ error?: string; validation?: { issues?: Array<{ message?: string }> } }>;
+    }>("/api/documents/review/bulk", "POST", {
       items,
       action,
       publish_mode: bulk.publishMode,
       reason: bulk.rejectReason,
     });
     bulk.notice = `Hoàn tất: ${result.updated} thành công, ${result.failed} thất bại`;
+    if (result.failures?.length) {
+      const messages = result.failures.flatMap((failure) => {
+        const issues = failure.validation?.issues?.map((issue) => issue.message).filter(Boolean) ?? [];
+        return issues.length ? issues : [failure.error || "Publish thất bại"];
+      });
+      bulk.error = messages.join("; ");
+    }
     await loadBulkJobs();
   } catch (err) {
     bulk.error = err instanceof Error ? err.message : "Lỗi";

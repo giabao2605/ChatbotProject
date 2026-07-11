@@ -359,7 +359,7 @@ For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QD
 # Step 1: Create the base schema
 #   Run: database/schema/01_baseline.sql on your SQL Server instance
 
-# Step 2: Apply versioned migrations in order (V0001 -> V0016)
+# Step 2: Apply versioned migrations in order (V0001 -> V0020)
 python scripts/migrations/migrate.py
 # or run each file in database/migrations/ manually
 

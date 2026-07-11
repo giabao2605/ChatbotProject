@@ -9,15 +9,50 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from mech_chatbot.db.repository import get_pending_job, update_ingestion_job, mark_job_failed, mark_job_waiting_quota, write_audit_log, update_ingestion_report
 from mech_chatbot.ingestion.file_ingestor import learn_new_file
 from mech_chatbot.config.logging import logger
+from mech_chatbot.llm.external_ai import external_processing_context
 
 def run_worker():
     logger.info("Khởi động Ingestion Worker chạy ngầm...")
-
+    publication_interval = max(
+        5, int(os.getenv("PUBLICATION_RECONCILE_INTERVAL_SECONDS", "15"))
+    )
+    serving_reconcile_interval = max(
+        60, int(os.getenv("SERVING_RECONCILE_INTERVAL_SECONDS", "600"))
+    )
+    last_publication_reconcile = 0.0
+    last_serving_reconcile = 0.0
 
     print("Ingestion Worker đã sẵn sàng. Đang chờ file mới...")
     
     while True:
         try:
+            if time.monotonic() - last_publication_reconcile >= publication_interval:
+                try:
+                    from mech_chatbot.db.repository import reconcile_publications
+
+                    summary = reconcile_publications(limit=10)
+                    if summary.get("processed"):
+                        logger.info("Publication reconciliation: %s", summary)
+                except Exception as reconcile_error:
+                    logger.warning(
+                        "Publication reconciliation failed: %s", reconcile_error
+                    )
+                last_publication_reconcile = time.monotonic()
+
+            if time.monotonic() - last_serving_reconcile >= serving_reconcile_interval:
+                try:
+                    from mech_chatbot.db.repository import reconcile_serving_state
+
+                    serving_summary = reconcile_serving_state(
+                        limit=int(os.getenv("SERVING_RECONCILE_BATCH_SIZE", "500")),
+                        worker_id="ingestion-worker-serving-reconciler",
+                    )
+                    if serving_summary.get("failed_doc_ids"):
+                        logger.warning("Serving reconciliation has failed docs: %s", serving_summary)
+                except Exception as reconcile_error:
+                    logger.warning("Serving reconciliation failed: %s", reconcile_error)
+                last_serving_reconcile = time.monotonic()
+
             # 1. Lấy job (và tự động set status = 'extracting' qua CTE OUTPUT)
             job = get_pending_job()
             
@@ -48,7 +83,8 @@ def run_worker():
                 from sqlalchemy import text
                 
                 print(f"[{time.strftime('%H:%M:%S')}] Đang phân loại bằng AI...")
-                cls_res = classify_document(file_path, file_name, thu_muc=thu_muc)
+                with external_processing_context("ingestion-worker", False, f"ingestion_{job_id}"):
+                    cls_res = classify_document(file_path, file_name, thu_muc=thu_muc)
                 
                 with engine.begin() as conn:
                     conn.execute(text("""
@@ -81,18 +117,19 @@ def run_worker():
             # Sử dụng learn_new_file của hệ thống
             # scan_sensitive=True: luon do noi dung nhay cam (khong tin folder tuyet doi),
             # ke ca file upload le lan nap hang loat -> tu nang 'confidential' khi can.
-            success, message, report = learn_new_file(
-                file_path=file_path,
-                ten_file=file_name,
-                thu_muc=thu_muc,
-                progress_callback=progress_handler,
-                domain_override=domain_override,
-                security_override=security_override,
-                cong_doan_override=cong_doan_override,
-                site_override=site_override,
-                phong_ban_override=phong_ban_override,
-                scan_sensitive=True,
-            )
+            with external_processing_context("ingestion-worker", False, f"ingestion_{job_id}"):
+                success, message, report = learn_new_file(
+                    file_path=file_path,
+                    ten_file=file_name,
+                    thu_muc=thu_muc,
+                    progress_callback=progress_handler,
+                    domain_override=domain_override,
+                    security_override=security_override,
+                    cong_doan_override=cong_doan_override,
+                    site_override=site_override,
+                    phong_ban_override=phong_ban_override,
+                    scan_sensitive=True,
+                )
             
             # 3. Cập nhật kết quả cuối cùng
             if success:

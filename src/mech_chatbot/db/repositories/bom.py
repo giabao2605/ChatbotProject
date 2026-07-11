@@ -3,6 +3,7 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 import re
+import os
 from sqlalchemy import text
 from ..engine import _ensure_engine, engine
 from mech_chatbot.config.logging import logger
@@ -74,6 +75,7 @@ def search_bom_by_code(
     user_roles=None,
     allowed_departments=None,
     max_security_level=None,
+    allowed_sites=None,
 ):
     """Tim kiem bang ke vat tu tren SQL theo ma hang hoac ma doi tuong (parent assembly).
 
@@ -130,21 +132,27 @@ def search_bom_by_code(
 
             filter_sql = "1=1"
             if version_policy in ["current_only", "all_current_variants"]:
-                filter_sql += " AND t.LifecycleStatus = 'published' AND t.ReviewStatus = 'approved' AND t.IsCurrent = 1"
+                filter_sql += " AND t.Servable = 1 AND t.PublicationState = 'published' AND t.LifecycleStatus = 'published' AND t.ReviewStatus = 'approved' AND t.IsCurrent = 1"
             elif version_policy == "specific_version":
-                filter_sql += " AND t.LifecycleStatus IN ('published', 'archived', 'superseded') AND t.ReviewStatus = 'approved'"
+                filter_sql += " AND t.Servable = 1 AND t.PublicationState = 'published' AND t.LifecycleStatus IN ('published', 'archived', 'superseded') AND t.ReviewStatus = 'approved'"
                 if detected_versions:
                     filter_sql += f" AND t.VersionNo = {int(detected_versions[0])}"
             elif version_policy == "compare_versions":
-                filter_sql += " AND t.LifecycleStatus IN ('published', 'archived', 'superseded') AND t.ReviewStatus = 'approved'"
+                filter_sql += " AND t.Servable = 1 AND t.PublicationState = 'published' AND t.LifecycleStatus IN ('published', 'archived', 'superseded') AND t.ReviewStatus = 'approved'"
                 if detected_versions:
                     vers_str = ",".join(str(int(v)) for v in detected_versions)
                     filter_sql += f" AND t.VersionNo IN ({vers_str})"
             else:
-                filter_sql += " AND t.LifecycleStatus = 'published' AND t.ReviewStatus = 'approved' AND t.IsCurrent = 1"
+                filter_sql += " AND t.Servable = 1 AND t.PublicationState = 'published' AND t.LifecycleStatus = 'published' AND t.ReviewStatus = 'approved' AND t.IsCurrent = 1"
 
-            # RBAC: chi dung allowed_departments tu UserDepartments, khong tu dong them department
-            if not user_roles or "admin" not in user_roles:
+            # The legacy ``admin`` role has the business-approved global-read
+            # capability.  Every other role must pass the same department,
+            # clearance, and site predicates as the Qdrant retrieval path.
+            normalized_roles = {
+                str(role).strip().lower() for role in (user_roles or []) if str(role).strip()
+            }
+            if "admin" not in normalized_roles:
+                # RBAC: chi dung allowed_departments tu UserDepartments, khong tu dong them department
                 allowed = list(allowed_departments or [])
                 if SHARE_ALL_DEPARTMENT not in allowed:
                     allowed.append(SHARE_ALL_DEPARTMENT)
@@ -182,11 +190,33 @@ def search_bom_by_code(
                 else:
                     filter_sql += " AND (t.SecurityLevel IS NOT NULL AND LTRIM(RTRIM(t.SecurityLevel)) <> '' AND (" + " OR ".join(sec_conditions) + "))"
 
+                # Keep the SQL BOM path fail-closed by site just like Qdrant.
+                # Legacy data without a site is visible only while the explicit
+                # compatibility switch is off; strict mode is the default.
+                sites = sorted({str(site).strip() for site in (allowed_sites or []) if str(site).strip()})
+                strict_site = str(os.getenv("RBAC_STRICT_SITE_FILTER", "true")).strip().lower() in {
+                    "1", "true", "yes", "on"
+                }
+                if not sites:
+                    filter_sql += " AND 1 = 0"
+                else:
+                    site_conditions = []
+                    for i, site in enumerate(sites):
+                        key = f"site{i}"
+                        site_conditions.append(f"LTRIM(RTRIM(t.Site)) = :{key}")
+                        params[key] = site
+                    if strict_site:
+                        filter_sql += " AND t.Site IS NOT NULL AND LTRIM(RTRIM(t.Site)) <> '' AND (" + " OR ".join(site_conditions) + ")"
+                    else:
+                        filter_sql += " AND (t.Site IS NULL OR LTRIM(RTRIM(t.Site)) = '' OR " + " OR ".join(site_conditions) + ")"
+
             query = text(f"""
-                SELECT DISTINCT b.MaHang, b.TenVatTu, b.VatLieu, b.SoLuong, b.GhiChu, t.TenFile, t.VersionNo
+                SELECT DISTINCT b.DocID, b.TrangSo, b.MaHang, b.TenVatTu, b.VatLieu,
+                       b.SoLuong, b.GhiChu, t.TenFile, t.VersionNo, t.SecurityLevel,
+                       t.Site, t.ExternalProcessingPolicy
                 FROM BangKeVatTu b
                 JOIN TaiLieu t ON b.DocID = t.DocID
-                WHERE {filter_sql} AND (
+                WHERE {filter_sql} AND b.TrangSo IS NOT NULL AND (
                     {" OR ".join(conditions)}
                 )
             """)

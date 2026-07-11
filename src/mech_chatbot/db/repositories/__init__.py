@@ -23,6 +23,10 @@ from . import (
     settings,
     access,
     glossary,
+    publication,
+    external_ai,
+    knowledge_governance,
+    rollout,
 )
 from ._shared import *  # noqa: F401,F403
 from .chat import *  # noqa: F401,F403
@@ -43,6 +47,10 @@ from .analytics import *  # noqa: F401,F403
 from .settings import *  # noqa: F401,F403
 from .access import *  # noqa: F401,F403
 from .glossary import *  # noqa: F401,F403
+from .publication import *  # noqa: F401,F403
+from .external_ai import *  # noqa: F401,F403
+from .knowledge_governance import *  # noqa: F401,F403
+from .rollout import *  # noqa: F401,F403
 
 __all__ = [
     'MAX_BOT_MSG_LEN',
@@ -55,6 +63,7 @@ __all__ = [
     'clear_chat_history',
     'get_all_sessions',
     'get_chat_history',
+    'save_answer_evidence',
     'save_answer_sources',
     'save_chat_history',
     'QUALITY_HALF_LIFE_DAYS',
@@ -83,6 +92,7 @@ __all__ = [
     'sc_clear_all',
     'sc_delete',
     'sc_docs_all_current',
+    'sc_get_exact',
     'sc_get_candidates',
     'sc_put',
     'sc_record_hit',
@@ -156,6 +166,7 @@ __all__ = [
     'write_audit_log',
     '_get_qdrant_client',
     '_qdrant_client_singleton',
+    'batch_update_qdrant_metadata',
     'update_qdrant_metadata',
     '_CATALOG_CACHE_TTL',
     '_catalog_cache',
@@ -208,4 +219,30 @@ __all__ = [
     'list_domain_glossary',
     'set_glossary_active',
     'upsert_glossary_term',
+    'PublicationResult',
+    'ValidationIssue',
+    'ValidationResult',
+    'backfill_qdrant_servable',
+    'process_publication_outbox_once',
+    'publish_document',
+    'reconcile_publications',
+    'reconcile_serving_state',
+    'validate_publish_actor',
+    'validate_publish_contract',
+    'get_external_ai_provider_profile',
+    'list_external_ai_provider_profiles',
+    'upsert_external_ai_provider_profile',
+    'get_department_domain_profile',
+    'get_department_knowledge_governance',
+    'list_department_domain_profiles',
+    'list_department_knowledge_governance',
+    'list_missing_site_documents',
+    'validate_document_metadata_actor',
+    'update_document_governance_metadata',
+    'upsert_department_domain_profile',
+    'upsert_department_knowledge_governance',
+    'get_department_rollout_readiness',
+    'list_department_rollout_plans',
+    'record_department_evaluation_gate',
+    'upsert_department_rollout_plan',
 ]

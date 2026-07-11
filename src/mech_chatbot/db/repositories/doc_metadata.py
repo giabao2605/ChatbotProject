@@ -37,6 +37,18 @@ _COMMON_META_COLS = {
     "owner_signer": "OwnerSigner",
     "language": "DocLanguage",
     "effective_status": "EffectiveStatus",
+    "site": "Site",
+}
+
+# Governance fields live on TaiLieu because they are part of the publication
+# contract, not merely optional presentation metadata.
+_GOVERNANCE_META_COLS = {
+    "knowledge_owner_user_id": "KnowledgeOwnerUserID",
+    "knowledge_approver_user_id": "KnowledgeApproverUserID",
+    "taxonomy_version": "TaxonomyVersion",
+    "parent_applicable": "ParentApplicable",
+    "parent_section": "ParentSection",
+    "parent_page": "ParentPage",
 }
 
 
@@ -77,6 +89,35 @@ def _apply_upload_meta_to_doc(conn, doc_id, upload_meta_json, domain):
                     params[k] = val
         if sets:
             conn.execute(text("UPDATE TaiLieu SET " + ", ".join(sets) + " WHERE DocID = :d"), params)
+
+        governance_sets, governance_params = [], {"d": doc_id}
+        for key, column in _GOVERNANCE_META_COLS.items():
+            if key not in meta:
+                continue
+            value = meta.get(key)
+            if key in {"knowledge_owner_user_id", "knowledge_approver_user_id", "parent_page"}:
+                if value in (None, ""):
+                    normalized = None
+                else:
+                    try:
+                        normalized = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if normalized <= 0:
+                        continue
+            elif key == "parent_applicable":
+                normalized = 1 if bool(value) else 0
+            else:
+                normalized = _clean_meta_value(value)
+            governance_sets.append(f"{column} = :gov_{key}")
+            governance_params[f"gov_{key}"] = normalized
+        if ("parent_section" in meta or "parent_page" in meta) and "parent_applicable" not in meta:
+            governance_sets.append("ParentApplicable = 1")
+        if governance_sets:
+            conn.execute(
+                text("UPDATE TaiLieu SET " + ", ".join(governance_sets) + " WHERE DocID = :d"),
+                governance_params,
+            )
 
         attrs = meta.get("attributes") or {}
         if isinstance(attrs, dict) and attrs:
@@ -130,13 +171,18 @@ def get_document_metadata(doc_id):
         with engine.connect() as conn:
             row = conn.execute(text("""
                 SELECT Title, Summary, Tags, DocNumber, IssuedDate, EffectiveDate,
-                       ExpiryDate, ReviewDate, OwnerSigner, DocLanguage, EffectiveStatus, Domain
+                       ExpiryDate, ReviewDate, OwnerSigner, DocLanguage, EffectiveStatus, Site, Domain,
+                       KnowledgeOwnerUserID, KnowledgeApproverUserID, TaxonomyVersion,
+                       ParentApplicable, ParentSection, ParentPage
                 FROM TaiLieu WHERE DocID = :d
             """), {"d": doc_id}).fetchone()
         if row:
             (out["title"], out["summary"], out["tags"], out["doc_number"], out["issued_date"],
              out["effective_date"], out["expiry_date"], out["review_date"], out["owner_signer"],
-             out["language"], out["effective_status"], out["domain"]) = row
+             out["language"], out["effective_status"], out["site"], out["domain"],
+             out["knowledge_owner_user_id"], out["knowledge_approver_user_id"], out["taxonomy_version"],
+             out["parent_applicable"], out["parent_section"], out["parent_page"]) = row
+            out["parent_applicable"] = bool(out["parent_applicable"])
     except Exception as e:
         logger.error(f"Loi get_document_metadata doc_id={doc_id}: {e}", exc_info=True)
     out["attributes"] = get_document_attributes(doc_id)
@@ -194,6 +240,31 @@ def update_document_common_metadata(doc_id, reviewer="System", attributes=None, 
                 else:
                     params[k] = v
                 sets.append(f"{col} = :{k}")
+        for k, col in _GOVERNANCE_META_COLS.items():
+            if k not in fields:
+                continue
+            value = fields.get(k)
+            if value is None:
+                continue
+            if k in {"knowledge_owner_user_id", "knowledge_approver_user_id", "parent_page"}:
+                if value == "":
+                    params[k] = None
+                else:
+                    try:
+                        params[k] = int(value)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"{k} phai la so nguyen hop le") from exc
+                    if params[k] <= 0:
+                        raise ValueError(f"{k} phai lon hon 0")
+            elif k == "parent_applicable":
+                params[k] = 1 if bool(value) else 0
+            else:
+                params[k] = _clean_meta_value(value)
+                if k == "taxonomy_version" and not params[k]:
+                    raise ValueError("taxonomy_version khong duoc de trong")
+            sets.append(f"{col} = :{k}")
+        if ("parent_section" in fields or "parent_page" in fields) and "parent_applicable" not in fields:
+            sets.append("ParentApplicable = 1")
         if sets:
             with engine.begin() as conn:
                 conn.execute(text("UPDATE TaiLieu SET " + ", ".join(sets) + " WHERE DocID = :d"), params)
@@ -203,7 +274,10 @@ def update_document_common_metadata(doc_id, reviewer="System", attributes=None, 
 
         # Dong bo nhe xuong Qdrant (chi field huu ich cho loc/hien thi)
         qmeta = {}
-        for qk in ("title", "doc_number", "tags", "effective_status"):
+        for qk in (
+            "title", "doc_number", "tags", "effective_status", "site", "taxonomy_version",
+            "parent_applicable", "parent_section", "parent_page",
+        ):
             if qk in params:
                 qmeta[qk] = params[qk]
         if qmeta:

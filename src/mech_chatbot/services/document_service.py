@@ -5,8 +5,11 @@ from mech_chatbot.db.repository import (
     publish_as_new_variant,
     publish_as_new_version,
     publish_as_standalone,
+    publish_document,
+    reconcile_serving_state,
     reject_document,
     update_document_common_metadata,
+    validate_publish_contract,
 )
 
 __all__ = [
@@ -15,6 +18,9 @@ __all__ = [
     "publish_as_new_variant",
     "publish_as_new_version",
     "publish_as_standalone",
+    "publish_document",
+    "reconcile_serving_state",
     "reject_document",
     "update_document_common_metadata",
+    "validate_publish_contract",
 ]

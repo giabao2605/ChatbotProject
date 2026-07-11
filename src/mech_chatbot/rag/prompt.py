@@ -65,8 +65,9 @@ _COMMON_RULES_VI = (
     "Bảng (Markdown Table) khi liệt kê nhiều mục hoặc khi được yêu cầu SO SÁNH; dùng gạch "
     "đầu dòng / các bước cho quy trình.\n"
     "19. BẮT BUỘC TRÍCH DẪN NGUỒN: Mọi kết luận phải kèm nguồn theo format "
-    "[Nguồn: tên file, Trang X, Version Y]. Nếu không có version_no, ghi "
-    "[Nguồn: tên file, Trang X, Version không rõ]. KHÔNG dùng các cụm 'có thể', 'khả năng', "
+    "[Nguồn: tên file, Trang X, Version Y, SourceID DnPm]. SourceID phải được CHÉP NGUYÊN VĂN "
+    "từ SOURCE_ID của đúng đoạn context hỗ trợ kết luận; tuyệt đối không tự tạo ID. Nếu không "
+    "có version_no, ghi Version không rõ. KHÔNG dùng các cụm 'có thể', 'khả năng', "
     "'thường là', 'theo kinh nghiệm', 'thông thường' cho thông tin cần chính xác."
 )
 
@@ -134,8 +135,9 @@ _COMMON_RULES_EN = (
     "when listing many items or when asked to COMPARE; use bullet points / numbered steps "
     "for procedures.\n"
     "19. MANDATORY SOURCE CITATION: Every conclusion must include a source in the format "
-    "[Source: file name, Page X, Version Y]. If version_no is missing, write "
-    "[Source: file name, Page X, Version unknown]. Do NOT use hedging words like 'maybe', "
+    "[Source: file name, Page X, Version Y, SourceID DnPm]. Copy SourceID VERBATIM from the "
+    "SOURCE_ID of the context passage supporting the conclusion; never invent an ID. If "
+    "version_no is missing, write Version unknown. Do NOT use hedging words like 'maybe', "
     "'possibly', 'usually', 'typically', 'in general' for information that must be precise."
 )
 

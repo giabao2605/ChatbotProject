@@ -19,6 +19,59 @@ if (!(Test-Path $logsDir)) {
     New-Item -ItemType Directory -Path $logsDir | Out-Null
 }
 
+# Build Vue sources before starting the static app server. Without this step,
+# start_demo_lan.ps1 would keep serving an old web-ui/dist even after source
+# files were overwritten by a patch.
+$npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+if (!$npmCommand) {
+    $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
+}
+if (!$npmCommand) {
+    throw "Khong tim thay npm. Hay cai Node.js LTS de build web-ui."
+}
+$webUiDir = Join-Path $projectRoot "web-ui"
+Write-Output "Dang build Vue frontend..."
+Push-Location $webUiDir
+try {
+    if (!(Test-Path (Join-Path $webUiDir "node_modules"))) {
+        & $npmCommand.Source ci
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm ci that bai."
+        }
+    }
+    & $npmCommand.Source run build
+    if ($LASTEXITCODE -ne 0) {
+        throw "Build Vue frontend that bai."
+    }
+}
+finally {
+    Pop-Location
+}
+
+Write-Output "Dang kiem tra va cap nhat schema database..."
+& $pythonExe "scripts\migrations\migrate.py" --target V0025
+if ($LASTEXITCODE -ne 0) {
+    throw "Migration database that bai. Khong khoi dong service de tranh chay sai schema."
+}
+
+Write-Output "Dang kiem tra Qdrant payload indexes..."
+& $pythonExe "scripts\create_qdrant_indexes.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "Khoi tao Qdrant payload indexes that bai."
+}
+
+Write-Output "Dang kiem tra Qdrant serving metadata..."
+& $pythonExe "scripts\migrations\backfill_qdrant_servable.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "Backfill Qdrant serving metadata that bai."
+}
+
+Write-Output "Dang dong bo Qdrant governance metadata..."
+& $pythonExe "scripts\migrations\backfill_qdrant_governance_metadata.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "Dong bo Qdrant governance metadata that bai."
+}
+
 function Get-DotEnvValue {
     param([string]$Path, [string]$Key)
     if (!(Test-Path $Path)) { return $null }
