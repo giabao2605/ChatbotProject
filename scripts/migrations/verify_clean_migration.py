@@ -2,7 +2,7 @@
 
 This is deliberately an operator/CI harness, not a normal migration command.
 It renders the repository SQL against an explicitly named test database, runs
-baseline + seeds + V0001..V0025 twice, and checks the version ledger.  It never
+baseline + seeds + all discovered versioned migrations twice, and checks the version ledger. It never
 accepts a production-looking database name.
 
 Example (Windows trusted authentication):

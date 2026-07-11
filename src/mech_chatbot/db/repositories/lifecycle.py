@@ -37,7 +37,7 @@ def _to_date(v):
 
 
 def classify_lifecycle(expiry_date, review_date, today=None, soon_days=30, effective_status=None):
-    """P1-7 (thuan, de test): phan loai vong doi -> expired | expiring_soon | needs_review | ok."""
+    """Canonical priority: expired -> expiring_soon -> needs_review -> effective."""
     from datetime import date, timedelta
     today = today or date.today()
     exp = _to_date(expiry_date)
@@ -51,7 +51,7 @@ def classify_lifecycle(expiry_date, review_date, today=None, soon_days=30, effec
         return "expiring_soon"
     if rev is not None and rev <= today:
         return "needs_review"
-    return "ok"
+    return "effective"
 
 
 def get_lifecycle_overview(soon_days=30):
@@ -68,7 +68,7 @@ def get_lifecycle_overview(soon_days=30):
         today = date.today()
         for r in rows:
             cls = classify_lifecycle(r[6], r[7], today, soon_days, r[4])
-            if cls == "ok":
+            if cls == "effective":
                 continue
             out[cls].append({
                 "doc_id": r[0], "file": r[1], "dept": r[2], "version_no": r[3],
@@ -91,9 +91,17 @@ def set_document_lifecycle(doc_id, effective_date=None, expiry_date=None, review
     _ensure_engine()
     try:
         with engine.begin() as conn:
-            conn.execute(text(
+            result = conn.execute(text(
                 "UPDATE TaiLieu SET EffectiveDate = :ed, ExpiryDate = :xd, ReviewDate = :rd WHERE DocID = :d"
             ), {"ed": effective_date, "xd": expiry_date, "rd": review_date, "d": doc_id})
+        if not (getattr(result, "rowcount", 0) or 0):
+            return False
+        _r_qdrant.update_qdrant_metadata(doc_id, {
+            "effective_date": str(effective_date)[:10] if effective_date else None,
+            "expiry_date": str(expiry_date)[:10] if expiry_date else None,
+            "review_date": str(review_date)[:10] if review_date else None,
+        })
+        _r_semantic_cache._invalidate_semantic_cache("lifecycle.update")
         try:
             _r_audit.write_audit_log(username=reviewer, action="document_lifecycle_update", entity_type="TaiLieu",
                             entity_id=doc_id, details={"effective_date": effective_date,
@@ -111,10 +119,15 @@ def mark_document_reviewed(doc_id, reviewer, next_review_days=180):
     _ensure_engine()
     try:
         with engine.begin() as conn:
-            conn.execute(text(
+            result = conn.execute(text(
                 "UPDATE TaiLieu SET LastReviewedAt = GETDATE(), LastReviewedBy = :rev, "
                 "ReviewDate = DATEADD(day, :nd, CAST(GETDATE() AS DATE)) WHERE DocID = :d"
             ), {"rev": _cap_len(reviewer, 255), "nd": int(next_review_days), "d": doc_id})
+            row = conn.execute(text("SELECT ReviewDate FROM TaiLieu WHERE DocID = :d"), {"d": doc_id}).fetchone()
+        if not (getattr(result, "rowcount", 0) or 0) or not row:
+            return False
+        _r_qdrant.update_qdrant_metadata(doc_id, {"review_date": str(row[0])[:10] if row[0] else None})
+        _r_semantic_cache._invalidate_semantic_cache("lifecycle.reviewed")
         try:
             _r_audit.write_audit_log(username=reviewer, action="document_reviewed", entity_type="TaiLieu",
                             entity_id=doc_id, details={"next_review_days": int(next_review_days)})

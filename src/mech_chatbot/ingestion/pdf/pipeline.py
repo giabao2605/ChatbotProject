@@ -435,9 +435,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     "security_level": security_level,
                     # Multi-site (P1.2)
                     "site": site,
-                    # P0#4: trang thai hieu luc (ingest moi mac dinh 'active';
+                    # Trang thai hieu luc canonical cho ingest moi.
                     # refresh_expired_status() se dong bo 'expired' xuong payload sau nay)
-                    "effective_status": "active",
+                    "effective_status": "effective",
                 }
                 info['trang_so'] = page_num + 1
  
@@ -571,7 +571,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
         if doc is not None:
             doc.close()
  
-    if report["status"] == "success" and (report["failed_pages"] or report["total_chunks"] == 0):
+    # Partial page failures reduce extraction coverage; only an empty result is
+    # a hard pipeline failure.
+    if report["status"] == "success" and report["total_chunks"] == 0:
         report["status"] = "error"
 
     # GD5 fix ro ri: dong bo Domain/SecurityLevel/PhongBan cuoi cung (override + escalation) xuong
@@ -604,6 +606,15 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     score, status = calculate_quality_status(report, domain)
     report["quality_score"] = score
     report["quality_status"] = "needs_review" if site_missing and report["status"] == "success" else status
+    if site_missing and report["status"] == "success":
+        report["quality_label"] = "Cần rà soát thủ công"
+        if "missing_site" not in report["quality_reason_codes"]:
+            report["quality_reason_codes"].append("missing_site")
+            report["quality_reasons"].append({
+                "code": "missing_site",
+                "component": "metadata_classification",
+                "message": "Thiếu site bắt buộc trước khi publish.",
+            })
 
     report["time_taken"] = round(time.time() - start_time, 2)
     message_parts = []
@@ -811,8 +822,8 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
             "security_level": security_level,
             # Multi-site (P1.2)
             "site": site,
-            # P0#4: trang thai hieu luc (ingest moi mac dinh 'active')
-            "effective_status": "active",
+            # Trang thai hieu luc canonical cho ingest moi.
+            "effective_status": "effective",
         }
         info["trang_so"] = 1
  
@@ -901,6 +912,15 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
     score, status = calculate_quality_status(report, domain)
     report["quality_score"] = score
     report["quality_status"] = "needs_review" if site_missing and report["status"] == "success" else status
+    if site_missing and report["status"] == "success":
+        report["quality_label"] = "Cần rà soát thủ công"
+        if "missing_site" not in report["quality_reason_codes"]:
+            report["quality_reason_codes"].append("missing_site")
+            report["quality_reasons"].append({
+                "code": "missing_site",
+                "component": "metadata_classification",
+                "message": "Thiếu site bắt buộc trước khi publish.",
+            })
 
     report["time_taken"] = round(time.time() - start_time, 2)
     message_parts = []

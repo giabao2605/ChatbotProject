@@ -71,9 +71,11 @@ from mech_chatbot.services import (
     get_grant_history,
     get_chat_history,
     get_dashboard_stats,
+    get_role_dashboard,
     get_department_domain_profile,
     get_department_knowledge_governance,
     get_lifecycle_overview,
+    get_document_lifecycle_counts,
     get_observability,
     get_regression_runs,
     get_user_access_requests,
@@ -1057,15 +1059,8 @@ data_router = APIRouter(prefix="/api", tags=["operations"])
 
 
 @data_router.get("/dashboard")
-def dashboard(profile: dict[str, Any] = Depends(require_any_role("platform_admin"))):
-    return {
-        "stats": get_dashboard_stats(),
-        # A platform administrator receives operational counts only. Filenames
-        # and failure reports can contain business content and are available
-        # only through department-scoped knowledge workflows.
-        "recent_documents": [],
-        "recent_failed_jobs": [],
-    }
+def dashboard(profile: dict[str, Any] = Depends(current_profile)):
+    return get_role_dashboard(profile)
 
 
 @data_router.get("/documents")
@@ -1074,10 +1069,18 @@ def documents(
     domain: str | None = None,
     sec: str | None = None,
     eff_mode: str | None = None,
+    bucket: str | None = None,
+    soon_days: int = 30,
     search: str | None = None,
     profile: dict[str, Any] = Depends(current_profile),
 ):
     global_read_admin = _is_admin(profile)
+    legacy_bucket = {"con": "effective", "sap": "expiring_soon", "het": "expired"}.get(eff_mode)
+    requested_bucket = str(bucket or legacy_bucket or "").strip().lower().replace("-", "_") or None
+    if requested_bucket and requested_bucket not in {"effective", "expired", "expiring_soon", "needs_review"}:
+        raise HTTPException(status_code=422, detail="Invalid lifecycle bucket")
+    if requested_bucket and requested_bucket != "effective" and not role_allows(profile.get("roles"), "reviewer"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Lifecycle bucket requires reviewer access")
     rows = list_documents(
         allowed_departments=profile.get("allowed_departments") or [],
         max_security_level=profile.get("max_security_level") or "public",
@@ -1086,6 +1089,8 @@ def documents(
         domain=domain,
         sec=sec,
         eff_mode=eff_mode,
+        bucket=requested_bucket,
+        soon_days=soon_days,
         search_kw=search,
         global_read_admin=global_read_admin,
     )
@@ -1105,6 +1110,20 @@ def documents(
             },
         )
     return {"documents": [dict(row._mapping) if hasattr(row, "_mapping") else list(row) for row in rows]}
+
+
+@data_router.get("/documents/lifecycle-counts")
+def document_lifecycle_counts(soon_days: int = 30, profile: dict[str, Any] = Depends(current_profile)):
+    counts = get_document_lifecycle_counts(
+        allowed_departments=profile.get("allowed_departments") or [],
+        max_security_level=profile.get("max_security_level") or "public",
+        allowed_sites=profile.get("allowed_sites") or [],
+        global_read_admin=_is_admin(profile),
+        soon_days=soon_days,
+    )
+    if not role_allows(profile.get("roles"), "reviewer"):
+        counts = {"effective": counts.get("effective", 0)}
+    return {"counts": counts, "soon_days": max(0, min(int(soon_days), 365))}
 
 
 @data_router.post("/documents/upload")
@@ -1481,7 +1500,8 @@ def document_set_current(doc_id: int, profile: dict[str, Any] = Depends(csrf_pro
 @data_router.patch("/documents/{doc_id}/expired")
 def document_mark_expired(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
-    return {"ok": bool(mark_document_expired(doc_id))}
+    _assert_metadata_actor(doc_id, profile)
+    return {"ok": bool(mark_document_expired(doc_id, reviewer=profile.get("username") or "System"))}
 
 
 @data_router.patch("/documents/{doc_id}/metadata")
@@ -2091,7 +2111,17 @@ def material_synonym_delete(synonym_id: int, profile: dict[str, Any] = Depends(c
 
 @data_router.get("/lifecycle")
 def lifecycle_overview(soon_days: int = 30, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return get_lifecycle_overview(soon_days=soon_days)
+    result = {"expired": [], "expiring_soon": [], "needs_review": [], "counts": {}}
+    for bucket in ("expired", "expiring_soon", "needs_review"):
+        rows = list_documents(
+            allowed_departments=profile.get("allowed_departments") or [],
+            max_security_level=profile.get("max_security_level") or "public",
+            allowed_sites=profile.get("allowed_sites") or [],
+            global_read_admin=_is_admin(profile), bucket=bucket, soon_days=soon_days,
+        )
+        result[bucket] = _rows_to_json(rows)
+        result["counts"][bucket] = len(rows)
+    return result
 
 
 @data_router.post("/lifecycle/refresh-expired")
@@ -2103,6 +2133,7 @@ def lifecycle_refresh(profile: dict[str, Any] = Depends(csrf_profile)):
 @data_router.patch("/lifecycle/documents/{doc_id}")
 def lifecycle_set_document(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_metadata_actor(doc_id, profile)
     return {
         "ok": bool(
             set_document_lifecycle(
@@ -2119,6 +2150,7 @@ def lifecycle_set_document(doc_id: int, body: dict[str, Any], profile: dict[str,
 @data_router.post("/lifecycle/documents/{doc_id}/reviewed")
 def lifecycle_mark_reviewed(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_metadata_actor(doc_id, profile)
     return {
         "ok": bool(
             mark_document_reviewed(

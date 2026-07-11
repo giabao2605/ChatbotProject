@@ -1,9 +1,31 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref, watchEffect } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import ResourcePage from "@/components/ResourcePage.vue";
+import LifecycleView from "@/views/LifecycleView.vue";
 import { apiGet, apiSend } from "@/api/client";
+import { useAuthStore } from "@/stores/auth";
+import { isRoleAllowed } from "@/authorization";
 import { num, pickStr, SECURITY_LEVELS } from "@/utils/rows";
 import type { ApiRow, ResourceColumn, ResourceFilter, RowAction, ToolbarAction } from "@/types";
+
+type DocumentTab = "effective" | "expired" | "expiring-soon" | "needs-review";
+const route = useRoute();
+const router = useRouter();
+const auth = useAuthStore();
+const canManage = computed(() => isRoleAllowed(auth.user?.roles, ["reviewer", "admin"]));
+const requestedTab = computed<DocumentTab>(() => {
+  const value = String(route.query.tab ?? "effective");
+  return ["effective", "expired", "expiring-soon", "needs-review"].includes(value) ? value as DocumentTab : "effective";
+});
+const activeTab = computed<DocumentTab>(() => canManage.value ? requestedTab.value : "effective");
+const lifecycleGroup = computed(() => activeTab.value.replace(/-/g, "_") as "expired" | "expiring_soon" | "needs_review");
+watchEffect(() => {
+  if (!canManage.value && route.query.tab && route.query.tab !== "effective") {
+    void router.replace({ path: "/documents", query: { tab: "effective" } });
+  }
+});
+function selectTab(tab: DocumentTab) { void router.replace({ path: "/documents", query: { tab } }); }
 
 const columns: ResourceColumn[] = [
   { field: "DocID", header: "DocID" },
@@ -37,7 +59,7 @@ const filters: ResourceFilter[] = [
 ];
 
 async function load(f: Record<string, unknown>): Promise<ApiRow[]> {
-  const data = await apiGet<{ documents: ApiRow[] }>("/api/documents", f);
+  const data = await apiGet<{ documents: ApiRow[] }>("/api/documents", { ...f, bucket: "effective", soon_days: 30 });
   return data.documents ?? [];
 }
 
@@ -122,7 +144,7 @@ function cancelEdit() {
   rejectEdit = null;
 }
 
-const rowActions: RowAction[] = [
+const managementActions: RowAction[] = [
   {
     label: "Xem trang",
     run: async (row) => {
@@ -157,6 +179,8 @@ const rowActions: RowAction[] = [
     run: (row) => apiSend(`/api/documents/${num(row, "DocID")}`, "DELETE"),
   },
 ];
+const viewerActions = managementActions.slice(0, 2);
+const rowActions = computed(() => canManage.value ? managementActions : viewerActions);
 
 const bulk = reactive({ visible: false, busy: false, error: "", ids: "" });
 let resolveBulk: (() => void) | null = null;
@@ -205,13 +229,24 @@ function cancelBulkDelete() {
   rejectBulk = null;
 }
 
-const toolbar: ToolbarAction[] = [
+const toolbar = computed<ToolbarAction[]>(() => canManage.value ? [
   { label: "Xóa nhiều DocID", severity: "danger", outlined: true, run: () => openBulkDelete() },
-];
+] : []);
 </script>
 
 <template>
-  <ResourcePage
+  <section class="content-page document-tabs-shell">
+    <header class="page-header"><div><div class="eyebrow">Document library</div><h1>Kho tài liệu</h1><p class="page-subtitle">Tài liệu được phân loại theo trạng thái hiệu lực.</p></div></header>
+    <nav class="view-tabs" aria-label="Trạng thái tài liệu">
+      <Button label="Còn hiệu lực" :outlined="activeTab !== 'effective'" @click="selectTab('effective')" />
+      <template v-if="canManage">
+        <Button label="Đã hết hạn" :outlined="activeTab !== 'expired'" @click="selectTab('expired')" />
+        <Button label="Sắp hết hạn" :outlined="activeTab !== 'expiring-soon'" @click="selectTab('expiring-soon')" />
+        <Button label="Cần rà soát" :outlined="activeTab !== 'needs-review'" @click="selectTab('needs-review')" />
+      </template>
+    </nav>
+  </section>
+  <ResourcePage v-if="activeTab === 'effective'"
     title="Kho tài liệu"
     eyebrow="Documents"
     description="Danh sách tài liệu đã xuất bản theo quyền truy cập của bạn."
@@ -221,6 +256,7 @@ const toolbar: ToolbarAction[] = [
     :row-actions="rowActions"
     :toolbar="toolbar"
   />
+  <LifecycleView v-else :key="activeTab" :group="lifecycleGroup" />
 
   <Dialog v-model:visible="editVisible" header="Sửa metadata tài liệu" modal :style="{ width: '560px' }">
     <Message v-if="editError" severity="error" v-text="editError"></Message>
@@ -271,3 +307,8 @@ const toolbar: ToolbarAction[] = [
     </template>
   </Dialog>
 </template>
+
+<style scoped>
+.document-tabs-shell { padding-bottom: 0; }
+.view-tabs { display: flex; flex-wrap: wrap; gap: .65rem; }
+</style>

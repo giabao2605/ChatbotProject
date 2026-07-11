@@ -1,15 +1,21 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
+import { useRouter } from "vue-router";
 import ResourcePage from "@/components/ResourcePage.vue";
 import { apiSend, apiGet } from "@/api/client";
 import { pickNum, pickStr } from "@/utils/rows";
 import type { ApiRow, ResourceColumn, RowAction } from "@/types";
+
+type ContractIssue = { field?: string; code?: string; message?: string };
+const router = useRouter();
+const contractDialog = reactive({ visible: false, docId: 0, issues: [] as ContractIssue[] });
 
 async function load(): Promise<ApiRow[]> {
   const data = await apiGet<{ documents: ApiRow[] }>("/api/documents/pending-review");
   return (data.documents ?? []).map((row) => ({
     ...row,
     ExtractionSummary: summarizeExtraction(row),
+    QualityDetails: qualityDetails(row),
   }));
 }
 
@@ -20,6 +26,7 @@ const columns: ResourceColumn[] = [
   { field: "UploadedBy", header: "Người tải", width: "110px" },
   { field: "UpdatedAt", header: "Cập nhật", width: "145px" },
   { field: "ExtractionSummary", header: "Kết quả ingest", width: "28%" },
+  { field: "QualityDetails", header: "Chi tiết chất lượng", width: "26%" },
   { field: "Domain", header: "Domain", width: "110px" },
   { field: "SecurityLevel", header: "Mức mật", kind: "tag", width: "110px" },
   { field: "Site", header: "Site", width: "90px" },
@@ -52,6 +59,21 @@ function summarizeExtraction(row: ApiRow): string {
   if (tables) parts.push(`${tables} bảng`);
   if (failed) parts.push(`${failed} trang lỗi`);
   return `${parts.join(", ")}${score}${time}`;
+}
+
+function qualityDetails(row: ApiRow): string {
+  const report = parseReport(row);
+  if (!report) return "Chưa có dữ liệu giải thích điểm.";
+  const policy = String(report.quality_policy_version ?? report.policy_version ?? "chưa ghi phiên bản");
+  const rawReasons = report.quality_reasons ?? report.reason_codes ?? report.reasons;
+  const reasons = Array.isArray(rawReasons)
+    ? rawReasons.map((item) => typeof item === "string" ? item : JSON.stringify(item)).filter(Boolean)
+    : [];
+  const rawComponents = report.quality_components ?? report.score_components;
+  const components = rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
+    ? Object.entries(rawComponents as Record<string, unknown>).map(([key, value]) => `${key}: ${String(value)}`)
+    : [];
+  return [`Chính sách ${policy}`, ...components, ...reasons].join("; ");
 }
 
 function pickId(row: ApiRow, candidates: string[]): number | null {
@@ -93,6 +115,25 @@ async function reviewAction(
 
   if (opts.requireDoc && doc === null) {
     throw new Error("Chưa tạo được tài liệu nên không thể xuất bản.");
+  }
+
+  if (opts.requireDoc && doc !== null) {
+    const validation = await apiGet<{
+      valid?: boolean;
+      ok?: boolean;
+      issues?: ContractIssue[];
+    }>(`/api/documents/${doc}/publish-contract`);
+    const issues = validation.issues ?? [];
+    if (validation.valid === false || validation.ok === false || issues.length) {
+      contractDialog.docId = doc;
+      contractDialog.issues = issues.length ? issues : [{ code: "invalid_contract", message: "Tài liệu chưa đáp ứng publish contract." }];
+      contractDialog.visible = true;
+      const detail = issues.map((issue) => {
+        const field = issue.field ? `[${issue.field}] ` : "";
+        return `${field}${issue.message || issue.code || "Metadata chưa hợp lệ"}`;
+      });
+      throw new Error(`Không thể publish. ${detail.join("; ") || "Tài liệu chưa đáp ứng publish contract."}`);
+    }
   }
 
   if (opts.doc && doc !== null) {
@@ -299,15 +340,6 @@ onMounted(async () => {
 
 <template>
   <div class="stacked-pages">
-    <ResourcePage
-      title="Duyệt tài liệu"
-      eyebrow="Review"
-      description="Tài liệu đang chờ duyệt. Chọn hình thức xuất bản hoặc từ chối."
-      :load="load"
-      :columns="columns"
-      :row-actions="rowActions"
-    />
-
     <section class="content-page">
       <header class="page-header">
         <div>
@@ -438,7 +470,30 @@ onMounted(async () => {
         </template>
       </Card>
     </section>
+
+    <ResourcePage
+      title="Danh sách tài liệu chờ duyệt"
+      eyebrow="Review queue"
+      description="Danh sách nằm cuối trang sau các công cụ hàng loạt. Chọn hình thức xuất bản hoặc từ chối trên từng dòng."
+      :load="load"
+      :columns="columns"
+      :row-actions="rowActions"
+    />
   </div>
+
+  <Dialog v-model:visible="contractDialog.visible" header="Không thể publish" modal :style="{ width: '680px' }">
+    <Message severity="warn">Tài liệu chưa đáp ứng hợp đồng metadata bắt buộc. Hãy sửa các trường dưới đây rồi kiểm tra lại.</Message>
+    <div class="contract-table-wrap">
+      <table class="contract-table">
+        <thead><tr><th>Trường</th><th>Mã lỗi</th><th>Cần xử lý</th></tr></thead>
+        <tbody><tr v-for="(issue, index) in contractDialog.issues" :key="`${issue.field}-${issue.code}-${index}`"><td>{{ issue.field || "Metadata" }}</td><td><code>{{ issue.code || "invalid" }}</code></td><td>{{ issue.message || "Giá trị chưa hợp lệ" }}</td></tr></tbody>
+      </table>
+    </div>
+    <template #footer>
+      <Button label="Đóng" severity="secondary" outlined @click="contractDialog.visible = false" />
+      <Button label="Mở kho tài liệu để sửa metadata" @click="router.push({ path: '/documents', query: { tab: 'effective', doc: contractDialog.docId } }); contractDialog.visible = false" />
+    </template>
+  </Dialog>
 </template>
 
 <style scoped>
@@ -464,4 +519,7 @@ onMounted(async () => {
 .meta-summary {
   grid-column: 1 / -1;
 }
+.contract-table-wrap { overflow-x: auto; margin-top: 1rem; }
+.contract-table { width: 100%; border-collapse: collapse; }
+.contract-table th, .contract-table td { text-align: left; padding: .65rem; border-bottom: 1px solid var(--p-content-border-color); vertical-align: top; }
 </style>

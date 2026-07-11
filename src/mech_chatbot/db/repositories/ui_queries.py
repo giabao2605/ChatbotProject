@@ -79,6 +79,114 @@ def get_dashboard_stats():
 		}
 
 
+def get_role_dashboard(profile):
+	"""Return dashboard groups that are safe for the server-loaded identity.
+
+	The function intentionally accepts the complete, trusted profile instead of
+	role/filter values supplied by the browser.  Document counters use the same
+	serving/RBAC filters as the document catalogue.
+	"""
+	from mech_chatbot.auth.authorization import role_allows
+
+	roles = profile.get("roles") or []
+	username = profile.get("username")
+	allowed_departments = profile.get("allowed_departments") or []
+	allowed_sites = profile.get("allowed_sites") or []
+	max_security_level = profile.get("max_security_level") or "public"
+	global_read_admin = "admin" in {str(role).strip().lower() for role in roles}
+
+	result = {
+		"document_lifecycle": get_document_lifecycle_counts(
+			allowed_departments=allowed_departments,
+			max_security_level=max_security_level,
+			allowed_sites=allowed_sites,
+			global_read_admin=global_read_admin,
+		),
+	}
+	with engine.connect() as conn:
+		if role_allows(roles, "uploader"):
+			result["ingestion"] = {
+				"running": _scalar(conn, """
+					SELECT COUNT(*) FROM dbo.IngestionJobs
+					WHERE UploadedBy = :username
+					  AND Status IN ('pending','pending_retry','classifying','extracting','embedding','publishing')
+				""", {"username": username}),
+				"failed": _scalar(conn, """
+					SELECT COUNT(*) FROM dbo.IngestionJobs
+					WHERE UploadedBy = :username AND Status IN ('failed','waiting_quota')
+				""", {"username": username}),
+			}
+		if role_allows(roles, "reviewer"):
+			dept_params = {}
+			dept_parts = []
+			for index, department in enumerate(sorted({str(v).strip() for v in allowed_departments if str(v).strip()})):
+				key = f"dashboard_dept_{index}"
+				dept_params[key] = department
+				dept_parts.append(f":{key}")
+			access_filters = [(
+				"EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pb WHERE pb.DocID = d.DocID "
+				+ "AND pb.DeptCode IN (" + ", ".join(dept_parts) + "))"
+				if dept_parts else "1 = 0"
+			)]
+			if global_read_admin:
+				access_filters = ["1 = 1"]
+			else:
+				security_parts = []
+				for index, level in enumerate(_allowed_security_levels(max_security_level)):
+					key = f"dashboard_level_{index}"
+					dept_params[key] = level
+					security_parts.append(f":{key}")
+				access_filters.append(
+					"COALESCE(NULLIF(LOWER(LTRIM(RTRIM(d.SecurityLevel))), ''), 'confidential') IN ("
+					+ ", ".join(security_parts) + ")"
+				)
+				site_parts = []
+				for index, site in enumerate(sorted({str(v).strip() for v in allowed_sites if str(v).strip()})):
+					key = f"dashboard_site_{index}"
+					dept_params[key] = site
+					site_parts.append(f":{key}")
+				if not site_parts:
+					access_filters.append("1 = 0")
+				else:
+					site_match = "d.Site IN (" + ", ".join(site_parts) + ")"
+					access_filters.append(site_match if _strict_site_filter_enabled() else f"({site_match} OR d.Site IS NULL OR LTRIM(RTRIM(d.Site)) = '')")
+			access_filter = " AND ".join(access_filters)
+			result["review"] = {
+				"pending": _scalar(conn, f"""
+					SELECT COUNT(*) FROM dbo.TaiLieu d
+					WHERE d.LifecycleStatus <> 'deleting' AND d.ReviewStatus = 'pending_review'
+					  AND {access_filter}
+				""", dept_params),
+				"publish_blocked": _scalar(conn, f"""
+					SELECT COUNT(*) FROM dbo.TaiLieu d
+					WHERE d.LifecycleStatus <> 'deleting'
+					  AND d.PublicationState IN ('failed','blocked') AND {access_filter}
+				""", dept_params),
+			}
+		if role_allows(roles, "viewer") or role_allows(roles, "knowledge_consumer"):
+			result["usage"] = {
+				"today_questions": _scalar(conn, """
+					SELECT COUNT(*) FROM dbo.LichSuChat
+					WHERE Username = :username AND CAST(ThoiGian AS DATE) = CAST(GETDATE() AS DATE)
+				""", {"username": username}),
+				"recent_questions": _scalar(conn, """
+					SELECT COUNT(*) FROM dbo.LichSuChat
+					WHERE Username = :username AND ThoiGian >= DATEADD(day, -30, GETDATE())
+				""", {"username": username}),
+			}
+		if role_allows(roles, "platform_admin"):
+			result["ingestion"] = {
+				"running": _scalar(conn, "SELECT COUNT(*) FROM dbo.IngestionJobs WHERE Status IN ('pending','pending_retry','classifying','extracting','embedding','publishing')"),
+				"failed": _scalar(conn, "SELECT COUNT(*) FROM dbo.IngestionJobs WHERE Status IN ('failed','waiting_quota')"),
+			}
+			result["rollout"] = {
+				"departments_total": _scalar(conn, "SELECT COUNT(*) FROM dbo.Departments WHERE IsActive = 1"),
+				"departments_active": _scalar(conn, "SELECT COUNT(*) FROM dbo.DepartmentRollout WHERE RolloutStatus = 'active'"),
+				"departments_blocked": _scalar(conn, "SELECT COUNT(*) FROM dbo.DepartmentRollout WHERE RolloutStatus = 'blocked'"),
+			}
+	return result
+
+
 def list_recent_documents():
 	with engine.connect() as conn:
 		return conn.execute(text("""
@@ -215,63 +323,75 @@ def _allowed_security_levels(max_security_level):
 	return [name for name, order in levels.items() if order <= max_order]
 
 
-def list_documents(allowed_departments=None, max_security_level="public", allowed_sites=None,
-                   dept=None, domain=None, sec=None, eff_mode=None, search_kw=None,
-                   global_read_admin=False):
-	params = {}
-	filters = []
+_DOCUMENT_BUCKETS = {"effective", "expired", "expiring_soon", "needs_review"}
 
-	filters.append("d.LifecycleStatus IN ('published', 'archived', 'superseded')")
-	filters.append("d.ReviewStatus = 'approved'")
-	# The catalog must expose the exact same serving set as retrieval.  Pending
-	# staging points can exist in Qdrant for publish latency, but they are never
-	# browser-searchable or visible through document metadata APIs.
-	filters.append("d.Servable = 1")
-	filters.append("d.PublicationState = 'published'")
 
-	# The legacy admin role is the single business-approved global-read role.
-	# Every newer control-plane role remains subject to normal document RBAC.
+def _lifecycle_bucket_case(soon_days_param="soon_days"):
+	"""Canonical, mutually-exclusive lifecycle classifier used by all SQL reads."""
+	return f"""CASE
+		WHEN LOWER(ISNULL(d.EffectiveStatus, 'effective')) IN ('expired','superseded')
+		  OR (d.ExpiryDate IS NOT NULL AND d.ExpiryDate < CAST(GETDATE() AS DATE)) THEN 'expired'
+		WHEN d.ExpiryDate IS NOT NULL
+		  AND d.ExpiryDate <= DATEADD(day, :{soon_days_param}, CAST(GETDATE() AS DATE)) THEN 'expiring_soon'
+		WHEN d.ReviewDate IS NOT NULL AND d.ReviewDate <= CAST(GETDATE() AS DATE) THEN 'needs_review'
+		ELSE 'effective' END"""
+
+
+def _document_access_filters(*, allowed_departments, max_security_level, allowed_sites,
+							 global_read_admin, params):
+	filters = [
+		"d.LifecycleStatus = 'published'",
+		"d.ReviewStatus = 'approved'",
+		"d.IsCurrent = 1",
+		"d.Servable = 1",
+		"d.PublicationState = 'published'",
+		"LOWER(ISNULL(NULLIF(LTRIM(RTRIM(d.EffectiveStatus)), ''), 'effective')) IN ('active','effective','expired','superseded')",
+	]
 	if not global_read_admin and allowed_departments:
-		_dept_placeholders = []
-		for _idx, _dept in enumerate(sorted({str(value).strip() for value in allowed_departments if str(value).strip()})):
-			_k = f"allowed_dept_{_idx}"
-			_dept_placeholders.append(f":{_k}")
-			params[_k] = _dept
-		if _dept_placeholders:
-			filters.append(
-				"EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pb "
-				"WHERE pb.DocID = d.DocID AND pb.DeptCode IN (" + ", ".join(_dept_placeholders) + "))"
-			)
-		else:
-			filters.append("1 = 0")
+		placeholders = []
+		for index, department in enumerate(sorted({str(value).strip() for value in allowed_departments if str(value).strip()})):
+			key = f"allowed_dept_{index}"
+			placeholders.append(f":{key}")
+			params[key] = department
+		filters.append(
+			"EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pb WHERE pb.DocID = d.DocID "
+			"AND pb.DeptCode IN (" + ", ".join(placeholders) + "))" if placeholders else "1 = 0"
+		)
 	elif not global_read_admin:
 		filters.append("1 = 0")
 
 	if not global_read_admin:
-		_security_placeholders = []
-		for _idx, _level in enumerate(_allowed_security_levels(max_security_level)):
-			_k = f"allowed_level_{_idx}"
-			_security_placeholders.append(f":{_k}")
-			params[_k] = _level
+		security_placeholders = []
+		for index, level in enumerate(_allowed_security_levels(max_security_level)):
+			key = f"allowed_level_{index}"
+			security_placeholders.append(f":{key}")
+			params[key] = level
 		filters.append(
-			"COALESCE(NULLIF(LOWER(LTRIM(RTRIM(d.SecurityLevel))), ''), 'confidential') "
-			"IN (" + ", ".join(_security_placeholders) + ")"
+			"COALESCE(NULLIF(LOWER(LTRIM(RTRIM(d.SecurityLevel))), ''), 'confidential') IN ("
+			+ ", ".join(security_placeholders) + ")"
 		)
-
-		_normalized_sites = sorted({str(value).strip() for value in (allowed_sites or []) if str(value).strip()})
-		if not _normalized_sites:
+		normalized_sites = sorted({str(value).strip() for value in (allowed_sites or []) if str(value).strip()})
+		if not normalized_sites:
 			filters.append("1 = 0")
 		else:
-			_site_placeholders = []
-			for _idx, _site in enumerate(_normalized_sites):
-				_k = f"allowed_site_{_idx}"
-				_site_placeholders.append(f":{_k}")
-				params[_k] = _site
-			_site_match = "d.Site IN (" + ", ".join(_site_placeholders) + ")"
-			if _strict_site_filter_enabled():
-				filters.append(_site_match)
-			else:
-				filters.append("(" + _site_match + " OR d.Site IS NULL OR LTRIM(RTRIM(d.Site)) = '')")
+			site_placeholders = []
+			for index, site in enumerate(normalized_sites):
+				key = f"allowed_site_{index}"
+				site_placeholders.append(f":{key}")
+				params[key] = site
+			site_match = "d.Site IN (" + ", ".join(site_placeholders) + ")"
+			filters.append(site_match if _strict_site_filter_enabled() else f"({site_match} OR d.Site IS NULL OR LTRIM(RTRIM(d.Site)) = '')")
+	return filters
+
+
+def list_documents(allowed_departments=None, max_security_level="public", allowed_sites=None,
+                   dept=None, domain=None, sec=None, eff_mode=None, search_kw=None,
+                   global_read_admin=False, bucket=None, soon_days=30):
+	params = {}
+	filters = _document_access_filters(
+		allowed_departments=allowed_departments, max_security_level=max_security_level,
+		allowed_sites=allowed_sites, global_read_admin=global_read_admin, params=params,
+	)
 
 	if dept:
 		filters.append("d.ThuMuc = :dept")
@@ -285,14 +405,13 @@ def list_documents(allowed_departments=None, max_security_level="public", allowe
 		filters.append("d.SecurityLevel = :sec")
 		params["sec"] = sec
 
-	if eff_mode == "con":
-		filters.append("(d.ExpiryDate IS NULL OR d.ExpiryDate > GETDATE())")
-		filters.append("(d.EffectiveStatus IS NULL OR d.EffectiveStatus = 'active')")
-	elif eff_mode == "sap":
-		filters.append("d.ExpiryDate IS NOT NULL")
-		filters.append("d.ExpiryDate BETWEEN GETDATE() AND DATEADD(day, 30, GETDATE())")
-	elif eff_mode == "het":
-		filters.append("d.ExpiryDate IS NOT NULL AND d.ExpiryDate < GETDATE()")
+	legacy_bucket = {"con": "effective", "sap": "expiring_soon", "het": "expired"}.get(eff_mode)
+	bucket = str(bucket or legacy_bucket or "effective").strip().lower().replace("-", "_")
+	if bucket not in _DOCUMENT_BUCKETS:
+		raise ValueError(f"Unknown document lifecycle bucket: {bucket}")
+	params["soon_days"] = max(0, min(int(soon_days), 365))
+	filters.append(f"({_lifecycle_bucket_case()}) = :bucket")
+	params["bucket"] = bucket
 
 	if search_kw:
 		filters.append("(d.TenFile LIKE :kw OR d.Title LIKE :kw OR d.Tags LIKE :kw OR d.Summary LIKE :kw)")
@@ -314,6 +433,27 @@ def list_documents(allowed_departments=None, max_security_level="public", allowe
 		return conn.execute(text(q), params).fetchall()
 
 
+def get_document_lifecycle_counts(allowed_departments=None, max_security_level="public", allowed_sites=None,
+								  global_read_admin=False, soon_days=30):
+	params = {"soon_days": max(0, min(int(soon_days), 365))}
+	filters = _document_access_filters(
+		allowed_departments=allowed_departments, max_security_level=max_security_level,
+		allowed_sites=allowed_sites, global_read_admin=global_read_admin, params=params,
+	)
+	bucket_case = _lifecycle_bucket_case()
+	query = f"""
+		SELECT Bucket, COUNT(*) AS Total FROM (
+			SELECT {bucket_case} AS Bucket FROM dbo.TaiLieu d
+			WHERE {' AND '.join(filters)}
+		) classified GROUP BY Bucket
+	"""
+	counts = {name: 0 for name in sorted(_DOCUMENT_BUCKETS)}
+	with engine.connect() as conn:
+		for row in conn.execute(text(query), params).fetchall():
+			counts[str(row[0])] = int(row[1] or 0)
+	return counts
+
+
 def set_document_current(doc_id):
 	with engine.begin() as conn:
 		# P4.3: Chi reset cac ban trong cung VariantGroup neu VariantGroup khong NULL.
@@ -328,12 +468,24 @@ def set_document_current(doc_id):
 		)
 
 
-def mark_document_expired(doc_id):
+def mark_document_expired(doc_id, reviewer=None):
 	with engine.begin() as conn:
-		conn.execute(
+		result = conn.execute(
 			text("UPDATE TaiLieu SET EffectiveStatus = 'expired' WHERE DocID = :id"),
 			{"id": doc_id},
 		)
+	if not (getattr(result, "rowcount", 0) or 0):
+		return False
+	from mech_chatbot.db.repositories.qdrant import update_qdrant_metadata
+	from mech_chatbot.db.repositories.semantic_cache import _invalidate_semantic_cache
+	from mech_chatbot.db.repositories.audit import write_audit_log
+	update_qdrant_metadata(doc_id, {"effective_status": "expired"})
+	_invalidate_semantic_cache("lifecycle.expired")
+	write_audit_log(
+		username=reviewer or "System", action="document_expired", entity_type="TaiLieu",
+		entity_id=doc_id, details={"effective_status": "expired"},
+	)
+	return True
 
 
 def list_expiring_documents():

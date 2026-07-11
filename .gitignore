@@ -20,10 +20,15 @@ __pycache__/
 .eggs/
 build/
 dist/
-node_modules/
-*.tsbuildinfo
 *.whl
 *.egg
+
+# ===== Node / Vue frontend (web-ui/) =====
+node_modules/
+web-ui/dist/
+web-ui/.vite/
+web-ui/.vitest/
+*.tsbuildinfo
 
 # ===== Testing & QA =====
 .pytest_cache/
@@ -32,11 +37,18 @@ node_modules/
 .coverage
 htmlcov/
 coverage.xml
+.coverage.*
+.tox/
+.nox/
+test-results/
+playwright-report/
+blob-report/
 
 # ===== Data (raw, processed & cache — large/generated files) =====
 data/raw/
 data/processed/
 data/cache/
+src/data/processed/
 
 # ===== Logs & Traces =====
 logs/
@@ -46,6 +58,8 @@ rag_trace.jsonl
 
 # ===== Generated Reports =====
 reports/
+*.prof
+*.lprof
 
 # ===== Secrets & Environment =====
 .env
@@ -53,11 +67,16 @@ reports/
 !.env.example
 .streamlit/secrets.toml
 
+# ===== Streamlit config (legacy) =====
+.streamlit/
+
 # ===== Debug & Temp scripts =====
 debug*.py
 debug*.txt
 temp_*.py
 temp_*.txt
+tmp/
+temp/
 plot.log
 
 # ===== IDE & OS =====
@@ -71,6 +90,7 @@ plot.log
 Thumbs.db
 .DS_Store
 desktop.ini
+*.stackdump
 
 # ===== Local agent/Codex workspace state =====
 .agents/
@@ -79,6 +99,7 @@ desktop.ini
 # ===== Temp RAG worker files =====
 rag_in_*.json
 rag_out_*.json
+*.pid
 
 # ===== Refactor scripts (one-time use) =====
 refactor_project.py
@@ -94,5 +115,20 @@ models/
 *.bin
 *.safetensors
 
+# ===== Local databases, exports & backups =====
+*.bak
+*.bacpac
+*.bcp
+*.dump
+*.sqlite
+*.sqlite3
+
+# ===== Local upload/session artifacts =====
+uploads/
+sessions/
+
 # ===== Archive (historical/deprecated scripts) =====
 archive/
+
+# ===== Empty components directory (legacy placeholder) =====
+components/

@@ -43,7 +43,7 @@ const createForm: CreateForm = {
 };
 
 function gid(row: ApiRow): number {
-  return pickNum(row, ["GlossaryID", "id"]);
+  return pickNum(row, ["glossary_id", "GlossaryID", "id"]);
 }
 
 const rowActions: RowAction[] = [

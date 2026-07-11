@@ -1,160 +1,116 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { loadDashboard } from "@/api/client";
+import { useAuthStore } from "@/stores/auth";
 import type { ApiRow } from "@/types";
 
+type DashboardGroup = Record<string, number>;
+type DashboardPayload = {
+  stats?: DashboardGroup;
+  document_lifecycle?: DashboardGroup;
+  ingestion?: DashboardGroup;
+  review?: DashboardGroup;
+  usage?: DashboardGroup;
+  rollout?: DashboardGroup;
+  recent_documents?: ApiRow[];
+  recent_failed_jobs?: ApiRow[];
+  recent_chats?: ApiRow[];
+};
+
+const auth = useAuthStore();
+const router = useRouter();
 const loading = ref(true);
-const stats = ref<Record<string, number>>({});
-const recentDocuments = ref<ApiRow[]>([]);
-const failedJobs = ref<ApiRow[]>([]);
+const payload = ref<DashboardPayload>({});
 const error = ref("");
 
-// GD4: nhan tieng Viet cho cac khoa thong ke (thay vi in khoa ky thuat).
-const STAT_LABELS: Record<string, string> = {
-  total_docs: "Tổng tài liệu",
-  pending_review: "Chờ duyệt",
-  published_docs: "Đã xuất bản",
-  running_jobs: "Job đang chạy",
-  failed_jobs: "Job lỗi",
-  today_chats: "Chat hôm nay",
-  pending_feedback: "Feedback chờ xử lý",
+const LABELS: Record<string, string> = {
+  total_docs: "Tổng tài liệu", effective: "Còn hiệu lực", published_docs: "Đã xuất bản",
+  expired: "Đã hết hạn", expiring_soon: "Sắp hết hạn", needs_review: "Cần rà soát",
+  pending_review: "Chờ duyệt", publish_blocked: "Publish bị chặn", running_jobs: "Job đang chạy",
+  failed_jobs: "Job lỗi", today_chats: "Chat hôm nay", recent_chats: "Lịch sử hỏi gần đây",
+  pending_feedback: "Feedback chờ xử lý", active_departments: "Phòng ban đã kích hoạt",
+  pilot_departments: "Phòng ban pilot", rollout_percent: "Tiến độ rollout (%)",
 };
-function statLabel(key: string): string {
-  return STAT_LABELS[key] ?? key.replace(/_/g, " ");
+const GROUPS: Array<{ key: keyof DashboardPayload; title: string }> = [
+  { key: "document_lifecycle", title: "Vòng đời tài liệu" },
+  { key: "ingestion", title: "Ingest" },
+  { key: "review", title: "Duyệt và chất lượng" },
+  { key: "usage", title: "Sử dụng" },
+  { key: "rollout", title: "Rollout phòng ban" },
+];
+
+const roles = computed(() => auth.user?.roles ?? []);
+const roleSummary = computed(() => {
+  if (roles.value.some((r) => ["admin", "platform_admin"].includes(r))) return "Toàn cảnh vận hành hệ thống";
+  if (roles.value.some((r) => ["reviewer", "knowledge_approver"].includes(r))) return "Công việc duyệt và quản trị tri thức";
+  if (roles.value.includes("uploader")) return "Tiến độ tài liệu bạn phụ trách";
+  return "Tài liệu và hoạt động của bạn";
+});
+const groups = computed(() => {
+  const result = GROUPS.map((g) => ({ ...g, values: payload.value[g.key] as DashboardGroup | undefined }))
+    .filter((g) => g.values && Object.keys(g.values).length);
+  if (!result.length && payload.value.stats) return [{ key: "stats", title: "Tổng quan", values: payload.value.stats }];
+  return result;
+});
+
+function label(key: string) { return LABELS[key] ?? key.replace(/_/g, " "); }
+function target(key: string): string | null {
+  if (key === "effective" || key === "published_docs" || key === "total_docs") return "/documents?tab=effective";
+  if (["expired", "expiring_soon", "needs_review"].includes(key)) return `/documents?tab=${key.replace("_", "-")}`;
+  if (["running_jobs", "failed_jobs"].includes(key)) return "/queue";
+  if (["pending_review", "publish_blocked"].includes(key)) return "/review";
+  return null;
 }
-
-// GD4: backend tra dict co ten cot (_rows_to_json).
-const docColumns = [
-  { field: "DocID", header: "DocID" },
-  { field: "TenFile", header: "Tên file" },
-  { field: "ThuMuc", header: "Phòng ban" },
-  { field: "ReviewStatus", header: "Duyệt" },
-  { field: "LifecycleStatus", header: "Vòng đời" },
-  { field: "NgayTaiLen", header: "Tải lên" },
-];
-const jobColumns = [
-  { field: "JobID", header: "JobID" },
-  { field: "TenFile", header: "Tên file" },
-  { field: "ThuMuc", header: "Phòng ban" },
-  { field: "Status", header: "Trạng thái" },
-  { field: "ErrorMessage", header: "Lỗi" },
-  { field: "UpdatedAt", header: "Cập nhật" },
-];
-
-function cell(row: ApiRow, field: string): string {
-  const v = row[field];
-  if (v === null || v === undefined || v === "") return "—";
-  return String(v);
+function openMetric(key: string) { const to = target(key); if (to) void router.push(to); }
+function cell(row: ApiRow, ...keys: string[]) {
+  const value = keys.map((key) => row[key]).find((item) => item !== null && item !== undefined && item !== "");
+  return value == null ? "—" : String(value);
 }
 
 onMounted(async () => {
-  try {
-    const data = await loadDashboard();
-    stats.value = data.stats ?? {};
-    recentDocuments.value = (data.recent_documents ?? []) as ApiRow[];
-    failedJobs.value = (data.recent_failed_jobs ?? []) as ApiRow[];
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : "Không tải được dashboard";
-  } finally {
-    loading.value = false;
-  }
+  try { payload.value = await loadDashboard() as DashboardPayload; }
+  catch (err) { error.value = err instanceof Error ? err.message : "Không tải được tổng quan"; }
+  finally { loading.value = false; }
 });
 </script>
 
 <template>
   <section class="content-page">
-    <header class="page-header">
-      <div>
-        <div class="eyebrow">Overview</div>
-        <h1>Tổng quan hệ thống</h1>
-      </div>
-    </header>
-
-    <Message v-if="error" severity="error" v-text="error"></Message>
-    <div v-if="loading" class="loading-block">
-      <ProgressSpinner />
-    </div>
-
+    <header class="page-header"><div><div class="eyebrow">Overview</div><h1>Tổng quan</h1><p class="page-subtitle" v-text="roleSummary"></p></div></header>
+    <Message v-if="error" severity="error" v-text="error" />
+    <div v-if="loading" class="loading-block"><ProgressSpinner /></div>
     <template v-else>
-      <div class="stat-grid">
-        <Card v-for="(value, key) in stats" :key="key">
-          <template #title><span v-text="statLabel(String(key))"></span></template>
-          <template #content>
-            <strong class="stat-number" v-text="value"></strong>
-          </template>
-        </Card>
-      </div>
-
+      <section v-for="group in groups" :key="group.key" class="dashboard-group">
+        <h2 v-text="group.title"></h2>
+        <div class="stat-grid">
+          <Card v-for="(value, key) in group.values" :key="key" class="metric-card" :class="{ actionable: target(String(key)) }" @click="openMetric(String(key))">
+            <template #title><span v-text="label(String(key))"></span></template>
+            <template #content><strong class="stat-number" v-text="value"></strong><small v-if="target(String(key))">Xem chi tiết</small></template>
+          </Card>
+        </div>
+      </section>
       <div class="two-column">
-        <Card>
-          <template #title>Tài liệu gần đây</template>
-          <template #content>
-            <div class="dash-table-wrap">
-              <table v-if="recentDocuments.length" class="dash-table">
-                <thead>
-                  <tr>
-                    <th v-for="col in docColumns" :key="col.field" v-text="col.header"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, ri) in recentDocuments" :key="ri">
-                    <td v-for="col in docColumns" :key="col.field" v-text="cell(row, col.field)"></td>
-                  </tr>
-                </tbody>
-              </table>
-              <p v-else class="muted-text">Không có dữ liệu</p>
-            </div>
-          </template>
-        </Card>
-        <Card>
-          <template #title>Job lỗi gần đây</template>
-          <template #content>
-            <div class="dash-table-wrap">
-              <table v-if="failedJobs.length" class="dash-table">
-                <thead>
-                  <tr>
-                    <th v-for="col in jobColumns" :key="col.field" v-text="col.header"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, ri) in failedJobs" :key="ri">
-                    <td v-for="col in jobColumns" :key="col.field" v-text="cell(row, col.field)"></td>
-                  </tr>
-                </tbody>
-              </table>
-              <p v-else class="muted-text">Không có job lỗi</p>
-            </div>
-          </template>
-        </Card>
+        <Card><template #title>Tài liệu gần đây</template><template #content>
+          <ul v-if="payload.recent_documents?.length" class="activity-list"><li v-for="(row, i) in payload.recent_documents" :key="i"><strong>{{ cell(row, 'TenFile', 'OriginalFileName', 'file') }}</strong><span>{{ cell(row, 'Department', 'ThuMuc', 'dept') }} · {{ cell(row, 'LifecycleStatus', 'effective_status') }}</span></li></ul>
+          <p v-else class="muted-text">Không có dữ liệu.</p>
+        </template></Card>
+        <Card v-if="payload.recent_failed_jobs"><template #title>Job lỗi gần đây</template><template #content>
+          <ul v-if="payload.recent_failed_jobs.length" class="activity-list"><li v-for="(row, i) in payload.recent_failed_jobs" :key="i"><strong>{{ cell(row, 'TenFile', 'file') }}</strong><span>{{ cell(row, 'ErrorMessage', 'error') }}</span></li></ul>
+          <p v-else class="muted-text">Không có job lỗi.</p>
+        </template></Card>
       </div>
     </template>
   </section>
 </template>
 
 <style scoped>
-.dash-table-wrap {
-  overflow-x: auto;
-}
-.dash-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
-}
-.dash-table th,
-.dash-table td {
-  text-align: left;
-  padding: 0.4rem 0.6rem;
-  border-bottom: 1px solid var(--p-surface-200, #e5e7eb);
-  white-space: nowrap;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.dash-table th {
-  color: var(--p-text-muted-color, #6b7280);
-  font-weight: 600;
-}
-.muted-text {
-  color: var(--p-text-muted-color, #6b7280);
-}
+.dashboard-group { margin-bottom: 1.5rem; }
+.dashboard-group h2 { font-size: 1rem; margin: 0 0 .75rem; }
+.metric-card.actionable { cursor: pointer; }
+.metric-card.actionable:hover { transform: translateY(-1px); }
+.metric-card small { display: block; margin-top: .4rem; color: var(--p-primary-color); }
+.activity-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .8rem; }
+.activity-list li { display: grid; gap: .2rem; border-bottom: 1px solid var(--p-content-border-color); padding-bottom: .65rem; }
+.activity-list span, .muted-text { color: var(--p-text-muted-color); font-size: .86rem; }
 </style>

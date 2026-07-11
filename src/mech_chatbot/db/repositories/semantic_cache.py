@@ -145,7 +145,7 @@ def sc_docs_all_current(doc_ids):
                 "AND Servable = 1 AND PublicationState = 'published' "
                 "AND IsCurrent = 1 AND LifecycleStatus = 'published' "
                 "AND ReviewStatus = 'approved' "
-                "AND ISNULL(EffectiveStatus, 'active') NOT IN ('expired','superseded','draft')"
+                "AND ISNULL(EffectiveStatus, 'effective') NOT IN ('expired','superseded','draft')"
             )).fetchone()
         return (row[0] or 0) == len(ids)
     except Exception as e:

@@ -24,56 +24,15 @@ o day chi cung CO (flag) de service chon prompt + bat/tat guard cho dung domain.
 # Cac ham nhan 'report' dict va tra ve (score:int, status:str).
 # ---------------------------------------------------------------------------
 def quality_mechanical(report):
-    """Diem chat luong cho tai lieu co khi (logic cu, giu nguyen)."""
-    total_pages = report.get("total_pages", 0)
-    failed_pages = report.get("failed_pages", [])
-    chunks = report.get("total_chunks", 0)
-    attrs = report.get("technical_attributes_count", 0)
-    if total_pages <= 0:
-        return 0, "blocked"
-    if failed_pages:
-        return 0, "blocked"
-    if chunks <= 0:
-        return 0, "blocked"
-    score = 100
-    if attrs == 0:
-        score -= 30
-    extracted_pages = set(report.get("pages_text_extracted", []) or [])
-    extracted_pages.update(report.get("pages_table_extracted", []) or [])
-    extracted_pages.update(report.get("pages_vision_success", []) or [])
-    if not extracted_pages:
-        score -= 40
-    if score >= 90:
-        return score, "ready_for_review"
-    elif score >= 70:
-        return score, "needs_review"
-    else:
-        return score, "blocked"
+    """Compatibility delegate to the canonical balanced quality policy."""
+    from mech_chatbot.ingestion.pdf.quality import calculate_quality_status
+    return calculate_quality_status(report, "mechanical")
 
 
 def quality_generic(report):
-    """Diem chat luong cho tai lieu phi co khi (tabular, generic).
-    KHONG phat khi thieu thuoc tinh ky thuat (attrs == 0).
-    """
-    total_pages = report.get("total_pages", 0)
-    failed_pages = report.get("failed_pages", [])
-    chunks = report.get("total_chunks", 0)
-    if total_pages <= 0 or chunks <= 0:
-        return 0, "blocked"
-    if failed_pages:
-        return 0, "blocked"
-    score = 100
-    extracted_pages = set(report.get("pages_text_extracted", []) or [])
-    extracted_pages.update(report.get("pages_table_extracted", []) or [])
-    extracted_pages.update(report.get("pages_vision_success", []) or [])
-    if not extracted_pages:
-        score -= 50
-    if score >= 90:
-        return score, "ready_for_review"
-    elif score >= 70:
-        return score, "needs_review"
-    else:
-        return score, "blocked"
+    """Compatibility delegate to the canonical balanced quality policy."""
+    from mech_chatbot.ingestion.pdf.quality import calculate_quality_status
+    return calculate_quality_status(report, "generic")
 
 
 # ---------------------------------------------------------------------------

@@ -11,9 +11,7 @@ import ReviewView from "@/views/ReviewView.vue";
 import AccessView from "@/views/AccessView.vue";
 import UsersView from "@/views/UsersView.vue";
 import OrgView from "@/views/OrgView.vue";
-import GlossaryView from "@/views/GlossaryView.vue";
-import MaterialsView from "@/views/MaterialsView.vue";
-import LifecycleView from "@/views/LifecycleView.vue";
+import DictionaryView from "@/views/DictionaryView.vue";
 import SettingsView from "@/views/SettingsView.vue";
 import FeedbackView from "@/views/FeedbackView.vue";
 import RegressionView from "@/views/RegressionView.vue";
@@ -29,7 +27,7 @@ export const routes = [
   { path: "/login", name: "login", component: LoginView, meta: { public: true } },
   { path: "/", redirect: "/chat" },
   { path: "/chat", name: "chat", component: ChatView },
-  { path: "/dashboard", name: "dashboard", component: DashboardView, meta: { roles: ["platform_admin"] } },
+  { path: "/dashboard", name: "dashboard", component: DashboardView },
   { path: "/documents", name: "documents", component: DocumentsView },
   { path: "/upload", name: "upload", component: UploadView, meta: { roles: ["uploader", "reviewer", "admin"] } },
   { path: "/queue", name: "queue", component: QueueView, meta: { roles: ["uploader", "reviewer", "admin"] } },
@@ -37,9 +35,10 @@ export const routes = [
   { path: "/access", name: "access", component: AccessView },
   { path: "/users", name: "users", component: UsersView, meta: { roles: ["security_admin"] } },
   { path: "/org", name: "org", component: OrgView, meta: { roles: ["platform_admin"] } },
-  { path: "/materials", name: "materials", component: MaterialsView, meta: { roles: ["reviewer", "admin"] } },
-  { path: "/glossary", name: "glossary", component: GlossaryView, meta: { roles: ["reviewer", "admin"] } },
-  { path: "/lifecycle", name: "lifecycle", component: LifecycleView, meta: { roles: ["reviewer", "admin"] } },
+  { path: "/dictionary", name: "dictionary", component: DictionaryView, meta: { roles: ["reviewer", "admin"] } },
+  { path: "/materials", redirect: { path: "/dictionary", query: { tab: "materials" } } },
+  { path: "/glossary", redirect: { path: "/dictionary", query: { tab: "glossary" } } },
+  { path: "/lifecycle", redirect: { path: "/documents", query: { tab: "expired" } } },
   { path: "/feedback", name: "feedback", component: FeedbackView, meta: { roles: ["reviewer", "admin"] } },
   { path: "/regression", name: "regression", component: RegressionView, meta: { roles: ["reviewer", "admin"] } },
   { path: "/quality", name: "quality", component: QualityView, meta: { roles: ["reviewer", "admin"] } },

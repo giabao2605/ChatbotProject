@@ -207,7 +207,13 @@ export async function sendFeedback(chatId: number, rating: number) {
 export async function loadDashboard() {
   return apiFetch<{
     stats: Record<string, number>;
+    document_lifecycle?: Record<string, number>;
+    ingestion?: Record<string, number>;
+    review?: Record<string, number>;
+    usage?: Record<string, number>;
+    rollout?: Record<string, number>;
     recent_documents: unknown[];
     recent_failed_jobs: unknown[];
+    recent_chats?: unknown[];
   }>("/api/dashboard");
 }

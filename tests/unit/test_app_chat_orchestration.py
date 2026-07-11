@@ -88,7 +88,12 @@ def test_dashboard_requires_admin_role():
     assert exc_info.value.status_code == 403
 
 
-def test_dashboard_endpoint_blocks_a_viewer():
+def test_dashboard_endpoint_is_role_aware_for_viewer(monkeypatch):
+    monkeypatch.setattr(
+        app_server,
+        "get_role_dashboard",
+        lambda profile: {"document_lifecycle": {"effective": 4}, "usage": {"today_questions": 1}},
+    )
     app_server.app.dependency_overrides[app_server.current_profile] = _profile
     try:
         with TestClient(app_server.app) as client:
@@ -96,7 +101,11 @@ def test_dashboard_endpoint_blocks_a_viewer():
     finally:
         app_server.app.dependency_overrides.clear()
 
-    assert response.status_code == 403
+    assert response.status_code == 200
+    assert response.json() == {
+        "document_lifecycle": {"effective": 4},
+        "usage": {"today_questions": 1},
+    }
 
 
 def test_external_ai_policy_endpoint_returns_metadata_only(monkeypatch):

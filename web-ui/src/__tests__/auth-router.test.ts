@@ -80,13 +80,24 @@ describe("route guards", () => {
     expect(router.currentRoute.value.name).toBe("chat");
   });
 
-  it("redirects a viewer away from the admin dashboard", async () => {
+  it("allows a viewer to open the role-aware dashboard", async () => {
     vi.mocked(api.loadMe).mockResolvedValue(user);
     const router = createAppRouter(createMemoryHistory());
 
     await router.push("/dashboard");
     await router.isReady();
 
-    expect(router.currentRoute.value.name).toBe("chat");
+    expect(router.currentRoute.value.name).toBe("dashboard");
+  });
+
+  it("redirects legacy lifecycle links into the document library", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue({ ...user, roles: ["reviewer"] });
+    const router = createAppRouter(createMemoryHistory());
+
+    await router.push("/lifecycle");
+    await router.isReady();
+
+    expect(router.currentRoute.value.path).toBe("/documents");
+    expect(router.currentRoute.value.query.tab).toBe("expired");
   });
 });

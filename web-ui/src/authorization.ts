@@ -37,7 +37,7 @@ export function isRoleAllowed(
 /** The sidebar policy is deliberately shared with route-level authorization. */
 export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
   { to: "/chat", key: "nav.chat", roles: [] },
-  { to: "/dashboard", key: "nav.dashboard", roles: ["platform_admin"] },
+  { to: "/dashboard", key: "nav.dashboard", roles: [] },
   { to: "/documents", key: "nav.documents", roles: [] },
   { to: "/upload", key: "nav.upload", roles: ["uploader", "reviewer", "admin"] },
   { to: "/queue", key: "nav.queue", roles: ["uploader", "reviewer", "admin"] },
@@ -45,9 +45,7 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
   { to: "/access", key: "nav.access", roles: [] },
   { to: "/users", key: "nav.users", roles: ["security_admin"] },
   { to: "/org", key: "nav.org", roles: ["platform_admin"] },
-  { to: "/glossary", key: "nav.glossary", roles: ["reviewer", "admin"] },
-  { to: "/materials", key: "nav.materials", roles: ["reviewer", "admin"] },
-  { to: "/lifecycle", key: "nav.lifecycle", roles: ["reviewer", "admin"] },
+  { to: "/dictionary", key: "nav.dictionary", roles: ["reviewer", "admin"] },
   { to: "/feedback", key: "nav.feedback", roles: ["reviewer", "admin"] },
   { to: "/regression", key: "nav.regression", roles: ["reviewer", "admin"] },
   { to: "/quality", key: "nav.quality", roles: ["reviewer", "admin"] },

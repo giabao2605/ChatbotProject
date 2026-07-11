@@ -5,6 +5,8 @@ import { apiGet, apiSend } from "@/api/client";
 import { num, str } from "@/utils/rows";
 import type { ApiRow, ResourceColumn, RowAction, ToolbarAction } from "@/types";
 
+const props = defineProps<{ group: "expired" | "expiring_soon" | "needs_review" }>();
+
 type LifecyclePayload = {
   expired?: ApiRow[];
   expiring_soon?: ApiRow[];
@@ -19,9 +21,12 @@ async function loadGroup(key: "expired" | "expiring_soon" | "needs_review"): Pro
   return data[key] ?? [];
 }
 
-const loadExpired = () => loadGroup("expired");
-const loadExpiringSoon = () => loadGroup("expiring_soon");
-const loadNeedsReview = () => loadGroup("needs_review");
+const loadSelected = () => loadGroup(props.group);
+const groupInfo = computed(() => ({
+  expired: { title: "Đã hết hạn", description: "Tài liệu hiện hành đã quá hạn hiệu lực." },
+  expiring_soon: { title: "Sắp hết hạn", description: "Tài liệu sắp hết hạn trong 30 ngày tới." },
+  needs_review: { title: "Cần rà soát", description: "Tài liệu đến hạn rà soát định kỳ." },
+})[props.group]);
 
 const columns: ResourceColumn[] = [
   { field: "doc_id", header: "DocID" },
@@ -130,33 +135,15 @@ const toolbar: ToolbarAction[] = [
 </script>
 
 <template>
-  <div class="stacked-pages">
-    <ResourcePage
-      title="Đã hết hạn"
-      eyebrow="Lifecycle"
-      description="Tài liệu hiện hành đã quá hạn hiệu lực."
-      :columns="columns"
-      :load="loadExpired"
-      :row-actions="rowActions"
-      :toolbar="toolbar"
-    />
-    <ResourcePage
-      title="Sắp hết hạn"
-      eyebrow="Lifecycle"
-      description="Tài liệu sắp hết hạn trong 30 ngày tới."
-      :columns="columns"
-      :load="loadExpiringSoon"
-      :row-actions="rowActions"
-    />
-    <ResourcePage
-      title="Cần rà soát"
-      eyebrow="Lifecycle"
-      description="Tài liệu đến hạn rà soát định kỳ."
-      :columns="columns"
-      :load="loadNeedsReview"
-      :row-actions="rowActions"
-    />
-  </div>
+  <ResourcePage
+    :title="groupInfo.title"
+    eyebrow="Document library"
+    :description="groupInfo.description"
+    :columns="columns"
+    :load="loadSelected"
+    :row-actions="rowActions"
+    :toolbar="props.group === 'expired' ? toolbar : []"
+  />
 
   <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '440px' }" @hide="cancel">
     <div class="stack-form">

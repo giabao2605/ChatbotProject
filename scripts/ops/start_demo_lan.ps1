@@ -49,7 +49,7 @@ finally {
 }
 
 Write-Output "Dang kiem tra va cap nhat schema database..."
-& $pythonExe "scripts\migrations\migrate.py" --target V0025
+& $pythonExe "scripts\migrations\migrate.py" --target V0026
 if ($LASTEXITCODE -ne 0) {
     throw "Migration database that bai. Khong khoi dong service de tranh chay sai schema."
 }

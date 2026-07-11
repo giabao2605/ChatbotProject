@@ -150,9 +150,12 @@ def run_worker():
                 if report and report.get("quality_status") in ["ready_for_review", "needs_review"]:
                     update_ingestion_job(job_id, status="pending_review", error_message="")
                 elif report and report.get("quality_status") == "blocked":
-                    # GD5: KHONG chan cung tai lieu chat luong thap. Dua vao duyet thu cong de
-                    # reviewer/admin kiem tra va co the override khi publish.
-                    update_ingestion_job(job_id, status="pending_review", error_message="Canh bao chat luong (blocked): can reviewer kiem tra va override truoc khi publish.")
+                    reasons = ", ".join(report.get("quality_reason_codes", []) or [])
+                    mark_job_failed(
+                        job_id,
+                        "Không đạt quality gate ingest"
+                        + (f" ({reasons})" if reasons else ""),
+                    )
                 else:
                     mark_job_failed(job_id, error_message=message + " (Failed quality gate: khong xac dinh duoc noi dung)")
             else:

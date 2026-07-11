@@ -1,4 +1,4 @@
-# Mechanical & Multi-Department RAG Chatbot
+# Mech Chatbot — Nền tảng RAG đa phòng ban
 
 An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for the mechanical engineering domain and extended into a **multi-department document management system** (mechanical, technical, accounting, HR, and shared documents). The system automatically classifies PDF documents by domain, extracts structured data (Bills of Materials), enforces layered access control (RBAC + department + security clearance), and returns accurate, citation-backed answers without hallucination.
 
@@ -18,12 +18,14 @@ An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for 
 | **Rate Limiting** | Login rate limiting with lockout to prevent brute-force attacks (`auth/rate_limit.py`). |
 | **Anti-Hallucination Guardrails** | A strict evidence-based verification layer (evidence gate) refuses to answer when quantitative data (fabrication time, costs, quantities) is absent from retrieved context. Reasons are logged per trace. |
 | **HyDE (Hypothetical Document Embedding)** | Automatically activated for short or ambiguous questions to expand retrieval context before hybrid search. |
-| **Voyage Reranking** | Voyage `rerank-2.5-lite` reranks retrieved chunks before generation. It supports multilingual queries, including Vietnamese, and falls back to deterministic ordering if the API is unavailable. |
-| **Domain Glossary** | Admins manage a per-domain synonym/abbreviation dictionary (`DomainGlossary` table, `glossary.py`). Changes take effect immediately — the RAG engine queries the glossary (with a short TTL cache) to expand queries and improve recall without code changes. |
+| **Voyage Reranking** | Voyage `rerank-2.5-lite` reranks retrieved chunks before generation. It supports Vietnamese and falls back to deterministic fusion ordering if the API is unavailable. |
+| **Unified Dictionaries** | Reviewers manage the material dictionary and the per-domain term/synonym dictionary from one tabbed UI. `MaterialDictionary`, `MaterialSynonym`, and `DomainGlossary` remain separate because they serve different runtime semantics. |
 | **Entity Resolver** | `rag/entity_resolver.py` normalizes material names and product codes before vector lookup. |
 | **Intelligent Chitchat Handling** | `rag/chitchat.py` distinguishes casual conversation from technical queries, with bilingual (Vietnamese/English) responses. |
 | **Sensitive Content Scanner** | `ingestion/sensitive_scanner.py` automatically detects sensitive information in documents during ingestion. |
-| **Document Lifecycle Management** | Track effective date, expiry date, and periodic review deadlines per document. The lifecycle page (`lifecycle.py`) shows expired, expiring-soon, and needs-review documents. One-click "mark as reviewed" extends the next review date by 180 days. |
+| **Unified Document Catalogue** | One document catalogue provides mutually exclusive tabs for effective, expired, expiring-soon, and needs-review documents. Viewer access remains restricted by department, site, security clearance, and serving state. |
+| **Explainable Ingest Quality Gate** | Ingest quality uses extraction coverage, chunk output, metadata/classification, and domain signals. Scores `85–100` pass to review, `60–84` require manual review, and lower scores or hard failures are blocked with reason codes. |
+| **Role-Aware Dashboard** | Dashboard groups document lifecycle, ingestion, review, usage, and rollout metrics. Backend RBAC decides which groups and records each role may see. |
 | **Observability Dashboard** | Every RAG request is persisted to `RagTraceSummary` (cost, token counts, per-step latency, refusal reason). The Observability page shows cost/token breakdown by department, daily trends, per-step latency charts, and top costly queries — all stored locally, no external telemetry. |
 | **Answer Source Tracking** | Each chat answer records which document versions and pages were used (`AnswerSources` table), enabling full traceability. |
 | **Visual Citations** | Provides source page images in the chat interface so users can verify the origin of every answer. |
@@ -36,7 +38,7 @@ An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for 
 | **Fail-Fast Config Validation** | `config/validate.py` validates all required environment variables at startup and raises `ConfigError` immediately with a clear error list, rather than failing silently later. Secrets are masked in all log output. |
 | **Access Audit Logging** | All access to `confidential`-level documents and permission changes are recorded in `AuditLog` for compliance. |
 | **RAGAS Continuous Evaluation (CI)** | A GitHub Actions workflow runs automated RAG quality evaluation weekly (or on demand), gates on regression tolerance, and uploads `ragas_report.md` as a build artifact. |
-| **Docker Compose Ready** | A single command brings up the full stack (UI + API backend + ingestion worker). |
+| **LAN Demo and Docker Support** | The Windows demo script starts the local stack and applies migrations automatically; Docker Compose remains available for containerized environments. |
 
 ---
 
@@ -61,14 +63,16 @@ An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for 
 ```text
 ChatBotProject/
 ├── .env                          # Environment variables (API keys, DB, model names)
-├── Dockerfile                    # Python 3.11 image used by all services
+├── Dockerfile                    # Python 3.11 image for RAG server + worker
+├── Dockerfile.app                # Python 3.11 image for browser-facing app server
 ├── docker/
 │   └── docker-compose.yml        # Orchestration: UI + API server + Worker
 ├── docs/
-│   └── go-live-demo.md           # Demo and go-live notes
+│   ├── go-live-demo.md           # Demo and go-live notes
+│   └── retrieval-architecture.md # Retrieval pipeline architecture overview
 ├── eval/
 │   └── golden_routes.csv         # Router evaluation fixture
-├── web-ui/                       # Vue 3 browser UI
+├── web-ui/                       # Vue 3 + Vite + PrimeVue browser UI
 ├── run_server.py                 # Launcher: FastAPI RAG server
 ├── run_worker.py                 # Launcher: Ingestion worker
 ├── requirements.txt              # Python dependencies
@@ -92,49 +96,52 @@ ChatBotProject/
 │   │   └── 0001_normalize_domain_values.sql
 │   ├── migrations/                       # Versioned SQL migrations (Flyway-style, idempotent)
 │   │   ├── V0001__backfill_clearance_safe_default.sql
-│   │   ├── V0002__deactivate_legacy_stage_departments.sql
-│   │   ├── V0003__add_filepath_to_tailieu.sql
-│   │   ├── V0004__add_common_document_metadata.sql
-│   │   ├── V0005__add_app_settings.sql
-│   │   ├── V0006__department_status_archive_reassign.sql
-│   │   ├── V0007__add_login_attempts.sql
-│   │   ├── V0008__add_site_to_departments.sql
-│   │   ├── V0009__normalize_phongban_sharing.sql
-│   │   ├── V0010__access_requests.sql
-│   │   ├── V0011__domain_glossary.sql
-│   │   ├── V0012__rag_trace_summary.sql
-│   │   ├── V0013__doc_lifecycle_review.sql
-│   │   ├── V0014__semantic_cache.sql                 # Semantic cache tables
-│   │   ├── V0015__perf_index_userdepartments.sql     # Index for access checks
-│   │   └── V0016__add_rejectreason_to_ingestionjobs.sql
+│   │   ├── V0002  →  V0016               # Core schema evolution (clearance, metadata, glossary, …)
+│   │   ├── V0017__add_user_preferred_language.sql
+│   │   ├── V0018__backfill_dev_account_links.sql
+│   │   ├── V0019__publication_outbox_and_serving_gate.sql
+│   │   ├── V0020__semantic_cache_exact_lookup.sql
+│   │   ├── V0021__external_ai_provider_profiles.sql
+│   │   ├── V0022__knowledge_governance_and_serving_epoch.sql
+│   │   ├── V0023__department_rollout_and_evaluation_gates.sql
+│   │   ├── V0024__separate_control_plane_roles.sql
+│   │   ├── V0025__citation_provenance_and_chat_evidence.sql
+│   │   └── V0026__effective_lifecycle_buckets.sql
 │   └── MIGRATIONS.md                     # Migration documentation
 │
 ├── scripts/
 │   ├── create_qdrant_indexes.py          # Initialize Qdrant Cloud collections
 │   ├── nap_them_file.py                  # Manually ingest additional documents
+│   ├── route_dashboard.py                # Dashboard route analyzer
+│   ├── eval_semantic_router.py           # Semantic router evaluation script
 │   ├── admin/
 │   │   └── hash_pass.py                  # Hash passwords for manual account seeding
 │   ├── diagnostics/
 │   │   ├── check_image_summary_coverage.py
 │   │   ├── check_qdrant_count.py
 │   │   └── check_qdrant_schema.py
-│   ├── route_dashboard.py                # Dashboard route analyzer
 │   ├── eval/
 │   │   ├── run_ragas_eval.py             # RAGAS evaluation entry point (used by CI)
 │   │   ├── run_eval.py                   # Manual evaluation runner
 │   │   ├── ragas_metrics.py              # RAGAS metric definitions
 │   │   ├── evaluate_chatbot.py           # Chatbot evaluation harness
+│   │   ├── benchmark_rag_concurrency.py  # RAG concurrency load testing
+│   │   ├── pilot_rollout_gate.py         # Department rollout gate evaluation
 │   │   ├── golden_set.jsonl              # Full golden question set
-│   │   └── golden_set_datagoc_real.jsonl # Real-data golden set
-│   ├── eval_semantic_router.py           # Semantic router evaluation script
+│   │   └── golden_set_datagoc_real.jsonl  # Real-data golden set
 │   ├── migrations/
 │   │   ├── migrate.py                    # Run pending SQL migrations in order
 │   │   ├── migrate_qdrant_collection.py
+│   │   ├── backfill_qdrant_governance_metadata.py  # Backfill governance metadata
+│   │   ├── backfill_qdrant_servable.py   # Backfill servable flag in Qdrant
+│   │   ├── verify_clean_migration.py     # Verify migration integrity
 │   │   ├── alter_ingestionjobs.py
 │   │   ├── check_empty.py
 │   │   └── check_qdrant.py
 │   ├── ops/
-│   │   └── backup_system.py              # System backup utility
+│   │   ├── backup_system.py              # System backup utility
+│   │   ├── loadtest_lan.py               # LAN load testing tool
+│   │   └── start_demo_lan.ps1            # PowerShell script: start all services for LAN demo
 │   └── danger_ops/
 │       ├── empty_bag.py                  # Purge documents from Qdrant
 │       ├── reconcile_sql_qdrant.py       # Reconcile SQL ↔ Qdrant state
@@ -149,30 +156,10 @@ ChatBotProject/
 │   └── cache/                            # Vision OCR cache (not committed to git)
 │
 └── src/mech_chatbot/                     # Core application source code
-    ├── ui/
-    │   ├── app_server.py                 # Browser-facing FastAPI app and Vue static server
-    │   ├── i18n.py                       # Centralized translation layer (t() function, Vi/En)
-    │   ├── labels.py                     # Department/site display label helpers
-    │   ├── metadata_forms.py             # Reusable document metadata form components
-    │   └── pages/
-    │       ├── chatbot.py                # RAG Q&A chat (image upload, history, like/dislike)
-    │       ├── queue.py                  # Ingestion queue monitor
-    │       ├── documents.py              # Document browser, search & approval
-    │       ├── upload.py                 # Document upload with metadata & security tagging
-    │       ├── admin.py                  # System administration, site/branch management
-    │       ├── users.py                  # User management (roles, departments, clearance)
-    │       ├── access.py                 # Access Request Workflow (submit, review, revoke)
-    │       ├── audit.py                  # Security & confidential document access log
-    │       ├── analytics.py              # Usage analytics
-    │       ├── dashboard.py              # Per-department overview dashboard
-    │       ├── materials.py              # Bill of Materials (BOM) lookup
-    │       ├── lifecycle.py              # Document lifecycle: expiry & review tracking
-    │       ├── observability.py          # RAG cost, token, latency observability (Admin)
-    │       ├── glossary.py               # Domain synonym/abbreviation dictionary (Admin)
-    │       ├── settings.py               # Interface language & personal preferences
-    │       ├── feedback.py               # Feedback loop: classify, golden set, regression
-    │       └── help.py                   # System user guide
     ├── api/
+    │   ├── app_server.py                 # Browser-facing FastAPI app (serves Vue build + REST API)
+    │   ├── app_security.py               # App-level CSRF, CORS, and session security
+    │   ├── file_access.py                # Secure file-serving endpoints
     │   └── rag_server.py                 # Persistent FastAPI RAG server
     ├── workers/
     │   ├── ingestion_worker.py           # Background document ingestion daemon
@@ -200,6 +187,8 @@ ChatBotProject/
     │   ├── retrieval.py                  # Retrieval helpers and lifecycle filters
     │   ├── rerank.py                     # Reranking and long-context ordering
     │   ├── intent.py                     # Query intent, filters, version policy
+    │   ├── evidence_gate.py              # LLM evidence sufficiency verification
+    │   ├── streaming_policy.py           # Streaming response policy
     │   ├── conversation_state.py         # Conversation state memory and management
     │   ├── interaction_router.py         # RAG semantic routing controller
     │   ├── semantic_cache.py             # Semantic caching layer
@@ -213,31 +202,37 @@ ChatBotProject/
     │   ├── regression.py                 # Regression batch runner
     │   └── text_utils.py                 # Text processing utilities
     ├── auth/
-    │   ├── service.py                    # Authentication, session, role & department resolution
+    │   ├── core.py                       # Authentication core logic
+    │   ├── authorization.py              # Role-based authorization middleware
+    │   ├── service.py                    # Auth session & role resolution shim
     │   ├── security_policy.py            # Security clearance policy (resolve_clearance)
     │   └── rate_limit.py                 # Login rate limiting & lockout
     ├── db/
     │   ├── engine.py                     # SQLAlchemy engine and SQL Server connection settings
+    │   ├── registry_ports.py             # Abstract registry port interfaces
     │   ├── repository.py                 # Backward-compatible shim re-exporting repositories/*
     │   └── repositories/                 # Split SQL repositories by domain
     │       ├── access.py / audit.py / analytics.py
-    │       ├── chat.py / feedback.py / lifecycle.py
-    │       ├── document.py / document_pages.py / doc_metadata.py
-    │       ├── glossary.py / jobs.py / material.py / bom.py
+    │       ├── catalog.py / chat.py / feedback.py / lifecycle.py
+    │       ├── doc_metadata.py / document.py / document_pages.py
+    │       ├── external_ai.py / glossary.py / jobs.py / material.py / bom.py
+    │       ├── knowledge_governance.py / publication.py / rollout.py
     │       └── qdrant.py / semantic_cache.py / settings.py / ui_queries.py / version.py
-    ├── services/                         # Thin service layer used by UI modules
+    ├── services/                         # Thin service layer used by API endpoints
     │   ├── access_service.py / audit_service.py / analytics_service.py
     │   ├── chat_service.py / document_service.py / feedback_service.py
-    │   ├── glossary_service.py / job_service.py / lifecycle_service.py
-    │   └── material_service.py / org_service.py / settings_service.py / ui_query_service.py
+    │   ├── external_ai_service.py / glossary_service.py / job_service.py
+    │   ├── knowledge_governance_service.py / lifecycle_service.py
+    │   ├── material_service.py / org_service.py / rollout_service.py
+    │   └── settings_service.py / ui_query_service.py
     ├── llm/
     │   ├── llm_client.py                 # LLM client (OpenAI-compatible, with retry)
-    │   └── vision_client.py              # Vision model client (with retry)
+    │   ├── vision_client.py              # Vision model client (with retry)
+    │   └── external_ai.py               # External AI provider routing & policy
     └── config/
         ├── constants.py                  # System-wide constants (SHARE_ALL_DEPARTMENT sentinel)
         ├── logging.py                    # Centralized structured logging
         ├── settings.py                   # Runtime settings loader
-        ├── theme.py                      # Legacy UI theme configuration
         └── validate.py                   # Fail-fast config validation (assert_config_valid)
 ```
 
@@ -267,6 +262,11 @@ ChatBotProject/
 | `RagTraceSummary` | Per-request observability: cost, tokens, per-step latency, refusal |
 | `SemanticCache` | Cached RAG answers keyed by embedding similarity and RBAC scope |
 | `AppSettings` | Key-value application configuration stored in DB |
+| `PublicationOutbox` | Outbox queue for document publication events |
+| `ExternalAiProviders` | External AI provider profiles and routing configuration |
+| `KnowledgeGovernance` | Knowledge governance policies and serving epoch tracking |
+| `DepartmentRollout` | Department-level feature rollout gates |
+| `CitationProvenance` | Citation provenance and chat evidence tracking |
 
 ---
 
@@ -275,7 +275,8 @@ ChatBotProject/
 ### 1. Prerequisites
 
 - Python 3.10+ (3.11 matches the Docker image)
-- Docker & Docker Compose (recommended)
+- PowerShell on Windows for the simplest LAN demo workflow
+- Docker & Docker Compose (optional)
 - Microsoft SQL Server + ODBC Driver (for `pyodbc`)
 - A Qdrant Cloud account (URL + API key)
 - An OpenAI-compatible LLM endpoint (ProxyLLM or direct OpenAI)
@@ -340,6 +341,9 @@ SEMANTIC_ROUTER_ENABLED=true
 SEMANTIC_ROUTER_SIM_THRESHOLD=0.55
 SEMANTIC_ROUTER_MARGIN=0.04
 
+# Chat Bridge (app_server <-> rag_server shared secret)
+CHAT_BRIDGE_SECRET=<long-random-hex-string>
+
 # Strict Modes
 STRICT_INGEST_REQUIRE_VISION=true
 STRICT_ANSWER_MODE=true
@@ -359,7 +363,7 @@ For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QD
 # Step 1: Create the base schema
 #   Run: database/schema/01_baseline.sql on your SQL Server instance
 
-# Step 2: Apply versioned migrations in order (V0001 -> V0020)
+# Step 2: Apply versioned migrations in order (currently V0001 -> V0026)
 python scripts/migrations/migrate.py
 # or run each file in database/migrations/ manually
 
@@ -371,7 +375,18 @@ python scripts/create_qdrant_indexes.py
 
 ### 4. Running the Application
 
-**Option A: Docker Compose (recommended)**
+**Option A: Windows LAN demo (recommended for the current pilot)**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ops\start_demo_lan.ps1
+```
+
+The script applies migrations through `V0026`, starts the RAG server on
+`127.0.0.1:8100`, and exposes the browser application on the configured LAN
+address. Stop the processes with `Ctrl+C`; rerun the same command to start the
+demo again.
+
+**Option B: Docker Compose**
 
 ```bash
 docker-compose -f docker/docker-compose.yml up -d --build
@@ -382,7 +397,7 @@ This launches:
 - FastAPI RAG server → `http://localhost:8100` (bound to localhost by compose)
 - Ingestion worker (background)
 
-**Option B: Local Development**
+**Option C: Local Development**
 
 ```bash
 git clone https://github.com/giabao2605/ChatbotProject.git
@@ -418,22 +433,23 @@ Access pages via the Vue sidebar (visibility depends on your role and clearance)
 
 | Page | Description | Required Role |
 |---|---|---|
-| **Chatbot Q&A** | Ask technical questions; get evidence-based answers with visual citations, like/dislike feedback, and automatic access request creation when blocked by clearance | All |
+| **Chatbot Q&A** | Ask technical questions; get evidence-based answers with visual citations, like/dislike feedback | All |
 | **Ingestion Queue** | Monitor background document processing jobs and status | Uploader, Admin |
-| **Documents** | Browse, search, filter, and approve documents | Reviewer, Admin |
+| **Document Catalogue** | Browse effective documents; Reviewers manage expired, expiring-soon, and needs-review tabs | All; management tabs require Reviewer/Admin |
 | **Upload** | Upload PDF/Word/Excel/images with metadata, security level, and site tagging | Uploader, Admin |
-| **Admin** | System settings, site/branch management, app configuration | Admin |
+| **Organization** | Department/site/branch management and organizational structure | Admin |
 | **Users** | Manage accounts, roles, department access, and security clearance | Admin |
-| **Access Requests** | Submit security/department access requests; Reviewers approve/reject; Admins revoke and view history | All (role-filtered tabs) |
+| **Access Requests** | Submit access requests; Reviewers approve/reject; Admins revoke and view history | All (role-filtered) |
 | **Audit** | Confidential document access log and permission change history | Admin |
 | **Analytics** | System usage statistics and trends | Admin, Reviewer |
-| **Dashboard** | Per-department document overview | All |
-| **Materials** | Bill of Materials (BOM) lookup and search | All |
-| **Lifecycle** | Track document effective dates, expiry, and review deadlines | Reviewer, Admin |
-| **Observability** | RAG cost, token, latency, and refusal analytics per department (reads from `RagTraceSummary`) | Admin |
-| **Glossary** | Manage domain synonym/abbreviation dictionary; changes take effect immediately | Admin |
+| **Dashboard** | Role-aware lifecycle, ingestion, review, usage, and rollout overview | All; content is role-filtered |
+| **Dictionary** | Material dictionary and domain terms/synonyms in two tabs | Reviewer, Admin |
+| **Observability** | RAG cost, token, latency, and refusal analytics per department | Admin |
 | **Settings** | Interface language toggle (Vi/En) and personal preferences | All |
-| **Feedback** | Classify disliked answers, manage golden set, run regression tests, document quality ranking, orphan cleanup | Reviewer, Admin |
+| **Feedback** | Classify disliked answers, manage golden set, document quality ranking | Reviewer, Admin |
+| **Document Review** | Review and approve pending documents with annotation support | Reviewer, Admin |
+| **Quality** | Document quality ranking and scoring dashboard | Reviewer, Admin |
+| **Regression** | Manage and run regression test suites against the RAG pipeline | Reviewer, Admin |
 | **Help** | System user guide | All |
 
 ---
@@ -468,7 +484,7 @@ Hybrid Search (Dense + BM25) on Qdrant
 Variant Disambiguation
     |-- asks the user to choose when multiple variants match
     v
-GPT Reranking
+Voyage Reranking
     |-- filter top-N by relevance score
     v
 Evidence Gate (LLM)
@@ -521,9 +537,16 @@ PYTHONPATH=src python scripts/eval/run_eval.py
 
 Evaluation reports are stored in the `reports/` directory.
 
-Current baseline note: the fast suite has one known pre-existing failure in
-`tests/unit/test_retrieval_filters.py::TestComposeReturnsTwoFilters::test_chitchat_skips_strict_part_id`.
-Treat any additional failure as a regression.
+SQL Server, Qdrant, and live RAG evaluation tests are opt-in. Enable them only
+against explicit test services with `RUN_DB_TESTS=1`, `RUN_QDRANT_TESTS=1`, or
+`RUN_EVAL_TESTS=1`; the default suite skips those tests.
+
+Verify all SQL migrations on a disposable database before deployment:
+
+```powershell
+.\chat_env\Scripts\python.exe scripts\migrations\verify_clean_migration.py `
+  --database Mech_Chatbot_Test_Migrations --recreate
+```
 
 ---
 
@@ -533,14 +556,22 @@ Treat any additional failure as a regression.
 |---|---|
 | `scripts/create_qdrant_indexes.py` | Create or recreate Qdrant collections |
 | `scripts/nap_them_file.py` | Manually ingest additional documents |
+| `scripts/route_dashboard.py` | Analyze dashboard routes |
 | `scripts/migrations/migrate.py` | Run pending SQL migrations in order |
+| `scripts/migrations/backfill_qdrant_governance_metadata.py` | Backfill governance metadata in Qdrant |
+| `scripts/migrations/backfill_qdrant_servable.py` | Backfill servable flag in Qdrant |
+| `scripts/migrations/verify_clean_migration.py` | Verify migration integrity |
 | `scripts/eval/run_ragas_eval.py` | Run RAGAS quality evaluation (also used by CI) |
 | `scripts/eval/run_eval.py` | Manual evaluation with detailed output |
+| `scripts/eval/benchmark_rag_concurrency.py` | RAG concurrency load testing |
+| `scripts/eval/pilot_rollout_gate.py` | Department rollout gate evaluation |
 | `scripts/eval_semantic_router.py` | Semantic router evaluation script |
 | `scripts/diagnostics/check_qdrant_count.py` | Verify document count in Qdrant |
 | `scripts/diagnostics/check_qdrant_schema.py` | Inspect Qdrant collection schema |
 | `scripts/diagnostics/check_image_summary_coverage.py` | Check Vision OCR coverage per document |
 | `scripts/ops/backup_system.py` | Back up system state |
+| `scripts/ops/loadtest_lan.py` | LAN load testing tool |
+| `scripts/ops/start_demo_lan.ps1` | Start all services for LAN demo |
 | `scripts/admin/hash_pass.py` | Hash passwords for manual account seeding |
 | `scripts/danger_ops/empty_bag.py` | Purge documents from Qdrant |
 | `scripts/danger_ops/reconcile_sql_qdrant.py` | Reconcile SQL ↔ Qdrant state |

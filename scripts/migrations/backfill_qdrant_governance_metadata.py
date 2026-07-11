@@ -17,9 +17,11 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from sqlalchemy import text  # noqa: E402
+from qdrant_client import models  # noqa: E402
 
 from mech_chatbot.db.engine import _ensure_engine, engine  # noqa: E402
-from mech_chatbot.db.repositories.qdrant import update_qdrant_metadata  # noqa: E402
+from mech_chatbot.db.repositories.qdrant import _get_qdrant_client, update_qdrant_metadata  # noqa: E402
+from mech_chatbot.config.settings import QDRANT_COLLECTION  # noqa: E402
 
 
 def _document_type(value):
@@ -28,6 +30,29 @@ def _document_type(value):
     except (TypeError, ValueError, json.JSONDecodeError):
         return ""
     return str(payload.get("document_type") or "").strip() if isinstance(payload, dict) else ""
+
+
+def _has_qdrant_points(client, doc_id: int) -> bool:
+    """Only synchronize SQL rows that still have vectors.
+
+    `TrangThaiVector=1` is legacy workflow state and can remain true after a
+    collection reset, a manual Qdrant cleanup, or a failed/partial ingest. A
+    migration must not prevent application startup merely because those stale
+    SQL rows cannot receive a payload update.
+    """
+    result = client.count(
+        collection_name=QDRANT_COLLECTION,
+        count_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.doc_id",
+                    match=models.MatchValue(value=int(doc_id)),
+                )
+            ]
+        ),
+        exact=True,
+    )
+    return int(getattr(result, "count", 0) or 0) > 0
 
 
 def main() -> int:
@@ -51,7 +76,17 @@ def main() -> int:
         ).mappings().all()
     updated = 0
     failed = []
+    skipped_missing_points = []
+    client = _get_qdrant_client()
     for row in rows:
+        doc_id = int(row["DocID"])
+        try:
+            if not _has_qdrant_points(client, doc_id):
+                skipped_missing_points.append(doc_id)
+                continue
+        except Exception as exc:
+            failed.append({"doc_id": doc_id, "reason": f"qdrant_count_failed:{type(exc).__name__}"})
+            continue
         doc_type = _document_type(row["ClassificationJson"])
         payload = {
             "owner_department": row["OwnerDepartment"] or "",
@@ -67,11 +102,20 @@ def main() -> int:
             "doc_number": row["DocNumber"] or "",
             "external_processing_policy": row["ExternalProcessingPolicy"] or "all_external",
         }
-        if update_qdrant_metadata(int(row["DocID"]), payload, require_points=True):
+        if update_qdrant_metadata(doc_id, payload, require_points=True):
             updated += 1
         else:
-            failed.append(int(row["DocID"]))
-    print(json.dumps({"total": len(rows), "updated": updated, "failed_doc_ids": failed}, ensure_ascii=False))
+            failed.append({"doc_id": doc_id, "reason": "payload_update_failed"})
+    try:
+        client.close()
+    except Exception:
+        pass
+    print(json.dumps({
+        "total_sql_vector_rows": len(rows),
+        "updated": updated,
+        "skipped_missing_qdrant_points": skipped_missing_points,
+        "failed": failed,
+    }, ensure_ascii=False))
     return 0 if not failed else 1
 
 
