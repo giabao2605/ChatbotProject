@@ -54,6 +54,8 @@ def build_snapshot(
     estimated_cost = 0.0
     corrective_attempts = 0
     repair_attempts = 0
+    llm_retries = 0
+    query_count = 0
     for raw in path.read_text(encoding="utf-8").splitlines():
         try:
             event = json.loads(raw)
@@ -73,8 +75,11 @@ def build_snapshot(
             corrective_attempts += 1
         if event.get("event") == "claim_repair" and event.get("attempted"):
             repair_attempts += 1
+        if event.get("event") == "llm_retry":
+            llm_retries += 1
         if event.get("event") != "rag_end":
             continue
+        query_count += 1
         if event.get("final_latency_ms") is not None:
             query_latencies.append(float(event["final_latency_ms"]))
         if not event.get("refusal"):
@@ -89,7 +94,6 @@ def build_snapshot(
         if event.get("ts"):
             included_timestamps.append(event["ts"])
     ordered_latencies = sorted(query_latencies)
-    query_count = len(query_latencies)
     return {
         "schema": "rag-refusal-snapshot-v1",
         "source": {"path": str(path.resolve()), "git_sha": _git_sha()},
@@ -115,7 +119,7 @@ def build_snapshot(
             "estimated_cost": round(estimated_cost, 8),
             "correction_rate": corrective_attempts / query_count if query_count else 0.0,
             "repair_rate": repair_attempts / query_count if query_count else 0.0,
-            "retry_rate": (corrective_attempts + repair_attempts) / query_count if query_count else 0.0,
+            "retry_rate": llm_retries / query_count if query_count else 0.0,
         },
     }
 

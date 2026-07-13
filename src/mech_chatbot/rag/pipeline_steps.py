@@ -491,6 +491,15 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                             delay,
                             stream_error,
                         )
+                        log_trace(
+                            "llm_retry",
+                            trace_id,
+                            surface="generation",
+                            attempt=attempt,
+                            max_attempts=_stream_attempts,
+                            delay_seconds=delay,
+                            error=type(stream_error).__name__,
+                        )
                         time.sleep(delay)
                 _raise_if_cancelled()
                 answer = "".join(chunks)
@@ -650,6 +659,15 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                             _stream_attempts,
                             delay,
                             stream_error,
+                        )
+                        log_trace(
+                            "llm_retry",
+                            trace_id,
+                            surface="generation",
+                            attempt=attempt,
+                            max_attempts=_stream_attempts,
+                            delay_seconds=delay,
+                            error=type(stream_error).__name__,
                         )
                         time.sleep(delay)
                 _raise_if_cancelled()

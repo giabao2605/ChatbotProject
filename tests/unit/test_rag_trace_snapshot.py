@@ -54,6 +54,7 @@ def test_snapshot_excludes_test_cancelled_and_empty_reason_by_default(tmp_path):
     snapshot = _load_snapshot_module()
     path = tmp_path / "trace.jsonl"
     events = [
+        {"ts": "2026-07-13T00:00:00+00:00", "event": "llm_retry", "trace_id": "p1", "execution_context": "production", "attempt": 1},
         {"ts": "2026-07-13T00:00:00+00:00", "event": "rag_end", "trace_id": "p1", "execution_context": "production", "refusal": True, "refusal_reason": "post_check_numbers"},
         {"ts": "2026-07-13T00:01:00+00:00", "event": "rag_end", "trace_id": "p2", "execution_context": "production", "refusal": True, "refusal_reason": "client_cancelled"},
         {"ts": "2026-07-13T00:02:00+00:00", "event": "rag_end", "trace_id": "p3", "execution_context": "production", "refusal": True, "refusal_reason": None},
@@ -67,4 +68,4 @@ def test_snapshot_excludes_test_cancelled_and_empty_reason_by_default(tmp_path):
     assert report["refusal_reasons"] == {"post_check_numbers": 1}
     assert report["filters"]["excluded_reasons"] == ["client_cancelled"]
     assert report["source"]["path"] == str(path.resolve())
-
+    assert report["system_metrics"]["retry_rate"] == pytest.approx(1 / 3)
