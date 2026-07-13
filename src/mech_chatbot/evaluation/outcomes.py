@@ -53,7 +53,7 @@ def classify_actual_outcome(answer: str) -> str:
     ]):
         return "insufficient_evidence"
     if re.fullmatch(
-        r"tai lieu .* khong co tong so luong bom duoc phe duyet trong tai lieu nay\."
+        r"tai lieu .* khong co tong (?:so luong )?bom duoc phe duyet trong tai lieu nay\."
         r"\s*(?:\[nguon:[^\]]+\])?",
         folded.strip(),
     ) or re.fullmatch(

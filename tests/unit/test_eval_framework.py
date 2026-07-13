@@ -218,11 +218,19 @@ def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
         "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
     ) == "insufficient_evidence"
     assert classify_actual_outcome(
+        "Tài liệu CRAG-EVAL-BOM-001 không có tổng BOM được phê duyệt trong tài liệu này. "
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
         "Rất tiếc, mình không tìm thấy mã số 'secret-001' nào trong hệ thống bản vẽ hiện tại. "
         "Vui lòng kiểm tra lại mã hoặc mô tả rõ hơn."
     ) == "insufficient_evidence"
     assert classify_actual_outcome(
         "Tài liệu không có tổng số lượng BOM được phê duyệt, nhưng tổng tính từ BOM là 999."
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Tài liệu CRAG-EVAL-BOM-001 không có tổng BOM được phê duyệt trong tài liệu này, "
+        "nhưng tổng là 999."
     ) == "full_answer"
     assert classify_actual_outcome(
         "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
