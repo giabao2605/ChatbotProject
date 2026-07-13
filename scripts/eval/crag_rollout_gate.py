@@ -21,9 +21,14 @@ def compare_reports(
     baseline_system = baseline_trace.get("system_metrics", {})
     candidate_system = candidate_trace.get("system_metrics", {})
 
+    baseline_wrong_refusal = baseline_outcomes.get("wrong_refusal", 0)
+    candidate_wrong_refusal = candidate_outcomes.get("wrong_refusal", 0)
     checks = {
-        "wrong_refusal_not_increased": candidate_outcomes.get("wrong_refusal", 0)
-        <= baseline_outcomes.get("wrong_refusal", 0),
+        "wrong_refusal_reduced": (
+            candidate_wrong_refusal < baseline_wrong_refusal
+            if baseline_wrong_refusal > 0
+            else candidate_wrong_refusal == 0
+        ),
         "wrong_answer_not_increased": candidate_outcomes.get("wrong_answer", 0)
         <= baseline_outcomes.get("wrong_answer", 0),
         "leakage_zero": candidate_outcomes.get("leakage", 0) == 0,
@@ -33,6 +38,7 @@ def compare_reports(
         <= baseline_system.get("estimated_cost", 0) * max_cost_ratio,
         "correction_budget": candidate_system.get("correction_rate", float("inf")) <= 1.0,
         "repair_budget": candidate_system.get("repair_rate", float("inf")) <= 1.0,
+        "retry_budget": candidate_system.get("retry_rate", float("inf")) <= 2.0,
     }
     return {
         "schema": "crag-rollout-gate-v1",

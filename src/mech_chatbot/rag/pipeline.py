@@ -642,6 +642,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     trace_id=trace_id,
                 ).content
                 corrected_query = tokenize_cached(str(rewritten or effective_question))
+                correction_cost = (
+                    (len(rewrite_prompt) // 4) * 2.5 + (len(str(rewritten)) // 4) * 15.0
+                ) / 1_000_000
                 corrected_docs, _, corrected_mode, _, _ = run_corrected_retrieval(
                     _retrieve,
                     corrected_query=corrected_query,
@@ -664,6 +667,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     after_docs=len(retrieved_docs),
                     retrieval_mode=corrected_mode,
                     evaluator_state=coverage_decision.state.value,
+                    estimated_cost=correction_cost,
                 )
             except Exception as exc:
                 logger.warning("Corrective retrieval failed: %s", exc)

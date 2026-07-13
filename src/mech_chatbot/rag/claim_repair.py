@@ -21,9 +21,19 @@ class RepairResult:
     attempted: bool
     accepted: bool
     violation_reason: str = ""
+    estimated_cost: float = 0.0
 
 
-def _validate(answer, *, context_text, question, documents, require_citation, required_source_ids):
+def _validate(
+    answer,
+    *,
+    context_text,
+    question,
+    documents,
+    require_citation,
+    required_source_ids,
+    required_citations,
+):
     bad_materials, _ = has_unsupported_materials(answer, context_text)
     bad_codes, _ = has_unsupported_codes(answer, context_text, question)
     bad_units, _ = has_unsupported_units_symbols(answer, context_text, question)
@@ -41,6 +51,8 @@ def _validate(answer, *, context_text, question, documents, require_citation, re
     if required_source_ids and not {value.upper() for value in required_source_ids}.issubset(
         {value.upper() for value in answer_source_ids}
     ):
+        return "citation"
+    if any(citation not in answer for citation in required_citations):
         return "citation"
     return ""
 
@@ -66,6 +78,9 @@ def repair_grounded_answer(
         normalized_number_values(context_text) | normalized_number_values(question)
     )
     original_source_ids = sorted(set(re.findall(r"\bD\d+P\d+\b", answer, flags=re.IGNORECASE)))
+    required_citations = re.findall(
+        r"\[(?:Nguồn|Source):[^\]]+\]", answer, flags=re.IGNORECASE
+    )
     allowed_source_ids = sorted(
         {
             f"D{metadata.get('doc_id')}P{metadata.get('trang_so')}"
@@ -81,10 +96,12 @@ def repair_grounded_answer(
         f"UNSUPPORTED_NUMBERS: {[item.normalized for item in violations]}\n"
         f"ALLOWED_NUMBERS: {allowed_numbers}\n"
         f"REQUIRED_SOURCE_IDS: {original_source_ids}\n"
+        f"REQUIRED_CITATIONS: {required_citations}\n"
         f"ALLOWED_SOURCE_IDS: {allowed_source_ids}\n\n"
         f"QUESTION:\n{question}\n\nCONTEXT:\n{context_text[:12000]}\n\nDRAFT:\n{answer}"
     )
     repaired = str(invoke(prompt) or "").strip()
+    estimated_cost = ((len(prompt) // 4) * 2.5 + (len(repaired) // 4) * 15.0) / 1_000_000
     violation = _validate(
         repaired,
         context_text=context_text,
@@ -92,10 +109,12 @@ def repair_grounded_answer(
         documents=documents,
         require_citation=require_citation,
         required_source_ids=original_source_ids,
+        required_citations=required_citations,
     )
     return RepairResult(
         answer=repaired if not violation else answer,
         attempted=True,
         accepted=not violation,
         violation_reason=violation,
+        estimated_cost=estimated_cost,
     )

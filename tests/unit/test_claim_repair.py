@@ -27,6 +27,7 @@ def test_claim_repair_accepts_one_grounded_rewrite():
     assert result.accepted is True
     assert "1,500" in result.answer
     assert len(calls) == 1
+    assert result.estimated_cost > 0
     assert "UNSUPPORTED_NUMBERS: ['2500']" in calls[0]
     assert "ALLOWED_NUMBERS: ['1500']" in calls[0]
     assert "ALLOWED_SOURCE_IDS: ['D7P3']" in calls[0]
@@ -48,3 +49,19 @@ def test_claim_repair_rejects_second_unsupported_answer_without_retrying():
     assert result.accepted is False
     assert result.violation_reason in {"numbers", "citation"}
     assert len(calls) == 1
+
+
+def test_claim_repair_must_preserve_complete_rendered_citation():
+    original_citation = "[Nguồn: bom.pdf, Trang 3, Version 1, SourceID D7P3]"
+    result = repair_grounded_answer(
+        f"Chi phí 2500 USD. {original_citation}",
+        context_text="Chi phí 1500 USD.",
+        question="Chi phí bao nhiêu?",
+        documents=[_doc()],
+        invoke=lambda _prompt: "Chi phí 1500 USD. [Nguồn: other.pdf, Trang 3, Version 1, SourceID D7P3]",
+        require_citation=True,
+        enabled=True,
+    )
+
+    assert result.accepted is False
+    assert result.violation_reason == "citation"

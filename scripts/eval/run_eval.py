@@ -19,6 +19,7 @@ from mech_chatbot.evaluation.outcomes import (
     expected_outcome,
     summarize_outcomes,
 )
+from mech_chatbot.evaluation.metrics import nearest_rank
 
 def run_evaluation():
     golden_set_files = [
@@ -180,7 +181,7 @@ def run_evaluation():
                         "leaked": not forbidden_passed and "admin" not in {
                             str(role).lower() for role in (user_roles or [])
                         },
-                        "legacy_admin_bypass": "admin" in {
+                        "legacy_admin_bypass": not forbidden_passed and "admin" in {
                             str(role).lower() for role in (user_roles or [])
                         },
                     }
@@ -268,13 +269,6 @@ def run_evaluation():
             else:
                 out.write(f"- **{lvl}**: Pass {st['pass']}/{st['total']} ({rate:.1f}%)\n")
 
-    ordered_latencies = sorted(latencies)
-    def percentile(ratio):
-        if not ordered_latencies:
-            return None
-        index = min(len(ordered_latencies) - 1, max(0, int(len(ordered_latencies) * ratio + 0.999999) - 1))
-        return round(ordered_latencies[index] * 1000, 2)
-
     with open(json_output_file, "w", encoding="utf-8") as json_out:
         json.dump(
             {
@@ -282,8 +276,8 @@ def run_evaluation():
                 "manifest_files": [os.path.abspath(path) for path in golden_set_files],
                 "total_cases": total_tests,
                 "outcome_confusion": summarize_outcomes(outcome_rows),
-                "latency_p50_ms": percentile(0.50),
-                "latency_p95_ms": percentile(0.95),
+                "latency_p50_ms": round(nearest_rank(latencies, 0.50) * 1000, 2) if latencies else None,
+                "latency_p95_ms": round(nearest_rank(latencies, 0.95) * 1000, 2) if latencies else None,
             },
             json_out,
             ensure_ascii=False,

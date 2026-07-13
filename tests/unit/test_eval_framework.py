@@ -222,8 +222,8 @@ def test_benchmark_accepts_done_trace_stage_contract_and_safe_trace_jsonl(tmp_pa
 def test_crag_rollout_gate_blocks_wrong_answers_leakage_and_excess_cost():
     baseline_eval = {"outcome_confusion": {"wrong_refusal": 5, "wrong_answer": 1, "leakage": 0}}
     candidate_eval = {"outcome_confusion": {"wrong_refusal": 3, "wrong_answer": 1, "leakage": 0}}
-    baseline_trace = {"system_metrics": {"latency_p95_ms": 1000, "estimated_cost": 1.0, "correction_rate": 0.0, "repair_rate": 0.0}}
-    candidate_trace = {"system_metrics": {"latency_p95_ms": 1200, "estimated_cost": 1.2, "correction_rate": 0.2, "repair_rate": 0.1}}
+    baseline_trace = {"system_metrics": {"latency_p95_ms": 1000, "estimated_cost": 1.0, "correction_rate": 0.0, "repair_rate": 0.0, "retry_rate": 0.0}}
+    candidate_trace = {"system_metrics": {"latency_p95_ms": 1200, "estimated_cost": 1.2, "correction_rate": 0.2, "repair_rate": 0.1, "retry_rate": 0.3}}
 
     report = crag_gate.compare_reports(baseline_eval, candidate_eval, baseline_trace, candidate_trace)
     assert report["passed"] is True

@@ -557,6 +557,7 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                         accepted=repair_result.accepted,
                         violation_reason=repair_result.violation_reason,
                         attempt=1 if repair_result.attempted else 0,
+                        estimated_cost=repair_result.estimated_cost,
                     )
                     if repair_result.accepted:
                         answer = repair_result.answer

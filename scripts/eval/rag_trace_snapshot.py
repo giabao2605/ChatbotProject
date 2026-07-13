@@ -5,19 +5,19 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+_SRC = Path(__file__).resolve().parents[2] / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from mech_chatbot.evaluation.metrics import nearest_rank
+
 
 DEFAULT_EXCLUDED_REASONS = {"client_cancelled"}
-
-
-def _nearest_rank(values: list[float], ratio: float):
-    if not values:
-        return None
-    index = min(len(values) - 1, max(0, int(len(values) * ratio + 0.999999) - 1))
-    return values[index]
 
 
 def _parse_timestamp(value: str | None):
@@ -67,7 +67,7 @@ def build_snapshot(
             continue
         if end_at and (timestamp is None or timestamp > end_at):
             continue
-        if event.get("event") == "llm_generation":
+        if event.get("estimated_cost") is not None:
             estimated_cost += float(event.get("estimated_cost") or 0)
         if event.get("event") == "corrective_retrieval" and event.get("attempt"):
             corrective_attempts += 1
@@ -110,11 +110,12 @@ def build_snapshot(
         "legacy_reason_events": legacy_reason_events,
         "system_metrics": {
             "query_count": query_count,
-            "latency_p50_ms": _nearest_rank(ordered_latencies, 0.50),
-            "latency_p95_ms": _nearest_rank(ordered_latencies, 0.95),
+            "latency_p50_ms": nearest_rank(ordered_latencies, 0.50),
+            "latency_p95_ms": nearest_rank(ordered_latencies, 0.95),
             "estimated_cost": round(estimated_cost, 8),
             "correction_rate": corrective_attempts / query_count if query_count else 0.0,
             "repair_rate": repair_attempts / query_count if query_count else 0.0,
+            "retry_rate": (corrective_attempts + repair_attempts) / query_count if query_count else 0.0,
         },
     }
 
@@ -126,6 +127,7 @@ def render_markdown(report: dict) -> str:
         f"- Commit: `{report['source']['git_sha']}`",
         f"- Source: `{report['source']['path']}`",
         f"- Denominator: {report['denominator']}",
+        f"- Observed range: `{report['observed_range']['first']}` to `{report['observed_range']['last']}`",
         f"- Filters: `{json.dumps(report['filters'], ensure_ascii=False)}`",
         "",
         "| Refusal reason | Count |",
