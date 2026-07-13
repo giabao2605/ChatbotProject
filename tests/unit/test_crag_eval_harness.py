@@ -29,6 +29,9 @@ def _case(**overrides):
         "expected_document": "crag_eval_numbers_v12.md",
         "expected_page": 1,
         "expected_version": 12,
+        "expected_department": "CRAG_EVAL",
+        "expected_site": "CRAG-EVAL-HQ",
+        "expected_security_level": "internal",
     }
     case.update(overrides)
     return case
@@ -42,6 +45,18 @@ def test_manifest_validation_requires_complete_live_identity(tmp_path):
     path.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="allowed_sites"):
+        runner.load_manifest_files([path])
+
+
+def test_manifest_validation_rejects_invalid_outcome_and_missing_provenance(tmp_path):
+    runner = _load("run_eval_contract", "scripts/eval/run_eval.py")
+    path = tmp_path / "cases.jsonl"
+    path.write_text(json.dumps(_case(expected_outcome="maybe")) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid expected_outcome"):
+        runner.load_manifest_files([path])
+
+    path.write_text(json.dumps(_case(expected_document=None)) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="expected_document"):
         runner.load_manifest_files([path])
 
 
@@ -80,8 +95,15 @@ def test_preflight_checks_sql_and_qdrant_provenance():
             "PublicationState": "published",
             "IsCurrent": True,
             "SourceSystem": "crag-eval-v1",
+            "Servable": True, "OwnerDepartment": "CRAG_EVAL", "Site": "CRAG-EVAL-HQ",
+            "SecurityLevel": "internal",
         }],
-        qdrant_points=[{"doc_id": 41, "page": 1, "source_system": "crag-eval-v1"}],
+        qdrant_points=[{
+            "doc_id": 41, "page": 1, "source_system": "crag-eval-v1", "version_no": 12,
+            "lifecycle_status": "published", "review_status": "approved", "publication_state": "published",
+            "servable": True, "is_current": True, "owner_department": "CRAG_EVAL",
+            "site": "CRAG-EVAL-HQ", "security_level": "internal", "phong_ban_quyen": ["CRAG_EVAL"],
+        }],
         collection="MechChatbot_CRAG_Eval_v1",
     )
 
@@ -102,8 +124,15 @@ def test_preflight_rejects_wrong_collection_and_missing_page():
             "LifecycleStatus": "published", "ReviewStatus": "approved",
             "PublicationState": "published", "IsCurrent": True,
             "SourceSystem": "crag-eval-v1",
+            "Servable": True, "OwnerDepartment": "CRAG_EVAL", "Site": "CRAG-EVAL-HQ",
+            "SecurityLevel": "internal",
         }],
-        qdrant_points=[{"doc_id": 41, "page": 1, "source_system": "crag-eval-v1"}],
+        qdrant_points=[{
+            "doc_id": 41, "page": 1, "source_system": "crag-eval-v1", "version_no": 12,
+            "lifecycle_status": "published", "review_status": "approved", "publication_state": "published",
+            "servable": True, "is_current": True, "owner_department": "CRAG_EVAL",
+            "site": "CRAG-EVAL-HQ", "security_level": "internal", "phong_ban_quyen": ["CRAG_EVAL"],
+        }],
         collection="MechChatbot_CRAG_Eval_v1",
     )
     assert report["passed"] is False

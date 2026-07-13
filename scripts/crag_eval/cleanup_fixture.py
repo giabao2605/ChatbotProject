@@ -5,15 +5,11 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-for candidate in (ROOT, ROOT / "src"):
-    if str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
-
 from scripts.crag_eval.constants import DEFAULT_OUTPUT, FIXTURE_BATCH, FIXTURE_COLLECTION, LIVE_OPT_IN
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def build_cleanup_plan(asset_root: Path, workspace_root: Path = ROOT) -> dict:

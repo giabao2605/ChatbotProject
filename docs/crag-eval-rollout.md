@@ -20,9 +20,9 @@ $env:QDRANT_COLLECTION = 'MechChatbot_CRAG_Eval_v1'
 $env:RUN_CRAG_EVAL_FIXTURE = '1'
 $env:RAG_EXECUTION_CONTEXT = 'evaluation'
 
-chat_env\Scripts\python.exe scripts\crag_eval\generate_fixture.py
-chat_env\Scripts\python.exe scripts\crag_eval\ingest_fixture.py
-chat_env\Scripts\python.exe scripts\crag_eval\preflight.py `
+chat_env\Scripts\python.exe -m scripts.crag_eval.generate_fixture
+chat_env\Scripts\python.exe -m scripts.crag_eval.ingest_fixture
+chat_env\Scripts\python.exe -m scripts.crag_eval.preflight `
   --manifest data\crag_eval_v1\eval_manifest.jsonl `
   --output reports\crag-rollout\preflight.json
 ```
@@ -35,7 +35,7 @@ Choose a new output directory for each attempt. The orchestrator refuses to over
 
 ```powershell
 $run = Get-Date -Format 'yyyyMMdd-HHmmss'
-chat_env\Scripts\python.exe scripts\crag_eval\run_rollout.py `
+chat_env\Scripts\python.exe -m scripts.crag_eval.run_rollout `
   --manifest data\crag_eval_v1\eval_manifest.jsonl `
   --output-dir "reports\crag-rollout\$run" `
   --trace logs\rag_trace.jsonl
@@ -56,8 +56,8 @@ Do not start a production pilot unless `gate.json` contains `"passed": true`. Du
 Inspect the dry-run plan, then execute it only after confirming the staging SQL and Qdrant environment.
 
 ```powershell
-chat_env\Scripts\python.exe scripts\crag_eval\cleanup_fixture.py
-chat_env\Scripts\python.exe scripts\crag_eval\cleanup_fixture.py --execute
+chat_env\Scripts\python.exe -m scripts.crag_eval.cleanup_fixture
+chat_env\Scripts\python.exe -m scripts.crag_eval.cleanup_fixture --execute
 ```
 
 After cleanup, rerun preflight. The expected result is failure because the tagged SQL documents and staging collection no longer exist. Production collections and SQL rows with any other `SourceSystem` are outside the cleanup query.

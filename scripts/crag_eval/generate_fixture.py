@@ -4,13 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
-from datetime import date, timedelta
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from scripts.crag_eval.constants import (
     DEFAULT_OUTPUT, FIXTURE_BATCH, FIXTURE_CODE_PREFIX, FIXTURE_DEPARTMENT,
@@ -61,6 +55,8 @@ def _source(document: dict) -> dict:
     return {
         "expected_document": document["filename"], "expected_page": 1,
         "expected_version": document["version"], "expected_sources": [document["filename"]],
+        "expected_department": FIXTURE_DEPARTMENT, "expected_site": document["site"],
+        "expected_security_level": document["security_level"],
     }
 
 
@@ -82,7 +78,6 @@ def generate_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
     output = Path(output)
     corpus = output / "corpus"
     corpus.mkdir(parents=True, exist_ok=True)
-    today = date.today()
     records = []
     for doc in DOCUMENTS:
         path = corpus / doc["filename"]
@@ -94,8 +89,7 @@ def generate_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
         records.append({
             **doc, "batch_id": FIXTURE_BATCH, "department": FIXTURE_DEPARTMENT,
             "path": str(path.relative_to(output)).replace("\\", "/"),
-            "effective_date": (today - timedelta(days=1)).isoformat(),
-            "expiry_date": (today + timedelta(days=365)).isoformat(),
+            "effective_date": "2026-01-01", "expiry_date": "2030-01-01",
         })
     (output / "corpus_manifest.jsonl").write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records), encoding="utf-8"

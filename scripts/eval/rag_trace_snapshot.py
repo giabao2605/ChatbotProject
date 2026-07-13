@@ -125,6 +125,8 @@ def build_snapshot(
             "repair_rate": repair_attempts / query_count if query_count else 0.0,
             "max_corrections_per_query": max(corrections_by_trace.values(), default=0),
             "max_repairs_per_query": max(repairs_by_trace.values(), default=0),
+            "correction_trace_ids": sorted(corrections_by_trace),
+            "repair_trace_ids": sorted(repairs_by_trace),
             "retry_rate": llm_retries / query_count if query_count else 0.0,
         },
     }

@@ -6,13 +6,7 @@ import argparse
 import hashlib
 import json
 import os
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[2]
-for candidate in (ROOT, ROOT / "src"):
-    if str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
 
 from scripts.crag_eval.constants import FIXTURE_BATCH, FIXTURE_COLLECTION, LIVE_OPT_IN
 
@@ -37,6 +31,10 @@ def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str)
             and str(doc.get("PublicationState") or "").lower() == "published"
             and bool(doc.get("IsCurrent"))
             and int(doc.get("VersionNo") or 0) == int(case.get("expected_version") or 0)
+            and bool(doc.get("Servable"))
+            and doc.get("OwnerDepartment") == case.get("expected_department")
+            and doc.get("Site") == case.get("expected_site")
+            and doc.get("SecurityLevel") == case.get("expected_security_level")
         )
         if not valid_sql:
             failures.append({"case_id": case["id"], "reason": "sql_provenance_invalid"})
@@ -46,18 +44,37 @@ def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str)
             int(point.get("doc_id") or 0) == int(doc["DocID"])
             and int(point.get("page") or point.get("page_number") or point.get("trang_so") or 0) == expected_page
             and point.get("source_system") == FIXTURE_BATCH
+            and int(point.get("version_no") or 0) == int(case.get("expected_version") or 0)
+            and str(point.get("lifecycle_status") or "").lower() == "published"
+            and str(point.get("review_status") or "").lower() == "approved"
+            and str(point.get("publication_state") or "").lower() == "published"
+            and bool(point.get("servable"))
+            and bool(point.get("is_current"))
+            and point.get("owner_department") == case.get("expected_department")
+            and point.get("site") == case.get("expected_site")
+            and point.get("security_level") == case.get("expected_security_level")
+            and case.get("expected_department") in (point.get("phong_ban_quyen") or [])
             for point in qdrant_points
         )
         if not exists:
             failures.append({"case_id": case["id"], "reason": "qdrant_page_missing"})
     fingerprint_payload = {
         "documents": sorted(
-            ({key: row.get(key) for key in ("DocID", "TenFile", "VersionNo", "LifecycleStatus", "ReviewStatus", "PublicationState", "IsCurrent", "SourceSystem")}
+            ({key: row.get(key) for key in (
+                "DocID", "TenFile", "VersionNo", "LifecycleStatus", "ReviewStatus",
+                "PublicationState", "IsCurrent", "Servable", "SourceSystem",
+                "OwnerDepartment", "Site", "SecurityLevel",
+            )}
              for row in sql_documents),
             key=lambda row: (str(row.get("TenFile")), int(row.get("DocID") or 0)),
         ),
         "points": sorted(
-            ({key: point.get(key) for key in ("doc_id", "page", "page_number", "trang_so", "source_system")}
+            ({key: point.get(key) for key in (
+                "doc_id", "page", "page_number", "trang_so", "source_system", "version_no",
+                "lifecycle_status", "review_status", "publication_state", "servable", "is_current",
+                "owner_department", "site", "security_level", "phong_ban_quyen",
+                "_point_id", "_content_sha256",
+            )}
              for point in qdrant_points),
             key=lambda point: (int(point.get("doc_id") or 0), int(point.get("page") or point.get("page_number") or point.get("trang_so") or 0)),
         ),
@@ -88,7 +105,8 @@ def run_live_preflight(cases: list[dict]) -> dict:
     with engine.connect() as conn:
         rows = conn.execute(text("""
             SELECT DocID, TenFile, VersionNo, LifecycleStatus, ReviewStatus,
-                   PublicationState, IsCurrent, SourceSystem
+                   PublicationState, IsCurrent, Servable, SourceSystem,
+                   OwnerDepartment, Site, SecurityLevel
             FROM dbo.TaiLieu WHERE SourceSystem=:batch
         """), {"batch": FIXTURE_BATCH}).mappings().all()
     client = _get_qdrant_client()
@@ -100,7 +118,13 @@ def run_live_preflight(cases: list[dict]) -> dict:
                 key="metadata.doc_id", match=models.MatchValue(value=int(row["DocID"]))
             )]), limit=100, with_payload=True, with_vectors=False,
         )
-        points.extend(dict((point.payload or {}).get("metadata") or {}) for point in found)
+        for point in found:
+            raw_payload = dict(point.payload or {})
+            metadata = dict(raw_payload.get("metadata") or {})
+            content = raw_payload.get("page_content") or raw_payload.get("text") or raw_payload.get("content") or ""
+            metadata["_point_id"] = str(point.id)
+            metadata["_content_sha256"] = hashlib.sha256(str(content).encode("utf-8")).hexdigest()
+            points.append(metadata)
     return check_fixture_cases(cases, [dict(row) for row in rows], points, collection=QDRANT_COLLECTION)
 
 

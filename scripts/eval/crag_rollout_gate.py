@@ -20,10 +20,30 @@ def compare_reports(
     candidate_outcomes = candidate_eval.get("outcome_confusion", {})
     baseline_system = baseline_trace.get("system_metrics", {})
     candidate_system = candidate_trace.get("system_metrics", {})
+    candidate_cases = candidate_eval.get("cases", [])
+    required_corrections = {
+        row.get("trace_id") for row in candidate_cases if row.get("requires_correction")
+    }
+    required_repairs = {
+        row.get("trace_id") for row in candidate_cases if row.get("requires_repair")
+    }
+    correction_traces = set(candidate_system.get("correction_trace_ids", []))
+    repair_traces = set(candidate_system.get("repair_trace_ids", []))
+    flags = candidate_eval.get("feature_flags", {})
 
     baseline_wrong_refusal = baseline_outcomes.get("wrong_refusal", 0)
     candidate_wrong_refusal = candidate_outcomes.get("wrong_refusal", 0)
     checks = {
+        "candidate_cases_passed": (
+            candidate_eval.get("total_cases", 0) > 0
+            and candidate_eval.get("passed_cases") == candidate_eval.get("total_cases")
+        ),
+        "candidate_features_enabled": (
+            str(flags.get("crag", "")).lower() == "true"
+            and str(flags.get("claim_repair", "")).lower() == "true"
+        ),
+        "required_corrections_exercised": required_corrections <= correction_traces,
+        "required_repairs_exercised": required_repairs <= repair_traces,
         "wrong_refusal_reduced": (
             candidate_wrong_refusal < baseline_wrong_refusal
             if baseline_wrong_refusal > 0

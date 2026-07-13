@@ -11,10 +11,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 from scripts.crag_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _utc_now() -> str:
@@ -35,7 +34,7 @@ def _run(label: str, manifest: Path, output: Path, trace: Path, *, enabled: bool
     })
     started_at = _utc_now()
     eval_result = subprocess.run([
-        sys.executable, str(ROOT / "scripts" / "eval" / "run_eval.py"),
+        sys.executable, "-m", "scripts.eval.run_eval",
         "--manifest", str(manifest), "--output-dir", str(output), "--run-label", label,
     ], cwd=ROOT, env=env, check=False)
     completed_at = _utc_now()
@@ -43,7 +42,7 @@ def _run(label: str, manifest: Path, output: Path, trace: Path, *, enabled: bool
     if not (run_dir / "eval.json").exists():
         raise RuntimeError(f"{label} failed before writing eval artifacts (exit {eval_result.returncode})")
     snapshot_result = subprocess.run([
-        sys.executable, str(ROOT / "scripts" / "eval" / "rag_trace_snapshot.py"), str(trace),
+        sys.executable, "-m", "scripts.eval.rag_trace_snapshot", str(trace),
         "--start", started_at, "--end", completed_at, "--context", "evaluation",
         "--json-output", str(run_dir / "trace.json"),
         "--markdown-output", str(run_dir / "trace.md"),
@@ -58,6 +57,10 @@ def run_rollout(manifest: Path, output: Path, trace: Path) -> dict:
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before running live staging evaluation")
     if not manifest.is_file() or not trace.is_file():
         raise ValueError("manifest and trace files must exist")
+    for label in ("baseline", "candidate"):
+        run_dir = output / label
+        if run_dir.exists() and any(run_dir.iterdir()):
+            raise ValueError(f"refusing to overwrite non-empty run directory: {run_dir}")
     git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest_sha = _sha(manifest)
     provider_config = {
@@ -69,16 +72,20 @@ def run_rollout(manifest: Path, output: Path, trace: Path) -> dict:
         json.dumps(provider_config, sort_keys=True).encode("utf-8")
     ).hexdigest()
     baseline = _run("baseline", manifest, output, trace, enabled=False)
+    if _sha(manifest) != manifest_sha:
+        raise RuntimeError("manifest changed after baseline")
     if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip() != git_sha:
         raise RuntimeError("commit changed between baseline and candidate")
     candidate = _run("candidate", manifest, output, trace, enabled=True)
+    if _sha(manifest) != manifest_sha:
+        raise RuntimeError("manifest changed after candidate")
     baseline_preflight = json.loads((output / "baseline" / "preflight.json").read_text(encoding="utf-8"))
     candidate_preflight = json.loads((output / "candidate" / "preflight.json").read_text(encoding="utf-8"))
     if baseline_preflight["fixture_fingerprint"] != candidate_preflight["fixture_fingerprint"]:
         raise RuntimeError("fixture snapshot changed between baseline and candidate")
     gate_path = output / "gate.json"
     gate_result = subprocess.run([
-        sys.executable, str(ROOT / "scripts" / "eval" / "crag_rollout_gate.py"),
+        sys.executable, "-m", "scripts.eval.crag_rollout_gate",
         str(output / "baseline" / "eval.json"), str(output / "candidate" / "eval.json"),
         str(output / "baseline" / "trace.json"), str(output / "candidate" / "trace.json"),
         "--output", str(gate_path),

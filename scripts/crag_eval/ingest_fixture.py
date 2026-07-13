@@ -5,15 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 
 from sqlalchemy import text
-
-ROOT = Path(__file__).resolve().parents[2]
-for candidate in (ROOT, ROOT / "src"):
-    if str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
 
 from scripts.crag_eval.constants import DEFAULT_OUTPUT, FIXTURE_BATCH, FIXTURE_COLLECTION, LIVE_OPT_IN
 from scripts.crag_eval.generate_fixture import generate_fixture

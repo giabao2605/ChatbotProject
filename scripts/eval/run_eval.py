@@ -28,6 +28,14 @@ REQUIRED_IDENTITY_FIELDS = (
     "allowed_sites",
     "max_security_level",
 )
+REQUIRED_PROVENANCE_FIELDS = (
+    "expected_document", "expected_page", "expected_version", "expected_department",
+    "expected_site", "expected_security_level",
+)
+VALID_EXPECTED_OUTCOMES = {
+    "full_answer", "partial_answer", "clarification_required",
+    "insufficient_evidence", "access_denied",
+}
 RUN_LABELS = ("baseline", "candidate")
 
 
@@ -51,10 +59,27 @@ def validate_live_case(case: dict, *, source: Path, line_number: int) -> None:
             f"{source}:{line_number}: live case {case.get('id', '<unknown>')} missing "
             + ", ".join(missing)
         )
+    for name in ("user_roles", "allowed_departments", "allowed_sites"):
+        value = case[name]
+        if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
+            raise ValueError(f"{source}:{line_number}: {name} must be a non-empty string list")
+    if not isinstance(case["user_department"], str) or not case["user_department"].strip():
+        raise ValueError(f"{source}:{line_number}: user_department must be a non-empty string")
+    if case["max_security_level"] not in {"public", "internal", "confidential"}:
+        raise ValueError(f"{source}:{line_number}: invalid max_security_level")
     if not case.get("question"):
         raise ValueError(f"{source}:{line_number}: case question is required")
     if "expected_outcome" not in case and "should_refuse" not in case:
         raise ValueError(f"{source}:{line_number}: expected_outcome is required")
+    if "expected_outcome" in case and case["expected_outcome"] not in VALID_EXPECTED_OUTCOMES:
+        raise ValueError(f"{source}:{line_number}: invalid expected_outcome")
+    missing_provenance = [name for name in REQUIRED_PROVENANCE_FIELDS if case.get(name) is None]
+    if missing_provenance:
+        raise ValueError(
+            f"{source}:{line_number}: case missing provenance " + ", ".join(missing_provenance)
+        )
+    if case.get("admin_exception") and "admin" not in {role.strip().lower() for role in case["user_roles"]}:
+        raise ValueError(f"{source}:{line_number}: admin_exception requires the admin role")
 
 
 def load_manifest_files(paths: list[Path]) -> list[dict]:
@@ -97,6 +122,7 @@ def _render_markdown(report: dict) -> str:
         f"- Manifests: `{json.dumps(report['manifest_files'], ensure_ascii=False)}`",
         f"- Cases: {report['total_cases']}",
         f"- Passed: {report['passed_cases']}", "",
+        f"- Retrieval Recall@5: `{json.dumps(report['retrieval_recall_at_5'])}`", "",
         "## Outcome confusion", "",
     ]
     lines.extend(f"- {name}: {count}" for name, count in report["outcome_confusion"].items())
@@ -145,6 +171,7 @@ def run_evaluation(
         expected = expected_outcome(case)
         should_refuse = expected in REFUSAL_OUTCOMES
         roles = case["user_roles"]
+        trace_id = f"eval:{run_label}:{case['id']}"
         try:
             intent = extract_search_intent(
                 case["question"], [], case["user_department"], roles,
@@ -155,6 +182,7 @@ def run_evaluation(
             stream, ref_text, _, _, debug = chat_with_rag(
                 case["question"], None, [], [], case["user_department"], roles,
                 case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
+                trace_id=trace_id,
             )
             answer = "".join(stream)
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
@@ -180,12 +208,19 @@ def run_evaluation(
             outcome_rows.append({
                 "expected": expected, "actual": actual, "answer_correct": passed,
                 "leaked": bool(forbidden_hits) and not is_admin,
-                "legacy_admin_bypass": bool(forbidden_hits) and is_admin,
+                "legacy_admin_bypass": (
+                    bool(case.get("admin_exception")) and is_admin and actual not in REFUSAL_OUTCOMES
+                ),
             })
             row = {
                 "id": case["id"], "passed": passed, "expected_outcome": expected,
                 "actual_outcome": actual, "latency_ms": latency_ms, "answer": answer,
                 "reference": ref_text, "retrieved_sources": retrieved,
+                "retrieval_expected": bool(expected_sources) and expected != "access_denied",
+                "retrieval_passed": source_ok,
+                "trace_id": trace_id,
+                "requires_correction": bool(case.get("requires_correction")),
+                "requires_repair": bool(case.get("requires_repair")),
             }
         except Exception as exc:
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
@@ -198,7 +233,9 @@ def run_evaluation(
             row = {
                 "id": case["id"], "passed": False, "expected_outcome": expected,
                 "actual_outcome": "error", "latency_ms": latency_ms,
-                "error": str(exc),
+                "error": str(exc), "retrieval_expected": False, "retrieval_passed": False,
+                "trace_id": trace_id, "requires_correction": bool(case.get("requires_correction")),
+                "requires_repair": bool(case.get("requires_repair")),
             }
         rows.append(row)
         level = case.get("level", "fixture")
@@ -206,6 +243,7 @@ def run_evaluation(
         levels[level]["pass"] += int(row["passed"])
 
     completed_at = _utc_now()
+    retrieval_rows = [row for row in rows if row.get("retrieval_expected")]
     report = {
         "schema": "rag-labeled-eval-v2", "run_label": run_label, "git_sha": _git_sha(),
         "started_at": started_at, "completed_at": completed_at,
@@ -217,6 +255,14 @@ def run_evaluation(
         },
         "total_cases": len(cases), "passed_cases": sum(row["passed"] for row in rows),
         "outcome_confusion": summarize_outcomes(outcome_rows),
+        "retrieval_recall_at_5": {
+            "numerator": sum(bool(row.get("retrieval_passed")) for row in retrieval_rows),
+            "denominator": len(retrieval_rows),
+            "value": (
+                sum(bool(row.get("retrieval_passed")) for row in retrieval_rows) / len(retrieval_rows)
+                if retrieval_rows else None
+            ),
+        },
         "latency_p50_ms": nearest_rank(latencies, 0.50),
         "latency_p95_ms": nearest_rank(latencies, 0.95),
         "levels": dict(levels), "cases": rows,
