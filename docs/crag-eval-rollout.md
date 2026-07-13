@@ -41,7 +41,7 @@ chat_env\Scripts\python.exe -m scripts.crag_eval.run_rollout `
   --trace logs\rag_trace.jsonl
 ```
 
-The baseline subprocess forces both feature flags off. The candidate subprocess forces both flags on. Both inherit the same provider settings and use concurrency 1. Each trace snapshot includes only `execution_context=evaluation` events inside that run's UTC window.
+The baseline subprocess forces both feature flags off. The candidate subprocess forces both flags on. Semantic cache is forced off for both runs so baseline answers cannot bypass candidate retrieval or repair. Both inherit the same provider settings and use concurrency 1. Each trace snapshot includes only `execution_context=evaluation` events inside that run's UTC window.
 
 Runner exit status is diagnostic only. If an evaluation wrote its artifacts, the orchestrator continues and `scripts/eval/crag_rollout_gate.py` is the sole rollout decision. The output contains:
 

@@ -80,6 +80,12 @@ def validate_live_case(case: dict, *, source: Path, line_number: int) -> None:
         )
     if case.get("admin_exception") and "admin" not in {role.strip().lower() for role in case["user_roles"]}:
         raise ValueError(f"{source}:{line_number}: admin_exception requires the admin role")
+    if "expected_sources" in case and (
+        not isinstance(case["expected_sources"], list)
+        or not case["expected_sources"]
+        or not all(isinstance(item, str) and item.strip() for item in case["expected_sources"])
+    ):
+        raise ValueError(f"{source}:{line_number}: expected_sources must be a non-empty string list")
 
 
 def load_manifest_files(paths: list[Path]) -> list[dict]:
@@ -189,7 +195,7 @@ def run_evaluation(
             latencies.append(latency_ms)
             actual = classify_actual_outcome(answer)
             retrieved = [str(doc.get("file_goc", "")).lower() for doc in debug.get("retrieved_docs", [])[:5]]
-            expected_sources = case.get("expected_sources", [])
+            expected_sources = case.get("expected_sources") or [case["expected_document"]]
             forbidden_sources = case.get("forbidden_sources", [])
             source_ok = expected == "access_denied" or all(
                 any(src.lower() in item for item in retrieved) for src in expected_sources
@@ -252,6 +258,7 @@ def run_evaluation(
         "feature_flags": {
             "crag": os.environ.get("RAG_CRAG_ENABLED", "false"),
             "claim_repair": os.environ.get("RAG_CLAIM_REPAIR_ENABLED", "false"),
+            "semantic_cache": os.environ.get("SEMANTIC_CACHE_ENABLED", "true"),
         },
         "total_cases": len(cases), "passed_cases": sum(row["passed"] for row in rows),
         "outcome_confusion": summarize_outcomes(outcome_rows),

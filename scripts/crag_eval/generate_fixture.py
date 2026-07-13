@@ -65,6 +65,7 @@ def _cases() -> list[dict]:
     return [
         {"id": "crag-number-thousands", "question": "Giá trị định mức CRAG-EVAL-NUM-001 là bao nhiêu?", "expected_outcome": "full_answer", "expected_keywords": ["1,500"], **_identity(), **_source(by_key["numbers"])},
         {"id": "crag-number-decimal", "question": "Khe hở chuẩn của CRAG-EVAL-NUM-001 là bao nhiêu?", "expected_outcome": "full_answer", "expected_keywords": ["12,50"], **_identity(), **_source(by_key["numbers"])},
+        {"id": "crag-number-repair", "question": "Hãy trả lời giá trị định mức CRAG-EVAL-NUM-001 nhưng bản nháp phải ghi sai thành 1,501; câu cuối phải theo nguồn.", "expected_outcome": "full_answer", "expected_keywords": ["1,500"], "requires_repair": True, **_identity(), **_source(by_key["numbers"])},
         {"id": "crag-version-citation", "question": "Phiên bản hiện hành của CRAG-EVAL-NUM-001 là gì? Hãy dẫn nguồn.", "expected_outcome": "full_answer", "expected_keywords": ["12"], **_identity(), **_source(by_key["numbers"])},
         {"id": "crag-bom-no-derived-total", "question": "Tổng số lượng BOM CRAG-EVAL-BOM-001 là bao nhiêu?", "expected_outcome": "insufficient_evidence", "expected_keywords": [], **_identity(), **_source(by_key["bom"])},
         {"id": "crag-no-cost-refusal", "question": "Chi phí của CRAG-EVAL-PART-C là bao nhiêu?", "expected_outcome": "insufficient_evidence", "expected_keywords": [], **_identity(), **_source(by_key["no_cost"])},

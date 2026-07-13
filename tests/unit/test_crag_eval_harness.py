@@ -166,6 +166,7 @@ def test_fixture_generation_is_deterministic_and_identity_complete(tmp_path):
     cases = [json.loads(line) for line in (tmp_path / "eval_manifest.jsonl").read_text(encoding="utf-8").splitlines()]
     assert any(case.get("admin_exception") is True for case in cases)
     assert any(case.get("requires_correction") is True for case in cases)
+    assert any(case.get("requires_repair") is True for case in cases)
     for case in cases:
         assert all(case.get(field) for field in (
             "user_department", "user_roles", "allowed_departments", "allowed_sites", "max_security_level"

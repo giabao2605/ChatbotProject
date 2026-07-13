@@ -41,7 +41,10 @@ def compare_reports(
         "candidate_features_enabled": (
             str(flags.get("crag", "")).lower() == "true"
             and str(flags.get("claim_repair", "")).lower() == "true"
+            and str(flags.get("semantic_cache", "")).lower() == "false"
         ),
+        "correction_fixture_present": bool(required_corrections),
+        "repair_fixture_present": bool(required_repairs),
         "required_corrections_exercised": required_corrections <= correction_traces,
         "required_repairs_exercised": required_repairs <= repair_traces,
         "wrong_refusal_reduced": (
