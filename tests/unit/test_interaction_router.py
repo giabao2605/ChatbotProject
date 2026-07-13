@@ -90,6 +90,74 @@ def test_fast_internal_rule_skips_embedding_and_llm(q):
     assert calls == {"embed": 0, "llm": 0}
 
 
+def test_configuration_code_question_skips_llm_safety_misclassification():
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình của CRAG-EVAL-SECRET-001 là gì?",
+        llm_classifier=classifier,
+    )
+
+    assert result.route == router.ROUTE_TECHNICAL
+    assert result.layer == router.LAYER_RULE
+    assert calls["llm"] == 0
+
+
+def test_system_configuration_question_still_reaches_llm_router():
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình hệ thống chatbot/API là gì?",
+        llm_classifier=classifier,
+    )
+
+    assert result.route == router.ROUTE_SAFETY_BLOCK
+    assert result.layer == router.LAYER_LLM
+    assert calls["llm"] == 1
+
+
+def test_code_shaped_system_credential_still_reaches_llm_router():
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình API-KEY-123 của hệ thống chatbot là gì?",
+        llm_classifier=classifier,
+    )
+
+    assert result.route == router.ROUTE_SAFETY_BLOCK
+    assert result.layer == router.LAYER_LLM
+    assert calls["llm"] == 1
+
+
+def test_multi_segment_client_secret_still_reaches_llm_router():
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình CLIENT-SECRET-PROD-123 là gì?",
+        llm_classifier=classifier,
+    )
+
+    assert result.route == router.ROUTE_SAFETY_BLOCK
+    assert result.layer == router.LAYER_LLM
+    assert calls["llm"] == 1
+
+
 # ------------------------- L1 (P1) -------------------------
 @pytest.fixture(autouse=True)
 def _low_threshold(monkeypatch):

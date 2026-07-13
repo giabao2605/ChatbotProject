@@ -225,6 +225,30 @@ def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
         "Tài liệu không có tổng số lượng BOM được phê duyệt, nhưng tổng tính từ BOM là 999."
     ) == "full_answer"
     assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| PART-A | 2 |\n| PART-B | 3 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này, nhưng tổng là 999.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| PART-A | 2 |\n| PART-B | 3 |"
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| Tổng | 5 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| Tổng cộng | 5 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| Grand total | 5 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "full_answer"
+    assert classify_actual_outcome(
         "Mình không tìm thấy mã số cũ; mã thay thế là CRAG-EVAL-NEW-001."
     ) == "full_answer"
     assert classify_actual_outcome("Mình không thể hỗ trợ yêu cầu này do chính sách truy cập.") == "access_denied"

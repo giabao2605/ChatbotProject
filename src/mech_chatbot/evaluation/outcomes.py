@@ -57,6 +57,12 @@ def classify_actual_outcome(answer: str) -> str:
         r"\s*(?:\[nguon:[^\]]+\])?",
         folded.strip(),
     ) or re.fullmatch(
+        r"khong co tong bom duoc phe duyet trong tai lieu nay\.\s*"
+        r"(?![\s\S]*\|\s*(?:tong|sum|total|grand)\b[^|]*\|)"
+        r"\| ma \| so luong \|\s*\|[-:| ]+\|\s*"
+        r"(?:\|[^\n]+\|\s*)+\[nguon:[^\]]+\]",
+        folded.strip(),
+    ) or re.fullmatch(
         r"rat tiec,\s*(?:minh|toi) khong tim thay ma so .+ nao trong he thong ban ve hien tai\."
         r"\s*vui long kiem tra lai ma hoac mo ta ro hon\.",
         folded.strip(),

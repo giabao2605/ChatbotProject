@@ -68,6 +68,11 @@ _HOW_TO_META_CUES = (
     "cach su dung", "huong dan su dung", "lam the nao de upload",
     "cach upload", "cach tai len", "lam sao de tai len",
 )
+_SYSTEM_CONFIGURATION_CUES = (
+    "he thong", "chatbot", "api key", "api-key", "access token",
+    "credential", "mat khau", "password", "client secret", "client-secret",
+    "private key", "private-key", "bearer token", "bearer-token",
+)
 
 
 def _department_router_pattern_match(text: str, department_codes) -> str | None:
@@ -110,6 +115,21 @@ def _fast_technical_route(text, department_codes=None) -> Optional[RouteResult]:
             LAYER_RULE,
             confidence=0.98,
             reason="internal_keyword",
+        )
+    if (
+        "ma cau hinh" in q
+        and not any(cue in q for cue in _SYSTEM_CONFIGURATION_CUES)
+        and re.search(
+            r"\b[A-Z0-9]+(?:-[A-Z0-9]+){3,}\b",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        )
+    ):
+        return RouteResult(
+            ROUTE_TECHNICAL,
+            LAYER_RULE,
+            confidence=0.98,
+            reason="internal_configuration_code",
         )
     profile_pattern = _department_router_pattern_match(text, department_codes)
     if profile_pattern:
