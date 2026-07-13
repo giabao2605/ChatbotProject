@@ -1,0 +1,2 @@
+# Install in an isolated encoder environment, not the RAG/ingestion environment.
+FlagEmbedding==1.4.0

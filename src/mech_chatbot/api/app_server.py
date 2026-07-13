@@ -97,6 +97,7 @@ from mech_chatbot.services import (
     list_expiring_documents,
     list_ingestion_jobs,
     list_feedbacks,
+    list_graph_proposals,
     list_known_departments,
     list_known_sites,
     list_materials,
@@ -123,6 +124,7 @@ from mech_chatbot.services import (
     reject_document,
     reject_ingestion_job,
     resolve_access_request,
+    review_graph_proposal,
     refresh_expired_status,
     revoke_user_clearance,
     revoke_user_department,
@@ -2355,6 +2357,56 @@ def external_ai_policy_set(
 def setting_set(key: str, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "platform_admin")
     return {"ok": bool(set_app_setting(key, body.get("value"), updated_by=profile.get("username") or "System"))}
+
+
+@data_router.get("/admin/graph/proposals")
+def graph_proposals(
+    status_value: str = "pending",
+    limit: int = 100,
+    profile: dict[str, Any] = Depends(require_any_role("knowledge_approver")),
+):
+    return {"proposals": _rows_to_json(list_graph_proposals(status=status_value, limit=limit))}
+
+
+def _review_graph_proposal_endpoint(proposal_id: int, action: str, body: dict[str, Any], profile: dict[str, Any]):
+    _assert_any_role(profile, "knowledge_approver")
+    result = review_graph_proposal(
+        proposal_id,
+        action,
+        reviewer=profile.get("username") or "System",
+        note=body.get("note"),
+    )
+    if not result.get("ok") and result.get("reason") == "not_found":
+        raise HTTPException(status_code=404, detail="Graph proposal not found")
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("reason") or "Graph proposal conflict")
+    write_audit_log(
+        action=f"graph_proposal_{action}",
+        username=profile.get("username") or "System",
+        entity_type="graph_proposal",
+        entity_id=int(proposal_id),
+        details={"status": action},
+        user_id=profile.get("user_id"),
+    )
+    return result
+
+
+@data_router.post("/admin/graph/proposals/{proposal_id}/approve")
+def graph_proposal_approve(
+    proposal_id: int,
+    body: dict[str, Any],
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    return _review_graph_proposal_endpoint(proposal_id, "approve", body, profile)
+
+
+@data_router.post("/admin/graph/proposals/{proposal_id}/reject")
+def graph_proposal_reject(
+    proposal_id: int,
+    body: dict[str, Any],
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    return _review_graph_proposal_endpoint(proposal_id, "reject", body, profile)
 
 
 app.include_router(auth_router)

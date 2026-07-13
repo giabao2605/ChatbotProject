@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import unicodedata
 
 
 ANSWER_OUTCOMES = {"full_answer", "partial_answer", "clarification_required"}
@@ -33,13 +34,22 @@ def classify_outcome(expected: str, actual: str, *, answer_correct: bool, leaked
 
 def classify_actual_outcome(answer: str) -> str:
     normalized = str(answer or "").lower()
-    if any(marker in normalized for marker in ["chưa đủ quyền", "protected by access control", "access request"]):
+    folded = "".join(
+        char for char in unicodedata.normalize("NFKD", normalized)
+        if not unicodedata.combining(char)
+    ).replace("đ", "d")
+    if any(marker in folded for marker in [
+        "chua du quyen", "chinh sach truy cap", "protected by access control", "access request"
+    ]):
         return "access_denied"
-    if any(marker in normalized for marker in ["vui lòng chỉ định", "bạn muốn so sánh", "which version"]):
+    if any(marker in folded for marker in ["vui long chi dinh", "ban muon so sanh", "which version"]):
         return "clarification_required"
-    if any(marker in normalized for marker in ["trả lời được một phần", "phần còn lại", "partial answer"]):
+    if any(marker in folded for marker in ["tra loi duoc mot phan", "phan con lai", "partial answer"]):
         return "partial_answer"
-    if any(marker in normalized for marker in ["không ghi thông tin", "tài liệu hiện tại không", "không đủ", "thiếu dữ kiện", "không tự ước lượng"]):
+    if any(marker in folded for marker in [
+        "khong ghi thong tin", "tai lieu hien tai khong", "khong cong bo",
+        "khong du", "thieu du kien", "khong tu uoc luong", "khong the ho tro yeu cau nay",
+    ]):
         return "insufficient_evidence"
     return "full_answer"
 

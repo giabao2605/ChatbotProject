@@ -11,7 +11,10 @@ import hashlib
 
 
 def enabled():
-    return os.getenv("SEMANTIC_CACHE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y", "on"}
+    configured = os.getenv("SEMANTIC_CACHE_ENABLED")
+    if configured is None and os.getenv("RAG_EXECUTION_CONTEXT", "production").strip().lower() == "evaluation":
+        return False
+    return str(configured if configured is not None else "true").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def sim_threshold():
@@ -43,15 +46,37 @@ def cosine(a, b):
     return dot / (math.sqrt(na) * math.sqrt(nb))
 
 
+def _env_flag(name):
+    return "1" if os.getenv(name, "false").strip().lower() in {"1", "true", "yes", "y", "on"} else "0"
+
+
+def pipeline_namespace():
+    flags = (
+        "RAG_CRAG_ENABLED",
+        "RAG_CLAIM_REPAIR_ENABLED",
+        "RAG_GROUNDED_MATH_ENABLED",
+        "RAG_LATE_INTERACTION_ENABLED",
+        "RAG_QUERY_DECOMPOSITION_ENABLED",
+        "RAG_GRAPH_RETRIEVAL_ENABLED",
+    )
+    versions = (
+        os.getenv("RAG_PLANNER_VERSION", "planner-v1"),
+        os.getenv("RAG_LATE_INDEX_VERSION", "late-v1"),
+        os.getenv("RAG_GRAPH_SERVING_EPOCH", "graph-v1"),
+    )
+    raw = "|".join([f"{name}={_env_flag(name)}" for name in flags] + list(versions))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
 def scope_signature(user_department, allowed_departments, max_security_level, allowed_sites, user_roles):
     roles = sorted([str(r).lower() for r in (user_roles or [])])
     if "admin" in roles:
-        return "admin"
+        return "admin|pipe=" + pipeline_namespace()
     deps = sorted(set([str(d) for d in (allowed_departments or []) if d] +
                       ([str(user_department)] if user_department else [])))
     sites = sorted(set([str(s) for s in (allowed_sites or []) if s]))
     lvl = str(max_security_level or "public")
-    return "d=" + ",".join(deps) + "|lvl=" + lvl + "|s=" + ",".join(sites)
+    return "d=" + ",".join(deps) + "|lvl=" + lvl + "|s=" + ",".join(sites) + "|pipe=" + pipeline_namespace()
 
 
 def normalize_question(question):

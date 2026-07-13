@@ -404,13 +404,19 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                new_part_ids, response_language, trace_id, t_start,
                user_department, user_roles, effective_question, intent_data,
                base_k, retrieval_mode, _has_active_filter=False, _active_filter=None,
-               cancel_event=None):
+               cancel_event=None, metrics=None):
     """BUOC C/D: sinh cau tra loi streaming (guarded_stream / normal_stream).
     Tra ve stream. Tach nguyen van tu chat_with_rag (P0 slice #4).
     active_filter bind co dieu kien de bao toan ngu nghia locals() nhu ban goc.
     """
     if _has_active_filter:
         active_filter = _active_filter
+    metrics = metrics if metrics is not None else {}
+    metrics.setdefault("input_tokens", 0)
+    metrics.setdefault("output_tokens", 0)
+    metrics.setdefault("estimated_cost", 0.0)
+    metrics.setdefault("provider_retries", 0)
+    metrics.setdefault("repair_count", 0)
     # GD3: chon prompt + gate guard co khi theo ngu canh truy hoi
     _ctx_is_mech = _context_is_mechanical(retrieved_docs, new_part_ids)
     _ctx_domain = _context_domain(retrieved_docs, new_part_ids)
@@ -500,6 +506,7 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                             delay_seconds=delay,
                             error=type(stream_error).__name__,
                         )
+                        metrics["provider_retries"] += 1
                         time.sleep(delay)
                 _raise_if_cancelled()
                 answer = "".join(chunks)
@@ -512,6 +519,9 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                 input_tokens = len(context_text + user_question + chat_history_str) // 4
                 output_tokens = len(answer) // 4
                 estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1000000
+                metrics["input_tokens"] += input_tokens
+                metrics["output_tokens"] += output_tokens
+                metrics["estimated_cost"] += estimated_cost
                 doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
                 retrieval_scores = [d.metadata.get("relevance_score") for d in retrieved_docs]
                 
@@ -573,6 +583,8 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                         attempt=1 if repair_result.attempted else 0,
                         estimated_cost=repair_result.estimated_cost,
                     )
+                    metrics["repair_count"] = int(repair_result.attempted)
+                    metrics["estimated_cost"] += repair_result.estimated_cost
                     if repair_result.accepted:
                         answer = repair_result.answer
                         yield answer
@@ -674,6 +686,7 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                             delay_seconds=delay,
                             error=type(stream_error).__name__,
                         )
+                        metrics["provider_retries"] += 1
                         time.sleep(delay)
                 _raise_if_cancelled()
             except ExternalAICallCancelled:
@@ -693,6 +706,9 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                     input_tokens = len(context_text + user_question + chat_history_str) // 4
                     output_tokens = len(answer) // 4
                     estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1000000
+                    metrics["input_tokens"] += input_tokens
+                    metrics["output_tokens"] += output_tokens
+                    metrics["estimated_cost"] += estimated_cost
                     doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
                     retrieval_scores = [d.metadata.get("relevance_score") for d in retrieved_docs]
                     

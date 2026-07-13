@@ -6,9 +6,15 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 from scripts.crag_eval.constants import FIXTURE_BATCH, FIXTURE_COLLECTION, LIVE_OPT_IN
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 
 def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str) -> dict:
@@ -54,6 +60,7 @@ def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str)
             and point.get("site") == case.get("expected_site")
             and point.get("security_level") == case.get("expected_security_level")
             and case.get("expected_department") in (point.get("phong_ban_quyen") or [])
+            and str(point.get("base_code") or "").lower() == str(doc.get("BaseCode") or "").lower()
             for point in qdrant_points
         )
         if not exists:
@@ -63,7 +70,7 @@ def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str)
             ({key: row.get(key) for key in (
                 "DocID", "TenFile", "VersionNo", "LifecycleStatus", "ReviewStatus",
                 "PublicationState", "IsCurrent", "Servable", "SourceSystem",
-                "OwnerDepartment", "Site", "SecurityLevel",
+                "OwnerDepartment", "Site", "SecurityLevel", "BaseCode",
             )}
              for row in sql_documents),
             key=lambda row: (str(row.get("TenFile")), int(row.get("DocID") or 0)),
@@ -73,6 +80,7 @@ def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str)
                 "doc_id", "page", "page_number", "trang_so", "source_system", "version_no",
                 "lifecycle_status", "review_status", "publication_state", "servable", "is_current",
                 "owner_department", "site", "security_level", "phong_ban_quyen",
+                "base_code", "ma_chinh", "ma_doi_tuong",
                 "_point_id", "_content_sha256",
             )}
              for point in qdrant_points),
@@ -106,7 +114,7 @@ def run_live_preflight(cases: list[dict]) -> dict:
         rows = conn.execute(text("""
             SELECT DocID, TenFile, VersionNo, LifecycleStatus, ReviewStatus,
                    PublicationState, IsCurrent, Servable, SourceSystem,
-                   OwnerDepartment, Site, SecurityLevel
+                   OwnerDepartment, Site, SecurityLevel, BaseCode
             FROM dbo.TaiLieu WHERE SourceSystem=:batch
         """), {"batch": FIXTURE_BATCH}).mappings().all()
     client = _get_qdrant_client()

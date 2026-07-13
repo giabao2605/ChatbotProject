@@ -33,6 +33,7 @@ from . import (
     material_service,
     org_service,
     rollout_service,
+    graph_service,
     settings_service,
     ui_query_service,
 )
@@ -52,6 +53,7 @@ _SERVICE_MODULES = (
     material_service,
     org_service,
     rollout_service,
+    graph_service,
     settings_service,
     ui_query_service,
 )

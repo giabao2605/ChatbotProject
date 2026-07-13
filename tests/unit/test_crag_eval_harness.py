@@ -101,12 +101,14 @@ def test_preflight_checks_sql_and_qdrant_provenance():
             "SourceSystem": "crag-eval-v1",
             "Servable": True, "OwnerDepartment": "CRAG_EVAL", "Site": "CRAG-EVAL-HQ",
             "SecurityLevel": "internal",
+            "BaseCode": "CRAG-EVAL-NUM-001",
         }],
         qdrant_points=[{
             "doc_id": 41, "page": 1, "source_system": "crag-eval-v1", "version_no": 12,
             "lifecycle_status": "published", "review_status": "approved", "publication_state": "published",
             "servable": True, "is_current": True, "owner_department": "CRAG_EVAL",
             "site": "CRAG-EVAL-HQ", "security_level": "internal", "phong_ban_quyen": ["CRAG_EVAL"],
+            "base_code": "crag-eval-num-001",
         }],
         collection="MechChatbot_CRAG_Eval_v1",
     )
@@ -130,12 +132,14 @@ def test_preflight_rejects_wrong_collection_and_missing_page():
             "SourceSystem": "crag-eval-v1",
             "Servable": True, "OwnerDepartment": "CRAG_EVAL", "Site": "CRAG-EVAL-HQ",
             "SecurityLevel": "internal",
+            "BaseCode": "CRAG-EVAL-NUM-001",
         }],
         qdrant_points=[{
             "doc_id": 41, "page": 1, "source_system": "crag-eval-v1", "version_no": 12,
             "lifecycle_status": "published", "review_status": "approved", "publication_state": "published",
             "servable": True, "is_current": True, "owner_department": "CRAG_EVAL",
             "site": "CRAG-EVAL-HQ", "security_level": "internal", "phong_ban_quyen": ["CRAG_EVAL"],
+            "base_code": "crag-eval-num-001",
         }],
         collection="MechChatbot_CRAG_Eval_v1",
     )

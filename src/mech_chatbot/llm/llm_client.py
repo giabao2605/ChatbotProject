@@ -2,6 +2,7 @@ import os
 from tenacity import retry, retry_if_exception, wait_exponential, stop_after_attempt
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from mech_chatbot.config.logging import log_trace
 from mech_chatbot.llm.external_ai import (
     audited_external_call,
     get_provider_runtime,
@@ -101,10 +102,27 @@ def _is_cohere_rate_limit(exc):
     return _is_gpt_rate_limit(exc)
 
 
+def _before_llm_retry(retry_state):
+    kwargs = retry_state.kwargs or {}
+    counter = kwargs.get("retry_counter")
+    if isinstance(counter, dict):
+        counter["count"] = int(counter.get("count") or 0) + 1
+    error = retry_state.outcome.exception() if retry_state.outcome else None
+    log_trace(
+        "llm_retry",
+        kwargs.get("trace_id"),
+        surface=kwargs.get("surface") or "generation",
+        attempt=retry_state.attempt_number,
+        max_attempts=4,
+        error=type(error).__name__ if error else "unknown",
+    )
+
+
 @retry(
     retry=retry_if_exception(_is_gpt_rate_limit),
     wait=wait_exponential(multiplier=2, min=2, max=30),
     stop=stop_after_attempt(4),
+    before_sleep=_before_llm_retry,
 )
 def gpt_invoke(
     messages,
@@ -113,6 +131,7 @@ def gpt_invoke(
     doc_ids=None,
     security_levels=None,
     policies=None,
+    retry_counter=None,
 ):
     with audited_external_call(
         provider="proxyllm",
@@ -137,6 +156,7 @@ def cohere_invoke(
     doc_ids=None,
     security_levels=None,
     policies=None,
+    retry_counter=None,
 ):
     return gpt_invoke(
         messages,
@@ -145,6 +165,7 @@ def cohere_invoke(
         doc_ids=doc_ids,
         security_levels=security_levels,
         policies=policies,
+        retry_counter=retry_counter,
     )
 
 

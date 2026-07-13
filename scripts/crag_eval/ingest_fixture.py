@@ -5,12 +5,37 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 from sqlalchemy import text
 
 from scripts.crag_eval.constants import DEFAULT_OUTPUT, FIXTURE_BATCH, FIXTURE_COLLECTION, LIVE_OPT_IN
 from scripts.crag_eval.generate_fixture import generate_fixture
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+
+def _fixture_qdrant_metadata(record):
+    code = str(record["doc_number"]).strip().lower()
+    return {
+        "source_system": FIXTURE_BATCH,
+        "doc_number": record["doc_number"],
+        "base_code": code,
+        "ma_chinh": code,
+        "ma_doi_tuong": [code],
+        "version_no": record["version"],
+        "version_label": f"v{record['version']}",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+        "publication_state": "published",
+        "servable": True,
+        "is_current": True,
+        "effective_status": "effective",
+    }
 
 
 def ingest_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
@@ -27,6 +52,16 @@ def ingest_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
     from mech_chatbot.db.repositories.qdrant import update_qdrant_metadata
     from mech_chatbot.ingestion.file_ingestor import learn_new_file
 
+    # A new Qdrant Cloud collection requires payload indexes before any
+    # filter-based publication/update/delete operation can run.
+    from mech_chatbot.db.repositories.qdrant import _get_qdrant_client
+    qdrant_client = _get_qdrant_client()
+    if not qdrant_client.collection_exists(FIXTURE_COLLECTION):
+        from mech_chatbot.rag.bootstrap import client as _initialized_client  # noqa: F401
+    from scripts.create_qdrant_indexes import create_indexes
+    if not create_indexes():
+        raise RuntimeError("could not create required fixture payload indexes")
+
     manifest = output / "corpus_manifest.jsonl"
     if not manifest.exists():
         generate_fixture(output)
@@ -35,9 +70,12 @@ def ingest_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
     completed = skipped = 0
     for record in records:
         with engine.connect() as conn:
-            existing = conn.execute(text(
-                "SELECT TOP 1 DocID FROM dbo.TaiLieu WHERE SourceSystem=:source AND DocNumber=:number"
-            ), {"source": FIXTURE_BATCH, "number": record["doc_number"]}).scalar()
+            existing = conn.execute(text("""
+                SELECT TOP 1 DocID, Servable, PublicationState, LifecycleStatus,
+                       ReviewStatus, IsCurrent
+                FROM dbo.TaiLieu WHERE SourceSystem=:source AND DocNumber=:number
+                ORDER BY DocID DESC
+            """), {"source": FIXTURE_BATCH, "number": record["doc_number"]}).mappings().first()
             governance = conn.execute(text("""
                 SELECT g.KnowledgeOwnerUserID, g.KnowledgeApproverUserID, g.TaxonomyVersion,
                        p.DocumentTypesJson
@@ -45,9 +83,17 @@ def ingest_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
                 JOIN dbo.DepartmentDomainProfile p ON p.DeptCode=g.DeptCode AND p.IsActive=1
                 WHERE g.DeptCode=:department AND g.IsActive=1
             """), {"department": record["department"]}).mappings().first()
-        if existing:
+        if existing and all((
+            bool(existing["Servable"]), bool(existing["IsCurrent"]),
+            existing["PublicationState"] == "published",
+            existing["LifecycleStatus"] == "published",
+            existing["ReviewStatus"] == "approved",
+        )):
+            update_qdrant_metadata(existing["DocID"], _fixture_qdrant_metadata(record), require_points=True)
             skipped += 1
             continue
+        if existing and not delete_document_completely(existing["DocID"], reviewer="crag-eval-retry"):
+            raise RuntimeError(f"could not remove incomplete fixture DocID {existing['DocID']}")
         if not governance or not governance["KnowledgeOwnerUserID"] or not governance["KnowledgeApproverUserID"]:
             raise RuntimeError(f"missing governance principals for {record['department']}")
         file_path = output / record["path"]
@@ -103,11 +149,7 @@ def ingest_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
         if not result:
             delete_document_completely(doc_id, reviewer="crag-eval-failed-publish")
             raise RuntimeError(f"publish failed for {file_path.name}: {result.error}")
-        metadata = {
-            "source_system": FIXTURE_BATCH, "version_no": record["version"], "version_label": f"v{record['version']}",
-            "lifecycle_status": "published", "review_status": "approved", "publication_state": "published",
-            "servable": True, "is_current": True, "effective_status": "effective",
-        }
+        metadata = _fixture_qdrant_metadata(record)
         update_qdrant_metadata(doc_id, metadata)
         update_ingestion_job(job_id, "published")
         completed += 1

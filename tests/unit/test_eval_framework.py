@@ -13,9 +13,39 @@ from mech_chatbot.evaluation.outcomes import (
     expected_outcome,
     summarize_outcomes,
 )
+from mech_chatbot.evaluation.metrics import ranked_retrieval_metrics
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_ranked_retrieval_metrics_reward_earlier_relevant_sources():
+    metrics = ranked_retrieval_metrics(
+        ["other.pdf", "target.pdf", "appendix.pdf"],
+        ["target.pdf"],
+        cutoffs=(2, 10),
+    )
+
+    assert metrics["recall_at_2"] == 1.0
+    assert metrics["recall_at_10"] == 1.0
+    assert metrics["ndcg_at_10"] == pytest.approx(0.6309297536)
+
+
+def test_ranked_retrieval_metrics_report_zero_when_source_is_missing():
+    metrics = ranked_retrieval_metrics(["other.pdf"], ["target.pdf"], cutoffs=(5, 10))
+
+    assert metrics == {
+        "recall_at_5": 0.0,
+        "ndcg_at_5": 0.0,
+        "recall_at_10": 0.0,
+        "ndcg_at_10": 0.0,
+    }
+
+
+def test_eval_runner_keeps_ten_sources_for_recall_at_ten():
+    source = Path("scripts/eval/run_eval.py").read_text(encoding="utf-8")
+
+    assert 'debug.get("retrieved_docs", [])[:10]' in source
 
 
 def _load_script(module_name: str, relative_path: str):
@@ -182,6 +212,8 @@ def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
     assert classify_outcome("partial_answer", "full_answer", answer_correct=True, leaked=False) == "wrong_answer"
     assert classify_actual_outcome("Tôi trả lời được một phần; phần còn lại chưa đủ dữ kiện.") == "partial_answer"
     assert classify_actual_outcome("Bạn muốn so sánh với phiên bản nào? Vui lòng chỉ định.") == "clarification_required"
+    assert classify_actual_outcome("Tài liệu không công bố chi phí hoặc đơn giá.") == "insufficient_evidence"
+    assert classify_actual_outcome("Mình không thể hỗ trợ yêu cầu này do chính sách truy cập.") == "access_denied"
     assert summarize_outcomes([
         {"expected": "full_answer", "actual": "full_answer", "answer_correct": True, "legacy_admin_bypass": True}
     ])["legacy_admin_exception"] == 1

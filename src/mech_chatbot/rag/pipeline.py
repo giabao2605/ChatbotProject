@@ -14,7 +14,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
-from mech_chatbot.db.repository import search_bom_by_code
+from mech_chatbot.db.repository import search_bom_by_code, traverse_knowledge_graph
 from mech_chatbot.rag.rbac import (
     compose_retrieval_filters,
     create_rbac_filter,
@@ -77,7 +77,13 @@ from mech_chatbot.rag.pipeline_steps import _prepare_history, _analyze_image, _a
 
 def make_debug_info(docs=None):
     docs = docs or []
+    try:
+        from mech_chatbot.rag.semantic_cache import pipeline_namespace
+        namespace = pipeline_namespace()
+    except Exception:
+        namespace = "unknown"
     return {
+        "pipeline_namespace": namespace,
         "retrieved_docs": [
             {
                 "file_goc": d.metadata.get("file_goc"),
@@ -161,7 +167,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
               current_part_ids=current_part_ids,
               department=user_department,
               role=",".join(user_roles) if user_roles else "",
-              model=get_llm_model_name())
+              model=get_llm_model_name(),
+              pipeline_namespace=make_debug_info([])["pipeline_namespace"])
 
     # Deterministic safety must run before every cache lookup. Otherwise an
     # entry produced under an older rule set could bypass a tightened policy.
@@ -266,6 +273,16 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     retrieved_docs = []
     skip_retrieval = False
+    decomposition_notice = ""
+    decomposition_states = []
+    planner_count = 0
+    auxiliary_input_tokens = 0
+    auxiliary_output_tokens = 0
+    planner_estimated_cost = 0.0
+    auxiliary_retry_counter = {"count": 0}
+    correction_attempts = 0
+    correction_estimated_cost = 0.0
+    crag_enabled = env_bool("RAG_CRAG_ENABLED", False)
     query_to_search = user_question  # Mac dinh, cac nhanh ben duoi se override neu can
     logger.info("Dang phan tich intent de tim kiem du lieu...")
     t_intent = time.time()
@@ -353,15 +370,196 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         except Exception as _ge:
             logger.warning(f"glossary expansion loi: {_ge}")
 
-        (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = _retrieve(
-            new_part_ids=new_part_ids,
-            strict_filter=strict_filter,
-            broad_filter=broad_filter,
-            is_bom_query=is_bom_query,
-            query_to_search=query_to_search,
-            rbac_filter=rbac_filter,
-            trace_id=trace_id,
-        )
+        decomposition_enabled = env_bool("RAG_QUERY_DECOMPOSITION_ENABLED", False)
+        if decomposition_enabled:
+            from mech_chatbot.rag.query_decomposition import (
+                build_plan, codes_in_query, CorrectionBudget, execute_plan, merge_branch_documents,
+            )
+
+            def _planner(question):
+                nonlocal planner_count, auxiliary_input_tokens, auxiliary_output_tokens, planner_estimated_cost
+                planner_count += 1
+                prompt = (
+                    "Tach cau hoi noi bo phuc hop thanh toi da 3 truy van doc lap. "
+                    "Khong them ma tai lieu, phien ban, phong ban hay site khong co trong cau goc. "
+                    "Chi tra JSON theo schema {\"subqueries\":[\"...\"]}.\nCAU HOI:\n" + question
+                )
+                response = cohere_invoke(
+                    [HumanMessage(content=prompt)],
+                    surface="query_decomposition",
+                    trace_id=trace_id,
+                    retry_counter=auxiliary_retry_counter,
+                ).content
+                planner_input = len(prompt) // 4
+                planner_output = len(str(response)) // 4
+                auxiliary_input_tokens += planner_input
+                auxiliary_output_tokens += planner_output
+                planner_estimated_cost += (
+                    planner_input * 2.5 + planner_output * 15.0
+                ) / 1_000_000
+                return _safe_json_loads(response)
+
+            decomp_plan = build_plan(
+                effective_question,
+                planner=_planner,
+                planner_version=os.getenv("RAG_PLANNER_VERSION", "planner-v1"),
+            )
+            if decomp_plan.is_complex:
+                access_context = {
+                    "user_department": user_department,
+                    "roles": tuple(user_roles or ()),
+                    "allowed_departments": tuple(allowed_departments or ()),
+                    "allowed_sites": tuple(allowed_sites or ()),
+                    "max_security_level": max_security_level,
+                    "version_policy": intent_data.get("version_policy"),
+                }
+                shared_correction_budget = CorrectionBudget(1)
+
+                def _retrieve_branch(subquery, inherited_access, _correction_budget):
+                    del inherited_access
+                    branch_codes = set(codes_in_query(subquery))
+                    branch_part_ids = [
+                        part_id for part_id in new_part_ids
+                        if str(part_id).lower() in branch_codes
+                    ]
+                    if not branch_part_ids and len(new_part_ids) == 1:
+                        branch_part_ids = list(new_part_ids)
+                    common_must = list(getattr(strict_filter, "must", ()) or ())
+                    if new_part_ids and common_must:
+                        common_must = common_must[:-1]
+                    branch_strict, branch_broad = compose_retrieval_filters(
+                        common_must, branch_part_ids
+                    )
+                    result = _retrieve(
+                        new_part_ids=branch_part_ids,
+                        strict_filter=branch_strict,
+                        broad_filter=branch_broad,
+                        is_bom_query=is_bom_query,
+                        query_to_search=tokenize_cached(subquery),
+                        rbac_filter=rbac_filter,
+                        trace_id=trace_id,
+                    )
+                    correction_cost = 0.0
+                    correction_input = 0
+                    correction_output = 0
+                    corrected = False
+                    branch_docs = result[0]
+                    branch_decision = evaluate_answerability(
+                        subquery,
+                        _assemble_context(branch_docs, subquery) if branch_docs else "",
+                        docs=branch_docs,
+                        trace_id=trace_id,
+                    )
+                    if (
+                        crag_enabled
+                        and branch_decision.state is EvidenceState.AMBIGUOUS
+                        and _correction_budget.claim()
+                    ):
+                        corrected = True
+                        try:
+                            rewrite_prompt = (
+                                "Rewrite this internal-document subquery once to improve evidence recall. "
+                                "Keep every technical code and do not add facts. Return only the query.\n\n"
+                                f"Question: {subquery}\nMissing evidence: {branch_decision.reason}"
+                            )
+                            rewritten = cohere_invoke(
+                                [HumanMessage(content=rewrite_prompt)],
+                                surface="corrective_retrieval",
+                                trace_id=trace_id,
+                                retry_counter=auxiliary_retry_counter,
+                            ).content
+                            corrected_result = run_corrected_retrieval(
+                                _retrieve,
+                                corrected_query=tokenize_cached(str(rewritten or subquery)),
+                                new_part_ids=branch_part_ids,
+                                strict_filter=branch_strict,
+                                broad_filter=branch_broad,
+                                is_bom_query=is_bom_query,
+                                rbac_filter=rbac_filter,
+                                trace_id=trace_id,
+                            )
+                            correction_cost = (
+                                (len(rewrite_prompt) // 4) * 2.5 + (len(str(rewritten)) // 4) * 15.0
+                            ) / 1_000_000
+                            correction_input = len(rewrite_prompt) // 4
+                            correction_output = len(str(rewritten)) // 4
+                            result = (
+                                merge_corrected_documents(result[0], corrected_result[0]),
+                                result[1],
+                                result[2] + "+corrected:" + corrected_result[2],
+                                result[3],
+                                result[4],
+                            )
+                            log_trace(
+                                "corrective_retrieval", trace_id,
+                                strategy="decomposed_query_rewrite", attempt=1,
+                                before_docs=len(branch_docs), after_docs=len(result[0]),
+                                evaluator_state=branch_decision.state.value,
+                                estimated_cost=correction_cost,
+                            )
+                        except Exception as exc:
+                            logger.warning("Decomposed corrective retrieval failed: %s", exc)
+                            log_trace(
+                                "corrective_retrieval", trace_id,
+                                strategy="decomposed_query_rewrite", attempt=1,
+                                before_docs=len(branch_docs), after_docs=len(branch_docs),
+                                evaluator_state=branch_decision.state.value,
+                                error=type(exc).__name__,
+                            )
+                    return (*result, correction_cost, corrected, correction_input, correction_output)
+
+                branch_results = execute_plan(decomp_plan, _retrieve_branch, access_context)
+                correction_estimated_cost += sum(result[5] for result in branch_results)
+                correction_attempts += sum(bool(result[6]) for result in branch_results)
+                auxiliary_input_tokens += sum(result[7] for result in branch_results)
+                auxiliary_output_tokens += sum(result[8] for result in branch_results)
+                retrieved_docs = merge_branch_documents(result[0] for result in branch_results)
+                base_k = max((result[1] for result in branch_results), default=0)
+                retrieval_mode = "decomposed_" + "+".join(sorted({result[2] for result in branch_results}))
+                t_retrieval = min((result[3] for result in branch_results), default=time.time())
+                _af = next((result[4] for result in branch_results if result[4] is not _RETRIEVE_UNSET), _RETRIEVE_UNSET)
+                for subquery, result in zip(decomp_plan.subqueries, branch_results):
+                    branch_docs = result[0]
+                    decision = evaluate_answerability(
+                        subquery,
+                        _assemble_context(branch_docs, subquery) if branch_docs else "",
+                        docs=branch_docs,
+                        trace_id=trace_id,
+                    )
+                    decomposition_states.append(decision.state.value)
+                missing_count = sum(state != "SUFFICIENT" for state in decomposition_states)
+                if missing_count:
+                    decomposition_notice = (
+                        f"\n\nLuu y bat buoc: {missing_count} nhanh cua cau hoi chua co du bang chung. "
+                        "Chi tra loi cac nhanh co nguon va noi ro phan chua tim thay; khong suy dien."
+                    )
+                log_trace(
+                    "query_decomposition",
+                    trace_id,
+                    planner_count=planner_count,
+                    subquery_count=len(decomp_plan.subqueries),
+                    evaluator_states=decomposition_states,
+                    correction_budget=1,
+                    estimated_cost=planner_estimated_cost + correction_estimated_cost,
+                    input_tokens=auxiliary_input_tokens,
+                    output_tokens=auxiliary_output_tokens,
+                )
+            else:
+                (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = _retrieve(
+                    new_part_ids=new_part_ids, strict_filter=strict_filter,
+                    broad_filter=broad_filter, is_bom_query=is_bom_query,
+                    query_to_search=query_to_search, rbac_filter=rbac_filter, trace_id=trace_id,
+                )
+        else:
+            (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = _retrieve(
+                new_part_ids=new_part_ids,
+                strict_filter=strict_filter,
+                broad_filter=broad_filter,
+                is_bom_query=is_bom_query,
+                query_to_search=query_to_search,
+                rbac_filter=rbac_filter,
+                trace_id=trace_id,
+            )
         if _af is not _RETRIEVE_UNSET:
             active_filter = _af
 
@@ -374,7 +572,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 )
                 t_hyde = time.time()
                 hyde_response = cohere_invoke(
-                    [HumanMessage(content=hyde_prompt)], surface="hyde"
+                    [HumanMessage(content=hyde_prompt)], surface="hyde",
+                    trace_id=trace_id, retry_counter=auxiliary_retry_counter,
                 ).content
                 hyde_query = tokenize_cached(hyde_response)
                 (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = _retrieve(
@@ -401,6 +600,39 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 logger.warning(f"Loi HyDE fallback: {e}")
                 log_trace("hyde", trace_id, used=True, error=str(e))
  
+    if not skip_retrieval and env_bool("RAG_GRAPH_RETRIEVAL_ENABLED", False):
+        from mech_chatbot.rag.graph_retrieval import filter_servable_edges, hydrate_graph_edges
+        graph_started = time.time()
+        graph_seeds = list(new_part_ids or [])
+        if not graph_seeds:
+            graph_seeds = re.findall(r"\b[A-Z]{1,10}[-_][A-Z0-9][A-Z0-9._-]*\b", effective_question, flags=re.IGNORECASE)
+        graph_access = {
+            "roles": user_roles or [],
+            "allowed_departments": allowed_departments or [],
+            "allowed_sites": allowed_sites or [],
+            "max_security_level": max_security_level,
+        }
+        try:
+            graph_edges = filter_servable_edges(
+                traverse_knowledge_graph(graph_seeds, graph_access, max_hops=2, limit=50),
+                graph_access,
+            )
+            graph_docs = hydrate_graph_edges(
+                graph_edges,
+                client,
+                os.getenv("QDRANT_COLLECTION", "TaiLieuKyThuat_v2"),
+            )
+            retrieved_docs = merge_corrected_documents(retrieved_docs, graph_docs)
+            log_trace(
+                "graph_retrieval", trace_id,
+                latency_ms=int((time.time() - graph_started) * 1000),
+                seed_count=len(graph_seeds), edge_count=len(graph_edges),
+                hydrated_count=len(graph_docs), max_hops=2,
+            )
+        except Exception as exc:
+            logger.warning("Graph retrieval unavailable: %s", exc)
+            log_trace("graph_retrieval", trace_id, error=type(exc).__name__, edge_count=0)
+
     # Kiem tra ket qua tim kiem ma cu the (khong fallback semantic lung tung)
     if not skip_retrieval and not retrieved_docs and new_part_ids:
         if is_inherited:
@@ -491,6 +723,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                         security_level,
                         site,
                         external_processing_policy,
+                        bom_row_id,
+                        unit,
                     ) = row
                     try:
                         source_key = (int(doc_id), int(page_no))
@@ -507,19 +741,69 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                             "site": site,
                             "external_processing_policy": external_processing_policy,
                             "lines": [],
+                            "facts": [],
                         },
                     )
                     source["lines"].append(
                         f"- Mã: {ma}, Tên: {ten}, Vật liệu: {vat_lieu}, "
                         f"SL: {sl}, Ghi chú: {gc}"
                     )
+                    if env_bool("RAG_GROUNDED_MATH_ENABLED", False) and sl is not None:
+                        try:
+                            from decimal import Decimal
+                            from mech_chatbot.rag.grounded_math import GroundedFact
+                            source["facts"].append(GroundedFact(
+                                value=Decimal(str(sl)), unit=str(unit or "").strip(),
+                                doc_id=int(doc_id), page=int(page_no), version=int(version_no),
+                                source_id=f"BOM-{int(bom_row_id)}",
+                            ))
+                        except (ValueError, TypeError, ArithmeticError):
+                            pass
+
+                normalized_math_question = user_question.lower()
+                wants_total = any(
+                    cue in normalized_math_question
+                    for cue in ("tổng", "tong", "total", "cộng", "cong")
+                )
+                calculation_claims = {}
+                if wants_total and env_bool("RAG_GROUNDED_MATH_ENABLED", False):
+                    from mech_chatbot.rag.grounded_math import CalculationPlan, derive_claim
+                    facts_by_document = {}
+                    for (source_doc_id, _), source in bom_by_source.items():
+                        claim_key = (source_doc_id, int(source["version_no"]))
+                        facts_by_document.setdefault(claim_key, []).extend(source["facts"])
+                    calculation_claims = {
+                        key: derive_claim(CalculationPlan("sum", tuple(facts)))
+                        for key, facts in facts_by_document.items()
+                    }
 
                 bom_docs = []
+                emitted_calculations = set()
                 for (doc_id, page_no), source in bom_by_source.items():
                     bom_text = (
                         "Dữ liệu cấu trúc Bảng Kê Vật Tư (BOM) đã trích xuất "
                         "từ đúng trang tài liệu:\n" + "\n".join(source["lines"])
                     )
+                    calculation_provenance = None
+                    claim_key = (doc_id, int(source["version_no"]))
+                    if claim_key in calculation_claims and claim_key not in emitted_calculations:
+                        emitted_calculations.add(claim_key)
+                        claim = calculation_claims[claim_key]
+                        if claim.status == "valid":
+                            qualifier = "xấp xỉ " if claim.approximate else ""
+                            bom_text += (
+                                f"\n- Kết quả tính xác định từ các dòng BOM trên: {qualifier}"
+                                f"{claim.display_value} {claim.unit}. Công thức: {claim.formula}."
+                            )
+                            calculation_provenance = {
+                                "operation": "sum", "formula": claim.formula,
+                                "source_ids": list(claim.source_ids), "status": claim.status,
+                            }
+                        else:
+                            bom_text += (
+                                "\n- Không thể tính tổng có kiểm soát cho trang này vì dữ kiện "
+                                f"không hợp lệ ({claim.status}); phải trả lời một phần và không tự suy diễn."
+                            )
                     bom_docs.append(
                         Document(
                             page_content=bom_text,
@@ -536,6 +820,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                                 "external_processing_policy": (
                                     source["external_processing_policy"] or "all_external"
                                 ),
+                                "calculation_provenance": calculation_provenance,
                             },
                         )
                     )
@@ -614,8 +899,6 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     # Optional CRAG pass.  It reuses the exact same strict/broad/RBAC filters;
     # only the query formulation changes, so correction can never widen access.
-    correction_attempts = 0
-    crag_enabled = env_bool("RAG_CRAG_ENABLED", False)
     if retrieved_docs and crag_enabled and not skip_retrieval:
         preliminary_context = _assemble_context(retrieved_docs, user_question)
         coverage_decision = evaluate_answerability(
@@ -651,11 +934,14 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     [HumanMessage(content=rewrite_prompt)],
                     surface="corrective_retrieval",
                     trace_id=trace_id,
+                    retry_counter=auxiliary_retry_counter,
                 ).content
                 corrected_query = tokenize_cached(str(rewritten or effective_question))
                 correction_cost = (
                     (len(rewrite_prompt) // 4) * 2.5 + (len(str(rewritten)) // 4) * 15.0
                 ) / 1_000_000
+                auxiliary_input_tokens += len(rewrite_prompt) // 4
+                auxiliary_output_tokens += len(str(rewritten)) // 4
                 corrected_docs, _, corrected_mode, _, _ = run_corrected_retrieval(
                     _retrieve,
                     corrected_query=corrected_query,
@@ -666,6 +952,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     rbac_filter=rbac_filter,
                     trace_id=trace_id,
                 )
+                correction_estimated_cost += correction_cost
                 retrieved_docs = merge_corrected_documents(retrieved_docs, corrected_docs)
                 log_trace(
                     "corrective_retrieval",
@@ -710,7 +997,41 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             cap=int(os.getenv("RERANK_CANDIDATE_CAP", "20")),
         )
  
-        rerank_backend = RerankPolicy().select_backend(real_docs)
+        late_used = False
+        if real_docs and env_bool("RAG_LATE_INTERACTION_ENABLED", False):
+            try:
+                from mech_chatbot.rag.late_interaction import enabled as late_enabled, encode_query, rerank_with_shadow
+                if not late_enabled():
+                    raise RuntimeError("late interaction encoder has not passed smoke preflight")
+                late_started = time.time()
+                late_top_n = min(RERANK_TOP_N_CAP, max(1, RERANK_PER_PART * max(1, len(new_part_ids) if new_part_ids else 1)))
+                pre_late_docs = list(real_docs)
+                real_docs = rerank_with_shadow(
+                    real_docs,
+                    encode_query(effective_question),
+                    client,
+                    top_n=late_top_n,
+                )
+                late_hits = sum(
+                    doc.metadata.get("rerank_backend") == "late_interaction" for doc in real_docs
+                )
+                # A partial shadow lookup must use the established reranker for
+                # the whole candidate set; mixing incomparable scores is unsafe.
+                late_used = bool(real_docs) and late_hits == len(real_docs)
+                if not late_used:
+                    real_docs = pre_late_docs
+                log_trace(
+                    "late_interaction", trace_id,
+                    latency_ms=int((time.time() - late_started) * 1000),
+                    candidate_count=len(real_docs), shadow_hits=late_hits,
+                    coverage=late_hits / len(real_docs) if real_docs else 0.0,
+                    fallback=not late_used,
+                )
+            except Exception as exc:
+                logger.warning("Late interaction unavailable, keeping existing reranker: %s", exc)
+                log_trace("late_interaction", trace_id, error=type(exc).__name__, fallback=True)
+
+        rerank_backend = "late_interaction" if late_used else RerankPolicy().select_backend(real_docs)
         if real_docs and rerank_backend == "voyage":
             try:
                 target_top_n = RERANK_PER_PART * max(1, len(new_part_ids) if new_part_ids else 1)
@@ -736,6 +1057,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 logger.error(f"Loi khi su dung Voyage Rerank: {e}. Fallback to manual rerank.")
                 real_docs = rerank_docs(real_docs)
                 log_trace("rerank", trace_id, error=str(e))
+        elif rerank_backend == "late_interaction":
+            logger.info("Dung late_interaction cho rerank candidate set")
         else:
             if real_docs:
                 logger.info("Dung %s cho rerank candidate set", rerank_backend)
@@ -765,7 +1088,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         retrieved_docs = long_context_reorder(retrieved_docs)
 
     # BUOC C: SINH CAU TRA LOI (STREAMING)
-    context_text = _assemble_context(retrieved_docs, user_question)
+    context_text = _assemble_context(retrieved_docs, user_question) + decomposition_notice
 
     # Citations are evidence actually relevant to the answer, not every
     # candidate that happened to survive retrieval/reranking. BOM questions in
@@ -812,8 +1135,26 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="evidence_gate", docs_count=len(retrieved_docs), doc_ids=[d.metadata.get("doc_id") for d in retrieved_docs], retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=[d.metadata.get("relevance_score") for d in retrieved_docs], user_department=user_department, user_roles=user_roles)
         _refusal_debug = make_debug_info(retrieved_docs)
         _refusal_debug["citation_docs"] = make_debug_info(retrieved_docs)["retrieved_docs"]
+        _refusal_debug["correction_count"] = correction_attempts
+        _refusal_debug["generation_metrics"] = {
+            "estimated_cost": correction_estimated_cost + planner_estimated_cost,
+            "input_tokens": auxiliary_input_tokens,
+            "output_tokens": auxiliary_output_tokens,
+            "provider_retries": int(auxiliary_retry_counter["count"]),
+            "repair_count": 0,
+        }
+        _refusal_debug["planner_count"] = planner_count
+        _refusal_debug["graph_traversal_count"] = sum(
+            1 for doc in retrieved_docs if doc.metadata.get("loai_du_lieu") == "knowledge_graph"
+        )
         return refusal_stream(), ref_text, ref_images, new_part_ids, _refusal_debug
 
+    generation_metrics = {
+        "estimated_cost": correction_estimated_cost + planner_estimated_cost,
+        "input_tokens": auxiliary_input_tokens,
+        "output_tokens": auxiliary_output_tokens,
+        "provider_retries": int(auxiliary_retry_counter["count"]),
+    }
     stream = _generate(
         context_text=context_text,
         user_question=user_question,
@@ -832,10 +1173,25 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         _has_active_filter=("active_filter" in locals()),
         _active_filter=(active_filter if "active_filter" in locals() else None),
         cancel_event=cancel_event,
+        metrics=generation_metrics,
     )
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)
     debug_info = make_debug_info(retrieved_docs)
+    debug_info["correction_count"] = correction_attempts
+    debug_info["planner_count"] = planner_count
+    debug_info["graph_traversal_count"] = sum(
+        1 for doc in retrieved_docs if doc.metadata.get("loai_du_lieu") == "knowledge_graph"
+    )
+    debug_info["late_interaction_hits"] = sum(
+        1 for doc in retrieved_docs if doc.metadata.get("rerank_backend") == "late_interaction"
+    )
+    debug_info["calculation_provenance"] = [
+        doc.metadata.get("calculation_provenance")
+        for doc in retrieved_docs if doc.metadata.get("calculation_provenance")
+    ]
+    # The generator mutates this object after the caller consumes the stream.
+    debug_info["generation_metrics"] = generation_metrics
     # Keep the full source registry. The browser-facing API will resolve the
     # stable SourceIDs emitted in the final answer and expose only those cards.
     _citation_snapshot = make_source_snapshot(retrieved_docs)

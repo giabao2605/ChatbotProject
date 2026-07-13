@@ -100,6 +100,10 @@ def _has_any_pattern(text, patterns):
     return any(re.search(pat, t, flags=re.IGNORECASE | re.DOTALL) for pat in patterns)
 
 
+def _contains_phrase(text, phrase):
+    return bool(re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text))
+
+
 def heuristic_missing_evidence_reason(question, context_text):
     """Chan nhanh cac cau hoi bay ma context ro rang khong co du kien can thiet."""
     q = _norm(question)
@@ -115,7 +119,10 @@ def heuristic_missing_evidence_reason(question, context_text):
     if asks_time and not _has_any_pattern(ctx, TIME_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi thoi gian gia cong/nang suat/dinh muc san xuat"
 
-    asks_cost = any(kw in q for kw in ["chi phi", "gia", "bao nhieu tien", "don gia"])
+    asks_cost = any(
+        _contains_phrase(q, keyword)
+        for keyword in ["chi phi", "bao nhieu tien", "don gia"]
+    ) or (_contains_phrase(q, "gia") and not _contains_phrase(q, "gia tri"))
     if asks_cost and not _has_any_pattern(ctx, COST_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi chi phi/don gia/gia thanh"
 
@@ -248,7 +255,7 @@ def verify_answerability(question, context_text, docs=None, trace_id=None):
     return decision.answerable, decision.reason, list(decision.evidence_quotes)
 
 
-_NUMBER_PATTERN = re.compile(r"(?<![\w.])\d+(?:[\.,]\d+)*(?![\w.])")
+_NUMBER_PATTERN = re.compile(r"(?<![\w.])\d+(?:[\.,]\d+)*(?!\w)")
 
 
 def _normalize_number_token(raw):
@@ -281,11 +288,17 @@ def find_unsupported_numbers(answer, context_text, question, strict_mode=False):
     if not strict_mode and not is_high_risk_question(question):
         return []
     allowed = normalized_number_values(context_text) | normalized_number_values(question)
-    harmless = {str(value) for value in range(11)}
+    answer_text = str(answer or "")
+    citation_spans = [
+        match.span()
+        for match in re.finditer(r"\[(?:Nguồn|Source):[^\]]+\]", answer_text, flags=re.IGNORECASE)
+    ]
     violations = []
-    for match in _NUMBER_PATTERN.finditer(str(answer or "")):
+    for match in _NUMBER_PATTERN.finditer(answer_text):
+        if any(start <= match.start() and match.end() <= end for start, end in citation_spans):
+            continue
         normalized = _normalize_number_token(match.group(0))
-        if normalized in allowed or normalized in harmless:
+        if normalized in allowed:
             continue
         violations.append(
             NumberViolation(match.group(0), normalized, match.start(), match.end())

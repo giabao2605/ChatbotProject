@@ -222,7 +222,7 @@ def search_bom_by_code(
             query = text(f"""
                 SELECT DISTINCT b.DocID, b.TrangSo, b.MaHang, b.TenVatTu, b.VatLieu,
                        b.SoLuong, b.GhiChu, t.TenFile, t.VersionNo, t.SecurityLevel,
-                       t.Site, t.ExternalProcessingPolicy
+                       t.Site, t.ExternalProcessingPolicy, b.ID, b.Unit
                 FROM BangKeVatTu b
                 JOIN TaiLieu t ON b.DocID = t.DocID
                 WHERE {filter_sql} AND b.TrangSo IS NOT NULL AND (

@@ -135,6 +135,9 @@ def _render_markdown(report: dict) -> str:
         f"- Cases: {report['total_cases']}",
         f"- Passed: {report['passed_cases']}", "",
         f"- Retrieval Recall@5: `{json.dumps(report['retrieval_recall_at_5'])}`", "",
+        f"- Ranked retrieval: `{json.dumps(report.get('ranked_retrieval', {}))}`",
+        f"- Pipeline variants: `{json.dumps(report.get('pipeline_variants', {}))}`",
+        f"- Estimated cost: `{report.get('total_estimated_cost', 0.0)}`", "",
         "## Outcome confusion", "",
     ]
     lines.extend(f"- {name}: {count}" for name, count in report["outcome_confusion"].items())
@@ -167,7 +170,7 @@ def run_evaluation(
             raise RuntimeError("fixture preflight failed; no LLM request was sent")
 
     # Import only after validation and preflight so malformed runs never initialize the RAG stack.
-    from mech_chatbot.evaluation.metrics import nearest_rank
+    from mech_chatbot.evaluation.metrics import nearest_rank, ranked_retrieval_metrics
     from mech_chatbot.evaluation.outcomes import (
         REFUSAL_OUTCOMES, classify_actual_outcome, expected_outcome, summarize_outcomes,
     )
@@ -217,9 +220,11 @@ def run_evaluation(
                         os.environ[name] = value
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
             latencies.append(latency_ms)
+            generation_metrics = debug.get("generation_metrics") or {}
             actual = classify_actual_outcome(answer)
-            retrieved = [str(doc.get("file_goc", "")).lower() for doc in debug.get("retrieved_docs", [])[:5]]
+            retrieved = [str(doc.get("file_goc", "")).lower() for doc in debug.get("retrieved_docs", [])[:10]]
             expected_sources = case.get("expected_sources") or [case["expected_document"]]
+            rank_metrics = ranked_retrieval_metrics(retrieved, expected_sources, cutoffs=(5, 10))
             forbidden_sources = case.get("forbidden_sources", [])
             source_ok = expected == "access_denied" or all(
                 any(src.lower() in item for item in retrieved) for src in expected_sources
@@ -255,6 +260,17 @@ def run_evaluation(
                 "trace_id": trace_id,
                 "requires_correction": bool(case.get("requires_correction")),
                 "requires_repair": bool(case.get("requires_repair")),
+                "retrieval_metrics": rank_metrics,
+                "pipeline_variant": debug.get("pipeline_namespace", "default"),
+                "estimated_cost": float(generation_metrics.get("estimated_cost") or 0.0),
+                "input_tokens": int(generation_metrics.get("input_tokens") or 0),
+                "output_tokens": int(generation_metrics.get("output_tokens") or 0),
+                "provider_retries": int(generation_metrics.get("provider_retries") or 0),
+                "correction_count": int(debug.get("correction_count") or 0),
+                "repair_count": int(generation_metrics.get("repair_count") or debug.get("repair_count") or 0),
+                "planner_count": int(debug.get("planner_count") or 0),
+                "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
+                "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
         except Exception as exc:
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
@@ -270,6 +286,7 @@ def run_evaluation(
                 "error": str(exc), "retrieval_expected": False, "retrieval_passed": False,
                 "trace_id": trace_id, "requires_correction": bool(case.get("requires_correction")),
                 "requires_repair": bool(case.get("requires_repair")),
+                "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
         rows.append(row)
         level = case.get("level", "fixture")
@@ -278,8 +295,39 @@ def run_evaluation(
 
     completed_at = _utc_now()
     retrieval_rows = [row for row in rows if row.get("retrieval_expected")]
+    def average_metric(name):
+        values = [row.get("retrieval_metrics", {}).get(name) for row in retrieval_rows]
+        values = [value for value in values if value is not None]
+        return sum(values) / len(values) if values else None
+
+    variants = {}
+    for variant in sorted({row.get("pipeline_variant", "default") for row in rows}):
+        variant_latencies = [row["latency_ms"] for row in rows if row.get("pipeline_variant", "default") == variant]
+        variants[variant] = {
+            "cases": len(variant_latencies),
+            "latency_p50_ms": nearest_rank(variant_latencies, 0.50),
+            "latency_p95_ms": nearest_rank(variant_latencies, 0.95),
+            "input_tokens": sum(row.get("input_tokens", 0) for row in rows if row.get("pipeline_variant", "default") == variant),
+            "output_tokens": sum(row.get("output_tokens", 0) for row in rows if row.get("pipeline_variant", "default") == variant),
+            "estimated_cost": sum(row.get("estimated_cost", 0.0) for row in rows if row.get("pipeline_variant", "default") == variant),
+            "provider_retries": sum(row.get("provider_retries", 0) for row in rows if row.get("pipeline_variant", "default") == variant),
+            "budget_counts": {
+                name: sum(row.get(name, 0) for row in rows if row.get("pipeline_variant", "default") == variant)
+                for name in ("correction_count", "repair_count", "planner_count", "graph_traversal_count")
+            },
+        }
+    evaluation_groups = {}
+    group_names = sorted({str(row.get("evaluation_group")) for row in rows if row.get("evaluation_group")})
+    for name in group_names:
+        group_rows = [row for row in rows if str(row.get("evaluation_group")) == name]
+        passed_count = sum(bool(row.get("passed")) for row in group_rows)
+        evaluation_groups[name] = {
+            "cases": len(group_rows),
+            "passed": passed_count,
+            "pass_rate": passed_count / len(group_rows),
+        }
     report = {
-        "schema": "rag-labeled-eval-v2", "run_label": run_label, "git_sha": _git_sha(),
+        "schema": "rag-labeled-eval-v3", "run_label": run_label, "git_sha": _git_sha(),
         "started_at": started_at, "completed_at": completed_at,
         "manifest_files": [str(Path(p).resolve()) for p in manifest_files],
         "execution_context": os.environ.get("RAG_EXECUTION_CONTEXT"),
@@ -287,6 +335,10 @@ def run_evaluation(
             "crag": os.environ.get("RAG_CRAG_ENABLED", "false"),
             "claim_repair": os.environ.get("RAG_CLAIM_REPAIR_ENABLED", "false"),
             "semantic_cache": os.environ.get("SEMANTIC_CACHE_ENABLED", "true"),
+            "grounded_math": os.environ.get("RAG_GROUNDED_MATH_ENABLED", "false"),
+            "late_interaction": os.environ.get("RAG_LATE_INTERACTION_ENABLED", "false"),
+            "query_decomposition": os.environ.get("RAG_QUERY_DECOMPOSITION_ENABLED", "false"),
+            "graph_retrieval": os.environ.get("RAG_GRAPH_RETRIEVAL_ENABLED", "false"),
         },
         "total_cases": len(cases), "passed_cases": sum(row["passed"] for row in rows),
         "outcome_confusion": summarize_outcomes(outcome_rows),
@@ -298,8 +350,22 @@ def run_evaluation(
                 if retrieval_rows else None
             ),
         },
+        "ranked_retrieval": {
+            name: average_metric(name)
+            for name in ("recall_at_5", "ndcg_at_5", "recall_at_10", "ndcg_at_10")
+        },
         "latency_p50_ms": nearest_rank(latencies, 0.50),
         "latency_p95_ms": nearest_rank(latencies, 0.95),
+        "pipeline_variants": variants,
+        "evaluation_groups": evaluation_groups,
+        "total_input_tokens": sum(row.get("input_tokens", 0) for row in rows),
+        "total_output_tokens": sum(row.get("output_tokens", 0) for row in rows),
+        "total_estimated_cost": sum(row.get("estimated_cost", 0.0) for row in rows),
+        "provider_retries": sum(row.get("provider_retries", 0) for row in rows),
+        "budget_counts": {
+            name: sum(row.get(name, 0) for row in rows)
+            for name in ("correction_count", "repair_count", "planner_count", "graph_traversal_count")
+        },
         "levels": dict(levels), "cases": rows,
     }
     paths["json"].write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
