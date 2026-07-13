@@ -12,6 +12,32 @@ from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 pytestmark = pytest.mark.unit
 
 
+def test_legacy_admin_global_read_audit_contains_no_raw_prompt(monkeypatch):
+    from mech_chatbot import services
+
+    writes = []
+    monkeypatch.setattr(services, "write_audit_log", lambda *args, **kwargs: writes.append((args, kwargs)))
+    profile = {"username": "legacy-admin", "user_id": 9, "roles": ["admin"]}
+
+    rag_server._audit_admin_query(
+        profile,
+        "trace-admin",
+        "chat",
+        outcome="completed",
+        debug_info={"retrieved_docs": [{"doc_id": 4, "security_level": "confidential"}]},
+    )
+
+    payload = writes[0][0][4]
+    assert payload == {
+        "trace_id": "trace-admin",
+        "surface": "chat",
+        "outcome": "completed",
+        "doc_ids": [4],
+        "security_levels": ["confidential"],
+    }
+    assert "question" not in payload
+
+
 def test_client_disconnect_cancels_stream_and_releases_rag_permit(monkeypatch):
     """The SSE generator must signal the worker, then its done callback frees capacity."""
     observed_cancel = threading.Event()

@@ -3,6 +3,8 @@
 
 import os
 import re
+from dataclasses import dataclass
+from enum import Enum
 from mech_chatbot.config.logging import logger, log_trace
 from langchain_core.messages import HumanMessage
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
@@ -26,6 +28,33 @@ from mech_chatbot.rag.prompt import _normalize_lang
 STRICT_ANSWER_MODE = os.getenv("STRICT_ANSWER_MODE", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
+
+
+class EvidenceState(str, Enum):
+    SUFFICIENT = "SUFFICIENT"
+    AMBIGUOUS = "AMBIGUOUS"
+    INSUFFICIENT = "INSUFFICIENT"
+
+
+@dataclass(frozen=True)
+class EvidenceDecision:
+    state: EvidenceState
+    reason: str = ""
+    stage: str = "heuristic"
+    evidence_quotes: tuple[str, ...] = ()
+    telemetry_status: str = "heuristic_pass"
+
+    @property
+    def answerable(self) -> bool:
+        return self.state is EvidenceState.SUFFICIENT
+
+
+@dataclass(frozen=True)
+class NumberViolation:
+    raw: str
+    normalized: str
+    start: int
+    end: int
 
 
 RISKY_QUESTION_KEYWORDS = [
@@ -115,14 +144,23 @@ def make_insufficient_evidence_message(question, reason, lang="vi"):
     )
 
 
-def verify_answerability(question, context_text, docs=None, trace_id=None):
-    """LLM evidence gate: kiem tra co du bang chung truc tiep truoc khi cho final answer."""
+def evaluate_answerability(question, context_text, docs=None, trace_id=None):
+    """Return a structured evidence decision for generation or correction."""
     if not STRICT_ANSWER_MODE and not is_high_risk_question(question):
-        return True, "", []
+        return EvidenceDecision(EvidenceState.SUFFICIENT, telemetry_status="heuristic_pass")
 
     quick_reason = heuristic_missing_evidence_reason(question, context_text)
     if quick_reason:
-        return False, quick_reason, []
+        crag_enabled = os.getenv("RAG_CRAG_ENABLED", "false").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        state = EvidenceState.AMBIGUOUS if crag_enabled and str(context_text).strip() else EvidenceState.INSUFFICIENT
+        return EvidenceDecision(
+            state,
+            reason=quick_reason,
+            stage="heuristic",
+            telemetry_status="heuristic_block",
+        )
 
     # Final prompt, source-citation gate and deterministic post-check already
     # validate the generated answer. A second GPT call here doubles latency and
@@ -130,7 +168,12 @@ def verify_answerability(question, context_text, docs=None, trace_id=None):
     if os.getenv("LLM_EVIDENCE_VERIFIER_ENABLED", "false").strip().lower() not in {
         "1", "true", "yes", "on"
     }:
-        return True, "deterministic_evidence_gate_passed", []
+        return EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="deterministic_evidence_gate_passed",
+            stage="verifier",
+            telemetry_status="verifier_disabled",
+        )
 
     verifier_prompt = f"""
 Ban la bo kiem dinh RAG cho chatbot ky thuat co khi. Nhiem vu: kiem tra CONTEXT co DU BANG CHUNG TRUC TIEP de tra loi QUESTION hay khong.
@@ -168,17 +211,82 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON:
         data = _safe_json_loads(response)
         if not isinstance(data, dict):
             logger.warning("Evidence gate khong parse duoc JSON, fallback cho phep final answer nhung van dung prompt nghiem ngat.")
-            return True, "", []
+            return EvidenceDecision(
+                EvidenceState.SUFFICIENT,
+                stage="verifier",
+                telemetry_status="verifier_fail_open",
+            )
         answerable = bool(data.get("answerable"))
         reason = str(data.get("reason") or "tai lieu khong co bang chung truc tiep")
         quotes = data.get("evidence_quotes") or []
         # if answerable and not quotes:
         #     # Cau hoi rui ro ma verifier khong dua duoc quote -> khong cho qua.
         #     return False, "khong tim thay trich dan bang chung truc tiep trong tai lieu", []
-        return answerable, reason, quotes if isinstance(quotes, list) else []
+        return EvidenceDecision(
+            EvidenceState.SUFFICIENT if answerable else EvidenceState.INSUFFICIENT,
+            reason=reason,
+            stage="verifier",
+            evidence_quotes=tuple(quotes) if isinstance(quotes, list) else (),
+            telemetry_status="verifier_pass" if answerable else "verifier_block",
+        )
     except Exception as e:
         logger.warning(f"Evidence gate loi ({e}). Fallback sang heuristic/prompt nghiem ngat.")
-        return True, "", []
+        return EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            stage="verifier",
+            telemetry_status="verifier_fail_open",
+        )
+
+
+def verify_answerability(question, context_text, docs=None, trace_id=None):
+    """Backward-compatible tuple wrapper around :func:`evaluate_answerability`."""
+    decision = evaluate_answerability(question, context_text, docs=docs, trace_id=trace_id)
+    return decision.answerable, decision.reason, list(decision.evidence_quotes)
+
+
+_NUMBER_PATTERN = re.compile(r"(?<![\w.])\d+(?:[\.,]\d+)*(?![\w.])")
+
+
+def _normalize_number_token(raw):
+    value = str(raw).strip()
+    separators = [char for char in value if char in ".,"]
+    if not separators:
+        return str(int(value)) if value.isdigit() else value
+    if len(set(separators)) == 2:
+        decimal_separator = "." if value.rfind(".") > value.rfind(",") else ","
+        grouping_separator = "," if decimal_separator == "." else "."
+        value = value.replace(grouping_separator, "").replace(decimal_separator, ".")
+    else:
+        separator = separators[0]
+        parts = value.split(separator)
+        if len(parts) > 2 or (len(parts[-1]) == 3 and parts[0] != "0"):
+            value = "".join(parts)
+        else:
+            value = ".".join(parts)
+    if "." in value:
+        value = value.rstrip("0").rstrip(".")
+    return value.lstrip("0") or "0"
+
+
+def _normalized_number_values(text):
+    return {_normalize_number_token(match.group(0)) for match in _NUMBER_PATTERN.finditer(str(text or ""))}
+
+
+def find_unsupported_numbers(answer, context_text, question, strict_mode=False):
+    """Return positioned number violations after formatting normalization."""
+    if not strict_mode and not is_high_risk_question(question):
+        return []
+    allowed = _normalized_number_values(context_text) | _normalized_number_values(question)
+    harmless = {str(value) for value in range(11)}
+    violations = []
+    for match in _NUMBER_PATTERN.finditer(str(answer or "")):
+        normalized = _normalize_number_token(match.group(0))
+        if normalized in allowed or normalized in harmless:
+            continue
+        violations.append(
+            NumberViolation(match.group(0), normalized, match.start(), match.end())
+        )
+    return violations
 
 
 def has_unsupported_numbers(answer, context_text, question, strict_mode=False):
@@ -188,26 +296,13 @@ def has_unsupported_numbers(answer, context_text, question, strict_mode=False):
     Nếu strict_mode=True thì kiểm tra mọi câu trả lời kỹ thuật,
     không chỉ câu hỏi high-risk.
     """
-    if not strict_mode and not is_high_risk_question(question):
-        return False
-
-    answer_nums = _extract_numbers(answer)
-    if not answer_nums:
-        return False
-
-    allowed_nums = _extract_numbers(context_text) | _extract_numbers(question)
-
-    # Bỏ qua số thứ tự / heading markdown phổ biến
-    harmless = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
-
-    unsupported = {
-        n for n in answer_nums
-        if n not in allowed_nums and n not in harmless
-    }
-
-    if unsupported:
+    violations = find_unsupported_numbers(
+        answer, context_text, question, strict_mode=strict_mode
+    )
+    if violations:
         logger.warning(
-            f"Post-check chan cau tra loi vi co so lieu khong co nguon: {sorted(unsupported)}"
+            "Post-check chan cau tra loi vi co so lieu khong co nguon: %s",
+            [item.normalized for item in violations],
         )
         return True
 
@@ -225,5 +320,10 @@ __all__ = [
     'heuristic_missing_evidence_reason',
     'make_insufficient_evidence_message',
     'verify_answerability',
+    'evaluate_answerability',
+    'EvidenceDecision',
+    'EvidenceState',
     'has_unsupported_numbers',
+    'find_unsupported_numbers',
+    'NumberViolation',
 ]

@@ -28,3 +28,19 @@ of truth for the pilot; Qdrant Query API/prefetch is not currently required.
   concurrent requests before any increase to `MAX_CONCURRENT_RAG`.
 - A future switch to Qdrant Query API/prefetch is a performance decision, not
   a silent replacement. It requires a new benchmark and architecture review.
+
+## Controlled corrective retrieval
+
+- `RAG_CRAG_ENABLED=false` is the production default. When enabled, an
+  ambiguous evidence result may run one query-rewrite retrieval pass through
+  the same strict, broad, RBAC, site, lifecycle, publication, and current-version
+  filters. The pass never rebuilds or relaxes a governance filter.
+- `RAG_CLAIM_REPAIR_ENABLED=false` is the production default. When enabled, a
+  number-grounding failure may run one repair generation. The repaired answer
+  must pass material, code, unit, number, and citation checks before release.
+- `RAG_EXECUTION_CONTEXT` is one of `production`, `evaluation`, or `test` and
+  is attached to every JSONL trace event. Evaluation workers must set it to
+  `evaluation`; tests that emit trace data must set it to `test`.
+- Generate reproducible refusal snapshots with
+  `python scripts/eval/rag_trace_snapshot.py logs/rag_trace.jsonl` and optional
+  `--start`, `--end`, `--context`, `--json-output`, and `--markdown-output`.

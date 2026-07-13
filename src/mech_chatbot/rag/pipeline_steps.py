@@ -34,6 +34,7 @@ from mech_chatbot.rag.evidence_gate import (
     has_unsupported_numbers,
     make_insufficient_evidence_message,
 )
+from mech_chatbot.rag.claim_repair import repair_grounded_answer
 from mech_chatbot.rag.bootstrap import STRICT_ANSWER_MODE
 from mech_chatbot.rag.streaming_policy import strict_realtime_streaming_enabled
 from mech_chatbot.rag.prompt import _build_prompt_template
@@ -415,6 +416,11 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
     }
     _stream_attempts = max(1, int(os.getenv("GPT_STREAM_MAX_ATTEMPTS", "3")))
     _strict_realtime = strict_realtime_streaming_enabled(STRICT_ANSWER_MODE)
+    if os.getenv("RAG_CLAIM_REPAIR_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }:
+        # Repair requires full-answer holdback; never release a violating draft.
+        _strict_realtime = False
 
     def _raise_if_cancelled():
         if cancel_event is not None and cancel_event.is_set():
@@ -505,6 +511,40 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                     user_question,
                     strict_mode=is_high_risk_question(user_question),
                 ):
+                    repair_started = time.time()
+                    repair_result = repair_grounded_answer(
+                        answer,
+                        context_text=context_text,
+                        question=user_question,
+                        documents=retrieved_docs,
+                        invoke=lambda prompt: cohere_invoke(
+                            [HumanMessage(content=prompt)],
+                            surface="claim_repair",
+                            trace_id=trace_id,
+                        ).content,
+                        require_citation=(
+                            requires_source_citation(user_question)
+                            and not os.getenv("RAG_AUTO_SOURCE_CARDS", "true").strip().lower()
+                            in {"1", "true", "yes", "on"}
+                        ),
+                        enabled=os.getenv("RAG_CLAIM_REPAIR_ENABLED", "false").strip().lower()
+                        in {"1", "true", "yes", "on"},
+                    )
+                    log_trace(
+                        "claim_repair",
+                        trace_id,
+                        latency_ms=int((time.time() - repair_started) * 1000),
+                        attempted=repair_result.attempted,
+                        accepted=repair_result.accepted,
+                        violation_reason=repair_result.violation_reason,
+                        attempt=1 if repair_result.attempted else 0,
+                    )
+                    if repair_result.accepted:
+                        answer = repair_result.answer
+                        yield answer
+                        log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), repaired=True, input_tokens=input_tokens, output_tokens=len(answer)//4, estimated_cost=estimated_cost)
+                        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
+                        return
                     ans = make_insufficient_evidence_message(
                         user_question,
                         "cau tra loi sinh ra co so lieu khong truy vet duoc trong tai lieu",

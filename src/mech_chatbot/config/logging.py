@@ -75,6 +75,8 @@ _BENCHMARK_STAGE_EVENTS = {
     "rrf_grouping",
     "rerank",
     "parent_context",
+    "corrective_retrieval",
+    "claim_repair",
 }
 _STEP_COL = {
     "context_analysis": "context_ms",
@@ -87,6 +89,8 @@ _STEP_COL = {
     "llm_generation": "llm_ms",
     "image_analysis": "image_ms",
     "sql_bom": "sqlbom_ms",
+    "corrective_retrieval": "corrective_retrieval_ms",
+    "claim_repair": "claim_repair_ms",
 }
 
 
@@ -141,11 +145,22 @@ def _record_benchmark_stage(event_name, trace_id, kwargs):
 
 def log_trace(event_name, trace_id, **kwargs):
     """Ghi 1 event JSONL vao log trace + gom vao summary theo trace_id (P1-4)."""
+    execution_context = str(
+        kwargs.pop("execution_context", None)
+        or os.getenv("RAG_EXECUTION_CONTEXT", "production")
+    ).strip().lower()
+    if execution_context not in {"production", "evaluation", "test"}:
+        execution_context = "production"
+    if event_name == "rag_end":
+        legacy_reason = kwargs.pop("reason", None)
+        if not kwargs.get("refusal_reason") and legacy_reason:
+            kwargs["refusal_reason"] = legacy_reason
     try:
         event = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "event": event_name,
-            "trace_id": trace_id
+            "trace_id": trace_id,
+            "execution_context": execution_context,
         }
         event.update(kwargs)
         trace_logger.info(json.dumps(event, ensure_ascii=False))
@@ -158,6 +173,7 @@ def log_trace(event_name, trace_id, **kwargs):
             return
         _record_benchmark_stage(event_name, trace_id, kwargs)
         acc = _TRACE_ACC.setdefault(trace_id, {})
+        acc["execution_context"] = execution_context
         if event_name == "rag_start":
             acc["question"] = str(kwargs.get("question", ""))[:490]
             acc["model"] = kwargs.get("model")

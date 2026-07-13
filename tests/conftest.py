@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+os.environ.setdefault("RAG_EXECUTION_CONTEXT", "test")
+
 # --- Path setup -------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = _REPO_ROOT / "src"

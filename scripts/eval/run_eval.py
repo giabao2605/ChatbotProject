@@ -4,11 +4,14 @@ import sys
 import time
 from collections import defaultdict
 
+os.environ.setdefault("RAG_EXECUTION_CONTEXT", "evaluation")
+
 # Them thu muc goc vao sys.path de import duoc rag_logic
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mech_chatbot.rag.service import chat_with_rag, extract_search_intent
 from mech_chatbot.config.logging import logger
+from mech_chatbot.evaluation.outcomes import REFUSAL_OUTCOMES, expected_outcome, summarize_outcomes
 
 def run_evaluation():
     golden_set_file = os.path.join(os.path.dirname(__file__), "golden_set_datagoc_real.jsonl")
@@ -40,6 +43,7 @@ def run_evaluation():
     }
     
     level_stats = defaultdict(lambda: {"total": 0, "pass": 0})
+    outcome_rows = []
 
     with open(output_file, "w", encoding="utf-8") as out:
         out.write("#  Kết Quả Đánh Giá RAG Pipeline (Phase 4)\n\n")
@@ -54,7 +58,8 @@ def run_evaluation():
             expected_sources = case.get("expected_sources", [])
             forbidden_sources = case.get("forbidden_sources", [])
             expected_version_policy = case.get("expected_version_policy", "current_only")
-            should_refuse = case.get("should_refuse", False)
+            expected_case_outcome = expected_outcome(case)
+            should_refuse = expected_case_outcome in REFUSAL_OUTCOMES
             user_department = case.get("user_department")
             user_roles = case.get("user_roles")
             allowed_departments = case.get("allowed_departments")
@@ -116,6 +121,15 @@ def run_evaluation():
                 # Check refusal
                 refusal_keywords = ["không ghi thông tin", "tài liệu hiện tại không", "từ chối", "không đủ", "thiếu dữ kiện", "không tự ước lượng"]
                 actual_refused = any(rk in bot_answer_lower for rk in refusal_keywords)
+                access_denied = any(
+                    marker in bot_answer_lower
+                    for marker in ["chưa đủ quyền", "access request", "protected by access control"]
+                )
+                actual_case_outcome = (
+                    "access_denied" if actual_refused and access_denied
+                    else "insufficient_evidence" if actual_refused
+                    else "full_answer"
+                )
                 refusal_passed = (should_refuse == actual_refused)
                 if refusal_passed: metrics["refusal_pass"] += 1
                 
@@ -154,6 +168,14 @@ def run_evaluation():
                 
                 # Final result for the test
                 is_pass = keywords_passed and refusal_passed and sources_passed and forbidden_passed and policy_passed
+                outcome_rows.append(
+                    {
+                        "expected": expected_case_outcome,
+                        "actual": actual_case_outcome,
+                        "answer_correct": is_pass,
+                        "leaked": not forbidden_passed,
+                    }
+                )
                 
                 if is_pass:
                     passed_tests += 1
@@ -199,6 +221,10 @@ def run_evaluation():
         out.write(f"- **Version Policy Score:** {metrics['policy_pass']}/{total_tests} ({(metrics['policy_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
         avg_lat = metrics['total_latency']/total_tests if total_tests > 0 else 0
         out.write(f"- **Average Latency:** {avg_lat:.2f}s/query\n\n")
+        out.write("## OUTCOME CONFUSION\n")
+        for name, count in summarize_outcomes(outcome_rows).items():
+            out.write(f"- **{name}:** {count}\n")
+        out.write("\n")
         
         out.write(f"## KẾT QUẢ THEO NHÓM (LEVEL)\n")
         

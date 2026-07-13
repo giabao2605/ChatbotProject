@@ -66,6 +66,11 @@ from mech_chatbot.rag.rerank import *
 from mech_chatbot.rag.intent import *
 from mech_chatbot.rag.retrieval import *
 from mech_chatbot.rag.evidence_gate import *
+from mech_chatbot.rag.corrective import (
+    merge_corrected_documents,
+    run_corrected_retrieval,
+    should_attempt_correction,
+)
 
 
 from mech_chatbot.rag.pipeline_steps import _prepare_history, _analyze_image, _assemble_context, _generate, _retrieve, _RETRIEVE_UNSET, _route, _rewrite_and_anchor, _disambiguate
@@ -606,6 +611,74 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         )
 
         return empty_stream(), "", [], current_part_ids, make_debug_info([])
+
+    # Optional CRAG pass.  It reuses the exact same strict/broad/RBAC filters;
+    # only the query formulation changes, so correction can never widen access.
+    correction_attempts = 0
+    crag_enabled = env_bool("RAG_CRAG_ENABLED", False)
+    if retrieved_docs and crag_enabled and not skip_retrieval:
+        preliminary_context = _assemble_context(retrieved_docs, user_question)
+        coverage_reason = heuristic_missing_evidence_reason(user_question, preliminary_context)
+        coverage_decision = EvidenceDecision(
+            EvidenceState.AMBIGUOUS if coverage_reason else EvidenceState.SUFFICIENT,
+            reason=coverage_reason or "",
+            stage="heuristic",
+            telemetry_status="heuristic_block" if coverage_reason else "heuristic_pass",
+        )
+        if should_attempt_correction(
+            coverage_decision, attempts=correction_attempts, enabled=crag_enabled
+        ):
+            correction_started = time.time()
+            before_count = len(retrieved_docs)
+            correction_attempts += 1
+            try:
+                rewrite_prompt = (
+                    "Rewrite this internal-document search query once to improve evidence recall. "
+                    "Keep every technical code and do not add facts. Return only the query.\n\n"
+                    f"Question: {effective_question}\nMissing evidence: {coverage_reason}"
+                )
+                rewritten = cohere_invoke(
+                    [HumanMessage(content=rewrite_prompt)],
+                    surface="corrective_retrieval",
+                    trace_id=trace_id,
+                ).content
+                corrected_query = tokenize_cached(str(rewritten or effective_question))
+                corrected_docs, _, corrected_mode, _, _ = run_corrected_retrieval(
+                    _retrieve,
+                    corrected_query=corrected_query,
+                    new_part_ids=new_part_ids,
+                    strict_filter=strict_filter,
+                    broad_filter=broad_filter,
+                    is_bom_query=is_bom_query,
+                    rbac_filter=rbac_filter,
+                    trace_id=trace_id,
+                )
+                retrieved_docs = merge_corrected_documents(retrieved_docs, corrected_docs)
+                log_trace(
+                    "corrective_retrieval",
+                    trace_id,
+                    latency_ms=int((time.time() - correction_started) * 1000),
+                    strategy="query_rewrite",
+                    attempt=correction_attempts,
+                    before_docs=before_count,
+                    corrected_docs=len(corrected_docs),
+                    after_docs=len(retrieved_docs),
+                    retrieval_mode=corrected_mode,
+                    evaluator_state=coverage_decision.state.value,
+                )
+            except Exception as exc:
+                logger.warning("Corrective retrieval failed: %s", exc)
+                log_trace(
+                    "corrective_retrieval",
+                    trace_id,
+                    latency_ms=int((time.time() - correction_started) * 1000),
+                    strategy="query_rewrite",
+                    attempt=correction_attempts,
+                    before_docs=before_count,
+                    after_docs=len(retrieved_docs),
+                    evaluator_state=coverage_decision.state.value,
+                    error=type(exc).__name__,
+                )
  
     # BUOC B2: VOYAGE RE-RANK & REORDER (CHONG LOST IN THE MIDDLE)
     if retrieved_docs:
@@ -696,13 +769,26 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     # LOP PHONG THU 2: Evidence Gate cho cau hoi bay / cau hoi can so lieu
     t_gate = time.time()
-    answerable, evidence_reason, evidence_quotes = verify_answerability(
+    evidence_decision = evaluate_answerability(
         user_question,
         context_text,
         docs=retrieved_docs,
         trace_id=trace_id,
     )
-    log_trace("evidence_gate", trace_id, latency_ms=int((time.time() - t_gate)*1000), answerable=answerable, reason=evidence_reason)
+    answerable = evidence_decision.answerable
+    evidence_reason = evidence_decision.reason
+    evidence_quotes = list(evidence_decision.evidence_quotes)
+    log_trace(
+        "evidence_gate",
+        trace_id,
+        latency_ms=int((time.time() - t_gate)*1000),
+        answerable=answerable,
+        state=evidence_decision.state.value,
+        stage=evidence_decision.stage,
+        status=evidence_decision.telemetry_status,
+        reason=evidence_reason,
+        correction_attempts=correction_attempts,
+    )
     
     if not answerable:
         logger.warning(f"Evidence gate BLOCK cau hoi: {evidence_reason}")

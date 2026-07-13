@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-MANIFEST_SCHEMA_VERSION = "pilot-eval-v4"
+MANIFEST_SCHEMA_VERSION = "pilot-eval-v5"
 MINIMUM_QUESTIONS_PER_DEPARTMENT = 75
 DEFAULT_PILOT_DEPARTMENT_COUNT = 3
 
@@ -47,6 +47,14 @@ _VERSION_POLICY_FIELDS = ("expected_version_policy", "version_policy")
 _KEYWORD_FIELDS = ("expected_keywords", "keywords")
 _SECURITY_FIELDS = ("security_expectation", "expected_security")
 _REFUSAL_FIELDS = ("refusal_expectation", "should_refuse", "expected_refusal")
+EXPECTED_OUTCOMES = {
+    "full_answer",
+    "partial_answer",
+    "clarification_required",
+    "insufficient_evidence",
+    "access_denied",
+}
+REFUSAL_OUTCOMES = {"insufficient_evidence", "access_denied"}
 
 
 def _has_meaningful_value(value: Any) -> bool:
@@ -89,12 +97,19 @@ def _validate_record(record: dict[str, Any], line_number: int) -> dict[str, Any]
     _require_nonempty_text(record, "question", line_number)
     scenario = _require_nonempty_text(record, "scenario", line_number)
 
-    refusal_field, refusal_value = _first_present(record, _REFUSAL_FIELDS)
-    if refusal_field is None or not isinstance(refusal_value, bool):
-        raise ValueError(
-            f"Dong {line_number}: thieu hoac sai kieu refusal_expectation/should_refuse (phai la boolean)"
-        )
-    refusal_expected = refusal_value
+    expected_outcome = record.get("expected_outcome")
+    if expected_outcome is not None:
+        if expected_outcome not in EXPECTED_OUTCOMES:
+            raise ValueError(f"Dong {line_number}: expected_outcome khong hop le")
+        refusal_expected = expected_outcome in REFUSAL_OUTCOMES
+    else:
+        refusal_field, refusal_value = _first_present(record, _REFUSAL_FIELDS)
+        if refusal_field is None or not isinstance(refusal_value, bool):
+            raise ValueError(
+                f"Dong {line_number}: thieu expected_outcome hoac refusal_expectation/should_refuse boolean"
+            )
+        refusal_expected = refusal_value
+        expected_outcome = "insufficient_evidence" if refusal_expected else "full_answer"
 
     version_field, version_value = _first_present(record, _VERSION_POLICY_FIELDS)
     if version_field is None or not isinstance(version_value, str) or not version_value.strip():
@@ -124,6 +139,7 @@ def _validate_record(record: dict[str, Any], line_number: int) -> dict[str, Any]
         "department": department,
         "scenario": scenario,
         "refusal_expected": refusal_expected,
+        "expected_outcome": expected_outcome,
         "has_expected_document": _has_meaningful_value(document_value),
         "has_expected_location": _has_meaningful_value(location_value),
     }
@@ -166,9 +182,14 @@ def summarize(
     counts = Counter(str(item["department"]).strip() for item in questions)
     scenarios: dict[str, Counter[str]] = {}
     refusal_counts: Counter[str] = Counter()
+    outcome_counts: dict[str, Counter[str]] = {}
     for item in questions:
         department = str(item["department"]).strip()
         scenarios.setdefault(department, Counter())[str(item["scenario"]).strip()] += 1
+        outcome = item.get("expected_outcome") or (
+            "insufficient_evidence" if item.get("refusal_expected") else "full_answer"
+        )
+        outcome_counts.setdefault(department, Counter())[str(outcome)] += 1
         if item.get("refusal_expected"):
             refusal_counts[department] += 1
 
@@ -181,6 +202,7 @@ def summarize(
             "meets_minimum": count >= minimum,
             "scenarios": dict(scenarios.get(department, {})),
             "refusal_case_count": int(refusal_counts.get(department, 0)),
+            "expected_outcomes": dict(outcome_counts.get(department, {})),
             "is_expected_pilot_department": department in expected,
         }
         for department, count in sorted(counts.items())

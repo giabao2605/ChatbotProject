@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+from mech_chatbot.evaluation.outcomes import classify_outcome, expected_outcome
 
 
 pytestmark = pytest.mark.unit
@@ -64,7 +65,7 @@ def test_pilot_gate_accepts_complete_real_manifest_shape(tmp_path):
         expected_department_count=3,
     )
 
-    assert report["manifest_schema"] == "pilot-eval-v4"
+    assert report["manifest_schema"] == "pilot-eval-v5"
     assert report["passed"] is True
     assert report["departments"]["Technical"]["question_count"] == 75
     assert "question" not in report["departments"]["Technical"]
@@ -88,6 +89,30 @@ def test_pilot_gate_requires_explicit_refusal_contract_fields(tmp_path):
 
     assert parsed[0]["refusal_expected"] is True
     assert parsed[0]["has_expected_document"] is False
+
+
+def test_pilot_gate_accepts_expected_outcome_and_maps_legacy_refusal(tmp_path):
+    answer = _record("Technical", 1)
+    answer.pop("refusal_expectation")
+    answer["expected_outcome"] = "partial_answer"
+    legacy_refusal = _record("Technical", 2)
+    legacy_refusal.update(
+        {
+            "expected_file": None,
+            "expected_page": None,
+            "keywords": [],
+            "refusal_expectation": True,
+        }
+    )
+    manifest = tmp_path / "outcomes.jsonl"
+    _write_jsonl(manifest, [answer, legacy_refusal])
+
+    parsed = pilot_gate.read_questions(manifest)
+
+    assert parsed[0]["expected_outcome"] == "partial_answer"
+    assert parsed[0]["refusal_expected"] is False
+    assert parsed[1]["expected_outcome"] == "insufficient_evidence"
+    assert parsed[1]["refusal_expected"] is True
 
 
 def test_pilot_gate_rejects_missing_mandatory_security_expectation(tmp_path):
@@ -141,6 +166,13 @@ def test_benchmark_defaults_and_sse_trace_stage_summary():
     assert summary["complete_p95_ms"] == 500.0
     assert summary["stage_latency"]["sources"] == ["sse_trace_stages"]
     assert summary["stage_latency"]["stages"]["dense_retrieval"]["p95_ms"] == 22.0
+
+
+def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
+    assert expected_outcome({"should_refuse": True}) == "insufficient_evidence"
+    assert classify_outcome("full_answer", "insufficient_evidence", answer_correct=False, leaked=False) == "wrong_refusal"
+    assert classify_outcome("insufficient_evidence", "full_answer", answer_correct=False, leaked=False) == "wrong_answer"
+    assert classify_outcome("access_denied", "access_denied", answer_correct=True, leaked=True) == "leakage"
 
 
 def test_benchmark_accepts_done_trace_stage_contract_and_safe_trace_jsonl(tmp_path):
