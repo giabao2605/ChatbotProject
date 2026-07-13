@@ -624,6 +624,17 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             docs=retrieved_docs,
             trace_id=trace_id,
         )
+        if (
+            os.getenv("RAG_EXECUTION_CONTEXT", "production").strip().lower() == "evaluation"
+            and os.getenv("RAG_EVAL_FORCE_AMBIGUOUS", "false").strip().lower() in {"1", "true", "yes", "on"}
+        ):
+            coverage_decision = EvidenceDecision(
+                EvidenceState.AMBIGUOUS,
+                reason="controlled_evaluation_correction_fixture",
+                stage="evaluation_fixture",
+                telemetry_status="heuristic_block",
+            )
+            log_trace("evaluation_override", trace_id, override="force_ambiguous")
         if should_attempt_correction(
             coverage_decision, attempts=correction_attempts, enabled=crag_enabled
         ):

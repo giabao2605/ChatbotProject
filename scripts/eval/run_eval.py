@@ -78,6 +78,12 @@ def validate_live_case(case: dict, *, source: Path, line_number: int) -> None:
         raise ValueError(
             f"{source}:{line_number}: case missing provenance " + ", ".join(missing_provenance)
         )
+    for name in ("expected_document", "expected_department", "expected_site", "expected_security_level"):
+        if not isinstance(case[name], str) or not case[name].strip():
+            raise ValueError(f"{source}:{line_number}: {name} must be a non-empty string")
+    for name in ("expected_page", "expected_version"):
+        if not isinstance(case[name], int) or isinstance(case[name], bool) or case[name] < 1:
+            raise ValueError(f"{source}:{line_number}: {name} must be a positive integer")
     if case.get("admin_exception") and "admin" not in {role.strip().lower() for role in case["user_roles"]}:
         raise ValueError(f"{source}:{line_number}: admin_exception requires the admin role")
     if "expected_sources" in case and (
@@ -165,6 +171,7 @@ def run_evaluation(
     from mech_chatbot.evaluation.outcomes import (
         REFUSAL_OUTCOMES, classify_actual_outcome, expected_outcome, summarize_outcomes,
     )
+    from mech_chatbot.rag.evidence_gate import normalized_number_values
     from mech_chatbot.rag.service import chat_with_rag, extract_search_intent
 
     started_at = _utc_now()
@@ -185,12 +192,29 @@ def run_evaluation(
             )
             intent_data = intent[-1] if len(intent) == 6 else {}
             actual_policy = (intent_data or {}).get("version_policy", "current_only")
-            stream, ref_text, _, _, debug = chat_with_rag(
-                case["question"], None, [], [], case["user_department"], roles,
-                case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
-                trace_id=trace_id,
-            )
-            answer = "".join(stream)
+            override_names = {
+                "RAG_EVAL_FORCE_AMBIGUOUS": "true" if case.get("evaluation_force_ambiguous") else None,
+                "RAG_EVAL_DRAFT_OVERRIDE": case.get("evaluation_draft_override"),
+            }
+            previous_env = {name: os.environ.get(name) for name in override_names}
+            try:
+                for name, value in override_names.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = str(value)
+                stream, ref_text, _, _, debug = chat_with_rag(
+                    case["question"], None, [], [], case["user_department"], roles,
+                    case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
+                    trace_id=trace_id,
+                )
+                answer = "".join(stream)
+            finally:
+                for name, value in previous_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
             latencies.append(latency_ms)
             actual = classify_actual_outcome(answer)
@@ -202,10 +226,14 @@ def run_evaluation(
             )
             forbidden_hits = [src for src in forbidden_sources if any(src.lower() in item for item in retrieved)]
             keywords = case.get("expected_keywords", [])
+            def keyword_present(keyword):
+                if str(keyword).lower() in answer.lower():
+                    return True
+                expected_numbers = normalized_number_values(str(keyword))
+                return bool(expected_numbers) and expected_numbers <= normalized_number_values(answer)
             keyword_ok = (
-                any(k.lower() in answer.lower() for k in keywords)
-                if should_refuse and keywords else
-                all(k.lower() in answer.lower() for k in keywords)
+                any(keyword_present(k) for k in keywords)
+                if should_refuse and keywords else all(keyword_present(k) for k in keywords)
             )
             refusal_ok = (actual in REFUSAL_OUTCOMES) == should_refuse
             policy_ok = actual_policy == case.get("expected_version_policy", "current_only")

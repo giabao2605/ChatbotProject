@@ -503,6 +503,11 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                         time.sleep(delay)
                 _raise_if_cancelled()
                 answer = "".join(chunks)
+                if os.getenv("RAG_EXECUTION_CONTEXT", "production").strip().lower() == "evaluation":
+                    draft_override = os.getenv("RAG_EVAL_DRAFT_OVERRIDE")
+                    if draft_override:
+                        answer = draft_override
+                        log_trace("evaluation_override", trace_id, override="draft")
                 
                 input_tokens = len(context_text + user_question + chat_history_str) // 4
                 output_tokens = len(answer) // 4

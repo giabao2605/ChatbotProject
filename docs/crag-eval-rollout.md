@@ -29,6 +29,8 @@ chat_env\Scripts\python.exe -m scripts.crag_eval.preflight `
 
 Preflight verifies the expected filename, page, version and published/current lifecycle in both SQL and the exact staging collection. A failed preflight stops evaluation before the RAG stack is initialized.
 
+Two fixture-only controls make path coverage reproducible: the alias case forces the preliminary evaluator to `AMBIGUOUS`, and the number-repair case substitutes a known violating draft before deterministic post-checks. Retrieval, rewrite, fusion, number checking and repair still run through their production implementations. Both controls are ignored unless `RAG_EXECUTION_CONTEXT=evaluation`, and the runner restores their environment values after each serial case.
+
 ## Run baseline, candidate and gate
 
 Choose a new output directory for each attempt. The orchestrator refuses to overwrite the `baseline` or `candidate` directories. It records the commit, manifest hash, provider configuration hash, serial concurrency, UTC windows and fixture fingerprint.

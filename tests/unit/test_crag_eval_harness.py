@@ -59,6 +59,10 @@ def test_manifest_validation_rejects_invalid_outcome_and_missing_provenance(tmp_
     with pytest.raises(ValueError, match="expected_document"):
         runner.load_manifest_files([path])
 
+    path.write_text(json.dumps(_case(expected_document="")) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="expected_document"):
+        runner.load_manifest_files([path])
+
 
 def test_output_paths_are_isolated_by_run_label(tmp_path):
     runner = _load("run_eval_outputs", "scripts/eval/run_eval.py")
@@ -167,6 +171,8 @@ def test_fixture_generation_is_deterministic_and_identity_complete(tmp_path):
     assert any(case.get("admin_exception") is True for case in cases)
     assert any(case.get("requires_correction") is True for case in cases)
     assert any(case.get("requires_repair") is True for case in cases)
+    assert any(case.get("evaluation_force_ambiguous") is True for case in cases)
+    assert any(case.get("evaluation_draft_override") for case in cases)
     for case in cases:
         assert all(case.get(field) for field in (
             "user_department", "user_roles", "allowed_departments", "allowed_sites", "max_security_level"
