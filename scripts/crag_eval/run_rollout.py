@@ -31,6 +31,7 @@ def _run(label: str, manifest: Path, output: Path, trace: Path, *, enabled: bool
         "RAG_CRAG_ENABLED": str(enabled).lower(),
         "RAG_CLAIM_REPAIR_ENABLED": str(enabled).lower(),
         "SEMANTIC_CACHE_ENABLED": "false",
+        "STRICT_REALTIME_STREAMING": "false",
         "QDRANT_COLLECTION": FIXTURE_COLLECTION,
     })
     started_at = _utc_now()
