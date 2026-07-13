@@ -9,7 +9,7 @@ function normalizedRoles(roles: readonly string[] | undefined): string[] {
 }
 
 const ROLE_CAPABILITIES: Record<string, readonly string[]> = {
-  platform_admin: ["platform_admin", "admin"],
+  platform_admin: ["platform_admin"],
   security_admin: ["security_admin", "admin"],
   knowledge_approver: ["knowledge_approver", "reviewer", "admin"],
   reviewer: ["reviewer", "knowledge_approver", "admin"],
@@ -36,13 +36,13 @@ export function isRoleAllowed(
 
 /** The sidebar policy is deliberately shared with route-level authorization. */
 export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
-  { to: "/chat", key: "nav.chat", roles: [] },
+  { to: "/chat", key: "nav.chat", roles: ["viewer", "uploader", "reviewer"] },
   { to: "/dashboard", key: "nav.dashboard", roles: [] },
-  { to: "/documents", key: "nav.documents", roles: [] },
+  { to: "/documents", key: "nav.documents", roles: ["viewer", "uploader", "reviewer"] },
   { to: "/upload", key: "nav.upload", roles: ["uploader", "reviewer", "admin"] },
   { to: "/queue", key: "nav.queue", roles: ["uploader", "reviewer", "admin"] },
   { to: "/review", key: "nav.review", roles: ["reviewer", "admin"] },
-  { to: "/access", key: "nav.access", roles: [] },
+  { to: "/access", key: "nav.access", roles: ["viewer", "uploader", "reviewer"] },
   { to: "/users", key: "nav.users", roles: ["security_admin"] },
   { to: "/org", key: "nav.org", roles: ["platform_admin"] },
   { to: "/dictionary", key: "nav.dictionary", roles: ["reviewer", "admin"] },

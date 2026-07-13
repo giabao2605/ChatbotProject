@@ -77,7 +77,7 @@ describe("route guards", () => {
     await router.push("/login");
     await router.isReady();
 
-    expect(router.currentRoute.value.name).toBe("chat");
+    expect(router.currentRoute.value.name).toBe("dashboard");
   });
 
   it("allows a viewer to open the role-aware dashboard", async () => {
@@ -88,6 +88,21 @@ describe("route guards", () => {
     await router.isReady();
 
     expect(router.currentRoute.value.name).toBe("dashboard");
+  });
+
+  it("allows only an explicit platform admin to open organization controls", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue({ ...user, roles: ["admin"] });
+    const legacyAdminRouter = createAppRouter(createMemoryHistory());
+    await legacyAdminRouter.push("/org");
+    await legacyAdminRouter.isReady();
+    expect(legacyAdminRouter.currentRoute.value.name).toBe("dashboard");
+
+    setActivePinia(createPinia());
+    vi.mocked(api.loadMe).mockResolvedValue({ ...user, roles: ["platform_admin"] });
+    const platformAdminRouter = createAppRouter(createMemoryHistory());
+    await platformAdminRouter.push("/org");
+    await platformAdminRouter.isReady();
+    expect(platformAdminRouter.currentRoute.value.name).toBe("org");
   });
 
   it("redirects legacy lifecycle links into the document library", async () => {

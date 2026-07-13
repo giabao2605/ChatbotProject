@@ -88,6 +88,8 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, resolve_security_by_department
     from mech_chatbot.ingestion.site_registry import resolve_site_by_department
     domain = domain_override or resolve_domain_by_department(thu_muc)
+    from mech_chatbot.ingestion.sensitive_scanner import requires_mandatory_scan
+    scan_sensitive = bool(scan_sensitive or requires_mandatory_scan(thu_muc, phong_ban_override))
     security_level = security_override or resolve_security_by_department(thu_muc)
     site = site_override or resolve_site_by_department(thu_muc)  # P1.2
     site_missing = not str(site or "").strip()
@@ -112,6 +114,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
         "time_taken": 0,
         "message": ""
     }
+    sensitive_scan = {"is_sensitive": False, "categories": [], "match_counts": {}}
     if site_missing:
         report["warnings"].append(
             "Thieu site: tai lieu se o trang thai needs_review va khong duoc publish cho den khi backfill."
@@ -127,6 +130,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
         # FIX #1: Reset metadata MOT LAN cho ca file, lay doc_id dung chung cho moi trang
         doc_id = reset_document_metadata(ten_file, thu_muc)
         doc_info = get_document_info(doc_id)
+        report["classification_failed"] = bool(doc_info.get("classification_failed"))
  
         # FIX hieu nang: mo pdfplumber MOT LAN ngoai vong lap (truoc day mo lai moi trang)
         try:
@@ -355,13 +359,11 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
 
                 # GD4: duong nap hang loat khong tin folder tuyet doi -> quet noi dung nhay cam
                 if scan_sensitive:
-                    from mech_chatbot.ingestion.sensitive_scanner import scan_sensitive_content, escalate_security
+                    from mech_chatbot.ingestion.sensitive_scanner import scan_sensitive_content, escalate_security, merge_scan_results
                     _scan = scan_sensitive_content(combined_text_for_metadata)
-                    if _scan.get("is_sensitive") and security_level != "confidential":
+                    sensitive_scan = merge_scan_results(sensitive_scan, _scan)
+                    if _scan.get("is_sensitive"):
                         security_level = escalate_security(security_level, _scan)
-                        report["warnings"].append(
-                            f"Phat hien noi dung nhay cam {_scan['categories']} -> nang muc mat 'confidential', can review thu cong."
-                        )
                 metadata = {
                     "file_goc": ten_file,
                     "thu_muc": thu_muc,
@@ -606,6 +608,9 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     score, status = calculate_quality_status(report, domain)
     report["quality_score"] = score
     report["quality_status"] = "needs_review" if site_missing and report["status"] == "success" else status
+    if sensitive_scan.get("is_sensitive") and report["status"] == "success":
+        from mech_chatbot.ingestion.sensitive_scanner import apply_sensitive_quality_policy
+        apply_sensitive_quality_policy(report, sensitive_scan)
     if site_missing and report["status"] == "success":
         report["quality_label"] = "Cần rà soát thủ công"
         if "missing_site" not in report["quality_reason_codes"]:
@@ -639,6 +644,8 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
     from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department, resolve_security_by_department
     from mech_chatbot.ingestion.site_registry import resolve_site_by_department
     domain = domain_override or resolve_domain_by_department(thu_muc)
+    from mech_chatbot.ingestion.sensitive_scanner import requires_mandatory_scan
+    scan_sensitive = bool(scan_sensitive or requires_mandatory_scan(thu_muc, phong_ban_override))
     security_level = security_override or resolve_security_by_department(thu_muc)
     site = site_override or resolve_site_by_department(thu_muc)  # P1.2
     site_missing = not str(site or "").strip()
@@ -663,6 +670,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         "time_taken": 0,
         "message": ""
     }
+    sensitive_scan = {"is_sensitive": False, "categories": [], "match_counts": {}}
     if site_missing:
         report["warnings"].append(
             "Thieu site: tai lieu se o trang thai needs_review va khong duoc publish cho den khi backfill."
@@ -727,6 +735,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         doc_id = reset_document_metadata(ten_file, thu_muc)
         save_page_metadata(ten_file, thu_muc, info, doc_id=doc_id)
         doc_info = get_document_info(doc_id)
+        report["classification_failed"] = bool(doc_info.get("classification_failed"))
         vision_used = bool(data_type == "image_summary" and text_content.strip())
         if vision_used:
             report["pages_vision_success"].append(1)
@@ -743,12 +752,9 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         # GD4: duong nap hang loat khong tin folder tuyet doi -> quet noi dung nhay cam
         if scan_sensitive:
             from mech_chatbot.ingestion.sensitive_scanner import scan_sensitive_content, escalate_security
-            _scan = scan_sensitive_content(text_content)
-            if _scan.get("is_sensitive") and security_level != "confidential":
-                security_level = escalate_security(security_level, _scan)
-                report["warnings"].append(
-                    f"Phat hien noi dung nhay cam {_scan['categories']} -> nang muc mat 'confidential', can review thu cong."
-                )
+            sensitive_scan = scan_sensitive_content(text_content)
+            if sensitive_scan.get("is_sensitive"):
+                security_level = escalate_security(security_level, sensitive_scan)
 
         metadata = {
             "file_goc": ten_file,
@@ -912,6 +918,9 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
     score, status = calculate_quality_status(report, domain)
     report["quality_score"] = score
     report["quality_status"] = "needs_review" if site_missing and report["status"] == "success" else status
+    if sensitive_scan.get("is_sensitive") and report["status"] == "success":
+        from mech_chatbot.ingestion.sensitive_scanner import apply_sensitive_quality_policy
+        apply_sensitive_quality_policy(report, sensitive_scan)
     if site_missing and report["status"] == "success":
         report["quality_label"] = "Cần rà soát thủ công"
         if "missing_site" not in report["quality_reason_codes"]:

@@ -1,0 +1,5 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là Molding.
+# Scenario: drawing, bom, mold_specification, material_specification, vision_ocr,
+# parent_context, current_version, citation, lifecycle_denial,
+# cross_department_denial, insufficient_evidence.

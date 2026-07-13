@@ -1,0 +1,6 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là Warehouse.
+# Scenario cần chuẩn bị: inventory_lookup, goods_receipt, goods_issue,
+# stock_transfer, stock_card, material_code, version_policy, citation,
+# expired_or_pending_denial, cross_department_denial, insufficient_evidence.
+# Xem schema và quy tắc xác nhận tại README.md trong cùng thư mục.

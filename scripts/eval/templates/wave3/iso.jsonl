@@ -1,0 +1,6 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là ISO.
+# Scenario: controlled_document, policy, procedure, work_instruction,
+# form_record, internal_audit, nonconformity, corrective_action,
+# current_version, citation, superseded_denial, cross_department_denial,
+# insufficient_evidence.

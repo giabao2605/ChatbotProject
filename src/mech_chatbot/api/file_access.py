@@ -9,6 +9,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
+from datetime import date
 
 from sqlalchemy import text
 
@@ -34,6 +35,10 @@ class DocumentAccessRecord:
     # state below and therefore fails closed for staged documents.
     servable: bool = True
     publication_state: str = "published"
+    is_current: bool = True
+    effective_status: str | None = "effective"
+    effective_date: date | str | None = None
+    expiry_date: date | str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,7 +95,8 @@ def load_document_access_record(doc_id: int) -> DocumentAccessRecord | None:
             text(
                 """
                 SELECT DocID, TenFile, FilePath, ThuMuc, SecurityLevel, Site,
-                       LifecycleStatus, ReviewStatus, Servable, PublicationState
+                       LifecycleStatus, ReviewStatus, Servable, PublicationState,
+                       IsCurrent, EffectiveStatus, EffectiveDate, ExpiryDate
                 FROM dbo.TaiLieu
                 WHERE DocID = :doc_id
                 """
@@ -116,6 +122,10 @@ def load_document_access_record(doc_id: int) -> DocumentAccessRecord | None:
         departments=departments,
         servable=bool(row[8]),
         publication_state=str(row[9] or "").strip().lower(),
+        is_current=bool(row[10]),
+        effective_status=row[11],
+        effective_date=row[12],
+        expiry_date=row[13],
     )
 
 
@@ -126,14 +136,17 @@ def evaluate_document_access(profile: dict[str, Any], record: DocumentAccessReco
     # Citation/original-file endpoints are serving surfaces too.  A document
     # may already have been embedded for review, but it must never be opened
     # until the publication outbox has made it explicitly servable.
-    lifecycle = str(record.lifecycle_status or "").strip().lower()
-    review = str(record.review_status or "").strip().lower()
-    if (
-        not record.servable
-        or record.publication_state != "published"
-        or lifecycle != "published"
-        or review != "approved"
-    ):
+    from mech_chatbot.rag.serving_state import is_currently_servable
+    if not is_currently_servable({
+        "servable": record.servable,
+        "publication_state": record.publication_state,
+        "lifecycle_status": record.lifecycle_status,
+        "review_status": record.review_status,
+        "is_current": record.is_current,
+        "effective_status": record.effective_status,
+        "effective_date": record.effective_date,
+        "expiry_date": record.expiry_date,
+    }, require_current=True):
         return AccessDecision(False, "document_not_servable", security_level=record.security_level)
 
     if "admin" in _profile_roles(profile):

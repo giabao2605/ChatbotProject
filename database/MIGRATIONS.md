@@ -33,7 +33,7 @@ sqlcmd -S localhost\SQLEXPRESS -d Mech_Chatbot_DB -I -i database/data_migrations
 
 `V0001` khong phai bootstrap tu database rong: no phu thuoc baseline va seed.
 Dung harness sau voi **database test co chu `test` trong ten**; harness se xoa
-va tao lai database do, chay baseline + toan bo seed, sau do chay V0001--V0026
+va tao lai database do, chay baseline + toan bo seed, sau do chay V0001--V0032
 hai lan de kiem tra idempotency.
 
 ```powershell

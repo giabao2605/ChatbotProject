@@ -2,6 +2,23 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 
+
+class _WindowsSafeRotatingFileHandler(RotatingFileHandler):
+    """Keep logging best-effort when another Windows process holds a log file.
+
+    The demo server and an evaluation worker can legitimately write the same
+    observability files.  Windows does not permit the rename used by standard
+    rotation while another process has the file open; dropping a rotation is
+    preferable to printing a traceback for every RAG event.
+    """
+
+    def doRollover(self):  # noqa: N802 - stdlib hook name
+        try:
+            super().doRollover()
+        except PermissionError:
+            if self.stream is None:
+                self.stream = self._open()
+
 # Đảm bảo thư mục logs tồn tại (project root / logs)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 log_dir = os.path.join(_PROJECT_ROOT, 'logs')
@@ -16,7 +33,7 @@ logger.setLevel(logging.INFO)
 # Tránh việc add handler nhiều lần nếu module được import nhiều nơi
 if not logger.handlers:
     # Handler 1: Ghi ra file với Rotating (tối đa 5 file, mỗi file 10MB)
-    file_handler = RotatingFileHandler(
+    file_handler = _WindowsSafeRotatingFileHandler(
         log_file, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8'
     )
     file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -39,7 +56,7 @@ trace_logger = logging.getLogger("RagTrace")
 trace_logger.setLevel(logging.INFO)
 
 if not trace_logger.handlers:
-    trace_handler = RotatingFileHandler(
+    trace_handler = _WindowsSafeRotatingFileHandler(
         trace_log_file, maxBytes=20*1024*1024, backupCount=5, encoding='utf-8'
     )
     # Jsonl không cần formatter có asctime text, chỉ ghi message (chứa chuỗi json)

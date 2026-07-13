@@ -1,6 +1,6 @@
 # Mech Chatbot — Nền tảng RAG đa phòng ban
 
-An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for the mechanical engineering domain and extended into a **multi-department document management system** (mechanical, technical, accounting, HR, and shared documents). The system automatically classifies PDF documents by domain, extracts structured data (Bills of Materials), enforces layered access control (RBAC + department + security clearance), and returns accurate, citation-backed answers without hallucination.
+An internal **Retrieval-Augmented Generation (RAG)** and knowledge-management platform for 14 department profiles. It classifies and ingests office or technical documents, enforces RBAC, department, site, clearance and serving-state policies, then returns evidence-backed answers with source provenance.
 
 ---
 
@@ -18,7 +18,7 @@ An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for 
 | **Rate Limiting** | Login rate limiting with lockout to prevent brute-force attacks (`auth/rate_limit.py`). |
 | **Anti-Hallucination Guardrails** | A strict evidence-based verification layer (evidence gate) refuses to answer when quantitative data (fabrication time, costs, quantities) is absent from retrieved context. Reasons are logged per trace. |
 | **HyDE (Hypothetical Document Embedding)** | Automatically activated for short or ambiguous questions to expand retrieval context before hybrid search. |
-| **Voyage Reranking** | Voyage `rerank-2.5-lite` reranks retrieved chunks before generation. It supports Vietnamese and falls back to deterministic fusion ordering if the API is unavailable. |
+| **Voyage Reranking** | Voyage `rerank-2.5-lite` reranks retrieved chunks before generation and falls back to deterministic fusion ordering if unavailable. Enabling it sends the query and eligible candidate chunks to Voyage. |
 | **Unified Dictionaries** | Reviewers manage the material dictionary and the per-domain term/synonym dictionary from one tabbed UI. `MaterialDictionary`, `MaterialSynonym`, and `DomainGlossary` remain separate because they serve different runtime semantics. |
 | **Entity Resolver** | `rag/entity_resolver.py` normalizes material names and product codes before vector lookup. |
 | **Intelligent Chitchat Handling** | `rag/chitchat.py` distinguishes casual conversation from technical queries, with bilingual (Vietnamese/English) responses. |
@@ -38,7 +38,7 @@ An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for 
 | **Fail-Fast Config Validation** | `config/validate.py` validates all required environment variables at startup and raises `ConfigError` immediately with a clear error list, rather than failing silently later. Secrets are masked in all log output. |
 | **Access Audit Logging** | All access to `confidential`-level documents and permission changes are recorded in `AuditLog` for compliance. |
 | **RAGAS Continuous Evaluation (CI)** | A GitHub Actions workflow runs automated RAG quality evaluation weekly (or on demand), gates on regression tolerance, and uploads `ragas_report.md` as a build artifact. |
-| **LAN Demo and Docker Support** | The Windows demo script starts the local stack and applies migrations automatically; Docker Compose remains available for containerized environments. |
+| **LAN Demo Operations** | The Windows demo script applies migrations, starts the local RAG server and exposes the browser application on the LAN. |
 
 ---
 
@@ -46,7 +46,7 @@ An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for 
 
 | Component | Technology |
 |---|---|
-| Language | Python 3.11 |
+| Language | Python 3.11+ |
 | Frontend / UI | Vue 3 + Vite + PrimeVue served by FastAPI |
 | API Backend | [FastAPI](https://fastapi.tiangolo.com/) + Uvicorn |
 | LLM & Vision | OpenAI-compatible endpoint (ProxyLLM) — configured via `GPT_MODEL_NAME`, `GPT_VISION_MODEL_NAME` |
@@ -62,23 +62,19 @@ An enterprise-grade **Retrieval-Augmented Generation (RAG)** platform built for 
 
 ```text
 ChatBotProject/
-├── .env                          # Environment variables (API keys, DB, model names)
-├── Dockerfile                    # Python 3.11 image for RAG server + worker
-├── Dockerfile.app                # Python 3.11 image for browser-facing app server
-├── docker/
-│   └── docker-compose.yml        # Orchestration: UI + API server + Worker
+├── CODEX.md                       # Agent engineering-skill configuration
+├── .agents/skills/                # Repository engineering skills
+├── .env                           # Local environment variables; never commit secrets
 ├── docs/
-│   ├── go-live-demo.md           # Demo and go-live notes
-│   └── retrieval-architecture.md # Retrieval pipeline architecture overview
-├── eval/
-│   └── golden_routes.csv         # Router evaluation fixture
-├── web-ui/                       # Vue 3 + Vite + PrimeVue browser UI
-├── run_server.py                 # Launcher: FastAPI RAG server
-├── run_worker.py                 # Launcher: Ingestion worker
-├── requirements.txt              # Python dependencies
-├── requirements.lock.txt         # Pinned dependencies
-├── requirements-test.txt         # Test dependencies
-├── pytest.ini                    # Test configuration
+│   ├── agents/                    # Issue-tracker, triage and domain-doc rules
+│   ├── adr/                       # Architectural decisions, created when needed
+│   ├── go-live-demo.md            # Demo and go-live notes
+│   └── wave*-rollout-checklist.md # Rollout operating checklists
+├── web-ui/                        # Vue 3 + Vite + PrimeVue browser UI
+├── run_server.py                  # RAG server launcher
+├── run_worker.py                  # Ingestion worker launcher
+├── requirements*.txt              # Runtime, locked and test dependencies
+├── pytest.ini                     # Test configuration
 │
 ├── .github/
 │   └── workflows/
@@ -106,7 +102,13 @@ ChatBotProject/
 │   │   ├── V0023__department_rollout_and_evaluation_gates.sql
 │   │   ├── V0024__separate_control_plane_roles.sql
 │   │   ├── V0025__citation_provenance_and_chat_evidence.sql
-│   │   └── V0026__effective_lifecycle_buckets.sql
+│   │   ├── V0026__effective_lifecycle_buckets.sql
+│   │   ├── V0027__wave2_rollout_profiles.sql
+│   │   ├── V0028__wave3_rollout_profiles.sql
+│   │   ├── V0029__wave4_rollout_profiles.sql
+│   │   ├── V0030__rollout_invariants_and_profile_hygiene.sql
+│   │   ├── V0031__wave1_domain_profiles.sql
+│   │   └── V0032__rollout_wave_status_guard.sql
 │   └── MIGRATIONS.md                     # Migration documentation
 │
 ├── scripts/
@@ -238,6 +240,19 @@ ChatBotProject/
 
 ---
 
+## Engineering workflow
+
+Repository engineering skills are configured in `CODEX.md`.
+
+- GitHub Issues is the tracker for implementation work.
+- `docs/agents/triage-labels.md` defines the shared triage vocabulary.
+- `docs/agents/domain.md` explains how agents consume `CONTEXT.md` and ADRs.
+
+The `.agents/skills/` directory is source-controlled. Only local agent cache
+and state directories are ignored.
+
+---
+
 ## Database Schema (Key Tables)
 
 | Table | Purpose |
@@ -274,9 +289,8 @@ ChatBotProject/
 
 ### 1. Prerequisites
 
-- Python 3.10+ (3.11 matches the Docker image)
+- Python 3.11+
 - PowerShell on Windows for the simplest LAN demo workflow
-- Docker & Docker Compose (optional)
 - Microsoft SQL Server + ODBC Driver (for `pyodbc`)
 - A Qdrant Cloud account (URL + API key)
 - An OpenAI-compatible LLM endpoint (ProxyLLM or direct OpenAI)
@@ -363,7 +377,7 @@ For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QD
 # Step 1: Create the base schema
 #   Run: database/schema/01_baseline.sql on your SQL Server instance
 
-# Step 2: Apply versioned migrations in order (currently V0001 -> V0026)
+# Step 2: Apply versioned migrations in order (currently V0001 -> V0032)
 python scripts/migrations/migrate.py
 # or run each file in database/migrations/ manually
 
@@ -381,23 +395,12 @@ python scripts/create_qdrant_indexes.py
 powershell -ExecutionPolicy Bypass -File .\scripts\ops\start_demo_lan.ps1
 ```
 
-The script applies migrations through `V0026`, starts the RAG server on
+The script applies migrations through `V0032`, starts the RAG server on
 `127.0.0.1:8100`, and exposes the browser application on the configured LAN
 address. Stop the processes with `Ctrl+C`; rerun the same command to start the
 demo again.
 
-**Option B: Docker Compose**
-
-```bash
-docker-compose -f docker/docker-compose.yml up -d --build
-```
-
-This launches:
-- Vue UI + browser API → `http://localhost:8080`
-- FastAPI RAG server → `http://localhost:8100` (bound to localhost by compose)
-- Ingestion worker (background)
-
-**Option C: Local Development**
+**Option B: Local Development**
 
 ```bash
 git clone https://github.com/giabao2605/ChatbotProject.git
@@ -514,6 +517,22 @@ The project includes a GitHub Actions workflow (`.github/workflows/ragas_eval.ym
 
 ## Testing
 
+### Wave 1-4 demo bootstrap
+
+The demo bootstrap is opt-in and tags every generated record with
+`demo-wave-v1`. Credentials are generated locally in
+`.local/demo-wave-credentials.json`; that path is ignored by Git.
+
+```powershell
+.\chat_env\Scripts\python.exe scripts\demo_wave\bootstrap_demo_wave_data.py all
+.\chat_env\Scripts\python.exe scripts\demo_wave\ingest_demo_corpus.py
+.\chat_env\Scripts\python.exe scripts\eval\run_demo_wave_gate.py --mode full --record-gates
+```
+
+The generator creates 84 lifecycle fixtures and 1,050 evaluation cases
+(75 for each of the 14 configured departments). A retrieval/debug run never
+writes a rollout gate; `--record-gates` is accepted only in full mode.
+
 ```bash
 pip install -r requirements-test.txt
 
@@ -536,6 +555,53 @@ PYTHONPATH=src python scripts/eval/run_eval.py
 ```
 
 Evaluation reports are stored in the `reports/` directory.
+
+### Department rollout waves
+
+- Wave 1: `Technical`, `HR`, `Purchasing` (`pilot`).
+- Wave 2: `Warehouse`, `Accountant`, `Sales`, `Planning` (`planned`).
+- Wave 3: `Production`, `Maintenance`, `QualityControl`, `ISO` (`planned`).
+- Wave 4: `Molding`, `HSE_5S`, `IT` (`planned`; the fourth slot is empty).
+
+The checked-in demo bootstrap provisions a demo corpus, demo governance and a
+75-question evaluation set for every configured department. It is useful for
+code verification only; rollout status remains explicit and is never promoted
+automatically by the bootstrap or evaluation runner.
+
+For a real rollout, replace demo ownership, corpus and questions with approved
+department data, then use the readiness API and the relevant checklist in
+`docs/wave*-rollout-checklist.md`. Wave transitions also require earlier waves
+to be active where applicable.
+
+The templates in `scripts/eval/templates/wave1` through `wave4` describe the
+expected per-department scenarios. The demo-runner's reports are ignored by
+Git and are written under `reports/demo_wave/`.
+
+After the real manifests for a wave have been reviewed, validate them without
+creating or recording a gate. The command below is the Wave 2 example; Wave 1,
+Wave 3 and Wave 4 commands are documented in their respective template
+directories:
+
+```powershell
+$env:PYTHONPATH="src"
+python scripts/eval/pilot_rollout_gate.py reports/wave2-evaluation.jsonl `
+  --expected-departments Warehouse,Accountant,Sales,Planning `
+  --expected-department-count 4 `
+  --minimum 75
+```
+
+Platform admins can inspect the backend-computed prerequisites from an
+authenticated browser session. Open the browser developer console on the app
+and run:
+
+```javascript
+fetch("/api/catalog/rollout/readiness", { credentials: "include" })
+  .then((response) => response.json())
+  .then((result) => console.table(result.departments));
+```
+
+The frontend does not calculate or override readiness. Treat
+`missing_prerequisites` from this response as the authoritative checklist.
 
 SQL Server, Qdrant, and live RAG evaluation tests are opt-in. Enable them only
 against explicit test services with `RUN_DB_TESTS=1`, `RUN_QDRANT_TESTS=1`, or
@@ -565,6 +631,10 @@ Verify all SQL migrations on a disposable database before deployment:
 | `scripts/eval/run_eval.py` | Manual evaluation with detailed output |
 | `scripts/eval/benchmark_rag_concurrency.py` | RAG concurrency load testing |
 | `scripts/eval/pilot_rollout_gate.py` | Department rollout gate evaluation |
+| `scripts/eval/run_demo_wave_gate.py` | Run or re-score the 14-department demo evaluation gate |
+| `scripts/demo_wave/bootstrap_demo_wave_data.py` | Create local demo users, governance assignments and evaluation cases |
+| `scripts/demo_wave/ingest_demo_corpus.py` | Ingest and publish the generated demo corpus |
+| `scripts/demo_wave/cleanup_demo_wave_data.py` | Remove only demo-wave records and artifacts |
 | `scripts/eval_semantic_router.py` | Semantic router evaluation script |
 | `scripts/diagnostics/check_qdrant_count.py` | Verify document count in Qdrant |
 | `scripts/diagnostics/check_qdrant_schema.py` | Inspect Qdrant collection schema |

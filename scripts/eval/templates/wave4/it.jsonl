@@ -1,0 +1,5 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là IT.
+# Scenario: system_guide, network, access, incident, change, backup, security,
+# credential_detection, confidential_denial, citation, lifecycle_denial,
+# cross_department_denial, insufficient_evidence.

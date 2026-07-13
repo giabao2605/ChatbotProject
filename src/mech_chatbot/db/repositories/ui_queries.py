@@ -66,6 +66,26 @@ def _scalar(conn, sql, params=None):
 		return 0
 
 
+def _rollout_dashboard_counts(conn):
+	"""Read rollout counters from the canonical table and fail on schema drift."""
+	row = conn.execute(text("""
+		SELECT
+			SUM(CASE WHEN RolloutStatus = 'planned' THEN 1 ELSE 0 END) AS PlannedCount,
+			SUM(CASE WHEN RolloutStatus = 'pilot' THEN 1 ELSE 0 END) AS PilotCount,
+			SUM(CASE WHEN RolloutStatus = 'dark_launch' THEN 1 ELSE 0 END) AS DarkLaunchCount,
+			SUM(CASE WHEN RolloutStatus = 'active' THEN 1 ELSE 0 END) AS ActiveCount,
+			SUM(CASE WHEN RolloutStatus = 'blocked' THEN 1 ELSE 0 END) AS BlockedCount
+		FROM dbo.DepartmentRolloutPlan
+	""")).mappings().one()
+	return {
+		"departments_planned": int(row["PlannedCount"] or 0),
+		"departments_pilot": int(row["PilotCount"] or 0),
+		"departments_dark_launch": int(row["DarkLaunchCount"] or 0),
+		"departments_active": int(row["ActiveCount"] or 0),
+		"departments_blocked": int(row["BlockedCount"] or 0),
+	}
+
+
 def get_dashboard_stats():
 	with engine.connect() as conn:
 		return {
@@ -103,6 +123,10 @@ def get_role_dashboard(profile):
 			global_read_admin=global_read_admin,
 		),
 	}
+	if not role_allows(roles, "reviewer") and not role_allows(roles, "platform_admin"):
+		result["document_lifecycle"] = {
+			"effective": int(result["document_lifecycle"].get("effective", 0))
+		}
 	with engine.connect() as conn:
 		if role_allows(roles, "uploader"):
 			result["ingestion"] = {
@@ -181,8 +205,7 @@ def get_role_dashboard(profile):
 			}
 			result["rollout"] = {
 				"departments_total": _scalar(conn, "SELECT COUNT(*) FROM dbo.Departments WHERE IsActive = 1"),
-				"departments_active": _scalar(conn, "SELECT COUNT(*) FROM dbo.DepartmentRollout WHERE RolloutStatus = 'active'"),
-				"departments_blocked": _scalar(conn, "SELECT COUNT(*) FROM dbo.DepartmentRollout WHERE RolloutStatus = 'blocked'"),
+				**_rollout_dashboard_counts(conn),
 			}
 	return result
 

@@ -1,0 +1,6 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là Accountant; security expectation mặc định confidential.
+# Scenario cần chuẩn bị: invoice, payment_request, receivable_payable, ledger,
+# payroll, tax_document, version_policy, citation, clearance_denial,
+# cross_department_denial, expired_or_pending_denial, insufficient_evidence.
+# Xem schema và quy tắc xác nhận tại README.md trong cùng thư mục.

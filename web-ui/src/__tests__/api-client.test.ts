@@ -44,4 +44,14 @@ describe("api client CSRF handling", () => {
     expect(headers.has("Content-Type")).toBe(false);
     expect(init.body).toBe(form);
   });
+
+  it("keeps a structured backend rejection readable for the UI", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: "Chưa hoàn tất wave trước; không thể kích hoạt Wave 2" }),
+      { status: 422, headers: { "Content-Type": "application/json" } },
+    )));
+
+    await expect(apiSend("/api/catalog/departments/Sales/rollout-plan", "PUT", {}))
+      .rejects.toThrow("Chưa hoàn tất wave trước; không thể kích hoạt Wave 2");
+  });
 });

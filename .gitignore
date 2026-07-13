@@ -28,6 +28,9 @@ node_modules/
 web-ui/dist/
 web-ui/.vite/
 web-ui/.vitest/
+web-ui/coverage/
+web-ui/playwright-report/
+web-ui/test-results/
 *.tsbuildinfo
 
 # ===== Testing & QA =====
@@ -93,7 +96,9 @@ desktop.ini
 *.stackdump
 
 # ===== Local agent/Codex workspace state =====
-.agents/
+# Keep repository skills and instructions under .agents/ in version control.
+.agents/state/
+.agents/cache/
 .codex/
 
 # ===== Temp RAG worker files =====
@@ -110,10 +115,10 @@ True/
 
 # ===== Model / Embedding cache (sentence-transformers, HuggingFace) =====
 .cache/
-models/
-*.onnx
-*.bin
-*.safetensors
+.hf_cache/
+huggingface/
+sentence_transformers/
+models/cache/
 
 # ===== Local databases, exports & backups =====
 *.bak
@@ -122,10 +127,18 @@ models/
 *.dump
 *.sqlite
 *.sqlite3
+*.mdf
+*.ndf
+*.ldf
 
 # ===== Local upload/session artifacts =====
 uploads/
 sessions/
+.local/
+data/demo_wave_v1/
+reports/demo_wave/
+*.tmp
+*.tmp.*
 
 # ===== Archive (historical/deprecated scripts) =====
 archive/

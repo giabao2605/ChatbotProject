@@ -23,6 +23,14 @@ _GATE_MIN_SOURCE_TOP5 = 0.90
 _GATE_MIN_CITATION_OR_REFUSAL = 1.00
 _GATE_MIN_EVIDENCE_SUPPORT = 0.85
 _WAVE_CAPACITY = {1: 3, 2: 4, 3: 4, 4: 4}
+_ALLOWED_STATUS_TRANSITIONS = {
+    None: {"planned", "pilot"},
+    "planned": {"planned", "pilot", "dark_launch", "blocked"},
+    "pilot": {"pilot", "dark_launch", "active", "blocked"},
+    "dark_launch": {"dark_launch", "active", "blocked"},
+    "blocked": {"blocked", "planned"},
+    "active": {"active"},
+}
 
 
 def _clean(value: Any) -> str:
@@ -70,6 +78,84 @@ def _plan_from_row(row: Any) -> dict[str, Any]:
     }
 
 
+def _readiness_from_row(row: Any) -> dict[str, Any]:
+    """Build the public readiness contract from one aggregate SQL row."""
+    target = int(row["EvaluationQuestionTarget"] or 75)
+    prerequisites = {
+        "rollout_plan": row["WaveNumber"] is not None,
+        "knowledge_owner": row["KnowledgeOwnerUserID"] is not None,
+        "knowledge_approver": row["KnowledgeApproverUserID"] is not None,
+        "taxonomy": bool(_clean(row["TaxonomyVersion"])),
+        "governance_active": bool(row["GovernanceActive"]),
+        "domain_profile_active": bool(row["DomainProfileActive"]),
+        "domain_profile_valid": bool(row["DomainProfileValid"]),
+        "site_backfill": int(row["MissingSiteCount"] or 0) == 0,
+        "servable_corpus": int(row["ServableDocumentCount"] or 0) > 0,
+        "evaluation_set": int(row["EvaluationQuestionCount"] or 0) >= target,
+        "evaluation_gate": bool(row["GatePassed"]),
+    }
+    return {
+        "department_code": _clean(row["DeptCode"]),
+        "wave_number": int(row["WaveNumber"]) if row["WaveNumber"] is not None else None,
+        "rollout_status": _clean(row["RolloutStatus"]) or "unplanned",
+        "evaluation_question_target": target,
+        "evaluation_question_count": int(row["EvaluationQuestionCount"] or 0),
+        "servable_document_count": int(row["ServableDocumentCount"] or 0),
+        "missing_site_documents": int(row["MissingSiteCount"] or 0),
+        "latest_gate": {
+            "batch_id": _clean(row["BatchID"]) or None,
+            "question_count": int(row["GateQuestionCount"] or 0),
+            "source_top5_rate": float(row["SourceTop5Rate"]) if row["SourceTop5Rate"] is not None else None,
+            "citation_or_refusal_rate": float(row["CitationOrRefusalRate"]) if row["CitationOrRefusalRate"] is not None else None,
+            "evidence_support_rate": float(row["EvidenceSupportRate"]) if row["EvidenceSupportRate"] is not None else None,
+            "rbac_site_publication_leaks": int(row["RbacSitePublicationLeaks"] or 0),
+            "passed": bool(row["GatePassed"]),
+            "evaluated_at": _iso(row["EvaluatedAt"]),
+        },
+        "prerequisites": prerequisites,
+        "missing_prerequisites": [name for name, passed in prerequisites.items() if not passed],
+        "ready_for_next_wave": all(prerequisites.values()),
+    }
+
+
+def _validate_rollout_transition(
+    *,
+    wave_number: int,
+    rollout_status: str,
+    pending_prior_wave_departments: int,
+    readiness: dict[str, Any] | None,
+) -> None:
+    if rollout_status not in {"dark_launch", "active"}:
+        return
+    if wave_number > 1 and pending_prior_wave_departments > 0:
+        raise ValueError("Chua hoan tat wave truoc, khong the bat dark launch/active cho wave nay")
+    if not readiness or not readiness["ready_for_next_wave"]:
+        missing = readiness.get("missing_prerequisites", []) if readiness else ["rollout_plan"]
+        raise ValueError(
+            "Phong ban chua du dieu kien de vao dark launch/active: "
+            + ", ".join(missing)
+        )
+
+
+def _validate_status_transition(
+    current_status: str | None,
+    requested_status: str,
+    *,
+    current_wave: int | None,
+    requested_wave: int,
+) -> None:
+    """Reject silent rollback or reassignment of an operated rollout plan."""
+    current = _clean(current_status).lower() or None
+    if requested_status == "pilot" and requested_wave != 1:
+        raise ValueError("Chi Wave 1 duoc su dung rollout status pilot")
+    if requested_status not in _ALLOWED_STATUS_TRANSITIONS.get(current, set()):
+        raise ValueError(
+            f"Khong the chuyen rollout status tu {current or 'unplanned'} sang {requested_status}"
+        )
+    if current_wave is not None and current_wave != requested_wave and current not in {"planned", "blocked"}:
+        raise ValueError("Khong the doi wave sau khi phong ban da bat dau pilot/dark launch/active")
+
+
 def list_department_rollout_plans() -> list[dict[str, Any]]:
     _ensure_engine()
     with engine.connect() as conn:
@@ -104,16 +190,41 @@ def get_department_rollout_readiness(department_code: str | None = None) -> list
                        g.KnowledgeOwnerUserID, g.KnowledgeApproverUserID,
                        g.TaxonomyVersion, g.IsActive AS GovernanceActive,
                        dp.IsActive AS DomainProfileActive,
+                       CASE WHEN dp.IsActive = 1
+                                  AND ISJSON(dp.DocumentTypesJson) = 1
+                                  AND ISJSON(dp.RequiredMetadataJson) = 1
+                                  AND ISJSON(dp.RouterPatternsJson) = 1
+                                  AND EXISTS (SELECT 1 FROM OPENJSON(CASE WHEN ISJSON(dp.DocumentTypesJson) = 1 THEN dp.DocumentTypesJson ELSE N'[]' END))
+                                  AND EXISTS (SELECT 1 FROM OPENJSON(CASE WHEN ISJSON(dp.RequiredMetadataJson) = 1 THEN dp.RequiredMetadataJson ELSE N'[]' END))
+                                  AND EXISTS (SELECT 1 FROM OPENJSON(CASE WHEN ISJSON(dp.RouterPatternsJson) = 1 THEN dp.RouterPatternsJson ELSE N'[]' END))
+                            THEN 1 ELSE 0 END AS DomainProfileValid,
                        (SELECT COUNT(*) FROM dbo.TaiLieu t
-                        WHERE NULLIF(LTRIM(RTRIM(t.Site)), '') IS NULL
+                        WHERE t.OwnerDepartment = d.DeptCode
+                          AND t.IsCurrent = 1
+                          AND t.ReviewStatus = 'approved'
+                          AND t.LifecycleStatus = 'published'
+                          AND t.Servable = 1
+                          AND t.PublicationState = 'published'
+                          AND NULLIF(LTRIM(RTRIM(t.Site)), '') IS NULL
+                       ) AS MissingSiteCount,
+                       (SELECT COUNT(*) FROM dbo.TaiLieu t
+                        WHERE t.IsCurrent = 1
+                          AND t.ReviewStatus = 'approved'
+                          AND t.LifecycleStatus = 'published'
+                          AND t.Servable = 1
+                          AND t.PublicationState = 'published'
+                          AND LOWER(ISNULL(NULLIF(LTRIM(RTRIM(t.EffectiveStatus)), ''), 'effective'))
+                              IN ('active', 'effective')
+                          AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+                          AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
                           AND (
                               t.OwnerDepartment = d.DeptCode
-                              OR t.ThuMuc = d.DeptCode
                               OR EXISTS (
                                   SELECT 1 FROM dbo.PhongBanChiaSe pb
-                                  WHERE pb.DocID = t.DocID AND pb.DeptCode = d.DeptCode
+                                  WHERE pb.DocID = t.DocID
+                                    AND pb.DeptCode = d.DeptCode
                               )
-                          )) AS MissingSiteCount,
+                          )) AS ServableDocumentCount,
                        (SELECT COUNT(*) FROM dbo.RegressionQuestion q
                         WHERE q.Department = d.DeptCode AND q.IsActive = 1) AS EvaluationQuestionCount,
                        eg.BatchID, eg.QuestionCount AS GateQuestionCount,
@@ -136,43 +247,7 @@ def get_department_rollout_readiness(department_code: str | None = None) -> list
             ),
             params,
         ).mappings().all()
-    out = []
-    for row in rows:
-        target = int(row["EvaluationQuestionTarget"] or 75)
-        prerequisites = {
-            "rollout_plan": row["WaveNumber"] is not None,
-            "knowledge_owner": row["KnowledgeOwnerUserID"] is not None,
-            "knowledge_approver": row["KnowledgeApproverUserID"] is not None,
-            "taxonomy": bool(_clean(row["TaxonomyVersion"])),
-            "governance_active": bool(row["GovernanceActive"]),
-            "domain_profile_active": bool(row["DomainProfileActive"]),
-            "site_backfill": int(row["MissingSiteCount"] or 0) == 0,
-            "evaluation_set": int(row["EvaluationQuestionCount"] or 0) >= target,
-            "evaluation_gate": bool(row["GatePassed"]),
-        }
-        out.append(
-            {
-                "department_code": _clean(row["DeptCode"]),
-                "wave_number": int(row["WaveNumber"]) if row["WaveNumber"] is not None else None,
-                "rollout_status": _clean(row["RolloutStatus"]) or "unplanned",
-                "evaluation_question_target": target,
-                "evaluation_question_count": int(row["EvaluationQuestionCount"] or 0),
-                "missing_site_documents": int(row["MissingSiteCount"] or 0),
-                "latest_gate": {
-                    "batch_id": _clean(row["BatchID"]) or None,
-                    "question_count": int(row["GateQuestionCount"] or 0),
-                    "source_top5_rate": float(row["SourceTop5Rate"]) if row["SourceTop5Rate"] is not None else None,
-                    "citation_or_refusal_rate": float(row["CitationOrRefusalRate"]) if row["CitationOrRefusalRate"] is not None else None,
-                    "evidence_support_rate": float(row["EvidenceSupportRate"]) if row["EvidenceSupportRate"] is not None else None,
-                    "rbac_site_publication_leaks": int(row["RbacSitePublicationLeaks"] or 0),
-                    "passed": bool(row["GatePassed"]),
-                    "evaluated_at": _iso(row["EvaluatedAt"]),
-                },
-                "prerequisites": prerequisites,
-                "ready_for_next_wave": all(prerequisites.values()),
-            }
-        )
-    return out
+    return [_readiness_from_row(row) for row in rows]
 
 
 def upsert_department_rollout_plan(
@@ -195,7 +270,47 @@ def upsert_department_rollout_plan(
         raise ValueError("Department code khong hop le")
 
     _ensure_engine()
-    with engine.connect() as conn:
+    readiness = {item["department_code"]: item for item in get_department_rollout_readiness(code)}.get(code)
+    params = {
+        "code": code,
+        "wave": wave,
+        "status": status,
+        "target": target,
+        "updated_by": _clean(updated_by)[:100] or "System",
+    }
+    with engine.begin() as conn:
+        lock_result = conn.execute(
+            text(
+                """
+                DECLARE @result INT;
+                EXEC @result = sys.sp_getapplock
+                    @Resource = N'department-rollout-plan',
+                    @LockMode = N'Exclusive',
+                    @LockOwner = N'Transaction',
+                    @LockTimeout = 10000;
+                SELECT @result;
+                """
+            )
+        ).scalar()
+        if lock_result is not None and int(lock_result) < 0:
+            raise ValueError("Khong the khoa rollout plan de cap nhat an toan")
+
+        current = conn.execute(
+            text(
+                """
+                SELECT WaveNumber, RolloutStatus
+                FROM dbo.DepartmentRolloutPlan WITH (UPDLOCK, HOLDLOCK)
+                WHERE DeptCode = :code
+                """
+            ),
+            {"code": code},
+        ).mappings().first()
+        _validate_status_transition(
+            current["RolloutStatus"] if current else None,
+            status,
+            current_wave=int(current["WaveNumber"]) if current else None,
+            requested_wave=wave,
+        )
         assigned = conn.execute(
             text(
                 """
@@ -207,31 +322,25 @@ def upsert_department_rollout_plan(
         ).scalar() or 0
         if int(assigned) >= _WAVE_CAPACITY[wave]:
             raise ValueError(f"Wave {wave} da du {_WAVE_CAPACITY[wave]} phong ban theo plan 3 -> 4 -> 4 -> 4")
+        pending_prior = 0
         if status in {"dark_launch", "active"} and wave > 1:
             pending_prior = conn.execute(
                 text(
                     """
-                    SELECT COUNT(*) FROM dbo.DepartmentRolloutPlan
-                    WHERE WaveNumber < :wave AND RolloutStatus <> 'active'
+                    SELECT COUNT(*)
+                    FROM dbo.DepartmentRolloutPlan p
+                    INNER JOIN dbo.Departments d ON d.DeptCode = p.DeptCode AND d.IsActive = 1
+                    WHERE p.WaveNumber < :wave AND p.RolloutStatus <> 'active'
                     """
                 ),
                 {"wave": wave},
             ).scalar() or 0
-            if int(pending_prior) > 0:
-                raise ValueError("Chua hoan tat wave truoc, khong the bat dark launch/active cho wave nay")
-
-    readiness = {item["department_code"]: item for item in get_department_rollout_readiness(code)}.get(code)
-    if status in {"dark_launch", "active"} and (not readiness or not readiness["ready_for_next_wave"]):
-        raise ValueError("Phong ban chua dat owner/site/evaluation gate de vao dark launch/active")
-
-    params = {
-        "code": code,
-        "wave": wave,
-        "status": status,
-        "target": target,
-        "updated_by": _clean(updated_by)[:100] or "System",
-    }
-    with engine.begin() as conn:
+        _validate_rollout_transition(
+            wave_number=wave,
+            rollout_status=status,
+            pending_prior_wave_departments=int(pending_prior),
+            readiness=readiness,
+        )
         conn.execute(
             text(
                 """

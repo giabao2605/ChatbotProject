@@ -48,7 +48,7 @@ def _profile():
 
 def _admin_profile():
     profile = _profile()
-    profile["roles"] = ["admin"]
+    profile["roles"] = ["platform_admin"]
     return profile
 
 

@@ -1,0 +1,5 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là HSE_5S.
+# Scenario: safety_rule, risk_assessment, work_permit, incident, emergency,
+# 5s_audit, effective_version, citation, lifecycle_denial,
+# cross_department_denial, insufficient_evidence.

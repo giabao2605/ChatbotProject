@@ -1,0 +1,4 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là Purchasing.
+# Scenario cần chuẩn bị: quotation, purchase_order, supplier, material_code,
+# tabular_lookup, version_policy, cross_department_denial, insufficient_evidence.

@@ -1,0 +1,5 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là Maintenance.
+# Scenario: equipment_manual, maintenance_schedule, maintenance_record,
+# inspection_checklist, spare_parts, current_version, citation,
+# expired_or_superseded_denial, cross_department_denial, insufficient_evidence.

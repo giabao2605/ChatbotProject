@@ -44,10 +44,9 @@ def _get_or_create_doc(conn, file_name, thu_muc):
     cls_data = {}
     if job and job[0]:
         try:
-            import json
             cls_data = json.loads(job[0])
-        except:
-            pass
+        except (TypeError, ValueError):
+            cls_data = {}
             
     base_code = cls_data.get("base_code")
     base_code = normalize_base_code(base_code) if base_code else None
@@ -137,12 +136,13 @@ def _get_or_create_doc(conn, file_name, thu_muc):
                 ExternalProcessingPolicy = :external_processing_policy,
                 ClassificationRationale = :classification_rationale,
                 ClassificationModel = :classification_model,
+                ClassificationJson = :classification_json,
                 KnowledgeOwnerUserID = COALESCE(KnowledgeOwnerUserID, :knowledge_owner_user_id),
                 KnowledgeApproverUserID = COALESCE(KnowledgeApproverUserID, :knowledge_approver_user_id),
                 TaxonomyVersion = COALESCE(NULLIF(TaxonomyVersion, ''), :taxonomy_version),
                 PublicationState = 'draft', PublicationError = NULL, Servable = 0
                 WHERE DocID = :d"""),
-            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": resolved_site, "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None), "owner_department": thu_muc or "CHUNG", "external_processing_policy": external_processing_policy, "classification_rationale": str(classification_rationale)[:1000], "classification_model": str(classification_model)[:100], "knowledge_owner_user_id": knowledge_owner_user_id, "knowledge_approver_user_id": knowledge_approver_user_id, "taxonomy_version": str(taxonomy_version)[:100]}
+            {"d": doc_id, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": resolved_site, "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None), "owner_department": thu_muc or "CHUNG", "external_processing_policy": external_processing_policy, "classification_rationale": str(classification_rationale)[:1000], "classification_model": str(classification_model)[:100], "classification_json": json.dumps(cls_data, ensure_ascii=False), "knowledge_owner_user_id": knowledge_owner_user_id, "knowledge_approver_user_id": knowledge_approver_user_id, "taxonomy_version": str(taxonomy_version)[:100]}
         )
         _r_doc_metadata._apply_upload_meta_to_doc(conn, doc_id, (job[2] if job else None), domain)
         return doc_id
@@ -153,18 +153,18 @@ def _get_or_create_doc(conn, file_name, thu_muc):
                 TenFile, ThuMuc, TrangThaiVector, ReviewStatus, FamilyID, BaseCode,
                 VersionNo, VersionLabel, VariantCode, Site, Domain, SecurityLevel,
                 FilePath, OwnerDepartment, SourceSystem, ExternalProcessingPolicy,
-                ClassificationRationale, ClassificationModel, KnowledgeOwnerUserID,
+                ClassificationRationale, ClassificationModel, ClassificationJson, KnowledgeOwnerUserID,
                 KnowledgeApproverUserID, TaxonomyVersion, PublicationState, Servable
             )
             OUTPUT INSERTED.DocID 
             VALUES (
                 :f, :t, 1, 'pending_review', :fid, :bc, :vn, :vl, :vc, :site,
                 :domain, :seclvl, :fp, :owner_department, 'upload', :external_processing_policy,
-                :classification_rationale, :classification_model, :knowledge_owner_user_id,
+                :classification_rationale, :classification_model, :classification_json, :knowledge_owner_user_id,
                 :knowledge_approver_user_id, :taxonomy_version, 'draft', 0
             )"""
         ),
-        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": resolved_site, "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None), "owner_department": thu_muc or "CHUNG", "external_processing_policy": external_processing_policy, "classification_rationale": str(classification_rationale)[:1000], "classification_model": str(classification_model)[:100], "knowledge_owner_user_id": knowledge_owner_user_id, "knowledge_approver_user_id": knowledge_approver_user_id, "taxonomy_version": str(taxonomy_version)[:100]},
+        {"f": file_name, "t": thu_muc, "fid": f_id, "bc": base_code, "vn": version_no, "vl": version_label, "vc": variant_code, "site": resolved_site, "domain": domain, "seclvl": security_level, "fp": (job[1] if job else None), "owner_department": thu_muc or "CHUNG", "external_processing_policy": external_processing_policy, "classification_rationale": str(classification_rationale)[:1000], "classification_model": str(classification_model)[:100], "classification_json": json.dumps(cls_data, ensure_ascii=False), "knowledge_owner_user_id": knowledge_owner_user_id, "knowledge_approver_user_id": knowledge_approver_user_id, "taxonomy_version": str(taxonomy_version)[:100]},
     )
     row = res.fetchone()
     new_doc_id = row[0] if row else None
@@ -315,6 +315,7 @@ def get_document_info(doc_id):
                     "serving_epoch": row[23] or 0,
                     "parent_context_enabled": bool(row[24]),
                     "document_type": document_type,
+                    "classification_failed": bool(classification.get("classification_failed")) if isinstance(classification, dict) else False,
                     "title": row[26] or "",
                     "doc_number": row[27] or "",
                 }

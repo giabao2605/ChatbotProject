@@ -53,8 +53,15 @@ class DomainHandler:
 
     def build_classify_prompt(self, original_filename, text_content,
                               regex_base_code, regex_version_label,
-                              regex_version_no, domain):
+                              regex_version_no, domain, document_types=None):
         """Prompt phan loai cho tai lieu hanh chinh/van phong (tabular + generic)."""
+        allowed_types = [str(item).strip().lower() for item in (document_types or []) if str(item).strip()]
+        type_instruction = (
+            f'Chi chon mot "document_type" trong danh sach: {allowed_types}.'
+            if allowed_types else
+            'Loai tai lieu vi du: "invoice", "contract", "payroll", "decision", "report", "form", "generic".'
+        )
+        fallback = "generic" if not allowed_types or "generic" in allowed_types else allowed_types[0]
         prompt = f"""
     Phan loai tai lieu hanh chinh/van phong.
     Domain: {domain}
@@ -67,7 +74,7 @@ class DomainHandler:
     - "version_label": Nhan version neu co, mac dinh "".
     - "version_no": So version, mac dinh 1.
     - "variant_code": Mac dinh "default".
-    - "document_type": Loai tai lieu. Vi du: "invoice", "contract", "payroll", "decision", "report", "form", "generic".
+    - "document_type": {type_instruction}
     - "detected_action": "new_document".
     - "confidence": Do tu tin (0.0 - 1.0).
     - "reason": Giai thich ngan gon.
@@ -75,7 +82,7 @@ class DomainHandler:
     Uu tien phan loai dua tren NOI DUNG tai lieu o tren; ten file chi la goi y phu.
     Chi tra ve dung JSON. Khong giai thich gi them.
     """
-        return prompt, "generic"
+        return prompt, fallback
 
 
 class GenericHandler(DomainHandler):
@@ -111,8 +118,15 @@ class MechanicalHandler(DomainHandler):
 
     def build_classify_prompt(self, original_filename, text_content,
                               regex_base_code, regex_version_label,
-                              regex_version_no, domain):
+                              regex_version_no, domain, document_types=None):
         """Prompt phan loai chuyen cho tai lieu co khi (giu nguyen prompt cu)."""
+        allowed_types = [str(item).strip().lower() for item in (document_types or []) if str(item).strip()]
+        type_instruction = (
+            f'Chi chon mot gia tri trong danh sach: {allowed_types}.'
+            if allowed_types else
+            '"technical_drawing", "bom", hoac "other".'
+        )
+        fallback = "technical_drawing" if not allowed_types or "technical_drawing" in allowed_types else allowed_types[0]
         prompt = f"""
     Thuc hien AI Classification cho tai lieu co khi.
     Ten file: {original_filename}
@@ -129,7 +143,7 @@ class MechanicalHandler(DomainHandler):
     - "version_label": Nhan version (VD: v2, r1, rev2). Neu khong co, tra ve chuoi rong "".
     - "version_no": So version kieu nguyen (VD: v2 -> 2). Mac dinh la 1.
     - "variant_code": Nhan bien the (VD: neu file la banveso1.2 thi variant_code la "1.2"). Mac dinh "default".
-    - "document_type": "technical_drawing", "bom", hoac "other".
+    - "document_type": {type_instruction}
     - "detected_action": Hanh dong de xuat ("new_version", "new_variant", "new_document").
     - "confidence": Do tu tin (tu 0.0 den 1.0).
     - "reason": Giai thich ngan gon ly do phan loai.
@@ -137,7 +151,7 @@ class MechanicalHandler(DomainHandler):
     Uu tien phan loai dua tren NOI DUNG tai lieu o tren; ten file chi la goi y phu.
     Chi tra ve dung JSON. Khong giai thich gi them.
     """
-        return prompt, "technical_drawing"
+        return prompt, fallback
 
 
 _HANDLERS = {

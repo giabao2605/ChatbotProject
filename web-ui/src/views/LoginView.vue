@@ -11,7 +11,7 @@ const password = ref("");
 
 async function submit() {
   await auth.login(username.value, password.value);
-  await router.push(String(route.query.next || "/chat"));
+  await router.push(String(route.query.next || "/dashboard"));
 }
 </script>
 

@@ -46,16 +46,6 @@ const filters: ResourceFilter[] = [
   { key: "dept", label: "Phòng ban", type: "text" },
   { key: "domain", label: "Domain", type: "text" },
   { key: "sec", label: "Mức mật", type: "select", options: SECURITY_LEVELS },
-  {
-    key: "eff_mode",
-    label: "Hiệu lực",
-    type: "select",
-    options: [
-      { label: "Còn hiệu lực", value: "con" },
-      { label: "Sắp hết hạn", value: "sap" },
-      { label: "Đã hết hạn", value: "het" },
-    ],
-  },
 ];
 
 async function load(f: Record<string, unknown>): Promise<ApiRow[]> {

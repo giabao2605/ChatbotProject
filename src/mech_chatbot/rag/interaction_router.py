@@ -56,7 +56,7 @@ LlmClassifier = Callable[[str, Optional[object]], Optional[Tuple[str, float]]]
 
 
 _FAST_TECHNICAL_KEYWORDS = (
-    "tai lieu", "quy trinh", "chinh sach", "noi quy", "huong dan cong viec",
+    "tai lieu", "quy trinh", "quy dinh", "chinh sach", "noi quy", "huong dan cong viec",
     "nhan su", "nghi phep", "bao hiem", "tien luong", "cham cong",
     "ke toan", "hoa don", "cong no", "thanh toan", "bao cao tai chinh",
     "mua hang", "nha cung cap", "ton kho", "xuat kho", "nhap kho",

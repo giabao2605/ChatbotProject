@@ -145,6 +145,15 @@ def search_bom_by_code(
             else:
                 filter_sql += " AND t.Servable = 1 AND t.PublicationState = 'published' AND t.LifecycleStatus = 'published' AND t.ReviewStatus = 'approved' AND t.IsCurrent = 1"
 
+            # Date validity is a serving invariant, including explicit version
+            # and BOM SQL paths. Do not wait for the reconciliation job to flip
+            # EffectiveStatus after midnight.
+            filter_sql += (
+                " AND LOWER(ISNULL(t.EffectiveStatus, 'effective')) NOT IN ('expired','superseded','draft')"
+                " AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))"
+                " AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))"
+            )
+
             # The legacy ``admin`` role has the business-approved global-read
             # capability.  Every other role must pass the same department,
             # clearance, and site predicates as the Qdrant retrieval path.

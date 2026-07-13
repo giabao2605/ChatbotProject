@@ -2,10 +2,20 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import ResourcePage from "@/components/ResourcePage.vue";
 import { apiGet, apiSend } from "@/api/client";
+import { isRoleAllowed } from "@/authorization";
+import { useAuthStore } from "@/stores/auth";
 import { pickStr } from "@/utils/rows";
-import type { ApiRow, CreateForm, RowAction } from "@/types";
+import {
+  filterRolloutReadiness,
+  MANAGED_ROLLOUT_STATUSES,
+  normalizeRolloutReadiness,
+} from "@/utils/rollout-readiness";
+import type { ApiRow, CreateForm, ResourceFilter, RowAction } from "@/types";
 
 type Opt = { label: string; value: string };
+
+const auth = useAuthStore();
+const canManagePlatform = computed(() => isRoleAllowed(auth.user?.roles, ["platform_admin"]));
 
 async function loadDepartments(): Promise<ApiRow[]> {
   const data = await apiGet<{ departments: ApiRow[] }>("/api/catalog/departments", { active_only: false });
@@ -32,9 +42,10 @@ async function loadMissingSiteDocuments(): Promise<ApiRow[]> {
   return data.documents ?? [];
 }
 
-async function loadRolloutReadiness(): Promise<ApiRow[]> {
+async function loadRolloutReadiness(filters: Record<string, unknown> = {}): Promise<ApiRow[]> {
   const data = await apiGet<{ departments: ApiRow[] }>("/api/catalog/rollout/readiness");
-  return data.departments ?? [];
+  const rows = (data.departments ?? []).map(normalizeRolloutReadiness);
+  return filterRolloutReadiness(rows, filters);
 }
 
 function csvList(value: unknown): string[] {
@@ -178,10 +189,30 @@ const rolloutReadinessColumns = [
   { field: "department_code", header: "Phòng ban", kind: "code" as const },
   { field: "wave_number", header: "Wave" },
   { field: "rollout_status", header: "Trạng thái", kind: "tag" as const },
+  { field: "servable_document_count", header: "Tài liệu phục vụ" },
   { field: "evaluation_question_count", header: "Câu eval" },
   { field: "evaluation_question_target", header: "Mục tiêu" },
   { field: "missing_site_documents", header: "Thiếu site" },
+  { field: "missing_prerequisites_display", header: "Điều kiện còn thiếu" },
   { field: "ready_for_next_wave", header: "Đủ gate", kind: "bool" as const },
+];
+
+const rolloutFilters: ResourceFilter[] = [
+  {
+    key: "wave_number",
+    label: "Wave",
+    type: "select",
+    options: [1, 2, 3, 4].map((value) => ({ label: String(value), value })),
+  },
+  {
+    key: "rollout_status",
+    label: "Trạng thái",
+    type: "select",
+    options: ["unplanned", "planned", "pilot", "dark_launch", "active", "blocked"].map((value) => ({
+      label: value,
+      value,
+    })),
+  },
 ];
 
 const rolloutPlanForm: CreateForm = {
@@ -205,13 +236,7 @@ const rolloutPlanForm: CreateForm = {
       key: "rollout_status",
       label: "Trạng thái",
       type: "select",
-      options: [
-        { label: "planned", value: "planned" },
-        { label: "pilot", value: "pilot" },
-        { label: "dark_launch", value: "dark_launch" },
-        { label: "active", value: "active" },
-        { label: "blocked", value: "blocked" },
-      ],
+      options: MANAGED_ROLLOUT_STATUSES.map((value) => ({ label: value, value })),
       required: true,
     },
     { key: "evaluation_question_target", label: "Số câu evaluation tối thiểu", type: "number", required: true },
@@ -389,7 +414,7 @@ const deptActions: RowAction[] = [
       description="Mỗi phòng cần Owner và Approver thật trước khi tài liệu có thể publish. Admin global-read không tự động có quyền duyệt thay."
       :load="loadKnowledgeGovernance"
       :columns="governanceColumns"
-      :create-form="governanceForm"
+      :create-form="canManagePlatform ? governanceForm : undefined"
     />
     <ResourcePage
       title="Domain profiles"
@@ -397,7 +422,7 @@ const deptActions: RowAction[] = [
       description="Catalog loại tài liệu, metadata bắt buộc và rule router riêng cho từng phòng ban."
       :load="loadDomainProfiles"
       :columns="domainProfileColumns"
-      :create-form="domainProfileForm"
+      :create-form="canManagePlatform ? domainProfileForm : undefined"
     />
     <ResourcePage
       title="Tài liệu thiếu site"
@@ -410,10 +435,11 @@ const deptActions: RowAction[] = [
     <ResourcePage
       title="Rollout readiness"
       eyebrow="3 → 4 → 4 → 4"
-      description="Chỉ chuyển sang dark launch hoặc active khi owner/approver, site, 75 câu đánh giá và toàn bộ gate đều đạt."
+      description="Chỉ chuyển sang dark launch hoặc active khi rollout plan, taxonomy, governance, domain profile, site, corpus phục vụ, Owner/Approver, bộ câu evaluation và evaluation gate đều đạt. Trạng thái pilot chỉ dành cho Wave 1 được bootstrap; UI không dùng pilot để bỏ qua gate."
       :load="loadRolloutReadiness"
       :columns="rolloutReadinessColumns"
-      :create-form="rolloutPlanForm"
+      :filters="rolloutFilters"
+      :create-form="canManagePlatform ? rolloutPlanForm : undefined"
     />
     <ResourcePage
       title="Evaluation gate"
@@ -421,7 +447,8 @@ const deptActions: RowAction[] = [
       description="Chỉ nhập kết quả từ bộ câu hỏi và benchmark đã chạy thực tế; hệ thống tự tính pass/fail theo threshold của plan."
       :load="loadRolloutReadiness"
       :columns="rolloutReadinessColumns"
-      :create-form="evaluationGateForm"
+      :filters="rolloutFilters"
+      :create-form="canManagePlatform ? evaluationGateForm : undefined"
     />
   </div>
 

@@ -170,10 +170,36 @@ _APP_THREAD_LIMIT = int(os.getenv("APP_THREAD_LIMIT", "60"))
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    import asyncio
     import anyio
     anyio.to_thread.current_default_thread_limiter().total_tokens = _APP_THREAD_LIMIT
     logger.info("App server anyio thread limiter raised to %d", _APP_THREAD_LIMIT)
-    yield
+
+    async def _reconcile_lifecycle_periodically():
+        interval = max(60, int(os.getenv("LIFECYCLE_RECONCILE_SECONDS", "300")))
+        while True:
+            try:
+                await anyio.to_thread.run_sync(refresh_expired_status)
+            except Exception:
+                logger.exception("Lifecycle reconciliation failed")
+            await asyncio.sleep(interval)
+
+    # Run once before accepting traffic, then reconcile periodically. Serving
+    # surfaces also validate dates directly, so a temporary sync failure cannot
+    # expose expired content.
+    try:
+        await anyio.to_thread.run_sync(refresh_expired_status)
+    except Exception:
+        logger.exception("Initial lifecycle reconciliation failed")
+    lifecycle_task = asyncio.create_task(_reconcile_lifecycle_periodically())
+    try:
+        yield
+    finally:
+        lifecycle_task.cancel()
+        try:
+            await lifecycle_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Mech Chatbot App API", version="0.1.0", lifespan=_lifespan)

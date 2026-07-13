@@ -17,4 +17,15 @@ describe("role-aware navigation policy", () => {
     expect(visibleRoutes).toContain("/dictionary");
     expect(isRoleAllowed(["admin"], ["admin"])).toBe(true);
   });
+
+  it("reserves platform control-plane access for explicit platform admins", () => {
+    expect(isRoleAllowed(["admin"], ["platform_admin"])).toBe(false);
+    expect(isRoleAllowed(["platform_admin"], ["platform_admin"])).toBe(true);
+    expect(visibleNavigationItems(["admin"]).map((item) => item.to)).not.toContain("/org");
+    const platformRoutes = visibleNavigationItems(["platform_admin"]).map((item) => item.to);
+    expect(platformRoutes).toContain("/org");
+    expect(platformRoutes).not.toContain("/chat");
+    expect(platformRoutes).not.toContain("/documents");
+    expect(platformRoutes).not.toContain("/access");
+  });
 });

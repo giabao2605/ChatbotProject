@@ -1,0 +1,5 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là QualityControl.
+# Scenario: quality_standard, inspection_plan, measurement_result, ncr, capa,
+# certificate, current_version, citation, staging_or_expired_denial,
+# cross_department_denial, insufficient_evidence.

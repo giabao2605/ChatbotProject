@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import threading
+import time
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -49,20 +50,20 @@ def _no_network_audit(**_kwargs):
     yield None
 
 
-def _generate(module, *, cancel_event=None):
+def _generate(module, *, cancel_event=None, question="Gia tri la bao nhieu?"):
     docs = [SimpleNamespace(metadata={"doc_id": 7, "security_level": "internal"})]
     return module._generate(
         context_text="Tai lieu chi ghi gia tri 10.",
-        user_question="Gia tri la bao nhieu?",
+        user_question=question,
         chat_history_str="",
         retrieved_docs=docs,
         new_part_ids=[],
         response_language="vi",
         trace_id="strict-stream-test",
-        t_start=0,
+        t_start=time.time(),
         user_department="Technical",
         user_roles=["viewer"],
-        effective_question="Gia tri la bao nhieu?",
+        effective_question=question,
         intent_data={},
         base_k=5,
         retrieval_mode="general:explicit_dense_bm25_rrf",
@@ -100,3 +101,17 @@ def test_cancelled_stream_raises_before_any_provider_chunk_is_emitted(monkeypatc
 
     with pytest.raises(ExternalAICallCancelled):
         list(_generate(module, cancel_event=cancelled))
+
+
+def test_normal_policy_question_does_not_apply_global_numeric_holdback(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    seen_strict_values = []
+    _prepare(module, monkeypatch, _FakeChain(["Quy định là 20."]))
+    monkeypatch.setattr(
+        module,
+        "has_unsupported_numbers",
+        lambda *_args, **kwargs: seen_strict_values.append(kwargs.get("strict_mode")) or False,
+    )
+
+    assert list(_generate(module, question="Quy định hiện hành là gì?")) == ["Quy định là 20."]
+    assert seen_strict_values == [False]

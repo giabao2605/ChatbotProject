@@ -136,6 +136,27 @@ Kiem tra nhanh:
 - Hoi lai cau vua hoi lan 2 de cache co co hoi hit.
 - Kiem tra trang Observability xem latency va loi.
 
+Wave 1 (`Technical`, `HR`, `Purchasing`) vẫn là pilot và không tự động được coi
+là sẵn sàng. Dùng checklist tại `docs/wave1-rollout-checklist.md`; trạng thái
+`pilot` không thay thế readiness gate hoặc cho phép bỏ qua dark launch.
+
+Wave 2 (`Warehouse`, `Accountant`, `Sales`, `Planning`) hien chi duoc chuan bi
+code/configuration va phai giu trang thai `planned`. Khong dung corpus mau,
+evaluation gia hoac gan quyen gia de mo dark launch. Checklist chinh thuc nam
+tai `docs/wave2-rollout-checklist.md`.
+
+Wave 3 (`Production`, `Maintenance`, `QualityControl`, `ISO`) cung chi duoc
+chuan bi code/configuration va phai giu trang thai `planned`. Wave 3 khong duoc
+dark launch hoac active truoc khi toan bo Wave 1 va Wave 2 active, dong thoi
+chinh phong do dat readiness voi du lieu that. Checklist nam tai
+`docs/wave3-rollout-checklist.md`.
+
+Wave 4 hiện gồm `Molding`, `HSE_5S` và `IT`, được chuẩn bị ở trạng thái
+`planned`; slot thứ tư được để trống cho phòng thứ 15 và không tạo placeholder.
+Wave 4 chỉ được dark launch hoặc active sau khi toàn bộ Wave 1--3 active và
+chính phòng đó đạt readiness bằng dữ liệu thật. Checklist nằm tại
+`docs/wave4-rollout-checklist.md`.
+
 ## 7. Gioi han demo
 
 Voi `MAX_CONCURRENT_RAG=4`, demo nen moi 5-10 nguoi dung va nhac moi nguoi khong spam cau hoi lien tuc. Neu CPU gan 100%, RAM tang manh, hoac nhieu loi busy/timeout, giam toc demo hoac ha `MAX_CONCURRENT_RAG=2`.

@@ -1,0 +1,4 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là Technical.
+# Scenario cần chuẩn bị: drawing_lookup, bom_lookup, specification, vision_ocr,
+# version_policy, citation, expired_or_pending_denial, insufficient_evidence.

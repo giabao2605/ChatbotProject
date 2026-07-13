@@ -16,7 +16,7 @@ def _profile(clearance="internal", departments=None, sites=None, roles=None):
     }
 
 
-def _doc(security="internal", departments=None, site="HQ", *, servable=True, publication_state="published"):
+def _doc(security="internal", departments=None, site="HQ", *, servable=True, publication_state="published", **lifecycle):
     return file_access.DocumentAccessRecord(
         doc_id=1,
         ten_file="a.pdf",
@@ -29,6 +29,7 @@ def _doc(security="internal", departments=None, site="HQ", *, servable=True, pub
         departments=tuple(departments if departments is not None else ["Technical"]),
         servable=servable,
         publication_state=publication_state,
+        **lifecycle,
     )
 
 
@@ -84,6 +85,24 @@ def test_staged_document_is_denied_even_for_legacy_admin():
 
     assert decision.allowed is False
     assert decision.reason == "document_not_servable"
+
+
+def test_expired_document_is_denied_even_before_reconciliation_and_for_admin():
+    decision = file_access.evaluate_document_access(
+        _profile(roles=["admin"], departments=[]),
+        _doc(expiry_date="2020-01-01", effective_status="effective"),
+    )
+    assert decision.allowed is False
+    assert decision.reason == "document_not_servable"
+
+
+def test_superseded_or_non_current_document_file_is_denied():
+    assert not file_access.evaluate_document_access(
+        _profile(), _doc(effective_status="superseded")
+    ).allowed
+    assert not file_access.evaluate_document_access(
+        _profile(), _doc(is_current=False)
+    ).allowed
 
 
 @pytest.mark.parametrize(

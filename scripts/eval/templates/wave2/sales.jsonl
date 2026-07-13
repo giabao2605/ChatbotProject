@@ -1,0 +1,6 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là Sales.
+# Scenario cần chuẩn bị: quotation, sales_order, contract, invoice,
+# customer_report, revenue_report, version_policy, citation,
+# expired_or_pending_denial, cross_department_denial, insufficient_evidence.
+# Xem schema và quy tắc xác nhận tại README.md trong cùng thư mục.

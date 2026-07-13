@@ -494,7 +494,17 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                     yield ans
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_units", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
-                elif has_unsupported_numbers(answer, context_text, user_question, strict_mode=STRICT_ANSWER_MODE):
+                # Source cards are constructed by the backend from retrieved
+                # documents.  Keep number holdback for high-risk questions,
+                # where a fabricated figure has material impact, without
+                # rejecting a normal policy answer merely because the model
+                # formats an otherwise sourced value differently.
+                elif has_unsupported_numbers(
+                    answer,
+                    context_text,
+                    user_question,
+                    strict_mode=is_high_risk_question(user_question),
+                ):
                     ans = make_insufficient_evidence_message(
                         user_question,
                         "cau tra loi sinh ra co so lieu khong truy vet duoc trong tai lieu",
@@ -506,9 +516,11 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                 elif (
                     STRICT_ANSWER_MODE
                     and requires_source_citation(user_question)
-                    and not has_valid_source_citation(
-                        answer, retrieved_docs, require_version=True
-                    )
+                    # The API always attaches source cards from retrieved_docs.
+                    # Do not reject a grounded answer just because it does not
+                    # repeat the card's file/page/version syntax in prose.
+                    and not os.getenv("RAG_AUTO_SOURCE_CARDS", "true").strip().lower() in {"1", "true", "yes", "on"}
+                    and not has_valid_source_citation(answer, retrieved_docs, require_version=True)
                 ):
                     ans = make_insufficient_evidence_message(
                         user_question,
@@ -741,6 +753,12 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
         )
         retrieval_mode = f"general:{general_mode}"
         active_filter = general_filter
+    # Qdrant filters cannot reliably compare legacy ISO date strings. Repeat
+    # the complete serving predicate after every retrieval branch so a document
+    # that crossed its expiry date cannot reach reranking or generation while
+    # lifecycle reconciliation is still catching up.
+    from mech_chatbot.rag.serving_state import filter_currently_servable
+    retrieved_docs = filter_currently_servable(retrieved_docs)
     return retrieved_docs, base_k, retrieval_mode, t_retrieval, (active_filter if "active_filter" in locals() else _RETRIEVE_UNSET)
 
 
@@ -997,8 +1015,14 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
         _strong_constraints = bool(
             _constraints.get("dimensions") or _constraints.get("materials") or _constraints.get("quoted_names")
         )
-        _need_disambig = (len(unique_variants) > 1) or (
-            not new_part_ids and _strong_constraints and len(distinct_families) > 1
+        # Candidate/model disambiguation is meaningful for mechanical drawings
+        # and part variants.  In administrative corpora it can mistake three
+        # supporting pages of one policy for three selectable "models", which
+        # prevents the evidence gate from answering or refusing correctly.
+        _need_disambig = _context_is_mechanical(retrieved_docs, new_part_ids) and (
+            (len(unique_variants) > 1) or (
+                not new_part_ids and _strong_constraints and len(distinct_families) > 1
+            )
         )
 
         if _need_disambig:

@@ -1,0 +1,5 @@
+# EMPTY TEMPLATE - không phải evaluation corpus và không được tính gate.
+# department phải là Production.
+# Scenario: drawing, bom, work_instruction, production_order, process_routing,
+# parent_context, current_version, citation, lifecycle_denial,
+# cross_department_denial, insufficient_evidence.

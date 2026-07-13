@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { loadDashboard } from "@/api/client";
 import { useAuthStore } from "@/stores/auth";
+import { dashboardMetricLabel, dashboardMetricTarget } from "@/utils/dashboard";
 import type { ApiRow } from "@/types";
 
 type DashboardGroup = Record<string, number>;
@@ -24,14 +25,6 @@ const loading = ref(true);
 const payload = ref<DashboardPayload>({});
 const error = ref("");
 
-const LABELS: Record<string, string> = {
-  total_docs: "Tổng tài liệu", effective: "Còn hiệu lực", published_docs: "Đã xuất bản",
-  expired: "Đã hết hạn", expiring_soon: "Sắp hết hạn", needs_review: "Cần rà soát",
-  pending_review: "Chờ duyệt", publish_blocked: "Publish bị chặn", running_jobs: "Job đang chạy",
-  failed_jobs: "Job lỗi", today_chats: "Chat hôm nay", recent_chats: "Lịch sử hỏi gần đây",
-  pending_feedback: "Feedback chờ xử lý", active_departments: "Phòng ban đã kích hoạt",
-  pilot_departments: "Phòng ban pilot", rollout_percent: "Tiến độ rollout (%)",
-};
 const GROUPS: Array<{ key: keyof DashboardPayload; title: string }> = [
   { key: "document_lifecycle", title: "Vòng đời tài liệu" },
   { key: "ingestion", title: "Ingest" },
@@ -42,7 +35,8 @@ const GROUPS: Array<{ key: keyof DashboardPayload; title: string }> = [
 
 const roles = computed(() => auth.user?.roles ?? []);
 const roleSummary = computed(() => {
-  if (roles.value.some((r) => ["admin", "platform_admin"].includes(r))) return "Toàn cảnh vận hành hệ thống";
+  if (roles.value.includes("platform_admin")) return "Toàn cảnh vận hành hệ thống";
+  if (roles.value.includes("admin")) return "Công việc tài liệu và quản trị nội dung";
   if (roles.value.some((r) => ["reviewer", "knowledge_approver"].includes(r))) return "Công việc duyệt và quản trị tri thức";
   if (roles.value.includes("uploader")) return "Tiến độ tài liệu bạn phụ trách";
   return "Tài liệu và hoạt động của bạn";
@@ -54,14 +48,8 @@ const groups = computed(() => {
   return result;
 });
 
-function label(key: string) { return LABELS[key] ?? key.replace(/_/g, " "); }
-function target(key: string): string | null {
-  if (key === "effective" || key === "published_docs" || key === "total_docs") return "/documents?tab=effective";
-  if (["expired", "expiring_soon", "needs_review"].includes(key)) return `/documents?tab=${key.replace("_", "-")}`;
-  if (["running_jobs", "failed_jobs"].includes(key)) return "/queue";
-  if (["pending_review", "publish_blocked"].includes(key)) return "/review";
-  return null;
-}
+function label(key: string) { return dashboardMetricLabel(key); }
+function target(key: string): string | null { return dashboardMetricTarget(key); }
 function openMetric(key: string) { const to = target(key); if (to) void router.push(to); }
 function cell(row: ApiRow, ...keys: string[]) {
   const value = keys.map((key) => row[key]).find((item) => item !== null && item !== undefined && item !== "");

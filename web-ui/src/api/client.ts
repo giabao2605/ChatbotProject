@@ -3,6 +3,28 @@ import { parseSseBuffer } from "@/api/sse";
 
 let csrfToken = "";
 
+function errorDetail(raw: string, status: number): string {
+  if (!raw) return `HTTP ${status}`;
+  try {
+    const parsed = JSON.parse(raw) as { detail?: unknown; message?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) return parsed.detail;
+    if (Array.isArray(parsed.detail)) {
+      const messages = parsed.detail
+        .map((item) => {
+          if (typeof item === "string") return item;
+          if (item && typeof item === "object" && "msg" in item) return String(item.msg);
+          return "";
+        })
+        .filter(Boolean);
+      if (messages.length) return messages.join("; ");
+    }
+    if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
+  } catch {
+    // Non-JSON backend errors are already suitable for direct display.
+  }
+  return raw;
+}
+
 export function setCsrfToken(token: string) {
   csrfToken = token;
 }
@@ -27,7 +49,7 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(detail || `HTTP ${response.status}`);
+    throw new Error(errorDetail(detail, response.status));
   }
   if (response.status === 204) {
     return undefined as T;

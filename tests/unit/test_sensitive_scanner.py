@@ -12,6 +12,10 @@ import pytest
 from mech_chatbot.ingestion.sensitive_scanner import (
     scan_sensitive_content,
     escalate_security,
+    has_credential_signal,
+    merge_scan_results,
+    requires_mandatory_scan,
+    apply_sensitive_quality_policy,
 )
 
 pytestmark = pytest.mark.security
@@ -45,6 +49,77 @@ class TestScan:
         r = scan_sensitive_content("Ban ve co khi: dung sai +/-0.05mm, vat lieu SKD11")
         # Khong chua tin hieu nhay cam => khong bi gan confidential
         assert r["is_sensitive"] is False
+
+    @pytest.mark.parametrize(
+        "text,category",
+        [
+            ("api_key = abcdefghijklmnop123456", "api_key_or_token"),
+            ("password: Correct-Horse-Battery-9", "password_assignment"),
+            ("-----BEGIN PRIVATE KEY-----", "private_key"),
+            ("Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234", "bearer_or_jwt"),
+            ("postgresql://service:secret-pass@db.internal/app", "database_connection_string"),
+            ("aws_secret_access_key=abcdefghijklmnop1234567890", "cloud_service_credential"),
+        ],
+    )
+    def test_detects_credentials_without_returning_plaintext(self, text, category):
+        result = scan_sensitive_content(text)
+        assert category in result["categories"]
+        assert result["match_counts"][category] >= 1
+        assert "matched" not in result
+        assert text not in repr(result)
+        assert has_credential_signal(result) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Password policy requires at least 12 characters.",
+            "API key rotation must happen every 90 days.",
+            "Set password=<redacted> in the deployment tool.",
+            "The bearer token standard is documented here.",
+        ],
+    )
+    def test_credential_policy_text_has_no_false_positive(self, text):
+        assert has_credential_signal(scan_sensitive_content(text)) is False
+
+    def test_merge_counts_without_values(self):
+        first = scan_sensitive_content("api_key=abcdefghijklmnop")
+        second = scan_sensitive_content("api_key=qrstuvwxyz123456")
+        merged = merge_scan_results(first, second)
+        assert merged["match_counts"]["api_key_or_token"] == 2
+        assert set(merged) == {"is_sensitive", "categories", "match_counts"}
+
+    def test_it_department_always_requires_scan(self):
+        assert requires_mandatory_scan("IT") is True
+        assert requires_mandatory_scan("HQ", ["Technical", "IT"]) is True
+        assert requires_mandatory_scan("HSE_5S") is False
+
+    def test_credential_forces_high_quality_report_to_manual_review(self):
+        secret = "api_key=abcdefghijklmnop123456"
+        scan = scan_sensitive_content(secret)
+        report = {
+            "status": "success",
+            "quality_score": 100,
+            "quality_status": "ready_for_review",
+            "quality_reason_codes": [],
+            "quality_reasons": [],
+            "warnings": [],
+        }
+        apply_sensitive_quality_policy(report, scan)
+        assert report["quality_score"] == 100
+        assert report["quality_status"] == "needs_review"
+        assert report["quality_reason_codes"] == ["credential_detected"]
+        assert secret not in repr(report)
+
+    def test_sensitive_warning_is_aggregated_once(self):
+        scan = merge_scan_results(
+            scan_sensitive_content("api_key=abcdefghijklmnop"),
+            scan_sensitive_content("api_key=qrstuvwxyz123456"),
+        )
+        report = {"status": "success", "warnings": [], "quality_reason_codes": [], "quality_reasons": []}
+        apply_sensitive_quality_policy(report, scan)
+        apply_sensitive_quality_policy(report, scan)
+        assert len(report["warnings"]) == 1
+        assert report["sensitive_scan"]["match_counts"]["api_key_or_token"] == 2
 
 
 class TestEscalate:

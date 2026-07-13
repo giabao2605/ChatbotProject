@@ -61,7 +61,42 @@ _SENSITIVE_PATTERNS = {
         r"\bIBAN\b",
         r"\bSWIFT\b",
     ],
+    # Credential patterns require both a recognizable label/format and a value.
+    # Matches are counted only; the value is never returned to callers or logs.
+    "api_key_or_token": [
+        r"\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret)\b\s*[:=]\s*[\"']?[A-Za-z0-9_./+\-=]{12,}",
+        r"\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{12,}\b",
+        r"\bgh[opusr]_[A-Za-z0-9]{20,}\b",
+    ],
+    "password_assignment": [
+        r"\b(?:password|passwd|pwd|mat\s*khau|m[aậ]t\s*kh[aẩ]u)\b\s*[:=]\s*(?!<[^>]+>|\*{3,}|x{3,}|change[_ -]?me\b)[\"']?[^\s\"']{8,}",
+    ],
+    "private_key": [
+        r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----",
+    ],
+    "bearer_or_jwt": [
+        r"\bBearer\s+[A-Za-z0-9._~+/\-=]{16,}",
+        r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b",
+    ],
+    "database_connection_string": [
+        r"\b(?:Server|Data Source)\s*=\s*[^;\r\n]+;[^\r\n]{0,300}\b(?:Password|Pwd)\s*=\s*[^;\s\r\n]+",
+        r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s:/]+:[^\s@]+@[^\s]+",
+    ],
+    "cloud_service_credential": [
+        r"\bAKIA[0-9A-Z]{16}\b",
+        r"\b(?:aws_secret_access_key|azure_client_secret|google_application_credentials)\b\s*[:=]\s*[\"']?[^\s\"']{12,}",
+        r'"type"\s*:\s*"service_account"[^}]{0,2000}"private_key"\s*:\s*"-----BEGIN PRIVATE KEY-----',
+    ],
 }
+
+CREDENTIAL_CATEGORIES = frozenset({
+    "api_key_or_token",
+    "password_assignment",
+    "private_key",
+    "bearer_or_jwt",
+    "database_connection_string",
+    "cloud_service_credential",
+})
 
 
 def _text_to_scan(text, max_chars=None):
@@ -88,27 +123,28 @@ def scan_sensitive_content(text, max_chars=None):
         {
           "is_sensitive": bool,
           "categories": ["payroll", ...],
-          "matched": {category: [mau dau tien]}
+          "match_counts": {category: count}
         }
 
     P1: mac dinh quet TOAN VAN. Tham so max_chars chi la tuy chon gioi han
     head+tail cho tai lieu cuc lon, khong con chi cat phan dau.
     """
-    result = {"is_sensitive": False, "categories": [], "matched": {}}
+    result = {"is_sensitive": False, "categories": [], "match_counts": {}}
     sample = _text_to_scan(text, max_chars=max_chars)
     if not sample:
         return result
 
     for category, patterns in _SENSITIVE_PATTERNS.items():
+        count = 0
         for pat in patterns:
             try:
-                m = re.search(pat, sample, re.IGNORECASE)
+                matches = re.findall(pat, sample, re.IGNORECASE)
             except re.error:
                 continue
-            if m:
-                result["categories"].append(category)
-                result["matched"][category] = m.group(0)
-                break
+            count += len(matches)
+        if count:
+            result["categories"].append(category)
+            result["match_counts"][category] = count
     result["is_sensitive"] = len(result["categories"]) > 0
     return result
 
@@ -118,3 +154,64 @@ def escalate_security(current_level, scan_result):
     if scan_result and scan_result.get("is_sensitive"):
         return "confidential"
     return current_level
+
+
+def merge_scan_results(current, incoming):
+    """Merge page/file scans without retaining matched plaintext."""
+    current = current or {"is_sensitive": False, "categories": [], "match_counts": {}}
+    incoming = incoming or {}
+    counts = dict(current.get("match_counts") or {})
+    for category, count in (incoming.get("match_counts") or {}).items():
+        counts[category] = counts.get(category, 0) + int(count or 0)
+    categories = sorted(counts)
+    return {"is_sensitive": bool(categories), "categories": categories, "match_counts": counts}
+
+
+def has_credential_signal(scan_result):
+    return bool(CREDENTIAL_CATEGORIES.intersection((scan_result or {}).get("categories") or []))
+
+
+def requires_mandatory_scan(*department_values):
+    """IT content is always scanned, including shared-department overrides."""
+    for value in department_values:
+        if isinstance(value, (list, tuple, set)):
+            candidates = value
+        else:
+            candidates = re.split(r"[,;|]", str(value or ""))
+        if any(str(item or "").strip().upper() == "IT" for item in candidates):
+            return True
+    return False
+
+
+def apply_sensitive_quality_policy(report, scan_result):
+    """Force successful sensitive ingests to manual review, metadata-only."""
+    if not report or report.get("status") != "success" or not (scan_result or {}).get("is_sensitive"):
+        return report
+    safe_scan = {
+        "is_sensitive": True,
+        "categories": sorted(set(scan_result.get("categories") or [])),
+        "match_counts": {
+            str(category): int(count or 0)
+            for category, count in (scan_result.get("match_counts") or {}).items()
+            if int(count or 0) > 0
+        },
+    }
+    report["sensitive_scan"] = safe_scan
+    report["quality_status"] = "needs_review"
+    report["quality_label"] = "Cần rà soát thủ công"
+    warning = (
+        "Phat hien noi dung nhay cam (%s) -> muc mat confidential, can review thu cong."
+        % ", ".join(safe_scan["categories"])
+    )
+    if warning not in report.setdefault("warnings", []):
+        report["warnings"].append(warning)
+    code = "credential_detected" if has_credential_signal(safe_scan) else "sensitive_content_detected"
+    reason_codes = report.setdefault("quality_reason_codes", [])
+    if code not in reason_codes:
+        reason_codes.append(code)
+        report.setdefault("quality_reasons", []).append({
+            "code": code,
+            "component": "sensitive_scan",
+            "message": "Nội dung nhạy cảm cần rà soát trước khi publish.",
+        })
+    return report

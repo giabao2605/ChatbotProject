@@ -91,7 +91,89 @@ def normalize_filename_to_classification(filename):
     res["base_code"] = res["base_code"].strip()
     return res
 
-def classify_document(file_path, original_filename=None, thu_muc=None):
+def _load_active_document_types(department_code):
+    """Read the serving profile without making classification depend on SQL availability."""
+    if not department_code:
+        return []
+    try:
+        from mech_chatbot.db.repositories.knowledge_governance import get_department_domain_profile
+
+        profile = get_department_domain_profile(department_code)
+        if not profile or not profile.get("is_active"):
+            return []
+        return [
+            str(item).strip().lower()
+            for item in (profile.get("document_types") or [])
+            if str(item).strip()
+        ]
+    except Exception as exc:
+        logger.warning(
+            "Khong tai duoc domain profile cho %s; dung classifier fallback: %s",
+            department_code,
+            exc,
+        )
+        return []
+
+
+def _canonical_profile_type(raw):
+    """Normalize an LLM label while preserving valid profile-specific codes."""
+    from mech_chatbot.ingestion.doc_type_registry import normalize_doc_type
+
+    canonical = normalize_doc_type(raw)
+    if canonical:
+        return canonical
+    return re.sub(r"[^a-z0-9]+", "_", str(raw or "").strip().lower()).strip("_")
+
+
+def _profile_type_code(raw):
+    """Return the literal normalized code stored in DocumentTypesJson."""
+    return re.sub(r"[^a-z0-9]+", "_", str(raw or "").strip().lower()).strip("_")
+
+
+def _validate_document_type(parsed, allowed_types, fallback_doc_type):
+    """Fail closed to the handler fallback when the LLM escapes the profile allowlist."""
+    allowed_codes = [_profile_type_code(item) for item in (allowed_types or [])]
+    allowed_codes = [item for item in allowed_codes if item]
+    candidate_literal = _profile_type_code(parsed.get("document_type"))
+    candidate_canonical = _canonical_profile_type(parsed.get("document_type"))
+
+    # Prefer the exact profile code. If the LLM returned a label/synonym, map
+    # it back to the matching code that is actually present in the profile so
+    # publication validation sees the same value. This also preserves
+    # profile codes such as ``other`` which the legacy registry aliases to
+    # ``generic``.
+    candidate = candidate_literal if candidate_literal in allowed_codes else None
+    if candidate is None and allowed_codes:
+        candidate = next(
+            (code for code in allowed_codes if _canonical_profile_type(code) == candidate_canonical),
+            None,
+        )
+    if not allowed_codes:
+        candidate = candidate_canonical or candidate_literal
+
+    fallback_literal = _profile_type_code(fallback_doc_type)
+    fallback_canonical = _canonical_profile_type(fallback_doc_type)
+    fallback = fallback_literal if fallback_literal in allowed_codes else None
+    if fallback is None and allowed_codes:
+        fallback = next(
+            (code for code in allowed_codes if _canonical_profile_type(code) == fallback_canonical),
+            allowed_codes[0],
+        )
+    fallback = fallback or fallback_canonical or fallback_literal or fallback_doc_type
+
+    if allowed_codes and candidate is None:
+        original = parsed.get("document_type")
+        parsed["document_type"] = fallback
+        detail = f"document_type '{original}' nam ngoai active department profile; fallback '{fallback}'."
+        parsed["reason"] = " ".join(part for part in [str(parsed.get("reason") or "").strip(), detail] if part)
+        parsed["document_type_validation"] = "profile_fallback"
+    else:
+        parsed["document_type"] = candidate or fallback
+        parsed["document_type_validation"] = "profile_valid" if allowed_codes else "legacy_fallback"
+    return parsed
+
+
+def classify_document(file_path, original_filename=None, thu_muc=None, document_types=None):
     """Phan loai tai lieu 2 tang:
       Tang 1: xac dinh domain tu thu_muc (mechanical / tabular / generic, tra cuu Departments)
       Tang 2: phan loai chi tiet bang LLM theo domain
@@ -115,6 +197,11 @@ def classify_document(file_path, original_filename=None, thu_muc=None):
     # ---- Tang 2: LLM Classification qua DomainHandler (GD3) ----
     from mech_chatbot.ingestion.domain_handlers import get_handler
     handler = get_handler(domain)
+    active_document_types = (
+        [str(item).strip().lower() for item in document_types if str(item).strip()]
+        if document_types is not None
+        else _load_active_document_types(thu_muc)
+    )
     prompt, fallback_doc_type = handler.build_classify_prompt(
         original_filename=original_filename,
         text_content=text_content,
@@ -122,6 +209,7 @@ def classify_document(file_path, original_filename=None, thu_muc=None):
         regex_version_label=regex_version_label,
         regex_version_no=regex_version_no,
         domain=domain,
+        document_types=active_document_types,
     )
 
     default_res = {
@@ -144,6 +232,10 @@ def classify_document(file_path, original_filename=None, thu_muc=None):
         )
         clean_json = resp.content.replace('```json', '').replace('```', '').strip()
         parsed = json.loads(clean_json)
+        if not isinstance(parsed, dict):
+            raise ValueError("Classification response phai la JSON object")
+        parsed = {**default_res, **parsed}
+        parsed = _validate_document_type(parsed, active_document_types, fallback_doc_type)
         
         base_code = parsed.get("base_code", default_res["base_code"])
         
@@ -165,6 +257,9 @@ def classify_document(file_path, original_filename=None, thu_muc=None):
         return parsed
     except Exception as e:
         logger.error(f"Loi classification LLM: {e}")
+        default_res["classification_failed"] = True
+        default_res["document_type_validation"] = "classifier_error_fallback"
+        default_res["reason"] = f"Classifier fallback: {type(e).__name__}."
         return default_res
 
 if __name__ == "__main__":

@@ -76,7 +76,7 @@ def build_common_metadata_context(docs):
         blocks = []
         for did, m in meta_map.items():
             parts = []
-            if m.get("title"): parts.append(f"Tieu de: {m[chr(39)+chr(116)+chr(105)+chr(116)+chr(108)+chr(101)+chr(39)]}")
+            if m.get("title"): parts.append("Tieu de: " + str(m.get("title")))
             if m.get("doc_number"): parts.append("So van ban: " + str(m.get("doc_number")))
             if m.get("effective_status"): parts.append("Trang thai hieu luc: " + str(m.get("effective_status")))
             if m.get("effective_date"): parts.append("Ngay hieu luc: " + str(m.get("effective_date")))

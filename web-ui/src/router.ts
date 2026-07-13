@@ -25,14 +25,14 @@ import HelpView from "@/views/HelpView.vue";
 // nhap. Dong bo voi navItems trong App.vue de an menu va chan URL truc tiep.
 export const routes = [
   { path: "/login", name: "login", component: LoginView, meta: { public: true } },
-  { path: "/", redirect: "/chat" },
-  { path: "/chat", name: "chat", component: ChatView },
+  { path: "/", redirect: "/dashboard" },
+  { path: "/chat", name: "chat", component: ChatView, meta: { roles: ["viewer", "uploader", "reviewer"] } },
   { path: "/dashboard", name: "dashboard", component: DashboardView },
-  { path: "/documents", name: "documents", component: DocumentsView },
+  { path: "/documents", name: "documents", component: DocumentsView, meta: { roles: ["viewer", "uploader", "reviewer"] } },
   { path: "/upload", name: "upload", component: UploadView, meta: { roles: ["uploader", "reviewer", "admin"] } },
   { path: "/queue", name: "queue", component: QueueView, meta: { roles: ["uploader", "reviewer", "admin"] } },
   { path: "/review", name: "review", component: ReviewView, meta: { roles: ["reviewer", "admin"] } },
-  { path: "/access", name: "access", component: AccessView },
+  { path: "/access", name: "access", component: AccessView, meta: { roles: ["viewer", "uploader", "reviewer"] } },
   { path: "/users", name: "users", component: UsersView, meta: { roles: ["security_admin"] } },
   { path: "/org", name: "org", component: OrgView, meta: { roles: ["platform_admin"] } },
   { path: "/dictionary", name: "dictionary", component: DictionaryView, meta: { roles: ["reviewer", "admin"] } },
@@ -61,12 +61,12 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
       return { name: "login", query: { next: to.fullPath } };
     }
     if (to.meta.public && auth.user) {
-      return { name: "chat" };
+      return { name: "dashboard" };
     }
     // Chan truy cap route theo vai tro (kem an menu o App.vue).
     const roles = (to.meta.roles as string[] | undefined) ?? [];
     if (roles.length && auth.user) {
-      if (!isRoleAllowed(auth.user.roles, roles)) return { name: "chat" };
+      if (!isRoleAllowed(auth.user.roles, roles)) return { name: "dashboard" };
     }
     return true;
   });
