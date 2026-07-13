@@ -36,8 +36,14 @@ def compare_reports(
         <= baseline_system.get("latency_p95_ms", 0) * max_latency_ratio,
         "cost_within_budget": candidate_system.get("estimated_cost", float("inf"))
         <= baseline_system.get("estimated_cost", 0) * max_cost_ratio,
-        "correction_budget": candidate_system.get("correction_rate", float("inf")) <= 1.0,
-        "repair_budget": candidate_system.get("repair_rate", float("inf")) <= 1.0,
+        "correction_budget": (
+            candidate_system.get("correction_rate", float("inf")) <= 1.0
+            and candidate_system.get("max_corrections_per_query", 0) <= 1
+        ),
+        "repair_budget": (
+            candidate_system.get("repair_rate", float("inf")) <= 1.0
+            and candidate_system.get("max_repairs_per_query", 0) <= 1
+        ),
         "retry_budget": candidate_system.get("retry_rate", float("inf")) <= 2.0,
     }
     return {

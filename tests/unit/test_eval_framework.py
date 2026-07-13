@@ -230,3 +230,16 @@ def test_crag_rollout_gate_blocks_wrong_answers_leakage_and_excess_cost():
 
     candidate_eval["outcome_confusion"]["wrong_answer"] = 2
     assert crag_gate.compare_reports(baseline_eval, candidate_eval, baseline_trace, candidate_trace)["passed"] is False
+
+
+def test_crag_rollout_gate_blocks_more_than_one_correction_or_repair_per_query():
+    eval_report = {"outcome_confusion": {"wrong_refusal": 0, "wrong_answer": 0, "leakage": 0}}
+    baseline_trace = {"system_metrics": {"latency_p95_ms": 100, "estimated_cost": 1}}
+    candidate_trace = {"system_metrics": {
+        "latency_p95_ms": 100, "estimated_cost": 1, "correction_rate": 0.5,
+        "repair_rate": 0.5, "retry_rate": 0, "max_corrections_per_query": 2,
+        "max_repairs_per_query": 1,
+    }}
+    report = crag_gate.compare_reports(eval_report, eval_report, baseline_trace, candidate_trace)
+    assert report["checks"]["correction_budget"] is False
+    assert report["passed"] is False

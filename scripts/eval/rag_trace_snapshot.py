@@ -54,6 +54,8 @@ def build_snapshot(
     estimated_cost = 0.0
     corrective_attempts = 0
     repair_attempts = 0
+    corrections_by_trace: Counter[str] = Counter()
+    repairs_by_trace: Counter[str] = Counter()
     llm_retries = 0
     query_count = 0
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -73,8 +75,10 @@ def build_snapshot(
             estimated_cost += float(event.get("estimated_cost") or 0)
         if event.get("event") == "corrective_retrieval" and event.get("attempt"):
             corrective_attempts += 1
+            corrections_by_trace[str(event.get("trace_id") or "<missing>")] += 1
         if event.get("event") == "claim_repair" and event.get("attempted"):
             repair_attempts += 1
+            repairs_by_trace[str(event.get("trace_id") or "<missing>")] += 1
         if event.get("event") == "llm_retry":
             llm_retries += 1
         if event.get("event") != "rag_end":
@@ -119,6 +123,8 @@ def build_snapshot(
             "estimated_cost": round(estimated_cost, 8),
             "correction_rate": corrective_attempts / query_count if query_count else 0.0,
             "repair_rate": repair_attempts / query_count if query_count else 0.0,
+            "max_corrections_per_query": max(corrections_by_trace.values(), default=0),
+            "max_repairs_per_query": max(repairs_by_trace.values(), default=0),
             "retry_rate": llm_retries / query_count if query_count else 0.0,
         },
     }

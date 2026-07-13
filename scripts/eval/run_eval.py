@@ -1,298 +1,249 @@
+"""Run labeled RAG evaluation against an explicitly selected staging manifest."""
+
+from __future__ import annotations
+
+import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+for candidate in (ROOT, SRC):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 os.environ.setdefault("RAG_EXECUTION_CONTEXT", "evaluation")
 
-# Add the source package when the script is run directly from the repository.
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(_PROJECT_ROOT / "src"))
-
-from mech_chatbot.rag.service import chat_with_rag, extract_search_intent
-from mech_chatbot.config.logging import logger
-from mech_chatbot.evaluation.outcomes import (
-    REFUSAL_OUTCOMES,
-    classify_actual_outcome,
-    expected_outcome,
-    summarize_outcomes,
+REQUIRED_IDENTITY_FIELDS = (
+    "user_department",
+    "user_roles",
+    "allowed_departments",
+    "allowed_sites",
+    "max_security_level",
 )
-from mech_chatbot.evaluation.metrics import nearest_rank
+RUN_LABELS = ("baseline", "candidate")
 
-def run_evaluation():
-    golden_set_files = [
-        os.path.join(os.path.dirname(__file__), "golden_set_datagoc_real.jsonl"),
-        os.path.join(os.path.dirname(__file__), "golden_set_refusal_grounding.jsonl"),
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _git_sha() -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def validate_live_case(case: dict, *, source: Path, line_number: int) -> None:
+    missing = [name for name in REQUIRED_IDENTITY_FIELDS if not case.get(name)]
+    if missing:
+        raise ValueError(
+            f"{source}:{line_number}: live case {case.get('id', '<unknown>')} missing "
+            + ", ".join(missing)
+        )
+    if not case.get("question"):
+        raise ValueError(f"{source}:{line_number}: case question is required")
+    if "expected_outcome" not in case and "should_refuse" not in case:
+        raise ValueError(f"{source}:{line_number}: expected_outcome is required")
+
+
+def load_manifest_files(paths: list[Path]) -> list[dict]:
+    cases: list[dict] = []
+    seen_ids: set[str] = set()
+    for path in paths:
+        path = Path(path)
+        if not path.is_file():
+            raise ValueError(f"manifest not found: {path}")
+        for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not raw.strip():
+                continue
+            try:
+                case = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_number}: invalid JSON: {exc.msg}") from exc
+            validate_live_case(case, source=path, line_number=line_number)
+            case_id = str(case.get("id") or "")
+            if not case_id or case_id in seen_ids:
+                raise ValueError(f"{path}:{line_number}: case id must be unique and non-empty")
+            seen_ids.add(case_id)
+            cases.append(case)
+    if not cases:
+        raise ValueError("at least one live evaluation case is required")
+    return cases
+
+
+def resolve_output_paths(output_dir: Path, run_label: str) -> dict[str, Path]:
+    if run_label not in RUN_LABELS:
+        raise ValueError(f"run_label must be one of {RUN_LABELS}")
+    run_dir = Path(output_dir) / run_label
+    return {"directory": run_dir, "json": run_dir / "eval.json", "markdown": run_dir / "eval.md"}
+
+
+def _render_markdown(report: dict) -> str:
+    lines = [
+        f"# CRAG evaluation: {report['run_label']}", "",
+        f"- Commit: `{report['git_sha']}`",
+        f"- UTC range: `{report['started_at']}` to `{report['completed_at']}`",
+        f"- Manifests: `{json.dumps(report['manifest_files'], ensure_ascii=False)}`",
+        f"- Cases: {report['total_cases']}",
+        f"- Passed: {report['passed_cases']}", "",
+        "## Outcome confusion", "",
     ]
-    output_file = os.path.join(os.path.dirname(__file__), "eval_report.md")
-    json_output_file = os.path.join(os.path.dirname(__file__), "eval_report.json")
-    
-    test_cases = []
-    for golden_set_file in golden_set_files:
-        if not os.path.exists(golden_set_file):
-            print(f"Khong tim thay file {golden_set_file}")
-            return
-        with open(golden_set_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    test_cases.append(json.loads(line))
+    lines.extend(f"- {name}: {count}" for name, count in report["outcome_confusion"].items())
+    lines.extend(["", "## Cases", ""])
+    for row in report["cases"]:
+        lines.append(
+            f"- `{row['id']}`: {'PASS' if row['passed'] else 'FAIL'}; "
+            f"expected={row['expected_outcome']}; actual={row['actual_outcome']}; "
+            f"latency={row.get('latency_ms')} ms"
+        )
+    return "\n".join(lines) + "\n"
 
-    print("BAT DAU CHAY EVALUATION RAG... (vui long doi, ket qua se duoc luu vao file eval_report.md)")
 
-    total_tests = len(test_cases)
-    passed_tests = 0
-    
-    # Metrics
-    metrics = {
-        "keyword_pass": 0,
-        "source_pass": 0,
-        "forbidden_violation": 0,
-        "refusal_pass": 0,
-        "policy_pass": 0,
-        "total_latency": 0.0
-    }
-    
-    level_stats = defaultdict(lambda: {"total": 0, "pass": 0})
-    outcome_rows = []
-    latencies = []
+def run_evaluation(
+    manifest_files: list[Path], output_dir: Path, run_label: str, *, preflight: bool = True
+) -> tuple[dict, bool]:
+    cases = load_manifest_files(manifest_files)
+    paths = resolve_output_paths(output_dir, run_label)
+    if paths["directory"].exists() and any(paths["directory"].iterdir()):
+        raise ValueError(f"refusing to overwrite non-empty run directory: {paths['directory']}")
+    paths["directory"].mkdir(parents=True, exist_ok=True)
 
-    with open(output_file, "w", encoding="utf-8") as out:
-        out.write("#  Kết Quả Đánh Giá RAG Pipeline (Phase 4)\n\n")
-        out.write(f"**Tổng số câu hỏi test:** {total_tests}\n\n")
-        out.write("---\n\n")
-        
-        for i, case in enumerate(test_cases):
-            test_id = case.get("id", f"Test_{i+1}")
-            level = case.get("level", "N/A")
-            question = case.get("question", "")
-            expected_keywords = case.get("expected_keywords", [])
+    if preflight:
+        from scripts.crag_eval.preflight import run_live_preflight
+        preflight_report = run_live_preflight(cases)
+        (paths["directory"] / "preflight.json").write_text(
+            json.dumps(preflight_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        if not preflight_report["passed"]:
+            raise RuntimeError("fixture preflight failed; no LLM request was sent")
+
+    # Import only after validation and preflight so malformed runs never initialize the RAG stack.
+    from mech_chatbot.evaluation.metrics import nearest_rank
+    from mech_chatbot.evaluation.outcomes import (
+        REFUSAL_OUTCOMES, classify_actual_outcome, expected_outcome, summarize_outcomes,
+    )
+    from mech_chatbot.rag.service import chat_with_rag, extract_search_intent
+
+    started_at = _utc_now()
+    rows: list[dict] = []
+    outcome_rows: list[dict] = []
+    latencies: list[float] = []
+    levels = defaultdict(lambda: {"total": 0, "pass": 0})
+    for case in cases:
+        before = time.perf_counter()
+        expected = expected_outcome(case)
+        should_refuse = expected in REFUSAL_OUTCOMES
+        roles = case["user_roles"]
+        try:
+            intent = extract_search_intent(
+                case["question"], [], case["user_department"], roles,
+                case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
+            )
+            intent_data = intent[-1] if len(intent) == 6 else {}
+            actual_policy = (intent_data or {}).get("version_policy", "current_only")
+            stream, ref_text, _, _, debug = chat_with_rag(
+                case["question"], None, [], [], case["user_department"], roles,
+                case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
+            )
+            answer = "".join(stream)
+            latency_ms = round((time.perf_counter() - before) * 1000, 2)
+            latencies.append(latency_ms)
+            actual = classify_actual_outcome(answer)
+            retrieved = [str(doc.get("file_goc", "")).lower() for doc in debug.get("retrieved_docs", [])[:5]]
             expected_sources = case.get("expected_sources", [])
             forbidden_sources = case.get("forbidden_sources", [])
-            expected_version_policy = case.get("expected_version_policy", "current_only")
-            expected_case_outcome = expected_outcome(case)
-            should_refuse = expected_case_outcome in REFUSAL_OUTCOMES
-            user_department = case.get("user_department")
-            user_roles = case.get("user_roles")
-            allowed_departments = case.get("allowed_departments")
-            
-            level_stats[level]["total"] += 1
-            
-            print(f"Dang chay cau {i+1}/{total_tests}: [{test_id}]...")
-            
-            out.write(f"### Câu {i+1}: [{test_id}] {level}\n")
-            out.write(f"** Câu hỏi:** {question}\n\n")
-            out.write(f"- **Kỳ vọng Keywords:** {expected_keywords}\n")
-            if expected_sources: out.write(f"- **Kỳ vọng Sources:** {expected_sources}\n")
-            if forbidden_sources: out.write(f"- **Forbidden Sources:** {forbidden_sources}\n")
-            out.write(f"- **Kỳ vọng Version Policy:** {expected_version_policy}\n")
-            out.write(f"- **Từ chối (Should refuse):** {should_refuse}\n\n")
-            
-            start_time = time.time()
-            
-            try:
-                # 1. Evaluate Intent Extraction
-                try:
-                    strict_f, broad_f, p_ids, is_inh, is_bom, intent_data = extract_search_intent(question, [], user_department, user_roles, allowed_departments)
-                    actual_policy = intent_data.get("version_policy", "current_only") if intent_data else "current_only"
-                except Exception as e:
-                    # Backward compatibility if intent extraction format changes
-                    strict_f, broad_f, p_ids, is_inh, is_bom = extract_search_intent(question, [], user_department, user_roles, allowed_departments)
-                    actual_policy = "current_only"
-                    
-                policy_passed = (actual_policy == expected_version_policy)
-                if policy_passed: metrics["policy_pass"] += 1
-                
-                # 2. Goi RAG
-                stream, ref_text, ref_images, new_part_ids, debug_info = chat_with_rag(question, None, [], [], user_department, user_roles, allowed_departments)
-                bot_answer = ""
-                for chunk in stream:
-                    bot_answer += chunk
-                
-                latency = time.time() - start_time
-                metrics["total_latency"] += latency
-                latencies.append(latency)
-                
-                bot_answer_lower = bot_answer.lower()
-                ref_text_lower = (ref_text or "").lower()
-                
-                # Check keywords
-                keywords_passed = True
-                failed_keywords = []
-                if should_refuse:
-                    if expected_keywords:
-                        keywords_passed = any(kw.lower() in bot_answer_lower for kw in expected_keywords)
-                        if not keywords_passed:
-                            failed_keywords = expected_keywords
-                else:
-                    for kw in expected_keywords:
-                        if kw.lower() not in bot_answer_lower:
-                            keywords_passed = False
-                            failed_keywords.append(kw)
-                if keywords_passed: metrics["keyword_pass"] += 1
-                
-                # Check refusal
-                actual_case_outcome = classify_actual_outcome(bot_answer)
-                actual_refused = actual_case_outcome in REFUSAL_OUTCOMES
-                refusal_passed = (should_refuse == actual_refused)
-                if refusal_passed: metrics["refusal_pass"] += 1
-                
-                # Check expected sources (Recall@5 approx)
-                sources_passed = True
-                failed_sources = []
-                retrieved_files = [
-                    str(d.get("file_goc", "")).lower() 
-                    for d in debug_info.get("retrieved_docs", [])[:5]
-                ]
-                for src in expected_sources:
-                    # Check in debug_info or in bot_answer text
-                    found = False
-                    for rf in retrieved_files:
-                        if src.lower() in rf:
-                            found = True
-                            break
-                    if not found and src.lower() not in bot_answer_lower:
-                        sources_passed = False
-                        failed_sources.append(src)
-                if sources_passed: metrics["source_pass"] += 1
-                
-                # Check forbidden sources
-                forbidden_passed = True
-                violated_sources = []
-                for src in forbidden_sources:
-                    found = False
-                    for rf in retrieved_files:
-                        if src.lower() in rf:
-                            found = True
-                            break
-                    if found or src.lower() in bot_answer_lower:
-                        forbidden_passed = False
-                        violated_sources.append(src)
-                if not forbidden_passed: metrics["forbidden_violation"] += 1
-                
-                # Final result for the test
-                is_pass = keywords_passed and refusal_passed and sources_passed and forbidden_passed and policy_passed
-                outcome_rows.append(
-                    {
-                        "expected": expected_case_outcome,
-                        "actual": actual_case_outcome,
-                        "answer_correct": is_pass,
-                        "leaked": not forbidden_passed and "admin" not in {
-                            str(role).lower() for role in (user_roles or [])
-                        },
-                        "legacy_admin_bypass": not forbidden_passed and "admin" in {
-                            str(role).lower() for role in (user_roles or [])
-                        },
-                    }
-                )
-                
-                if is_pass:
-                    passed_tests += 1
-                    level_stats[level]["pass"] += 1
-                    status_icon = " **PASSED**"
-                else:
-                    status_icon = " **FAILED**"
-                
-                out.write(f"**Trạng thái:** {status_icon}\n\n")
-                if not is_pass:
-                    if not policy_passed:
-                        out.write(f"- Lỗi: Policy sai. Ky vong: `{expected_version_policy}`, Thuc te: `{actual_policy}`\n")
-                    if not keywords_passed:
-                        out.write(f"- Lỗi: Không khớp keywords kỳ vọng: {failed_keywords}\n")
-                    if not refusal_passed:
-                        out.write(f"- Lỗi: Phản hồi từ chối không khớp kỳ vọng (Kỳ vọng từ chối: {should_refuse}, Thực tế: {actual_refused})\n")
-                    if not sources_passed:
-                        out.write(f"- Lỗi: Không tìm thấy nguồn: {failed_sources}\n")
-                    if not forbidden_passed:
-                        out.write(f"- Lỗi: Vi pham Forbidden Source: {violated_sources}\n")
-                    out.write("\n")
+            source_ok = expected == "access_denied" or all(
+                any(src.lower() in item for item in retrieved) for src in expected_sources
+            )
+            forbidden_hits = [src for src in forbidden_sources if any(src.lower() in item for item in retrieved)]
+            keywords = case.get("expected_keywords", [])
+            keyword_ok = (
+                any(k.lower() in answer.lower() for k in keywords)
+                if should_refuse and keywords else
+                all(k.lower() in answer.lower() for k in keywords)
+            )
+            refusal_ok = (actual in REFUSAL_OUTCOMES) == should_refuse
+            policy_ok = actual_policy == case.get("expected_version_policy", "current_only")
+            passed = keyword_ok and source_ok and not forbidden_hits and refusal_ok and policy_ok
+            is_admin = "admin" in {str(role).lower() for role in roles}
+            outcome_rows.append({
+                "expected": expected, "actual": actual, "answer_correct": passed,
+                "leaked": bool(forbidden_hits) and not is_admin,
+                "legacy_admin_bypass": bool(forbidden_hits) and is_admin,
+            })
+            row = {
+                "id": case["id"], "passed": passed, "expected_outcome": expected,
+                "actual_outcome": actual, "latency_ms": latency_ms, "answer": answer,
+                "reference": ref_text, "retrieved_sources": retrieved,
+            }
+        except Exception as exc:
+            latency_ms = round((time.perf_counter() - before) * 1000, 2)
+            latencies.append(latency_ms)
+            error_actual = "full_answer" if should_refuse else "insufficient_evidence"
+            outcome_rows.append({
+                "expected": expected, "actual": error_actual, "answer_correct": False,
+                "leaked": False, "legacy_admin_bypass": False,
+            })
+            row = {
+                "id": case["id"], "passed": False, "expected_outcome": expected,
+                "actual_outcome": "error", "latency_ms": latency_ms,
+                "error": str(exc),
+            }
+        rows.append(row)
+        level = case.get("level", "fixture")
+        levels[level]["total"] += 1
+        levels[level]["pass"] += int(row["passed"])
 
-                out.write(f"** Thời gian:** {latency:.2f}s\n\n")
-                out.write(f"** Bot trả lời:**\n> {bot_answer.strip().replace(chr(10), chr(10)+'> ')}\n\n")
-                
-                if ref_text:
-                    out.write(f"** Nguồn trích dẫn (Bot):**\n{ref_text.strip()}\n\n")
-                
-                out.write("---\n")
+    completed_at = _utc_now()
+    report = {
+        "schema": "rag-labeled-eval-v2", "run_label": run_label, "git_sha": _git_sha(),
+        "started_at": started_at, "completed_at": completed_at,
+        "manifest_files": [str(Path(p).resolve()) for p in manifest_files],
+        "execution_context": os.environ.get("RAG_EXECUTION_CONTEXT"),
+        "feature_flags": {
+            "crag": os.environ.get("RAG_CRAG_ENABLED", "false"),
+            "claim_repair": os.environ.get("RAG_CLAIM_REPAIR_ENABLED", "false"),
+        },
+        "total_cases": len(cases), "passed_cases": sum(row["passed"] for row in rows),
+        "outcome_confusion": summarize_outcomes(outcome_rows),
+        "latency_p50_ms": nearest_rank(latencies, 0.50),
+        "latency_p95_ms": nearest_rank(latencies, 0.95),
+        "levels": dict(levels), "cases": rows,
+    }
+    paths["json"].write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    paths["markdown"].write_text(_render_markdown(report), encoding="utf-8")
+    return report, all(row["passed"] for row in rows)
 
-            except Exception as e:
-                out.write(f"**Trạng thái:**  ERROR\n\n")
-                out.write(f"**Lỗi RAG:** {e}\n\n---\n")
 
-        # Summary 
-        out.write(f"\n## TỔNG KẾT METRICS\n")
-        out.write(f"- **Tổng số câu test:** {total_tests}\n")
-        out.write(f"- **Pass toàn phần:** {passed_tests} ({(passed_tests/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
-        out.write(f"- **Answer Keyword Score:** {metrics['keyword_pass']}/{total_tests} ({(metrics['keyword_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
-        out.write(f"- **Retrieval Recall@5:** {metrics['source_pass']}/{total_tests} ({(metrics['source_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
-        out.write(f"- **Forbidden Violation:** {metrics['forbidden_violation']}/{total_tests}\n")
-        out.write(f"- **Refusal Score:** {metrics['refusal_pass']}/{total_tests} ({(metrics['refusal_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
-        out.write(f"- **Version Policy Score:** {metrics['policy_pass']}/{total_tests} ({(metrics['policy_pass']/total_tests)*100 if total_tests > 0 else 0:.1f}%)\n")
-        avg_lat = metrics['total_latency']/total_tests if total_tests > 0 else 0
-        out.write(f"- **Average Latency:** {avg_lat:.2f}s/query\n\n")
-        out.write("## OUTCOME CONFUSION\n")
-        for name, count in summarize_outcomes(outcome_rows).items():
-            out.write(f"- **{name}:** {count}\n")
-        out.write("\n")
-        
-        out.write(f"## KẾT QUẢ THEO NHÓM (LEVEL)\n")
-        
-        THRESHOLDS = {
-            "L1": 90,
-            "L2": 85,
-            "L3": 95,
-            "L4": 98,
-            "L5": 90,
-            "L6": 90,
-        }
-        
-        overall_failed_threshold = False
-        
-        for lvl, st in level_stats.items():
-            rate = (st["pass"]/st["total"])*100 if st["total"] > 0 else 0
-            
-            # Match threshold based on the first two characters (e.g., L1_keyword -> L1)
-            base_lvl = lvl.split('_')[0] if '_' in lvl else lvl
-            threshold = THRESHOLDS.get(base_lvl)
-            
-            if threshold is not None:
-                passed_threshold = rate >= threshold
-                if not passed_threshold:
-                    overall_failed_threshold = True
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", type=Path, action="append", required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--run-label", choices=RUN_LABELS, required=True)
+    return parser.parse_args(argv)
 
-                out.write(
-                    f"- **{lvl}**: Pass {st['pass']}/{st['total']} "
-                    f"({rate:.1f}%) | Threshold: {threshold}% | "
-                    f"{'PASS' if passed_threshold else 'FAIL'}\n"
-                )
-            else:
-                out.write(f"- **{lvl}**: Pass {st['pass']}/{st['total']} ({rate:.1f}%)\n")
 
-    with open(json_output_file, "w", encoding="utf-8") as json_out:
-        json.dump(
-            {
-                "schema": "rag-labeled-eval-v1",
-                "manifest_files": [os.path.abspath(path) for path in golden_set_files],
-                "total_cases": total_tests,
-                "outcome_confusion": summarize_outcomes(outcome_rows),
-                "latency_p50_ms": round(nearest_rank(latencies, 0.50) * 1000, 2) if latencies else None,
-                "latency_p95_ms": round(nearest_rank(latencies, 0.95) * 1000, 2) if latencies else None,
-            },
-            json_out,
-            ensure_ascii=False,
-            indent=2,
-        )
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    _, passed = run_evaluation(args.manifest, args.output_dir, args.run_label)
+    # Artifacts are always written. The rollout decision belongs to crag_rollout_gate.py.
+    return 0 if passed else 2
 
-    print(f"\nDa hoan tat test. Pass {passed_tests}/{total_tests}. Vui long mo file scripts/eval_report.md de xem ket qua chi tiet.")
-    
-    if overall_failed_threshold:
-        print("\n CI/CD ALERT: Có ít nhất 1 level không đạt ngưỡng threshold yêu cầu.")
-        import sys
-        sys.exit(1)
 
 if __name__ == "__main__":
-    # Ep kieu in stdout mac dinh thanh utf-8 cho chac an tren windows
-    import sys
-    sys.stdout.reconfigure(encoding='utf-8')
-    run_evaluation()
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    raise SystemExit(main())
