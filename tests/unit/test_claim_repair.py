@@ -27,6 +27,9 @@ def test_claim_repair_accepts_one_grounded_rewrite():
     assert result.accepted is True
     assert "1,500" in result.answer
     assert len(calls) == 1
+    assert "UNSUPPORTED_NUMBERS: ['2500']" in calls[0]
+    assert "ALLOWED_NUMBERS: ['1500']" in calls[0]
+    assert "ALLOWED_SOURCE_IDS: ['D7P3']" in calls[0]
 
 
 def test_claim_repair_rejects_second_unsupported_answer_without_retrying():

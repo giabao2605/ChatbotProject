@@ -13,6 +13,13 @@ from pathlib import Path
 DEFAULT_EXCLUDED_REASONS = {"client_cancelled"}
 
 
+def _nearest_rank(values: list[float], ratio: float):
+    if not values:
+        return None
+    index = min(len(values) - 1, max(0, int(len(values) * ratio + 0.999999) - 1))
+    return values[index]
+
+
 def _parse_timestamp(value: str | None):
     return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
 
@@ -43,13 +50,15 @@ def build_snapshot(
     included_timestamps: list[str] = []
     parse_errors = 0
     legacy_reason_events = 0
+    query_latencies: list[float] = []
+    estimated_cost = 0.0
+    corrective_attempts = 0
+    repair_attempts = 0
     for raw in path.read_text(encoding="utf-8").splitlines():
         try:
             event = json.loads(raw)
         except json.JSONDecodeError:
             parse_errors += 1
-            continue
-        if event.get("event") != "rag_end" or not event.get("refusal"):
             continue
         if str(event.get("execution_context") or "production") not in contexts:
             continue
@@ -57,6 +66,18 @@ def build_snapshot(
         if start_at and (timestamp is None or timestamp < start_at):
             continue
         if end_at and (timestamp is None or timestamp > end_at):
+            continue
+        if event.get("event") == "llm_generation":
+            estimated_cost += float(event.get("estimated_cost") or 0)
+        if event.get("event") == "corrective_retrieval" and event.get("attempt"):
+            corrective_attempts += 1
+        if event.get("event") == "claim_repair" and event.get("attempted"):
+            repair_attempts += 1
+        if event.get("event") != "rag_end":
+            continue
+        if event.get("final_latency_ms") is not None:
+            query_latencies.append(float(event["final_latency_ms"]))
+        if not event.get("refusal"):
             continue
         reason = event.get("refusal_reason")
         if not reason and event.get("reason"):
@@ -67,6 +88,8 @@ def build_snapshot(
         counts[str(reason)] += 1
         if event.get("ts"):
             included_timestamps.append(event["ts"])
+    ordered_latencies = sorted(query_latencies)
+    query_count = len(query_latencies)
     return {
         "schema": "rag-refusal-snapshot-v1",
         "source": {"path": str(path.resolve()), "git_sha": _git_sha()},
@@ -85,6 +108,14 @@ def build_snapshot(
         "refusal_reasons": dict(sorted(counts.items())),
         "parse_errors": parse_errors,
         "legacy_reason_events": legacy_reason_events,
+        "system_metrics": {
+            "query_count": query_count,
+            "latency_p50_ms": _nearest_rank(ordered_latencies, 0.50),
+            "latency_p95_ms": _nearest_rank(ordered_latencies, 0.95),
+            "estimated_cost": round(estimated_cost, 8),
+            "correction_rate": corrective_attempts / query_count if query_count else 0.0,
+            "repair_rate": repair_attempts / query_count if query_count else 0.0,
+        },
     }
 
 

@@ -190,9 +190,9 @@ QUESTION:
 CONTEXT:
 {context_text[:12000]}
 
-Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON:
+Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State la SUFFICIENT, AMBIGUOUS hoac INSUFFICIENT:
 
-  "answerable": true,
+  "state": "SUFFICIENT",
   "reason": "ly do ngan gon",
   "evidence_quotes": ["trich dan ngan tu CONTEXT neu co"]
 
@@ -216,18 +216,22 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON:
                 stage="verifier",
                 telemetry_status="verifier_fail_open",
             )
-        answerable = bool(data.get("answerable"))
+        raw_state = str(data.get("state") or "").strip().upper()
+        if raw_state in EvidenceState.__members__:
+            state = EvidenceState[raw_state]
+        else:
+            state = EvidenceState.SUFFICIENT if bool(data.get("answerable")) else EvidenceState.INSUFFICIENT
         reason = str(data.get("reason") or "tai lieu khong co bang chung truc tiep")
         quotes = data.get("evidence_quotes") or []
         # if answerable and not quotes:
         #     # Cau hoi rui ro ma verifier khong dua duoc quote -> khong cho qua.
         #     return False, "khong tim thay trich dan bang chung truc tiep trong tai lieu", []
         return EvidenceDecision(
-            EvidenceState.SUFFICIENT if answerable else EvidenceState.INSUFFICIENT,
+            state,
             reason=reason,
             stage="verifier",
             evidence_quotes=tuple(quotes) if isinstance(quotes, list) else (),
-            telemetry_status="verifier_pass" if answerable else "verifier_block",
+            telemetry_status="verifier_pass" if state is EvidenceState.SUFFICIENT else "verifier_block",
         )
     except Exception as e:
         logger.warning(f"Evidence gate loi ({e}). Fallback sang heuristic/prompt nghiem ngat.")
@@ -268,7 +272,7 @@ def _normalize_number_token(raw):
     return value.lstrip("0") or "0"
 
 
-def _normalized_number_values(text):
+def normalized_number_values(text):
     return {_normalize_number_token(match.group(0)) for match in _NUMBER_PATTERN.finditer(str(text or ""))}
 
 
@@ -276,7 +280,7 @@ def find_unsupported_numbers(answer, context_text, question, strict_mode=False):
     """Return positioned number violations after formatting normalization."""
     if not strict_mode and not is_high_risk_question(question):
         return []
-    allowed = _normalized_number_values(context_text) | _normalized_number_values(question)
+    allowed = normalized_number_values(context_text) | normalized_number_values(question)
     harmless = {str(value) for value in range(11)}
     violations = []
     for match in _NUMBER_PATTERN.finditer(str(answer or "")):
@@ -326,4 +330,5 @@ __all__ = [
     'has_unsupported_numbers',
     'find_unsupported_numbers',
     'NumberViolation',
+    'normalized_number_values',
 ]

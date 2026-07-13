@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 from mech_chatbot.llm.llm_client import _is_gpt_rate_limit
 from mech_chatbot.rag import evidence_gate
@@ -61,3 +62,19 @@ def test_evaluator_reports_verifier_disabled(monkeypatch):
 
     assert decision.state is evidence_gate.EvidenceState.SUFFICIENT
     assert decision.telemetry_status == "verifier_disabled"
+
+
+def test_evaluator_accepts_ambiguous_state_from_verifier(monkeypatch):
+    monkeypatch.setenv("LLM_EVIDENCE_VERIFIER_ENABLED", "true")
+    monkeypatch.setattr(
+        evidence_gate,
+        "cohere_invoke",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            content='{"state":"AMBIGUOUS","reason":"coverage gap","evidence_quotes":[]}'
+        ),
+    )
+
+    decision = evidence_gate.evaluate_answerability("Quy định gì?", "Có một phần quy định.")
+
+    assert decision.state is evidence_gate.EvidenceState.AMBIGUOUS
+    assert decision.telemetry_status == "verifier_block"

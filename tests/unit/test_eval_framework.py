@@ -7,7 +7,12 @@ import json
 from pathlib import Path
 
 import pytest
-from mech_chatbot.evaluation.outcomes import classify_outcome, expected_outcome
+from mech_chatbot.evaluation.outcomes import (
+    classify_actual_outcome,
+    classify_outcome,
+    expected_outcome,
+    summarize_outcomes,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -24,6 +29,7 @@ def _load_script(module_name: str, relative_path: str):
 
 pilot_gate = _load_script("pilot_rollout_gate", "scripts/eval/pilot_rollout_gate.py")
 benchmark = _load_script("benchmark_rag_concurrency", "scripts/eval/benchmark_rag_concurrency.py")
+crag_gate = _load_script("crag_rollout_gate", "scripts/eval/crag_rollout_gate.py")
 
 
 def _record(department: str, index: int) -> dict:
@@ -173,6 +179,12 @@ def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
     assert classify_outcome("full_answer", "insufficient_evidence", answer_correct=False, leaked=False) == "wrong_refusal"
     assert classify_outcome("insufficient_evidence", "full_answer", answer_correct=False, leaked=False) == "wrong_answer"
     assert classify_outcome("access_denied", "access_denied", answer_correct=True, leaked=True) == "leakage"
+    assert classify_outcome("partial_answer", "full_answer", answer_correct=True, leaked=False) == "wrong_answer"
+    assert classify_actual_outcome("Tôi trả lời được một phần; phần còn lại chưa đủ dữ kiện.") == "partial_answer"
+    assert classify_actual_outcome("Bạn muốn so sánh với phiên bản nào? Vui lòng chỉ định.") == "clarification_required"
+    assert summarize_outcomes([
+        {"expected": "full_answer", "actual": "full_answer", "answer_correct": True, "legacy_admin_bypass": True}
+    ])["legacy_admin_exception"] == 1
 
 
 def test_benchmark_accepts_done_trace_stage_contract_and_safe_trace_jsonl(tmp_path):
@@ -205,3 +217,16 @@ def test_benchmark_accepts_done_trace_stage_contract_and_safe_trace_jsonl(tmp_pa
     assert stages == {"dense_retrieval": [9.0], "rrf_grouping": [3.0]}
     assert metadata["correlation"] == "time_window_only"
     assert "t1" not in json.dumps(metadata)
+
+
+def test_crag_rollout_gate_blocks_wrong_answers_leakage_and_excess_cost():
+    baseline_eval = {"outcome_confusion": {"wrong_refusal": 5, "wrong_answer": 1, "leakage": 0}}
+    candidate_eval = {"outcome_confusion": {"wrong_refusal": 3, "wrong_answer": 1, "leakage": 0}}
+    baseline_trace = {"system_metrics": {"latency_p95_ms": 1000, "estimated_cost": 1.0, "correction_rate": 0.0, "repair_rate": 0.0}}
+    candidate_trace = {"system_metrics": {"latency_p95_ms": 1200, "estimated_cost": 1.2, "correction_rate": 0.2, "repair_rate": 0.1}}
+
+    report = crag_gate.compare_reports(baseline_eval, candidate_eval, baseline_trace, candidate_trace)
+    assert report["passed"] is True
+
+    candidate_eval["outcome_confusion"]["wrong_answer"] = 2
+    assert crag_gate.compare_reports(baseline_eval, candidate_eval, baseline_trace, candidate_trace)["passed"] is False

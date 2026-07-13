@@ -1,6 +1,6 @@
 # Review `doichieukientruc.docx` đối chiếu source hiện tại
 
-Ngày review: 2026-07-13  
+Ngày review: 2026-07-13
 Nguồn chính: source code và `logs/rag_trace.jsonl` trong checkout hiện tại. Không quét `chat_env`, `chat-ui/node_modules`, `chat-ui/.next`.
 
 ## Kết luận

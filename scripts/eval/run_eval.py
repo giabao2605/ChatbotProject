@@ -3,29 +3,40 @@ import os
 import sys
 import time
 from collections import defaultdict
+from pathlib import Path
 
 os.environ.setdefault("RAG_EXECUTION_CONTEXT", "evaluation")
 
-# Them thu muc goc vao sys.path de import duoc rag_logic
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add the source package when the script is run directly from the repository.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
 from mech_chatbot.rag.service import chat_with_rag, extract_search_intent
 from mech_chatbot.config.logging import logger
-from mech_chatbot.evaluation.outcomes import REFUSAL_OUTCOMES, expected_outcome, summarize_outcomes
+from mech_chatbot.evaluation.outcomes import (
+    REFUSAL_OUTCOMES,
+    classify_actual_outcome,
+    expected_outcome,
+    summarize_outcomes,
+)
 
 def run_evaluation():
-    golden_set_file = os.path.join(os.path.dirname(__file__), "golden_set_datagoc_real.jsonl")
+    golden_set_files = [
+        os.path.join(os.path.dirname(__file__), "golden_set_datagoc_real.jsonl"),
+        os.path.join(os.path.dirname(__file__), "golden_set_refusal_grounding.jsonl"),
+    ]
     output_file = os.path.join(os.path.dirname(__file__), "eval_report.md")
+    json_output_file = os.path.join(os.path.dirname(__file__), "eval_report.json")
     
-    if not os.path.exists(golden_set_file):
-        print(f"Khong tim thay file {golden_set_file}")
-        return
-
     test_cases = []
-    with open(golden_set_file, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                test_cases.append(json.loads(line))
+    for golden_set_file in golden_set_files:
+        if not os.path.exists(golden_set_file):
+            print(f"Khong tim thay file {golden_set_file}")
+            return
+        with open(golden_set_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    test_cases.append(json.loads(line))
 
     print("BAT DAU CHAY EVALUATION RAG... (vui long doi, ket qua se duoc luu vao file eval_report.md)")
 
@@ -44,6 +55,7 @@ def run_evaluation():
     
     level_stats = defaultdict(lambda: {"total": 0, "pass": 0})
     outcome_rows = []
+    latencies = []
 
     with open(output_file, "w", encoding="utf-8") as out:
         out.write("#  Kết Quả Đánh Giá RAG Pipeline (Phase 4)\n\n")
@@ -99,6 +111,7 @@ def run_evaluation():
                 
                 latency = time.time() - start_time
                 metrics["total_latency"] += latency
+                latencies.append(latency)
                 
                 bot_answer_lower = bot_answer.lower()
                 ref_text_lower = (ref_text or "").lower()
@@ -119,17 +132,8 @@ def run_evaluation():
                 if keywords_passed: metrics["keyword_pass"] += 1
                 
                 # Check refusal
-                refusal_keywords = ["không ghi thông tin", "tài liệu hiện tại không", "từ chối", "không đủ", "thiếu dữ kiện", "không tự ước lượng"]
-                actual_refused = any(rk in bot_answer_lower for rk in refusal_keywords)
-                access_denied = any(
-                    marker in bot_answer_lower
-                    for marker in ["chưa đủ quyền", "access request", "protected by access control"]
-                )
-                actual_case_outcome = (
-                    "access_denied" if actual_refused and access_denied
-                    else "insufficient_evidence" if actual_refused
-                    else "full_answer"
-                )
+                actual_case_outcome = classify_actual_outcome(bot_answer)
+                actual_refused = actual_case_outcome in REFUSAL_OUTCOMES
                 refusal_passed = (should_refuse == actual_refused)
                 if refusal_passed: metrics["refusal_pass"] += 1
                 
@@ -173,7 +177,12 @@ def run_evaluation():
                         "expected": expected_case_outcome,
                         "actual": actual_case_outcome,
                         "answer_correct": is_pass,
-                        "leaked": not forbidden_passed,
+                        "leaked": not forbidden_passed and "admin" not in {
+                            str(role).lower() for role in (user_roles or [])
+                        },
+                        "legacy_admin_bypass": "admin" in {
+                            str(role).lower() for role in (user_roles or [])
+                        },
                     }
                 )
                 
@@ -258,6 +267,28 @@ def run_evaluation():
                 )
             else:
                 out.write(f"- **{lvl}**: Pass {st['pass']}/{st['total']} ({rate:.1f}%)\n")
+
+    ordered_latencies = sorted(latencies)
+    def percentile(ratio):
+        if not ordered_latencies:
+            return None
+        index = min(len(ordered_latencies) - 1, max(0, int(len(ordered_latencies) * ratio + 0.999999) - 1))
+        return round(ordered_latencies[index] * 1000, 2)
+
+    with open(json_output_file, "w", encoding="utf-8") as json_out:
+        json.dump(
+            {
+                "schema": "rag-labeled-eval-v1",
+                "manifest_files": [os.path.abspath(path) for path in golden_set_files],
+                "total_cases": total_tests,
+                "outcome_confusion": summarize_outcomes(outcome_rows),
+                "latency_p50_ms": percentile(0.50),
+                "latency_p95_ms": percentile(0.95),
+            },
+            json_out,
+            ensure_ascii=False,
+            indent=2,
+        )
 
     print(f"\nDa hoan tat test. Pass {passed_tests}/{total_tests}. Vui long mo file scripts/eval_report.md de xem ket qua chi tiet.")
     

@@ -618,12 +618,11 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     crag_enabled = env_bool("RAG_CRAG_ENABLED", False)
     if retrieved_docs and crag_enabled and not skip_retrieval:
         preliminary_context = _assemble_context(retrieved_docs, user_question)
-        coverage_reason = heuristic_missing_evidence_reason(user_question, preliminary_context)
-        coverage_decision = EvidenceDecision(
-            EvidenceState.AMBIGUOUS if coverage_reason else EvidenceState.SUFFICIENT,
-            reason=coverage_reason or "",
-            stage="heuristic",
-            telemetry_status="heuristic_block" if coverage_reason else "heuristic_pass",
+        coverage_decision = evaluate_answerability(
+            user_question,
+            preliminary_context,
+            docs=retrieved_docs,
+            trace_id=trace_id,
         )
         if should_attempt_correction(
             coverage_decision, attempts=correction_attempts, enabled=crag_enabled
@@ -635,7 +634,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 rewrite_prompt = (
                     "Rewrite this internal-document search query once to improve evidence recall. "
                     "Keep every technical code and do not add facts. Return only the query.\n\n"
-                    f"Question: {effective_question}\nMissing evidence: {coverage_reason}"
+                    f"Question: {effective_question}\nMissing evidence: {coverage_decision.reason}"
                 )
                 rewritten = cohere_invoke(
                     [HumanMessage(content=rewrite_prompt)],

@@ -65,6 +65,34 @@ def _env_int(name, default):
         return max(1, int(default))
 
 
+def _attempt_number_claim_repair(
+    answer,
+    *,
+    context_text,
+    user_question,
+    retrieved_docs,
+    trace_id,
+    enabled,
+):
+    return repair_grounded_answer(
+        answer,
+        context_text=context_text,
+        question=user_question,
+        documents=retrieved_docs,
+        invoke=lambda prompt: cohere_invoke(
+            [HumanMessage(content=prompt)],
+            surface="claim_repair",
+            trace_id=trace_id,
+        ).content,
+        require_citation=(
+            requires_source_citation(user_question)
+            and not os.getenv("RAG_AUTO_SOURCE_CARDS", "true").strip().lower()
+            in {"1", "true", "yes", "on"}
+        ),
+        enabled=enabled,
+    )
+
+
 def _rrf_document_key(doc):
     metadata = getattr(doc, "metadata", {}) or {}
     doc_id = metadata.get("doc_id")
@@ -416,9 +444,10 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
     }
     _stream_attempts = max(1, int(os.getenv("GPT_STREAM_MAX_ATTEMPTS", "3")))
     _strict_realtime = strict_realtime_streaming_enabled(STRICT_ANSWER_MODE)
-    if os.getenv("RAG_CLAIM_REPAIR_ENABLED", "false").strip().lower() in {
+    _claim_repair_enabled = os.getenv("RAG_CLAIM_REPAIR_ENABLED", "false").strip().lower() in {
         "1", "true", "yes", "on"
-    }:
+    }
+    if _claim_repair_enabled:
         # Repair requires full-answer holdback; never release a violating draft.
         _strict_realtime = False
 
@@ -512,23 +541,13 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                     strict_mode=is_high_risk_question(user_question),
                 ):
                     repair_started = time.time()
-                    repair_result = repair_grounded_answer(
+                    repair_result = _attempt_number_claim_repair(
                         answer,
                         context_text=context_text,
-                        question=user_question,
-                        documents=retrieved_docs,
-                        invoke=lambda prompt: cohere_invoke(
-                            [HumanMessage(content=prompt)],
-                            surface="claim_repair",
-                            trace_id=trace_id,
-                        ).content,
-                        require_citation=(
-                            requires_source_citation(user_question)
-                            and not os.getenv("RAG_AUTO_SOURCE_CARDS", "true").strip().lower()
-                            in {"1", "true", "yes", "on"}
-                        ),
-                        enabled=os.getenv("RAG_CLAIM_REPAIR_ENABLED", "false").strip().lower()
-                        in {"1", "true", "yes", "on"},
+                        user_question=user_question,
+                        retrieved_docs=retrieved_docs,
+                        trace_id=trace_id,
+                        enabled=_claim_repair_enabled,
                     )
                     log_trace(
                         "claim_repair",

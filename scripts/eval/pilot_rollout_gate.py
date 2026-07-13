@@ -5,7 +5,7 @@ generates questions, expected answers, or pass/fail results.  Business owners
 must supply the real JSONL evaluation corpus and name the pilot departments
 being considered.
 
-Schema v4 contract for each JSONL record:
+Schema v5 contract for each JSONL record:
 
 * department, question, scenario
 * expected document or file
@@ -13,7 +13,7 @@ Schema v4 contract for each JSONL record:
 * version policy
 * expected keywords
 * security expectation
-* refusal expectation
+* expected outcome, or a legacy refusal expectation boolean
 
 For a deliberate refusal case, the document/file and page/section fields must
 still be present, but may be explicitly ``null`` when there is no permitted
@@ -25,9 +25,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
+
+_SRC = Path(__file__).resolve().parents[2] / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from mech_chatbot.evaluation.outcomes import REFUSAL_OUTCOMES, VALID_OUTCOMES
 
 
 MANIFEST_SCHEMA_VERSION = "pilot-eval-v5"
@@ -47,14 +54,6 @@ _VERSION_POLICY_FIELDS = ("expected_version_policy", "version_policy")
 _KEYWORD_FIELDS = ("expected_keywords", "keywords")
 _SECURITY_FIELDS = ("security_expectation", "expected_security")
 _REFUSAL_FIELDS = ("refusal_expectation", "should_refuse", "expected_refusal")
-EXPECTED_OUTCOMES = {
-    "full_answer",
-    "partial_answer",
-    "clarification_required",
-    "insufficient_evidence",
-    "access_denied",
-}
-REFUSAL_OUTCOMES = {"insufficient_evidence", "access_denied"}
 
 
 def _has_meaningful_value(value: Any) -> bool:
@@ -92,14 +91,14 @@ def _validate_keywords(value: Any, *, line_number: int, refusal_expected: bool) 
 
 
 def _validate_record(record: dict[str, Any], line_number: int) -> dict[str, Any]:
-    """Validate one v4 record and return only non-sensitive summary metadata."""
+    """Validate one v5 record and return only non-sensitive summary metadata."""
     department = _require_nonempty_text(record, "department", line_number)
     _require_nonempty_text(record, "question", line_number)
     scenario = _require_nonempty_text(record, "scenario", line_number)
 
     expected_outcome = record.get("expected_outcome")
     if expected_outcome is not None:
-        if expected_outcome not in EXPECTED_OUTCOMES:
+        if expected_outcome not in VALID_OUTCOMES:
             raise ValueError(f"Dong {line_number}: expected_outcome khong hop le")
         refusal_expected = expected_outcome in REFUSAL_OUTCOMES
     else:
@@ -146,7 +145,7 @@ def _validate_record(record: dict[str, Any], line_number: int) -> dict[str, Any]
 
 
 def read_questions(path: Path) -> list[dict[str, Any]]:
-    """Read and strictly validate a v4 JSONL manifest without exposing prompts."""
+    """Read and strictly validate a v5 JSONL manifest without exposing prompts."""
     questions: list[dict[str, Any]] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         stripped = line.strip()
