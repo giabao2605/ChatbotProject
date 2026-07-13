@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import re
 import unicodedata
 
 
@@ -50,6 +51,16 @@ def classify_actual_outcome(answer: str) -> str:
         "khong ghi thong tin", "tai lieu hien tai khong", "khong cong bo",
         "khong du", "thieu du kien", "khong tu uoc luong", "khong the ho tro yeu cau nay",
     ]):
+        return "insufficient_evidence"
+    if re.fullmatch(
+        r"tai lieu .* khong co tong so luong bom duoc phe duyet trong tai lieu nay\."
+        r"\s*(?:\[nguon:[^\]]+\])?",
+        folded.strip(),
+    ) or re.fullmatch(
+        r"rat tiec,\s*(?:minh|toi) khong tim thay ma so .+ nao trong he thong ban ve hien tai\."
+        r"\s*vui long kiem tra lai ma hoac mo ta ro hon\.",
+        folded.strip(),
+    ):
         return "insufficient_evidence"
     return "full_answer"
 

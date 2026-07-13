@@ -213,6 +213,20 @@ def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
     assert classify_actual_outcome("Tôi trả lời được một phần; phần còn lại chưa đủ dữ kiện.") == "partial_answer"
     assert classify_actual_outcome("Bạn muốn so sánh với phiên bản nào? Vui lòng chỉ định.") == "clarification_required"
     assert classify_actual_outcome("Tài liệu không công bố chi phí hoặc đơn giá.") == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Tài liệu CRAG-EVAL-BOM-001 không có tổng số lượng BOM được phê duyệt trong tài liệu này. "
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Rất tiếc, mình không tìm thấy mã số 'secret-001' nào trong hệ thống bản vẽ hiện tại. "
+        "Vui lòng kiểm tra lại mã hoặc mô tả rõ hơn."
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Tài liệu không có tổng số lượng BOM được phê duyệt, nhưng tổng tính từ BOM là 999."
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Mình không tìm thấy mã số cũ; mã thay thế là CRAG-EVAL-NEW-001."
+    ) == "full_answer"
     assert classify_actual_outcome("Mình không thể hỗ trợ yêu cầu này do chính sách truy cập.") == "access_denied"
     assert summarize_outcomes([
         {"expected": "full_answer", "actual": "full_answer", "answer_correct": True, "legacy_admin_bypass": True}
