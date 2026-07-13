@@ -65,3 +65,74 @@ def test_claim_repair_must_preserve_complete_rendered_citation():
 
     assert result.accepted is False
     assert result.violation_reason == "citation"
+
+
+def test_claim_repair_rejects_new_source_id_when_source_cards_are_deferred():
+    result = repair_grounded_answer(
+        "Chi phí 2500 USD.",
+        context_text="Chi phí 1500 USD.",
+        question="Chi phí bao nhiêu?",
+        documents=[_doc()],
+        invoke=lambda _prompt: (
+            "Chi phí 1500 USD. "
+            "[Nguồn: fake.pdf, Trang 9, Version 99, SourceID D999P9]"
+        ),
+        require_citation=False,
+        enabled=True,
+    )
+
+    assert result.accepted is False
+    assert result.violation_reason == "citation"
+
+
+def test_claim_repair_rejects_wrong_version_for_allowed_source_id():
+    result = repair_grounded_answer(
+        "Chi phí 2500 USD.",
+        context_text="Chi phí 1500 USD.",
+        question="Chi phí bao nhiêu?",
+        documents=[_doc()],
+        invoke=lambda _prompt: (
+            "Chi phí 1500 USD. "
+            "[Nguồn: bom.pdf, Trang 3, Version 99, SourceID D7P3]"
+        ),
+        require_citation=False,
+        enabled=True,
+    )
+
+    assert result.accepted is False
+    assert result.violation_reason == "citation"
+
+
+def test_claim_repair_rejects_invented_filename_for_allowed_source_id():
+    result = repair_grounded_answer(
+        "Chi phí 2500 USD.",
+        context_text="Chi phí 1500 USD.",
+        question="Chi phí bao nhiêu?",
+        documents=[_doc()],
+        invoke=lambda _prompt: (
+            "Chi phí 1500 USD. "
+            "[Nguồn: fake.pdf, Trang 3, Version 1, SourceID D7P3]"
+        ),
+        require_citation=False,
+        enabled=True,
+    )
+
+    assert result.accepted is False
+    assert result.violation_reason == "citation"
+
+
+def test_claim_repair_rejects_source_card_without_source_id_when_deferred():
+    result = repair_grounded_answer(
+        "Chi phí 2500 USD.",
+        context_text="Chi phí 1500 USD.",
+        question="Chi phí bao nhiêu?",
+        documents=[_doc()],
+        invoke=lambda _prompt: (
+            "Chi phí 1500 USD. [Nguồn: fake.pdf, Trang 9, Version 99]"
+        ),
+        require_citation=False,
+        enabled=True,
+    )
+
+    assert result.accepted is False
+    assert result.violation_reason == "citation"

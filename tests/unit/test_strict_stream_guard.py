@@ -8,7 +8,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled, ExternalProcessingDenied
 
 
 pytestmark = pytest.mark.unit
@@ -115,3 +115,26 @@ def test_normal_policy_question_does_not_apply_global_numeric_holdback(monkeypat
 
     assert list(_generate(module, question="Quy định hiện hành là gì?")) == ["Quy định là 20."]
     assert seen_strict_values == [False]
+
+
+def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    document = SimpleNamespace(
+        metadata={
+            "doc_id": 7,
+            "trang_so": 3,
+            "version_no": 1,
+            "security_level": "confidential",
+            "external_processing_policy": "internal_only",
+        }
+    )
+
+    with pytest.raises(ExternalProcessingDenied, match="internal_only"):
+        module._attempt_number_claim_repair(
+            "Chi phí 2500 USD.",
+            context_text="Chi phí 1500 USD.",
+            user_question="Chi phí bao nhiêu?",
+            retrieved_docs=[document],
+            trace_id="claim-repair-policy-test",
+            enabled=True,
+        )

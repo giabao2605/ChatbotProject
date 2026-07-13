@@ -74,6 +74,9 @@ def _attempt_number_claim_repair(
     trace_id,
     enabled,
 ):
+    document_metadata = [
+        getattr(document, "metadata", {}) or {} for document in (retrieved_docs or [])
+    ]
     return repair_grounded_answer(
         answer,
         context_text=context_text,
@@ -83,6 +86,14 @@ def _attempt_number_claim_repair(
             [HumanMessage(content=prompt)],
             surface="claim_repair",
             trace_id=trace_id,
+            doc_ids=[metadata.get("doc_id") for metadata in document_metadata],
+            security_levels=[
+                metadata.get("security_level") for metadata in document_metadata
+            ],
+            policies=[
+                metadata.get("external_processing_policy") or "all_external"
+                for metadata in document_metadata
+            ],
         ).content,
         require_citation=(
             requires_source_citation(user_question)

@@ -7,6 +7,7 @@ import re
 from typing import Callable, Iterable
 
 from mech_chatbot.rag.answer_checks import (
+    extract_source_ids,
     has_unsupported_codes,
     has_unsupported_materials,
     has_unsupported_units_symbols,
@@ -22,6 +23,58 @@ class RepairResult:
     accepted: bool
     violation_reason: str = ""
     estimated_cost: float = 0.0
+
+
+def _citations_match_documents(answer, documents):
+    allowed = {}
+    for document in documents or []:
+        metadata = getattr(document, "metadata", {}) or {}
+        try:
+            doc_id = int(metadata.get("doc_id"))
+            page = int(metadata.get("trang_so"))
+            version = int(metadata.get("version_no"))
+            filename = str(metadata.get("file_goc") or "").strip().casefold()
+        except (TypeError, ValueError):
+            continue
+        if page > 0 and version > 0 and filename:
+            allowed.setdefault(f"D{doc_id}P{page}", set()).add((version, filename))
+
+    cards = re.findall(
+        r"\[(?:Ngu[oồ]n|Source)\s*:[^\]]+\]",
+        str(answer or ""),
+        flags=re.IGNORECASE,
+    )
+    answer_source_ids = extract_source_ids(answer)
+    if not answer_source_ids:
+        return not cards
+    if not answer_source_ids.issubset(set(allowed)):
+        return False
+
+    card_source_ids = set()
+    for card in cards:
+        source_ids = extract_source_ids(card)
+        filename_match = re.search(
+            r"\[(?:Ngu[oồ]n|Source)\s*:\s*([^,\]]+)", card, re.IGNORECASE
+        )
+        page_match = re.search(r"(?:Trang|Page)\s*(?:s[oố]|#|:)?\s*(\d+)", card, re.IGNORECASE)
+        version_match = re.search(r"(?:Version|Ver|V)\s*[:#-]?\s*(\d+)", card, re.IGNORECASE)
+        if len(source_ids) != 1 or not filename_match or not page_match or not version_match:
+            return False
+        source_id = next(iter(source_ids))
+        source_match = re.fullmatch(r"D(\d+)P(\d+)", source_id)
+        if source_match is None:
+            return False
+        cited_page = int(page_match.group(1))
+        source_page = int(source_match.group(2))
+        cited_version = int(version_match.group(1))
+        cited_filename = filename_match.group(1).strip().casefold()
+        if cited_page != source_page or (
+            cited_version,
+            cited_filename,
+        ) not in allowed.get(source_id, set()):
+            return False
+        card_source_ids.add(source_id)
+    return answer_source_ids == card_source_ids
 
 
 def _validate(
@@ -46,6 +99,8 @@ def _validate(
     if require_citation and not has_valid_source_citation(
         answer, documents, require_version=True
     ):
+        return "citation"
+    if not _citations_match_documents(answer, documents):
         return "citation"
     answer_source_ids = set(re.findall(r"\bD\d+P\d+\b", answer, flags=re.IGNORECASE))
     if required_source_ids and not {value.upper() for value in required_source_ids}.issubset(

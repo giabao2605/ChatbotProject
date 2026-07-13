@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -165,6 +166,39 @@ def test_bootstrap_profile_requires_explicit_local_development_flag(monkeypatch)
     assert bootstrap is not None
     assert bootstrap.review_expires_at is None
     assert bootstrap.risk_acceptance_ref == "notion:92459b78-3e54-4c47-8322-d44ab2b65664"
+
+
+def test_proxyllm_bootstrap_profile_allows_governed_claim_repair(monkeypatch):
+    monkeypatch.setattr(external_ai, "_load_managed_provider_profile", lambda _provider: None)
+    monkeypatch.setenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", "true")
+    monkeypatch.setenv("APP_ENV", "development")
+
+    profile = external_ai.get_external_ai_provider_profile("proxyllm")
+
+    assert profile is not None
+    client = external_ai.ExternalAIClient("proxyllm", profile=profile)
+    spec = client.prepare_call(model="model-test", surface="claim_repair")
+    assert spec.surface == "claim_repair"
+    assert spec.policy_version == "risk-accepted-v4-claim-repair"
+
+
+def test_claim_repair_profile_migration_is_additive_and_audited():
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "database"
+        / "migrations"
+        / "V0035__allow_governed_claim_repair_surface.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "JSON_MODIFY" in migration
+    assert "claim_repair" in migration
+    assert "external_ai_claim_repair_surface_enabled" in migration
+    assert "raw prompt" not in migration.lower()
+    assert "Expected exactly one proxyllm profile" in migration
+    assert "must be a JSON array" in migration
+    verification = migration.index("claim_repair surface update could not be verified")
+    audit = migration.index("external_ai_claim_repair_surface_enabled")
+    assert verification < audit
 
 
 def test_audit_unavailable_blocks_before_external_call_body(monkeypatch):

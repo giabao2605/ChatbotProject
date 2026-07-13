@@ -131,6 +131,7 @@ _DEFAULT_SURFACES = (
     "hyde",
     "interaction_routing",
     "evidence_verification",
+    "claim_repair",
     "generation",
     "vision_ocr",
 )
@@ -148,7 +149,7 @@ def _fallback_provider_profile(provider: str) -> ExternalAIProviderProfile | Non
             secret_reference="env:PROXYLLM_API_KEY",
             allowed_surfaces=_DEFAULT_SURFACES,
             retention_mode="provider_default_no_opt_out",
-            policy_version="risk-accepted-v3",
+            policy_version="risk-accepted-v4-claim-repair",
             approved_by="documented-risk-acceptance",
             risk_acceptance_ref="notion:92459b78-3e54-4c47-8322-d44ab2b65664",
             # Local bootstrap is deliberately not a synthetic 90-day review.
