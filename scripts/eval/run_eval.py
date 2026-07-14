@@ -269,6 +269,7 @@ def run_evaluation(
                 "provider_retries": int(generation_metrics.get("provider_retries") or 0),
                 "correction_count": int(debug.get("correction_count") or 0),
                 "repair_count": int(generation_metrics.get("repair_count") or debug.get("repair_count") or 0),
+                "calculation_count": int(generation_metrics.get("calculation_count") or 0),
                 "planner_count": int(debug.get("planner_count") or 0),
                 "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
@@ -314,7 +315,10 @@ def run_evaluation(
             "provider_retries": sum(row.get("provider_retries", 0) for row in rows if row.get("pipeline_variant", "default") == variant),
             "budget_counts": {
                 name: sum(row.get(name, 0) for row in rows if row.get("pipeline_variant", "default") == variant)
-                for name in ("correction_count", "repair_count", "planner_count", "graph_traversal_count")
+                for name in (
+                    "correction_count", "repair_count", "calculation_count",
+                    "planner_count", "graph_traversal_count",
+                )
             },
         }
     evaluation_groups = {}
@@ -365,7 +369,10 @@ def run_evaluation(
         "provider_retries": sum(row.get("provider_retries", 0) for row in rows),
         "budget_counts": {
             name: sum(row.get(name, 0) for row in rows)
-            for name in ("correction_count", "repair_count", "planner_count", "graph_traversal_count")
+            for name in (
+                "correction_count", "repair_count", "calculation_count",
+                "planner_count", "graph_traversal_count",
+            )
         },
         "levels": dict(levels), "cases": rows,
     }

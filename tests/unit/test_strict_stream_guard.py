@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from decimal import Decimal
 import importlib.util
 from pathlib import Path
 import sys
@@ -9,6 +10,12 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled, ExternalProcessingDenied
+from mech_chatbot.rag.grounded_math import (
+    CalculationPlan,
+    GroundedFact,
+    derive_claim,
+    make_calculation_provenance,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -50,8 +57,8 @@ def _no_network_audit(**_kwargs):
     yield None
 
 
-def _generate(module, *, cancel_event=None, question="Gia tri la bao nhieu?"):
-    docs = [SimpleNamespace(metadata={"doc_id": 7, "security_level": "internal"})]
+def _generate(module, *, cancel_event=None, question="Gia tri la bao nhieu?", docs=None):
+    docs = docs or [SimpleNamespace(metadata={"doc_id": 7, "security_level": "internal"})]
     return module._generate(
         context_text="Tai lieu chi ghi gia tri 10.",
         user_question=question,
@@ -138,3 +145,89 @@ def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch):
             trace_id="claim-repair-policy-test",
             enabled=True,
         )
+
+
+def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    monkeypatch.setenv("RAG_GROUNDED_MATH_ENABLED", "true")
+    monkeypatch.setattr(
+        module,
+        "get_cohere_llm",
+        lambda: (_ for _ in ()).throw(AssertionError("grounded math must not initialize LLM")),
+    )
+    plan = CalculationPlan(
+        "add",
+        (
+            GroundedFact(Decimal("2"), "cái", 41, 3, 12, "BOM-1", "PART-A"),
+            GroundedFact(Decimal("5"), "cái", 41, 4, 12, "BOM-2", "PART-B"),
+        ),
+    )
+    docs = [
+        SimpleNamespace(metadata={
+            "doc_id": 41,
+            "trang_so": 3,
+            "version_no": 12,
+            "file_goc": "bom-v12.pdf",
+            "security_level": "internal",
+            "calculation_provenance": make_calculation_provenance(plan, derive_claim(plan)),
+        }),
+        SimpleNamespace(metadata={
+            "doc_id": 41,
+            "trang_so": 4,
+            "version_no": 12,
+            "file_goc": "bom-v12.pdf",
+            "security_level": "internal",
+        }),
+    ]
+
+    emitted = list(_generate(module, question="Cộng PART-A và PART-B", docs=docs))
+
+    assert emitted == [
+        "Kết quả tính có kiểm soát: 7 cái. Công thức: 2 + 5 = 7 cái. "
+        "[Nguồn: bom-v12.pdf, Trang 3, Version 12, SourceID D41P3] "
+        "[Nguồn: bom-v12.pdf, Trang 4, Version 12, SourceID D41P4]"
+    ]
+
+    cancelled = threading.Event()
+    cancelled.set()
+    with pytest.raises(ExternalAICallCancelled):
+        list(_generate(
+            module,
+            question="Cộng PART-A và PART-B",
+            docs=docs,
+            cancel_event=cancelled,
+        ))
+
+
+def test_grounded_math_flag_defaults_to_normal_generation_path(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    monkeypatch.delenv("RAG_GROUNDED_MATH_ENABLED", raising=False)
+    initialized = []
+    _prepare(module, monkeypatch, _FakeChain(["Normal generation path."]))
+    monkeypatch.setattr(
+        module,
+        "get_cohere_llm",
+        lambda: initialized.append(True) or object(),
+    )
+    monkeypatch.setattr(
+        module,
+        "has_unsupported_numbers",
+        lambda *_args, **_kwargs: False,
+    )
+    plan = CalculationPlan(
+        "sum",
+        (GroundedFact(Decimal("2"), "cái", 41, 3, 12, "BOM-1", "PART-A"),),
+    )
+    docs = [SimpleNamespace(metadata={
+        "doc_id": 41,
+        "trang_so": 3,
+        "version_no": 12,
+        "file_goc": "bom-v12.pdf",
+        "security_level": "internal",
+        "calculation_provenance": make_calculation_provenance(plan, derive_claim(plan)),
+    })]
+
+    emitted = list(_generate(module, question="Tổng BOM là bao nhiêu?", docs=docs))
+
+    assert emitted == ["Normal generation path."]
+    assert initialized == [True]

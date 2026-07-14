@@ -35,6 +35,10 @@ from mech_chatbot.rag.evidence_gate import (
     make_insufficient_evidence_message,
 )
 from mech_chatbot.rag.claim_repair import repair_grounded_answer
+from mech_chatbot.rag.grounded_math import (
+    render_grounded_calculation_answer,
+    validate_grounded_calculation_answer,
+)
 from mech_chatbot.rag.bootstrap import STRICT_ANSWER_MODE
 from mech_chatbot.rag.streaming_policy import strict_realtime_streaming_enabled
 from mech_chatbot.rag.prompt import _build_prompt_template
@@ -428,6 +432,53 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
     metrics.setdefault("estimated_cost", 0.0)
     metrics.setdefault("provider_retries", 0)
     metrics.setdefault("repair_count", 0)
+    calculation_docs = [
+        document for document in retrieved_docs
+        if isinstance((getattr(document, "metadata", {}) or {}).get("calculation_provenance"), dict)
+    ]
+    grounded_math_enabled = os.getenv("RAG_GROUNDED_MATH_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "y", "on",
+    }
+    if grounded_math_enabled and calculation_docs:
+        answer = render_grounded_calculation_answer(
+            retrieved_docs,
+            language=response_language,
+        )
+        violation = (
+            validate_grounded_calculation_answer(answer, retrieved_docs)
+            if answer is not None else "missing_calculation_citation"
+        )
+        if violation:
+            answer = make_insufficient_evidence_message(
+                user_question,
+                f"grounded calculation failed closed: {violation}",
+                lang=response_language,
+            )
+        metrics["calculation_count"] = len(calculation_docs)
+        metrics["output_tokens"] += len(answer) // 4
+
+        def grounded_math_stream():
+            if cancel_event is not None and cancel_event.is_set():
+                raise ExternalAICallCancelled("RAG stream da bi client huy")
+            yield answer
+            log_trace(
+                "grounded_math_generation",
+                trace_id,
+                calculations=len(calculation_docs),
+                validation_status="blocked" if violation else "passed",
+                doc_ids=[document.metadata.get("doc_id") for document in calculation_docs],
+            )
+            rag_end = {
+                "final_latency_ms": int((time.time() - t_start) * 1000),
+                "refusal": bool(violation),
+                "docs_count": len(retrieved_docs),
+                "doc_ids": [document.metadata.get("doc_id") for document in retrieved_docs],
+            }
+            if violation:
+                rag_end["refusal_reason"] = "grounded_math_post_check"
+            log_trace("rag_end", trace_id, **rag_end)
+
+        return grounded_math_stream()
     # GD3: chon prompt + gate guard co khi theo ngu canh truy hoi
     _ctx_is_mech = _context_is_mechanical(retrieved_docs, new_part_ids)
     _ctx_domain = _context_domain(retrieved_docs, new_part_ids)

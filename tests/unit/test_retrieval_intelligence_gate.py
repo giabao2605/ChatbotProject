@@ -49,3 +49,15 @@ def test_decomposition_gate_requires_complex_gain_and_zero_simple_planner_calls(
     result = gate.compare("query_decomposition", baseline, candidate, {"simple_planner_calls": 0})
 
     assert result["passed"] is True
+
+
+def test_grounded_math_gate_uses_observed_per_query_calculation_budget():
+    gate = _module()
+    baseline = report(groups={"grounded_math": {"pass_rate": 0.0}})
+    candidate = report(groups={"grounded_math": {"pass_rate": 1.0}})
+    candidate["cases"] = [{"calculation_count": 2}]
+
+    result = gate.compare("grounded_math", baseline, candidate)
+
+    assert result["checks"]["calculation_budget"] is False
+    assert result["passed"] is False

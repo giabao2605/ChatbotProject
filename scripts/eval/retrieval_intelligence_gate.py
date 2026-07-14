@@ -29,10 +29,14 @@ def compare(stage, baseline, candidate, metadata=None):
         <= int(baseline.get("provider_retries") or 0),
     }
     if stage == "grounded_math":
+        max_calculations = max(
+            (int(row.get("calculation_count") or 0) for row in candidate.get("cases", [])),
+            default=0,
+        )
         checks = {
             **common,
             "grounded_math_cases_passed": _group_rate(candidate, "grounded_math") == 1.0,
-            "calculation_budget": int(metadata.get("max_calculations_per_query", 1)) <= 1,
+            "calculation_budget": max_calculations <= 1,
         }
         limits = {"max_calculations_per_query": 1}
     elif stage == "late_interaction":

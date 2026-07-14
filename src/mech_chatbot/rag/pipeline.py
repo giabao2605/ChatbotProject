@@ -756,26 +756,33 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                                 value=Decimal(str(sl)), unit=str(unit or "").strip(),
                                 doc_id=int(doc_id), page=int(page_no), version=int(version_no),
                                 source_id=f"BOM-{int(bom_row_id)}",
+                                label=str(ma or "").strip(),
                             ))
                         except (ValueError, TypeError, ArithmeticError):
                             pass
 
-                normalized_math_question = user_question.lower()
-                wants_total = any(
-                    cue in normalized_math_question
-                    for cue in ("tổng", "tong", "total", "cộng", "cong")
-                )
                 calculation_claims = {}
-                if wants_total and env_bool("RAG_GROUNDED_MATH_ENABLED", False):
-                    from mech_chatbot.rag.grounded_math import CalculationPlan, derive_claim
+                if env_bool("RAG_GROUNDED_MATH_ENABLED", False):
+                    from mech_chatbot.rag.grounded_math import (
+                        build_calculation_plan,
+                        derive_claim,
+                    )
                     facts_by_document = {}
                     for (source_doc_id, _), source in bom_by_source.items():
                         claim_key = (source_doc_id, int(source["version_no"]))
                         facts_by_document.setdefault(claim_key, []).extend(source["facts"])
-                    calculation_claims = {
-                        key: derive_claim(CalculationPlan("sum", tuple(facts)))
-                        for key, facts in facts_by_document.items()
-                    }
+                    all_facts = tuple(
+                        fact
+                        for facts in facts_by_document.values()
+                        for fact in facts
+                    )
+                    plan = build_calculation_plan(user_question, all_facts)
+                    if plan is not None and facts_by_document:
+                        operand_keys = tuple(dict.fromkeys(
+                            (fact.doc_id, fact.version) for fact in plan.operands
+                        ))
+                        claim_key = operand_keys[0] if operand_keys else next(iter(facts_by_document))
+                        calculation_claims[claim_key] = (plan, derive_claim(plan))
 
                 bom_docs = []
                 emitted_calculations = set()
@@ -788,21 +795,19 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     claim_key = (doc_id, int(source["version_no"]))
                     if claim_key in calculation_claims and claim_key not in emitted_calculations:
                         emitted_calculations.add(claim_key)
-                        claim = calculation_claims[claim_key]
+                        plan, claim = calculation_claims[claim_key]
+                        from mech_chatbot.rag.grounded_math import make_calculation_provenance
+                        calculation_provenance = make_calculation_provenance(plan, claim)
                         if claim.status == "valid":
                             qualifier = "xấp xỉ " if claim.approximate else ""
                             bom_text += (
                                 f"\n- Kết quả tính xác định từ các dòng BOM trên: {qualifier}"
                                 f"{claim.display_value} {claim.unit}. Công thức: {claim.formula}."
                             )
-                            calculation_provenance = {
-                                "operation": "sum", "formula": claim.formula,
-                                "source_ids": list(claim.source_ids), "status": claim.status,
-                            }
                         else:
                             bom_text += (
-                                "\n- Không thể tính tổng có kiểm soát cho trang này vì dữ kiện "
-                                f"không hợp lệ ({claim.status}); phải trả lời một phần và không tự suy diễn."
+                                "\n- Tôi trả lời được một phần: không thể hoàn thành phép tính có kiểm soát "
+                                f"vì dữ kiện không hợp lệ ({claim.status}); không tự suy diễn."
                             )
                     bom_docs.append(
                         Document(
