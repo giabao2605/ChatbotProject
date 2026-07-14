@@ -84,6 +84,41 @@ def test_cli_accepts_multiple_manifests():
     assert args.manifest == [Path("one.jsonl"), Path("two.jsonl")]
 
 
+def test_rollout_offline_router_mode_disables_provider_router(monkeypatch):
+    rollout = _load("crag_rollout_router_mode", "scripts/crag_eval/run_rollout.py")
+    monkeypatch.setenv("LLM_ROUTER_ENABLED", "true")
+
+    env = rollout.build_evaluation_environment(enabled=True, router_mode="offline")
+
+    assert env["LLM_ROUTER_ENABLED"] == "false"
+    assert env["SEMANTIC_ROUTER_ENABLED"] == "false"
+    assert env["RAG_EVAL_ROUTER_MODE"] == "offline"
+
+
+def test_rollout_provider_router_mode_preserves_explicit_router_configuration(monkeypatch):
+    rollout = _load("crag_rollout_provider_mode", "scripts/crag_eval/run_rollout.py")
+    monkeypatch.setenv("LLM_ROUTER_ENABLED", "true")
+    monkeypatch.setenv("SEMANTIC_ROUTER_ENABLED", "false")
+
+    env = rollout.build_evaluation_environment(enabled=False, router_mode="provider")
+
+    assert env["LLM_ROUTER_ENABLED"] == "true"
+    assert env["SEMANTIC_ROUTER_ENABLED"] == "false"
+    assert env["RAG_EVAL_ROUTER_MODE"] == "provider"
+
+
+def test_rollout_rejects_dirty_tracked_worktree(monkeypatch):
+    rollout = _load("crag_rollout_clean_tree", "scripts/crag_eval/run_rollout.py")
+    monkeypatch.setattr(
+        rollout.subprocess,
+        "check_output",
+        lambda *args, **kwargs: " M src/mech_chatbot/rag/pipeline.py\n",
+    )
+
+    with pytest.raises(RuntimeError, match="clean tracked worktree"):
+        rollout.require_clean_worktree()
+
+
 def test_preflight_checks_sql_and_qdrant_provenance():
     preflight = _load("crag_preflight", "scripts/crag_eval/preflight.py")
     cases = [_case()]

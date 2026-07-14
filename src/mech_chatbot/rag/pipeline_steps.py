@@ -247,7 +247,7 @@ def _explicit_hybrid_rrf(
         return list(fallback or []), "hybrid_fallback"
 
 
-def _prepare_history(chat_history, conversation_context, response_language):
+def _prepare_history(chat_history, conversation_context, response_language, trace_id=None):
     """BUOC lich su hoi thoai: dung chat_history_str (token-budgeted windowing)
     + tom tat luy tien (KH-3). Tra ve (chat_history_str, history_summary_new,
     summary_covered_new). Tach nguyen van tu chat_with_rag (P0 slice #1).
@@ -314,6 +314,7 @@ def _prepare_history(chat_history, conversation_context, response_language):
                     _history_summary_new = cohere_invoke(
                         [HumanMessage(content=_sum_prompt)],
                         surface="chat_history_summary",
+                        trace_id=trace_id,
                     ).content.strip()
                     _summary_covered_new = len(_ov)
                 except Exception as _e_sum:
@@ -965,7 +966,7 @@ def _route(*, user_question, conversation_context, response_language,
     def _llm_classifier(_t, _ctx=None):
         try:
             from mech_chatbot.rag import route_llm as _route_llm
-            return _route_llm.classify_llm(_t, _ctx)
+            return _route_llm.classify_llm(_t, _ctx, trace_id=trace_id)
         except Exception:
             return None
     _route_started = time.time()
@@ -1034,7 +1035,13 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
     _cc_in = conversation_context or {}
     _active_doc_refs_in = _cc_in.get("active_doc_refs") if _cc_in else None
     t_ctx = time.time()
-    ctx_result = analyze_context(user_question, chat_history, current_part_ids, active_doc_refs=_active_doc_refs_in)
+    ctx_result = analyze_context(
+        user_question,
+        chat_history,
+        current_part_ids,
+        active_doc_refs=_active_doc_refs_in,
+        trace_id=trace_id,
+    )
     context_action = ctx_result["context_action"]
     _ctx_llm_resolved = bool(ctx_result.get("llm_resolved"))
     if context_action in ("switch_topic", "broaden"):
@@ -1096,7 +1103,7 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
         logger.warning(f"[ConvState] resolve_selection loi: {_cse}")
     rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments, max_security_level=max_security_level, allowed_sites=allowed_sites)
     strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data = extract_search_intent(
-        effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel
+        effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel, trace_id=trace_id
     )
 
     log_trace("intent", trace_id,

@@ -193,6 +193,7 @@ def run_evaluation(
             intent = extract_search_intent(
                 case["question"], [], case["user_department"], roles,
                 case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
+                trace_id=trace_id,
             )
             intent_data = intent[-1] if len(intent) == 6 else {}
             actual_policy = (intent_data or {}).get("version_policy", "current_only")
@@ -340,6 +341,9 @@ def run_evaluation(
             "crag": os.environ.get("RAG_CRAG_ENABLED", "false"),
             "claim_repair": os.environ.get("RAG_CLAIM_REPAIR_ENABLED", "false"),
             "semantic_cache": os.environ.get("SEMANTIC_CACHE_ENABLED", "true"),
+            "evaluation_router_mode": os.environ.get("RAG_EVAL_ROUTER_MODE", "provider"),
+            "llm_router": os.environ.get("LLM_ROUTER_ENABLED", "true"),
+            "semantic_router": os.environ.get("SEMANTIC_ROUTER_ENABLED", "true"),
             "grounded_math": os.environ.get("RAG_GROUNDED_MATH_ENABLED", "false"),
             "late_interaction": os.environ.get("RAG_LATE_INTERACTION_ENABLED", "false"),
             "query_decomposition": os.environ.get("RAG_QUERY_DECOMPOSITION_ENABLED", "false"),

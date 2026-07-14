@@ -246,7 +246,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     # P0 slice #1: lich su hoi thoai tach sang pipeline_steps._prepare_history
     chat_history_str, _history_summary_new, _summary_covered_new = _prepare_history(
-        chat_history, conversation_context, response_language
+        chat_history, conversation_context, response_language, trace_id=trace_id
     )
  
     # P0 slice #2: phan tich anh tach sang pipeline_steps._analyze_image

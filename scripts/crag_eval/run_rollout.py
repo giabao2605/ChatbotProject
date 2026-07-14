@@ -24,7 +24,28 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _run(label: str, manifest: Path, output: Path, trace: Path, *, enabled: bool) -> dict:
+def require_clean_worktree() -> None:
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    if status:
+        raise RuntimeError(
+            "CRAG rollout requires a clean tracked worktree so artifact git_sha "
+            "identifies the code that actually ran"
+        )
+
+
+def build_evaluation_environment(*, enabled: bool, router_mode: str) -> dict[str, str]:
+    """Build one controlled evaluation environment without mutating the caller.
+
+    Offline mode bypasses both semantic prototypes and the provider-backed L2
+    router. CRAG fixtures then use the router's safe technical fallback, so the
+    comparison measures CRAG rather than router model or prototype latency.
+    """
+    if router_mode not in {"offline", "provider"}:
+        raise ValueError(f"unsupported router mode: {router_mode}")
     env = os.environ.copy()
     env.update({
         "RAG_EXECUTION_CONTEXT": "evaluation",
@@ -33,7 +54,24 @@ def _run(label: str, manifest: Path, output: Path, trace: Path, *, enabled: bool
         "SEMANTIC_CACHE_ENABLED": "false",
         "STRICT_REALTIME_STREAMING": "false",
         "QDRANT_COLLECTION": FIXTURE_COLLECTION,
+        "RAG_EVAL_ROUTER_MODE": router_mode,
     })
+    if router_mode == "offline":
+        env["LLM_ROUTER_ENABLED"] = "false"
+        env["SEMANTIC_ROUTER_ENABLED"] = "false"
+    return env
+
+
+def _run(
+    label: str,
+    manifest: Path,
+    output: Path,
+    trace: Path,
+    *,
+    enabled: bool,
+    router_mode: str,
+) -> dict:
+    env = build_evaluation_environment(enabled=enabled, router_mode=router_mode)
     started_at = _utc_now()
     eval_result = subprocess.run([
         sys.executable, "-m", "scripts.eval.run_eval",
@@ -54,11 +92,12 @@ def _run(label: str, manifest: Path, output: Path, trace: Path, *, enabled: bool
     return {"label": label, "started_at": started_at, "completed_at": completed_at, "runner_exit": eval_result.returncode}
 
 
-def run_rollout(manifest: Path, output: Path, trace: Path) -> dict:
+def run_rollout(manifest: Path, output: Path, trace: Path, *, router_mode: str = "offline") -> dict:
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before running live staging evaluation")
     if not manifest.is_file() or not trace.is_file():
         raise ValueError("manifest and trace files must exist")
+    require_clean_worktree()
     for label in ("baseline", "candidate"):
         run_dir = output / label
         if run_dir.exists() and any(run_dir.iterdir()):
@@ -73,12 +112,18 @@ def run_rollout(manifest: Path, output: Path, trace: Path) -> dict:
     provider_config_sha = hashlib.sha256(
         json.dumps(provider_config, sort_keys=True).encode("utf-8")
     ).hexdigest()
-    baseline = _run("baseline", manifest, output, trace, enabled=False)
+    baseline = _run(
+        "baseline", manifest, output, trace, enabled=False, router_mode=router_mode
+    )
+    require_clean_worktree()
     if _sha(manifest) != manifest_sha:
         raise RuntimeError("manifest changed after baseline")
     if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip() != git_sha:
         raise RuntimeError("commit changed between baseline and candidate")
-    candidate = _run("candidate", manifest, output, trace, enabled=True)
+    candidate = _run(
+        "candidate", manifest, output, trace, enabled=True, router_mode=router_mode
+    )
+    require_clean_worktree()
     if _sha(manifest) != manifest_sha:
         raise RuntimeError("manifest changed after candidate")
     baseline_preflight = json.loads((output / "baseline" / "preflight.json").read_text(encoding="utf-8"))
@@ -97,6 +142,7 @@ def run_rollout(manifest: Path, output: Path, trace: Path) -> dict:
         "schema": "crag-rollout-run-v1", "git_sha": git_sha, "manifest_sha256": manifest_sha,
         "provider_configuration_sha256": provider_config_sha, "concurrency": 1,
         "fixture_fingerprint": baseline_preflight["fixture_fingerprint"],
+        "router_mode": router_mode,
         "baseline": baseline, "candidate": candidate, "gate_exit": gate_result.returncode,
         "passed": bool(gate["passed"]),
     }
@@ -109,8 +155,11 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--trace", type=Path, default=ROOT / "logs" / "rag_trace.jsonl")
+    parser.add_argument("--router-mode", choices=("offline", "provider"), default="offline")
     args = parser.parse_args()
-    report = run_rollout(args.manifest, args.output_dir, args.trace)
+    report = run_rollout(
+        args.manifest, args.output_dir, args.trace, router_mode=args.router_mode
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["passed"] else 1
 

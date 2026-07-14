@@ -235,6 +235,32 @@ def test_local_development_may_continue_when_audit_unavailable(monkeypatch):
     assert called is True
 
 
+def test_external_call_emits_metadata_only_latency_trace(monkeypatch):
+    events = []
+    monkeypatch.setattr(external_ai, "_record_external_call", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        external_ai,
+        "_emit_external_call_trace",
+        lambda spec, **kwargs: events.append((spec, kwargs)),
+    )
+
+    with external_ai.audited_external_call(
+        provider="proxyllm",
+        model="gpt-test",
+        surface="generation",
+        trace_id="trace-router",
+        profile=_profile(),
+    ):
+        pass
+
+    assert len(events) == 1
+    spec, metadata = events[0]
+    assert spec.trace_id == "trace-router"
+    assert metadata["status"] == "success"
+    assert metadata["latency_ms"] >= 0
+    assert set(metadata) == {"status", "latency_ms", "error_type"}
+
+
 def test_cancelled_external_call_is_audited_without_error_status(monkeypatch):
     statuses = []
 

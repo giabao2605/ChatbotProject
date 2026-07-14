@@ -154,7 +154,7 @@ def deterministic_business_document_intent(question):
     }
 
 
-def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False):
+def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False, trace_id=None):
     """Phan tich cau hoi de lay danh sach ma doi tuong va intent versioning bang LLM (co timeout)."""
     if current_part_ids is None:
         current_part_ids = []
@@ -230,7 +230,9 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     else:
         def call_llm():
             response = cohere_invoke(
-                [HumanMessage(content=prompt_intent)], surface="intent_routing"
+                [HumanMessage(content=prompt_intent)],
+                surface="intent_routing",
+                trace_id=trace_id,
             )
             return response.content
  
@@ -418,7 +420,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
 _CONTEXT_TIMEOUT = float(os.getenv("CONTEXT_TIMEOUT", "5.0"))
 
 
-def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None):
+def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None, trace_id=None):
     """P0-1: Phan doan ngu canh hoi thoai + query rewriting (1 LLM call, co timeout).
 
     Tra ve dict:
@@ -504,7 +506,9 @@ Quy tac:
 
     def call_llm():
         return cohere_invoke(
-            [HumanMessage(content=prompt)], surface="query_disambiguation"
+            [HumanMessage(content=prompt)],
+            surface="query_disambiguation",
+            trace_id=trace_id,
         ).content
 
     try:

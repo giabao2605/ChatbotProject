@@ -62,10 +62,14 @@ def min_confidence():
         return 0.5
 
 
-def _default_invoke(messages):
+def _default_invoke(messages, *, trace_id=None):
     # Lazy import de module THUAN khi test (khong keo theo langchain/llm_client).
     from mech_chatbot.llm.llm_client import gpt_invoke
-    return gpt_invoke(messages, surface="interaction_routing")
+    return gpt_invoke(
+        messages,
+        surface="interaction_routing",
+        trace_id=trace_id,
+    )
 
 
 def _build_messages(text, context=None):
@@ -115,15 +119,18 @@ def parse_response(text):
     return (route, conf)
 
 
-def classify_llm(text, context=None, invoke=None):
+def classify_llm(text, context=None, invoke=None, trace_id=None):
     """Tra (route, confidence) neu du tu tin, nguoc lai None (fail-safe)."""
     if not enabled():
         return None
     if not text or not str(text).strip():
         return None
-    inv = invoke or _default_invoke
     try:
-        resp = inv(_build_messages(text, context))
+        messages = _build_messages(text, context)
+        if invoke is None:
+            resp = _default_invoke(messages, trace_id=trace_id)
+        else:
+            resp = invoke(messages)
     except Exception:
         return None
     parsed = parse_response(_extract_text(resp))

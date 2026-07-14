@@ -568,6 +568,36 @@ def _preflight_compliance_audit(spec: ExternalCallSpec) -> None:
     )
 
 
+def _emit_external_call_trace(
+    spec: ExternalCallSpec,
+    *,
+    status: str,
+    latency_ms: float,
+    error_type: str | None = None,
+) -> None:
+    """Emit metadata-only provider timing into the RAG trace.
+
+    The event deliberately excludes prompts, responses, endpoints, and secrets.
+    """
+    if not spec.trace_id:
+        return
+    try:
+        from mech_chatbot.config.logging import log_trace
+
+        log_trace(
+            "external_ai_call",
+            spec.trace_id,
+            provider=spec.provider,
+            model=spec.model,
+            surface=spec.surface,
+            status=status,
+            latency_ms=max(0, int(latency_ms or 0)),
+            error_type=error_type,
+        )
+    except Exception:
+        logger.debug("External AI latency trace unavailable", exc_info=True)
+
+
 class ExternalAIClient:
     """One policy/audit entry point shared by provider-specific adapters."""
 
@@ -589,22 +619,35 @@ class ExternalAIClient:
         try:
             yield spec
         except ExternalAICallCancelled:
+            latency_ms = (time.perf_counter() - started) * 1000
             _record_external_call(
                 spec,
                 status="cancelled",
-                latency_ms=(time.perf_counter() - started) * 1000,
+                latency_ms=latency_ms,
+            )
+            _emit_external_call_trace(
+                spec, status="cancelled", latency_ms=latency_ms, error_type=None
             )
             raise
         except Exception as exc:
+            latency_ms = (time.perf_counter() - started) * 1000
+            error_type = external_error_metadata(exc).error_type
             _record_external_call(
                 spec,
                 status="error",
-                latency_ms=(time.perf_counter() - started) * 1000,
-                error_type=external_error_metadata(exc).error_type,
+                latency_ms=latency_ms,
+                error_type=error_type,
+            )
+            _emit_external_call_trace(
+                spec, status="error", latency_ms=latency_ms, error_type=error_type
             )
             raise
         else:
-            _record_external_call(spec, status="success", latency_ms=(time.perf_counter() - started) * 1000)
+            latency_ms = (time.perf_counter() - started) * 1000
+            _record_external_call(spec, status="success", latency_ms=latency_ms)
+            _emit_external_call_trace(
+                spec, status="success", latency_ms=latency_ms, error_type=None
+            )
 
 
 @contextmanager

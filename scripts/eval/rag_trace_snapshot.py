@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 from collections import Counter
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -58,6 +59,8 @@ def build_snapshot(
     repairs_by_trace: Counter[str] = Counter()
     llm_retries = 0
     query_count = 0
+    external_ai_latencies: dict[str, list[float]] = defaultdict(list)
+    external_ai_statuses: dict[str, Counter[str]] = defaultdict(Counter)
     for raw in path.read_text(encoding="utf-8").splitlines():
         try:
             event = json.loads(raw)
@@ -81,6 +84,14 @@ def build_snapshot(
             repairs_by_trace[str(event.get("trace_id") or "<missing>")] += 1
         if event.get("event") == "llm_retry":
             llm_retries += 1
+        if event.get("event") == "external_ai_call":
+            surface = str(event.get("surface") or "unknown")
+            try:
+                latency = max(0.0, float(event.get("latency_ms") or 0.0))
+            except (TypeError, ValueError):
+                latency = 0.0
+            external_ai_latencies[surface].append(latency)
+            external_ai_statuses[surface][str(event.get("status") or "unknown")] += 1
         if event.get("event") != "rag_end":
             continue
         query_count += 1
@@ -98,6 +109,24 @@ def build_snapshot(
         if event.get("ts"):
             included_timestamps.append(event["ts"])
     ordered_latencies = sorted(query_latencies)
+    external_ai_latency = {}
+    for surface, values in sorted(external_ai_latencies.items()):
+        ordered = sorted(values)
+        statuses = external_ai_statuses[surface]
+        external_ai_latency[surface] = {
+            "call_count": len(ordered),
+            "success_count": statuses.get("success", 0),
+            "error_count": statuses.get("error", 0),
+            "cancelled_count": statuses.get("cancelled", 0),
+            "unknown_count": sum(
+                count
+                for status, count in statuses.items()
+                if status not in {"success", "error", "cancelled"}
+            ),
+            "latency_p50_ms": nearest_rank(ordered, 0.50),
+            "latency_p95_ms": nearest_rank(ordered, 0.95),
+            "latency_max_ms": max(ordered, default=None),
+        }
     return {
         "schema": "rag-refusal-snapshot-v1",
         "source": {"path": str(path.resolve()), "git_sha": _git_sha()},
@@ -116,6 +145,7 @@ def build_snapshot(
         "refusal_reasons": dict(sorted(counts.items())),
         "parse_errors": parse_errors,
         "legacy_reason_events": legacy_reason_events,
+        "external_ai_latency": external_ai_latency,
         "system_metrics": {
             "query_count": query_count,
             "latency_p50_ms": nearest_rank(ordered_latencies, 0.50),
@@ -148,6 +178,22 @@ def render_markdown(report: dict) -> str:
     lines.extend(
         f"| {reason} | {count} |"
         for reason, count in report["refusal_reasons"].items()
+    )
+    lines.extend([
+        "",
+        "## External AI latency",
+        "",
+        "| Surface | Calls | Success | Error | Cancelled | Unknown | P50 ms | P95 ms | Max ms |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ])
+    lines.extend(
+        "| {surface} | {call_count} | {success_count} | {error_count} | "
+        "{cancelled_count} | {unknown_count} | "
+        "{latency_p50_ms} | {latency_p95_ms} | {latency_max_ms} |".format(
+            surface=surface,
+            **metrics,
+        )
+        for surface, metrics in report.get("external_ai_latency", {}).items()
     )
     return "\n".join(lines) + "\n"
 
