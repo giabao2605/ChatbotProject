@@ -1,0 +1,57 @@
+{
+  "schema": "evaluation-adjudication-artifact-v1",
+  "evaluator_version": "evaluation-foundation-v1",
+  "evaluator_models": {
+    "retrieval": "binary-relevance-v2",
+    "claims": "deterministic-labeled-claims-v1",
+    "citations": "structured-source-identity-v1",
+    "risk_coverage": "explicit-operating-points-v1"
+  },
+  "source_sha256": "d02feb05ec8a95993cf0b07d1996fe8285b3ffeca2f71bac790e90423476097a",
+  "protocol": {
+    "independent_reviewers": 2,
+    "third_reviewer_on_disagreement": true,
+    "reason_code_required": true,
+    "raw_prompt_recorded": false
+  },
+  "cases": 2,
+  "disagreements": 1,
+  "records": [
+    {
+      "schema": "evaluation-adjudication-v1",
+      "case_id": "worked-consensus",
+      "disagreement": false,
+      "resolved_by": "consensus",
+      "reviewer_ids": [
+        "reviewer-a",
+        "reviewer-b"
+      ],
+      "outcome_label": "full_answer",
+      "answer_correct": true,
+      "citation_correct": true,
+      "reason_codes": [
+        "evidence_supported",
+        "evidence_supported"
+      ]
+    },
+    {
+      "schema": "evaluation-adjudication-v1",
+      "case_id": "worked-disagreement",
+      "disagreement": true,
+      "resolved_by": "reviewer-c",
+      "reviewer_ids": [
+        "reviewer-a",
+        "reviewer-b",
+        "reviewer-c"
+      ],
+      "outcome_label": "partial_answer",
+      "answer_correct": true,
+      "citation_correct": false,
+      "reason_codes": [
+        "evidence_supported",
+        "citation_version_mismatch",
+        "citation_version_mismatch"
+      ]
+    }
+  ]
+}

@@ -38,7 +38,7 @@ Vì vậy, “100% mục đích” không đồng nghĩa phải bật mọi côn
 
 | Hạng mục | Code | Test offline | Artifact/gate live | Production pilot | Trạng thái thực tế |
 |---|---|---|---|---|---|
-| Telemetry và labeled evaluation | Có | Có | Có | Áp dụng cho evaluation | Gần hoàn tất |
+| Telemetry và labeled evaluation | Có | Có | Có | Áp dụng cho evaluation | Foundation v4 hoàn tất; pilot labels thuộc Milestone A–F |
 | CRAG và claim repair | Có | Có | Ba gate đạt | Chưa | Hoàn tất staging, chưa đóng production |
 | Grounded math | Có | Có | Chưa có baseline/candidate riêng | Chưa | Offline-ready |
 | Late Interaction | Có | Có | Có readiness offline; chưa có quality gate | Chưa | Serving-ready về hạ tầng, chưa production-ready |
@@ -71,7 +71,7 @@ Các implementation chính:
 
 #### Chưa có hoặc chưa hoàn tất
 
-- Chưa có risk–coverage curve để quan sát trade-off giữa coverage và refusal quality.
+- Đã có risk–coverage curve theo operating point; chưa có dashboard production hiển thị curve này.
 - Chưa có dashboard chuẩn tổng hợp theo pipeline namespace và theo feature combination.
 - Chưa có SLO/alert chính thức cho provider latency, external reranker error và feature-specific fallback rate.
 - Voyage 429 hiện được quan sát rõ nhưng chưa có operational threshold hoặc quyết định retry/fallback cố định cho pilot.
@@ -83,7 +83,12 @@ Các implementation chính:
 - Manifest hỗ trợ `expected_outcome`: `full_answer`, `partial_answer`, `clarification_required`, `insufficient_evidence`, `access_denied`.
 - Manifest cũ có `should_refuse` vẫn được ánh xạ tương thích.
 - Evaluator báo correct/wrong refusal, wrong refusal type, wrong answer, leakage và admin exception.
-- Có Recall@5, nDCG@5, Recall@10 và nDCG@10.
+- Có Recall@5/10/20, nDCG@5/10 và MRR; từng case giữ rank list và expected source identity.
+- Có deterministic claim evaluator cho claim precision, expected-claim recall và faithfulness.
+- Có citation evaluator cho SourceID/page/version/rendered citation và inaccessible source.
+- Có risk–coverage report không tự chọn threshold khi safety chưa đạt.
+- Manifest v2 và evaluator artifact v4 được version; manifest cũ được ánh xạ thành legacy.
+- Có protocol hai reviewer độc lập và reviewer thứ ba khi bất đồng, bắt buộc reason code.
 - Report có P50/P95, token, estimated cost, provider retry, correction, repair, calculation, planner và graph traversal count.
 - Fixture CRAG có identity, RBAC, site, clearance, publication, lifecycle, current version và provenance thật trong SQL/Qdrant staging.
 - Preflight kiểm tra document/page/version và fixture fingerprint trước khi gửi request tới LLM.
@@ -94,13 +99,15 @@ Các implementation chính:
 - [`scripts/eval/run_eval.py`](../scripts/eval/run_eval.py)
 - [`src/mech_chatbot/evaluation/outcomes.py`](../src/mech_chatbot/evaluation/outcomes.py)
 - [`src/mech_chatbot/evaluation/metrics.py`](../src/mech_chatbot/evaluation/metrics.py)
+- [`src/mech_chatbot/evaluation/grounding.py`](../src/mech_chatbot/evaluation/grounding.py)
+- [`src/mech_chatbot/evaluation/risk_coverage.py`](../src/mech_chatbot/evaluation/risk_coverage.py)
+- [`src/mech_chatbot/evaluation/adjudication.py`](../src/mech_chatbot/evaluation/adjudication.py)
+- [`docs/evaluation-foundation.md`](evaluation-foundation.md)
 - [`scripts/crag_eval/`](../scripts/crag_eval/)
 - [`data/crag_eval_v1/eval_manifest.jsonl`](../data/crag_eval_v1/eval_manifest.jsonl)
 
 #### Chưa có hoặc chưa hoàn tất
 
-- Chưa có Recall@20 và MRR như bộ metrics đầy đủ trong tài liệu gốc.
-- Chưa có evaluator riêng cho claim precision, faithfulness và citation accuracy theo SourceID/page/version.
 - Chưa có một manifest chung đủ rộng cho exact code, near-code, OCR noise, multi-intent, multi-hop, relational query và grounded calculation.
 - Chưa có workflow định kỳ để đóng băng và version evaluation snapshot qua nhiều milestone.
 
@@ -340,6 +347,8 @@ Implementation chính:
 - Rollback luôn phải là tắt feature flag, không yêu cầu data migration ngược.
 - Chỉ chuyển milestone tiếp theo sang production sau khi milestone trước có artifact và gate rõ ràng.
 
+Trạng thái triển khai: đã hoàn tất bằng [`rollout_guardrails.py`](../src/mech_chatbot/evaluation/rollout_guardrails.py) và CLI [`scripts/eval/rollout_guardrails.py`](../scripts/eval/rollout_guardrails.py). Guardrail fail-closed với unit-only evidence, benchmark drift, production mutation, safety regression, rollback gap, ít hơn ba pair hoặc milestone dependency chưa đóng.
+
 ### 2.2 Milestone 0 — Hoàn thiện evaluation foundation dùng chung
 
 #### Mục tiêu
@@ -383,6 +392,8 @@ Implementation chính:
 - Evaluator schema và manifest version được commit.
 - Test evaluator xanh và artifact mẫu tái lập được từ clean commit.
 - Mọi milestone A–G sử dụng cùng metric definitions và adjudication protocol này.
+
+Trạng thái triển khai: evaluator foundation v4, manifest v2, worked-example artifact và protocol dùng chung đã hoàn tất. Milestone A–G bắt buộc đi qua `run_eval.py` và rollout guardrail này; live target >=99% vẫn phải được chứng minh trong pilot tương ứng, không được suy ra từ unit test.
 
 ### 2.3 Milestone A — Đóng CRAG production pilot
 

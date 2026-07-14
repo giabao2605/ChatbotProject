@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 
@@ -59,6 +60,71 @@ def test_manifest_validation_rejects_invalid_outcome_and_missing_provenance(tmp_
     with pytest.raises(ValueError, match="expected_document"):
         runner.load_manifest_files([path])
 
+
+def test_manifest_v2_requires_labeled_claim_and_citation_ground_truth(tmp_path):
+    runner = _load("run_eval_manifest_v2", "scripts/eval/run_eval.py")
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        json.dumps(_case(manifest_schema="rag-eval-manifest-v2")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="expected_claims"):
+        runner.load_manifest_files([path])
+
+    valid = _case(
+        manifest_schema="rag-eval-manifest-v2",
+        expected_claims=[
+            {
+                "id": "nominal-value",
+                "required_terms": ["1,500"],
+                "allowed_source_ids": ["D41P1"],
+            }
+        ],
+        expected_citations=[
+            {
+                "document": "crag_eval_numbers_v12.md",
+                "doc_id": 41,
+                "page": 1,
+                "version": 12,
+                "source_id": "D41P1",
+            }
+        ],
+    )
+    path.write_text(json.dumps(valid) + "\n", encoding="utf-8")
+
+    loaded = runner.load_manifest_files([path])
+
+    assert loaded[0]["manifest_schema"] == "rag-eval-manifest-v2"
+
+
+def test_legacy_manifest_is_versioned_without_breaking_compatibility(tmp_path):
+    runner = _load("run_eval_manifest_legacy", "scripts/eval/run_eval.py")
+    path = tmp_path / "cases.jsonl"
+    path.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+
+    loaded = runner.load_manifest_files([path])
+
+    assert loaded[0]["manifest_schema"] == "rag-eval-manifest-v1-legacy"
+
+
+def test_manifest_v2_allows_clarification_without_grounded_claims(tmp_path):
+    runner = _load("run_eval_manifest_clarification", "scripts/eval/run_eval.py")
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        json.dumps(
+            _case(
+                manifest_schema="rag-eval-manifest-v2",
+                expected_outcome="clarification_required",
+                expected_claims=[],
+                expected_citations=[],
+            )
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    assert runner.load_manifest_files([path])[0]["expected_claims"] == []
+
     path.write_text(json.dumps(_case(expected_document="")) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="expected_document"):
         runner.load_manifest_files([path])
@@ -82,6 +148,95 @@ def test_cli_accepts_multiple_manifests():
         "--output-dir", "reports/run", "--run-label", "candidate",
     ])
     assert args.manifest == [Path("one.jsonl"), Path("two.jsonl")]
+
+
+def test_eval_v4_artifact_contains_shared_foundation_metrics(tmp_path, monkeypatch):
+    runner = _load("run_eval_v4_artifact", "scripts/eval/run_eval.py")
+
+    manifest = tmp_path / "cases.jsonl"
+    case = _case(
+        manifest_schema="rag-eval-manifest-v2",
+        expected_document="target.md",
+        expected_sources=["target.md"],
+        expected_claims=[
+            {
+                "id": "nominal-value",
+                "required_terms": ["1,500"],
+                "allowed_source_ids": ["D41P1"],
+            }
+        ],
+        expected_citations=[
+            {
+                "document": "target.md",
+                "doc_id": 41,
+                "page": 1,
+                "version": 12,
+                "source_id": "D41P1",
+            }
+        ],
+    )
+    manifest.write_text(json.dumps(case) + "\n", encoding="utf-8")
+
+    intent_extractor = lambda *args, **kwargs: (
+        None, None, None, None, None, {"version_policy": "current_only"}
+    )
+    retrieved = [
+        {
+            "file_goc": f"other-{index}.md",
+            "source_id": f"D{index}P1",
+        }
+        for index in range(1, 12)
+    ] + [
+        {
+            "file_goc": "target.md",
+            "doc_id": 41,
+            "source_id": "D41P1",
+            "trang": 1,
+            "version_no": 12,
+        }
+    ]
+    answer = (
+        "Giá trị định mức là 1,500. "
+        "[Nguồn: target.md, Trang 1, Version 12, SourceID D41P1]"
+    )
+    rag_chat = lambda *args, **kwargs: (
+            iter([answer]),
+            "target.md Trang 1 Version 12 SourceID D41P1",
+            [],
+            [],
+            {
+                "retrieved_docs": retrieved,
+                "citation_docs": [retrieved[-1]],
+                "evidence_state": "SUFFICIENT",
+                "pipeline_namespace": "eval-v4",
+                "generation_metrics": {},
+            },
+        )
+
+    report, passed = runner.run_evaluation(
+        [manifest],
+        tmp_path / "output",
+        "candidate",
+        preflight=False,
+        intent_extractor=intent_extractor,
+        rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is True
+    assert report["schema"] == "rag-labeled-eval-v4"
+    assert report["evaluator_version"] == "evaluation-foundation-v1"
+    assert report["manifest_sha256s"] == [
+        hashlib.sha256(manifest.read_bytes()).hexdigest()
+    ]
+    assert report["ranked_retrieval"]["recall_at_10"] == 0.0
+    assert report["ranked_retrieval"]["recall_at_20"] == 1.0
+    assert report["ranked_retrieval"]["mrr"] == pytest.approx(1 / 12)
+    assert report["claim_evaluation"]["faithfulness"]["value"] == 1.0
+    assert report["citation_evaluation"]["citation_accuracy"]["value"] == 1.0
+    assert report["risk_coverage"]["selected_threshold"] is None
+    assert (tmp_path / "output" / "candidate" / "eval.json").is_file()
+    assert (tmp_path / "output" / "candidate" / "eval.md").is_file()
 
 
 def test_rollout_offline_router_mode_disables_provider_router(monkeypatch):
@@ -117,6 +272,96 @@ def test_rollout_rejects_dirty_tracked_worktree(monkeypatch):
 
     with pytest.raises(RuntimeError, match="clean tracked worktree"):
         rollout.require_clean_worktree()
+
+
+def test_crag_rollout_pair_requires_commit_pinned_rollback_evidence(tmp_path):
+    rollout = _load("crag_rollout_pair", "scripts/crag_eval/run_rollout.py")
+    gate = tmp_path / "gate.json"
+    gate.write_text(
+        json.dumps({
+            "schema": "crag-rollout-gate-v1", "passed": True,
+            "checks": {"wrong_answer_not_increased": True, "leakage_zero": True},
+        }),
+        encoding="utf-8",
+    )
+    def run_evidence(arm, started_at, completed_at):
+        evaluation = tmp_path / f"{arm}-eval.json"
+        trace = tmp_path / f"{arm}-trace.json"
+        evaluation.write_text(
+            json.dumps({"schema": "rag-labeled-eval-v4", "arm": arm}),
+            encoding="utf-8",
+        )
+        trace.write_text(
+            json.dumps({"schema": "rag-refusal-snapshot-v1", "arm": arm}),
+            encoding="utf-8",
+        )
+        return {
+            **rollout._artifact_reference(evaluation),
+            **rollout._artifact_reference(trace, prefix="trace"),
+            "started_at": started_at,
+            "completed_at": completed_at,
+        }
+    baseline_evidence = run_evidence(
+        "baseline", "2026-07-14T00:00:00Z", "2026-07-14T00:01:00Z"
+    )
+    candidate_evidence = run_evidence(
+        "candidate", "2026-07-14T00:02:00Z", "2026-07-14T00:03:00Z"
+    )
+    evidence = tmp_path / "rollback.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema": "rollback-test-evidence-v1",
+                "git_sha": "abc123",
+                "passed": True,
+                "flags": ["RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pair = rollout.build_rollout_pair(
+        run_id="run-1",
+        git_sha="abc123",
+        manifest_sha256="manifest-sha",
+        snapshot_fingerprint="snapshot-sha",
+        provider_configuration_sha256="provider-sha",
+        governance_scope_sha256_value="governance-sha",
+        baseline_evidence=baseline_evidence,
+        candidate_evidence=candidate_evidence,
+        gate_artifact=gate,
+        rollback_test_artifact=evidence,
+    )
+
+    assert pair["rollback"]["artifact_sha256"]
+    assert pair["rollback"]["artifact_schema"] == "rollback-test-evidence-v1"
+    assert pair["baseline"]["git_sha"] == pair["candidate"]["git_sha"]
+    assert pair["baseline"]["artifact_sha256"] != pair["candidate"]["artifact_sha256"]
+
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema": "rollback-test-evidence-v1",
+                "git_sha": "different-commit",
+                "passed": True,
+                "flags": ["RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="rollout commit"):
+        rollout.build_rollout_pair(
+            run_id="run-1",
+            git_sha="abc123",
+            manifest_sha256="manifest-sha",
+            snapshot_fingerprint="snapshot-sha",
+            provider_configuration_sha256="provider-sha",
+            governance_scope_sha256_value="governance-sha",
+            baseline_evidence=baseline_evidence,
+            candidate_evidence=candidate_evidence,
+            gate_artifact=gate,
+            rollback_test_artifact=evidence,
+        )
 
 
 def test_preflight_checks_sql_and_qdrant_provenance():

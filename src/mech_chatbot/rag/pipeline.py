@@ -1174,6 +1174,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="evidence_gate", docs_count=len(retrieved_docs), doc_ids=[d.metadata.get("doc_id") for d in retrieved_docs], retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=[d.metadata.get("relevance_score") for d in retrieved_docs], user_department=user_department, user_roles=user_roles)
         _refusal_debug = make_debug_info(retrieved_docs)
         _refusal_debug["citation_docs"] = make_debug_info(retrieved_docs)["retrieved_docs"]
+        _refusal_debug["evidence_state"] = evidence_decision.state.value
+        _refusal_debug["evidence_stage"] = evidence_decision.stage
         _refusal_debug["correction_count"] = correction_attempts
         _refusal_debug["generation_metrics"] = {
             "estimated_cost": correction_estimated_cost + planner_estimated_cost,
@@ -1217,6 +1219,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)
     debug_info = make_debug_info(retrieved_docs)
+    debug_info["evidence_state"] = evidence_decision.state.value
+    debug_info["evidence_stage"] = evidence_decision.stage
     debug_info["correction_count"] = correction_attempts
     debug_info["planner_count"] = planner_count
     debug_info["graph_traversal_count"] = sum(

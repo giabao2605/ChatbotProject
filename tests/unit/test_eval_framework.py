@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 
@@ -14,7 +15,10 @@ from mech_chatbot.evaluation.outcomes import (
     outcome_matches_expected,
     summarize_outcomes,
 )
-from mech_chatbot.evaluation.metrics import ranked_retrieval_metrics
+from mech_chatbot.evaluation.metrics import (
+    ranked_retrieval_audit,
+    ranked_retrieval_metrics,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -40,13 +44,69 @@ def test_ranked_retrieval_metrics_report_zero_when_source_is_missing():
         "ndcg_at_5": 0.0,
         "recall_at_10": 0.0,
         "ndcg_at_10": 0.0,
+        "mrr": 0.0,
     }
 
 
-def test_eval_runner_keeps_ten_sources_for_recall_at_ten():
+def test_ranked_retrieval_metrics_include_recall_at_twenty_and_mrr():
+    ranked = [f"other-{index}.pdf" for index in range(1, 12)] + ["target.pdf"]
+
+    metrics = ranked_retrieval_metrics(ranked, ["target.pdf"])
+    audit = ranked_retrieval_audit(ranked, ["target.pdf"])
+
+    assert metrics["recall_at_10"] == 0.0
+    assert metrics["recall_at_20"] == 1.0
+    assert metrics["mrr"] == pytest.approx(1 / 12)
+    assert audit[11] == {
+        "rank": 12,
+        "source": "target.pdf",
+        "identity": {
+            "document": "target.pdf", "doc_id": "", "page": "",
+            "version": "", "source_id": "",
+        },
+        "relevant": True,
+    }
+
+
+def test_ranked_retrieval_metrics_do_not_double_count_duplicate_document_chunks():
+    metrics = ranked_retrieval_metrics(
+        ["target.pdf", "target.pdf", "other.pdf"],
+        ["target.pdf"],
+        cutoffs=(3,),
+    )
+
+    assert metrics["recall_at_3"] == 1.0
+    assert metrics["ndcg_at_3"] == 1.0
+    assert 0.0 <= metrics["ndcg_at_3"] <= 1.0
+
+
+def test_ranked_retrieval_metrics_preserve_page_version_and_source_identity():
+    retrieved = [
+        {"file_goc": "manual.pdf", "doc_id": 7, "trang": 2,
+         "version_no": 3, "source_id": "D7P2"},
+        {"file_goc": "manual.pdf", "doc_id": 7, "trang": 1,
+         "version_no": 3, "source_id": "D7P1"},
+    ]
+    expected = [
+        {"document": "manual.pdf", "doc_id": 7, "page": 1,
+         "version": 3, "source_id": "D7P1"}
+    ]
+
+    metrics = ranked_retrieval_metrics(retrieved, expected, cutoffs=(1, 2))
+    audit = ranked_retrieval_audit(retrieved, expected)
+
+    assert metrics["recall_at_1"] == 0.0
+    assert metrics["recall_at_2"] == 1.0
+    assert metrics["mrr"] == 0.5
+    assert audit[0]["identity"]["page"] == "2"
+    assert audit[0]["relevant"] is False
+    assert audit[1]["relevant"] is True
+
+
+def test_eval_runner_keeps_twenty_sources_for_recall_at_twenty():
     source = Path("scripts/eval/run_eval.py").read_text(encoding="utf-8")
 
-    assert 'debug.get("retrieved_docs", [])[:10]' in source
+    assert 'debug.get("retrieved_docs", [])[:20]' in source
 
 
 def _load_script(module_name: str, relative_path: str):
@@ -347,6 +407,31 @@ def test_crag_rollout_gate_blocks_wrong_answers_leakage_and_excess_cost():
 
     candidate_eval["outcome_confusion"]["wrong_answer"] = 2
     assert crag_gate.compare_reports(baseline_eval, candidate_eval, baseline_trace, candidate_trace)["passed"] is False
+
+
+def test_crag_rollout_gate_cli_binds_all_input_hashes(tmp_path, monkeypatch):
+    paths = {}
+    for name in ("baseline_eval", "candidate_eval", "baseline_trace", "candidate_trace"):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps({"name": name}), encoding="utf-8")
+        paths[name] = path
+    output = tmp_path / "gate.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "crag_rollout_gate.py",
+            str(paths["baseline_eval"]), str(paths["candidate_eval"]),
+            str(paths["baseline_trace"]), str(paths["candidate_trace"]),
+            "--output", str(output),
+        ],
+    )
+
+    assert crag_gate.main() == 1
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["inputs"] == {
+        f"{name}_sha256": hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in paths.items()
+    }
 
 
 def test_crag_rollout_gate_blocks_more_than_one_correction_or_repair_per_query():

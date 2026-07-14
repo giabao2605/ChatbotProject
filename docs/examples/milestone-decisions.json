@@ -1,0 +1,10 @@
+{
+  "schema": "rollout-milestone-decisions-v1",
+  "evaluation_foundation": {
+    "decision": "completed",
+    "artifact_sha256": "5d515d4c8be246fda57164bb0b4eaa8a27e28d3248541eedd4e3eb4f21ed618a",
+    "artifact": "docs/examples/evaluation-adjudication-v1.json",
+    "artifact_schema": "evaluation-adjudication-artifact-v1",
+    "evaluator_version": "evaluation-foundation-v1"
+  }
+}

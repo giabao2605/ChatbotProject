@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -43,6 +44,10 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def _git_sha() -> str | None:
     try:
         return subprocess.check_output(
@@ -53,6 +58,9 @@ def _git_sha() -> str | None:
 
 
 def validate_live_case(case: dict, *, source: Path, line_number: int) -> None:
+    from mech_chatbot.evaluation.outcomes import expected_outcome
+    from mech_chatbot.evaluation.schema import validate_manifest_ground_truth
+
     missing = [name for name in REQUIRED_IDENTITY_FIELDS if not case.get(name)]
     if missing:
         raise ValueError(
@@ -73,6 +81,10 @@ def validate_live_case(case: dict, *, source: Path, line_number: int) -> None:
         raise ValueError(f"{source}:{line_number}: expected_outcome is required")
     if "expected_outcome" in case and case["expected_outcome"] not in VALID_EXPECTED_OUTCOMES:
         raise ValueError(f"{source}:{line_number}: invalid expected_outcome")
+    try:
+        validate_manifest_ground_truth(case, expected_outcome=expected_outcome(case))
+    except ValueError as exc:
+        raise ValueError(f"{source}:{line_number}: {exc}") from exc
     missing_provenance = [name for name in REQUIRED_PROVENANCE_FIELDS if case.get(name) is None]
     if missing_provenance:
         raise ValueError(
@@ -108,6 +120,11 @@ def load_manifest_files(paths: list[Path]) -> list[dict]:
                 case = json.loads(raw)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path}:{line_number}: invalid JSON: {exc.msg}") from exc
+            from mech_chatbot.evaluation.schema import version_manifest_case
+            try:
+                version_manifest_case(case)
+            except ValueError as exc:
+                raise ValueError(f"{path}:{line_number}: {exc}") from exc
             validate_live_case(case, source=path, line_number=line_number)
             case_id = str(case.get("id") or "")
             if not case_id or case_id in seen_ids:
@@ -129,6 +146,10 @@ def resolve_output_paths(output_dir: Path, run_label: str) -> dict[str, Path]:
 def _render_markdown(report: dict) -> str:
     lines = [
         f"# CRAG evaluation: {report['run_label']}", "",
+        f"- Schema: `{report['schema']}`",
+        f"- Evaluator: `{report['evaluator_version']}`",
+        f"- Evaluator models: `{json.dumps(report['evaluator_models'], ensure_ascii=False)}`",
+        f"- Manifest schemas: `{json.dumps(report['manifest_schemas'])}`",
         f"- Commit: `{report['git_sha']}`",
         f"- UTC range: `{report['started_at']}` to `{report['completed_at']}`",
         f"- Manifests: `{json.dumps(report['manifest_files'], ensure_ascii=False)}`",
@@ -136,6 +157,9 @@ def _render_markdown(report: dict) -> str:
         f"- Passed: {report['passed_cases']}", "",
         f"- Retrieval Recall@5: `{json.dumps(report['retrieval_recall_at_5'])}`", "",
         f"- Ranked retrieval: `{json.dumps(report.get('ranked_retrieval', {}))}`",
+        f"- Claim evaluation: `{json.dumps(report.get('claim_evaluation', {}))}`",
+        f"- Citation evaluation: `{json.dumps(report.get('citation_evaluation', {}))}`",
+        f"- Risk coverage: `{json.dumps(report.get('risk_coverage', {}))}`",
         f"- Pipeline variants: `{json.dumps(report.get('pipeline_variants', {}))}`",
         f"- Estimated cost: `{report.get('total_estimated_cost', 0.0)}`", "",
         "## Outcome confusion", "",
@@ -152,7 +176,14 @@ def _render_markdown(report: dict) -> str:
 
 
 def run_evaluation(
-    manifest_files: list[Path], output_dir: Path, run_label: str, *, preflight: bool = True
+    manifest_files: list[Path],
+    output_dir: Path,
+    run_label: str,
+    *,
+    preflight: bool = True,
+    intent_extractor=None,
+    rag_chat=None,
+    number_normalizer=None,
 ) -> tuple[dict, bool]:
     cases = load_manifest_files(manifest_files)
     paths = resolve_output_paths(output_dir, run_label)
@@ -160,6 +191,7 @@ def run_evaluation(
         raise ValueError(f"refusing to overwrite non-empty run directory: {paths['directory']}")
     paths["directory"].mkdir(parents=True, exist_ok=True)
 
+    preflight_report = {}
     if preflight:
         from scripts.crag_eval.preflight import run_live_preflight
         preflight_report = run_live_preflight(cases)
@@ -170,13 +202,28 @@ def run_evaluation(
             raise RuntimeError("fixture preflight failed; no LLM request was sent")
 
     # Import only after validation and preflight so malformed runs never initialize the RAG stack.
-    from mech_chatbot.evaluation.metrics import nearest_rank, ranked_retrieval_metrics
+    from mech_chatbot.evaluation.grounding import (
+        evaluate_citations, evaluate_claims, extract_claims, select_rendered_citations,
+    )
+    from mech_chatbot.evaluation.metrics import (
+        canonical_source_identity, nearest_rank, ranked_retrieval_audit,
+        ranked_retrieval_metrics,
+    )
     from mech_chatbot.evaluation.outcomes import (
-        REFUSAL_OUTCOMES, classify_actual_outcome, expected_outcome,
+        ANSWER_OUTCOMES, REFUSAL_OUTCOMES, classify_actual_outcome, expected_outcome,
         outcome_matches_expected, summarize_outcomes,
     )
-    from mech_chatbot.rag.evidence_gate import normalized_number_values
-    from mech_chatbot.rag.service import chat_with_rag, extract_search_intent
+    from mech_chatbot.evaluation.risk_coverage import build_risk_coverage_report
+    from mech_chatbot.evaluation.schema import (
+        EVALUATION_REPORT_SCHEMA, EVALUATOR_MODELS, EVALUATOR_VERSION,
+    )
+    if intent_extractor is None or rag_chat is None:
+        from mech_chatbot.rag.service import chat_with_rag, extract_search_intent
+        intent_extractor = intent_extractor or extract_search_intent
+        rag_chat = rag_chat or chat_with_rag
+    if number_normalizer is None:
+        from mech_chatbot.rag.evidence_gate import normalized_number_values
+        number_normalizer = normalized_number_values
 
     started_at = _utc_now()
     rows: list[dict] = []
@@ -190,7 +237,7 @@ def run_evaluation(
         roles = case["user_roles"]
         trace_id = f"eval:{run_label}:{case['id']}"
         try:
-            intent = extract_search_intent(
+            intent = intent_extractor(
                 case["question"], [], case["user_department"], roles,
                 case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
                 trace_id=trace_id,
@@ -208,7 +255,7 @@ def run_evaluation(
                         os.environ.pop(name, None)
                     else:
                         os.environ[name] = str(value)
-                stream, ref_text, _, _, debug = chat_with_rag(
+                stream, ref_text, _, _, debug = rag_chat(
                     case["question"], None, [], [], case["user_department"], roles,
                     case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
                     trace_id=trace_id,
@@ -224,31 +271,88 @@ def run_evaluation(
             latencies.append(latency_ms)
             generation_metrics = debug.get("generation_metrics") or {}
             actual = classify_actual_outcome(answer)
-            retrieved = [str(doc.get("file_goc", "")).lower() for doc in debug.get("retrieved_docs", [])[:10]]
-            expected_sources = case.get("expected_sources") or [case["expected_document"]]
-            rank_metrics = ranked_retrieval_metrics(retrieved, expected_sources, cutoffs=(5, 10))
-            forbidden_sources = case.get("forbidden_sources", [])
-            source_ok = expected == "access_denied" or all(
-                any(src.lower() in item for item in retrieved) for src in expected_sources
+            retrieved_docs = debug.get("retrieved_docs", [])[:20]
+            retrieved = [canonical_source_identity(doc) for doc in retrieved_docs]
+            expected_sources = (
+                case.get("expected_citations")
+                or case.get("expected_sources")
+                or [case["expected_document"]]
             )
-            forbidden_hits = [src for src in forbidden_sources if any(src.lower() in item for item in retrieved)]
+            rank_metrics = ranked_retrieval_metrics(retrieved, expected_sources)
+            rank_audit = ranked_retrieval_audit(retrieved, expected_sources)
+            forbidden_sources = case.get("forbidden_sources", [])
+            source_ok = expected == "access_denied" or rank_metrics["recall_at_20"] == 1.0
+            forbidden_hits = [
+                src for src in forbidden_sources
+                if any(str(src).casefold() == item["document"] for item in retrieved)
+            ]
             keywords = case.get("expected_keywords", [])
             def keyword_present(keyword):
                 if str(keyword).lower() in answer.lower():
                     return True
-                expected_numbers = normalized_number_values(str(keyword))
-                return bool(expected_numbers) and expected_numbers <= normalized_number_values(answer)
+                expected_numbers = number_normalizer(str(keyword))
+                return bool(expected_numbers) and expected_numbers <= number_normalizer(answer)
             keyword_ok = (
                 any(keyword_present(k) for k in keywords)
                 if should_refuse and keywords else all(keyword_present(k) for k in keywords)
             )
             outcome_ok = outcome_matches_expected(expected, actual)
             policy_ok = actual_policy == case.get("expected_version_policy", "current_only")
-            passed = keyword_ok and source_ok and not forbidden_hits and outcome_ok and policy_ok
             is_admin = "admin" in {str(role).lower() for role in roles}
+            leaked = bool(forbidden_hits) and not is_admin
+            accessible_source_ids = {
+                str(doc.get("source_id")).strip().upper()
+                for doc in retrieved_docs if doc.get("source_id")
+            }
+            claim_evaluation = evaluate_claims(
+                extract_claims(answer),
+                case.get("expected_claims") or [],
+                accessible_source_ids=accessible_source_ids,
+            )
+            citation_evaluation = evaluate_citations(
+                select_rendered_citations(
+                    debug.get("citation_docs") or [], f"{answer}\n{ref_text}"
+                ),
+                case.get("expected_citations") or [],
+                accessible_source_ids=accessible_source_ids,
+                rendered_text=f"{answer}\n{ref_text}",
+            )
+            grounding_ok = (
+                (
+                    not claim_evaluation["applicable"]
+                    or (
+                        claim_evaluation["claim_precision"] == 1.0
+                        and claim_evaluation["expected_claim_recall"] == 1.0
+                        and claim_evaluation["faithfulness"] == 1.0
+                    )
+                )
+                and (
+                    not citation_evaluation["applicable"]
+                    or (
+                        citation_evaluation["citation_accuracy"] == 1.0
+                        and citation_evaluation["citation_precision"] == 1.0
+                    )
+                )
+            )
+            passed = (
+                keyword_ok and source_ok and not forbidden_hits and outcome_ok
+                and policy_ok and grounding_ok
+            )
+            evidence_state = str(
+                debug.get("evidence_state")
+                or ("SUFFICIENT" if actual in ANSWER_OUTCOMES else "INSUFFICIENT")
+            ).upper()
+            default_confidence = {
+                "SUFFICIENT": 1.0,
+                "AMBIGUOUS": 0.5,
+                "INSUFFICIENT": 0.0,
+            }.get(evidence_state, 0.0)
+            evaluation_confidence = float(
+                case.get("evaluation_confidence", default_confidence)
+            )
             outcome_rows.append({
                 "expected": expected, "actual": actual, "answer_correct": passed,
-                "leaked": bool(forbidden_hits) and not is_admin,
+                "leaked": leaked,
                 "legacy_admin_bypass": (
                     bool(case.get("admin_exception")) and is_admin and actual not in REFUSAL_OUTCOMES
                 ),
@@ -256,13 +360,25 @@ def run_evaluation(
             row = {
                 "id": case["id"], "passed": passed, "expected_outcome": expected,
                 "actual_outcome": actual, "latency_ms": latency_ms, "answer": answer,
-                "reference": ref_text, "retrieved_sources": retrieved,
+                "reference": ref_text,
+                "retrieved_sources": [item["document"] for item in retrieved],
                 "retrieval_expected": bool(expected_sources) and expected != "access_denied",
                 "retrieval_passed": source_ok,
                 "trace_id": trace_id,
                 "requires_correction": bool(case.get("requires_correction")),
                 "requires_repair": bool(case.get("requires_repair")),
                 "retrieval_metrics": rank_metrics,
+                "retrieval_ranking": rank_audit,
+                "expected_source_identity": [
+                    canonical_source_identity(item) for item in expected_sources
+                ],
+                "claim_evaluation": claim_evaluation,
+                "citation_evaluation": citation_evaluation,
+                "evidence_state": evidence_state,
+                "evaluation_confidence": evaluation_confidence,
+                "answer_correct": passed,
+                "leaked": leaked,
+                "manifest_schema": case["manifest_schema"],
                 "pipeline_variant": debug.get("pipeline_namespace", "default"),
                 "estimated_cost": float(generation_metrics.get("estimated_cost") or 0.0),
                 "input_tokens": int(generation_metrics.get("input_tokens") or 0),
@@ -289,6 +405,13 @@ def run_evaluation(
                 "error": str(exc), "retrieval_expected": False, "retrieval_passed": False,
                 "trace_id": trace_id, "requires_correction": bool(case.get("requires_correction")),
                 "requires_repair": bool(case.get("requires_repair")),
+                "claim_evaluation": {"applicable": False},
+                "citation_evaluation": {"applicable": False},
+                "evidence_state": "INSUFFICIENT",
+                "evaluation_confidence": 0.0,
+                "answer_correct": False,
+                "leaked": False,
+                "manifest_schema": case["manifest_schema"],
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
         rows.append(row)
@@ -302,6 +425,20 @@ def run_evaluation(
         values = [row.get("retrieval_metrics", {}).get(name) for row in retrieval_rows]
         values = [value for value in values if value is not None]
         return sum(values) / len(values) if values else None
+
+    def aggregate_fraction(section, numerator, denominator):
+        applicable = [
+            row.get(section, {})
+            for row in rows
+            if row.get(section, {}).get("applicable")
+        ]
+        total_denominator = sum(int(value.get(denominator) or 0) for value in applicable)
+        total_numerator = sum(int(value.get(numerator) or 0) for value in applicable)
+        return {
+            "numerator": total_numerator,
+            "denominator": total_denominator,
+            "value": total_numerator / total_denominator if total_denominator else None,
+        }
 
     variants = {}
     for variant in sorted({row.get("pipeline_variant", "default") for row in rows}):
@@ -332,10 +469,35 @@ def run_evaluation(
             "passed": passed_count,
             "pass_rate": passed_count / len(group_rows),
         }
+    risk_rows = [
+        {
+            "id": row["id"],
+            "confidence": row.get("evaluation_confidence", 0.0),
+            "evidence_state": row.get("evidence_state", "UNKNOWN"),
+            "expected_outcome": row["expected_outcome"],
+            "answer_correct": bool(row.get("answer_correct")),
+            "leaked": bool(row.get("leaked")),
+        }
+        for row in rows
+    ]
     report = {
-        "schema": "rag-labeled-eval-v3", "run_label": run_label, "git_sha": _git_sha(),
+        "schema": EVALUATION_REPORT_SCHEMA,
+        "evaluator_version": EVALUATOR_VERSION,
+        "evaluator_models": EVALUATOR_MODELS,
+        "manifest_schemas": sorted({case["manifest_schema"] for case in cases}),
+        "run_label": run_label, "git_sha": _git_sha(),
         "started_at": started_at, "completed_at": completed_at,
         "manifest_files": [str(Path(p).resolve()) for p in manifest_files],
+        "manifest_sha256s": [_sha256(path) for path in manifest_files],
+        "snapshot_fingerprint": preflight_report.get("fixture_fingerprint"),
+        "provider_configuration_sha256": os.environ.get(
+            "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256"
+        ),
+        "governance_scope_sha256": os.environ.get(
+            "RAG_EVAL_GOVERNANCE_SCOPE_SHA256"
+        ),
+        "benchmark_concurrency": int(os.environ.get("RAG_EVAL_CONCURRENCY", "1")),
+        "collection": os.environ.get("QDRANT_COLLECTION"),
         "execution_context": os.environ.get("RAG_EXECUTION_CONTEXT"),
         "feature_flags": {
             "crag": os.environ.get("RAG_CRAG_ENABLED", "false"),
@@ -361,8 +523,39 @@ def run_evaluation(
         },
         "ranked_retrieval": {
             name: average_metric(name)
-            for name in ("recall_at_5", "ndcg_at_5", "recall_at_10", "ndcg_at_10")
+            for name in (
+                "recall_at_5", "ndcg_at_5", "recall_at_10", "ndcg_at_10",
+                "recall_at_20", "mrr",
+            )
         },
+        "claim_evaluation": {
+            "applicable_cases": sum(
+                bool(row.get("claim_evaluation", {}).get("applicable")) for row in rows
+            ),
+            "claim_precision": aggregate_fraction(
+                "claim_evaluation", "matched_claim_count", "claim_count"
+            ),
+            "expected_claim_recall": aggregate_fraction(
+                "claim_evaluation", "matched_expected_claim_count", "expected_claim_count"
+            ),
+            "faithfulness": aggregate_fraction(
+                "claim_evaluation", "faithful_claim_count", "claim_count"
+            ),
+        },
+        "citation_evaluation": {
+            "applicable_cases": sum(
+                bool(row.get("citation_evaluation", {}).get("applicable")) for row in rows
+            ),
+            "citation_accuracy": aggregate_fraction(
+                "citation_evaluation", "valid_expected_citation_count",
+                "expected_citation_count",
+            ),
+            "citation_precision": aggregate_fraction(
+                "citation_evaluation", "valid_actual_citation_count",
+                "actual_citation_count",
+            ),
+        },
+        "risk_coverage": build_risk_coverage_report(risk_rows),
         "latency_p50_ms": nearest_rank(latencies, 0.50),
         "latency_p95_ms": nearest_rank(latencies, 0.95),
         "pipeline_variants": variants,

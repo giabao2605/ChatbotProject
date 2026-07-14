@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -85,6 +86,10 @@ def _read(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("baseline_eval", type=Path)
@@ -99,6 +104,12 @@ def main() -> int:
         _read(args.baseline_trace),
         _read(args.candidate_trace),
     )
+    report["inputs"] = {
+        "baseline_eval_sha256": _sha256(args.baseline_eval),
+        "candidate_eval_sha256": _sha256(args.candidate_eval),
+        "baseline_trace_sha256": _sha256(args.baseline_trace),
+        "candidate_trace_sha256": _sha256(args.candidate_trace),
+    }
     payload = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.write_text(payload, encoding="utf-8")

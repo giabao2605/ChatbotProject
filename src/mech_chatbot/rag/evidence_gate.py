@@ -25,6 +25,11 @@ from mech_chatbot.rag.answer_checks import (  # noqa: F401
 
 # cross-module (owned) refs
 from mech_chatbot.rag.prompt import _normalize_lang
+from mech_chatbot.rag.number_normalization import (
+    NUMBER_PATTERN as _NUMBER_PATTERN,
+    normalize_number_token as _normalize_number_token,
+    normalized_number_values,
+)
 STRICT_ANSWER_MODE = os.getenv("STRICT_ANSWER_MODE", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -253,34 +258,6 @@ def verify_answerability(question, context_text, docs=None, trace_id=None):
     """Backward-compatible tuple wrapper around :func:`evaluate_answerability`."""
     decision = evaluate_answerability(question, context_text, docs=docs, trace_id=trace_id)
     return decision.answerable, decision.reason, list(decision.evidence_quotes)
-
-
-_NUMBER_PATTERN = re.compile(r"(?<![\w.])\d+(?:[\.,]\d+)*(?!\w)")
-
-
-def _normalize_number_token(raw):
-    value = str(raw).strip()
-    separators = [char for char in value if char in ".,"]
-    if not separators:
-        return str(int(value)) if value.isdigit() else value
-    if len(set(separators)) == 2:
-        decimal_separator = "." if value.rfind(".") > value.rfind(",") else ","
-        grouping_separator = "," if decimal_separator == "." else "."
-        value = value.replace(grouping_separator, "").replace(decimal_separator, ".")
-    else:
-        separator = separators[0]
-        parts = value.split(separator)
-        if len(parts) > 2 or (len(parts[-1]) == 3 and parts[0] != "0"):
-            value = "".join(parts)
-        else:
-            value = ".".join(parts)
-    if "." in value:
-        value = value.rstrip("0").rstrip(".")
-    return value.lstrip("0") or "0"
-
-
-def normalized_number_values(text):
-    return {_normalize_number_token(match.group(0)) for match in _NUMBER_PATTERN.finditer(str(text or ""))}
 
 
 def find_unsupported_numbers(answer, context_text, question, strict_mode=False):

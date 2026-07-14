@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,10 @@ def _ratio(candidate, baseline):
 
 def _group_rate(report, name):
     return float((report.get("evaluation_groups", {}).get(name) or {}).get("pass_rate") or 0.0)
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def compare(stage, baseline, candidate, metadata=None):
@@ -108,10 +113,18 @@ def main(argv=None):
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--metadata", type=Path)
+    parser.add_argument("--baseline-trace", type=Path, required=True)
+    parser.add_argument("--candidate-trace", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     read = lambda path: json.loads(path.read_text(encoding="utf-8"))
     result = compare(args.stage, read(args.baseline), read(args.candidate), read(args.metadata) if args.metadata else {})
+    result["inputs"] = {
+        "baseline_eval_sha256": _sha256(args.baseline),
+        "candidate_eval_sha256": _sha256(args.candidate),
+        "baseline_trace_sha256": _sha256(args.baseline_trace),
+        "candidate_trace_sha256": _sha256(args.candidate_trace),
+    }
     payload = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
