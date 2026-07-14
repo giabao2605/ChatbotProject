@@ -54,6 +54,7 @@ def compare_reports(
         ),
         "wrong_answer_not_increased": candidate_outcomes.get("wrong_answer", 0)
         <= baseline_outcomes.get("wrong_answer", 0),
+        "refusal_types_correct": candidate_outcomes.get("wrong_refusal_type", 0) == 0,
         "leakage_zero": candidate_outcomes.get("leakage", 0) == 0,
         "latency_within_budget": candidate_system.get("latency_p95_ms", float("inf"))
         <= baseline_system.get("latency_p95_ms", 0) * max_latency_ratio,

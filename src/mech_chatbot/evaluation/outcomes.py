@@ -19,6 +19,11 @@ def expected_outcome(case: dict) -> str:
     return "insufficient_evidence" if case.get("should_refuse") else "full_answer"
 
 
+def outcome_matches_expected(expected: str, actual: str) -> bool:
+    """Require the evaluator's five-state outcome contract to match exactly."""
+    return expected in VALID_OUTCOMES and actual == expected
+
+
 def classify_outcome(expected: str, actual: str, *, answer_correct: bool, leaked: bool) -> str:
     if leaked:
         return "leakage"

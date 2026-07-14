@@ -20,6 +20,7 @@ unit-test offline duoc bang embedder/classifier gia dinh, khong can model/mang.
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence, Tuple
@@ -75,6 +76,12 @@ _SYSTEM_CONFIGURATION_CUES = (
 )
 
 
+def _crag_fast_routes_enabled() -> bool:
+    return os.getenv("RAG_CRAG_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "y", "on",
+    }
+
+
 def _department_router_pattern_match(text: str, department_codes) -> str | None:
     """Apply active department profile patterns as an additive L0 rule."""
     normalized = chitchat.normalize(text)
@@ -117,7 +124,8 @@ def _fast_technical_route(text, department_codes=None) -> Optional[RouteResult]:
             reason="internal_keyword",
         )
     if (
-        "ma cau hinh" in q
+        _crag_fast_routes_enabled()
+        and "ma cau hinh" in q
         and not any(cue in q for cue in _SYSTEM_CONFIGURATION_CUES)
         and re.search(
             r"\b[A-Z0-9]+(?:-[A-Z0-9]+){3,}\b",

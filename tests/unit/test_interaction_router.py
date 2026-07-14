@@ -90,7 +90,26 @@ def test_fast_internal_rule_skips_embedding_and_llm(q):
     assert calls == {"embed": 0, "llm": 0}
 
 
-def test_configuration_code_question_skips_llm_safety_misclassification():
+def test_configuration_code_fast_route_is_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("RAG_CRAG_ENABLED", raising=False)
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình của CRAG-EVAL-SECRET-001 là gì?",
+        llm_classifier=classifier,
+    )
+
+    assert result.route == router.ROUTE_SAFETY_BLOCK
+    assert result.layer == router.LAYER_LLM
+    assert calls["llm"] == 1
+
+
+def test_configuration_code_question_skips_llm_when_fast_route_enabled(monkeypatch):
+    monkeypatch.setenv("RAG_CRAG_ENABLED", "true")
     calls = {"llm": 0}
 
     def classifier(_, __=None):

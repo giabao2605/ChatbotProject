@@ -11,6 +11,7 @@ from mech_chatbot.evaluation.outcomes import (
     classify_actual_outcome,
     classify_outcome,
     expected_outcome,
+    outcome_matches_expected,
     summarize_outcomes,
 )
 from mech_chatbot.evaluation.metrics import ranked_retrieval_metrics
@@ -265,6 +266,20 @@ def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
     ])["legacy_admin_exception"] == 1
 
 
+@pytest.mark.parametrize(
+    ("expected", "actual"),
+    [
+        ("access_denied", "insufficient_evidence"),
+        ("insufficient_evidence", "access_denied"),
+        ("partial_answer", "full_answer"),
+        ("clarification_required", "full_answer"),
+    ],
+)
+def test_eval_outcome_contract_requires_the_exact_labeled_state(expected, actual):
+    assert outcome_matches_expected(expected, actual) is False
+    assert outcome_matches_expected(expected, expected) is True
+
+
 def test_benchmark_accepts_done_trace_stage_contract_and_safe_trace_jsonl(tmp_path):
     payload = {
         "trace_stages": {
@@ -337,4 +352,40 @@ def test_crag_rollout_gate_blocks_more_than_one_correction_or_repair_per_query()
     }}
     report = crag_gate.compare_reports(eval_report, eval_report, baseline_trace, candidate_trace)
     assert report["checks"]["correction_budget"] is False
+    assert report["passed"] is False
+
+
+def test_crag_rollout_gate_blocks_wrong_refusal_type():
+    baseline_eval = {"outcome_confusion": {"wrong_refusal": 1, "wrong_answer": 0, "leakage": 0}}
+    candidate_eval = {
+        "outcome_confusion": {
+            "wrong_refusal": 0,
+            "wrong_refusal_type": 1,
+            "wrong_answer": 0,
+            "leakage": 0,
+        },
+        "total_cases": 1,
+        "passed_cases": 1,
+        "feature_flags": {"crag": "true", "claim_repair": "true", "semantic_cache": "false"},
+        "cases": [],
+    }
+    baseline_trace = {"system_metrics": {"latency_p95_ms": 100, "estimated_cost": 1}}
+    candidate_trace = {"system_metrics": {
+        "latency_p95_ms": 100,
+        "estimated_cost": 1,
+        "correction_rate": 0,
+        "repair_rate": 0,
+        "retry_rate": 0,
+        "max_corrections_per_query": 0,
+        "max_repairs_per_query": 0,
+    }}
+
+    report = crag_gate.compare_reports(
+        baseline_eval,
+        candidate_eval,
+        baseline_trace,
+        candidate_trace,
+    )
+
+    assert report["checks"]["refusal_types_correct"] is False
     assert report["passed"] is False

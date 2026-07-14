@@ -172,7 +172,8 @@ def run_evaluation(
     # Import only after validation and preflight so malformed runs never initialize the RAG stack.
     from mech_chatbot.evaluation.metrics import nearest_rank, ranked_retrieval_metrics
     from mech_chatbot.evaluation.outcomes import (
-        REFUSAL_OUTCOMES, classify_actual_outcome, expected_outcome, summarize_outcomes,
+        REFUSAL_OUTCOMES, classify_actual_outcome, expected_outcome,
+        outcome_matches_expected, summarize_outcomes,
     )
     from mech_chatbot.rag.evidence_gate import normalized_number_values
     from mech_chatbot.rag.service import chat_with_rag, extract_search_intent
@@ -240,9 +241,9 @@ def run_evaluation(
                 any(keyword_present(k) for k in keywords)
                 if should_refuse and keywords else all(keyword_present(k) for k in keywords)
             )
-            refusal_ok = (actual in REFUSAL_OUTCOMES) == should_refuse
+            outcome_ok = outcome_matches_expected(expected, actual)
             policy_ok = actual_policy == case.get("expected_version_policy", "current_only")
-            passed = keyword_ok and source_ok and not forbidden_hits and refusal_ok and policy_ok
+            passed = keyword_ok and source_ok and not forbidden_hits and outcome_ok and policy_ok
             is_admin = "admin" in {str(role).lower() for role in roles}
             outcome_rows.append({
                 "expected": expected, "actual": actual, "answer_correct": passed,
