@@ -12,6 +12,7 @@ pytestmark = pytest.mark.unit
     "message",
     [
         "Error code: 503 service_unavailable no_capacity",
+        "Error code: 502 Bad Gateway",
         "429 too many requests",
         "provider temporarily unavailable",
         "request timeout",

@@ -84,7 +84,9 @@ def _is_gpt_rate_limit(exc):
     msg = str(exc).lower()
     return (
         "429" in msg
+        or "502" in msg
         or "503" in msg
+        or "bad gateway" in msg
         or "too many requests" in msg
         or "rate limit" in msg
         or "resource_exhausted" in msg
