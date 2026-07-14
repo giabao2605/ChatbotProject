@@ -160,8 +160,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     trace_id = trace_id or f"rag_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     t_start = time.time()
     
-    log_trace("rag_start", trace_id, 
-              question=user_question[:500],
+    log_trace("rag_start", trace_id,
+              question_length=len(user_question or ""),
               has_image=bool(image_path),
               history_count=len(chat_history),
               current_part_ids=current_part_ids,
@@ -1091,11 +1091,17 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 )
                 
                 scores = [{"file": d.metadata.get("file_goc"), "page": d.metadata.get("trang_so"), "score": d.metadata.get("relevance_score", 1.0)} for d in real_docs[:5]]
-                log_trace("rerank", trace_id, latency_ms=int((time.time() - t_rerank)*1000), input_docs=len(retrieved_docs), output_docs=len(real_docs), scores=scores)
+                log_trace(
+                    "rerank", trace_id,
+                    latency_ms=int((time.time() - t_rerank)*1000),
+                    input_docs=len(retrieved_docs), output_docs=len(real_docs),
+                    scores=scores, backend="voyage", status="success",
+                    fallback=False, retry_attempted=False,
+                )
             except Exception as e:
                 logger.error(f"Loi khi su dung Voyage Rerank: {e}. Fallback to manual rerank.")
                 real_docs = rerank_docs(real_docs)
-                log_trace("rerank", trace_id, error=str(e))
+                log_trace("rerank", trace_id, **voyage_failure_metadata(e))
         elif rerank_backend == "late_interaction":
             logger.info("Dung late_interaction cho rerank candidate set")
         else:

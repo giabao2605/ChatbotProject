@@ -72,3 +72,21 @@ def test_voyage_rerank_requires_api_key(monkeypatch):
 
     with pytest.raises(RuntimeError, match="VOYAGE_API_KEY"):
         rerank.voyage_rerank_documents([_doc("text")], "cau hoi")
+
+
+def test_voyage_pilot_policy_records_429_and_immediate_local_fallback():
+    error = RuntimeError("429 too many requests")
+    error.status_code = 429
+
+    metadata = rerank.voyage_failure_metadata(error)
+
+    assert metadata == {
+        "backend": "voyage",
+        "status": "error",
+        "fallback": True,
+        "fallback_backend": "local_fusion",
+        "fallback_reason": "RuntimeError",
+        "provider_status_code": 429,
+        "retryable": True,
+        "retry_attempted": False,
+    }

@@ -163,3 +163,84 @@ def test_stream_done_exposes_numeric_trace_stages_for_benchmark(monkeypatch):
     assert payload["trace_stages"]["rrf_grouping"] == {"latency_ms": 2}
     assert payload["trace_stages"]["first_token"]["latency_ms"] >= 0
     assert payload["trace_stages"]["completion"]["latency_ms"] >= 0
+
+
+def test_pilot_replay_header_disables_cache_inside_worker(monkeypatch):
+    from mech_chatbot.rag import semantic_cache
+    from mech_chatbot.evaluation.crag_pilot import (
+        PilotConfig,
+        assign_pilot_route,
+        build_replay_request,
+    )
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    semaphore = asyncio.Semaphore(1)
+    observed = []
+    monkeypatch.setenv("SEMANTIC_CACHE_ENABLED", "true")
+    monkeypatch.setenv("CRAG_PILOT_ASSIGNMENT_SALT", "pilot-test-salt")
+    monkeypatch.setenv("RAG_DEPLOYMENT_ID", "candidate-1")
+    monkeypatch.setattr(rag_server, "_rag_ready", True)
+    monkeypatch.setattr(rag_server, "_rag_executor", executor)
+    monkeypatch.setattr(rag_server, "_rag_semaphore", semaphore)
+    monkeypatch.setattr(
+        rag_server,
+        "resolve_user_profile",
+        lambda _req: {
+            "username": "viewer-test", "user_id": 2, "roles": ["viewer"],
+            "department": "Technical", "allowed_departments": ["Technical"],
+            "allowed_sites": ["HQ"], "max_security_level": "internal",
+        },
+    )
+
+    def fake_open(*_args, **_kwargs):
+        observed.append(semantic_cache.enabled())
+        return iter(["replay answer"]), "", [], [], {"citation_docs": []}
+
+    monkeypatch.setattr(rag_server, "_open_rag_stream", fake_open)
+    route = assign_pilot_route(
+        PilotConfig(
+            experiment_id="exp-1",
+            assignment_salt="pilot-test-salt",
+            eligible_department="Technical",
+            cohort_sha256="cohort-v1",
+            control_url="http://control",
+            candidate_url="http://candidate",
+            control_deployment_id="control-1",
+            candidate_deployment_id="candidate-1",
+            snapshot_fingerprint="snapshot-v1",
+        ),
+        user_id="2",
+        department="Technical",
+        request_id="request-1",
+    )
+    if route.opposite_deployment_id != "candidate-1":
+        monkeypatch.setenv("RAG_DEPLOYMENT_ID", route.opposite_deployment_id)
+    replay = build_replay_request(
+        route,
+        {"user_question": "replay", "username": "viewer-test"},
+        original_trace_id="rag-original",
+    )
+
+    async def scenario():
+        response = await rag_server.chat_stream_endpoint(
+            rag_server.ChatRequest(user_question="replay", username="viewer-test"),
+            x_rag_pilot_replay="true",
+            x_rag_pilot_experiment_id="exp-1",
+            x_rag_matched_pair_id=route.matched_pair_id,
+            x_rag_original_trace_id="rag-original",
+            x_rag_assigned_arm=route.arm,
+            x_rag_pilot_payload_sha256=replay.headers["X-RAG-Pilot-Payload-SHA256"],
+            x_rag_pilot_replay_nonce=replay.headers["X-RAG-Pilot-Replay-Nonce"],
+            x_rag_pilot_replay_expires=replay.headers["X-RAG-Pilot-Replay-Expires"],
+            x_rag_pilot_replay_signature=replay.headers["X-RAG-Pilot-Replay-Signature"],
+        )
+        async for _event in response.body_iterator:
+            pass
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        executor.shutdown(wait=True)
+
+    assert observed == [False]
+    assert semantic_cache.enabled() is True

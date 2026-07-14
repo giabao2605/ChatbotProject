@@ -1050,15 +1050,16 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
         effective_question = ctx_result["standalone_question"]
     if effective_question != user_question or effective_part_ids != current_part_ids:
         logger.info(
-            f"[Context] action={context_action} | goc={user_question} -> "
-            f"rewrite={effective_question} | part_ids {current_part_ids}->{effective_part_ids}"
+            "[Context] action=%s | rewritten=%s | part_ids %s->%s",
+            context_action,
+            effective_question != user_question,
+            current_part_ids,
+            effective_part_ids,
         )
     log_trace("context_analysis", trace_id,
               latency_ms=int((time.time() - t_ctx) * 1000),
               context_action=context_action,
               rewritten=(effective_question != user_question),
-              original_question=user_question[:300],
-              standalone_question=effective_question[:300],
               part_ids_before=current_part_ids,
               part_ids_after=effective_part_ids)
 

@@ -8,9 +8,26 @@ import os
 import json
 import math
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+
+_REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
+
+
+@contextmanager
+def replay_cache_disabled(disabled=True):
+    """Disable cache reads/writes only for one pilot replay execution."""
+    token = _REPLAY_CACHE_DISABLED.set(bool(disabled))
+    try:
+        yield
+    finally:
+        _REPLAY_CACHE_DISABLED.reset(token)
 
 
 def enabled():
+    if _REPLAY_CACHE_DISABLED.get():
+        return False
     configured = os.getenv("SEMANTIC_CACHE_ENABLED")
     if configured is None and os.getenv("RAG_EXECUTION_CONTEXT", "production").strip().lower() == "evaluation":
         return False

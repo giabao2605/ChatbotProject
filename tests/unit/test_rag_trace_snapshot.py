@@ -50,6 +50,30 @@ def test_log_trace_adds_execution_context_and_normalizes_rag_end_reason(monkeypa
     ]
 
 
+def test_replay_trace_context_removes_raw_query_fields(monkeypatch):
+    emitted: list[dict] = []
+    monkeypatch.setattr(
+        trace_logging.trace_logger,
+        "info",
+        lambda message: emitted.append(json.loads(message)),
+    )
+
+    with trace_logging.redact_sensitive_trace_fields(True):
+        trace_logging.log_trace(
+            "context_analysis",
+            "replay-trace",
+            original_question="raw question",
+            standalone_question="rewritten raw question",
+            corrected_query="raw corrected query",
+            latency_ms=10,
+        )
+
+    assert emitted[0]["latency_ms"] == 10
+    assert "original_question" not in emitted[0]
+    assert "standalone_question" not in emitted[0]
+    assert "corrected_query" not in emitted[0]
+
+
 def test_snapshot_excludes_test_cancelled_and_empty_reason_by_default(tmp_path):
     snapshot = _load_snapshot_module()
     path = tmp_path / "trace.jsonl"
@@ -121,3 +145,44 @@ def test_snapshot_summarizes_external_ai_latency_by_surface_without_payload(tmp_
     markdown = snapshot.render_markdown(report)
     assert "interaction_routing" in markdown
     assert "120000.0" in markdown
+
+
+def test_snapshot_reports_voyage_error_and_local_fallback_rate(tmp_path):
+    snapshot = _load_snapshot_module()
+    path = tmp_path / "trace.jsonl"
+    events = [
+        {
+            "ts": "2026-07-13T00:00:00+00:00", "event": "rerank",
+            "trace_id": "p1", "execution_context": "production",
+            "backend": "voyage", "status": "success", "fallback": False,
+        },
+        {
+            "ts": "2026-07-13T00:01:00+00:00", "event": "rerank",
+            "trace_id": "p2", "execution_context": "production",
+            "backend": "voyage", "status": "error", "fallback": True,
+            "fallback_backend": "local_fusion", "provider_status_code": 429,
+            "retry_attempted": False,
+        },
+        {
+            "ts": "2026-07-13T00:02:00+00:00", "event": "rag_end",
+            "trace_id": "p1", "execution_context": "production", "refusal": False,
+        },
+        {
+            "ts": "2026-07-13T00:03:00+00:00", "event": "rag_end",
+            "trace_id": "p2", "execution_context": "production", "refusal": False,
+        },
+    ]
+    path.write_text("\n".join(json.dumps(item) for item in events), encoding="utf-8")
+
+    report = snapshot.build_snapshot(path, execution_contexts={"production"})
+
+    assert report["voyage_rerank"] == {
+        "call_count": 2,
+        "success_count": 1,
+        "error_count": 1,
+        "fallback_count": 1,
+        "error_rate": 0.5,
+        "fallback_rate": 0.5,
+        "status_codes": {"429": 1},
+        "retry_attempt_count": 0,
+    }

@@ -32,7 +32,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
-from mech_chatbot.config.logging import logger, log_trace, pop_trace_stage_metrics
+from mech_chatbot.config.logging import (
+    logger,
+    log_trace,
+    pop_trace_stage_metrics,
+    redact_sensitive_trace_fields,
+)
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled, external_processing_context
 
 # ---------------------------------------------------------------------------
@@ -149,6 +154,10 @@ class HealthResponse(BaseModel):
     rag_loaded: bool
     max_concurrent: int
     current_available: int
+    deployment_id: Optional[str] = None
+    git_sha: Optional[str] = None
+    snapshot_fingerprint: Optional[str] = None
+    feature_flags: Dict[str, bool] = Field(default_factory=dict)
 
 
 class UserContextRequest(BaseModel):
@@ -261,6 +270,17 @@ async def health_check():
         max_concurrent=MAX_CONCURRENT_RAG,
         # Semaphore._value gives remaining permits (CPython implementation detail)
         current_available=getattr(_rag_semaphore, "_value", -1),
+        deployment_id=os.getenv("RAG_DEPLOYMENT_ID"),
+        git_sha=os.getenv("RAG_DEPLOYMENT_GIT_SHA"),
+        snapshot_fingerprint=os.getenv("RAG_SNAPSHOT_FINGERPRINT"),
+        feature_flags={
+            "RAG_CRAG_ENABLED": os.getenv("RAG_CRAG_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"},
+            "RAG_CLAIM_REPAIR_ENABLED": os.getenv(
+                "RAG_CLAIM_REPAIR_ENABLED", "false"
+            ).strip().lower()
+            in {"1", "true", "yes", "on"},
+        },
     )
 
 
@@ -313,8 +333,8 @@ async def chat_endpoint(req: ChatRequest):
         )
         result.elapsed_ms = int((time.time() - t_start) * 1000)
         logger.info(
-            f"RAG request completed in {result.elapsed_ms}ms "
-            f"(question={req.user_question[:80]}...)"
+            "RAG request completed in %sms",
+            result.elapsed_ms,
         )
         return result
 
@@ -376,11 +396,86 @@ def _final_stream_citations(debug_info: dict[str, Any] | None, answer: str) -> l
 
 
 @app.post("/chat/stream", tags=["RAG"], dependencies=[Depends(require_service_auth)])
-async def chat_stream_endpoint(req: ChatRequest):
+async def chat_stream_endpoint(
+    req: ChatRequest,
+    x_rag_pilot_replay: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Replay"
+    ),
+    x_rag_pilot_experiment_id: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Experiment-ID"
+    ),
+    x_rag_matched_pair_id: Optional[str] = Header(
+        default=None, alias="X-RAG-Matched-Pair-ID"
+    ),
+    x_rag_original_trace_id: Optional[str] = Header(
+        default=None, alias="X-RAG-Original-Trace-ID"
+    ),
+    x_rag_assigned_arm: Optional[str] = Header(
+        default=None, alias="X-RAG-Assigned-Arm"
+    ),
+    x_rag_pilot_replay_signature: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Replay-Signature"
+    ),
+    x_rag_pilot_payload_sha256: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Payload-SHA256"
+    ),
+    x_rag_pilot_replay_nonce: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Replay-Nonce"
+    ),
+    x_rag_pilot_replay_expires: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Replay-Expires"
+    ),
+):
     """Stream real pipeline chunks and final metadata over SSE."""
     if not _rag_ready:
         raise HTTPException(status_code=503, detail="RAG system is not loaded yet.")
     user_profile = resolve_user_profile(req)
+    replay = isinstance(x_rag_pilot_replay, str) and x_rag_pilot_replay.strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if replay:
+        if (
+            not isinstance(x_rag_matched_pair_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", x_rag_matched_pair_id)
+            or not isinstance(x_rag_original_trace_id, str)
+            or not x_rag_original_trace_id.strip()
+            or x_rag_assigned_arm not in {"control", "candidate"}
+            or not isinstance(x_rag_pilot_experiment_id, str)
+            or not x_rag_pilot_experiment_id.strip()
+        ):
+            raise HTTPException(status_code=400, detail="Invalid CRAG pilot replay headers")
+        from mech_chatbot.evaluation.crag_pilot import (
+            canonical_payload_sha256,
+            verify_replay_signature,
+        )
+
+        if hasattr(req, "model_fields_set"):
+            fields_set = req.model_fields_set
+        else:
+            fields_set = req.__fields_set__
+        if hasattr(req, "model_dump"):
+            signed_payload = req.model_dump(include=fields_set)
+        else:
+            signed_payload = req.dict(include=fields_set)
+        actual_payload_sha256 = canonical_payload_sha256(signed_payload)
+
+        try:
+            replay_expires_at = int(x_rag_pilot_replay_expires or 0)
+        except (TypeError, ValueError):
+            replay_expires_at = 0
+        if not verify_replay_signature(
+            assignment_salt=os.getenv("CRAG_PILOT_ASSIGNMENT_SALT", ""),
+            experiment_id=x_rag_pilot_experiment_id,
+            matched_pair_id=x_rag_matched_pair_id,
+            assigned_arm=x_rag_assigned_arm,
+            target_deployment_id=os.getenv("RAG_DEPLOYMENT_ID", ""),
+            original_trace_id=x_rag_original_trace_id,
+            payload_sha256=actual_payload_sha256,
+            nonce=str(x_rag_pilot_replay_nonce or ""),
+            expires_at=replay_expires_at,
+            signature=str(x_rag_pilot_replay_signature or ""),
+        ) or actual_payload_sha256 != x_rag_pilot_payload_sha256:
+            raise HTTPException(status_code=403, detail="Invalid CRAG pilot replay signature")
     try:
         await asyncio.wait_for(_rag_semaphore.acquire(), timeout=120.0)
     except asyncio.TimeoutError:
@@ -399,11 +494,25 @@ async def chat_stream_endpoint(req: ChatRequest):
     def worker():
         stream = None
         debug_info: dict[str, Any] = {}
+        from mech_chatbot.rag.semantic_cache import replay_cache_disabled
+
         with external_processing_context(
             user_profile.get("username"),
             _is_admin(user_profile),
             request_trace_id,
-        ):
+        ), replay_cache_disabled(replay), redact_sensitive_trace_fields(replay):
+            if replay:
+                log_trace(
+                    "pilot_replay_start",
+                    request_trace_id,
+                    matched_pair_id=x_rag_matched_pair_id,
+                    original_trace_id=x_rag_original_trace_id,
+                    assigned_arm=x_rag_assigned_arm,
+                    deployment_id=os.getenv("RAG_DEPLOYMENT_ID"),
+                    snapshot_fingerprint=os.getenv("RAG_SNAPSHOT_FINGERPRINT"),
+                    cache_disabled=True,
+                    side_effects_disabled=True,
+                )
             first_token_ms = None
             try:
                 if cancel_event.is_set():
@@ -438,13 +547,14 @@ async def chat_stream_endpoint(req: ChatRequest):
                     raise ExternalAICallCancelled("RAG stream da bi client huy")
                 for citation in _final_stream_citations(debug_info, "".join(answer_parts)):
                     emit("citation", citation)
-                _audit_admin_query(
-                    user_profile,
-                    request_trace_id,
-                    "chat_stream",
-                    outcome="success",
-                    debug_info=debug_info,
-                )
+                if not replay:
+                    _audit_admin_query(
+                        user_profile,
+                        request_trace_id,
+                        "chat_stream",
+                        outcome="success",
+                        debug_info=debug_info,
+                    )
                 elapsed_ms = int((time.time() - started) * 1000)
                 trace_stages = pop_trace_stage_metrics(request_trace_id)
                 if first_token_ms is not None:
@@ -461,9 +571,8 @@ async def chat_stream_endpoint(req: ChatRequest):
                     },
                 )
                 logger.info(
-                    "RAG stream completed in %sms (question=%s...)",
+                    "RAG stream completed in %sms",
                     elapsed_ms,
-                    req.user_question[:80],
                 )
                 log_trace(
                     "complete",
@@ -474,13 +583,14 @@ async def chat_stream_endpoint(req: ChatRequest):
             except ExternalAICallCancelled:
                 elapsed_ms = int((time.time() - started) * 1000)
                 logger.info("RAG stream cancelled after %sms", elapsed_ms)
-                _audit_admin_query(
-                    user_profile,
-                    request_trace_id,
-                    "chat_stream",
-                    outcome="cancelled",
-                    debug_info=debug_info,
-                )
+                if not replay:
+                    _audit_admin_query(
+                        user_profile,
+                        request_trace_id,
+                        "chat_stream",
+                        outcome="cancelled",
+                        debug_info=debug_info,
+                    )
                 log_trace(
                     "rag_end",
                     request_trace_id,
@@ -491,12 +601,13 @@ async def chat_stream_endpoint(req: ChatRequest):
                 )
             except Exception as exc:
                 logger.error("RAG stream failed: %s", exc, exc_info=True)
-                _audit_admin_query(
-                    user_profile,
-                    request_trace_id,
-                    "chat_stream",
-                    outcome="error",
-                )
+                if not replay:
+                    _audit_admin_query(
+                        user_profile,
+                        request_trace_id,
+                        "chat_stream",
+                        outcome="error",
+                    )
                 emit(
                     "error",
                     {

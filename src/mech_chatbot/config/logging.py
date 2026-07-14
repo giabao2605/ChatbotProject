@@ -1,6 +1,8 @@
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 
 class _WindowsSafeRotatingFileHandler(RotatingFileHandler):
@@ -92,6 +94,20 @@ _STEP_COL = {
     "corrective_retrieval": "corrective_retrieval_ms",
     "claim_repair": "claim_repair_ms",
 }
+_REDACT_SENSITIVE_TRACE_FIELDS = ContextVar(
+    "redact_sensitive_trace_fields", default=False
+)
+_SENSITIVE_TRACE_KEY_PARTS = ("question", "prompt", "query", "content")
+
+
+@contextmanager
+def redact_sensitive_trace_fields(enabled=True):
+    """Remove prompt-like values from trace events in replay contexts."""
+    token = _REDACT_SENSITIVE_TRACE_FIELDS.set(bool(enabled))
+    try:
+        yield
+    finally:
+        _REDACT_SENSITIVE_TRACE_FIELDS.reset(token)
 
 
 def _persist_rag_trace(trace_id, acc):
@@ -145,6 +161,12 @@ def _record_benchmark_stage(event_name, trace_id, kwargs):
 
 def log_trace(event_name, trace_id, **kwargs):
     """Ghi 1 event JSONL vao log trace + gom vao summary theo trace_id (P1-4)."""
+    if _REDACT_SENSITIVE_TRACE_FIELDS.get():
+        kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if not any(part in str(key).casefold() for part in _SENSITIVE_TRACE_KEY_PARTS)
+        }
     execution_context = str(
         kwargs.pop("execution_context", None)
         or os.getenv("RAG_EXECUTION_CONTEXT", "production")

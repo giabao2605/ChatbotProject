@@ -11,8 +11,10 @@ import mimetypes
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import BoundedSemaphore
 from typing import Any
 from uuid import uuid4
 
@@ -39,7 +41,7 @@ from mech_chatbot.api.file_access import (
 )
 from mech_chatbot.auth.core import authenticate_user, load_user_profile, update_user_preferred_language
 from mech_chatbot.auth.authorization import role_allows
-from mech_chatbot.config.logging import logger
+from mech_chatbot.config.logging import logger, log_trace
 from mech_chatbot.db.engine import engine
 from mech_chatbot.llm.external_ai import invalidate_external_ai_provider_profiles
 from mech_chatbot.services import (
@@ -168,6 +170,27 @@ load_dotenv()
 # Lifespan: raise anyio thread limiter so blocking def endpoints don't starve
 # ---------------------------------------------------------------------------
 _APP_THREAD_LIMIT = int(os.getenv("APP_THREAD_LIMIT", "60"))
+_PILOT_REPLAY_EXECUTOR = None
+_PILOT_REPLAY_CAPACITY = None
+
+
+def _start_pilot_replay_executor():
+    global _PILOT_REPLAY_EXECUTOR, _PILOT_REPLAY_CAPACITY
+    workers = max(1, int(os.getenv("CRAG_PILOT_REPLAY_WORKERS", "2")))
+    queue_size = max(0, int(os.getenv("CRAG_PILOT_REPLAY_QUEUE_SIZE", "8")))
+    _PILOT_REPLAY_EXECUTOR = ThreadPoolExecutor(
+        max_workers=workers, thread_name_prefix="crag-pilot-replay"
+    )
+    _PILOT_REPLAY_CAPACITY = BoundedSemaphore(workers + queue_size)
+
+
+def _stop_pilot_replay_executor():
+    global _PILOT_REPLAY_EXECUTOR, _PILOT_REPLAY_CAPACITY
+    executor = _PILOT_REPLAY_EXECUTOR
+    _PILOT_REPLAY_EXECUTOR = None
+    _PILOT_REPLAY_CAPACITY = None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 @asynccontextmanager
@@ -176,6 +199,7 @@ async def _lifespan(app: FastAPI):
     import anyio
     anyio.to_thread.current_default_thread_limiter().total_tokens = _APP_THREAD_LIMIT
     logger.info("App server anyio thread limiter raised to %d", _APP_THREAD_LIMIT)
+    _start_pilot_replay_executor()
 
     async def _reconcile_lifecycle_periodically():
         interval = max(60, int(os.getenv("LIFECYCLE_RECONCILE_SECONDS", "300")))
@@ -197,6 +221,7 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
+        _stop_pilot_replay_executor()
         lifecycle_task.cancel()
         try:
             await lifecycle_task
@@ -353,6 +378,178 @@ def _iter_sse_events(response):
         except Exception:
             payload = {"message": raw_data}
         yield event, payload
+
+
+def _pilot_route(profile: dict[str, Any], request_id: str):
+    from mech_chatbot.evaluation.crag_pilot import (
+        assign_pilot_route,
+        load_pilot_config,
+    )
+
+    config = load_pilot_config()
+    if config is None:
+        return None
+    return assign_pilot_route(
+        config,
+        user_id=str(profile.get("user_id") or ""),
+        department=str(profile.get("department") or ""),
+        request_id=request_id,
+    )
+
+
+def _pilot_outcome(answer: str, debug: dict[str, Any], *, provider_error=False):
+    from mech_chatbot.evaluation.outcomes import (
+        REFUSAL_OUTCOMES,
+        classify_actual_outcome,
+    )
+
+    actual = classify_actual_outcome(answer)
+    generation = debug.get("generation_metrics") or {}
+    return {
+        "refusal": actual in REFUSAL_OUTCOMES,
+        "access_denied": actual == "access_denied",
+        "provider_error": bool(provider_error),
+        "correction_count": int(debug.get("correction_count") or 0),
+        "repair_count": int(
+            debug.get("repair_count") or generation.get("repair_count") or 0
+        ),
+        "query_type": str(
+            debug.get("route") or debug.get("evaluation_group") or "unknown"
+        )[:50],
+    }
+
+
+def _execute_pilot_replay(replay) -> None:
+    from mech_chatbot.evaluation.crag_pilot import load_pilot_config, refresh_replay_auth
+
+    try:
+        current = load_pilot_config()
+    except ValueError:
+        current = None
+    expected_target_id = (
+        current.control_deployment_id
+        if current is not None and replay.target_arm == "control"
+        else current.candidate_deployment_id
+        if current is not None
+        else None
+    )
+    if (
+        current is None
+        or current.experiment_id != replay.metadata["experiment_id"]
+        or current.snapshot_fingerprint != replay.metadata["snapshot_fingerprint"]
+        or expected_target_id != replay.target_deployment_id
+    ):
+        log_trace(
+            "pilot_replay_result",
+            replay.metadata["matched_pair_id"],
+            matched_pair_id=replay.metadata["matched_pair_id"],
+            experiment_id=replay.metadata["experiment_id"],
+            assigned_arm=replay.metadata["assigned_arm"],
+            target_arm=replay.target_arm,
+            target_deployment_id=replay.target_deployment_id,
+            status="dropped",
+            fallback_reason="pilot_disabled_or_contract_changed",
+        )
+        return
+    replay = refresh_replay_auth(replay)
+    headers = {**_rag_headers(), **replay.headers}
+    started = time.perf_counter()
+    status = "error"
+    replay_trace_id = None
+    error_type = None
+    try:
+        with requests.post(
+            f"{replay.target_url}/chat/stream",
+            headers=headers,
+            json=replay.payload,
+            timeout=(10, int(os.getenv("CRAG_PILOT_REPLAY_TIMEOUT_SECONDS", "300"))),
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+            for event, payload in _iter_sse_events(response):
+                if event == "done" and isinstance(payload, dict):
+                    replay_trace_id = payload.get("trace_id")
+                    status = "success"
+                elif event == "error":
+                    error_type = "replay_stream_error"
+                    break
+    except Exception as exc:
+        error_type = type(exc).__name__
+        logger.warning("CRAG pilot replay failed: %s", exc)
+    finally:
+        log_trace(
+            "pilot_replay_result",
+            replay_trace_id or replay.metadata["matched_pair_id"],
+            matched_pair_id=replay.metadata["matched_pair_id"],
+            experiment_id=replay.metadata["experiment_id"],
+            assigned_arm=replay.metadata["assigned_arm"],
+            target_arm=replay.target_arm,
+            target_deployment_id=replay.target_deployment_id,
+            snapshot_fingerprint=replay.metadata["snapshot_fingerprint"],
+            status=status,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            error_type=error_type,
+        )
+
+
+def _schedule_pilot_replay(route, payload, outcome, trace_id, profile) -> bool:
+    from mech_chatbot.evaluation.crag_pilot import (
+        build_replay_request,
+        should_sample_for_adjudication,
+    )
+
+    if route is None or not route.eligible:
+        return False
+    sampled = should_sample_for_adjudication(
+        route.experiment_id, route.matched_pair_id, outcome
+    )
+    log_trace(
+        "pilot_assignment",
+        trace_id,
+        experiment_id=route.experiment_id,
+        matched_pair_id=route.matched_pair_id,
+        assignment_version=route.assignment_version,
+        assigned_arm=route.arm,
+        deployment_id=route.deployment_id,
+        snapshot_fingerprint=route.snapshot_fingerprint,
+        cohort_sha256=route.cohort_sha256,
+        actor_hash=route.actor_hash,
+        department=str(profile.get("department") or "")[:100],
+        roles=sorted(str(role)[:50] for role in (profile.get("roles") or [])),
+        sites=sorted(str(site)[:100] for site in (profile.get("allowed_sites") or [])),
+        query_type=outcome.get("query_type"),
+        refusal=bool(outcome.get("refusal")),
+        access_denied=bool(outcome.get("access_denied")),
+        provider_error=bool(outcome.get("provider_error")),
+        correction_count=int(outcome.get("correction_count") or 0),
+        repair_count=int(outcome.get("repair_count") or 0),
+        sampled_for_adjudication=sampled,
+    )
+    if not sampled:
+        return False
+    replay = build_replay_request(route, payload, original_trace_id=trace_id)
+    executor = _PILOT_REPLAY_EXECUTOR
+    capacity = _PILOT_REPLAY_CAPACITY
+    if executor is None or capacity is None or not capacity.acquire(blocking=False):
+        log_trace(
+            "pilot_replay_result",
+            trace_id,
+            matched_pair_id=route.matched_pair_id,
+            experiment_id=route.experiment_id,
+            assigned_arm=route.arm,
+            target_arm=replay.target_arm,
+            target_deployment_id=replay.target_deployment_id,
+            status="dropped",
+            fallback_reason="replay_queue_full_or_stopped",
+        )
+        return False
+    try:
+        future = executor.submit(_execute_pilot_replay, replay)
+    except Exception:
+        capacity.release()
+        raise
+    future.add_done_callback(lambda _future: capacity.release())
+    return True
 
 
 def _safe_int(value: Any) -> int | None:
@@ -833,18 +1030,37 @@ def chat_message(req: ChatMessageRequest, profile: dict[str, Any] = Depends(csrf
             "conversation_context": req.conversation_context,
         }
         try:
+            pilot_route = _pilot_route(
+                profile, request_id=f"{req.session_id}|{uuid4().hex}"
+            )
+        except ValueError as exc:
+            logger.error("CRAG pilot configuration invalid: %s", exc)
+            yield _sse("error", {"message": "CRAG pilot configuration is invalid"})
+            return
+        rag_base_url = (
+            pilot_route.deployment_url if pilot_route is not None else _rag_base_url()
+        )
+        try:
             answer_parts = []
             stream_metadata = {}
             stream_done = None
             streamed_citations = []
             with requests.post(
-                f"{_rag_base_url()}/chat/stream",
+                f"{rag_base_url}/chat/stream",
                 headers=_rag_headers(),
                 json=rag_payload,
                 timeout=(10, int(os.getenv("APP_RAG_CHAT_TIMEOUT_SECONDS", "300"))),
                 stream=True,
             ) as resp:
                 if not resp.ok:
+                    if pilot_route is not None:
+                        _schedule_pilot_replay(
+                            pilot_route,
+                            rag_payload,
+                            _pilot_outcome("", {}, provider_error=True),
+                            pilot_route.matched_pair_id,
+                            profile,
+                        )
                     yield _sse(
                         "error",
                         {
@@ -871,6 +1087,26 @@ def chat_message(req: ChatMessageRequest, profile: dict[str, Any] = Depends(csrf
                         # hold it until final-answer attribution is resolved.
                         streamed_citations.append(payload or {})
                     elif event == "error":
+                        if pilot_route is not None:
+                            _schedule_pilot_replay(
+                                pilot_route,
+                                rag_payload,
+                                _pilot_outcome(
+                                    "",
+                                    stream_metadata.get("debug_info")
+                                    if isinstance(stream_metadata, dict)
+                                    and isinstance(
+                                        stream_metadata.get("debug_info"), dict
+                                    )
+                                    else {},
+                                    provider_error=True,
+                                ),
+                                str(
+                                    (payload or {}).get("trace_id")
+                                    or pilot_route.matched_pair_id
+                                ),
+                                profile,
+                            )
                         yield _sse("error", payload)
                         return
                     elif event == "done":
@@ -895,6 +1131,14 @@ def chat_message(req: ChatMessageRequest, profile: dict[str, Any] = Depends(csrf
             # Keep the expandable text source list consistent with the visual
             # citation cards; do not expose unrelated retrieval candidates.
             ref_text = _citation_ref_text(citations)
+            if pilot_route is not None:
+                _schedule_pilot_replay(
+                    pilot_route,
+                    rag_payload,
+                    _pilot_outcome(answer, debug),
+                    str(stream_done.get("trace_id") or pilot_route.matched_pair_id),
+                    profile,
+                )
             for citation in citations:
                 yield _sse("citation", citation)
 

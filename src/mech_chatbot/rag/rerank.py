@@ -10,12 +10,28 @@ import requests
 from functools import lru_cache
 from mech_chatbot.llm.external_ai import (
     audited_external_call,
+    external_error_metadata,
     get_provider_runtime,
     normalize_rerank_result,
 )
 
 
 _VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
+
+
+def voyage_failure_metadata(exc):
+    """Describe the fixed pilot policy: no retry, immediate local fallback."""
+    error = external_error_metadata(exc)
+    return {
+        "backend": "voyage",
+        "status": "error",
+        "fallback": True,
+        "fallback_backend": "local_fusion",
+        "fallback_reason": error.error_type,
+        "provider_status_code": error.status_code,
+        "retryable": error.retryable,
+        "retry_attempted": False,
+    }
 
 
 def _voyage_runtime():

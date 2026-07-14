@@ -39,7 +39,7 @@ Vì vậy, “100% mục đích” không đồng nghĩa phải bật mọi côn
 | Hạng mục | Code | Test offline | Artifact/gate live | Production pilot | Trạng thái thực tế |
 |---|---|---|---|---|---|
 | Telemetry và labeled evaluation | Có | Có | Có | Áp dụng cho evaluation | Foundation v4 hoàn tất; pilot labels thuộc Milestone A–F |
-| CRAG và claim repair | Có | Có | Ba gate đạt | Chưa | Hoàn tất staging, chưa đóng production |
+| CRAG và claim repair | Có | Có | Ba gate đạt | Chưa | Hoàn tất staging và pilot control plane; live pilot chưa bắt đầu |
 | Grounded math | Có | Có | Chưa có baseline/candidate riêng | Chưa | Offline-ready |
 | Late Interaction | Có | Có | Có readiness offline; chưa có quality gate | Chưa | Serving-ready về hạ tầng, chưa production-ready |
 | Query decomposition | Có | Có | Chưa | Chưa | Implementation sớm, chưa được chứng minh chất lượng |
@@ -74,7 +74,7 @@ Các implementation chính:
 - Đã có risk–coverage curve theo operating point; chưa có dashboard production hiển thị curve này.
 - Chưa có dashboard chuẩn tổng hợp theo pipeline namespace và theo feature combination.
 - Chưa có SLO/alert chính thức cho provider latency, external reranker error và feature-specific fallback rate.
-- Voyage 429 hiện được quan sát rõ nhưng chưa có operational threshold hoặc quyết định retry/fallback cố định cho pilot.
+- Voyage 429 đã có policy pilot: không retry trong user request, fallback local ngay và abort nếu error rate >5% trong một cửa sổ đủ 50 rerank call. Chưa có SLO/alert production tổng quát ngoài pilot.
 
 ### 1.3 Labeled evaluation và rollout foundation
 
@@ -183,8 +183,8 @@ Trong cả ba run:
 
 - Chưa bật `RAG_CRAG_ENABLED` và `RAG_CLAIM_REPAIR_ENABLED` trong production pilot.
 - Chưa có artifact production pilot chứng minh không regression trong traffic thật.
-- Trong ba cặp CRAG benchmark, reranking external có 19 error status trên 48 call; log trực tiếp cho thấy Voyage 429 là lỗi đã quan sát. Fallback local giữ correctness nhưng reliability cần được xử lý hoặc chấp nhận bằng policy rõ ràng.
-- Tài liệu gốc cho phép tối đa hai correction pass; implementation hiện chủ động giới hạn một pass. Đây là quyết định an toàn về latency/cost, cần ghi thành ADR hoặc cập nhật tài liệu gốc.
+- Trong ba cặp CRAG benchmark, reranking external có 19 error status trên 48 call; log trực tiếp cho thấy Voyage 429 là lỗi đã quan sát. ADR 0002 đã khóa policy fallback local ngay, không retry trong request và ngưỡng abort >5%/50 call cho pilot.
+- Tài liệu gốc cho phép tối đa hai correction pass; implementation và pilot gate chủ động giới hạn một pass để khóa latency/cost. Quyết định này đã được ghi trong rollout contract; kiến trúc cuối vẫn cần phản ánh giới hạn đã chọn.
 
 ### 1.5 Grounded math có provenance
 
@@ -397,6 +397,8 @@ Trạng thái triển khai: evaluator foundation v4, manifest v2, worked-example
 
 ### 2.3 Milestone A — Đóng CRAG production pilot
 
+Trạng thái cập nhật 2026-07-14: phần code readiness đã hoàn tất trên nhánh `codex/p1-retrieval-intelligence`. Đã có stable HMAC assignment theo identity, hai deployment cô lập, replay bất đồng bộ sang arm đối diện, semantic-cache/side-effect isolation, sampling bắt buộc, deployment preflight, Voyage fallback policy, telemetry, abort rules, artifact JSON/Markdown và runbook rollback. Tất cả flag vẫn mặc định tắt. Milestone này chưa đạt vì chưa chạy pilot thật 7–14 ngày, chưa có tối thiểu 100 matched pair đã adjudicate và chưa có reviewer sign-off/final artifact từ traffic thật.
+
 #### Mục tiêu
 
 Chuyển CRAG từ “staging gate passed” sang “production pilot passed”.
@@ -439,6 +441,14 @@ Chuyển CRAG từ “staging gate passed” sang “production pilot passed”.
    - Correction/repair vượt budget.
    - Nếu tiếp tục dùng Voyage, external rerank error rate >5% trong một cửa sổ 50 rerank calls đã hoàn tất.
 10. Tắt candidate flags và route toàn bộ traffic về control khi abort hoặc kết thúc pilot.
+
+Implementation phục vụ pilot:
+
+- [`src/mech_chatbot/evaluation/crag_pilot.py`](../src/mech_chatbot/evaluation/crag_pilot.py)
+- [`scripts/eval/crag_pilot_preflight.py`](../scripts/eval/crag_pilot_preflight.py)
+- [`scripts/eval/crag_pilot_gate.py`](../scripts/eval/crag_pilot_gate.py)
+- [`docs/adr/0002-crag-pilot-isolation-and-voyage-fallback.md`](adr/0002-crag-pilot-isolation-and-voyage-fallback.md)
+- [`docs/crag-production-pilot.md`](crag-production-pilot.md)
 
 #### Điều kiện hoàn tất
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -61,6 +62,10 @@ def build_snapshot(
     query_count = 0
     external_ai_latencies: dict[str, list[float]] = defaultdict(list)
     external_ai_statuses: dict[str, Counter[str]] = defaultdict(Counter)
+    voyage_statuses: Counter[str] = Counter()
+    voyage_fallbacks = 0
+    voyage_status_codes: Counter[str] = Counter()
+    voyage_retry_attempts = 0
     for raw in path.read_text(encoding="utf-8").splitlines():
         try:
             event = json.loads(raw)
@@ -92,6 +97,12 @@ def build_snapshot(
                 latency = 0.0
             external_ai_latencies[surface].append(latency)
             external_ai_statuses[surface][str(event.get("status") or "unknown")] += 1
+        if event.get("event") == "rerank" and event.get("backend") == "voyage":
+            voyage_statuses[str(event.get("status") or "unknown")] += 1
+            voyage_fallbacks += int(bool(event.get("fallback")))
+            if event.get("provider_status_code") is not None:
+                voyage_status_codes[str(event.get("provider_status_code"))] += 1
+            voyage_retry_attempts += int(bool(event.get("retry_attempted")))
         if event.get("event") != "rag_end":
             continue
         query_count += 1
@@ -127,9 +138,14 @@ def build_snapshot(
             "latency_p95_ms": nearest_rank(ordered, 0.95),
             "latency_max_ms": max(ordered, default=None),
         }
+    voyage_calls = sum(voyage_statuses.values())
     return {
         "schema": "rag-refusal-snapshot-v1",
-        "source": {"path": str(path.resolve()), "git_sha": _git_sha()},
+        "source": {
+            "path": str(path.resolve()),
+            "git_sha": _git_sha(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        },
         "filters": {
             "start": start,
             "end": end,
@@ -146,6 +162,18 @@ def build_snapshot(
         "parse_errors": parse_errors,
         "legacy_reason_events": legacy_reason_events,
         "external_ai_latency": external_ai_latency,
+        "voyage_rerank": {
+            "call_count": voyage_calls,
+            "success_count": voyage_statuses.get("success", 0),
+            "error_count": voyage_statuses.get("error", 0),
+            "fallback_count": voyage_fallbacks,
+            "error_rate": (
+                voyage_statuses.get("error", 0) / voyage_calls if voyage_calls else 0.0
+            ),
+            "fallback_rate": voyage_fallbacks / voyage_calls if voyage_calls else 0.0,
+            "status_codes": dict(sorted(voyage_status_codes.items())),
+            "retry_attempt_count": voyage_retry_attempts,
+        },
         "system_metrics": {
             "query_count": query_count,
             "latency_p50_ms": nearest_rank(ordered_latencies, 0.50),
@@ -171,6 +199,7 @@ def render_markdown(report: dict) -> str:
         f"- Denominator: {report['denominator']}",
         f"- Observed range: `{report['observed_range']['first']}` to `{report['observed_range']['last']}`",
         f"- Filters: `{json.dumps(report['filters'], ensure_ascii=False)}`",
+        f"- Voyage rerank: `{json.dumps(report.get('voyage_rerank', {}), ensure_ascii=False)}`",
         "",
         "| Refusal reason | Count |",
         "|---|---:|",

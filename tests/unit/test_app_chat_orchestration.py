@@ -325,3 +325,114 @@ def test_chat_message_emits_busy_error_without_persisting(monkeypatch, client):
     assert [name for name, _data in events] == ["thinking", "error"]
     assert events[-1][1]["status"] == 503
     assert events[-1][1]["message"] == "RAG server busy"
+
+
+def test_crag_pilot_routes_by_identity_and_schedules_only_sampled_replay(
+    monkeypatch, client
+):
+    from mech_chatbot.evaluation.crag_pilot import assign_pilot_route, load_pilot_config
+
+    env = {
+        "CRAG_PILOT_ENABLED": "true",
+        "CRAG_PILOT_EXPERIMENT_ID": "exp-1",
+        "CRAG_PILOT_ASSIGNMENT_SALT": "pilot-test-salt",
+        "CRAG_PILOT_DEPARTMENT": "Technical",
+        "CRAG_PILOT_COHORT_SHA256": "cohort-v1",
+        "CRAG_PILOT_CONTROL_URL": "http://control:8100",
+        "CRAG_PILOT_CANDIDATE_URL": "http://candidate:8100",
+        "CRAG_PILOT_CONTROL_DEPLOYMENT_ID": "control-1",
+        "CRAG_PILOT_CANDIDATE_DEPLOYMENT_ID": "candidate-1",
+        "CRAG_PILOT_SNAPSHOT_FINGERPRINT": "snapshot-v1",
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    posts = []
+    scheduled = []
+
+    def fake_post(url, **kwargs):
+        posts.append((url, kwargs))
+        return _FakeResponse(events=[
+            ("metadata", {"debug_info": {"correction_count": 1}}),
+            ("delta", {"text": "safe answer"}),
+            ("done", {"ok": True, "trace_id": "rag-assigned", "elapsed_ms": 10}),
+        ])
+
+    monkeypatch.setattr(app_server.requests, "post", fake_post)
+    monkeypatch.setattr(app_server, "save_chat_history", lambda **_kwargs: 1)
+    monkeypatch.setattr(app_server, "save_answer_evidence", lambda *_args: None)
+    monkeypatch.setattr(app_server, "write_audit_log", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        app_server,
+        "_schedule_pilot_replay",
+        lambda route, payload, outcome, trace_id, profile: scheduled.append(
+            (route, payload, outcome, trace_id, profile)
+        ),
+    )
+
+    response = client.post(
+        "/api/chat/message", json={"session_id": "s1", "question": "same identity"}
+    )
+
+    config = load_pilot_config(env)
+    expected = assign_pilot_route(
+        config, user_id="7", department="Technical", request_id="irrelevant"
+    )
+    assert response.status_code == 200
+    assert posts[0][0] == f"{expected.deployment_url}/chat/stream"
+    assert len(scheduled) == 1
+    assert scheduled[0][0].arm == expected.arm
+    assert scheduled[0][2]["correction_count"] == 1
+    assert scheduled[0][3] == "rag-assigned"
+
+
+def test_crag_pilot_replay_queue_is_bounded_and_drops_without_submitting(monkeypatch):
+    from mech_chatbot.evaluation.crag_pilot import PilotConfig, assign_pilot_route
+
+    class FullCapacity:
+        def acquire(self, *, blocking):
+            assert blocking is False
+            return False
+
+    class NoSubmitExecutor:
+        def submit(self, *_args, **_kwargs):
+            raise AssertionError("full queue must not submit")
+
+    events = []
+    route = assign_pilot_route(
+        PilotConfig(
+            experiment_id="exp-1",
+            assignment_salt="test-salt",
+            eligible_department="Technical",
+            cohort_sha256="cohort-v1",
+            control_url="http://control",
+            candidate_url="http://candidate",
+            control_deployment_id="control-1",
+            candidate_deployment_id="candidate-1",
+            snapshot_fingerprint="snapshot-v1",
+        ),
+        user_id="7",
+        department="Technical",
+        request_id="request-1",
+    )
+    monkeypatch.setattr(app_server, "_PILOT_REPLAY_CAPACITY", FullCapacity())
+    monkeypatch.setattr(app_server, "_PILOT_REPLAY_EXECUTOR", NoSubmitExecutor())
+    monkeypatch.setattr(
+        app_server,
+        "log_trace",
+        lambda event, trace_id, **data: events.append((event, trace_id, data)),
+    )
+
+    submitted = app_server._schedule_pilot_replay(
+        route,
+        {"user_question": "sensitive", "user_id": 7},
+        {"refusal": True, "query_type": "technical"},
+        "trace-1",
+        {"department": "Technical", "roles": ["viewer"], "allowed_sites": ["HQ"]},
+    )
+
+    assert submitted is False
+    assert events[0][0] == "pilot_assignment"
+    assert events[0][2]["assigned_arm"] == route.arm
+    assert events[0][2]["cohort_sha256"] == "cohort-v1"
+    assert events[-1][2]["status"] == "dropped"
+    assert events[-1][2]["fallback_reason"] == "replay_queue_full_or_stopped"
