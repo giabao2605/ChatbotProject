@@ -633,6 +633,39 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             logger.warning("Graph retrieval unavailable: %s", exc)
             log_trace("graph_retrieval", trace_id, error=type(exc).__name__, edge_count=0)
 
+    def _access_denied_terminal(access_reason):
+        stub_vi = (
+            "Có tài liệu liên quan đến câu hỏi, nhưng tài khoản của bạn chưa đủ quyền truy cập. "
+            "Nội dung được bảo vệ theo chính sách truy cập.\n\n"
+            "Bạn có thể vào trang 'Yêu cầu quyền' để gửi yêu cầu cấp quyền; "
+            "quản trị hoặc phụ trách phòng ban sẽ duyệt."
+        )
+        stub_en = (
+            "There are documents related to your question, but your account is not cleared "
+            "to access them. The content is protected by access control.\n\n"
+            "You can open the 'Access requests' page to request access; "
+            "an admin or department owner will review it."
+        )
+        message = stub_en if _normalize_lang(response_language) == "en" else stub_vi
+
+        def restricted_stream():
+            yield message
+
+        debug = make_debug_info([])
+        debug["access_hint"] = {
+            "restricted": True,
+            "reason": access_reason,
+            "question": user_question,
+        }
+        log_trace(
+            "rag_end", trace_id,
+            final_latency_ms=int((time.time() - t_start) * 1000),
+            refusal=True,
+            refusal_reason="access_denied",
+            access_reason=access_reason,
+        )
+        return restricted_stream(), "", [], current_part_ids, debug
+
     # Kiem tra ket qua tim kiem ma cu the (khong fallback semantic lung tung)
     if not skip_retrieval and not retrieved_docs and new_part_ids:
         if is_inherited:
@@ -651,6 +684,19 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 retrieved_docs = []
         else:
             logger.info(f"Khong tim thay bat ky tai lieu nao cho ma {new_part_ids}. Tu choi fallback semantic.")
+            try:
+                _blocked, _access_reason = probe_restricted_access(
+                    query_to_search,
+                    user_department=user_department,
+                    allowed_departments=allowed_departments,
+                    max_security_level=max_security_level,
+                    allowed_sites=allowed_sites,
+                    part_ids=new_part_ids,
+                )
+            except Exception:
+                _blocked, _access_reason = False, None
+            if _blocked and _access_reason:
+                return _access_denied_terminal(_access_reason)
             _codes_str = ', '.join(new_part_ids)
             if _normalize_lang(response_language) == "en":
                 _no_code_msg = f"Sorry, I couldn't find the code '{_codes_str}' in the current drawing system. Please double-check the code or provide more details."
@@ -658,7 +704,12 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 _no_code_msg = f"Rất tiếc, mình không tìm thấy mã số '{_codes_str}' nào trong hệ thống bản vẽ hiện tại. Vui lòng kiểm tra lại mã hoặc mô tả rõ hơn."
             def insufficient_evidence_stream():
                 yield _no_code_msg
-            log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="no_docs_for_exact_code")
+            log_trace(
+                "rag_end", trace_id,
+                final_latency_ms=int((time.time() - t_start) * 1000),
+                refusal=True,
+                refusal_reason="no_docs_for_exact_code",
+            )
             return insufficient_evidence_stream(), "", [], current_part_ids, make_debug_info([])
 
     if not skip_retrieval:
@@ -855,31 +906,15 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
         # P0-2: co the bi chan vi ton tai tai lieu MAT khop pham vi nhung vuot clearance
         try:
-            _blocked, _needed_lvl = probe_restricted_access(
+            _blocked, _access_reason = probe_restricted_access(
                 query_to_search, user_department=user_department,
                 allowed_departments=allowed_departments,
-                max_security_level=max_security_level, allowed_sites=allowed_sites)
+                max_security_level=max_security_level, allowed_sites=allowed_sites,
+                part_ids=new_part_ids)
         except Exception:
-            _blocked, _needed_lvl = False, None
-        if _blocked and _needed_lvl:
-            _lvl_vi = {"internal": "noi bo (internal)", "confidential": "mat (confidential)"}.get(_needed_lvl, _needed_lvl)
-            _stub_vi = (
-                "Co tai lieu lien quan den cau hoi cua ban, nhung o muc " + _lvl_vi +
-                " ma tai khoan cua ban chua du quyen xem. Noi dung duoc bao mat theo phan quyen.\n\n"
-                "Ban co the vao trang 'Yeu cau quyen' de gui yeu cau cap quyen; quan tri / phu trach phong ban se duyet."
-            )
-            _stub_en = (
-                "There are documents related to your question, but they are classified '" + str(_needed_lvl) +
-                "' and your account is not cleared to view them. The content is protected by access control.\n\n"
-                "You can open the 'Access requests' page to request access; an admin / department owner will review it."
-            )
-            _stub_msg = _stub_en if _normalize_lang(response_language) == "en" else _stub_vi
-            def restricted_stream():
-                yield _stub_msg
-            _dbg = make_debug_info([])
-            _dbg["access_hint"] = {"restricted": True, "needed_level": _needed_lvl, "question": user_question}
-            log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="restricted_by_clearance", needed_level=_needed_lvl)
-            return restricted_stream(), "", [], current_part_ids, _dbg
+            _blocked, _access_reason = False, None
+        if _blocked and _access_reason:
+            return _access_denied_terminal(_access_reason)
 
         _empty_vi = (
             "Tài liệu hiện tại chưa có dữ liệu liên quan đến câu hỏi của bạn. "

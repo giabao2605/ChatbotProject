@@ -52,6 +52,22 @@ def classify_actual_outcome(answer: str) -> str:
         return "clarification_required"
     if any(marker in folded for marker in ["tra loi duoc mot phan", "phan con lai", "partial answer"]):
         return "partial_answer"
+    no_approved_bom_total = re.search(
+        r"khong co tong (?:so luong )?bom duoc phe duyet", folded,
+    )
+    derived_total_claim = re.search(
+        r"\b(?:tong(?: so luong)?|cong lai|ket qua (?:tong|cong))\b[^;\n|.]{0,100}"
+        r"(?:la|duoc|=)\s*[-+]?\d",
+        folded,
+    ) or re.search(r"\b\d+(?:[.,]\d+)?\s*[+*/-]\s*\d+(?:[.,]\d+)?\s*=\s*\d", folded)
+    total_table_row = re.search(
+        r"\|\s*(?:tong|tong cong|sum|total|grand total)\b[^|]*\|\s*[-+]?\d",
+        folded,
+    )
+    if derived_total_claim or total_table_row:
+        return "full_answer"
+    if no_approved_bom_total:
+        return "insufficient_evidence"
     if any(marker in folded for marker in [
         "khong ghi thong tin", "tai lieu hien tai khong", "khong cong bo",
         "khong du", "thieu du kien", "khong tu uoc luong", "khong the ho tro yeu cau nay",

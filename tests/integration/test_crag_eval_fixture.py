@@ -46,6 +46,8 @@ def test_crag_fixture_ingest_publish_retrieval_and_denial(tmp_path):
             denied["allowed_departments"], denied["max_security_level"], denied["allowed_sites"],
         )
         answer = "".join(stream)
+        assert "chưa đủ quyền truy cập" in answer
+        assert (debug.get("access_hint") or {}).get("restricted") is True
         assert "CRAG-EVAL-SECRET-RED" not in answer
         assert all("crag_eval_restricted_v1.md" not in str(doc.get("file_goc", "")).lower() for doc in debug.get("retrieved_docs", []))
     finally:

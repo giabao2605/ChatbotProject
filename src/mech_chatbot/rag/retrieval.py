@@ -2,13 +2,12 @@
 """Auto-split tu rag/service.py (P1.2 refactor). Giu nguyen logic goc; chi tach file + import."""
 
 from mech_chatbot.config.logging import logger, log_trace
-from qdrant_client import QdrantClient, models
+from qdrant_client import models
+from mech_chatbot.config.settings import QDRANT_COLLECTION
 from mech_chatbot.rag.rbac import (
+    PART_ID_KEYS_BROAD,
     compose_retrieval_filters,
     create_rbac_filter,
-    _security_filter,
-    _site_filter,
-    _allowed_levels,
     LEVEL_ORDER,
 )
 
@@ -52,14 +51,20 @@ def current_published_filter(rbac_filter=None):
 
 
 def probe_restricted_access(query_text, user_department=None, allowed_departments=None,
-                            max_security_level="public", allowed_sites=None):
-    """P0-2: Kiem tra co ton tai tai lieu KHOP pham vi phong ban cua user nhung bi CHAN
-    CHI vi muc mat cao hon clearance. Tra ve (exists: bool, needed_level: str|None).
-    Best-effort, stateless; loi -> (False, None) de khong pha luong RAG.
+                            max_security_level="public", allowed_sites=None, part_ids=None):
+    """Detect an exact-code document blocked by security or site policy.
+
+    The probe reads only security/site payload fields and never returns evidence.
+    It returns ``(blocked, access_reason)`` and fails closed to ``(False, None)``
+    on operational errors so it cannot break the primary RAG path.
     """
     try:
         # Lazy import de module filter van thuan va unit test khong tai model.
-        from mech_chatbot.rag.bootstrap import vectorstore
+        from mech_chatbot.rag.bootstrap import client
+
+        exact_ids = [str(value).strip().lower() for value in (part_ids or []) if str(value).strip()]
+        if not exact_ids:
+            return False, None
 
         user_order = LEVEL_ORDER.get((max_security_level or "public"), 0)
         allowed = list(allowed_departments) if allowed_departments else []
@@ -68,28 +73,44 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
         from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT as _SHARE
         if _SHARE not in allowed:
             allowed.append(_SHARE)
-        must = [
-            models.FieldCondition(key="metadata.servable", match=models.MatchValue(value=True)),
-            models.FieldCondition(key="metadata.publication_state", match=models.MatchValue(value="published")),
-            models.FieldCondition(key="metadata.lifecycle_status", match=models.MatchValue(value="published")),
-            models.FieldCondition(key="metadata.review_status", match=models.MatchValue(value="approved")),
-            models.FieldCondition(key="metadata.is_current", match=models.MatchValue(value=True)),
+        governance = current_published_filter()
+        must = list(governance.must or ()) + [
             models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchAny(any=allowed)),
+            models.Filter(should=[
+                models.FieldCondition(
+                    key=key,
+                    match=models.MatchAny(any=exact_ids),
+                )
+                for key in PART_ID_KEYS_BROAD
+            ]),
         ]
-        site_cond = _site_filter(allowed_sites)
-        if site_cond is not None:
-            must.append(site_cond)
-        probe_filter = models.Filter(must=must)
-        retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 10, "filter": probe_filter})
-        docs = retriever.invoke(query_text)
+        probe_filter = models.Filter(must=must, must_not=governance.must_not)
+        points, _ = client.scroll(
+            collection_name=QDRANT_COLLECTION,
+            scroll_filter=probe_filter,
+            limit=10,
+            with_payload=["metadata.security_level", "metadata.site"],
+            with_vectors=False,
+        )
         levels_above = []
-        for d in docs:
-            lvl = (d.metadata or {}).get("security_level") or "confidential"
+        site_restricted = False
+        normalized_sites = {
+            str(site).strip().lower() for site in (allowed_sites or []) if str(site).strip()
+        }
+        for point in points:
+            payload = getattr(point, "payload", {}) or {}
+            metadata = payload.get("metadata") or {}
+            lvl = metadata.get("security_level") or "confidential"
             if LEVEL_ORDER.get(lvl, 2) > user_order:
                 levels_above.append(lvl)
+            doc_site = str(metadata.get("site") or "").strip().lower()
+            if not normalized_sites or doc_site not in normalized_sites:
+                site_restricted = True
         if levels_above:
             needed = min(levels_above, key=lambda l: LEVEL_ORDER.get(l, 2))
             return True, needed
+        if site_restricted:
+            return True, "site_restricted"
         return False, None
     except Exception as e:
         logger.warning(f"probe_restricted_access loi: {e}")

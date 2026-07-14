@@ -230,11 +230,27 @@ def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
         "Tài liệu không có tổng số lượng BOM được phê duyệt, nhưng tổng tính từ BOM là 999."
     ) == "full_answer"
     assert classify_actual_outcome(
+        "Tài liệu không có tổng số lượng BOM được phê duyệt. Tổng số lượng là 999."
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Tài liệu không có tổng BOM được phê duyệt. "
+        "Tổng số lượng BOM, tính từ các dòng, là 999."
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Tài liệu không có tổng BOM được phê duyệt; kết quả kiểm tra là 0 lỗi."
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
         "Tài liệu CRAG-EVAL-BOM-001 không có tổng BOM được phê duyệt trong tài liệu này, "
         "nhưng tổng là 999."
     ) == "full_answer"
     assert classify_actual_outcome(
         "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| PART-A | 2 |\n| PART-B | 3 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Tài liệu BOM `CRAG-EVAL-BOM-001` không có tổng số lượng BOM được phê duyệt "
+        "trong tài liệu này.\n\n"
         "| Mã | Số lượng |\n|---|---:|\n| PART-A | 2 |\n| PART-B | 3 |\n\n"
         "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
     ) == "insufficient_evidence"
