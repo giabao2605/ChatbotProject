@@ -1,2 +1,3 @@
-# Install in an isolated encoder environment, not the RAG/ingestion environment.
+# Combine with requirements.lock.txt in .local/late-interaction-env.
+# Keep this optional dependency out of chat_env; run the offline shadow tooling with that environment.
 FlagEmbedding==1.4.0

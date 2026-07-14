@@ -30,11 +30,44 @@ def test_late_gate_enforces_quality_latency_and_storage():
     baseline = report(ndcg10=0.50)
     candidate = report(ndcg10=0.53, p95=120)
 
-    passed = gate.compare("late_interaction", baseline, candidate, {"shadow_storage_ratio": 20})
-    failed = gate.compare("late_interaction", baseline, candidate, {"shadow_storage_ratio": 30})
+    readiness = {
+        "schema": "late-interaction-readiness-v1",
+        "capability_passed": True,
+        "ready_for_serving": True,
+        "shadow_storage_ratio": 20,
+        "shadow_coverage": 1.0,
+        "governance_drift": 0,
+        "provenance_drift": 0,
+        "vector_schema_rejected": 0,
+        "orphan_points": 0,
+    }
+    passed = gate.compare("late_interaction", baseline, candidate, readiness)
+    failed = gate.compare("late_interaction", baseline, candidate, {**readiness, "shadow_storage_ratio": 30})
 
     assert passed["passed"] is True
     assert failed["checks"]["storage_within_budget"] is False
+
+
+def test_late_gate_rejects_missing_or_non_serving_readiness_artifact():
+    gate = _module()
+    baseline = report(ndcg10=0.50)
+    candidate = report(ndcg10=0.53, p95=120)
+
+    missing = gate.compare("late_interaction", baseline, candidate, {})
+    not_ready = gate.compare("late_interaction", baseline, candidate, {
+        "schema": "late-interaction-readiness-v1",
+        "capability_passed": True,
+        "ready_for_serving": False,
+        "shadow_storage_ratio": 20,
+        "shadow_coverage": 1.0,
+        "governance_drift": 0,
+        "provenance_drift": 0,
+        "vector_schema_rejected": 0,
+        "orphan_points": 0,
+    })
+
+    assert missing["checks"]["readiness_artifact_valid"] is False
+    assert not_ready["checks"]["ready_for_serving"] is False
 
 
 def test_decomposition_gate_requires_complex_gain_and_zero_simple_planner_calls():

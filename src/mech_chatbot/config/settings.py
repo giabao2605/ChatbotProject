@@ -157,7 +157,7 @@ class Settings(BaseModel):
     RAG_QUERY_DECOMPOSITION_ENABLED: bool = False
     RAG_GRAPH_RETRIEVAL_ENABLED: bool = False
     RAG_PLANNER_VERSION: str = "planner-v1"
-    RAG_LATE_INDEX_VERSION: str = "late-v1"
+    RAG_LATE_INDEX_VERSION: str = "late-v2"
     RAG_GRAPH_SERVING_EPOCH: str = "graph-v1"
     GLOSSARY_CACHE_TTL: float = 60.0
     LLM_ROUTER_MIN_CONFIDENCE: float = 0.5
@@ -243,7 +243,7 @@ class Settings(BaseModel):
             RAG_QUERY_DECOMPOSITION_ENABLED=_bool("RAG_QUERY_DECOMPOSITION_ENABLED", False, _TRUTHY_5),
             RAG_GRAPH_RETRIEVAL_ENABLED=_bool("RAG_GRAPH_RETRIEVAL_ENABLED", False, _TRUTHY_5),
             RAG_PLANNER_VERSION=_str("RAG_PLANNER_VERSION", "planner-v1"),
-            RAG_LATE_INDEX_VERSION=_str("RAG_LATE_INDEX_VERSION", "late-v1"),
+            RAG_LATE_INDEX_VERSION=_str("RAG_LATE_INDEX_VERSION", "late-v2"),
             RAG_GRAPH_SERVING_EPOCH=_str("RAG_GRAPH_SERVING_EPOCH", "graph-v1"),
             GLOSSARY_CACHE_TTL=_float("GLOSSARY_CACHE_TTL", 60.0),
             LLM_ROUTER_MIN_CONFIDENCE=_float("LLM_ROUTER_MIN_CONFIDENCE", 0.5),

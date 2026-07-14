@@ -46,6 +46,9 @@ def compare(stage, baseline, candidate, metadata=None):
         candidate_ndcg = float(c_ranked.get("ndcg_at_10") or 0.0)
         checks = {
             **common,
+            "readiness_artifact_valid": metadata.get("schema") == "late-interaction-readiness-v1",
+            "capability_passed": metadata.get("capability_passed") is True,
+            "ready_for_serving": metadata.get("ready_for_serving") is True,
             "ndcg_relative_gain": baseline_ndcg > 0 and candidate_ndcg >= baseline_ndcg * 1.05,
             "recall_not_decreased": float(c_ranked.get("recall_at_10") or 0.0)
             >= float(b_ranked.get("recall_at_10") or 0.0),
@@ -53,7 +56,13 @@ def compare(stage, baseline, candidate, metadata=None):
                 float(candidate.get("latency_p95_ms") or 0), float(baseline.get("latency_p95_ms") or 0)
             ) <= 1.25,
             "storage_within_budget": float(metadata.get("shadow_storage_ratio", float("inf"))) <= 25.0,
-            "shadow_coverage_complete": float(metadata.get("shadow_coverage", 1.0)) >= 1.0,
+            "shadow_coverage_complete": float(metadata.get("shadow_coverage") or 0.0) >= 1.0,
+            "governance_drift_zero": int(metadata.get("governance_drift", -1)) == 0,
+            "provenance_drift_zero": int(metadata.get("provenance_drift", -1)) == 0,
+            "vector_schema_rejected_zero": int(
+                metadata.get("vector_schema_rejected", -1)
+            ) == 0,
+            "orphan_points_zero": int(metadata.get("orphan_points", -1)) == 0,
         }
         limits = {"min_ndcg_relative_gain": 0.05, "max_latency_ratio": 1.25, "max_storage_ratio": 25.0}
     elif stage == "query_decomposition":

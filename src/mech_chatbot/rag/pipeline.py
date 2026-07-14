@@ -1005,32 +1005,31 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         late_used = False
         if real_docs and env_bool("RAG_LATE_INTERACTION_ENABLED", False):
             try:
-                from mech_chatbot.rag.late_interaction import enabled as late_enabled, encode_query, rerank_with_shadow
+                from mech_chatbot.rag.late_interaction import (
+                    attempt_shadow_rerank,
+                    enabled as late_enabled,
+                )
                 if not late_enabled():
                     raise RuntimeError("late interaction encoder has not passed smoke preflight")
-                late_started = time.time()
                 late_top_n = min(RERANK_TOP_N_CAP, max(1, RERANK_PER_PART * max(1, len(new_part_ids) if new_part_ids else 1)))
-                pre_late_docs = list(real_docs)
-                real_docs = rerank_with_shadow(
-                    real_docs,
-                    encode_query(effective_question),
+                late_result = attempt_shadow_rerank(
+                    real_docs, effective_question,
                     client,
                     top_n=late_top_n,
                 )
-                late_hits = sum(
-                    doc.metadata.get("rerank_backend") == "late_interaction" for doc in real_docs
-                )
-                # A partial shadow lookup must use the established reranker for
-                # the whole candidate set; mixing incomparable scores is unsafe.
-                late_used = bool(real_docs) and late_hits == len(real_docs)
-                if not late_used:
-                    real_docs = pre_late_docs
+                real_docs = list(late_result.documents)
+                late_used = late_result.used_shadow
                 log_trace(
                     "late_interaction", trace_id,
-                    latency_ms=int((time.time() - late_started) * 1000),
-                    candidate_count=len(real_docs), shadow_hits=late_hits,
-                    coverage=late_hits / len(real_docs) if real_docs else 0.0,
-                    fallback=not late_used,
+                    latency_ms=round(late_result.total_latency_ms, 2),
+                    encode_latency_ms=round(late_result.encode_latency_ms, 2),
+                    query_latency_ms=round(late_result.query_latency_ms, 2),
+                    candidate_count=late_result.candidate_count,
+                    shadow_hits=late_result.shadow_hits,
+                    coverage=late_result.coverage,
+                    index_version=os.getenv("RAG_LATE_INDEX_VERSION", "late-v2"),
+                    used_shadow=late_result.used_shadow,
+                    fallback_reason=late_result.fallback_reason,
                 )
             except Exception as exc:
                 logger.warning("Late interaction unavailable, keeping existing reranker: %s", exc)

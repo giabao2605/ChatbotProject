@@ -61,7 +61,7 @@ def pipeline_namespace():
     )
     versions = (
         os.getenv("RAG_PLANNER_VERSION", "planner-v1"),
-        os.getenv("RAG_LATE_INDEX_VERSION", "late-v1"),
+        os.getenv("RAG_LATE_INDEX_VERSION", "late-v2"),
         os.getenv("RAG_GRAPH_SERVING_EPOCH", "graph-v1"),
     )
     raw = "|".join([f"{name}={_env_flag(name)}" for name in flags] + list(versions))
