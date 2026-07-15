@@ -4,7 +4,7 @@ Ngày cập nhật: 2026-07-15
 
 Nhánh: `codex/p1-retrieval-intelligence`
 
-Commit đối chiếu runtime và artifact Grounded Math: `d5ec3e1`
+Commit đối chiếu runtime Query Decomposition: `c7e7b86`
 
 Tài liệu gốc: [`../doichieukientruc.docx`](../doichieukientruc.docx)
 Bản review ban đầu: [`doichieukientruc-review.md`](doichieukientruc-review.md)
@@ -42,11 +42,11 @@ Vì vậy, “100% mục đích” không đồng nghĩa phải bật mọi côn
 | CRAG và claim repair | Có | Có | Ba gate đạt | Chưa | Hoàn tất staging và pilot control plane; live pilot chưa bắt đầu |
 | Grounded math | Có | Có, gồm integration live | 3/3 pair đạt; series bị chặn bởi CRAG | Chưa | Staging evidence hoàn tất; chưa production-ready |
 | Late Interaction | Có | Có | Có readiness và 3 pair clean-commit gate fail-closed | Chưa chạy controlled demo | `late-v2` không dùng mặc định, nhưng có thể opt-in demo để tìm nguyên nhân regression |
-| Query decomposition | Có | Có | Chưa | Chưa | Implementation sớm, chưa được chứng minh chất lượng |
+| Query decomposition | Có | Có, full suite xanh | Có một pair fail-closed do ProxyLLM 503 | Chưa | Offline/staging readiness hoàn tất; quality gate phải chạy lại khi provider ổn định |
 | Governed GraphRAG | Có schema/API/retrieval | Có | Chưa có staging gate | Chưa | Implementation sớm, chưa được nghiệm thu live |
 | Community summaries | Chưa | Chưa | Chưa | Chưa | Chủ động hoãn theo điều kiện trong tài liệu gốc |
 
-Không gán một phần trăm tổng hợp cho bảng này vì các hạng mục có trọng số và rủi ro khác nhau. Chỉ số có thể kiểm chứng hiện tại là: 6/6 workstream chính đã có implementation, 3/6 có artifact live hoặc readiness artifact, 1/6 đã vượt quality gate staging, 1/6 có reject decision bằng clean-commit artifact, và 0/6 đã hoàn tất production pilot. Checklist tại mục 2.11 là denominator chính thức để tiến tới 100%.
+Không gán một phần trăm tổng hợp cho bảng này vì các hạng mục có trọng số và rủi ro khác nhau. Chỉ số có thể kiểm chứng hiện tại là: 6/6 workstream chính đã có implementation, 4/6 có artifact live/readiness hoặc một lần gate fail-closed, 1/6 đã vượt quality gate staging, 1/6 có reject decision bằng clean-commit artifact, và 0/6 đã hoàn tất production pilot. Checklist tại mục 2.11 là denominator chính thức để tiến tới 100%.
 
 ### 1.2 Telemetry có thể tái lập
 
@@ -587,7 +587,7 @@ Chứng minh decomposition chỉ giúp câu phức tạp, không làm câu đơn
 
 #### Công việc
 
-1. Tạo manifest `decomposition-eval-v1` gồm:
+1. [Đã hoàn tất] Tạo manifest `decomposition-eval-v1` gồm:
    - Simple factual query.
    - Hai hoặc ba intent độc lập.
    - SQL BOM kết hợp tài liệu.
@@ -595,13 +595,13 @@ Chứng minh decomposition chỉ giúp câu phức tạp, không làm câu đơn
    - Một nhánh đủ evidence, một nhánh thiếu evidence.
    - Một nhánh access denied.
    - Query chứa mã tài liệu để kiểm tra planner không tự tạo/nới mã.
-2. Gắn expected branch outcomes và expected citations cho từng subquery.
-3. Kiểm tra deterministic router: simple query có `planner_count=0`.
-4. Chạy baseline flag tắt và candidate `RAG_QUERY_DECOMPOSITION_ENABLED=true`.
-5. Kiểm tra tối đa ba subquery, một shared correction và một final generation.
-6. Kiểm tra deadline propagation, parallel retrieval và partial-answer rendering.
-7. Chạy gate accuracy, wrong-answer, leakage, P95 và cost.
-8. Nếu đạt, pilot trên nhóm query phức tạp; router vẫn giữ feature tắt cho simple query.
+2. [Đã hoàn tất offline và preflight] Gắn expected branch outcomes, expected citations và SourceID được render cho từng subquery.
+3. [Đã hoàn tất] Deterministic router giữ simple query ở `planner_count=0`; planner chỉ nhận tối đa ba subquery và không được tự tạo mã.
+4. [Đã chạy nhưng artifact không hợp lệ để rollout] Baseline flag tắt và candidate `RAG_QUERY_DECOMPOSITION_ENABLED=true` đã chạy cùng commit/snapshot. ProxyLLM trả `503 no_capacity` trên phần lớn request nên pair bị fail-closed.
+5. [Đã hoàn tất offline] Enforce tối đa ba subquery, một shared correction và một final generation; evaluator và gate báo budget violation.
+6. [Đã hoàn tất offline] Deadline được truyền dưới dạng monotonic deadline, retrieval chạy song song và trả về khi hết hạn; chỉ document từ nhánh `full_answer` đi vào generation; missing/access-denied chỉ tạo notice an toàn.
+7. [Đã có gate, cần rerun provider-stable] Gate đo accuracy, wrong-answer, leakage, provider retry, P95 và cost. Lần chạy đầu fail vì retry, latency và cost bị 503 làm nhiễu, không phải bằng chứng quality hợp lệ.
+8. [Chưa làm] Chưa controlled demo vì quality gate chưa đạt trên một pair provider-stable. Flag mặc định tiếp tục tắt.
 
 #### Điều kiện hoàn tất
 
@@ -611,6 +611,15 @@ Chứng minh decomposition chỉ giúp câu phức tạp, không làm câu đơn
 - P95 và cost <=1.5 baseline.
 - Không query nào vượt ba subquery, một correction và một final generation.
 - Production pilot đạt hoặc có quyết định không bật có bằng chứng.
+
+#### Kết quả hiện tại
+
+- Commit implementation: `c7e7b86`; code-review hai trục không còn blocker và full pytest xanh.
+- Fixture dùng batch `crag-eval-v1`, collection staging `MechChatbot_CRAG_Eval_v1`; preflight đạt 8/8 case, SQL BOM có hai row provenance cố định và integration SQL/Qdrant xanh.
+- Rollback evidence cho `RAG_QUERY_DECOMPOSITION_ENABLED` đạt; flag mặc định vẫn `false`.
+- Artifact lần chạy đầu: `reports/decomposition/quality-gate/20260715-101519-c7e7b86/`. Baseline và candidate dùng cùng commit, manifest SHA, fixture fingerprint và concurrency.
+- Gate trả `passed=false`: complex gain, branch accuracy/citation, retry, P95 và cost không đạt. Trace xác nhận ProxyLLM `gpt-5.4` trả nhiều `503 service_unavailable/no_capacity`; baseline có 10 retry, candidate 12 retry. Vì vậy artifact này là bằng chứng fail-closed/provider-invalid, chưa phải quyết định bác bỏ decomposition.
+- Việc còn lại của 2.6 là rerun một output directory mới khi provider ổn định; chỉ khi pair sạch đạt gate mới chạy controlled demo. Nếu pair sạch vẫn không đạt thì ghi reject decision và giữ flag tắt.
 
 ### 2.7 Milestone E — Đóng Governed GraphRAG gate
 
