@@ -75,11 +75,13 @@ def pipeline_namespace():
         "RAG_LATE_INTERACTION_ENABLED",
         "RAG_QUERY_DECOMPOSITION_ENABLED",
         "RAG_GRAPH_RETRIEVAL_ENABLED",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
     )
     versions = (
         os.getenv("RAG_PLANNER_VERSION", "planner-v1"),
         os.getenv("RAG_LATE_INDEX_VERSION", "late-v2"),
         os.getenv("RAG_GRAPH_SERVING_EPOCH", "graph-v1"),
+        os.getenv("RAG_COMMUNITY_SERVING_EPOCH", "community-v1"),
     )
     raw = "|".join([f"{name}={_env_flag(name)}" for name in flags] + list(versions))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]

@@ -24,6 +24,7 @@ def report(*, wrong=0, leakage=0, p95=100, cost=1, recall10=1, ndcg10=0.5, group
         "evaluation_groups": groups or {},
         "provider_retries": 0,
         "citation_evaluation": {
+            "applicable_cases": 1,
             "citation_accuracy": {"value": 1.0},
             "citation_precision": {"value": 1.0},
         },
@@ -277,6 +278,102 @@ def test_graph_gate_rejects_scripted_or_too_small_review_sample():
 
     assert result["checks"]["review_sample_is_independent"] is False
     assert result["checks"]["review_sample_size_sufficient"] is False
+    assert result["passed"] is False
+
+
+def test_community_summary_gate_requires_global_gain_without_local_regression():
+    gate = _module()
+    baseline = report(groups={
+        "global": {"pass_rate": 0.20},
+        "local": {"pass_rate": 0.80},
+        "relational": {"pass_rate": 0.70},
+    })
+    candidate = report(p95=140, cost=1.4, groups={
+        "global": {"pass_rate": 0.35},
+        "local": {"pass_rate": 0.80},
+        "relational": {"pass_rate": 0.70},
+    })
+    for arm in (baseline, candidate):
+        arm["claim_evaluation"] = {
+            "applicable_cases": 1, "claim_precision": {"value": 1.0}
+        }
+    metadata = {
+        "schema": "community-summary-readiness-v1",
+        "prerequisite_graph_gate_passed": True,
+        "reviewed_edge_precision": 0.96,
+        "target_locked_before_benchmark": True,
+        "min_global_answer_gain": 0.10,
+        "provenance_completeness": 1.0,
+        "pending_summaries_served": 0,
+        "stale_summary_violations": 0,
+        "serving_epoch_valid": True,
+        "indexing_latency_ms": 1000,
+        "max_indexing_latency_ms": 60000,
+    }
+
+    result = gate.compare("community_summaries", baseline, candidate, metadata)
+
+    assert result["passed"] is True
+
+
+def test_community_summary_gate_fails_closed_when_quality_metrics_are_missing():
+    gate = _module()
+    baseline = report(groups={
+        "global": {"pass_rate": 0.20}, "local": {"pass_rate": 0.80},
+        "relational": {"pass_rate": 0.70},
+    })
+    candidate = report(groups={
+        "global": {"pass_rate": 0.35}, "local": {"pass_rate": 0.80},
+        "relational": {"pass_rate": 0.70},
+    })
+    baseline.pop("citation_evaluation")
+    candidate.pop("citation_evaluation")
+    metadata = {
+        "schema": "community-summary-readiness-v1",
+        "prerequisite_graph_gate_passed": True,
+        "reviewed_edge_precision": 0.96,
+        "target_locked_before_benchmark": True,
+        "min_global_answer_gain": 0.10,
+        "provenance_completeness": 1.0,
+        "pending_summaries_served": 0,
+        "stale_summary_violations": 0,
+        "serving_epoch_valid": True,
+        "indexing_latency_ms": 1000,
+        "max_indexing_latency_ms": 60000,
+    }
+    result = gate.compare("community_summaries", baseline, candidate, metadata)
+    assert result["checks"]["claim_precision_not_decreased"] is False
+    assert result["checks"]["citation_accuracy_not_decreased"] is False
+    assert result["passed"] is False
+
+
+def test_community_summary_gate_fails_closed_without_graph_review_or_on_stale_summary():
+    gate = _module()
+    baseline = report(groups={"global": {"pass_rate": 0.20}})
+    candidate = report(groups={"global": {"pass_rate": 0.40}})
+    for arm in (baseline, candidate):
+        arm["claim_evaluation"] = {
+            "applicable_cases": 1, "claim_precision": {"value": 1.0}
+        }
+    metadata = {
+        "schema": "community-summary-readiness-v1",
+        "prerequisite_graph_gate_passed": False,
+        "reviewed_edge_precision": 0.0,
+        "target_locked_before_benchmark": True,
+        "min_global_answer_gain": 0.10,
+        "provenance_completeness": 1.0,
+        "pending_summaries_served": 0,
+        "stale_summary_violations": 1,
+        "serving_epoch_valid": True,
+        "indexing_latency_ms": 1000,
+        "max_indexing_latency_ms": 60000,
+    }
+
+    result = gate.compare("community_summaries", baseline, candidate, metadata)
+
+    assert result["checks"]["graph_gate_prerequisite"] is False
+    assert result["checks"]["reviewed_edge_precision"] is False
+    assert result["checks"]["stale_summary_behavior"] is False
     assert result["passed"] is False
 
 

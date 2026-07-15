@@ -239,6 +239,8 @@ def run_evaluation(
                 from scripts.decomposition_eval.preflight import run_live_preflight
             elif preflight_kind == "graph":
                 from scripts.graph_eval.preflight import run_live_preflight
+            elif preflight_kind == "community":
+                from scripts.graph_eval.preflight import run_live_preflight
             elif preflight_kind == "crag":
                 from scripts.crag_eval.preflight import run_live_preflight
             else:

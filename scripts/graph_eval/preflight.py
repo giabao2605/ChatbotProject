@@ -116,19 +116,62 @@ def check_graph_fixture(
             if _relation_identity(relation) not in edge_identities:
                 failures.append({"case_id": case_id, "reason": "expected_relation_missing", "relation": relation})
             resolved_relations.append(relation)
-        citation = {
-            "document": filename, "doc_id": int(document["DocID"]), "page": page,
-            "version": int(document["VersionNo"]),
-            "source_id": f"D{int(document['DocID'])}P{page}",
-        }
+        requested_citations = case.get("expected_citations") or []
+        if not requested_citations and (relation or case.get("expected_claims")):
+            requested_citations = [{"document": filename, "page": page}]
+        resolved_citations = []
+        source_ids = {}
+        for expected_citation in requested_citations:
+            citation_filename = str(expected_citation.get("document") or "")
+            citation_document = documents.get(citation_filename.casefold())
+            citation_page = int(expected_citation.get("page") or 1)
+            if not citation_document:
+                failures.append({
+                    "case_id": case_id, "reason": "citation_document_missing",
+                    "document": citation_filename,
+                })
+                continue
+            expected_version = int(
+                expected_citation.get("version") or citation_document.get("VersionNo") or 0
+            )
+            citation_valid = (
+                citation_document.get("SourceSystem") == FIXTURE_BATCH
+                and int(citation_document.get("VersionNo") or 0) == expected_version
+                and any(
+                    int(point.get("doc_id") or 0) == int(citation_document["DocID"])
+                    and int(point.get("trang_so") or point.get("page") or 0) == citation_page
+                    and int(point.get("version_no") or 0) == expected_version
+                    and point.get("source_system") == FIXTURE_BATCH
+                    and bool(point.get("servable")) and bool(point.get("is_current"))
+                    and str(point.get("publication_state") or "").casefold() == "published"
+                    and str(point.get("lifecycle_status") or "").casefold() == "published"
+                    and str(point.get("review_status") or "").casefold() == "approved"
+                    for point in qdrant_points or ()
+                )
+            )
+            if retrieval_expected and not citation_valid:
+                failures.append({
+                    "case_id": case_id, "reason": "citation_provenance_invalid",
+                    "document": citation_filename,
+                })
+            source_id = f"D{int(citation_document['DocID'])}P{citation_page}"
+            resolved_citations.append({
+                "document": citation_filename,
+                "doc_id": int(citation_document["DocID"]),
+                "page": citation_page,
+                "version": expected_version,
+                "source_id": source_id,
+            })
+            source_ids[str(expected_citation.get("source_id") or "")] = source_id
         resolutions[case_id] = {
-            "expected_citations": [citation] if (
-                case.get("expected_citations") or relation or case.get("expected_claims")
-            ) else [],
+            "expected_citations": resolved_citations,
             "expected_claims": [
                 {
                     **claim,
-                    "allowed_source_ids": [citation["source_id"]],
+                    "allowed_source_ids": [
+                        source_ids.get(str(source_id), str(source_id))
+                        for source_id in claim.get("allowed_source_ids") or []
+                    ],
                 }
                 for claim in case.get("expected_claims") or []
             ],

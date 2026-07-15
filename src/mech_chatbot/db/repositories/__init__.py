@@ -28,6 +28,7 @@ from . import (
     knowledge_governance,
     rollout,
     graph,
+    community_summaries,
 )
 from ._shared import *  # noqa: F401,F403
 from .chat import *  # noqa: F401,F403
@@ -53,6 +54,7 @@ from .external_ai import *  # noqa: F401,F403
 from .knowledge_governance import *  # noqa: F401,F403
 from .rollout import *  # noqa: F401,F403
 from .graph import *  # noqa: F401,F403
+from .community_summaries import *  # noqa: F401,F403
 
 __all__ = [
     'MAX_BOT_MSG_LEN',
@@ -248,7 +250,10 @@ __all__ = [
     'record_department_evaluation_gate',
     'upsert_department_rollout_plan',
     'list_graph_proposals',
+    'list_community_summaries',
     'propose_graph_edge',
     'review_graph_proposal',
+    'propose_community_summary',
+    'review_community_summary',
     'traverse_knowledge_graph',
 ]

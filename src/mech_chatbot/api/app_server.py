@@ -100,6 +100,7 @@ from mech_chatbot.services import (
     list_ingestion_jobs,
     list_feedbacks,
     list_graph_proposals,
+    list_community_summaries,
     list_known_departments,
     list_known_sites,
     list_materials,
@@ -127,6 +128,7 @@ from mech_chatbot.services import (
     reject_ingestion_job,
     resolve_access_request,
     review_graph_proposal,
+    review_community_summary,
     refresh_expired_status,
     revoke_user_clearance,
     revoke_user_department,
@@ -2652,6 +2654,68 @@ def graph_proposal_reject(
     profile: dict[str, Any] = Depends(csrf_profile),
 ):
     return _review_graph_proposal_endpoint(proposal_id, "reject", body, profile)
+
+
+@data_router.get("/admin/graph/community-summaries")
+def community_summaries(
+    status_value: str = "pending",
+    limit: int = 100,
+    profile: dict[str, Any] = Depends(
+        require_any_role("knowledge_approver", "reviewer", "admin")
+    ),
+):
+    _assert_any_role(profile, "knowledge_approver", "reviewer", "admin")
+    return {
+        "summaries": _rows_to_json(
+            list_community_summaries(status=status_value, limit=limit)
+        )
+    }
+
+
+def _review_community_summary_endpoint(
+    summary_id: int, action: str, body: dict[str, Any], profile: dict[str, Any]
+):
+    _assert_any_role(profile, "knowledge_approver", "reviewer", "admin")
+    result = review_community_summary(
+        summary_id,
+        action,
+        reviewer=profile.get("username") or "System",
+        note=body.get("note"),
+    )
+    if not result.get("ok") and result.get("reason") == "not_found":
+        raise HTTPException(status_code=404, detail="Community summary not found")
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=409,
+            detail=result.get("reason") or "Community summary conflict",
+        )
+    write_audit_log(
+        action=f"graph_community_summary_{action}",
+        username=profile.get("username") or "System",
+        entity_type="graph_community_summary",
+        entity_id=int(summary_id),
+        details={"status": action},
+        user_id=profile.get("user_id"),
+    )
+    return result
+
+
+@data_router.post("/admin/graph/community-summaries/{summary_id}/approve")
+def community_summary_approve(
+    summary_id: int,
+    body: dict[str, Any],
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    return _review_community_summary_endpoint(summary_id, "approve", body, profile)
+
+
+@data_router.post("/admin/graph/community-summaries/{summary_id}/reject")
+def community_summary_reject(
+    summary_id: int,
+    body: dict[str, Any],
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    return _review_community_summary_endpoint(summary_id, "reject", body, profile)
 
 
 app.include_router(auth_router)

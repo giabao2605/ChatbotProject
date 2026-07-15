@@ -27,6 +27,25 @@ def _fraction_complete(report, section, metric):
     return value is not None and float(value) == 1.0
 
 
+def _metric_value(report, section, metric):
+    value = (((report.get(section) or {}).get(metric) or {}).get("value"))
+    return float(value) if value is not None else None
+
+
+def _metric_not_decreased(baseline, candidate, section, metric):
+    baseline_section = baseline.get(section) or {}
+    candidate_section = candidate.get(section) or {}
+    before = _metric_value(baseline, section, metric)
+    after = _metric_value(candidate, section, metric)
+    return (
+        int(baseline_section.get("applicable_cases") or 0) > 0
+        and int(candidate_section.get("applicable_cases") or 0) > 0
+        and before is not None
+        and after is not None
+        and after >= before
+    )
+
+
 def _calculation_check_complete(report, check):
     totals = (((report.get("grounded_math_evaluation") or {}).get("check_totals") or {}).get(check) or {})
     applicable = int(totals.get("applicable") or 0)
@@ -217,6 +236,72 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "min_approved_edge_pool": 20,
             "max_hops": 2, "max_edges": 50,
         }
+    elif stage == "community_summaries":
+        target = float(metadata.get("min_global_answer_gain") or 0.0)
+        max_indexing_latency = float(
+            metadata.get("max_indexing_latency_ms") or 0.0
+        )
+        checks = {
+            **common,
+            "readiness_schema_valid": (
+                metadata.get("schema") == "community-summary-readiness-v1"
+            ),
+            "graph_gate_prerequisite": (
+                metadata.get("prerequisite_graph_gate_passed") is True
+            ),
+            "reviewed_edge_precision": float(
+                metadata.get("reviewed_edge_precision") or 0.0
+            ) >= 0.95,
+            "quality_target_locked": (
+                metadata.get("target_locked_before_benchmark") is True
+                and target > 0.0
+            ),
+            "global_answer_gain": _group_rate(candidate, "global")
+            >= _group_rate(baseline, "global") + target,
+            "local_quality_not_decreased": _group_rate(candidate, "local")
+            >= _group_rate(baseline, "local"),
+            "relational_quality_not_decreased": _group_rate(candidate, "relational")
+            >= _group_rate(baseline, "relational"),
+            "claim_precision_not_decreased": _metric_not_decreased(
+                baseline, candidate, "claim_evaluation", "claim_precision"
+            ),
+            "citation_accuracy_not_decreased": _metric_not_decreased(
+                baseline, candidate, "citation_evaluation", "citation_accuracy"
+            ),
+            "citation_precision_not_decreased": _metric_not_decreased(
+                baseline, candidate, "citation_evaluation", "citation_precision"
+            ),
+            "provenance_complete": float(
+                metadata.get("provenance_completeness") or 0.0
+            ) == 1.0,
+            "pending_summaries_never_served": int(
+                metadata.get("pending_summaries_served", -1)
+            ) == 0,
+            "stale_summary_behavior": int(
+                metadata.get("stale_summary_violations", -1)
+            ) == 0,
+            "serving_epoch_valid": metadata.get("serving_epoch_valid") is True,
+            "indexing_latency_within_budget": (
+                max_indexing_latency > 0
+                and float(metadata.get("indexing_latency_ms") or float("inf"))
+                <= max_indexing_latency
+            ),
+            "latency_within_budget": _ratio(
+                float(candidate.get("latency_p95_ms") or 0),
+                float(baseline.get("latency_p95_ms") or 0),
+            ) <= 1.5,
+            "cost_within_budget": _ratio(
+                float(candidate.get("total_estimated_cost") or 0),
+                float(baseline.get("total_estimated_cost") or 0),
+            ) <= 1.5,
+        }
+        limits = {
+            "min_reviewed_edge_precision": 0.95,
+            "min_global_answer_gain": target,
+            "max_latency_ratio": 1.5,
+            "max_cost_ratio": 1.5,
+            "max_indexing_latency_ms": max_indexing_latency,
+        }
     else:
         raise ValueError(f"unknown stage: {stage}")
     return {
@@ -230,7 +315,10 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("stage", choices=("grounded_math", "late_interaction", "query_decomposition", "graph_retrieval"))
+    parser.add_argument("stage", choices=(
+        "grounded_math", "late_interaction", "query_decomposition",
+        "graph_retrieval", "community_summaries",
+    ))
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--metadata", type=Path)
