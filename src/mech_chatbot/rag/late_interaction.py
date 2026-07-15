@@ -98,6 +98,7 @@ def attempt_shadow_rerank(
     *,
     top_n: int | None = None,
     collection_name: str | None = None,
+    query_encoder=None,
 ) -> LateInteractionResult:
     """Use MaxSim only when every authorized input candidate has a shadow point."""
     started = time.perf_counter()
@@ -114,7 +115,7 @@ def attempt_shadow_rerank(
     index_version = os.getenv("RAG_LATE_INDEX_VERSION", "late-v2")
     try:
         encode_started = time.perf_counter()
-        query_vectors = encode_query(query)
+        query_vectors = (query_encoder or encode_query)(query)
         encode_ms = (time.perf_counter() - encode_started) * 1000
     except Exception:
         encode_ms = (time.perf_counter() - encode_started) * 1000

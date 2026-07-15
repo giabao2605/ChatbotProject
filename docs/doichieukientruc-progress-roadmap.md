@@ -41,12 +41,12 @@ Vì vậy, “100% mục đích” không đồng nghĩa phải bật mọi côn
 | Telemetry và labeled evaluation | Có | Có | Có | Áp dụng cho evaluation | Foundation v4 hoàn tất; pilot labels thuộc Milestone A–F |
 | CRAG và claim repair | Có | Có | Ba gate đạt | Chưa | Hoàn tất staging và pilot control plane; live pilot chưa bắt đầu |
 | Grounded math | Có | Có, gồm integration live | 3/3 pair đạt; series bị chặn bởi CRAG | Chưa | Staging evidence hoàn tất; chưa production-ready |
-| Late Interaction | Có | Có | Có readiness offline; chưa có quality gate | Chưa | Serving-ready về hạ tầng, chưa production-ready |
+| Late Interaction | Có | Có | Có readiness và 3 pair quality gate fail-closed | Chưa | Defer: giữ flag tắt, cần rerun với Voyage baseline hợp lệ |
 | Query decomposition | Có | Có | Chưa | Chưa | Implementation sớm, chưa được chứng minh chất lượng |
 | Governed GraphRAG | Có schema/API/retrieval | Có | Chưa có staging gate | Chưa | Implementation sớm, chưa được nghiệm thu live |
 | Community summaries | Chưa | Chưa | Chưa | Chưa | Chủ động hoãn theo điều kiện trong tài liệu gốc |
 
-Không gán một phần trăm tổng hợp cho bảng này vì các hạng mục có trọng số và rủi ro khác nhau. Chỉ số có thể kiểm chứng hiện tại là: 6/6 workstream chính đã có implementation, 2/6 có artifact live hoặc readiness artifact, 1/6 đã vượt quality gate staging, và 0/6 đã hoàn tất production pilot. Checklist tại mục 2.11 là denominator chính thức để tiến tới 100%.
+Không gán một phần trăm tổng hợp cho bảng này vì các hạng mục có trọng số và rủi ro khác nhau. Chỉ số có thể kiểm chứng hiện tại là: 6/6 workstream chính đã có implementation, 3/6 có artifact live hoặc readiness artifact, 1/6 đã vượt quality gate staging, và 0/6 đã hoàn tất production pilot. Checklist tại mục 2.11 là denominator chính thức để tiến tới 100%.
 
 ### 1.2 Telemetry có thể tái lập
 
@@ -521,7 +521,7 @@ Biến trạng thái “shadow index ready” thành quyết định production 
 
 #### Công việc
 
-1. Tạo labeled retrieval manifest từ corpus có provenance thật:
+1. [Đã hoàn tất] Tạo labeled retrieval manifest từ corpus có provenance thật:
    - Exact code.
    - Near-code và code family.
    - Tên vật liệu/tiêu chuẩn hiếm.
@@ -529,16 +529,16 @@ Biến trạng thái “shadow index ready” thành quyết định production 
    - OCR noise.
    - Hai chunk gần nghĩa cần phân biệt.
    - RBAC/site denial và lifecycle negative cases.
-2. Đóng băng source snapshot, shadow index version `late-v2`, commit và provider configuration.
-3. Chạy ba pipeline:
+2. [Đã hoàn tất] Đóng băng source snapshot 170 point, shadow index version `late-v2`, commit và provider configuration.
+3. [Đã hoàn tất] Chạy ba pipeline:
    - Dense+BM25+RRF không external rerank.
    - Voyage rerank hiện tại.
    - Shadow MaxSim rerank.
-4. Chạy nhiều cặp benchmark để giảm ảnh hưởng Voyage 429/provider variance.
-5. Báo Recall@5/10, nDCG@5/10, wrong-answer, leakage, P50/P95, storage và fallback coverage.
-6. Kiểm tra candidate thiếu shadow point luôn fallback, không thêm document ngoài governance-filtered input.
-7. Nếu đạt, pilot với `RAG_LATE_ENCODER_READY=true` và `RAG_LATE_INTERACTION_ENABLED=true` trên scope nhỏ.
-8. Nếu không đạt, giữ Voyage/local path và ghi báo cáo kết luận; shadow collection có thể giữ để nghiên cứu hoặc cleanup theo runbook.
+4. [Đã chạy 3 pair, gate fail-closed] Voyage fallback lần lượt 62,5%, 100% và 100%; dữ liệu này chứng minh provider variance nhưng không đủ điều kiện làm baseline hợp lệ.
+5. [Đã hoàn tất] Report có Recall@5/10, nDCG@5/10, wrong-answer, leakage, P50/P95, storage và fallback coverage.
+6. [Đã hoàn tất] Unit/integration seam xác nhận partial shadow luôn fallback nguyên candidate và reranker không thể thêm document ngoài governance-filtered input.
+7. [Chưa pilot] MaxSim đạt Recall@10=1, nDCG@10=0,9505, leakage=0 và không fallback; tuy nhiên aggregate P95 cao hơn baseline 1,53 lần vì cold start, còn Voyage baseline fallback 87,5% nên gate không hợp lệ.
+8. [Defer fail-closed] Giữ `RAG_LATE_ENCODER_READY=false` và `RAG_LATE_INTERACTION_ENABLED=false`; tiếp tục dùng Voyage/local path. Giữ shadow collection để rerun quality gate khi Voyage ổn định và tách cold-start khỏi serving latency. Đây chưa phải reject decision cuối cùng.
 
 #### Điều kiện hoàn tất
 
@@ -549,6 +549,13 @@ Biến trạng thái “shadow index ready” thành quyết định production 
 - Storage <=25x source dense storage; hiện tại là 23.3618x.
 - Shadow coverage 100%, drift/orphan 0.
 - Production pilot đạt hoặc có quyết định không dùng Late Interaction có bằng chứng.
+
+#### Kết quả hiện tại
+
+- Artifact: `reports/late-interaction/quality-gate/20260715-pair-series-v1/`.
+- Ba pair và aggregate đều fail-closed vì Voyage baseline fallback vượt 10%; pair 1 còn không đạt latency, pair 2-3 đạt latency riêng lẻ.
+- Chất lượng MaxSim quan sát được tăng khoảng 6,8% nDCG@10 so với aggregate Voyage/RRF fallback, Recall@10 không giảm, wrong-answer và leakage bằng 0, coverage 100%, drift/orphan bằng 0 và storage 23,3618x.
+- Đây là quyết định defer production có bằng chứng, không phải reject decision cuối cùng hay kết luận MaxSim kém chất lượng. Muốn đóng milestone phải rerun trên baseline Voyage hợp lệ và benchmark warm-serving cùng clean commit.
 
 ### 2.6 Milestone D — Đóng Query Decomposition gate
 
@@ -737,7 +744,7 @@ Tất cả milestone đã đạt
 
 - [ ] CRAG/repair production pilot đạt hoặc có reject decision/artifact theo nhánh bác bỏ.
 - [ ] Grounded math có live baseline/candidate, gate và pilot/decision.
-- [ ] Late Interaction có Voyage-vs-MaxSim quality artifact và pilot/decision.
+- [ ] Late Interaction có quality artifact sơ bộ nhưng cần Voyage baseline hợp lệ trước pilot/reject decision cuối cùng; production flags đang giữ tắt.
 - [ ] Query decomposition có complex-query gate và pilot/decision.
 - [ ] GraphRAG migration, seed, reviewer flow, quality gate và pilot/decision đạt.
 - [ ] Community summaries đã pilot hoặc có quyết định chính thức không triển khai do không đủ điều kiện/không tạo giá trị.

@@ -40,10 +40,23 @@ def report(*, wrong=0, leakage=0, p95=100, cost=1, recall10=1, ndcg10=0.5, group
     }
 
 
+def late_arm(payload, variant):
+    payload["variant"] = variant
+    payload["fallback_coverage"] = {"fallback_rate": 0.0}
+    payload["run_metadata"] = {
+        "snapshot_fingerprint": "snapshot-1",
+        "provider_configuration_sha256": "provider-1",
+        "commit_sha": "commit-1",
+        "manifest_sha256": "manifest-1",
+    }
+    return payload
+
+
 def test_late_gate_enforces_quality_latency_and_storage():
     gate = _module()
-    baseline = report(ndcg10=0.50)
-    candidate = report(ndcg10=0.53, p95=120)
+    reference = late_arm(report(ndcg10=0.49), "rrf")
+    baseline = late_arm(report(ndcg10=0.50), "voyage")
+    candidate = late_arm(report(ndcg10=0.53, p95=120), "maxsim")
 
     readiness = {
         "schema": "late-interaction-readiness-v1",
@@ -56,8 +69,11 @@ def test_late_gate_enforces_quality_latency_and_storage():
         "vector_schema_rejected": 0,
         "orphan_points": 0,
     }
-    passed = gate.compare("late_interaction", baseline, candidate, readiness)
-    failed = gate.compare("late_interaction", baseline, candidate, {**readiness, "shadow_storage_ratio": 30})
+    passed = gate.compare("late_interaction", baseline, candidate, readiness, reference)
+    failed = gate.compare(
+        "late_interaction", baseline, candidate,
+        {**readiness, "shadow_storage_ratio": 30}, reference,
+    )
 
     assert passed["passed"] is True
     assert failed["checks"]["storage_within_budget"] is False
@@ -65,10 +81,11 @@ def test_late_gate_enforces_quality_latency_and_storage():
 
 def test_late_gate_rejects_missing_or_non_serving_readiness_artifact():
     gate = _module()
-    baseline = report(ndcg10=0.50)
-    candidate = report(ndcg10=0.53, p95=120)
+    reference = late_arm(report(ndcg10=0.49), "rrf")
+    baseline = late_arm(report(ndcg10=0.50), "voyage")
+    candidate = late_arm(report(ndcg10=0.53, p95=120), "maxsim")
 
-    missing = gate.compare("late_interaction", baseline, candidate, {})
+    missing = gate.compare("late_interaction", baseline, candidate, {}, reference)
     not_ready = gate.compare("late_interaction", baseline, candidate, {
         "schema": "late-interaction-readiness-v1",
         "capability_passed": True,
@@ -79,10 +96,86 @@ def test_late_gate_rejects_missing_or_non_serving_readiness_artifact():
         "provenance_drift": 0,
         "vector_schema_rejected": 0,
         "orphan_points": 0,
-    })
+    }, reference)
 
     assert missing["checks"]["readiness_artifact_valid"] is False
     assert not_ready["checks"]["ready_for_serving"] is False
+
+
+def test_late_gate_rejects_provider_or_shadow_fallbacks():
+    gate = _module()
+    reference = late_arm(report(ndcg10=0.49), "rrf")
+    baseline = late_arm(report(ndcg10=0.50), "voyage")
+    baseline["fallback_coverage"] = {"fallback_rate": 0.25}
+    candidate = late_arm(report(ndcg10=0.53, p95=120), "maxsim")
+    candidate["fallback_coverage"] = {"fallback_rate": 0.05}
+    readiness = {
+        "schema": "late-interaction-readiness-v1",
+        "capability_passed": True,
+        "ready_for_serving": True,
+        "shadow_storage_ratio": 20,
+        "shadow_coverage": 1.0,
+        "governance_drift": 0,
+        "provenance_drift": 0,
+        "vector_schema_rejected": 0,
+        "orphan_points": 0,
+    }
+
+    result = gate.compare("late_interaction", baseline, candidate, readiness, reference)
+
+    assert result["checks"]["voyage_baseline_valid"] is False
+    assert result["checks"]["shadow_candidate_valid"] is False
+    assert result["passed"] is False
+
+
+def test_late_gate_binds_all_three_variants_snapshot_and_provider_configuration():
+    gate = _module()
+    reference = late_arm(report(ndcg10=0.49), "rrf")
+    baseline = late_arm(report(ndcg10=0.50), "voyage")
+    candidate = late_arm(report(ndcg10=0.53, p95=120), "maxsim")
+    readiness = {
+        "schema": "late-interaction-readiness-v1",
+        "capability_passed": True,
+        "ready_for_serving": True,
+        "shadow_storage_ratio": 20,
+        "shadow_coverage": 1.0,
+        "governance_drift": 0,
+        "provenance_drift": 0,
+        "vector_schema_rejected": 0,
+        "orphan_points": 0,
+    }
+
+    missing_reference = gate.compare("late_interaction", baseline, candidate, readiness)
+    candidate["run_metadata"]["provider_configuration_sha256"] = "provider-2"
+    drifted = gate.compare("late_interaction", baseline, candidate, readiness, reference)
+
+    assert missing_reference["checks"]["rrf_reference_valid"] is False
+    assert drifted["checks"]["provider_configuration_frozen"] is False
+
+
+def test_late_gate_rejects_commit_or_manifest_drift_between_variants():
+    gate = _module()
+    reference = late_arm(report(ndcg10=0.49), "rrf")
+    baseline = late_arm(report(ndcg10=0.50), "voyage")
+    candidate = late_arm(report(ndcg10=0.53, p95=120), "maxsim")
+    readiness = {
+        "schema": "late-interaction-readiness-v1",
+        "capability_passed": True,
+        "ready_for_serving": True,
+        "shadow_storage_ratio": 20,
+        "shadow_coverage": 1.0,
+        "governance_drift": 0,
+        "provenance_drift": 0,
+        "vector_schema_rejected": 0,
+        "orphan_points": 0,
+    }
+
+    candidate["run_metadata"]["commit_sha"] = "commit-2"
+    candidate["run_metadata"]["manifest_sha256"] = "manifest-2"
+    result = gate.compare("late_interaction", baseline, candidate, readiness, reference)
+
+    assert result["checks"]["commit_frozen_across_variants"] is False
+    assert result["checks"]["manifest_frozen_across_variants"] is False
 
 
 def test_decomposition_gate_requires_complex_gain_and_zero_simple_planner_calls():

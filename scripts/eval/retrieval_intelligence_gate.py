@@ -33,7 +33,7 @@ def _calculation_check_complete(report, check):
     return applicable > 0 and int(totals.get("passed") or 0) == applicable
 
 
-def compare(stage, baseline, candidate, metadata=None):
+def compare(stage, baseline, candidate, metadata=None, reference=None):
     metadata = metadata or {}
     baseline_outcomes = baseline.get("outcome_confusion", {})
     candidate_outcomes = candidate.get("outcome_confusion", {})
@@ -93,12 +93,46 @@ def compare(stage, baseline, candidate, metadata=None):
             "required_exact_rate": 1.0,
         }
     elif stage == "late_interaction":
+        reference = reference or {}
         b_ranked = baseline.get("ranked_retrieval", {})
         c_ranked = candidate.get("ranked_retrieval", {})
         baseline_ndcg = float(b_ranked.get("ndcg_at_10") or 0.0)
         candidate_ndcg = float(c_ranked.get("ndcg_at_10") or 0.0)
+        baseline_fallback = float(
+            (baseline.get("fallback_coverage") or {}).get("fallback_rate") or 0.0
+        )
+        candidate_fallback = float(
+            (candidate.get("fallback_coverage") or {}).get("fallback_rate") or 0.0
+        )
+        snapshots = {
+            str((report.get("run_metadata") or {}).get("snapshot_fingerprint") or "")
+            for report in (reference, baseline, candidate)
+        }
+        provider_hashes = {
+            str((report.get("run_metadata") or {}).get("provider_configuration_sha256") or "")
+            for report in (reference, baseline, candidate)
+        }
+        commits = {
+            str((report.get("run_metadata") or {}).get("commit_sha") or "")
+            for report in (reference, baseline, candidate)
+        }
+        manifests = {
+            str((report.get("run_metadata") or {}).get("manifest_sha256") or "")
+            for report in (reference, baseline, candidate)
+        }
         checks = {
             **common,
+            "voyage_baseline_valid": (
+                baseline.get("variant") == "voyage" and baseline_fallback <= 0.10
+            ),
+            "shadow_candidate_valid": (
+                candidate.get("variant") == "maxsim" and candidate_fallback == 0.0
+            ),
+            "rrf_reference_valid": reference.get("variant") == "rrf",
+            "snapshot_frozen_across_variants": len(snapshots) == 1 and "" not in snapshots,
+            "provider_configuration_frozen": len(provider_hashes) == 1 and "" not in provider_hashes,
+            "commit_frozen_across_variants": len(commits) == 1 and "" not in commits,
+            "manifest_frozen_across_variants": len(manifests) == 1 and "" not in manifests,
             "readiness_artifact_valid": metadata.get("schema") == "late-interaction-readiness-v1",
             "capability_passed": metadata.get("capability_passed") is True,
             "ready_for_serving": metadata.get("ready_for_serving") is True,
@@ -117,7 +151,13 @@ def compare(stage, baseline, candidate, metadata=None):
             ) == 0,
             "orphan_points_zero": int(metadata.get("orphan_points", -1)) == 0,
         }
-        limits = {"min_ndcg_relative_gain": 0.05, "max_latency_ratio": 1.25, "max_storage_ratio": 25.0}
+        limits = {
+            "min_ndcg_relative_gain": 0.05,
+            "max_latency_ratio": 1.25,
+            "max_storage_ratio": 25.0,
+            "max_voyage_fallback_rate": 0.10,
+            "max_shadow_fallback_rate": 0.0,
+        }
     elif stage == "query_decomposition":
         checks = {
             **common,
@@ -161,18 +201,31 @@ def main(argv=None):
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--metadata", type=Path)
+    parser.add_argument("--reference", type=Path)
     parser.add_argument("--baseline-trace", type=Path, required=True)
     parser.add_argument("--candidate-trace", type=Path, required=True)
+    parser.add_argument("--reference-trace", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     read = lambda path: json.loads(path.read_text(encoding="utf-8"))
-    result = compare(args.stage, read(args.baseline), read(args.candidate), read(args.metadata) if args.metadata else {})
+    if args.stage == "late_interaction" and (not args.reference or not args.reference_trace):
+        parser.error("late_interaction requires --reference and --reference-trace for the RRF arm")
+    result = compare(
+        args.stage,
+        read(args.baseline),
+        read(args.candidate),
+        read(args.metadata) if args.metadata else {},
+        read(args.reference) if args.reference else None,
+    )
     result["inputs"] = {
         "baseline_eval_sha256": _sha256(args.baseline),
         "candidate_eval_sha256": _sha256(args.candidate),
         "baseline_trace_sha256": _sha256(args.baseline_trace),
         "candidate_trace_sha256": _sha256(args.candidate_trace),
     }
+    if args.reference:
+        result["inputs"]["reference_eval_sha256"] = _sha256(args.reference)
+        result["inputs"]["reference_trace_sha256"] = _sha256(args.reference_trace)
     payload = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
