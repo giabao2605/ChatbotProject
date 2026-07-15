@@ -100,6 +100,21 @@ def test_grounded_calculation_evaluator_accepts_expected_partial_status_without_
     assert report["checks"]["exact_decimal"] is True
 
 
+def test_grounded_calculation_evaluator_allows_operand_value_in_partial_reason():
+    expected = expected_calculation("division_by_zero")
+    expected["allowed_numbers"] = []
+    expected["sources"][1]["value"] = "0"
+    actual = actual_calculation("division_by_zero")
+    actual["sources"][1]["value"] = "0"
+
+    report = evaluate_grounded_calculation(
+        expected, [actual], answer="Không thể tính vì mẫu số bằng 0."
+    )
+
+    assert report["passed"] is True
+    assert report["unsupported_numbers"] == []
+
+
 def test_grounded_calculation_evaluator_rejects_numbers_not_in_expected_formula_or_sources():
     report = evaluate_grounded_calculation(
         expected_calculation(),

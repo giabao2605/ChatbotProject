@@ -46,6 +46,7 @@ def _allowed_numbers(expected: dict[str, Any]) -> set[str]:
     for source in _sources(expected.get("sources")):
         values.extend((
             source["doc_id"], source["page"], source["version"], source["source_id"],
+            source["value"],
         ))
     return normalized_number_values(" ".join(str(value or "") for value in values))
 
