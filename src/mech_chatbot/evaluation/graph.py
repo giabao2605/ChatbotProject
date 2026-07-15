@@ -41,12 +41,19 @@ def evaluate_graph_case(case: dict, debug: dict) -> dict:
 
 def summarize_graph_evaluation(rows: list[dict]) -> dict:
     applicable = [row for row in rows if row.get("graph_evaluation", {}).get("applicable")]
+    relational_answer_passes = sum(
+        bool(row["graph_evaluation"].get("relational_answer_passed"))
+        for row in applicable
+    )
     return {
         "applicable_cases": len(applicable),
         "passed_cases": sum(bool(row["graph_evaluation"].get("passed")) for row in applicable),
         "relation_accuracy": (
             sum(bool(row["graph_evaluation"].get("passed")) for row in applicable) / len(applicable)
             if applicable else None
+        ),
+        "relational_answer_accuracy": (
+            relational_answer_passes / len(applicable) if applicable else None
         ),
         "budget_violations": sum(
             not bool(row.get("graph_evaluation", {}).get("budget_ok", True)) for row in rows

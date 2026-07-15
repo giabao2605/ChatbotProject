@@ -186,11 +186,15 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         }
     elif stage == "graph_retrieval":
         graph = candidate.get("graph_evaluation") or {}
+        baseline_graph = baseline.get("graph_evaluation") or {}
         domains = metadata.get("domain_coverage") or {}
         checks = {
             **common,
-            "relational_accuracy_gain": _group_rate(candidate, "relational")
-            >= _group_rate(baseline, "relational") + 0.10,
+            "relational_accuracy_gain": float(
+                graph.get("relational_answer_accuracy") or 0.0
+            ) >= float(
+                baseline_graph.get("relational_answer_accuracy") or 0.0
+            ) + 0.10,
             "reviewed_edge_precision": float(metadata.get("reviewed_edge_precision", 0.0)) >= 0.95,
             "review_workflow_fixture_passed": metadata.get("workflow_fixture_passed") is True,
             "review_sample_is_independent": metadata.get("review_sample_source") == "independent",

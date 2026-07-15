@@ -135,7 +135,16 @@ def heuristic_missing_evidence_reason(question, context_text):
     if asks_standard and not _has_any_pattern(ctx, STANDARD_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi tieu chuan/ket qua kiem tra de ket luan dat hay khong dat"
 
-    asks_material_sub = any(kw in q for kw in ["thay duoc", "thay the", "vat lieu khac", "tuong duong"])
+    material_context = any(
+        _contains_phrase(q, kw)
+        for kw in [
+            "vat lieu", "material", "thep", "steel", "aluminum",
+            "inox", "copper", "cao su", "rubber", "nylon",
+        ]
+    )
+    asks_material_sub = any(
+        kw in q for kw in ["thay duoc", "vat lieu khac", "tuong duong"]
+    ) or ("thay the" in q and material_context)
     if asks_material_sub and not _has_any_pattern(ctx, MATERIAL_SUB_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi thong tin vat lieu thay the/tuong duong"
 

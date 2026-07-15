@@ -427,6 +427,12 @@ def run_evaluation(
                     or (graph_evaluation["passed"] and graph_evaluation["budget_ok"])
                 )
             )
+            graph_evaluation["relational_answer_passed"] = bool(
+                graph_evaluation["applicable"]
+                and graph_evaluation["passed"]
+                and graph_evaluation["budget_ok"]
+                and passed
+            )
             evidence_state = str(
                 debug.get("evidence_state")
                 or ("SUFFICIENT" if actual in ANSWER_OUTCOMES else "INSUFFICIENT")

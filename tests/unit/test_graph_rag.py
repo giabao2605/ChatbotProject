@@ -181,7 +181,8 @@ def test_graph_repository_filters_every_traversed_edge_and_only_returns_two_hops
     source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
 
     assert "EligibleEdges AS" in source
-    assert "JOIN EligibleEdges e ON e.SourceNodeID = w.NodeID" in source
+    assert "e.SourceNodeID = w.NodeID OR e.TargetNodeID = w.NodeID" in source
+    assert "THEN e.TargetNodeID ELSE e.SourceNodeID END" in source
     assert "WHERE w.Depth < :max_hops" in source
 
 

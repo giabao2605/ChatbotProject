@@ -3,7 +3,7 @@ import pytest
 from scripts.graph.report import build_graph_report, validate_review_samples
 from scripts.graph_eval.preflight import check_graph_fixture
 from scripts.graph_eval.cleanup_fixture import build_cleanup_plan
-from mech_chatbot.evaluation.graph import evaluate_graph_case
+from mech_chatbot.evaluation.graph import evaluate_graph_case, summarize_graph_evaluation
 
 
 pytestmark = pytest.mark.unit
@@ -190,3 +190,21 @@ def test_graph_evaluator_keeps_relation_evidence_after_document_deduplication():
 
     assert result["passed"] is True
     assert result["relation_matched"] is True
+
+
+def test_graph_summary_reports_relational_answer_accuracy_separately():
+    rows = [
+        {"graph_evaluation": {
+            "applicable": True, "passed": True, "budget_ok": True,
+            "relational_answer_passed": True,
+        }},
+        {"graph_evaluation": {
+            "applicable": True, "passed": True, "budget_ok": True,
+            "relational_answer_passed": False,
+        }},
+    ]
+
+    summary = summarize_graph_evaluation(rows)
+
+    assert summary["relation_accuracy"] == 1.0
+    assert summary["relational_answer_accuracy"] == 0.5

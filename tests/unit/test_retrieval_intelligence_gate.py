@@ -221,7 +221,11 @@ def test_graph_gate_requires_coverage_precision_provenance_and_budgets():
     gate = _module()
     baseline = report(groups={"relational": {"pass_rate": 0.50}})
     candidate = report(groups={"relational": {"pass_rate": 0.61}}, p95=150)
-    candidate["graph_evaluation"] = {"budget_violations": 0, "non_relational_graph_calls": 0}
+    baseline["graph_evaluation"] = {"relational_answer_accuracy": 0.50}
+    candidate["graph_evaluation"] = {
+        "relational_answer_accuracy": 0.61,
+        "budget_violations": 0, "non_relational_graph_calls": 0,
+    }
     metadata = {
         "schema": "graph-readiness-v1", "structured_coverage": 0.8,
         "reviewed_edge_precision": 0.95, "provenance_completeness": 1.0,

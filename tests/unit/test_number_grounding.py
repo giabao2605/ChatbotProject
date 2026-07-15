@@ -52,3 +52,28 @@ def test_cost_heuristic_still_requires_direct_cost_evidence():
         "Gia CRAG-EVAL-PART-C la bao nhieu?",
         "Tai lieu chi mo ta quy trinh lap rap.",
     ) == "tai lieu khong ghi chi phi/don gia/gia thanh"
+
+
+def test_document_supersedes_question_is_not_treated_as_material_substitution():
+    assert heuristic_missing_evidence_reason(
+        "GRAPH-EVAL-ASM-001 phiên bản 2 thay thế tài liệu nào?",
+        "Quan he duoc duyet: Assembly v2 --SUPERSEDES--> Assembly v1",
+    ) is None
+
+
+def test_material_substitution_still_requires_direct_evidence():
+    assert heuristic_missing_evidence_reason(
+        "Vật liệu steel thay thế bằng vật liệu nào?",
+        "Tài liệu chỉ ghi kích thước chi tiết.",
+    ) == "tai lieu khong ghi thong tin vat lieu thay the/tuong duong"
+
+
+@pytest.mark.parametrize("question", [
+    "Nhóm tài liệu nào thay thế bản cũ?",
+    "Động cơ nào thay thế phiên bản cũ?",
+])
+def test_document_terms_do_not_trigger_material_substitution(question):
+    assert heuristic_missing_evidence_reason(
+        question,
+        "Quan he duoc duyet: v2 --SUPERSEDES--> v1",
+    ) is None

@@ -142,7 +142,7 @@ def review_graph_proposal(proposal_id, action, reviewer, note=None):
 
 
 def traverse_knowledge_graph(seed_keys, access_context, max_hops=2, limit=50):
-    """Traverse approved outgoing edges while enforcing document governance in SQL."""
+    """Traverse approved edges both ways while preserving their stored direction."""
     from mech_chatbot.rag.graph_retrieval import expand_seed_keys
 
     keys = expand_seed_keys(seed_keys)
@@ -195,12 +195,20 @@ def traverse_knowledge_graph(seed_keys, access_context, max_hops=2, limit=50):
                 WHERE LOWER(n.CanonicalKey) IN (SELECT [value] FROM OPENJSON(:keys))
                    OR LOWER(ISNULL(n.DisplayName, '')) IN (SELECT [value] FROM OPENJSON(:keys))
                 UNION ALL
-                SELECT e.TargetNodeID, w.Depth + 1,
-                       CAST(w.Path + CAST(e.TargetNodeID AS VARCHAR(30)) + '/' AS VARCHAR(MAX))
+                SELECT CASE WHEN e.SourceNodeID = w.NodeID
+                            THEN e.TargetNodeID ELSE e.SourceNodeID END,
+                       w.Depth + 1,
+                       CAST(w.Path + CAST(
+                            CASE WHEN e.SourceNodeID = w.NodeID
+                                 THEN e.TargetNodeID ELSE e.SourceNodeID END
+                       AS VARCHAR(30)) + '/' AS VARCHAR(MAX))
                 FROM Walk w
-                JOIN EligibleEdges e ON e.SourceNodeID = w.NodeID
+                JOIN EligibleEdges e ON (e.SourceNodeID = w.NodeID OR e.TargetNodeID = w.NodeID)
                 WHERE w.Depth < :max_hops
-                  AND w.Path NOT LIKE '%/' + CAST(e.TargetNodeID AS VARCHAR(30)) + '/%'
+                  AND w.Path NOT LIKE '%/' + CAST(
+                        CASE WHEN e.SourceNodeID = w.NodeID
+                             THEN e.TargetNodeID ELSE e.SourceNodeID END
+                  AS VARCHAR(30)) + '/%'
             )
             SELECT DISTINCT TOP (:limit) e.EdgeID AS edge_id, e.RelationType AS relation_type,
                    sn.CanonicalKey AS source_key, sn.DisplayName AS source_name,
@@ -212,7 +220,7 @@ def traverse_knowledge_graph(seed_keys, access_context, max_hops=2, limit=50):
                    t.IsCurrent AS is_current, t.PublicationState AS publication_state,
                    t.LifecycleStatus AS lifecycle_status, t.ReviewStatus AS review_status
             FROM Walk w
-            JOIN EligibleEdges e ON e.SourceNodeID = w.NodeID
+            JOIN EligibleEdges e ON (e.SourceNodeID = w.NodeID OR e.TargetNodeID = w.NodeID)
             JOIN dbo.KnowledgeGraphNode sn ON sn.NodeID = e.SourceNodeID
             JOIN dbo.KnowledgeGraphNode tn ON tn.NodeID = e.TargetNodeID
             JOIN dbo.TaiLieu t ON t.DocID = e.SourceDocID
