@@ -81,8 +81,8 @@ def test_calculation_planner_keeps_missing_operand_fail_closed():
 
 def test_calculation_planner_marks_unit_conversion_as_unsupported():
     plan = build_calculation_plan(
-        "Quy đổi GROUND-MATH-EVAL-PART-A sang mét",
-        (fact("2", "kg", "BOM-1", label="GROUND-MATH-EVAL-PART-A"),),
+        "Quy đổi GROUND-MATH-EVAL-PART-A-100 sang mét",
+        (fact("2", "kg", "BOM-1", label="GROUND-MATH-EVAL-PART-A-100"),),
     )
 
     assert plan is not None

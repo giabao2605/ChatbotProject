@@ -18,11 +18,11 @@ DOCUMENTS = (
         "doc_number": "GROUND-MATH-EVAL-BOM-001", "title": "BOM Grounded Math",
         "version": 12,
         "rows": (
-            {"row_key": "row-a", "source_table_index": 1, "part": "GROUND-MATH-EVAL-PART-A", "value": "2", "unit": "kg"},
-            {"row_key": "row-b", "source_table_index": 2, "part": "GROUND-MATH-EVAL-PART-B", "value": "4", "unit": "kg"},
-            {"row_key": "row-factor", "source_table_index": 3, "part": "GROUND-MATH-EVAL-FACTOR-X", "value": "2", "unit": ""},
-            {"row_key": "row-zero", "source_table_index": 4, "part": "GROUND-MATH-EVAL-ZERO-X", "value": "0", "unit": ""},
-            {"row_key": "row-metre", "source_table_index": 5, "part": "GROUND-MATH-EVAL-PART-M", "value": "3", "unit": "m"},
+            {"row_key": "row-a", "source_table_index": 1, "part": "GROUND-MATH-EVAL-PART-A-100", "value": "2", "unit": "kg"},
+            {"row_key": "row-b", "source_table_index": 2, "part": "GROUND-MATH-EVAL-PART-B-200", "value": "4", "unit": "kg"},
+            {"row_key": "row-factor", "source_table_index": 3, "part": "GROUND-MATH-EVAL-FACTOR-X-300", "value": "2", "unit": ""},
+            {"row_key": "row-zero", "source_table_index": 4, "part": "GROUND-MATH-EVAL-ZERO-X-400", "value": "0", "unit": ""},
+            {"row_key": "row-metre", "source_table_index": 5, "part": "GROUND-MATH-EVAL-PART-M-500", "value": "3", "unit": "m"},
         ),
     },
     {
@@ -30,7 +30,7 @@ DOCUMENTS = (
         "doc_number": "GROUND-MATH-EVAL-BOM-001-V11", "title": "BOM Grounded Math cũ",
         "version": 11,
         "rows": (
-            {"row_key": "row-old-a", "source_table_index": 1, "part": "GROUND-MATH-EVAL-OLD-A", "value": "1", "unit": "kg"},
+            {"row_key": "row-old-a", "source_table_index": 1, "part": "GROUND-MATH-EVAL-OLD-A-600", "value": "1", "unit": "kg"},
         ),
     },
     {
@@ -38,7 +38,7 @@ DOCUMENTS = (
         "doc_number": "GROUND-MATH-EVAL-BOM-002", "title": "BOM provenance khác",
         "version": 12,
         "rows": (
-            {"row_key": "row-other", "source_table_index": 1, "part": "GROUND-MATH-EVAL-OTHER-A", "value": "1", "unit": "kg"},
+            {"row_key": "row-other", "source_table_index": 1, "part": "GROUND-MATH-EVAL-OTHER-A-700", "value": "1", "unit": "kg"},
         ),
     },
 )
@@ -104,21 +104,21 @@ def _cases() -> list[dict]:
     old = _source("bom_v11", "row-old-a", value="1", unit="kg")
     other = _source("bom_other_v12", "row-other", value="1", unit="kg")
     return [
-        _case("math-bom-total", "Tổng BOM của GROUND-MATH-EVAL-PART-A và GROUND-MATH-EVAL-PART-B?", _calculation("sum", "valid", "2 + 4 = 6 kg", "kg", [a, b], exact_value="6", display_value="6", allowed_numbers=["2", "4"])),
-        _case("math-dedupe-source", "Tổng GROUND-MATH-EVAL-PART-A, GROUND-MATH-EVAL-PART-A và GROUND-MATH-EVAL-PART-B", _calculation("sum", "valid", "2 + 4 = 6 kg", "kg", [a, b], exact_value="6", display_value="6", allowed_numbers=["2", "4"])),
-        _case("math-add", "Cộng GROUND-MATH-EVAL-PART-A và GROUND-MATH-EVAL-PART-B", _calculation("add", "valid", "2 + 4 = 6 kg", "kg", [a, b], exact_value="6", display_value="6", allowed_numbers=["2", "4"])),
-        _case("math-subtract", "Lấy GROUND-MATH-EVAL-PART-B trừ GROUND-MATH-EVAL-PART-A", _calculation("subtract", "valid", "4 - 2 = 2 kg", "kg", [b, a], exact_value="2", display_value="2", allowed_numbers=["4", "2"])),
-        _case("math-ratio", "Tỷ lệ GROUND-MATH-EVAL-PART-A so với GROUND-MATH-EVAL-PART-B", _calculation("ratio", "valid", "2 / 4 = 0.5", "", [a, b], exact_value="0.5", display_value="0.5", allowed_numbers=["2", "4"])),
-        _case("math-percent", "GROUND-MATH-EVAL-PART-A chiếm bao nhiêu phần trăm GROUND-MATH-EVAL-PART-B?", _calculation("percent", "valid", "2 / 4 * 100 = 50 %", "%", [a, b], exact_value="50", display_value="50", allowed_numbers=["2", "4", "100"])),
-        _case("math-multiply", "Lấy GROUND-MATH-EVAL-PART-A nhân GROUND-MATH-EVAL-FACTOR-X", _calculation("multiply", "valid", "2 * 2 = 4 kg", "kg", [a, factor], exact_value="4", display_value="4", allowed_numbers=["2"])),
-        _case("math-divide", "Lấy GROUND-MATH-EVAL-PART-B chia GROUND-MATH-EVAL-FACTOR-X", _calculation("divide", "valid", "4 / 2 = 2 kg", "kg", [b, factor], exact_value="2", display_value="2", allowed_numbers=["4", "2"])),
-        _case("math-missing", "Lấy GROUND-MATH-EVAL-PART-A chia GROUND-MATH-EVAL-MISSING", _calculation("divide", "missing_operand", "", "", [a]), outcome="partial_answer"),
-        _case("math-unsupported-number", "Cộng GROUND-MATH-EVAL-PART-A và GROUND-MATH-EVAL-MISSING-99", _calculation("add", "missing_operand", "", "", [a]), outcome="partial_answer"),
-        _case("math-zero", "Lấy GROUND-MATH-EVAL-PART-A chia GROUND-MATH-EVAL-ZERO-X", _calculation("divide", "division_by_zero", "", "", [a, zero]), outcome="partial_answer"),
-        _case("math-unit-mismatch", "Cộng GROUND-MATH-EVAL-PART-A và GROUND-MATH-EVAL-PART-M", _calculation("add", "ambiguous_unit", "", "", [a, metre]), outcome="partial_answer"),
-        _case("math-mixed-version", "Cộng GROUND-MATH-EVAL-PART-A và GROUND-MATH-EVAL-OLD-A", _calculation("add", "mixed_version", "", "", [a, old]), outcome="partial_answer"),
-        _case("math-ambiguous-provenance", "Cộng GROUND-MATH-EVAL-PART-A và GROUND-MATH-EVAL-OTHER-A", _calculation("add", "ambiguous_provenance", "", "", [a, other]), outcome="partial_answer"),
-        _case("math-unsupported-conversion", "Quy đổi GROUND-MATH-EVAL-PART-A sang mét", _calculation("unsupported_operation", "unsupported_operation", "", "", [a]), outcome="partial_answer"),
+        _case("math-bom-total", "Tổng BOM của GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-PART-B-200?", _calculation("sum", "valid", "2 + 4 = 6 kg", "kg", [a, b], exact_value="6", display_value="6", allowed_numbers=["2", "4"])),
+        _case("math-dedupe-source", "Tổng GROUND-MATH-EVAL-PART-A-100, GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-PART-B-200", _calculation("sum", "valid", "2 + 4 = 6 kg", "kg", [a, b], exact_value="6", display_value="6", allowed_numbers=["2", "4"])),
+        _case("math-add", "Cộng GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-PART-B-200", _calculation("add", "valid", "2 + 4 = 6 kg", "kg", [a, b], exact_value="6", display_value="6", allowed_numbers=["2", "4"])),
+        _case("math-subtract", "Lấy GROUND-MATH-EVAL-PART-B-200 trừ GROUND-MATH-EVAL-PART-A-100", _calculation("subtract", "valid", "4 - 2 = 2 kg", "kg", [b, a], exact_value="2", display_value="2", allowed_numbers=["4", "2"])),
+        _case("math-ratio", "Tỷ lệ GROUND-MATH-EVAL-PART-A-100 so với GROUND-MATH-EVAL-PART-B-200", _calculation("ratio", "valid", "2 / 4 = 0.5", "", [a, b], exact_value="0.5", display_value="0.5", allowed_numbers=["2", "4"])),
+        _case("math-percent", "GROUND-MATH-EVAL-PART-A-100 chiếm bao nhiêu phần trăm GROUND-MATH-EVAL-PART-B-200?", _calculation("percent", "valid", "2 / 4 * 100 = 50 %", "%", [a, b], exact_value="50", display_value="50", allowed_numbers=["2", "4", "100"])),
+        _case("math-multiply", "Lấy GROUND-MATH-EVAL-PART-A-100 nhân GROUND-MATH-EVAL-FACTOR-X-300", _calculation("multiply", "valid", "2 * 2 = 4 kg", "kg", [a, factor], exact_value="4", display_value="4", allowed_numbers=["2"])),
+        _case("math-divide", "Lấy GROUND-MATH-EVAL-PART-B-200 chia GROUND-MATH-EVAL-FACTOR-X-300", _calculation("divide", "valid", "4 / 2 = 2 kg", "kg", [b, factor], exact_value="2", display_value="2", allowed_numbers=["4", "2"])),
+        _case("math-missing", "Lấy GROUND-MATH-EVAL-PART-A-100 chia GROUND-MATH-EVAL-MISSING-999", _calculation("divide", "missing_operand", "", "", [a]), outcome="partial_answer"),
+        _case("math-unsupported-number", "Cộng GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-MISSING-999", _calculation("add", "missing_operand", "", "", [a]), outcome="partial_answer"),
+        _case("math-zero", "Lấy GROUND-MATH-EVAL-PART-A-100 chia GROUND-MATH-EVAL-ZERO-X-400", _calculation("divide", "division_by_zero", "", "", [a, zero]), outcome="partial_answer"),
+        _case("math-unit-mismatch", "Cộng GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-PART-M-500", _calculation("add", "ambiguous_unit", "", "", [a, metre]), outcome="partial_answer"),
+        _case("math-mixed-version", "Cộng GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-OLD-A-600", _calculation("add", "mixed_version", "", "", [a, old]), outcome="partial_answer"),
+        _case("math-ambiguous-provenance", "Cộng GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-OTHER-A-700", _calculation("add", "ambiguous_provenance", "", "", [a, other]), outcome="partial_answer"),
+        _case("math-unsupported-conversion", "Quy đổi GROUND-MATH-EVAL-PART-A-100 sang mét", _calculation("unsupported_operation", "unsupported_operation", "", "", [a]), outcome="partial_answer"),
     ]
 
 

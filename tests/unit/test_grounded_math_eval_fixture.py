@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from scripts.eval.run_eval import load_manifest_files
@@ -28,6 +30,19 @@ def test_grounded_math_fixture_is_deterministic_and_manifest_is_valid(tmp_path):
         "valid", "missing_operand", "division_by_zero", "ambiguous_unit", "mixed_version",
         "ambiguous_provenance", "unsupported_operation",
     }
+
+
+def test_every_fixture_part_code_reaches_the_mechanical_intent_path(tmp_path):
+    from mech_chatbot.rag.intent import extract_mechanical_codes
+
+    generate_fixture(tmp_path)
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "corpus_manifest.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    for record in records:
+        for row in record["rows"]:
+            assert row["part"] in extract_mechanical_codes(f"Tra cứu {row['part']}")
 
 
 def test_grounded_math_preflight_resolves_real_document_and_bom_row_ids(tmp_path):
