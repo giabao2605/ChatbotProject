@@ -726,6 +726,45 @@ Hoàn tất phần GraphRAG global sensemaking trong tài liệu gốc mà khôn
 
 ### 2.9 Milestone G — Integrated evaluation và production hardening
 
+#### Trạng thái cập nhật 2026-07-15
+
+- [x] Đã hoàn thiện control plane offline cho đúng bảy combination bắt buộc.
+  Mỗi row khai báo tường minh bảy feature flag, bốn version/serving namespace
+  và prerequisite; cache namespace của các row không trùng nhau.
+- [x] Đã thêm request-budget gate fail-closed. Mọi case phải ghi đủ counter
+  kiểu integer cho planner, subquery, correction, repair, calculation, graph
+  edge, provider retry và final generation; thiếu telemetry cũng bị fail.
+- [x] Đã thêm 15 security case phủ allow/deny theo role, department, site,
+  clearance, lifecycle, publication và current version. Legacy admin exception
+  chỉ hợp lệ cho đúng role `admin` và tài liệu published/current/approved/
+  effective/servable; admin vẫn không qua draft, unpublished hoặc non-current.
+- [x] Đã thêm load adapter đọc đúng artifact nhiều concurrency của
+  `benchmark_rag_concurrency.py`, buộc chọn một mức concurrency và ghép P50/P95
+  first-token/completion với cost/query, retry và fallback của labeled eval.
+- [x] Đã xác nhận bằng test rằng strict factual streaming vẫn buffer trước
+  post-check/repair, feature flags mặc định tắt và rollback không cần migration.
+- [x] Eval artifact lưu đúng bảy flag và bốn version; baseline phải all-off,
+  candidate phải khớp chính xác matrix row. Trace snapshot được rebuild từ raw
+  JSONL bất biến và các budget maxima phải khớp eval telemetry, nên nhãn
+  combination hoặc snapshot tổng hợp giả không thể tự làm gate xanh.
+- [x] Đã thêm composer và integrated gate kiểm lại SHA-256/schema của artifact,
+  cùng commit, manifest, snapshot, provider configuration, governance scope,
+  collection và concurrency cho từng pair trong bảy pair. Eval, trace, load và
+  results của mỗi pair được bind end-to-end; một combination regression làm
+  toàn bộ gate fail. Gate không nhận boolean tự khai báo thay evidence.
+- [x] Đã viết ADR và operations runbook cho flag isolation, abort, rollback,
+  cleanup có scope, baseline/candidate, load report và release decision.
+- [ ] Chưa chạy live bảy combination, load pair hoặc controlled demo pilot.
+  Đây là trạng thái chủ động fail-closed: CRAG, Grounded Math, Late Interaction,
+  decomposition và graph vẫn chưa đồng thời có decision artifact đã xác minh.
+- [ ] Chưa có release decision cuối. Template hiện để `incomplete`; mỗi feature
+  phải có quyết định accepted/rejected và immutable evidence hợp lệ trước gate.
+
+Kết luận hiện tại: phần triển khai có thể làm hoàn toàn offline của 2.9 đã hoàn
+tất; `capability_passed` có thể đạt, nhưng `ready_for_live_matrix` phải tiếp tục
+ở `false` cho đến khi các milestone 2.3–2.8 đóng prerequisite tương ứng. Không
+bật feature flag demo chỉ để làm cho integrated gate xanh.
+
 #### Mục tiêu
 
 Chứng minh các tính năng khi kết hợp không phá governance, cache, latency hoặc budget.

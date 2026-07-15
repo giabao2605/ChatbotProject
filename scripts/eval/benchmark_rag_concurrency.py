@@ -437,6 +437,7 @@ def main() -> int:
         )
 
     payload = {
+        "schema": "rag-concurrency-benchmark-v1",
         "base_url": _safe_base_url(args.base_url),
         "concurrency_levels": levels,
         "question_count": len(questions),

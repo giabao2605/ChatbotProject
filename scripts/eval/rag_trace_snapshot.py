@@ -60,6 +60,9 @@ def build_snapshot(
     repairs_by_trace: Counter[str] = Counter()
     llm_retries = 0
     query_count = 0
+    event_counts: Counter[str] = Counter()
+    planner_max = subquery_max = calculation_max = graph_edge_max = 0
+    retries_by_trace: Counter[str] = Counter()
     external_ai_latencies: dict[str, list[float]] = defaultdict(list)
     external_ai_statuses: dict[str, Counter[str]] = defaultdict(Counter)
     voyage_statuses: Counter[str] = Counter()
@@ -79,6 +82,15 @@ def build_snapshot(
             continue
         if end_at and (timestamp is None or timestamp > end_at):
             continue
+        event_name = str(event.get("event") or "<missing>")
+        event_counts[event_name] += 1
+        if event_name == "query_decomposition":
+            planner_max = max(planner_max, int(event.get("planner_count") or 0))
+            subquery_max = max(subquery_max, int(event.get("subquery_count") or 0))
+        if event_name == "grounded_math_generation":
+            calculation_max = max(calculation_max, int(event.get("calculations") or 0))
+        if event_name == "graph_retrieval":
+            graph_edge_max = max(graph_edge_max, int(event.get("edge_count") or 0))
         if event.get("estimated_cost") is not None:
             estimated_cost += float(event.get("estimated_cost") or 0)
         if event.get("event") == "corrective_retrieval" and event.get("attempt"):
@@ -89,6 +101,7 @@ def build_snapshot(
             repairs_by_trace[str(event.get("trace_id") or "<missing>")] += 1
         if event.get("event") == "llm_retry":
             llm_retries += 1
+            retries_by_trace[str(event.get("trace_id") or "<missing>")] += 1
         if event.get("event") == "external_ai_call":
             surface = str(event.get("surface") or "unknown")
             try:
@@ -106,6 +119,8 @@ def build_snapshot(
         if event.get("event") != "rag_end":
             continue
         query_count += 1
+        if event.get("ts"):
+            included_timestamps.append(event["ts"])
         if event.get("final_latency_ms") is not None:
             query_latencies.append(float(event["final_latency_ms"]))
         if not event.get("refusal"):
@@ -117,8 +132,6 @@ def build_snapshot(
         if not reason or reason in excluded:
             continue
         counts[str(reason)] += 1
-        if event.get("ts"):
-            included_timestamps.append(event["ts"])
     ordered_latencies = sorted(query_latencies)
     external_ai_latency = {}
     for surface, values in sorted(external_ai_latencies.items()):
@@ -161,6 +174,7 @@ def build_snapshot(
         "refusal_reasons": dict(sorted(counts.items())),
         "parse_errors": parse_errors,
         "legacy_reason_events": legacy_reason_events,
+        "event_counts": dict(sorted(event_counts.items())),
         "external_ai_latency": external_ai_latency,
         "voyage_rerank": {
             "call_count": voyage_calls,
@@ -186,6 +200,15 @@ def build_snapshot(
             "correction_trace_ids": sorted(corrections_by_trace),
             "repair_trace_ids": sorted(repairs_by_trace),
             "retry_rate": llm_retries / query_count if query_count else 0.0,
+        },
+        "observed_budget_metrics": {
+            "max_planner_count": planner_max,
+            "max_subquery_count": subquery_max,
+            "max_correction_count": max(corrections_by_trace.values(), default=0),
+            "max_repair_count": max(repairs_by_trace.values(), default=0),
+            "max_calculation_count": calculation_max,
+            "max_graph_edge_count": graph_edge_max,
+            "max_provider_retries": max(retries_by_trace.values(), default=0),
         },
     }
 

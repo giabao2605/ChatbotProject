@@ -186,3 +186,36 @@ def test_snapshot_reports_voyage_error_and_local_fallback_rate(tmp_path):
         "status_codes": {"429": 1},
         "retry_attempt_count": 0,
     }
+
+
+def test_snapshot_emits_observed_event_and_request_budget_metrics(tmp_path):
+    snapshot = _load_snapshot_module()
+    path = tmp_path / "trace.jsonl"
+    events = [
+        {"ts": "2026-07-13T00:00:00+00:00", "event": "query_decomposition",
+         "trace_id": "q1", "execution_context": "evaluation",
+         "planner_count": 1, "subquery_count": 3},
+        {"ts": "2026-07-13T00:00:01+00:00", "event": "graph_retrieval",
+         "trace_id": "q1", "execution_context": "evaluation", "edge_count": 12},
+        {"ts": "2026-07-13T00:00:02+00:00", "event": "grounded_math_generation",
+         "trace_id": "q1", "execution_context": "evaluation", "calculations": 1},
+        {"ts": "2026-07-13T00:00:03+00:00", "event": "llm_retry",
+         "trace_id": "q1", "execution_context": "evaluation"},
+        {"ts": "2026-07-13T00:00:04+00:00", "event": "rag_end",
+         "trace_id": "q1", "execution_context": "evaluation", "refusal": False},
+    ]
+    path.write_text("\n".join(json.dumps(item) for item in events), encoding="utf-8")
+
+    report = snapshot.build_snapshot(path, execution_contexts={"evaluation"})
+
+    assert report["event_counts"]["rag_end"] == 1
+    assert report["observed_range"] == {
+        "first": "2026-07-13T00:00:04+00:00",
+        "last": "2026-07-13T00:00:04+00:00",
+    }
+    assert report["observed_budget_metrics"] == {
+        "max_planner_count": 1, "max_subquery_count": 3,
+        "max_correction_count": 0, "max_repair_count": 0,
+        "max_calculation_count": 1, "max_graph_edge_count": 12,
+        "max_provider_retries": 1,
+    }

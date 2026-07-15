@@ -66,6 +66,11 @@ def _execution_metrics(debug: dict, *, calculation_count: int | None = None) -> 
             or len(debug.get("calculation_provenance") or [])
         )
     return {
+        "combination_id": str(
+            debug.get("combination_id")
+            or os.environ.get("RAG_EVAL_COMBINATION_ID")
+            or ""
+        ),
         "pipeline_variant": debug.get("pipeline_namespace", "default"),
         "estimated_cost": float(generation.get("estimated_cost") or 0.0),
         "input_tokens": int(generation.get("input_tokens") or 0),
@@ -81,6 +86,7 @@ def _execution_metrics(debug: dict, *, calculation_count: int | None = None) -> 
         "final_generation_count": int(debug.get("final_generation_count") or 0),
         "deadline_exceeded": bool(debug.get("deadline_exceeded")),
         "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
+        "graph_edge_count": int(debug.get("graph_edge_count") or 0),
     }
 
 
@@ -275,6 +281,7 @@ def run_evaluation(
         outcome_matches_expected, summarize_outcomes,
     )
     from mech_chatbot.evaluation.risk_coverage import build_risk_coverage_report
+    from mech_chatbot.evaluation.integrated_hardening import FEATURE_FLAGS, VERSION_FIELDS
     from mech_chatbot.evaluation.schema import (
         EVALUATION_REPORT_SCHEMA, EVALUATOR_MODELS, EVALUATOR_VERSION,
     )
@@ -553,7 +560,8 @@ def run_evaluation(
                 name: sum(row.get(name, 0) for row in rows if row.get("pipeline_variant", "default") == variant)
                 for name in (
                     "correction_count", "repair_count", "calculation_count",
-                    "planner_count", "graph_traversal_count",
+                    "planner_count", "subquery_count", "final_generation_count",
+                    "graph_traversal_count", "graph_edge_count",
                 )
             },
         }
@@ -608,6 +616,19 @@ def run_evaluation(
             "late_interaction": os.environ.get("RAG_LATE_INTERACTION_ENABLED", "false"),
             "query_decomposition": os.environ.get("RAG_QUERY_DECOMPOSITION_ENABLED", "false"),
             "graph_retrieval": os.environ.get("RAG_GRAPH_RETRIEVAL_ENABLED", "false"),
+        },
+        "pipeline_configuration": {
+            "flags": {
+                name: os.environ.get(name, "false").strip().casefold()
+                in {"1", "true", "yes", "y", "on"}
+                for name in FEATURE_FLAGS
+            },
+            "versions": {
+                name: os.environ.get(name, default)
+                for name, default in zip(VERSION_FIELDS, (
+                    "planner-v1", "late-v2", "graph-v1", "community-v1",
+                ))
+            },
         },
         "total_cases": len(cases), "passed_cases": sum(row["passed"] for row in rows),
         "outcome_confusion": summarize_outcomes(outcome_rows),
@@ -701,7 +722,7 @@ def run_evaluation(
             for name in (
                 "correction_count", "repair_count", "calculation_count",
                 "planner_count", "subquery_count", "final_generation_count",
-                "graph_traversal_count",
+                "graph_traversal_count", "graph_edge_count",
             )
         },
         "levels": dict(levels), "cases": rows,

@@ -1,0 +1,48 @@
+{
+  "schema": "integrated-feature-matrix-v1",
+  "version": "integrated-v1",
+  "combinations": [
+    {
+      "id": "crag_repair",
+      "prerequisites": ["crag"],
+      "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"true","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "crag_grounded_math",
+      "prerequisites": ["crag","grounded_math"],
+      "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"true","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "crag_late_interaction",
+      "prerequisites": ["crag","late_interaction"],
+      "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"true","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "crag_query_decomposition",
+      "prerequisites": ["crag","query_decomposition"],
+      "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"true","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "crag_graph_retrieval",
+      "prerequisites": ["crag","graph_retrieval"],
+      "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"true","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "decomposition_graph",
+      "prerequisites": ["query_decomposition","graph_retrieval"],
+      "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"true","RAG_GRAPH_RETRIEVAL_ENABLED":"true","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "decomposition_late_interaction",
+      "prerequisites": ["query_decomposition","late_interaction"],
+      "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"true","RAG_QUERY_DECOMPOSITION_ENABLED":"true","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    }
+  ]
+}

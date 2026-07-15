@@ -2,7 +2,10 @@ import pytest
 
 from scripts.graph.report import build_graph_report, validate_review_samples
 from scripts.graph_eval.preflight import check_graph_fixture
-from scripts.graph_eval.cleanup_fixture import build_cleanup_plan
+from scripts.graph_eval.cleanup_fixture import (
+    build_cleanup_plan,
+    fixture_only_community_versions,
+)
 from mech_chatbot.evaluation.graph import evaluate_graph_case, summarize_graph_evaluation
 
 
@@ -135,6 +138,16 @@ def test_graph_cleanup_is_scoped_to_fixture_assets_and_collection(tmp_path):
     assert plan["collection"] == "MechChatbot_Graph_Eval_v1"
     with pytest.raises(ValueError):
         build_cleanup_plan(workspace / "data", workspace)
+
+
+def test_graph_cleanup_rejects_mixed_scope_community_versions():
+    assert fixture_only_community_versions(
+        [(10, 101), (10, 102), (11, 101)], {101, 102}
+    ) == [10, 11]
+    with pytest.raises(RuntimeError, match="mix fixture and non-fixture"):
+        fixture_only_community_versions(
+            [(10, 101), (10, 999)], {101, 102}
+        )
 
 
 def test_graph_evaluator_uses_explicit_router_and_traversal_budget_fields():

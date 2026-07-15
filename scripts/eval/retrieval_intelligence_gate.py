@@ -22,6 +22,61 @@ def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _artifact_references_verified(integrity):
+    references = integrity.get("artifact_references") or []
+    if not references:
+        return False
+    for reference in references:
+        try:
+            path = Path(reference["path"])
+            raw = path.read_bytes()
+            decoded = raw.decode("utf-8")
+            if reference.get("format") == "jsonl":
+                rows = [json.loads(line) for line in decoded.splitlines() if line.strip()]
+                if not rows:
+                    return False
+                artifact = None
+            else:
+                artifact = json.loads(decoded)
+        except (KeyError, TypeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if hashlib.sha256(raw).hexdigest() != reference.get("sha256"):
+            return False
+        if artifact is not None and artifact.get("schema") != reference.get("schema"):
+            return False
+    return True
+
+
+def _matrix_evidence_recomputed(integrity, expected):
+    references = integrity.get("artifact_references") or []
+    manifests = [
+        reference for reference in references
+        if reference.get("schema") == "integrated-matrix-evidence-v1"
+    ]
+    if len(manifests) != 1:
+        return False
+    matrices = [
+        reference for reference in references
+        if reference.get("schema") == "integrated-feature-matrix-v1"
+    ]
+    if len(matrices) != 1:
+        return False
+    try:
+        from scripts.integrated_eval.compose_gate_metadata import load_matrix_evidence
+
+        path = Path(manifests[0]["path"])
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        feature_matrix = json.loads(
+            Path(matrices[0]["path"]).read_text(encoding="utf-8")
+        )
+        actual, _ = load_matrix_evidence(
+            manifest, feature_matrix=feature_matrix, root=path.parent
+        )
+    except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return False
+    return actual == expected
+
+
 def _fraction_complete(report, section, metric):
     value = (((report.get(section) or {}).get(metric) or {}).get("value"))
     return value is not None and float(value) == 1.0
@@ -302,6 +357,80 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "max_cost_ratio": 1.5,
             "max_indexing_latency_ms": max_indexing_latency,
         }
+    elif stage == "integrated_hardening":
+        integrity = metadata.get("artifact_integrity") or {}
+        matrix_evidence = metadata.get("combination_matrix_evidence") or {}
+        combination_results = matrix_evidence.get("combination_results") or []
+        prerequisites = metadata.get("prerequisites") or {}
+        required_prerequisites = {
+            "crag", "grounded_math", "late_interaction",
+            "query_decomposition", "graph_retrieval",
+        }
+        required_combinations = {
+            "crag_repair", "crag_grounded_math", "crag_late_interaction",
+            "crag_query_decomposition", "crag_graph_retrieval",
+            "decomposition_graph", "decomposition_late_interaction",
+        }
+        checks = {
+            **common,
+            "artifact_integrity_verified": (
+                metadata.get("schema") == "integrated-gate-metadata-v1"
+                and
+                integrity.get("passed") is True
+                and integrity.get("benchmark_conditions_match") is True
+                and _artifact_references_verified(integrity)
+                and _matrix_evidence_recomputed(integrity, matrix_evidence)
+            ),
+            "gate_arms_bound_to_primary_combination": (
+                metadata.get("primary_gate_inputs")
+                == metadata.get("_actual_gate_inputs")
+                and bool(metadata.get("primary_gate_inputs"))
+            ),
+            "combination_matrix_valid": (
+                (metadata.get("matrix_validation") or {}).get("passed") is True
+            ),
+            "combination_results_complete": (
+                matrix_evidence.get("passed") is True
+                and {row.get("combination_id") for row in combination_results}
+                == required_combinations
+            ),
+            "all_combination_quality_gates_passed": (
+                len(combination_results) == len(required_combinations)
+                and all(row.get("passed") is True for row in combination_results)
+            ),
+            "strict_buffered_stream_verified": (
+                (metadata.get("strict_stream_evidence") or {}).get("passed") is True
+            ),
+            "cache_isolation_verified": (
+                (metadata.get("cache_isolation") or {}).get("passed") is True
+            ),
+            "rollback_verified": (
+                (metadata.get("rollback_evidence") or {}).get("passed") is True
+            ),
+            "prerequisites_completed": (
+                set(prerequisites) == required_prerequisites
+                and all(prerequisites.values())
+            ),
+            "release_decisions_complete": (
+                metadata.get("release_decisions_complete") is True
+            ),
+            "claim_precision_not_decreased": _metric_not_decreased(
+                baseline, candidate, "claim_evaluation", "claim_precision"
+            ),
+            "citation_accuracy_not_decreased": _metric_not_decreased(
+                baseline, candidate, "citation_evaluation", "citation_accuracy"
+            ),
+            "citation_precision_not_decreased": _metric_not_decreased(
+                baseline, candidate, "citation_evaluation", "citation_precision"
+            ),
+        }
+        limits = {
+            "max_planners": 1, "max_subqueries": 3,
+            "max_corrections": 1, "max_repairs": 1,
+            "max_calculations": 1, "max_graph_edges": 50,
+            "max_provider_retries": 2, "max_final_generations": 1,
+            "max_latency_ratio": 1.5, "max_cost_ratio": 1.5,
+        }
     else:
         raise ValueError(f"unknown stage: {stage}")
     return {
@@ -318,6 +447,7 @@ def main(argv=None):
     parser.add_argument("stage", choices=(
         "grounded_math", "late_interaction", "query_decomposition",
         "graph_retrieval", "community_summaries",
+        "integrated_hardening",
     ))
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
@@ -331,11 +461,21 @@ def main(argv=None):
     read = lambda path: json.loads(path.read_text(encoding="utf-8"))
     if args.stage == "late_interaction" and (not args.reference or not args.reference_trace):
         parser.error("late_interaction requires --reference and --reference-trace for the RRF arm")
+    baseline = read(args.baseline)
+    candidate = read(args.candidate)
+    metadata = read(args.metadata) if args.metadata else {}
+    if args.stage == "integrated_hardening":
+        metadata["_actual_gate_inputs"] = {
+            "baseline_eval_sha256": _sha256(args.baseline),
+            "candidate_eval_sha256": _sha256(args.candidate),
+            "baseline_trace_sha256": _sha256(args.baseline_trace),
+            "candidate_trace_sha256": _sha256(args.candidate_trace),
+        }
     result = compare(
         args.stage,
-        read(args.baseline),
-        read(args.candidate),
-        read(args.metadata) if args.metadata else {},
+        baseline,
+        candidate,
+        metadata,
         read(args.reference) if args.reference else None,
     )
     result["inputs"] = {

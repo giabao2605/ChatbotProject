@@ -1,0 +1,13 @@
+{
+  "schema": "integrated-release-decisions-v1",
+  "status": "incomplete",
+  "decisions": {
+    "RAG_CRAG_ENABLED": {"decision": null, "evidence": null},
+    "RAG_CLAIM_REPAIR_ENABLED": {"decision": null, "evidence": null},
+    "RAG_GROUNDED_MATH_ENABLED": {"decision": null, "evidence": null},
+    "RAG_LATE_INTERACTION_ENABLED": {"decision": null, "evidence": null},
+    "RAG_QUERY_DECOMPOSITION_ENABLED": {"decision": null, "evidence": null},
+    "RAG_GRAPH_RETRIEVAL_ENABLED": {"decision": null, "evidence": null},
+    "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": {"decision": null, "evidence": null}
+  }
+}

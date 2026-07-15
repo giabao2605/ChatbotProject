@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -13,6 +14,23 @@ from scripts.graph_eval.constants import DEFAULT_OUTPUT, FIXTURE_BATCH, FIXTURE_
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+
+
+def fixture_only_community_versions(memberships, fixture_doc_ids) -> list[int]:
+    fixture_ids = {int(value) for value in fixture_doc_ids or ()}
+    by_version = {}
+    for version_id, doc_id in memberships or ():
+        by_version.setdefault(int(version_id), set()).add(int(doc_id))
+    mixed = sorted(
+        version_id for version_id, doc_ids in by_version.items()
+        if not doc_ids <= fixture_ids
+    )
+    if mixed:
+        raise RuntimeError(
+            "community versions mix fixture and non-fixture documents: "
+            + ",".join(map(str, mixed))
+        )
+    return sorted(by_version)
 
 
 def build_cleanup_plan(asset_root: Path, workspace_root: Path = ROOT) -> dict:
@@ -39,6 +57,51 @@ def cleanup_fixture(asset_root: Path = DEFAULT_OUTPUT) -> dict:
         doc_ids = [int(row[0]) for row in connection.execute(text(
             "SELECT DocID FROM dbo.TaiLieu WHERE SourceSystem=:batch"
         ), {"batch": FIXTURE_BATCH}).all()]
+        community_versions = []
+        community_tables_exist = bool(connection.execute(text("""
+            SELECT CASE WHEN OBJECT_ID(N'dbo.GraphCommunityMembership', N'U') IS NOT NULL
+                              AND OBJECT_ID(N'dbo.GraphCommunitySummary', N'U') IS NOT NULL
+                              AND OBJECT_ID(N'dbo.GraphCommunityVersion', N'U') IS NOT NULL
+                        THEN 1 ELSE 0 END
+        """)).scalar_one())
+        if doc_ids and community_tables_exist:
+            memberships = connection.execute(text("""
+                SELECT membership.CommunityVersionID, node.SourceDocID
+                FROM dbo.GraphCommunityMembership membership
+                JOIN dbo.KnowledgeGraphNode node ON node.NodeID=membership.NodeID
+                WHERE membership.CommunityVersionID IN (
+                    SELECT DISTINCT scoped.CommunityVersionID
+                    FROM dbo.GraphCommunityMembership scoped
+                    JOIN dbo.KnowledgeGraphNode scoped_node
+                      ON scoped_node.NodeID=scoped.NodeID
+                    WHERE scoped_node.SourceDocID IN (
+                        SELECT DocID FROM dbo.TaiLieu WHERE SourceSystem=:batch
+                    )
+                )
+            """), {"batch": FIXTURE_BATCH}).all()
+            community_versions = fixture_only_community_versions(
+                memberships, doc_ids
+            )
+            if community_versions:
+                version_json = json.dumps(community_versions)
+                connection.execute(text("""
+                    DELETE FROM dbo.GraphCommunitySummary
+                    WHERE CommunityVersionID IN (
+                        SELECT TRY_CONVERT(BIGINT, [value]) FROM OPENJSON(:versions)
+                    )
+                """), {"versions": version_json})
+                connection.execute(text("""
+                    DELETE FROM dbo.GraphCommunityMembership
+                    WHERE CommunityVersionID IN (
+                        SELECT TRY_CONVERT(BIGINT, [value]) FROM OPENJSON(:versions)
+                    )
+                """), {"versions": version_json})
+                connection.execute(text("""
+                    DELETE FROM dbo.GraphCommunityVersion
+                    WHERE CommunityVersionID IN (
+                        SELECT TRY_CONVERT(BIGINT, [value]) FROM OPENJSON(:versions)
+                    )
+                """), {"versions": version_json})
         if doc_ids:
             connection.execute(text("""
                 DELETE p FROM dbo.GraphExtractionProposal p
@@ -66,7 +129,12 @@ def cleanup_fixture(asset_root: Path = DEFAULT_OUTPUT) -> dict:
         client.delete_collection(FIXTURE_COLLECTION)
     if Path(asset_root).exists():
         shutil.rmtree(asset_root)
-    return {**plan, "documents": deleted, "collection_deleted": existed, "assets_deleted": not Path(asset_root).exists()}
+    return {
+        **plan, "documents": deleted,
+        "community_versions": len(community_versions),
+        "collection_deleted": existed,
+        "assets_deleted": not Path(asset_root).exists(),
+    }
 
 
 def main():

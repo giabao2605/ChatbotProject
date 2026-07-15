@@ -1,0 +1,11 @@
+{
+  "schema": "integrated-prerequisites-v1",
+  "as_of": "2026-07-15",
+  "stages": {
+    "crag": {"complete": false, "reason": "controlled production pilot has not completed"},
+    "grounded_math": {"complete": false, "reason": "series and controlled pilot are blocked by CRAG completion"},
+    "late_interaction": {"complete": false, "reason": "quality gate has not accepted late-v2"},
+    "query_decomposition": {"complete": false, "reason": "provider-stable quality pair and pilot are incomplete"},
+    "graph_retrieval": {"complete": false, "reason": "independent reviewed-edge precision is not available"}
+  }
+}

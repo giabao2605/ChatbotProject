@@ -226,6 +226,16 @@ def test_eval_v4_artifact_contains_shared_foundation_metrics(tmp_path, monkeypat
     assert passed is True
     assert report["schema"] == "rag-labeled-eval-v4"
     assert report["evaluator_version"] == "evaluation-foundation-v1"
+    assert set(report["pipeline_configuration"]["flags"]) == {
+        "RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED",
+        "RAG_GROUNDED_MATH_ENABLED", "RAG_LATE_INTERACTION_ENABLED",
+        "RAG_QUERY_DECOMPOSITION_ENABLED", "RAG_GRAPH_RETRIEVAL_ENABLED",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
+    }
+    assert set(report["pipeline_configuration"]["versions"]) == {
+        "RAG_PLANNER_VERSION", "RAG_LATE_INDEX_VERSION",
+        "RAG_GRAPH_SERVING_EPOCH", "RAG_COMMUNITY_SERVING_EPOCH",
+    }
     assert report["manifest_sha256s"] == [
         hashlib.sha256(manifest.read_bytes()).hexdigest()
     ]
@@ -305,8 +315,9 @@ def test_eval_artifact_preserves_provider_retries_when_generation_stream_fails(t
         "planner_count": 1,
         "subquery_count": 0,
         "final_generation_count": 0,
-        "graph_traversal_count": 1,
-    }
+            "graph_traversal_count": 1,
+            "graph_edge_count": 0,
+        }
 
 
 def test_eval_report_includes_decomposition_branch_and_budget_evidence(tmp_path, monkeypatch):

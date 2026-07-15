@@ -377,6 +377,75 @@ def test_community_summary_gate_fails_closed_without_graph_review_or_on_stale_su
     assert result["passed"] is False
 
 
+def test_integrated_hardening_gate_requires_every_control_plane_report(tmp_path, monkeypatch):
+    gate = _module()
+    monkeypatch.setattr(gate, "_matrix_evidence_recomputed", lambda *_args: True)
+    baseline = report()
+    candidate = report(p95=140, cost=1.4)
+    for arm in (baseline, candidate):
+        arm["claim_evaluation"] = {
+            "applicable_cases": 1, "claim_precision": {"value": 1.0}
+        }
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text('{"schema":"test-evidence-v1"}\n', encoding="utf-8")
+    import hashlib
+    digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    gate_inputs = {
+        "baseline_eval_sha256": "baseline", "candidate_eval_sha256": "candidate",
+        "baseline_trace_sha256": "baseline-trace",
+        "candidate_trace_sha256": "candidate-trace",
+    }
+    combination_ids = [
+        "crag_repair", "crag_grounded_math", "crag_late_interaction",
+        "crag_query_decomposition", "crag_graph_retrieval",
+        "decomposition_graph", "decomposition_late_interaction",
+    ]
+    metadata = {
+        "schema": "integrated-gate-metadata-v1",
+        "artifact_integrity": {
+            "passed": True, "benchmark_conditions_match": True,
+            "artifact_references": [{
+                "path": str(evidence), "sha256": digest,
+                "schema": "test-evidence-v1",
+            }],
+        },
+        "primary_gate_inputs": gate_inputs,
+        "_actual_gate_inputs": gate_inputs,
+        "matrix_validation": {"passed": True},
+        "combination_matrix_evidence": {
+            "passed": True,
+            "combination_results": [
+                {"combination_id": name, "passed": True} for name in combination_ids
+            ],
+        },
+        "strict_stream_evidence": {"passed": True},
+        "cache_isolation": {"passed": True},
+        "rollback_evidence": {"passed": True},
+        "prerequisites": {name: True for name in (
+            "crag", "grounded_math", "late_interaction",
+            "query_decomposition", "graph_retrieval",
+        )},
+        "release_decisions_complete": True,
+    }
+    result = gate.compare("integrated_hardening", baseline, candidate, metadata)
+    assert result["passed"] is True
+
+    metadata["strict_stream_evidence"] = {"passed": False}
+    failed = gate.compare("integrated_hardening", baseline, candidate, metadata)
+    assert failed["checks"]["strict_buffered_stream_verified"] is False
+    assert failed["passed"] is False
+
+    metadata["strict_stream_evidence"] = {"passed": True}
+    metadata["_actual_gate_inputs"] = {**gate_inputs, "candidate_trace_sha256": "other"}
+    failed = gate.compare("integrated_hardening", baseline, candidate, metadata)
+    assert failed["checks"]["gate_arms_bound_to_primary_combination"] is False
+
+    metadata["_actual_gate_inputs"] = gate_inputs
+    metadata["combination_matrix_evidence"]["combination_results"][0]["passed"] = False
+    failed = gate.compare("integrated_hardening", baseline, candidate, metadata)
+    assert failed["checks"]["all_combination_quality_gates_passed"] is False
+
+
 def test_grounded_math_gate_uses_observed_per_query_calculation_budget():
     gate = _module()
     baseline = report(groups={"grounded_math": {"pass_rate": 0.0}})
