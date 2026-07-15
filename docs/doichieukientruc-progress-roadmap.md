@@ -36,12 +36,12 @@ Vì vậy, “100% mục đích” không đồng nghĩa phải bật mọi côn
 
 ### 1.1 Bảng tổng quan
 
-| Hạng mục | Code | Test offline | Artifact/gate live | Production pilot | Trạng thái thực tế |
+| Hạng mục | Code | Test offline | Artifact/gate live | Controlled demo / default decision | Trạng thái thực tế |
 |---|---|---|---|---|---|
 | Telemetry và labeled evaluation | Có | Có | Có | Áp dụng cho evaluation | Foundation v4 hoàn tất; pilot labels thuộc Milestone A–F |
 | CRAG và claim repair | Có | Có | Ba gate đạt | Chưa | Hoàn tất staging và pilot control plane; live pilot chưa bắt đầu |
 | Grounded math | Có | Có, gồm integration live | 3/3 pair đạt; series bị chặn bởi CRAG | Chưa | Staging evidence hoàn tất; chưa production-ready |
-| Late Interaction | Có | Có | Có readiness và 3 pair clean-commit gate fail-closed | Reject `late-v2` | Giữ flag tắt do nDCG@10 MaxSim giảm rõ so với cả RRF và Voyage/fallback |
+| Late Interaction | Có | Có | Có readiness và 3 pair clean-commit gate fail-closed | Chưa chạy controlled demo | `late-v2` không dùng mặc định, nhưng có thể opt-in demo để tìm nguyên nhân regression |
 | Query decomposition | Có | Có | Chưa | Chưa | Implementation sớm, chưa được chứng minh chất lượng |
 | Governed GraphRAG | Có schema/API/retrieval | Có | Chưa có staging gate | Chưa | Implementation sớm, chưa được nghiệm thu live |
 | Community summaries | Chưa | Chưa | Chưa | Chưa | Chủ động hoãn theo điều kiện trong tài liệu gốc |
@@ -341,11 +341,33 @@ Implementation chính:
 #### Rủi ro còn mở
 
 - ProxyLLM không còn 503 trong ba CRAG benchmark gần nhất nhưng generation latency vẫn có variance lớn.
-- Ba cặp CRAG benchmark ghi nhận 19/48 external reranking call ở trạng thái error; log run cho thấy Voyage 429 là lỗi đã quan sát. Cần quyết định retry, rate-limit, fallback-only hoặc thay bằng Late Interaction trước production pilot rộng hơn.
+- Ba cặp CRAG benchmark ghi nhận 19/48 external reranking call ở trạng thái error; log run cho thấy Voyage 429 là lỗi đã quan sát. Policy đã chốt không retry, fallback local ngay và abort theo threshold; phần còn lại là quan sát/xác nhận error và fallback rate trong controlled demo.
 - Integration test opt-in Grounded Math đã chạy xanh với fixture live và cleanup giới hạn phạm vi; decomposition và GraphRAG vẫn chưa có bằng chứng integration live tương đương.
 - Nhiều feature cùng bật có thể tạo interaction về cache namespace, timeout, cost và shared correction budget; chưa có integrated combination matrix.
 
 ## 2. Kế hoạch chi tiết để đạt 100% mục đích tài liệu
+
+### Cách hiểu trạng thái trong dự án demo
+
+Dự án hiện ở giai đoạn phát triển và demo có kiểm soát, chưa phải hệ thống đã được triển khai rộng rãi. Vì vậy roadmap tách ba mức nghiệm thu:
+
+1. **Offline/staging ready**: code, test, fixture, artifact và rollback đã có.
+2. **Controlled demo**: bật opt-in cho nhóm nhỏ đã biết trước rủi ro để quan sát, so sánh và cải tiến; feature vẫn mặc định tắt.
+3. **Default rollout**: đủ bằng chứng để trở thành đường xử lý mặc định cho phạm vi người dùng rộng hơn.
+
+Không đạt default-rollout gate không đồng nghĩa phải xóa tính năng hoặc cấm demo. Tính năng vẫn có thể vào controlled demo khi leakage bằng 0, governance không bị nới, có fallback/rollback và người thử được thông báo rõ đây là nhánh thử nghiệm.
+
+### Tổng hợp phần chưa hoàn tất từ 2.1 đến 2.5
+
+| Mục | Phần đã hoàn tất | Phần chưa hoàn tất | Trạng thái đối với demo |
+|---|---|---|---|
+| 2.1 Rollout guardrails | Policy, CLI và fail-closed checks đã có | Không còn implementation riêng; phải tiếp tục áp dụng guardrail cho từng run mới | Sẵn sàng |
+| 2.2 Evaluation foundation | Schema v4, manifest v2, claim/citation/risk-coverage evaluator, adjudication protocol và worked examples đã có | Chưa có sample controlled-demo đủ reviewer để chứng minh claim precision, faithfulness và citation accuracy >=99% trên traffic quan sát | Sẵn sàng thu thập bằng chứng demo |
+| 2.3 CRAG/repair | Code readiness, staging gates, canary isolation, replay, telemetry, abort, Voyage fallback policy và rollback đã có | Chưa chạy controlled demo thật; chưa có matched pairs được reviewer gán nhãn, reviewer sign-off và final demo artifact; provider error/fallback rate chưa được quan sát và xác nhận trong demo | Có thể demo giới hạn, flag mặc định tắt |
+| 2.4 Grounded Math | Fixture live, 3/3 pair, exact Decimal/provenance/citation gate và rollback đều đạt | Chưa chạy controlled demo để đo calculation failure, refusal và latency trên câu hỏi người dùng; dependency CRAG chỉ còn là điều kiện cho default rollout, không cấm demo cô lập | Có thể demo cô lập, flag mặc định tắt |
+| 2.5 Late Interaction | Shadow `late-v2`, coverage/governance, three-arm benchmark và clean-commit artifact đã có | Chưa chạy A/B controlled demo; chưa phân tích nguyên nhân nDCG regression/cold start; chưa có index revision mới tốt hơn `late-v2` | Chỉ opt-in demo, không dùng mặc định |
+
+Đối với controlled demo, các yêu cầu 7–14 ngày, tối thiểu 100 matched pairs và quality threshold đầy đủ vẫn là mục tiêu tham chiếu cho default rollout, không phải điều kiện bắt buộc để bắt đầu một demo nhỏ. Demo vẫn phải dừng ngay khi có leakage, governance escape hoặc rollback không hoạt động.
 
 ### 2.1 Nguyên tắc triển khai còn lại
 
@@ -408,7 +430,7 @@ Trạng thái triển khai: evaluator foundation v4, manifest v2, worked-example
 
 ### 2.3 Milestone A — Đóng CRAG production pilot
 
-Trạng thái cập nhật 2026-07-14: phần code readiness đã hoàn tất trên nhánh `codex/p1-retrieval-intelligence`. Đã có stable HMAC assignment theo identity, hai deployment cô lập, replay bất đồng bộ sang arm đối diện, semantic-cache/side-effect isolation, sampling bắt buộc, deployment preflight, Voyage fallback policy, telemetry, abort rules, artifact JSON/Markdown và runbook rollback. Tất cả flag vẫn mặc định tắt. Milestone này chưa đạt vì chưa chạy pilot thật 7–14 ngày, chưa có tối thiểu 100 matched pair đã adjudicate và chưa có reviewer sign-off/final artifact từ traffic thật.
+Trạng thái cập nhật 2026-07-15: phần code readiness đã hoàn tất trên nhánh `codex/p1-retrieval-intelligence`. Đã có stable HMAC assignment theo identity, hai deployment cô lập, replay bất đồng bộ sang arm đối diện, semantic-cache/side-effect isolation, sampling bắt buộc, deployment preflight, Voyage fallback policy, telemetry, abort rules, artifact JSON/Markdown và runbook rollback. Tất cả flag vẫn mặc định tắt. Controlled demo nhỏ chưa chạy; mốc 7–14 ngày, tối thiểu 100 matched pair đã adjudicate và reviewer sign-off vẫn là điều kiện cho default rollout rộng hơn.
 
 #### Mục tiêu
 
@@ -416,10 +438,10 @@ Chuyển CRAG từ “staging gate passed” sang “production pilot passed”.
 
 #### Công việc
 
-1. Chốt policy cho Voyage 429:
-   - Đo error/fallback rate theo cửa sổ thời gian.
-   - Quyết định retry có backoff, fallback local ngay, hoặc tạm dùng local-only trong pilot.
-   - Ghi quyết định vào ADR và telemetry threshold.
+1. [Đã chốt policy] Xử lý Voyage 429:
+   - Không retry trong pilot path; fallback local ngay.
+   - Abort khi external rerank error rate vượt threshold đã khóa.
+   - ADR, telemetry threshold và runbook đã có; phần còn lại là đo error/fallback rate trong controlled demo để xác nhận policy hoạt động như thiết kế.
 2. Tạo canary isolation vì feature flags hiện là process-global:
    - Control deployment/process chạy cùng commit với hai flag tắt.
    - Candidate deployment/process chạy cùng commit với hai flag bật.
@@ -476,7 +498,7 @@ Protocol canary, labeling, artifact và abort này được tái sử dụng cho
 
 ### 2.4 Milestone B — Đóng Grounded Math live gate
 
-Trạng thái hiện tại: **staging evidence đã hoàn tất, production pilot bị chặn**. Fixture, evaluator, isolated ingest/preflight/cleanup, baseline/candidate runner, rollback verifier và gate đã được triển khai. Ba pair trên commit `d5ec3e1` đạt toàn bộ pair gate và series conditions; series chỉ không production-eligible vì dependency CRAG chưa có quyết định hoàn tất. Provider 503/429 vẫn phải ổn định trước pilot.
+Trạng thái hiện tại: **staging evidence đã hoàn tất, controlled demo chưa chạy**. Fixture, evaluator, isolated ingest/preflight/cleanup, baseline/candidate runner, rollback verifier và gate đã được triển khai. Ba pair trên commit `d5ec3e1` đạt toàn bộ pair gate và series conditions. Dependency CRAG và provider stability vẫn chặn default rollout, nhưng không cấm một demo Grounded Math cô lập, opt-in và có rollback.
 
 #### Mục tiêu
 
@@ -537,8 +559,8 @@ Biến trạng thái “shadow index ready” thành quyết định production 
 4. [Đã chạy 3 pair, gate fail-closed] Voyage fallback lần lượt 62,5%, 100% và 100%; dữ liệu này chứng minh provider variance nhưng không đủ điều kiện làm baseline hợp lệ.
 5. [Đã hoàn tất] Report có Recall@5/10, nDCG@5/10, wrong-answer, leakage, P50/P95, storage và fallback coverage.
 6. [Đã hoàn tất] Unit/integration seam xác nhận partial shadow luôn fallback nguyên candidate và reranker không thể thêm document ngoài governance-filtered input.
-7. [Không pilot] Clean-commit aggregate cho MaxSim: Recall@10=1, nDCG@10=0,5221, leakage=0, coverage=100% và không fallback. RRF đạt nDCG@10=0,8908; Voyage/fallback đạt 0,8899 nhưng baseline Voyage không hợp lệ vì fallback 87,5%. Aggregate latency MaxSim đạt budget; pair cold-start đầu không đạt.
-8. [Reject `late-v2`] Giữ `RAG_LATE_ENCODER_READY=false` và `RAG_LATE_INTERACTION_ENABLED=false`; tiếp tục dùng Voyage/local path. Shadow collection có thể giữ để nghiên cứu, nhưng muốn mở lại milestone phải có index/encoder revision mới và rerun toàn bộ gate.
+7. [Chưa controlled demo] Clean-commit aggregate cho MaxSim: Recall@10=1, nDCG@10=0,5221, leakage=0, coverage=100% và không fallback. RRF đạt nDCG@10=0,8908; Voyage/fallback đạt 0,8899 nhưng baseline Voyage không hợp lệ vì fallback 87,5%. Aggregate latency MaxSim đạt budget; pair cold-start đầu không đạt.
+8. [Không dùng mặc định; cho phép opt-in demo] Giữ `RAG_LATE_ENCODER_READY=false` và `RAG_LATE_INTERACTION_ENABLED=false` ở cấu hình mặc định; tiếp tục dùng Voyage/local path. Có thể bật `late-v2` trong controlled demo giới hạn để quan sát ranking/cold start và thu thập feedback. Muốn trở thành default path phải có index/encoder revision mới và rerun toàn bộ gate.
 
 #### Điều kiện hoàn tất
 
@@ -548,14 +570,14 @@ Biến trạng thái “shadow index ready” thành quyết định production 
 - P95 <=1.25 baseline.
 - Storage <=25x source dense storage; hiện tại là 23.3618x.
 - Shadow coverage 100%, drift/orphan 0.
-- Production pilot đạt hoặc có quyết định không dùng Late Interaction có bằng chứng.
+- Controlled demo là bằng chứng quan sát tùy chọn. Default rollout chỉ đạt khi quality gate đạt; một quyết định không dùng phiên bản index hiện tại làm default, kèm clean-commit artifact, cũng đóng được milestone.
 
 #### Kết quả hiện tại
 
 - Artifact: `reports/late-interaction/quality-gate/20260715-757b939-series-v1/`, chạy từ commit `757b939` với cùng manifest, snapshot và provider-config fingerprint cho cả ba arm.
 - Ba pair và aggregate đều fail-closed. Voyage baseline fallback vượt 10%; pair 1 không đạt latency do cold start, pair 2-3 và aggregate đạt latency.
 - MaxSim giảm khoảng 41,4% nDCG@10 so với RRF hợp lệ, Recall@10 không giảm, wrong-answer và leakage bằng 0, coverage 100%, drift/orphan bằng 0 và storage 23,3618x.
-- Đây là reject decision có bằng chứng cho shadow index contract `late-v2`; không bật production. Một revision tương lai phải dùng index version mới và được nghiệm thu lại từ đầu.
+- Đây là quyết định không dùng `late-v2` làm default path. Nó vẫn là demo candidate có kiểm soát vì leakage bằng 0, governance được giữ nguyên, coverage 100% và có rollback. Một revision muốn default rollout phải dùng index version mới và được nghiệm thu lại từ đầu.
 
 ### 2.6 Milestone D — Đóng Query Decomposition gate
 
@@ -708,10 +730,10 @@ Chứng minh các tính năng khi kết hợp không phá governance, cache, lat
 
 Thứ tự còn lại nên là:
 
-1. **Evaluation foundation** để khóa evaluator, adjudication và metric definitions dùng chung.
-2. **CRAG production pilot** vì staging gate đã đạt.
-3. **Grounded Math live gate** vì code offline đã hoàn tất và phạm vi hẹp.
-4. **Late Interaction quality gate** vì shadow index đã ready nhưng chưa chứng minh nDCG/Recall.
+1. [Đã hoàn tất implementation] **Evaluation foundation** đã khóa evaluator, adjudication và metric definitions dùng chung; live reviewer evidence tiếp tục được thu trong các demo.
+2. **CRAG controlled demo** vì staging gate và pilot control plane đã sẵn sàng.
+3. **Grounded Math controlled demo** vì code, fixture live và offline gate đã hoàn tất, phạm vi hẹp.
+4. [Đã hoàn tất default decision] **Late Interaction quality gate** đã đo Recall/nDCG và loại `late-v2` khỏi default path; A/B controlled demo chỉ là bước quan sát tùy chọn.
 5. **Query Decomposition gate** sau khi retrieval/rerank đã ổn định.
 6. **GraphRAG staging và pilot** cho relational query.
 7. **Community summaries** chỉ khi GraphRAG đạt điều kiện.
@@ -744,7 +766,7 @@ Tất cả milestone đã đạt
 
 - [ ] CRAG/repair production pilot đạt hoặc có reject decision/artifact theo nhánh bác bỏ.
 - [ ] Grounded math có live baseline/candidate, gate và pilot/decision.
-- [x] Late Interaction có clean-commit three-arm quality artifact và reject decision cho `late-v2`; production flags giữ tắt.
+- [x] Late Interaction có clean-commit three-arm artifact và quyết định không dùng `late-v2` làm default; controlled demo vẫn là hạng mục quan sát tùy chọn, flags mặc định giữ tắt.
 - [ ] Query decomposition có complex-query gate và pilot/decision.
 - [ ] GraphRAG migration, seed, reviewer flow, quality gate và pilot/decision đạt.
 - [ ] Community summaries đã pilot hoặc có quyết định chính thức không triển khai do không đủ điều kiện/không tạo giá trị.
