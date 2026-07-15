@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from typing import Any
 
 
 _COMPLEX_CUES = (" và ", " đồng thời ", " so sánh ", " đối chiếu ", " versus ", " vs ")
@@ -18,6 +20,21 @@ class DecompositionPlan:
     is_complex: bool
     subqueries: tuple[str, ...] = ()
     planner_version: str = "planner-v1"
+
+
+@dataclass(frozen=True)
+class BranchRetrievalResult:
+    documents: list[Any]
+    base_k: int
+    retrieval_mode: str
+    started_at: float
+    active_filter: Any
+    correction_cost: float = 0.0
+    correction_attempted: bool = False
+    correction_input_tokens: int = 0
+    correction_output_tokens: int = 0
+    access_denied: bool = False
+    deadline_exceeded: bool = False
 
 
 class CorrectionBudget:
@@ -73,16 +90,58 @@ def build_plan(question: str, planner=None, *, planner_version="planner-v1") -> 
     return DecompositionPlan(original, True, tuple(accepted or [original]), planner_version)
 
 
-def execute_plan(plan, retrieve, access_context, *, correction_budget=None, max_workers=3):
+def execute_plan(
+    plan,
+    retrieve,
+    access_context,
+    *,
+    correction_budget=None,
+    max_workers=3,
+    deadline_monotonic=None,
+    on_timeout=None,
+):
     queries = plan.subqueries if plan.is_complex else (plan.original_query,)
     queries = tuple(queries[:3])
     budget = correction_budget or CorrectionBudget(1)
 
     def run(query):
-        return retrieve(query, access_context, budget)
+        return retrieve(query, access_context, budget, deadline_monotonic)
 
-    with ThreadPoolExecutor(max_workers=min(max(1, max_workers), len(queries))) as executor:
-        return list(executor.map(run, queries))
+    executor = ThreadPoolExecutor(max_workers=min(max(1, max_workers), len(queries)))
+    futures = [executor.submit(run, query) for query in queries]
+    try:
+        timeout = None
+        if deadline_monotonic is not None:
+            timeout = max(0.0, deadline_monotonic - time.monotonic())
+        done, pending = wait(futures, timeout=timeout)
+        for future in pending:
+            future.cancel()
+        if pending and on_timeout is None:
+            raise TimeoutError("decomposition retrieval deadline exceeded")
+        return [
+            future.result() if future in done else on_timeout(query)
+            for query, future in zip(queries, futures)
+        ]
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def build_partial_answer_instruction(branches) -> str:
+    """Build a safe generation instruction without naming inaccessible sources."""
+    outcomes = [str((branch or {}).get("outcome") or "") for branch in (branches or ())]
+    missing = sum(outcome in {"insufficient_evidence", "partial_answer"} for outcome in outcomes)
+    denied = sum(outcome == "access_denied" for outcome in outcomes)
+    if not missing and not denied:
+        return ""
+    notices = []
+    if missing:
+        notices.append(f"{missing} nhánh chưa có đủ bằng chứng")
+    if denied:
+        notices.append(f"{denied} nhánh không thể truy cập")
+    return (
+        "\n\nLưu ý bắt buộc: " + "; ".join(notices) + ". "
+        "Chỉ trả lời các nhánh có nguồn, nêu rõ phần chưa thể trả lời và không tiết lộ tên hoặc nội dung nguồn bị chặn."
+    )
 
 
 def merge_branch_documents(branches):
@@ -103,3 +162,12 @@ def merge_branch_documents(branches):
             seen.add(key)
             merged.append(document)
     return merged
+
+
+def sufficient_branch_documents(results, branches):
+    """Return only evidence from branches allowed to reach final generation."""
+    return merge_branch_documents(
+        result.documents
+        for result, branch in zip(results or (), branches or ())
+        if (branch or {}).get("outcome") == "full_answer"
+    )

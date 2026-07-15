@@ -303,8 +303,59 @@ def test_eval_artifact_preserves_provider_retries_when_generation_stream_fails(t
         "repair_count": 1,
         "calculation_count": 1,
         "planner_count": 1,
+        "subquery_count": 0,
+        "final_generation_count": 0,
         "graph_traversal_count": 1,
     }
+
+
+def test_eval_report_includes_decomposition_branch_and_budget_evidence(tmp_path, monkeypatch):
+    runner = _load("run_eval_decomposition", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "decomposition.jsonl"
+    manifest.write_text(json.dumps(_case(
+        evaluation_group="complex",
+        expected_branches=[{
+            "branch_id": "branch-1",
+            "expected_outcome": "full_answer",
+            "expected_citations": [{"document": "crag_eval_numbers_v12.md", "doc_id": 41}],
+        }],
+    )) + "\n", encoding="utf-8")
+    monkeypatch.setenv("RAG_QUERY_DECOMPOSITION_ENABLED", "true")
+    intent_extractor = lambda *args, **kwargs: (
+        None, None, None, None, None, {"version_policy": "current_only"}
+    )
+    rag_chat = lambda *args, **kwargs: (
+        iter(["Giá trị được xác nhận từ tài liệu."]),
+        "",
+        [],
+        [],
+        {
+            "pipeline_namespace": "decomposition-v1",
+            "retrieved_docs": [{"file_goc": "crag_eval_numbers_v12.md", "doc_id": 41}],
+            "citation_docs": [],
+            "planner_count": 1,
+            "subquery_count": 1,
+            "correction_count": 0,
+            "final_generation_count": 1,
+            "deadline_exceeded": False,
+            "decomposition_branches": [{
+                "branch_id": "branch-1",
+                "outcome": "full_answer",
+                "citations": [{"document": "crag_eval_numbers_v12.md", "doc_id": 41}],
+            }],
+        },
+    )
+
+    report, passed = runner.run_evaluation(
+        [manifest], tmp_path / "output", "candidate", preflight=False,
+        intent_extractor=intent_extractor, rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is True
+    assert report["decomposition_evaluation"]["branch_accuracy"] == 1.0
+    assert report["decomposition_evaluation"]["citation_accuracy"] == 1.0
+    assert report["decomposition_evaluation"]["budget_violations"] == 0
 
 
 def test_eval_runner_requires_exact_grounded_math_and_provenance(tmp_path):

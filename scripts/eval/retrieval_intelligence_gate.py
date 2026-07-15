@@ -159,11 +159,15 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "max_shadow_fallback_rate": 0.0,
         }
     elif stage == "query_decomposition":
+        decomposition = candidate.get("decomposition_evaluation") or {}
         checks = {
             **common,
             "complex_answer_gain": _group_rate(candidate, "complex")
             >= _group_rate(baseline, "complex") + 0.10,
-            "simple_planner_calls_zero": int(metadata.get("simple_planner_calls", -1)) == 0,
+            "simple_planner_calls_zero": int(decomposition.get("simple_planner_calls", -1)) == 0,
+            "branch_accuracy_complete": float(decomposition.get("branch_accuracy") or 0.0) == 1.0,
+            "branch_citations_complete": float(decomposition.get("citation_accuracy") or 0.0) == 1.0,
+            "request_budgets_respected": int(decomposition.get("budget_violations", -1)) == 0,
             "latency_within_budget": _ratio(
                 float(candidate.get("latency_p95_ms") or 0), float(baseline.get("latency_p95_ms") or 0)
             ) <= 1.5,
@@ -172,7 +176,14 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
                 float(baseline.get("total_estimated_cost") or 0),
             ) <= 1.5,
         }
-        limits = {"min_complex_answer_gain": 0.10, "max_latency_ratio": 1.5, "max_cost_ratio": 1.5}
+        limits = {
+            "min_complex_answer_gain": 0.10,
+            "max_latency_ratio": 1.5,
+            "max_cost_ratio": 1.5,
+            "max_subqueries": 3,
+            "max_corrections": 1,
+            "max_final_generations": 1,
+        }
     elif stage == "graph_retrieval":
         checks = {
             **common,

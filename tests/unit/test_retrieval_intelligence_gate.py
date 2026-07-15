@@ -186,10 +186,35 @@ def test_decomposition_gate_requires_complex_gain_and_zero_simple_planner_calls(
         p95=140,
         cost=1.4,
     )
+    candidate["decomposition_evaluation"] = {
+        "branch_accuracy": 1.0,
+        "citation_accuracy": 1.0,
+        "simple_planner_calls": 0,
+        "budget_violations": 0,
+    }
 
-    result = gate.compare("query_decomposition", baseline, candidate, {"simple_planner_calls": 0})
+    result = gate.compare("query_decomposition", baseline, candidate)
 
     assert result["passed"] is True
+
+
+def test_decomposition_gate_rejects_branch_budget_or_simple_router_regression():
+    gate = _module()
+    baseline = report(groups={"complex": {"pass_rate": 0.50}})
+    candidate = report(groups={"complex": {"pass_rate": 0.65}}, p95=120, cost=1.2)
+    candidate["decomposition_evaluation"] = {
+        "branch_accuracy": 0.9,
+        "citation_accuracy": 1.0,
+        "simple_planner_calls": 1,
+        "budget_violations": 1,
+    }
+
+    result = gate.compare("query_decomposition", baseline, candidate)
+
+    assert result["checks"]["simple_planner_calls_zero"] is False
+    assert result["checks"]["branch_accuracy_complete"] is False
+    assert result["checks"]["request_budgets_respected"] is False
+    assert result["passed"] is False
 
 
 def test_grounded_math_gate_uses_observed_per_query_calculation_budget():

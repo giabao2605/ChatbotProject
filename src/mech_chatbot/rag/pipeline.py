@@ -159,6 +159,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         
     trace_id = trace_id or f"rag_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     t_start = time.time()
+    request_started_monotonic = time.monotonic()
     
     log_trace("rag_start", trace_id,
               question_length=len(user_question or ""),
@@ -275,7 +276,11 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     skip_retrieval = False
     decomposition_notice = ""
     decomposition_states = []
+    decomposition_branches = []
     planner_count = 0
+    subquery_count = 0
+    deadline_exceeded = False
+    final_generation_count = 0
     auxiliary_input_tokens = 0
     auxiliary_output_tokens = 0
     planner_estimated_cost = 0.0
@@ -373,7 +378,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         decomposition_enabled = env_bool("RAG_QUERY_DECOMPOSITION_ENABLED", False)
         if decomposition_enabled:
             from mech_chatbot.rag.query_decomposition import (
-                build_plan, codes_in_query, CorrectionBudget, execute_plan, merge_branch_documents,
+                build_plan, build_partial_answer_instruction, codes_in_query,
+                BranchRetrievalResult, CorrectionBudget, execute_plan,
+                merge_branch_documents, sufficient_branch_documents,
             )
 
             def _planner(question):
@@ -381,6 +388,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 planner_count += 1
                 prompt = (
                     "Tach cau hoi noi bo phuc hop thanh toi da 3 truy van doc lap. "
+                    "Giu nguyen thu tu cac y trong cau hoi goc. "
                     "Khong them ma tai lieu, phien ban, phong ban hay site khong co trong cau goc. "
                     "Chi tra JSON theo schema {\"subqueries\":[\"...\"]}.\nCAU HOI:\n" + question
                 )
@@ -405,6 +413,13 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 planner_version=os.getenv("RAG_PLANNER_VERSION", "planner-v1"),
             )
             if decomp_plan.is_complex:
+                try:
+                    request_deadline_seconds = max(
+                        0.1, float(os.getenv("RAG_REQUEST_DEADLINE_SECONDS", "120"))
+                    )
+                except (TypeError, ValueError):
+                    request_deadline_seconds = 120.0
+                request_deadline_monotonic = request_started_monotonic + request_deadline_seconds
                 access_context = {
                     "user_department": user_department,
                     "roles": tuple(user_roles or ()),
@@ -415,8 +430,17 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 }
                 shared_correction_budget = CorrectionBudget(1)
 
-                def _retrieve_branch(subquery, inherited_access, _correction_budget):
-                    del inherited_access
+                def _retrieve_branch(
+                    subquery, inherited_access, _correction_budget, branch_deadline_monotonic,
+                ):
+                    if (
+                        branch_deadline_monotonic is not None
+                        and time.monotonic() >= branch_deadline_monotonic
+                    ):
+                        return BranchRetrievalResult(
+                            [], 0, "deadline_exceeded", time.time(), _RETRIEVE_UNSET,
+                            deadline_exceeded=True,
+                        )
                     branch_codes = set(codes_in_query(subquery))
                     branch_part_ids = [
                         part_id for part_id in new_part_ids
@@ -444,6 +468,16 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     correction_output = 0
                     corrected = False
                     branch_docs = result[0]
+                    branch_deadline_exceeded = bool(
+                        branch_deadline_monotonic is not None
+                        and time.monotonic() >= branch_deadline_monotonic
+                    )
+                    if branch_deadline_exceeded:
+                        result = (
+                            [], result[1], result[2] + "+deadline_exceeded",
+                            result[3], result[4],
+                        )
+                        branch_docs = []
                     branch_decision = evaluate_answerability(
                         subquery,
                         _assemble_context(branch_docs, subquery) if branch_docs else "",
@@ -452,6 +486,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     )
                     if (
                         crag_enabled
+                        and not branch_deadline_exceeded
                         and branch_decision.state is EvidenceState.AMBIGUOUS
                         and _correction_budget.claim()
                     ):
@@ -506,20 +541,60 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                                 evaluator_state=branch_decision.state.value,
                                 error=type(exc).__name__,
                             )
-                    return (*result, correction_cost, corrected, correction_input, correction_output)
+                    access_denied = False
+                    if not result[0] and branch_part_ids and not branch_deadline_exceeded:
+                        access_denied, _ = probe_restricted_access(
+                            subquery,
+                            user_department=inherited_access["user_department"],
+                            allowed_departments=inherited_access["allowed_departments"],
+                            max_security_level=inherited_access["max_security_level"],
+                            allowed_sites=inherited_access["allowed_sites"],
+                            part_ids=branch_part_ids,
+                        )
+                    branch_deadline_exceeded = bool(
+                        branch_deadline_monotonic is not None
+                        and time.monotonic() >= branch_deadline_monotonic
+                    )
+                    if branch_deadline_exceeded:
+                        result = (
+                            [], result[1], result[2] + "+deadline_exceeded",
+                            result[3], result[4],
+                        )
+                    return BranchRetrievalResult(
+                        documents=result[0], base_k=result[1], retrieval_mode=result[2],
+                        started_at=result[3], active_filter=result[4],
+                        correction_cost=correction_cost,
+                        correction_attempted=corrected,
+                        correction_input_tokens=correction_input,
+                        correction_output_tokens=correction_output,
+                        access_denied=bool(access_denied),
+                        deadline_exceeded=branch_deadline_exceeded,
+                    )
 
-                branch_results = execute_plan(decomp_plan, _retrieve_branch, access_context)
-                correction_estimated_cost += sum(result[5] for result in branch_results)
-                correction_attempts += sum(bool(result[6]) for result in branch_results)
-                auxiliary_input_tokens += sum(result[7] for result in branch_results)
-                auxiliary_output_tokens += sum(result[8] for result in branch_results)
-                retrieved_docs = merge_branch_documents(result[0] for result in branch_results)
-                base_k = max((result[1] for result in branch_results), default=0)
-                retrieval_mode = "decomposed_" + "+".join(sorted({result[2] for result in branch_results}))
-                t_retrieval = min((result[3] for result in branch_results), default=time.time())
-                _af = next((result[4] for result in branch_results if result[4] is not _RETRIEVE_UNSET), _RETRIEVE_UNSET)
-                for subquery, result in zip(decomp_plan.subqueries, branch_results):
-                    branch_docs = result[0]
+                branch_results = execute_plan(
+                    decomp_plan,
+                    _retrieve_branch,
+                    access_context,
+                    deadline_monotonic=request_deadline_monotonic,
+                    on_timeout=lambda _query: BranchRetrievalResult(
+                        [], 0, "deadline_exceeded", time.time(), _RETRIEVE_UNSET,
+                        deadline_exceeded=True,
+                    ),
+                )
+                subquery_count = len(decomp_plan.subqueries)
+                correction_estimated_cost += sum(result.correction_cost for result in branch_results)
+                correction_attempts += sum(result.correction_attempted for result in branch_results)
+                auxiliary_input_tokens += sum(result.correction_input_tokens for result in branch_results)
+                auxiliary_output_tokens += sum(result.correction_output_tokens for result in branch_results)
+                retrieved_docs = merge_branch_documents(result.documents for result in branch_results)
+                base_k = max((result.base_k for result in branch_results), default=0)
+                retrieval_mode = "decomposed_" + "+".join(sorted({result.retrieval_mode for result in branch_results}))
+                t_retrieval = min((result.started_at for result in branch_results), default=time.time())
+                _af = next((result.active_filter for result in branch_results if result.active_filter is not _RETRIEVE_UNSET), _RETRIEVE_UNSET)
+                for branch_index, (subquery, result) in enumerate(
+                    zip(decomp_plan.subqueries, branch_results), 1
+                ):
+                    branch_docs = result.documents
                     decision = evaluate_answerability(
                         subquery,
                         _assemble_context(branch_docs, subquery) if branch_docs else "",
@@ -527,19 +602,35 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                         trace_id=trace_id,
                     )
                     decomposition_states.append(decision.state.value)
-                missing_count = sum(state != "SUFFICIENT" for state in decomposition_states)
-                if missing_count:
-                    decomposition_notice = (
-                        f"\n\nLuu y bat buoc: {missing_count} nhanh cua cau hoi chua co du bang chung. "
-                        "Chi tra loi cac nhanh co nguon va noi ro phan chua tim thay; khong suy dien."
-                    )
+                    deadline_exceeded = deadline_exceeded or result.deadline_exceeded
+                    if result.access_denied:
+                        branch_outcome = "access_denied"
+                    elif decision.state is EvidenceState.SUFFICIENT:
+                        branch_outcome = "full_answer"
+                    else:
+                        branch_outcome = "insufficient_evidence"
+                    decomposition_branches.append({
+                        "branch_id": f"branch-{branch_index}",
+                        "outcome": branch_outcome,
+                        "evaluator_state": decision.state.value,
+                        "citations": make_source_snapshot(branch_docs),
+                        "correction_attempted": result.correction_attempted,
+                        "deadline_exceeded": result.deadline_exceeded,
+                    })
+                retrieved_docs = sufficient_branch_documents(
+                    branch_results, decomposition_branches
+                )
+                decomposition_notice = build_partial_answer_instruction(
+                    decomposition_branches
+                )
                 log_trace(
                     "query_decomposition",
                     trace_id,
                     planner_count=planner_count,
-                    subquery_count=len(decomp_plan.subqueries),
+                    subquery_count=subquery_count,
                     evaluator_states=decomposition_states,
                     correction_budget=1,
+                    deadline_exceeded=deadline_exceeded,
                     estimated_cost=planner_estimated_cost + correction_estimated_cost,
                     input_tokens=auxiliary_input_tokens,
                     output_tokens=auxiliary_output_tokens,
@@ -1157,7 +1248,13 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         docs=retrieved_docs,
         trace_id=trace_id,
     )
-    answerable = evidence_decision.answerable
+    has_sufficient_decomposition_branch = any(
+        branch.get("outcome") == "full_answer"
+        for branch in decomposition_branches
+    )
+    answerable = (
+        evidence_decision.answerable or has_sufficient_decomposition_branch
+    )
     evidence_reason = evidence_decision.reason
     evidence_quotes = list(evidence_decision.evidence_quotes)
     log_trace(
@@ -1170,6 +1267,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         status=evidence_decision.telemetry_status,
         reason=evidence_reason,
         correction_attempts=correction_attempts,
+        partial_serving=(
+            has_sufficient_decomposition_branch
+            and not evidence_decision.answerable
+        ),
     )
     
     if not answerable:
@@ -1191,6 +1292,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             "repair_count": 0,
         }
         _refusal_debug["planner_count"] = planner_count
+        _refusal_debug["subquery_count"] = subquery_count
+        _refusal_debug["final_generation_count"] = final_generation_count
+        _refusal_debug["deadline_exceeded"] = deadline_exceeded
+        _refusal_debug["decomposition_branches"] = decomposition_branches
         _refusal_debug["graph_traversal_count"] = sum(
             1 for doc in retrieved_docs if doc.metadata.get("loai_du_lieu") == "knowledge_graph"
         )
@@ -1202,6 +1307,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         "output_tokens": auxiliary_output_tokens,
         "provider_retries": int(auxiliary_retry_counter["count"]),
     }
+    final_generation_count = 1
     stream = _generate(
         context_text=context_text,
         user_question=user_question,
@@ -1229,6 +1335,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     debug_info["evidence_stage"] = evidence_decision.stage
     debug_info["correction_count"] = correction_attempts
     debug_info["planner_count"] = planner_count
+    debug_info["subquery_count"] = subquery_count
+    debug_info["final_generation_count"] = final_generation_count
+    debug_info["deadline_exceeded"] = deadline_exceeded
+    debug_info["decomposition_branches"] = decomposition_branches
     debug_info["graph_traversal_count"] = sum(
         1 for doc in retrieved_docs if doc.metadata.get("loai_du_lieu") == "knowledge_graph"
     )
@@ -1246,6 +1356,29 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     _citation_snapshot = make_source_snapshot(retrieved_docs)
     _evidence_snapshot = make_source_snapshot(retrieved_docs)
     debug_info["citation_docs"] = _citation_snapshot
+
+    if decomposition_branches:
+        generated_stream = stream
+
+        def decomposition_audited_stream():
+            rendered_parts = []
+            for chunk in generated_stream:
+                rendered_parts.append(str(chunk))
+                yield chunk
+            rendered_source_ids = extract_source_ids(
+                "".join(rendered_parts)
+            )
+            for branch in decomposition_branches:
+                branch_source_ids = {
+                    str(citation.get("source_id") or "").strip().upper()
+                    for citation in branch.get("citations") or []
+                    if citation.get("source_id")
+                }
+                branch["rendered_source_ids"] = sorted(
+                    branch_source_ids & rendered_source_ids
+                )
+
+        stream = decomposition_audited_stream()
     # KH-2 (sua V4): neo lai tai lieu vua dung de tra loi cho luot tiep theo.
     try:
         from mech_chatbot.rag import conversation_state as _cs3

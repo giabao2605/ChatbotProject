@@ -77,6 +77,9 @@ def _execution_metrics(debug: dict, *, calculation_count: int | None = None) -> 
         ),
         "calculation_count": int(calculation_count),
         "planner_count": int(debug.get("planner_count") or 0),
+        "subquery_count": int(debug.get("subquery_count") or 0),
+        "final_generation_count": int(debug.get("final_generation_count") or 0),
+        "deadline_exceeded": bool(debug.get("deadline_exceeded")),
         "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
     }
 
@@ -109,6 +112,14 @@ def validate_live_case(case: dict, *, source: Path, line_number: int) -> None:
         validate_manifest_ground_truth(case, expected_outcome=expected_outcome(case))
     except ValueError as exc:
         raise ValueError(f"{source}:{line_number}: {exc}") from exc
+    if "expected_branches" in case:
+        from mech_chatbot.evaluation.decomposition import (
+            DecompositionManifestError, validate_decomposition_case,
+        )
+        try:
+            validate_decomposition_case(case)
+        except DecompositionManifestError as exc:
+            raise ValueError(f"{source}:{line_number}: {exc}") from exc
     missing_provenance = [name for name in REQUIRED_PROVENANCE_FIELDS if case.get(name) is None]
     if missing_provenance:
         raise ValueError(
@@ -184,6 +195,7 @@ def _render_markdown(report: dict) -> str:
         f"- Claim evaluation: `{json.dumps(report.get('claim_evaluation', {}))}`",
         f"- Citation evaluation: `{json.dumps(report.get('citation_evaluation', {}))}`",
         f"- Grounded math evaluation: `{json.dumps(report.get('grounded_math_evaluation', {}))}`",
+        f"- Decomposition evaluation: `{json.dumps(report.get('decomposition_evaluation', {}))}`",
         f"- Risk coverage: `{json.dumps(report.get('risk_coverage', {}))}`",
         f"- Pipeline variants: `{json.dumps(report.get('pipeline_variants', {}))}`",
         f"- Estimated cost: `{report.get('total_estimated_cost', 0.0)}`", "",
@@ -223,6 +235,8 @@ def run_evaluation(
             preflight_kind = os.environ.get("RAG_EVAL_PREFLIGHT_KIND", "crag").strip().lower()
             if preflight_kind == "grounded_math":
                 from scripts.grounded_math_eval.preflight import run_live_preflight
+            elif preflight_kind == "decomposition":
+                from scripts.decomposition_eval.preflight import run_live_preflight
             elif preflight_kind == "crag":
                 from scripts.crag_eval.preflight import run_live_preflight
             else:
@@ -244,6 +258,9 @@ def run_evaluation(
         evaluate_citations, evaluate_claims, extract_claims, select_rendered_citations,
     )
     from mech_chatbot.evaluation.grounded_math import evaluate_grounded_calculation
+    from mech_chatbot.evaluation.decomposition import (
+        evaluate_decomposition_case, summarize_decomposition_evaluation,
+    )
     from mech_chatbot.evaluation.metrics import (
         canonical_source_identity, nearest_rank, ranked_retrieval_audit,
         ranked_retrieval_metrics,
@@ -361,6 +378,7 @@ def run_evaluation(
                 debug.get("calculation_provenance") or [],
                 answer=answer,
             )
+            decomposition_evaluation = evaluate_decomposition_case(case, debug)
             grounding_ok = (
                 (
                     not claim_evaluation["applicable"]
@@ -379,9 +397,15 @@ def run_evaluation(
                 )
                 and calculation_evaluation["passed"]
             )
+            decomposition_required = (
+                bool(case.get("expected_branches"))
+                and os.environ.get("RAG_QUERY_DECOMPOSITION_ENABLED", "false").strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
             passed = (
                 keyword_ok and source_ok and not forbidden_hits and outcome_ok
                 and policy_ok and grounding_ok
+                and (not decomposition_required or decomposition_evaluation["passed"])
             )
             evidence_state = str(
                 debug.get("evidence_state")
@@ -420,6 +444,7 @@ def run_evaluation(
                 "claim_evaluation": claim_evaluation,
                 "citation_evaluation": citation_evaluation,
                 "calculation_evaluation": calculation_evaluation,
+                "decomposition_evaluation": decomposition_evaluation,
                 "evidence_state": evidence_state,
                 "evaluation_confidence": evaluation_confidence,
                 "answer_correct": passed,
@@ -448,6 +473,7 @@ def run_evaluation(
                 "claim_evaluation": {"applicable": False},
                 "citation_evaluation": {"applicable": False},
                 "calculation_evaluation": {"applicable": False, "passed": False},
+                "decomposition_evaluation": {"applicable": False, "passed": False},
                 "evidence_state": "INSUFFICIENT",
                 "evaluation_confidence": 0.0,
                 "answer_correct": False,
@@ -629,6 +655,7 @@ def run_evaluation(
                 for row in rows
             ),
         },
+        "decomposition_evaluation": summarize_decomposition_evaluation(rows),
         "risk_coverage": build_risk_coverage_report(risk_rows),
         "latency_p50_ms": nearest_rank(latencies, 0.50),
         "latency_p95_ms": nearest_rank(latencies, 0.95),
@@ -642,7 +669,8 @@ def run_evaluation(
             name: sum(row.get(name, 0) for row in rows)
             for name in (
                 "correction_count", "repair_count", "calculation_count",
-                "planner_count", "graph_traversal_count",
+                "planner_count", "subquery_count", "final_generation_count",
+                "graph_traversal_count",
             )
         },
         "levels": dict(levels), "cases": rows,
