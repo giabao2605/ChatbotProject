@@ -358,6 +358,49 @@ def test_eval_report_includes_decomposition_branch_and_budget_evidence(tmp_path,
     assert report["decomposition_evaluation"]["budget_violations"] == 0
 
 
+def test_regular_baseline_is_not_forced_to_emit_graph_edge_evidence(tmp_path, monkeypatch):
+    runner = _load("run_eval_graph_baseline", "scripts/eval/run_eval.py")
+    case = _case(
+        evaluation_group="relational",
+        expected_relation={
+            "source_key": "document:41", "relation_type": "HAS_PAGE",
+            "target_key": "page:41:1",
+        },
+    )
+    manifest = tmp_path / "graph.jsonl"
+    manifest.write_text(json.dumps(case) + "\n", encoding="utf-8")
+    intent_extractor = lambda *args, **kwargs: (
+        None, None, None, None, None, {"version_policy": "current_only"}
+    )
+    rag_chat = lambda *args, **kwargs: (
+        iter(["Giá trị được xác nhận từ tài liệu."]), "", [], [], {
+            "retrieved_docs": [{
+                "file_goc": "crag_eval_numbers_v12.md", "doc_id": 41,
+                "trang": 1, "version_no": 12,
+            }],
+            "citation_docs": [], "evidence_state": "SUFFICIENT",
+            "generation_metrics": {},
+        },
+    )
+    monkeypatch.setenv("RAG_GRAPH_RETRIEVAL_ENABLED", "false")
+    baseline, baseline_passed = runner.run_evaluation(
+        [manifest], tmp_path / "baseline", "baseline", preflight=False,
+        intent_extractor=intent_extractor, rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+    )
+    monkeypatch.setenv("RAG_GRAPH_RETRIEVAL_ENABLED", "true")
+    candidate, candidate_passed = runner.run_evaluation(
+        [manifest], tmp_path / "candidate", "candidate", preflight=False,
+        intent_extractor=intent_extractor, rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert baseline_passed is True
+    assert baseline["cases"][0]["graph_evaluation"]["relation_matched"] is False
+    assert candidate_passed is False
+    assert candidate["cases"][0]["graph_evaluation"]["relation_matched"] is False
+
+
 def test_eval_runner_requires_exact_grounded_math_and_provenance(tmp_path):
     runner = _load("run_eval_grounded_math", "scripts/eval/run_eval.py")
     source = {

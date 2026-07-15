@@ -2,10 +2,40 @@ from pathlib import Path
 
 import pytest
 
-from mech_chatbot.rag.graph_retrieval import expand_seed_keys, filter_servable_edges, hydrate_graph_edges
+from mech_chatbot.rag.graph_retrieval import (
+    expand_seed_keys, filter_servable_edges, hydrate_graph_edges,
+    select_graph_seeds, should_attempt_graph,
+)
 
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("question", [
+    "Tài liệu A supersedes tài liệu nào?",
+    "Assembly X contains part nào?",
+    "Vật tư P dùng vật liệu gì?",
+    "Mối quan hệ giữa DOC-A và DOC-B là gì?",
+])
+def test_graph_router_accepts_relational_queries(question):
+    assert should_attempt_graph(question) is True
+
+
+@pytest.mark.parametrize("question", [
+    "Chu kỳ bảo trì là bao nhiêu?",
+    "Xin chào",
+    "Tóm tắt tài liệu DOC-A",
+])
+def test_graph_router_keeps_simple_queries_on_regular_retrieval(question):
+    assert should_attempt_graph(question) is False
+
+
+def test_graph_seeds_keep_explicit_query_code_when_retrieval_has_other_entities():
+    seeds = select_graph_seeds(
+        "GRAPH-EVAL-ASM-001 chứa bộ phận nào?", ["GRAPH-EVAL-PART-B"]
+    )
+
+    assert seeds == ["GRAPH-EVAL-ASM-001", "GRAPH-EVAL-PART-B"]
 
 
 def edge(**overrides):
@@ -112,7 +142,8 @@ def test_llm_edge_producer_only_inserts_pending_proposals():
     assert ":page > 0" in producer
 
 
-def test_graph_review_endpoint_requires_approver_and_audits_without_prompt(monkeypatch):
+@pytest.mark.parametrize("role", ["knowledge_approver", "reviewer", "admin"])
+def test_graph_review_endpoint_allows_governed_review_roles_and_audits_without_prompt(monkeypatch, role):
     from mech_chatbot.api import app_server
 
     with pytest.raises(app_server.HTTPException) as denied:
@@ -130,9 +161,20 @@ def test_graph_review_endpoint_requires_approver_and_audits_without_prompt(monke
     monkeypatch.setattr(app_server, "write_audit_log", lambda **kwargs: audits.append(kwargs))
 
     result = app_server.graph_proposal_approve(
-        7, {"note": "verified"}, {"roles": ["knowledge_approver"], "username": "bob", "user_id": 9}
+        7, {"note": "verified"}, {"roles": [role], "username": "bob", "user_id": 9}
     )
 
     assert result["status"] == "approved"
     assert audits[0]["entity_id"] == 7
     assert "prompt" not in str(audits[0]).lower()
+
+
+def test_graph_proposal_listing_rejects_viewer_even_when_called_directly(monkeypatch):
+    from mech_chatbot.api import app_server
+
+    monkeypatch.setattr(app_server, "list_graph_proposals", lambda **_kwargs: [])
+
+    with pytest.raises(app_server.HTTPException) as denied:
+        app_server.graph_proposals(profile={"roles": ["viewer"]})
+
+    assert denied.value.status_code == 403

@@ -237,6 +237,8 @@ def run_evaluation(
                 from scripts.grounded_math_eval.preflight import run_live_preflight
             elif preflight_kind == "decomposition":
                 from scripts.decomposition_eval.preflight import run_live_preflight
+            elif preflight_kind == "graph":
+                from scripts.graph_eval.preflight import run_live_preflight
             elif preflight_kind == "crag":
                 from scripts.crag_eval.preflight import run_live_preflight
             else:
@@ -258,6 +260,7 @@ def run_evaluation(
         evaluate_citations, evaluate_claims, extract_claims, select_rendered_citations,
     )
     from mech_chatbot.evaluation.grounded_math import evaluate_grounded_calculation
+    from mech_chatbot.evaluation.graph import evaluate_graph_case, summarize_graph_evaluation
     from mech_chatbot.evaluation.decomposition import (
         evaluate_decomposition_case, summarize_decomposition_evaluation,
     )
@@ -337,7 +340,14 @@ def run_evaluation(
             rank_metrics = ranked_retrieval_metrics(retrieved, expected_sources)
             rank_audit = ranked_retrieval_audit(retrieved, expected_sources)
             forbidden_sources = case.get("forbidden_sources", [])
-            source_ok = expected == "access_denied" or rank_metrics["recall_at_20"] == 1.0
+            retrieval_expected = bool(
+                case.get("expected_retrieval", bool(expected_sources) and expected != "access_denied")
+            )
+            source_ok = (
+                expected == "access_denied"
+                or (not retrieval_expected and rank_metrics["recall_at_20"] == 0.0)
+                or (retrieval_expected and rank_metrics["recall_at_20"] == 1.0)
+            )
             forbidden_hits = [
                 src for src in forbidden_sources
                 if any(str(src).casefold() == item["document"] for item in retrieved)
@@ -379,6 +389,7 @@ def run_evaluation(
                 answer=answer,
             )
             decomposition_evaluation = evaluate_decomposition_case(case, debug)
+            graph_evaluation = evaluate_graph_case(case, debug)
             grounding_ok = (
                 (
                     not claim_evaluation["applicable"]
@@ -402,10 +413,19 @@ def run_evaluation(
                 and os.environ.get("RAG_QUERY_DECOMPOSITION_ENABLED", "false").strip().lower()
                 in {"1", "true", "yes", "on"}
             )
+            graph_required = (
+                bool(case.get("expected_relation"))
+                and os.environ.get("RAG_GRAPH_RETRIEVAL_ENABLED", "false").strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
             passed = (
                 keyword_ok and source_ok and not forbidden_hits and outcome_ok
                 and policy_ok and grounding_ok
                 and (not decomposition_required or decomposition_evaluation["passed"])
+                and (
+                    not graph_required
+                    or (graph_evaluation["passed"] and graph_evaluation["budget_ok"])
+                )
             )
             evidence_state = str(
                 debug.get("evidence_state")
@@ -431,7 +451,7 @@ def run_evaluation(
                 "actual_outcome": actual, "latency_ms": latency_ms, "answer": answer,
                 "reference": ref_text,
                 "retrieved_sources": [item["document"] for item in retrieved],
-                "retrieval_expected": bool(expected_sources) and expected != "access_denied",
+                "retrieval_expected": retrieval_expected,
                 "retrieval_passed": source_ok,
                 "trace_id": trace_id,
                 "requires_correction": bool(case.get("requires_correction")),
@@ -445,6 +465,7 @@ def run_evaluation(
                 "citation_evaluation": citation_evaluation,
                 "calculation_evaluation": calculation_evaluation,
                 "decomposition_evaluation": decomposition_evaluation,
+                "graph_evaluation": graph_evaluation,
                 "evidence_state": evidence_state,
                 "evaluation_confidence": evaluation_confidence,
                 "answer_correct": passed,
@@ -474,6 +495,7 @@ def run_evaluation(
                 "citation_evaluation": {"applicable": False},
                 "calculation_evaluation": {"applicable": False, "passed": False},
                 "decomposition_evaluation": {"applicable": False, "passed": False},
+                "graph_evaluation": {"applicable": False, "passed": False, "budget_ok": False},
                 "evidence_state": "INSUFFICIENT",
                 "evaluation_confidence": 0.0,
                 "answer_correct": False,
@@ -656,6 +678,7 @@ def run_evaluation(
             ),
         },
         "decomposition_evaluation": summarize_decomposition_evaluation(rows),
+        "graph_evaluation": summarize_graph_evaluation(rows),
         "risk_coverage": build_risk_coverage_report(risk_rows),
         "latency_p50_ms": nearest_rank(latencies, 0.50),
         "latency_p95_ms": nearest_rank(latencies, 0.95),

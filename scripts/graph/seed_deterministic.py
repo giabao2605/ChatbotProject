@@ -22,11 +22,14 @@ from mech_chatbot.db.engine import _ensure_engine  # noqa: E402
 DEFAULT_DEPARTMENTS = ("Technical", "Production", "Maintenance")
 
 
-def seed(departments=DEFAULT_DEPARTMENTS):
+def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
     import mech_chatbot.db.engine as db_engine
 
     _ensure_engine()
-    params = {"departments": json.dumps(list(departments))}
+    params = {
+        "departments": json.dumps(list(departments)),
+        "source_system": source_system,
+    }
     statements = [
         """
         MERGE dbo.KnowledgeGraphNode AS target
@@ -42,6 +45,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
                 SELECT TOP 1 t.DocID, t.VersionNo, t.ThuMuc, t.Site, t.SecurityLevel
                 FROM dbo.TaiLieu t
                 WHERE t.FamilyID=f.FamilyID
+                  AND (:source_system IS NULL OR t.SourceSystem=:source_system)
                   AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
                   AND t.ReviewStatus='approved' AND t.PublicationState='published'
                 ORDER BY t.IsCurrent DESC, t.VersionNo DESC, t.DocID DESC
@@ -64,6 +68,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
                    t.Site, ISNULL(t.SecurityLevel, 'confidential') AS SecurityLevel
             FROM dbo.TaiLieu t
             WHERE t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
+              AND (:source_system IS NULL OR t.SourceSystem=:source_system)
               AND t.ReviewStatus = 'approved' AND t.PublicationState = 'published'
         ) source ON target.NodeType = source.NodeType AND target.CanonicalKey = source.CanonicalKey
         WHEN MATCHED THEN UPDATE SET DisplayName=source.DisplayName, SourceDocID=source.SourceDocID,
@@ -84,6 +89,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
                    t.ThuMuc AS Department, t.Site, ISNULL(t.SecurityLevel, 'confidential') AS SecurityLevel
             FROM dbo.DocumentPages p JOIN dbo.TaiLieu t ON t.DocID=p.DocID
             WHERE t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
+              AND (:source_system IS NULL OR t.SourceSystem=:source_system)
               AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
               AND t.PublicationState='published' AND t.LifecycleStatus='published'
         ) source ON target.NodeType=source.NodeType AND target.CanonicalKey=source.CanonicalKey
@@ -106,6 +112,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
                                           ORDER BY t.VersionNo DESC, b.DocID DESC, b.ID DESC) AS rn
                 FROM dbo.BangKeVatTu b JOIN dbo.TaiLieu t ON t.DocID=b.DocID
                 WHERE b.MaHang IS NOT NULL AND LTRIM(RTRIM(b.MaHang)) <> ''
+                  AND (:source_system IS NULL OR t.SourceSystem=:source_system)
                   AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
                   AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
                   AND t.PublicationState='published' AND t.LifecycleStatus='published'
@@ -133,6 +140,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
                        ) AS rn
                 FROM dbo.BangKeVatTu b JOIN dbo.TaiLieu t ON t.DocID=b.DocID
                 WHERE COALESCE(NULLIF(b.NormalizedMaterial,''), b.VatLieu) IS NOT NULL
+                  AND (:source_system IS NULL OR t.SourceSystem=:source_system)
                   AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
                   AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
                   AND t.PublicationState='published' AND t.LifecycleStatus='published'
@@ -155,6 +163,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
             OUTER APPLY (SELECT TOP 1 PageNo FROM dbo.DocumentPages WHERE DocID=t.DocID ORDER BY PageNo) page_ref
             OUTER APPLY (SELECT MIN(TrangSo) PageNo FROM dbo.BangKeVatTu WHERE DocID=t.DocID) bom_ref
             WHERE t.FamilyID IS NOT NULL
+              AND (:source_system IS NULL OR t.SourceSystem=:source_system)
               AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
               AND t.ReviewStatus='approved' AND t.PublicationState='published'
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
@@ -179,6 +188,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
             OUTER APPLY (SELECT TOP 1 PageNo FROM dbo.DocumentPages WHERE DocID=t.DocID ORDER BY PageNo) page_ref
             OUTER APPLY (SELECT MIN(TrangSo) PageNo FROM dbo.BangKeVatTu WHERE DocID=t.DocID) bom_ref
             WHERE t.SupersedesDocID IS NOT NULL
+              AND (:source_system IS NULL OR t.SourceSystem=:source_system)
               AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
               AND t.ReviewStatus='approved' AND t.PublicationState='published'
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
@@ -201,6 +211,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
             JOIN dbo.KnowledgeGraphNode dn ON dn.CanonicalKey='document:'+CAST(p.DocID AS NVARCHAR(30))
             JOIN dbo.KnowledgeGraphNode pn ON pn.CanonicalKey='page:'+CAST(p.DocID AS NVARCHAR(30))+':'+CAST(p.PageNo AS NVARCHAR(30))
             WHERE t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments)) AND t.Servable=1 AND t.IsCurrent=1
+              AND (:source_system IS NULL OR t.SourceSystem=:source_system)
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
                    AND target.RelationType=source.RelationType AND target.SourceDocID=source.SourceDocID
                    AND target.SourcePage=source.SourcePage
@@ -221,6 +232,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
             JOIN dbo.KnowledgeGraphNode dn ON dn.CanonicalKey='document:'+CAST(b.DocID AS NVARCHAR(30))
             JOIN dbo.KnowledgeGraphNode pn ON pn.CanonicalKey='part:'+LOWER(LTRIM(RTRIM(b.MaHang)))
             WHERE t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments)) AND t.Servable=1 AND t.IsCurrent=1
+              AND (:source_system IS NULL OR t.SourceSystem=:source_system)
               AND b.TrangSo IS NOT NULL
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
                    AND target.RelationType=source.RelationType AND target.SourceDocID=source.SourceDocID
@@ -242,6 +254,7 @@ def seed(departments=DEFAULT_DEPARTMENTS):
             JOIN dbo.KnowledgeGraphNode pn ON pn.CanonicalKey='part:'+LOWER(LTRIM(RTRIM(b.MaHang)))
             JOIN dbo.KnowledgeGraphNode mn ON mn.CanonicalKey='material:'+LOWER(LTRIM(RTRIM(COALESCE(NULLIF(b.NormalizedMaterial,''),b.VatLieu))))
             WHERE t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments)) AND t.Servable=1 AND t.IsCurrent=1
+              AND (:source_system IS NULL OR t.SourceSystem=:source_system)
               AND b.TrangSo IS NOT NULL
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
                    AND target.RelationType=source.RelationType AND target.SourceDocID=source.SourceDocID
@@ -254,26 +267,46 @@ def seed(departments=DEFAULT_DEPARTMENTS):
                     source.SecurityLevel,'deterministic-seed',SYSUTCDATETIME());
         """,
         """
-        UPDATE dbo.KnowledgeGraphEdge
+        UPDATE e
         SET ServingStatus='disabled'
-        WHERE Origin='deterministic' AND SourcePage <= 0;
+        FROM dbo.KnowledgeGraphEdge e
+        WHERE e.Origin='deterministic' AND e.SourcePage <= 0
+          AND (:source_system IS NULL OR EXISTS (
+              SELECT 1 FROM dbo.TaiLieu t
+              WHERE t.DocID=e.SourceDocID
+                AND t.SourceSystem=:source_system
+          ));
         """,
     ]
     with db_engine.engine.begin() as conn:
         for statement in statements:
             conn.execute(text(statement), params)
         counts = conn.execute(text("""
-            SELECT (SELECT COUNT(*) FROM dbo.KnowledgeGraphNode) AS nodes,
-                   (SELECT COUNT(*) FROM dbo.KnowledgeGraphEdge WHERE ServingStatus='approved') AS approved_edges
-        """)).mappings().one()
+            SELECT (
+                       SELECT COUNT(*) FROM dbo.KnowledgeGraphNode n
+                       WHERE :source_system IS NULL OR EXISTS (
+                           SELECT 1 FROM dbo.TaiLieu t
+                           WHERE t.DocID=n.SourceDocID AND t.SourceSystem=:source_system
+                       )
+                   ) AS nodes,
+                   (
+                       SELECT COUNT(*) FROM dbo.KnowledgeGraphEdge e
+                       WHERE e.ServingStatus='approved'
+                         AND (:source_system IS NULL OR EXISTS (
+                             SELECT 1 FROM dbo.TaiLieu t
+                             WHERE t.DocID=e.SourceDocID AND t.SourceSystem=:source_system
+                         ))
+                   ) AS approved_edges
+        """), params).mappings().one()
     return dict(counts)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--department", action="append", dest="departments")
+    parser.add_argument("--source-system")
     args = parser.parse_args(argv)
-    print(seed(args.departments or DEFAULT_DEPARTMENTS))
+    print(seed(args.departments or DEFAULT_DEPARTMENTS, source_system=args.source_system))
     return 0
 
 

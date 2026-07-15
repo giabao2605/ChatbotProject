@@ -1,0 +1,8 @@
+{
+  "schema": "graph-eval-fixture-v1",
+  "documents": 10,
+  "cases": 13,
+  "bom_rows": 2,
+  "batch": "graph-eval-v1",
+  "collection": "MechChatbot_Graph_Eval_v1"
+}

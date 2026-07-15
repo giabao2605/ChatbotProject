@@ -103,6 +103,10 @@ def make_debug_info(docs=None):
                 "score": d.metadata.get("relevance_score"),
                 # GD5 muc 3: kem muc mat de tang audit doc tai lieu confidential o tang UI.
                 "security_level": d.metadata.get("security_level"),
+                "graph_edge_id": d.metadata.get("graph_edge_id"),
+                "graph_relation_type": d.metadata.get("graph_relation_type"),
+                "graph_source_key": d.metadata.get("graph_source_key"),
+                "graph_target_key": d.metadata.get("graph_target_key"),
                 "text": str(d.metadata.get("noi_dung_goc") or getattr(d, "page_content", "") or "")[:800],
             }
             for d in docs
@@ -691,12 +695,16 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 logger.warning(f"Loi HyDE fallback: {e}")
                 log_trace("hyde", trace_id, used=True, error=str(e))
  
+    graph_routed = False
+    graph_edge_count = 0
+    graph_max_hops = 0
     if not skip_retrieval and env_bool("RAG_GRAPH_RETRIEVAL_ENABLED", False):
-        from mech_chatbot.rag.graph_retrieval import filter_servable_edges, hydrate_graph_edges
+        from mech_chatbot.rag.graph_retrieval import (
+            filter_servable_edges, hydrate_graph_edges, select_graph_seeds,
+            should_attempt_graph,
+        )
         graph_started = time.time()
-        graph_seeds = list(new_part_ids or [])
-        if not graph_seeds:
-            graph_seeds = re.findall(r"\b[A-Z]{1,10}[-_][A-Z0-9][A-Z0-9._-]*\b", effective_question, flags=re.IGNORECASE)
+        graph_seeds = select_graph_seeds(effective_question, new_part_ids)
         graph_access = {
             "roles": user_roles or [],
             "allowed_departments": allowed_departments or [],
@@ -704,21 +712,29 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             "max_security_level": max_security_level,
         }
         try:
-            graph_edges = filter_servable_edges(
-                traverse_knowledge_graph(graph_seeds, graph_access, max_hops=2, limit=50),
-                graph_access,
-            )
-            graph_docs = hydrate_graph_edges(
-                graph_edges,
-                client,
-                os.getenv("QDRANT_COLLECTION", "TaiLieuKyThuat_v2"),
-            )
-            retrieved_docs = merge_corrected_documents(retrieved_docs, graph_docs)
+            graph_routed = should_attempt_graph(effective_question)
+            if graph_routed:
+                graph_max_hops = 2
+                graph_edges = filter_servable_edges(
+                    traverse_knowledge_graph(graph_seeds, graph_access, max_hops=2, limit=50),
+                    graph_access,
+                )
+                graph_docs = hydrate_graph_edges(
+                    graph_edges,
+                    client,
+                    os.getenv("QDRANT_COLLECTION", "TaiLieuKyThuat_v2"),
+                )
+                retrieved_docs = merge_corrected_documents(retrieved_docs, graph_docs)
+            else:
+                graph_edges, graph_docs = [], []
+            graph_edge_count = len(graph_edges)
             log_trace(
                 "graph_retrieval", trace_id,
                 latency_ms=int((time.time() - graph_started) * 1000),
+                routed=graph_routed,
+                route_scope="relational" if graph_routed else "regular",
                 seed_count=len(graph_seeds), edge_count=len(graph_edges),
-                hydrated_count=len(graph_docs), max_hops=2,
+                hydrated_count=len(graph_docs), max_hops=2, edge_limit=50,
             )
         except Exception as exc:
             logger.warning("Graph retrieval unavailable: %s", exc)
@@ -1299,6 +1315,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         _refusal_debug["graph_traversal_count"] = sum(
             1 for doc in retrieved_docs if doc.metadata.get("loai_du_lieu") == "knowledge_graph"
         )
+        _refusal_debug["graph_routed"] = graph_routed
+        _refusal_debug["graph_edge_count"] = graph_edge_count
+        _refusal_debug["graph_max_hops"] = graph_max_hops
         return refusal_stream(), ref_text, ref_images, new_part_ids, _refusal_debug
 
     generation_metrics = {
@@ -1342,6 +1361,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     debug_info["graph_traversal_count"] = sum(
         1 for doc in retrieved_docs if doc.metadata.get("loai_du_lieu") == "knowledge_graph"
     )
+    debug_info["graph_routed"] = graph_routed
+    debug_info["graph_edge_count"] = graph_edge_count
+    debug_info["graph_max_hops"] = graph_max_hops
     debug_info["late_interaction_hits"] = sum(
         1 for doc in retrieved_docs if doc.metadata.get("rerank_backend") == "late_interaction"
     )

@@ -2607,13 +2607,14 @@ def setting_set(key: str, body: dict[str, Any], profile: dict[str, Any] = Depend
 def graph_proposals(
     status_value: str = "pending",
     limit: int = 100,
-    profile: dict[str, Any] = Depends(require_any_role("knowledge_approver")),
+    profile: dict[str, Any] = Depends(require_any_role("knowledge_approver", "reviewer", "admin")),
 ):
+    _assert_any_role(profile, "knowledge_approver", "reviewer", "admin")
     return {"proposals": _rows_to_json(list_graph_proposals(status=status_value, limit=limit))}
 
 
 def _review_graph_proposal_endpoint(proposal_id: int, action: str, body: dict[str, Any], profile: dict[str, Any]):
-    _assert_any_role(profile, "knowledge_approver")
+    _assert_any_role(profile, "knowledge_approver", "reviewer", "admin")
     result = review_graph_proposal(
         proposal_id,
         action,

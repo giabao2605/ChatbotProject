@@ -647,8 +647,22 @@ Nghiệm thu graph route trên staging thật trước khi dùng cho relational/
    - Draft, unpublished, superseded và expired source không serving.
 7. Chạy baseline regular retrieval và candidate graph route trên cùng evidence snapshot.
 8. Đo edge precision qua reviewer sample, graph coverage và relational-answer accuracy.
-9. Pilot `RAG_GRAPH_RETRIEVAL_ENABLED=true` chỉ cho relational/global router scope.
+9. Pilot `RAG_GRAPH_RETRIEVAL_ENABLED=true` chỉ cho relational router scope; global sensemaking thuộc mục 2.8.
 10. Sau pilot, quyết định có làm community summaries hay không.
+
+#### Tiến độ hiện tại (2026-07-15)
+
+- [x] Clean migration từ database rỗng đến V0035 chạy hai lần idempotent; V0033/V0034 có trong ledger. Artifact: `reports/graph/20260715-104107/migration.json` (local, reports được ignore).
+- [x] Fixture staging độc lập `graph-eval-v1` đã ingest 7 tài liệu vào `MechChatbot_Graph_Eval_v1`; source collection production không bị sửa.
+- [x] Deterministic seed được giới hạn bằng `SourceSystem`, tạo family/version, supersedes, page, part và material edges cho Technical, Production và Maintenance.
+- [x] Preflight 9/9 case đạt; structured coverage 6/6 = 100%, provenance completeness 100%, cả ba pilot domain có node và approved edge.
+- [x] Reviewer workflow staging đạt: viewer bị chặn; pending proposal không serving; approve/reject giữ reviewer, note, timestamp; hai audit event không chứa raw prompt. Hai proposal scripted chỉ là workflow fixture, không được tính làm quality sample.
+- [x] Graph router chỉ gọi graph seam cho relational/global wording; simple query giữ regular retrieval. Traversal vẫn bị chặn cứng ở 2 hop/50 edge.
+- [x] Evaluator và rollout gate đã bổ sung relation accuracy, coverage, reviewer precision, provenance, pending-serving, router scope và traversal budget; rollback vẫn chỉ cần tắt `RAG_GRAPH_RETRIEVAL_ENABLED`.
+- [ ] Chưa có tập tối thiểu 20 edge được reviewer đánh nhãn độc lập; quality gate sẽ fail-closed dù workflow fixture đạt.
+- [ ] Baseline regular retrieval và candidate graph route trên cùng snapshot chưa có kết quả hợp lệ. Provider `gpt-5.4` lại trả `503 no_capacity` trong lần ingest đầu; fixture hoàn tất bằng metadata mode offline, nhưng benchmark LLM phải chạy thành pair mới và fail-closed nếu provider tiếp tục lỗi.
+- [ ] Controlled demo pilot chưa chạy; chỉ được chạy nếu baseline/candidate sạch đạt gate. Nếu gate không đạt thì ghi reject decision và giữ flag tắt.
+- [ ] Community summaries chưa bắt đầu; quyết định này chỉ được mở sau kết quả gate/pilot của mục 2.7.
 
 #### Điều kiện hoàn tất
 

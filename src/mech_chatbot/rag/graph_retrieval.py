@@ -3,18 +3,40 @@
 from __future__ import annotations
 
 import os
+import re
 
 from langchain_core.documents import Document
 from qdrant_client import models
 
 
 _LEVELS = {"public": 0, "internal": 1, "confidential": 2}
+_RELATIONAL_TERMS = (
+    "supersede", "thay thế", "contains", "chứa", "thuộc", "uses material",
+    "dùng vật liệu", "sử dụng vật liệu", "liên kết", "mối quan hệ", "quan hệ",
+    "phiên bản hiện hành", "current version",
+)
 
 
 def enabled() -> bool:
     return os.getenv("RAG_GRAPH_RETRIEVAL_ENABLED", "false").strip().lower() in {
         "1", "true", "yes", "y", "on"
     }
+
+
+def should_attempt_graph(question: str) -> bool:
+    """Route only explicit relational/global questions to the graph seam."""
+    normalized = " ".join(str(question or "").casefold().split())
+    return bool(normalized) and any(term in normalized for term in _RELATIONAL_TERMS)
+
+
+def select_graph_seeds(question: str, candidate_ids=()):
+    """Keep governed retrieval entities while always retaining explicit query codes."""
+    values = {str(item).strip() for item in candidate_ids or () if str(item).strip()}
+    values.update(re.findall(
+        r"\b[A-Z]{1,10}[-_][A-Z0-9][A-Z0-9._-]*\b",
+        str(question or ""), flags=re.IGNORECASE,
+    ))
+    return sorted(values, key=str.casefold)
 
 
 def expand_seed_keys(seed_keys):
@@ -117,6 +139,9 @@ def hydrate_graph_edges(edges, client, collection_name):
                 "security_level": edge.get("security_level"), "site": edge.get("site"),
                 "loai_du_lieu": "knowledge_graph", "doc_status": "published",
                 "graph_edge_id": edge.get("edge_id"),
+                "graph_relation_type": edge.get("relation_type"),
+                "graph_source_key": edge.get("source_key"),
+                "graph_target_key": edge.get("target_key"),
             })
             hydrated.append(Document(page_content=relation + "\n\n" + content, metadata=metadata))
             break

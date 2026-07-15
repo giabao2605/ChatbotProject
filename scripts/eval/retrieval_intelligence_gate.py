@@ -185,16 +185,32 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "max_final_generations": 1,
         }
     elif stage == "graph_retrieval":
+        graph = candidate.get("graph_evaluation") or {}
+        domains = metadata.get("domain_coverage") or {}
         checks = {
             **common,
             "relational_accuracy_gain": _group_rate(candidate, "relational")
             >= _group_rate(baseline, "relational") + 0.10,
             "reviewed_edge_precision": float(metadata.get("reviewed_edge_precision", 0.0)) >= 0.95,
+            "review_workflow_fixture_passed": metadata.get("workflow_fixture_passed") is True,
+            "review_sample_is_independent": metadata.get("review_sample_source") == "independent",
+            "review_sample_size_sufficient": int(metadata.get("review_sample_count", 0)) >= 20,
+            "structured_coverage": float(metadata.get("structured_coverage", 0.0)) >= 0.80,
+            "provenance_complete": float(metadata.get("provenance_completeness", 0.0)) == 1.0,
+            "pilot_domains_covered": all(bool(domains.get(name)) for name in ("Technical", "Production", "Maintenance")),
+            "pending_edges_never_served": int(metadata.get("pending_serving_edges", -1)) == 0,
+            "traversal_budget_respected": int(graph.get("budget_violations", -1)) == 0,
+            "router_scope_respected": int(graph.get("non_relational_graph_calls", -1)) == 0,
             "latency_within_budget": _ratio(
                 float(candidate.get("latency_p95_ms") or 0), float(baseline.get("latency_p95_ms") or 0)
             ) <= 1.5,
         }
-        limits = {"min_accuracy_gain": 0.10, "min_reviewed_edge_precision": 0.95, "max_latency_ratio": 1.5}
+        limits = {
+            "min_accuracy_gain": 0.10, "min_structured_coverage": 0.80,
+            "min_reviewed_edge_precision": 0.95, "max_latency_ratio": 1.5,
+            "min_independent_review_sample": 20,
+            "max_hops": 2, "max_edges": 50,
+        }
     else:
         raise ValueError(f"unknown stage: {stage}")
     return {
