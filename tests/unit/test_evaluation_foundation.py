@@ -204,6 +204,20 @@ def test_rendered_citation_selection_excludes_uncited_retrieval_candidates():
     assert selected == [candidates[0]]
 
 
+def test_rendered_citation_selection_deduplicates_the_same_source_identity():
+    candidate = {
+        "file_goc": "target.md", "doc_id": 41, "trang": 1,
+        "version_no": 12, "source_id": "D41P1",
+    }
+
+    selected = select_rendered_citations(
+        [candidate, dict(candidate)],
+        "[Nguồn: target.md, Trang 1, Version 12, SourceID D41P1]",
+    )
+
+    assert selected == [candidate]
+
+
 def test_citation_evaluator_matches_multiple_pages_from_same_document_one_to_one():
     actual = [
         {

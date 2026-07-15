@@ -69,9 +69,6 @@ def build_calculation_plan(
         return None
 
     available = tuple(facts or ())
-    if operation == "sum":
-        return CalculationPlan(operation, available)
-
     matched = []
     for fact in available:
         label = _fold(fact.label).strip()
@@ -82,6 +79,8 @@ def build_calculation_plan(
         if match is not None:
             matched.append((match.start(), fact))
     matched.sort(key=lambda item: item[0])
+    if operation == "sum" and not matched:
+        return CalculationPlan(operation, available)
     return CalculationPlan(operation, tuple(fact for _, fact in matched))
 
 

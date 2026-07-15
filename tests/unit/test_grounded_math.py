@@ -44,6 +44,20 @@ def test_calculation_planner_selects_operation_and_ordered_bom_operands():
     assert difference == CalculationPlan("subtract", (facts[1], facts[0]))
 
 
+def test_bom_total_uses_only_explicitly_named_operands_when_present():
+    facts = (
+        fact("2", "kg", "BOM-1", label="PART-A-100"),
+        fact("4", "kg", "BOM-2", label="PART-B-200"),
+        fact("3", "m", "BOM-3", label="PART-M-500"),
+    )
+
+    plan = build_calculation_plan("Tổng PART-A-100 và PART-B-200", facts)
+
+    assert plan == CalculationPlan("sum", facts[:2])
+    assert derive_claim(plan).status == "valid"
+    assert derive_claim(plan).value == Decimal("6")
+
+
 @pytest.mark.parametrize(
     ("question", "operation", "source_ids"),
     [

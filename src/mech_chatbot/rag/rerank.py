@@ -306,6 +306,7 @@ def long_context_reorder(docs):
 
 __all__ = [
     'RerankPolicy',
+    'voyage_failure_metadata',
     'tokenize_cached',
     'voyage_rerank_documents',
     'prioritize_document_types',

@@ -210,8 +210,16 @@ def select_rendered_citations(candidates: list[dict], rendered_text: str) -> lis
     """Select cited sources from the full retrieval registry."""
     rendered = _normalize_text(rendered_text)
     selected = []
+    seen_identities = set()
     for candidate in candidates:
         identity = _actual_identity(candidate)
+        identity_key = (
+            _normalize_text(identity["document"]), str(identity["doc_id"] or ""),
+            str(identity["page"] or ""), str(identity["version"] or ""),
+            _normalize_text(identity["source_id"]),
+        )
+        if identity_key in seen_identities:
+            continue
         source_id = _normalize_text(identity["source_id"])
         document = _normalize_text(identity["document"])
         page = str(identity["page"] or "").strip()
@@ -231,6 +239,7 @@ def select_rendered_citations(candidates: list[dict], rendered_text: str) -> lis
         )
         if source_id_present or rendered_reference_present:
             selected.append(candidate)
+            seen_identities.add(identity_key)
     return selected
 
 

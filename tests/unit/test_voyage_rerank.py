@@ -90,3 +90,4 @@ def test_voyage_pilot_policy_records_429_and_immediate_local_fallback():
         "retryable": True,
         "retry_attempted": False,
     }
+    assert "voyage_failure_metadata" in rerank.__all__
