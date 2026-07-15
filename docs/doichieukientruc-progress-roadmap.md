@@ -43,10 +43,10 @@ Vì vậy, “100% mục đích” không đồng nghĩa phải bật mọi côn
 | Grounded math | Có | Có, gồm integration live | 3/3 pair đạt; series bị chặn bởi CRAG | Chưa | Staging evidence hoàn tất; chưa production-ready |
 | Late Interaction | Có | Có | Có readiness và 3 pair clean-commit gate fail-closed | Chưa chạy controlled demo | `late-v2` không dùng mặc định, nhưng có thể opt-in demo để tìm nguyên nhân regression |
 | Query decomposition | Có | Có, full suite xanh | Có một pair fail-closed do ProxyLLM 503 | Chưa | Offline/staging readiness hoàn tất; quality gate phải chạy lại khi provider ổn định |
-| Governed GraphRAG | Có schema/API/retrieval | Có | Chưa có staging gate | Chưa | Implementation sớm, chưa được nghiệm thu live |
+| Governed GraphRAG | Có schema/API/retrieval | Có, gồm integration live | Có clean-commit pair; gate fail-closed vì thiếu independent review | Chưa chạy | Retrieval/answer/latency đạt; còn human edge review trước pilot |
 | Community summaries | Chưa | Chưa | Chưa | Chưa | Chủ động hoãn theo điều kiện trong tài liệu gốc |
 
-Không gán một phần trăm tổng hợp cho bảng này vì các hạng mục có trọng số và rủi ro khác nhau. Chỉ số có thể kiểm chứng hiện tại là: 6/6 workstream chính đã có implementation, 4/6 có artifact live/readiness hoặc một lần gate fail-closed, 1/6 đã vượt quality gate staging, 1/6 có reject decision bằng clean-commit artifact, và 0/6 đã hoàn tất production pilot. Checklist tại mục 2.11 là denominator chính thức để tiến tới 100%.
+Không gán một phần trăm tổng hợp cho bảng này vì các hạng mục có trọng số và rủi ro khác nhau. Chỉ số có thể kiểm chứng hiện tại là: 6/6 workstream chính đã có implementation, 5/6 có artifact live/readiness hoặc một lần gate fail-closed, 1/6 đã vượt quality gate staging, 2/6 có reject/fail-closed decision bằng clean-commit artifact, và 0/6 đã hoàn tất production pilot. Checklist tại mục 2.11 là denominator chính thức để tiến tới 100%.
 
 ### 1.2 Telemetry có thể tái lập
 
@@ -653,15 +653,22 @@ Nghiệm thu graph route trên staging thật trước khi dùng cho relational/
 #### Tiến độ hiện tại (2026-07-15)
 
 - [x] Clean migration từ database rỗng đến V0035 chạy hai lần idempotent; V0033/V0034 có trong ledger. Artifact: `reports/graph/20260715-104107/migration.json` (local, reports được ignore).
-- [x] Fixture staging độc lập `graph-eval-v1` đã ingest 7 tài liệu vào `MechChatbot_Graph_Eval_v1`; source collection production không bị sửa.
+- [x] Fixture staging độc lập `graph-eval-v1` đã ingest 10 tài liệu vào `MechChatbot_Graph_Eval_v1`; BOM fixture có 6 dòng để tạo đủ tập edge review, source collection production không bị sửa.
 - [x] Deterministic seed được giới hạn bằng `SourceSystem`, tạo family/version, supersedes, page, part và material edges cho Technical, Production và Maintenance.
-- [x] Preflight 9/9 case đạt; structured coverage 6/6 = 100%, provenance completeness 100%, cả ba pilot domain có node và approved edge.
+- [x] Preflight 13/13 case đạt; graph hiện có 25 node, 21 approved edge, structured coverage 6/6 = 100%, provenance completeness 100%, pending serving edge = 0 và cả ba pilot domain có node/approved edge.
 - [x] Reviewer workflow staging đạt: viewer bị chặn; pending proposal không serving; approve/reject giữ reviewer, note, timestamp; hai audit event không chứa raw prompt. Hai proposal scripted chỉ là workflow fixture, không được tính làm quality sample.
-- [x] Graph router chỉ gọi graph seam cho relational/global wording; simple query giữ regular retrieval. Traversal vẫn bị chặn cứng ở 2 hop/50 edge.
-- [x] Evaluator và rollout gate đã bổ sung relation accuracy, coverage, reviewer precision, provenance, pending-serving, router scope và traversal budget; rollback vẫn chỉ cần tắt `RAG_GRAPH_RETRIEVAL_ENABLED`.
-- [ ] Chưa có tập tối thiểu 20 edge được reviewer đánh nhãn độc lập; quality gate sẽ fail-closed dù workflow fixture đạt.
-- [ ] Baseline regular retrieval và candidate graph route trên cùng snapshot chưa có kết quả hợp lệ. Provider `gpt-5.4` lại trả `503 no_capacity` trong lần ingest đầu; fixture hoàn tất bằng metadata mode offline, nhưng benchmark LLM phải chạy thành pair mới và fail-closed nếu provider tiếp tục lỗi.
-- [ ] Controlled demo pilot chưa chạy; chỉ được chạy nếu baseline/candidate sạch đạt gate. Nếu gate không đạt thì ghi reject decision và giữ flag tắt.
+- [x] Graph router chỉ gọi graph seam cho relational/global wording; simple query giữ regular retrieval. Traversal hai chiều vẫn giữ hướng edge gốc, fail-closed theo governance và bị chặn cứng ở 2 hop/50 edge.
+- [x] Graph evidence sống sót qua rerank/parent hydration được giữ riêng để evaluator audit và được đưa thật vào generation context; evidence bị loại khỏi serving context không được tính relation match.
+- [x] Evaluator và rollout gate đo riêng relation accuracy và fully-grounded relational-answer accuracy, cùng coverage, reviewer precision, provenance, pending-serving, router scope và traversal budget; rollback test xanh và chỉ cần tắt `RAG_GRAPH_RETRIEVAL_ENABLED`.
+- [x] Clean-commit baseline/candidate tại `48e5fc6` đã chạy cùng manifest, fixture fingerprint và provider config. Artifact local: `reports/graph/quality-gate/20260715-133845-48e5fc6/`.
+  - Relation accuracy: `0% -> 100%`.
+  - Fully-grounded relational-answer accuracy: `0% -> 16,67%`, vượt yêu cầu tăng 10 điểm phần trăm.
+  - Wrong-answer: `7 -> 6`; leakage: `0 -> 0`; provider retry: `0 -> 0`.
+  - P95: `74.639,75 ms -> 45.077,56 ms`; estimated cost: `0,017305 -> 0,02052`.
+  - Các check answer quality, governance, provenance, domain, pending edge, router, traversal, rollback và latency đều đạt.
+- [x] Đã xuất queue 21 approved edge có provenance tại `reports/graph/20260715-130721/review-queue.jsonl`; queue cố ý để trống `reviewer`, `expected_correct` và `review_note`, không tự tạo nhãn giả.
+- [ ] Chưa có reviewer độc lập điền tối thiểu 20 edge. Vì vậy `review_sample_count=0`, `reviewed_edge_precision` chưa đo được và ba check `reviewed_edge_precision`, `review_sample_is_independent`, `review_sample_size_sufficient` fail-closed.
+- [x] Gate hiện có reject/fail-closed decision bằng artifact: không chạy controlled demo pilot, giữ `RAG_GRAPH_RETRIEVAL_ENABLED=false` cho đến khi human review hoàn tất và pair được chạy lại.
 - [ ] Community summaries chưa bắt đầu; quyết định này chỉ được mở sau kết quả gate/pilot của mục 2.7.
 
 #### Điều kiện hoàn tất
