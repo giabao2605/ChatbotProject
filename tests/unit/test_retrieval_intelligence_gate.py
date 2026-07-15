@@ -226,7 +226,7 @@ def test_graph_gate_requires_coverage_precision_provenance_and_budgets():
         "schema": "graph-readiness-v1", "structured_coverage": 0.8,
         "reviewed_edge_precision": 0.95, "provenance_completeness": 1.0,
         "workflow_fixture_passed": True, "review_sample_source": "independent",
-        "review_sample_count": 20,
+        "review_sample_count": 20, "approved_edge_count": 20,
         "pending_serving_edges": 0,
         "domain_coverage": {"Technical": True, "Production": True, "Maintenance": True},
     }
@@ -245,7 +245,7 @@ def test_graph_gate_fails_closed_on_pending_edge_or_router_leak():
         "schema": "graph-readiness-v1", "structured_coverage": 1.0,
         "reviewed_edge_precision": 1.0, "provenance_completeness": 1.0,
         "workflow_fixture_passed": True, "review_sample_source": "independent",
-        "review_sample_count": 20,
+        "review_sample_count": 20, "approved_edge_count": 20,
         "pending_serving_edges": 1,
         "domain_coverage": {"Technical": True, "Production": True, "Maintenance": True},
     }
@@ -265,7 +265,7 @@ def test_graph_gate_rejects_scripted_or_too_small_review_sample():
         "schema": "graph-readiness-v1", "structured_coverage": 1.0,
         "reviewed_edge_precision": 1.0, "provenance_completeness": 1.0,
         "workflow_fixture_passed": True, "review_sample_source": "scripted_workflow",
-        "review_sample_count": 2, "pending_serving_edges": 0,
+        "review_sample_count": 2, "approved_edge_count": 20, "pending_serving_edges": 0,
         "domain_coverage": {"Technical": True, "Production": True, "Maintenance": True},
     }
 

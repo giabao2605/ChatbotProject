@@ -13,7 +13,10 @@ def _relation_identity(value):
     )
 
 
-def validate_review_samples(samples, *, require_independent=False):
+def validate_review_samples(
+    samples, *, require_independent=False, allowed_edge_ids=None,
+    allowed_proposal_ids=None,
+):
     validated = []
     identities = set()
     for index, sample in enumerate(samples or ()):
@@ -25,6 +28,9 @@ def validate_review_samples(samples, *, require_independent=False):
         if key in identities:
             raise ValueError(f"duplicate review sample identity: {identity_type}={identity}")
         identities.add(key)
+        allowed = allowed_edge_ids if identity_type == "edge_id" else allowed_proposal_ids
+        if allowed is not None and str(identity) not in {str(value) for value in allowed}:
+            raise ValueError(f"review sample references unknown {identity_type}={identity}")
         if not str(sample.get("reviewer") or "").strip():
             raise ValueError(f"review sample {index} requires reviewer")
         if not isinstance(sample.get("expected_correct"), bool):
@@ -34,6 +40,10 @@ def validate_review_samples(samples, *, require_independent=False):
             raise ValueError(f"review sample {index} has invalid decision")
         if require_independent and sample.get("review_source") != "independent":
             raise ValueError(f"review sample {index} is not marked independent")
+        if require_independent and identity_type != "edge_id":
+            raise ValueError(f"review sample {index} must reference an approved edge_id")
+        if require_independent and decision != "approved":
+            raise ValueError(f"review sample {index} decision must match approved serving state")
         validated.append({**sample, "decision": decision})
     return validated
 
@@ -51,12 +61,17 @@ def build_graph_report(
     matched = expected & available
     reviewed = validate_review_samples(
         review_samples, require_independent=review_sample_source == "independent",
+        allowed_edge_ids={edge.get("edge_id") for edge in approved_edges},
+        allowed_proposal_ids={item.get("proposal_id") for item in proposals or ()},
     )
-    correct_reviews = sum(
-        (bool(sample.get("expected_correct")) and sample.get("decision") == "approved")
-        or (not bool(sample.get("expected_correct")) and sample.get("decision") == "rejected")
-        for sample in reviewed
-    )
+    if review_sample_source == "independent":
+        correct_reviews = sum(bool(sample.get("expected_correct")) for sample in reviewed)
+    else:
+        correct_reviews = sum(
+            (bool(sample.get("expected_correct")) and sample.get("decision") == "approved")
+            or (not bool(sample.get("expected_correct")) and sample.get("decision") == "rejected")
+            for sample in reviewed
+        )
     node_domains = {str(node.get("department") or "") for node in nodes or ()}
     edge_domains = {str(edge.get("department") or "") for edge in approved_edges}
     domains = list(dict.fromkeys(str(value) for value in expected_domains or ()))

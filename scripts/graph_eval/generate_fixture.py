@@ -27,6 +27,10 @@ DOCUMENTS = (
 BOM_ROWS = (
     {"row_key": "graph-row-a", "part": "GRAPH-EVAL-PART-A", "name": "Graph Part A", "value": "2", "unit": "cái", "material": "steel", "source_table_index": 1},
     {"row_key": "graph-row-b", "part": "GRAPH-EVAL-PART-B", "name": "Graph Part B", "value": "3", "unit": "cái", "material": "aluminum", "source_table_index": 2},
+    {"row_key": "graph-row-c", "part": "GRAPH-EVAL-PART-C", "name": "Graph Part C", "value": "1", "unit": "cái", "material": "copper", "source_table_index": 3},
+    {"row_key": "graph-row-d", "part": "GRAPH-EVAL-PART-D", "name": "Graph Part D", "value": "4", "unit": "cái", "material": "brass", "source_table_index": 4},
+    {"row_key": "graph-row-e", "part": "GRAPH-EVAL-PART-E", "name": "Graph Part E", "value": "2", "unit": "cái", "material": "rubber", "source_table_index": 5},
+    {"row_key": "graph-row-f", "part": "GRAPH-EVAL-PART-F", "name": "Graph Part F", "value": "6", "unit": "cái", "material": "nylon", "source_table_index": 6},
 )
 
 

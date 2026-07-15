@@ -39,7 +39,7 @@ def _edge(edge_id=1, **overrides):
 def test_graph_report_uses_explicit_relation_denominator_and_review_labels():
     report = build_graph_report(
         nodes=[{"node_type": "document", "department": "Technical"}],
-        edges=[_edge()],
+        edges=[_edge(), _edge(edge_id=2, relation_type="HAS_PAGE", target_key="page:10:1")],
         proposals=[{"status": "approved"}, {"status": "rejected"}],
         expected_relations=[
             {"source_key": "document:10", "relation_type": "CONTAINS_PART", "target_key": "part:graph-eval-part-a"},
@@ -47,13 +47,13 @@ def test_graph_report_uses_explicit_relation_denominator_and_review_labels():
         ],
         review_samples=[
             {"edge_id": 1, "reviewer": "alice", "review_source": "independent", "expected_correct": True, "decision": "approved"},
-            {"edge_id": 2, "reviewer": "bob", "review_source": "independent", "expected_correct": False, "decision": "rejected"},
+                {"edge_id": 2, "reviewer": "bob", "review_source": "independent", "expected_correct": False, "decision": "approved"},
         ],
         expected_domains=["Technical", "Production", "Maintenance"],
     )
 
     assert report["structured_coverage"] == 0.5
-    assert report["reviewed_edge_precision"] == 1.0
+    assert report["reviewed_edge_precision"] == 0.5
     assert report["coverage_denominator"] == 2
     assert report["domain_coverage"] == {"Technical": True, "Production": False, "Maintenance": False}
 
@@ -71,6 +71,23 @@ def test_independent_review_samples_require_unique_identity_and_reviewer():
             "proposal_id": 2, "review_source": "independent",
             "expected_correct": False, "decision": "rejected",
         }], require_independent=True)
+
+    with pytest.raises(ValueError, match="unknown edge_id"):
+        validate_review_samples([{
+            "edge_id": 999, "reviewer": "alice", "review_source": "independent",
+            "expected_correct": True, "decision": "approved",
+        }], require_independent=True, allowed_edge_ids={1, 2})
+
+    with pytest.raises(ValueError, match="approved edge_id"):
+        validate_review_samples([{
+            "proposal_id": 2, "reviewer": "alice", "review_source": "independent",
+            "expected_correct": True, "decision": "approved",
+        }], require_independent=True, allowed_proposal_ids={2})
+    with pytest.raises(ValueError, match="approved serving state"):
+        validate_review_samples([{
+            "edge_id": 1, "reviewer": "alice", "review_source": "independent",
+            "expected_correct": False, "decision": "rejected",
+        }], require_independent=True, allowed_edge_ids={1})
 
 
 def test_graph_preflight_resolves_relations_and_fails_closed_on_pending_edge():

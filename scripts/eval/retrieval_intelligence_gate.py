@@ -195,6 +195,7 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "review_workflow_fixture_passed": metadata.get("workflow_fixture_passed") is True,
             "review_sample_is_independent": metadata.get("review_sample_source") == "independent",
             "review_sample_size_sufficient": int(metadata.get("review_sample_count", 0)) >= 20,
+            "approved_edge_pool_sufficient": int(metadata.get("approved_edge_count", 0)) >= 20,
             "structured_coverage": float(metadata.get("structured_coverage", 0.0)) >= 0.80,
             "provenance_complete": float(metadata.get("provenance_completeness", 0.0)) == 1.0,
             "pilot_domains_covered": all(bool(domains.get(name)) for name in ("Technical", "Production", "Maintenance")),
@@ -209,6 +210,7 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "min_accuracy_gain": 0.10, "min_structured_coverage": 0.80,
             "min_reviewed_edge_precision": 0.95, "max_latency_ratio": 1.5,
             "min_independent_review_sample": 20,
+            "min_approved_edge_pool": 20,
             "max_hops": 2, "max_edges": 50,
         }
     else:
