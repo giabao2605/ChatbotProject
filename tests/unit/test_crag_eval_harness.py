@@ -239,6 +239,52 @@ def test_eval_v4_artifact_contains_shared_foundation_metrics(tmp_path, monkeypat
     assert (tmp_path / "output" / "candidate" / "eval.md").is_file()
 
 
+def test_eval_artifact_preserves_provider_retries_when_generation_stream_fails(tmp_path):
+    runner = _load("run_eval_failed_stream_metrics", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "cases.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    intent_extractor = lambda *args, **kwargs: (
+        None, None, None, None, None, {"version_policy": "current_only"}
+    )
+    generation_metrics = {
+        "provider_retries": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "estimated_cost": 0.0,
+    }
+
+    def failed_stream():
+        generation_metrics["provider_retries"] = 2
+        raise RuntimeError("provider unavailable after retries")
+        yield "unreachable"
+
+    rag_chat = lambda *args, **kwargs: (
+        failed_stream(),
+        "",
+        [],
+        [],
+        {
+            "pipeline_namespace": "eval-v4",
+            "generation_metrics": generation_metrics,
+        },
+    )
+
+    report, passed = runner.run_evaluation(
+        [manifest],
+        tmp_path / "output",
+        "baseline",
+        preflight=False,
+        intent_extractor=intent_extractor,
+        rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is False
+    assert report["provider_retries"] == 2
+    assert report["pipeline_variants"]["eval-v4"]["provider_retries"] == 2
+    assert report["cases"][0]["provider_retries"] == 2
+
+
 def test_eval_runner_requires_exact_grounded_math_and_provenance(tmp_path):
     runner = _load("run_eval_grounded_math", "scripts/eval/run_eval.py")
     source = {

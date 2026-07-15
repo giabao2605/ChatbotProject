@@ -251,6 +251,7 @@ def run_evaluation(
         should_refuse = expected in REFUSAL_OUTCOMES
         roles = case["user_roles"]
         trace_id = f"eval:{run_label}:{case['id']}"
+        debug: dict = {}
         try:
             intent = intent_extractor(
                 case["question"], [], case["user_department"], roles,
@@ -416,6 +417,7 @@ def run_evaluation(
         except Exception as exc:
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
             latencies.append(latency_ms)
+            generation_metrics = debug.get("generation_metrics") or {}
             error_actual = "full_answer" if should_refuse else "insufficient_evidence"
             outcome_rows.append({
                 "expected": expected, "actual": error_actual, "answer_correct": False,
@@ -435,6 +437,18 @@ def run_evaluation(
                 "answer_correct": False,
                 "leaked": False,
                 "manifest_schema": case["manifest_schema"],
+                "pipeline_variant": debug.get("pipeline_namespace", "default"),
+                "estimated_cost": float(generation_metrics.get("estimated_cost") or 0.0),
+                "input_tokens": int(generation_metrics.get("input_tokens") or 0),
+                "output_tokens": int(generation_metrics.get("output_tokens") or 0),
+                "provider_retries": int(generation_metrics.get("provider_retries") or 0),
+                "correction_count": int(debug.get("correction_count") or 0),
+                "repair_count": int(
+                    generation_metrics.get("repair_count") or debug.get("repair_count") or 0
+                ),
+                "calculation_count": 0,
+                "planner_count": int(debug.get("planner_count") or 0),
+                "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
         rows.append(row)
