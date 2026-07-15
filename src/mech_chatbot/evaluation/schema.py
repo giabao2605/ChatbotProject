@@ -30,8 +30,12 @@ def validate_manifest_ground_truth(case: dict, *, expected_outcome: str) -> None
     for field in ("expected_claims", "expected_citations"):
         if not isinstance(case.get(field), list):
             raise ValueError(f"{field} must be a list for {CURRENT_MANIFEST_SCHEMA}")
+    has_calculation_contract = (
+        case.get("evaluation_group") == "grounded_math"
+        and isinstance(case.get("expected_calculation"), dict)
+    )
     if expected_outcome in {"full_answer", "partial_answer"}:
-        if not case["expected_claims"]:
+        if not has_calculation_contract and not case["expected_claims"]:
             raise ValueError("expected_claims must be non-empty for answer outcomes")
         if not case["expected_citations"]:
             raise ValueError("expected_citations must be non-empty for answer outcomes")
@@ -50,3 +54,20 @@ def validate_manifest_ground_truth(case: dict, *, expected_outcome: str) -> None
             raise ValueError(
                 "each expected_citation requires document/doc_id/page/version/source_id"
             )
+    if case.get("evaluation_group") == "grounded_math":
+        calculation = case.get("expected_calculation")
+        if not isinstance(calculation, dict):
+            raise ValueError("expected_calculation is required for grounded_math")
+        required = ("operation", "status", "formula", "unit", "sources")
+        if any(calculation.get(field) is None for field in required):
+            raise ValueError("expected_calculation is incomplete")
+        if not isinstance(calculation.get("sources"), list) or not calculation["sources"]:
+            raise ValueError("expected_calculation sources must be non-empty")
+        for source in calculation["sources"]:
+            if not isinstance(source, dict) or any(
+                source.get(field) in (None, "")
+                for field in ("doc_id", "page", "version", "source_id")
+            ) or source.get("value") is None or source.get("unit") is None:
+                raise ValueError(
+                    "each calculation source requires doc_id/page/version/source_id/value/unit"
+                )

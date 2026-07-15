@@ -199,17 +199,24 @@ Trong cả ba run:
 - LLM chỉ diễn đạt kết quả đã tính; công thức, value, unit và citation được post-check trước stream.
 - Feature flag `RAG_GROUNDED_MATH_ENABLED` mặc định `false`.
 - Unit tests và strict stream tests đã tồn tại và xanh.
+- Đã có evaluator `grounded-calculation-evaluation-v1` kiểm tra Decimal, status, operation, display, formula, unit, provenance và số không được phép.
+- Đã có fixture staging riêng `grounded-math-eval-v1`, collection `MechChatbot_GroundedMath_Eval_v1`, 15 case positive/negative và source-row key cố định.
+- Preflight ánh xạ source-row key sang DocID/BOM ID thật và fail-closed khi lifecycle, governance, version, value, unit hoặc Qdrant page drift.
+- Đã có baseline/candidate runner chỉ toggle Grounded Math, gate latency/cost/citation/provenance, rollback evidence và cleanup giới hạn phạm vi.
 
 Implementation chính:
 
 - [`src/mech_chatbot/rag/grounded_math.py`](../src/mech_chatbot/rag/grounded_math.py)
 - [`tests/unit/test_grounded_math.py`](../tests/unit/test_grounded_math.py)
+- [`src/mech_chatbot/evaluation/grounded_math.py`](../src/mech_chatbot/evaluation/grounded_math.py)
+- [`scripts/grounded_math_eval/`](../scripts/grounded_math_eval/)
+- [`docs/grounded-math-rollout.md`](grounded-math-rollout.md)
 
 #### Chưa có hoặc chưa hoàn tất
 
-- Chưa có fixture live riêng cho phép tính được phép và các negative case tương ứng.
+- Fixture và harness đã có trong code nhưng chưa được coi là bằng chứng live cho đến khi ingest/preflight staging chạy xanh trên commit sạch.
 - Chưa có baseline/candidate artifact cho grounded math.
-- Chưa có gate chứng minh calculation accuracy, citation accuracy, latency và cost.
+- Gate đã triển khai nhưng chưa có artifact live chứng minh calculation/citation accuracy, latency và cost.
 - Chưa production pilot.
 - Unit conversion có provenance vẫn nằm ngoài phạm vi và cần spec riêng nếu muốn bổ sung.
 
@@ -464,6 +471,8 @@ Implementation phục vụ pilot:
 Protocol canary, labeling, artifact và abort này được tái sử dụng cho các production pilot ở Milestone B–F; mỗi milestone chỉ bổ sung metric riêng của tính năng.
 
 ### 2.4 Milestone B — Đóng Grounded Math live gate
+
+Trạng thái hiện tại: **code/harness hoàn tất, live gate chưa đóng**. Fixture, evaluator, isolated ingest/preflight/cleanup, baseline/candidate runner, rollback verifier và gate đã được triển khai. Các bước 5–7 vẫn cần artifact live trên commit sạch; production pilot còn bị chặn bởi quyết định milestone CRAG theo dependency guardrail.
 
 #### Mục tiêu
 

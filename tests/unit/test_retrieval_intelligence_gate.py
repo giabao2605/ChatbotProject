@@ -22,6 +22,21 @@ def report(*, wrong=0, leakage=0, p95=100, cost=1, recall10=1, ndcg10=0.5, group
         "total_estimated_cost": cost,
         "ranked_retrieval": {"recall_at_10": recall10, "ndcg_at_10": ndcg10},
         "evaluation_groups": groups or {},
+        "provider_retries": 0,
+        "citation_evaluation": {
+            "citation_accuracy": {"value": 1.0},
+            "citation_precision": {"value": 1.0},
+        },
+        "grounded_math_evaluation": {
+            "applicable_cases": 1, "passed_cases": 1, "unsupported_number_count": 0,
+            "check_totals": {
+                name: {"passed": 1, "applicable": 1}
+                for name in (
+                    "single_plan", "status", "operation", "exact_decimal", "display_value",
+                    "formula", "unit", "provenance", "unsupported_numbers_zero",
+                )
+            },
+        },
     }
 
 
@@ -94,3 +109,37 @@ def test_grounded_math_gate_uses_observed_per_query_calculation_budget():
 
     assert result["checks"]["calculation_budget"] is False
     assert result["passed"] is False
+
+
+def test_grounded_math_gate_enforces_exactness_provenance_citations_latency_and_cost():
+    gate = _module()
+    baseline = report(groups={"grounded_math": {"pass_rate": 0.5}}, p95=100, cost=1)
+    candidate = report(groups={"grounded_math": {"pass_rate": 1.0}}, p95=125, cost=1.5)
+    candidate["cases"] = [{"calculation_count": 1}]
+
+    passed = gate.compare("grounded_math", baseline, candidate)
+    bad_provenance = report(groups={"grounded_math": {"pass_rate": 1.0}}, p95=125, cost=1.5)
+    bad_provenance["cases"] = [{"calculation_count": 1}]
+    bad_provenance["grounded_math_evaluation"]["check_totals"]["provenance"]["passed"] = 0
+    failed = gate.compare("grounded_math", baseline, bad_provenance)
+
+    assert passed["passed"] is True
+    assert passed["checks"]["grounded_math_improved"] is True
+    assert failed["checks"]["provenance_exact"] is False
+    assert failed["passed"] is False
+
+
+def test_grounded_math_gate_rejects_unsupported_numbers_and_regressions():
+    gate = _module()
+    baseline = report(groups={"grounded_math": {"pass_rate": 0.5}}, p95=100, cost=1)
+    candidate = report(groups={"grounded_math": {"pass_rate": 1.0}}, p95=126, cost=1.51)
+    candidate["cases"] = [{"calculation_count": 1}]
+    candidate["grounded_math_evaluation"]["unsupported_number_count"] = 1
+    candidate["citation_evaluation"]["citation_accuracy"]["value"] = 0.9
+
+    result = gate.compare("grounded_math", baseline, candidate)
+
+    assert result["checks"]["unsupported_numbers_zero"] is False
+    assert result["checks"]["citation_accuracy_complete"] is False
+    assert result["checks"]["latency_within_budget"] is False
+    assert result["checks"]["cost_within_budget"] is False

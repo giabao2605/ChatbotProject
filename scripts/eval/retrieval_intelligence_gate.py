@@ -22,6 +22,17 @@ def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _fraction_complete(report, section, metric):
+    value = (((report.get(section) or {}).get(metric) or {}).get("value"))
+    return value is not None and float(value) == 1.0
+
+
+def _calculation_check_complete(report, check):
+    totals = (((report.get("grounded_math_evaluation") or {}).get("check_totals") or {}).get(check) or {})
+    applicable = int(totals.get("applicable") or 0)
+    return applicable > 0 and int(totals.get("passed") or 0) == applicable
+
+
 def compare(stage, baseline, candidate, metadata=None):
     metadata = metadata or {}
     baseline_outcomes = baseline.get("outcome_confusion", {})
@@ -38,12 +49,49 @@ def compare(stage, baseline, candidate, metadata=None):
             (int(row.get("calculation_count") or 0) for row in candidate.get("cases", [])),
             default=0,
         )
+        baseline_rate = _group_rate(baseline, "grounded_math")
+        candidate_rate = _group_rate(candidate, "grounded_math")
+        calculation = candidate.get("grounded_math_evaluation") or {}
         checks = {
             **common,
-            "grounded_math_cases_passed": _group_rate(candidate, "grounded_math") == 1.0,
+            "grounded_math_cases_passed": candidate_rate == 1.0,
+            "grounded_math_improved": (
+                candidate_rate > baseline_rate if baseline_rate < 1.0 else candidate_rate == 1.0
+            ),
             "calculation_budget": max_calculations <= 1,
+            "single_plan_exact": _calculation_check_complete(candidate, "single_plan"),
+            "status_exact": _calculation_check_complete(candidate, "status"),
+            "operation_exact": _calculation_check_complete(candidate, "operation"),
+            "decimal_exact": _calculation_check_complete(candidate, "exact_decimal"),
+            "display_value_exact": _calculation_check_complete(candidate, "display_value"),
+            "formula_exact": _calculation_check_complete(candidate, "formula"),
+            "unit_exact": _calculation_check_complete(candidate, "unit"),
+            "provenance_exact": _calculation_check_complete(candidate, "provenance"),
+            "unsupported_numbers_zero": (
+                int(calculation.get("unsupported_number_count") or 0) == 0
+                and _calculation_check_complete(candidate, "unsupported_numbers_zero")
+            ),
+            "citation_accuracy_complete": _fraction_complete(
+                candidate, "citation_evaluation", "citation_accuracy"
+            ),
+            "citation_precision_complete": _fraction_complete(
+                candidate, "citation_evaluation", "citation_precision"
+            ),
+            "latency_within_budget": _ratio(
+                float(candidate.get("latency_p95_ms") or 0),
+                float(baseline.get("latency_p95_ms") or 0),
+            ) <= 1.25,
+            "cost_within_budget": _ratio(
+                float(candidate.get("total_estimated_cost") or 0),
+                float(baseline.get("total_estimated_cost") or 0),
+            ) <= 1.5,
         }
-        limits = {"max_calculations_per_query": 1}
+        limits = {
+            "max_calculations_per_query": 1,
+            "max_latency_ratio": 1.25,
+            "max_cost_ratio": 1.5,
+            "required_exact_rate": 1.0,
+        }
     elif stage == "late_interaction":
         b_ranked = baseline.get("ranked_retrieval", {})
         c_ranked = candidate.get("ranked_retrieval", {})

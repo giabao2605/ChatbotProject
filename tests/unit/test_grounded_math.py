@@ -79,6 +79,17 @@ def test_calculation_planner_keeps_missing_operand_fail_closed():
     assert derive_claim(plan).status == "missing_operand"
 
 
+def test_calculation_planner_marks_unit_conversion_as_unsupported():
+    plan = build_calculation_plan(
+        "Quy đổi GROUND-MATH-EVAL-PART-A sang mét",
+        (fact("2", "kg", "BOM-1", label="GROUND-MATH-EVAL-PART-A"),),
+    )
+
+    assert plan is not None
+    assert plan.operation == "unsupported_operation"
+    assert derive_claim(plan).status == "unsupported_operation"
+
+
 def test_addition_requires_at_least_two_grounded_operands():
     claim = derive_claim(CalculationPlan(
         "add",
@@ -122,6 +133,36 @@ def test_bom_total_deduplicates_source_rows_and_preserves_provenance():
     assert claim.unit == "kg"
     assert claim.source_ids == ("BOM-1", "BOM-2")
     assert claim.formula == "1.5 + 2 = 3.5 kg"
+
+
+def test_grounded_math_rejects_conflicting_duplicate_rows_and_cross_document_provenance():
+    conflicting_duplicate = derive_claim(CalculationPlan(
+        "sum",
+        (fact("1", source_id="BOM-1"), fact("2", source_id="BOM-1")),
+    ))
+    cross_document = derive_claim(CalculationPlan(
+        "sum",
+        (fact("1", source_id="BOM-1"), fact("2", source_id="BOM-2", doc_id=42)),
+    ))
+
+    assert conflicting_duplicate.status == "ambiguous_provenance"
+    assert cross_document.status == "ambiguous_provenance"
+
+
+def test_grounded_math_normalizes_unit_case_but_rejects_missing_source_identity():
+    normalized = derive_claim(CalculationPlan(
+        "sum",
+        (fact("1", "kg", "BOM-1"), fact("2", "KG", "BOM-2")),
+    ))
+    missing_identity = derive_claim(CalculationPlan(
+        "sum",
+        (fact("1", source_id=""), fact("2", source_id="BOM-2")),
+    ))
+
+    assert normalized.status == "valid"
+    assert normalized.value == Decimal("3")
+    assert normalized.unit == "kg"
+    assert missing_identity.status == "ambiguous_provenance"
 
 
 def test_grounded_math_rejects_mixed_units_versions_and_zero_division():

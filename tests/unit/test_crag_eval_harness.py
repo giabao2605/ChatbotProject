@@ -239,6 +239,59 @@ def test_eval_v4_artifact_contains_shared_foundation_metrics(tmp_path, monkeypat
     assert (tmp_path / "output" / "candidate" / "eval.md").is_file()
 
 
+def test_eval_runner_requires_exact_grounded_math_and_provenance(tmp_path):
+    runner = _load("run_eval_grounded_math", "scripts/eval/run_eval.py")
+    source = {
+        "document": "bom-v12.pdf", "doc_id": 41, "page": 3,
+        "version": 12, "source_id": "BOM-1", "value": "7", "unit": "kg",
+    }
+    expected_calculation = {
+        "operation": "sum", "status": "valid", "exact_value": "7",
+        "display_value": "7", "formula": "2 + 5 = 7 kg", "unit": "kg",
+        "allowed_numbers": ["2", "5"], "sources": [source],
+    }
+    manifest = tmp_path / "grounded-math.jsonl"
+    manifest.write_text(json.dumps(_case(
+        manifest_schema="rag-eval-manifest-v2",
+        evaluation_group="grounded_math",
+        expected_document="bom-v12.pdf",
+        expected_page=3,
+        expected_claims=[],
+        expected_citations=[source],
+        expected_calculation=expected_calculation,
+    )) + "\n", encoding="utf-8")
+    intent_extractor = lambda *args, **kwargs: (
+        None, None, None, None, None, {"version_policy": "current_only"}
+    )
+    retrieved = {
+        "file_goc": "bom-v12.pdf", "doc_id": 41, "trang": 3,
+        "version_no": 12, "source_id": "BOM-1",
+    }
+    provenance = dict(expected_calculation)
+    rag_chat = lambda *args, **kwargs: (
+        iter(["Kết quả 7 kg. Công thức 2 + 5 = 7 kg. "
+              "[Nguồn: bom-v12.pdf, Trang 3, Version 12, SourceID BOM-1]"]),
+        "bom-v12.pdf Trang 3 Version 12 SourceID BOM-1",
+        [], [], {
+            "retrieved_docs": [retrieved], "citation_docs": [retrieved],
+            "calculation_provenance": [provenance], "evidence_state": "SUFFICIENT",
+            "generation_metrics": {},
+        },
+    )
+
+    report, passed = runner.run_evaluation(
+        [manifest], tmp_path / "result", "candidate", preflight=False,
+        intent_extractor=intent_extractor, rag_chat=rag_chat,
+    )
+
+    assert passed is True
+    assert report["grounded_math_evaluation"]["passed_cases"] == 1
+    assert report["grounded_math_evaluation"]["check_totals"]["provenance"] == {
+        "passed": 1, "applicable": 1,
+    }
+    assert report["budget_counts"]["calculation_count"] == 1
+
+
 def test_rollout_offline_router_mode_disables_provider_router(monkeypatch):
     rollout = _load("crag_rollout_router_mode", "scripts/crag_eval/run_rollout.py")
     monkeypatch.setenv("LLM_ROUTER_ENABLED", "true")

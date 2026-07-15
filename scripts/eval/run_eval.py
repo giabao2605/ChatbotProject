@@ -159,6 +159,7 @@ def _render_markdown(report: dict) -> str:
         f"- Ranked retrieval: `{json.dumps(report.get('ranked_retrieval', {}))}`",
         f"- Claim evaluation: `{json.dumps(report.get('claim_evaluation', {}))}`",
         f"- Citation evaluation: `{json.dumps(report.get('citation_evaluation', {}))}`",
+        f"- Grounded math evaluation: `{json.dumps(report.get('grounded_math_evaluation', {}))}`",
         f"- Risk coverage: `{json.dumps(report.get('risk_coverage', {}))}`",
         f"- Pipeline variants: `{json.dumps(report.get('pipeline_variants', {}))}`",
         f"- Estimated cost: `{report.get('total_estimated_cost', 0.0)}`", "",
@@ -184,6 +185,7 @@ def run_evaluation(
     intent_extractor=None,
     rag_chat=None,
     number_normalizer=None,
+    preflight_runner=None,
 ) -> tuple[dict, bool]:
     cases = load_manifest_files(manifest_files)
     paths = resolve_output_paths(output_dir, run_label)
@@ -193,18 +195,31 @@ def run_evaluation(
 
     preflight_report = {}
     if preflight:
-        from scripts.crag_eval.preflight import run_live_preflight
-        preflight_report = run_live_preflight(cases)
+        if preflight_runner is None:
+            preflight_kind = os.environ.get("RAG_EVAL_PREFLIGHT_KIND", "crag").strip().lower()
+            if preflight_kind == "grounded_math":
+                from scripts.grounded_math_eval.preflight import run_live_preflight
+            elif preflight_kind == "crag":
+                from scripts.crag_eval.preflight import run_live_preflight
+            else:
+                raise ValueError(f"unsupported RAG_EVAL_PREFLIGHT_KIND: {preflight_kind}")
+            preflight_runner = run_live_preflight
+        preflight_report = preflight_runner(cases)
         (paths["directory"] / "preflight.json").write_text(
             json.dumps(preflight_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         if not preflight_report["passed"]:
             raise RuntimeError("fixture preflight failed; no LLM request was sent")
+        for case in cases:
+            resolution = (preflight_report.get("case_resolutions") or {}).get(case["id"])
+            if resolution:
+                case.update(resolution)
 
     # Import only after validation and preflight so malformed runs never initialize the RAG stack.
     from mech_chatbot.evaluation.grounding import (
         evaluate_citations, evaluate_claims, extract_claims, select_rendered_citations,
     )
+    from mech_chatbot.evaluation.grounded_math import evaluate_grounded_calculation
     from mech_chatbot.evaluation.metrics import (
         canonical_source_identity, nearest_rank, ranked_retrieval_audit,
         ranked_retrieval_metrics,
@@ -317,6 +332,11 @@ def run_evaluation(
                 accessible_source_ids=accessible_source_ids,
                 rendered_text=f"{answer}\n{ref_text}",
             )
+            calculation_evaluation = evaluate_grounded_calculation(
+                case.get("expected_calculation"),
+                debug.get("calculation_provenance") or [],
+                answer=answer,
+            )
             grounding_ok = (
                 (
                     not claim_evaluation["applicable"]
@@ -333,6 +353,7 @@ def run_evaluation(
                         and citation_evaluation["citation_precision"] == 1.0
                     )
                 )
+                and calculation_evaluation["passed"]
             )
             passed = (
                 keyword_ok and source_ok and not forbidden_hits and outcome_ok
@@ -374,6 +395,7 @@ def run_evaluation(
                 ],
                 "claim_evaluation": claim_evaluation,
                 "citation_evaluation": citation_evaluation,
+                "calculation_evaluation": calculation_evaluation,
                 "evidence_state": evidence_state,
                 "evaluation_confidence": evaluation_confidence,
                 "answer_correct": passed,
@@ -386,7 +408,7 @@ def run_evaluation(
                 "provider_retries": int(generation_metrics.get("provider_retries") or 0),
                 "correction_count": int(debug.get("correction_count") or 0),
                 "repair_count": int(generation_metrics.get("repair_count") or debug.get("repair_count") or 0),
-                "calculation_count": int(generation_metrics.get("calculation_count") or 0),
+                "calculation_count": calculation_evaluation["calculation_count"],
                 "planner_count": int(debug.get("planner_count") or 0),
                 "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
@@ -407,6 +429,7 @@ def run_evaluation(
                 "requires_repair": bool(case.get("requires_repair")),
                 "claim_evaluation": {"applicable": False},
                 "citation_evaluation": {"applicable": False},
+                "calculation_evaluation": {"applicable": False, "passed": False},
                 "evidence_state": "INSUFFICIENT",
                 "evaluation_confidence": 0.0,
                 "answer_correct": False,
@@ -553,6 +576,38 @@ def run_evaluation(
             "citation_precision": aggregate_fraction(
                 "citation_evaluation", "valid_actual_citation_count",
                 "actual_citation_count",
+            ),
+        },
+        "grounded_math_evaluation": {
+            "applicable_cases": sum(
+                bool(row.get("calculation_evaluation", {}).get("applicable")) for row in rows
+            ),
+            "passed_cases": sum(
+                bool(row.get("calculation_evaluation", {}).get("applicable"))
+                and bool(row.get("calculation_evaluation", {}).get("passed"))
+                for row in rows
+            ),
+            "check_totals": {
+                check: {
+                    "passed": sum(
+                        row.get("calculation_evaluation", {}).get("checks", {}).get(check) is True
+                        for row in rows
+                        if row.get("calculation_evaluation", {}).get("applicable")
+                    ),
+                    "applicable": sum(
+                        check in row.get("calculation_evaluation", {}).get("checks", {})
+                        for row in rows
+                        if row.get("calculation_evaluation", {}).get("applicable")
+                    ),
+                }
+                for check in (
+                    "single_plan", "status", "operation", "exact_decimal", "display_value",
+                    "formula", "unit", "provenance", "unsupported_numbers_zero",
+                )
+            },
+            "unsupported_number_count": sum(
+                len(row.get("calculation_evaluation", {}).get("unsupported_numbers", []))
+                for row in rows
             ),
         },
         "risk_coverage": build_risk_coverage_report(risk_rows),

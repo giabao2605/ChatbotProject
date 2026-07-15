@@ -49,7 +49,9 @@ def build_calculation_plan(
     """Build a deterministic plan only from BOM operands named in the question."""
     folded = _fold(question)
     has_word = lambda word: bool(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", folded))
-    if "phan tram" in folded or "%" in folded:
+    if "quy doi" in folded or "chuyen doi don vi" in folded:
+        operation = "unsupported_operation"
+    elif "phan tram" in folded or "%" in folded:
         operation = "percent"
     elif "ty le" in folded or "ti le" in folded:
         operation = "ratio"
@@ -105,22 +107,34 @@ def _invalid(status: str, facts: tuple[GroundedFact, ...]) -> DerivedClaim:
 def derive_claim(plan: CalculationPlan) -> DerivedClaim:
     operation = str(plan.operation or "").strip().lower()
     deduped = []
-    seen = set()
+    seen: dict[str, GroundedFact] = {}
     for fact in plan.operands or ():
-        if fact.source_id in seen:
+        source_id = str(fact.source_id or "").strip()
+        if not source_id or fact.doc_id is None or fact.page is None or fact.version is None:
+            return _invalid("ambiguous_provenance", tuple(plan.operands or ()))
+        previous = seen.get(source_id)
+        if previous is not None:
+            if previous != fact:
+                return _invalid("ambiguous_provenance", tuple(plan.operands or ()))
             continue
-        seen.add(fact.source_id)
+        seen[source_id] = fact
         deduped.append(fact)
     facts = tuple(deduped)
     if not facts:
         return _invalid("missing_operand", facts)
-    if len({(fact.doc_id, fact.version) for fact in facts}) != 1:
+    if len({fact.version for fact in facts}) != 1:
         return _invalid("mixed_version", facts)
+    if len({fact.doc_id for fact in facts}) != 1:
+        return _invalid("ambiguous_provenance", facts)
     labels = [_fold(fact.label).strip() for fact in facts if str(fact.label or "").strip()]
     if operation != "sum" and len(labels) != len(set(labels)):
         return _invalid("ambiguous_provenance", facts)
 
-    units = {str(fact.unit or "").strip() for fact in facts}
+    canonical_units: dict[str, str] = {}
+    for fact in facts:
+        unit = str(fact.unit or "").strip()
+        canonical_units.setdefault(unit.casefold(), unit)
+    units = set(canonical_units)
     values = [fact.value for fact in facts]
     try:
         with localcontext() as context:
@@ -131,7 +145,7 @@ def derive_claim(plan: CalculationPlan) -> DerivedClaim:
                 if len(units) != 1:
                     return _invalid("ambiguous_unit", facts)
                 value = sum(values, Decimal("0"))
-                unit = next(iter(units))
+                unit = canonical_units[next(iter(units))]
                 symbol = " + "
             elif operation == "subtract":
                 if len(values) != 2:
@@ -139,7 +153,7 @@ def derive_claim(plan: CalculationPlan) -> DerivedClaim:
                 if len(units) != 1:
                     return _invalid("ambiguous_unit", facts)
                 value = values[0] - values[1]
-                unit = next(iter(units))
+                unit = canonical_units[next(iter(units))]
                 symbol = " - "
             elif operation in {"ratio", "percent"}:
                 if len(values) != 2:
@@ -157,11 +171,15 @@ def derive_claim(plan: CalculationPlan) -> DerivedClaim:
             elif operation == "multiply":
                 if len(values) != 2:
                     return _invalid("missing_operand", facts)
-                non_empty_units = [unit for unit in (fact.unit.strip() for fact in facts) if unit]
+                non_empty_units = {
+                    str(fact.unit or "").strip().casefold(): str(fact.unit or "").strip()
+                    for fact in facts
+                    if str(fact.unit or "").strip()
+                }
                 if len(non_empty_units) > 1:
                     return _invalid("ambiguous_unit", facts)
                 value = values[0] * values[1]
-                unit = non_empty_units[0] if non_empty_units else ""
+                unit = next(iter(non_empty_units.values()), "")
                 symbol = " * "
             elif operation == "divide":
                 if len(values) != 2:
