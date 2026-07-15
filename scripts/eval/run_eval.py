@@ -57,6 +57,30 @@ def _git_sha() -> str | None:
         return None
 
 
+def _execution_metrics(debug: dict, *, calculation_count: int | None = None) -> dict:
+    generation = debug.get("generation_metrics") or {}
+    if calculation_count is None:
+        calculation_count = int(
+            generation.get("calculation_count")
+            or debug.get("calculation_count")
+            or len(debug.get("calculation_provenance") or [])
+        )
+    return {
+        "pipeline_variant": debug.get("pipeline_namespace", "default"),
+        "estimated_cost": float(generation.get("estimated_cost") or 0.0),
+        "input_tokens": int(generation.get("input_tokens") or 0),
+        "output_tokens": int(generation.get("output_tokens") or 0),
+        "provider_retries": int(generation.get("provider_retries") or 0),
+        "correction_count": int(debug.get("correction_count") or 0),
+        "repair_count": int(
+            generation.get("repair_count") or debug.get("repair_count") or 0
+        ),
+        "calculation_count": int(calculation_count),
+        "planner_count": int(debug.get("planner_count") or 0),
+        "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
+    }
+
+
 def validate_live_case(case: dict, *, source: Path, line_number: int) -> None:
     from mech_chatbot.evaluation.outcomes import expected_outcome
     from mech_chatbot.evaluation.schema import validate_manifest_ground_truth
@@ -285,7 +309,6 @@ def run_evaluation(
                         os.environ[name] = value
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
             latencies.append(latency_ms)
-            generation_metrics = debug.get("generation_metrics") or {}
             actual = classify_actual_outcome(answer)
             retrieved_docs = debug.get("retrieved_docs", [])[:20]
             retrieved = [canonical_source_identity(doc) for doc in retrieved_docs]
@@ -402,22 +425,15 @@ def run_evaluation(
                 "answer_correct": passed,
                 "leaked": leaked,
                 "manifest_schema": case["manifest_schema"],
-                "pipeline_variant": debug.get("pipeline_namespace", "default"),
-                "estimated_cost": float(generation_metrics.get("estimated_cost") or 0.0),
-                "input_tokens": int(generation_metrics.get("input_tokens") or 0),
-                "output_tokens": int(generation_metrics.get("output_tokens") or 0),
-                "provider_retries": int(generation_metrics.get("provider_retries") or 0),
-                "correction_count": int(debug.get("correction_count") or 0),
-                "repair_count": int(generation_metrics.get("repair_count") or debug.get("repair_count") or 0),
-                "calculation_count": calculation_evaluation["calculation_count"],
-                "planner_count": int(debug.get("planner_count") or 0),
-                "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
+                **_execution_metrics(
+                    debug,
+                    calculation_count=calculation_evaluation["calculation_count"],
+                ),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
         except Exception as exc:
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
             latencies.append(latency_ms)
-            generation_metrics = debug.get("generation_metrics") or {}
             error_actual = "full_answer" if should_refuse else "insufficient_evidence"
             outcome_rows.append({
                 "expected": expected, "actual": error_actual, "answer_correct": False,
@@ -437,18 +453,7 @@ def run_evaluation(
                 "answer_correct": False,
                 "leaked": False,
                 "manifest_schema": case["manifest_schema"],
-                "pipeline_variant": debug.get("pipeline_namespace", "default"),
-                "estimated_cost": float(generation_metrics.get("estimated_cost") or 0.0),
-                "input_tokens": int(generation_metrics.get("input_tokens") or 0),
-                "output_tokens": int(generation_metrics.get("output_tokens") or 0),
-                "provider_retries": int(generation_metrics.get("provider_retries") or 0),
-                "correction_count": int(debug.get("correction_count") or 0),
-                "repair_count": int(
-                    generation_metrics.get("repair_count") or debug.get("repair_count") or 0
-                ),
-                "calculation_count": 0,
-                "planner_count": int(debug.get("planner_count") or 0),
-                "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
+                **_execution_metrics(debug),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
         rows.append(row)

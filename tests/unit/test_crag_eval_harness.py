@@ -251,10 +251,19 @@ def test_eval_artifact_preserves_provider_retries_when_generation_stream_fails(t
         "input_tokens": 0,
         "output_tokens": 0,
         "estimated_cost": 0.0,
+        "repair_count": 0,
+        "calculation_count": 0,
     }
 
     def failed_stream():
-        generation_metrics["provider_retries"] = 2
+        generation_metrics.update({
+            "provider_retries": 2,
+            "input_tokens": 120,
+            "output_tokens": 8,
+            "estimated_cost": 0.25,
+            "repair_count": 1,
+            "calculation_count": 1,
+        })
         raise RuntimeError("provider unavailable after retries")
         yield "unreachable"
 
@@ -266,6 +275,9 @@ def test_eval_artifact_preserves_provider_retries_when_generation_stream_fails(t
         {
             "pipeline_namespace": "eval-v4",
             "generation_metrics": generation_metrics,
+            "correction_count": 1,
+            "planner_count": 1,
+            "graph_traversal_count": 1,
         },
     )
 
@@ -283,6 +295,16 @@ def test_eval_artifact_preserves_provider_retries_when_generation_stream_fails(t
     assert report["provider_retries"] == 2
     assert report["pipeline_variants"]["eval-v4"]["provider_retries"] == 2
     assert report["cases"][0]["provider_retries"] == 2
+    assert report["total_input_tokens"] == 120
+    assert report["total_output_tokens"] == 8
+    assert report["total_estimated_cost"] == 0.25
+    assert report["budget_counts"] == {
+        "correction_count": 1,
+        "repair_count": 1,
+        "calculation_count": 1,
+        "planner_count": 1,
+        "graph_traversal_count": 1,
+    }
 
 
 def test_eval_runner_requires_exact_grounded_math_and_provenance(tmp_path):
