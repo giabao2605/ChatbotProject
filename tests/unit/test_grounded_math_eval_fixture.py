@@ -5,6 +5,7 @@ import pytest
 from scripts.eval.run_eval import load_manifest_files
 from scripts.grounded_math_eval.constants import FIXTURE_BATCH, FIXTURE_COLLECTION
 from scripts.grounded_math_eval.generate_fixture import generate_fixture
+from scripts.grounded_math_eval.ingest_fixture import _metadata
 from scripts.grounded_math_eval.preflight import check_fixture_cases
 from scripts.grounded_math_eval.cleanup_fixture import build_cleanup_plan
 from scripts.grounded_math_eval.run_rollout import build_evaluation_environment
@@ -43,6 +44,26 @@ def test_every_fixture_part_code_reaches_the_mechanical_intent_path(tmp_path):
     for record in records:
         for row in record["rows"]:
             assert row["part"] in extract_mechanical_codes(f"Tra cứu {row['part']}")
+
+
+def test_fixture_qdrant_payload_exposes_bom_codes_to_exact_retrieval():
+    record = {
+        "doc_number": "GROUND-MATH-EVAL-BOM-001", "version": 12,
+        "rows": [
+            {"part": "GROUND-MATH-EVAL-PART-A-100"},
+            {"part": "GROUND-MATH-EVAL-PART-B-200"},
+        ],
+    }
+
+    metadata = _metadata(record)
+
+    assert metadata["ma_doi_tuong"] == [
+        "ground-math-eval-bom-001", "ground-math-eval-part-a-100",
+        "ground-math-eval-part-b-200",
+    ]
+    assert metadata["ma_vat_tu"] == [
+        "ground-math-eval-part-a-100", "ground-math-eval-part-b-200",
+    ]
 
 
 def test_grounded_math_preflight_resolves_real_document_and_bom_row_ids(tmp_path):

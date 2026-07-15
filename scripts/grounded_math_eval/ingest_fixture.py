@@ -23,9 +23,12 @@ if str(SRC) not in sys.path:
 
 def _metadata(record):
     code = str(record["doc_number"]).strip().lower()
+    part_codes = [str(row["part"]).strip().lower() for row in record.get("rows") or []]
     return {
         "source_system": FIXTURE_BATCH, "doc_number": record["doc_number"],
-        "base_code": code, "ma_chinh": code, "ma_doi_tuong": [code],
+        "base_code": code, "ma_chinh": code,
+        "ma_doi_tuong": list(dict.fromkeys([code, *part_codes])),
+        "ma_vat_tu": part_codes,
         "version_no": record["version"], "version_label": f"v{record['version']}",
         "lifecycle_status": "published", "review_status": "approved",
         "publication_state": "published", "servable": True, "is_current": True,
