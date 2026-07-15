@@ -162,3 +162,31 @@ def test_graph_evaluator_uses_explicit_router_and_traversal_budget_fields():
     assert missing_budget["budget_ok"] is False
     assert valid["passed"] is True
     assert valid["budget_ok"] is True
+
+
+def test_graph_evaluator_keeps_relation_evidence_after_document_deduplication():
+    case = {
+        "evaluation_group": "relational",
+        "expected_relation": {
+            "source_key": "document:10", "relation_type": "CONTAINS_PART",
+            "target_key": "part:graph-eval-part-a",
+        },
+    }
+    relation = {
+        "graph_edge_id": 7, "graph_source_key": "document:10",
+        "graph_relation_type": "CONTAINS_PART",
+        "graph_target_key": "part:graph-eval-part-a",
+    }
+
+    result = evaluate_graph_case(case, {
+        # The normal retrieval copy of the page wins document de-duplication.
+        "retrieved_docs": [{"doc_id": 10, "graph_edge_id": None}],
+        # Traversal evidence must remain independently auditable.
+        "graph_evidence": [relation],
+        "graph_routed": True,
+        "graph_max_hops": 2,
+        "graph_edge_count": 1,
+    })
+
+    assert result["passed"] is True
+    assert result["relation_matched"] is True

@@ -146,3 +146,52 @@ def hydrate_graph_edges(edges, client, collection_name):
             hydrated.append(Document(page_content=relation + "\n\n" + content, metadata=metadata))
             break
     return hydrated
+
+
+def _document_version_key(document):
+    metadata = document.metadata or {}
+    return (
+        str(metadata.get("doc_id")),
+        str(metadata.get("trang_so")),
+        str(metadata.get("version_no")),
+    )
+
+
+def attach_served_graph_context(served_documents, graph_documents):
+    """Attach relation statements only to exact pages surviving selection.
+
+    The returned evidence list is the auditable subset that reached generation,
+    not every edge encountered by the traversal.
+    """
+    served_documents = list(served_documents or [])
+    graph_documents = list(graph_documents or [])
+    relations_by_page = {}
+    served_keys = {_document_version_key(doc) for doc in served_documents}
+    served_evidence = []
+    for document in graph_documents:
+        key = _document_version_key(document)
+        relation = str(document.page_content or "").split("\n\n", 1)[0].strip()
+        if key not in served_keys:
+            continue
+        served_evidence.append(document)
+        if relation:
+            relations_by_page.setdefault(key, []).append(relation)
+
+    merged = []
+    for document in served_documents:
+        key = _document_version_key(document)
+        relations = list(dict.fromkeys(relations_by_page.get(key, ())))
+        if not relations:
+            merged.append(document)
+            continue
+        relation_context = "\n".join(relations)
+        metadata = dict(document.metadata or {})
+        original_content = str(
+            metadata.get("noi_dung_goc") or document.page_content or ""
+        )
+        metadata["noi_dung_goc"] = relation_context + "\n\n" + original_content
+        merged.append(Document(
+            page_content=relation_context + "\n\n" + str(document.page_content or ""),
+            metadata=metadata,
+        ))
+    return merged, served_evidence

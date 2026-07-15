@@ -84,34 +84,39 @@ def make_debug_info(docs=None):
         namespace = "unknown"
     return {
         "pipeline_namespace": namespace,
-        "retrieved_docs": [
-            {
-                "file_goc": d.metadata.get("file_goc"),
-                "doc_id": d.metadata.get("doc_id"),
-                "version_no": d.metadata.get("version_no"),
-                "variant_code": d.metadata.get("variant_code"),
-                "is_current": d.metadata.get("is_current"),
-                "lifecycle_status": d.metadata.get("lifecycle_status"),
-                "review_status": d.metadata.get("review_status"),
-                "trang": d.metadata.get("trang_so"),
-                "source_id": (
-                    f"D{d.metadata.get('doc_id')}P{d.metadata.get('trang_so')}"
-                    if d.metadata.get("doc_id") is not None and d.metadata.get("trang_so") is not None
-                    else None
-                ),
-                "vision_used": bool(d.metadata.get("vision_used", False)),
-                "score": d.metadata.get("relevance_score"),
-                # GD5 muc 3: kem muc mat de tang audit doc tai lieu confidential o tang UI.
-                "security_level": d.metadata.get("security_level"),
-                "graph_edge_id": d.metadata.get("graph_edge_id"),
-                "graph_relation_type": d.metadata.get("graph_relation_type"),
-                "graph_source_key": d.metadata.get("graph_source_key"),
-                "graph_target_key": d.metadata.get("graph_target_key"),
-                "text": str(d.metadata.get("noi_dung_goc") or getattr(d, "page_content", "") or "")[:800],
-            }
-            for d in docs
-        ]
+        "retrieved_docs": serialize_debug_documents(docs),
     }
+
+
+def serialize_debug_documents(docs=None):
+    docs = docs or []
+    return [
+        {
+            "file_goc": d.metadata.get("file_goc"),
+            "doc_id": d.metadata.get("doc_id"),
+            "version_no": d.metadata.get("version_no"),
+            "variant_code": d.metadata.get("variant_code"),
+            "is_current": d.metadata.get("is_current"),
+            "lifecycle_status": d.metadata.get("lifecycle_status"),
+            "review_status": d.metadata.get("review_status"),
+            "trang": d.metadata.get("trang_so"),
+            "source_id": (
+                f"D{d.metadata.get('doc_id')}P{d.metadata.get('trang_so')}"
+                if d.metadata.get("doc_id") is not None and d.metadata.get("trang_so") is not None
+                else None
+            ),
+            "vision_used": bool(d.metadata.get("vision_used", False)),
+            "score": d.metadata.get("relevance_score"),
+            # GD5 muc 3: kem muc mat de tang audit doc tai lieu confidential o tang UI.
+            "security_level": d.metadata.get("security_level"),
+            "graph_edge_id": d.metadata.get("graph_edge_id"),
+            "graph_relation_type": d.metadata.get("graph_relation_type"),
+            "graph_source_key": d.metadata.get("graph_source_key"),
+            "graph_target_key": d.metadata.get("graph_target_key"),
+            "text": str(d.metadata.get("noi_dung_goc") or getattr(d, "page_content", "") or "")[:800],
+        }
+        for d in docs
+    ]
 
 
 def make_source_snapshot(docs=None):
@@ -698,6 +703,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     graph_routed = False
     graph_edge_count = 0
     graph_max_hops = 0
+    graph_docs = []
+    served_graph_docs = []
     if not skip_retrieval and env_bool("RAG_GRAPH_RETRIEVAL_ENABLED", False):
         from mech_chatbot.rag.graph_retrieval import (
             filter_servable_edges, hydrate_graph_edges, select_graph_seeds,
@@ -1229,6 +1236,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
         t_parent_context = time.time()
         real_docs = hydrate_parent_context(real_docs)
+        if graph_docs:
+            from mech_chatbot.rag.graph_retrieval import attach_served_graph_context
+            real_docs, served_graph_docs = attach_served_graph_context(real_docs, graph_docs)
         log_trace(
             "parent_context",
             trace_id,
@@ -1312,9 +1322,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         _refusal_debug["final_generation_count"] = final_generation_count
         _refusal_debug["deadline_exceeded"] = deadline_exceeded
         _refusal_debug["decomposition_branches"] = decomposition_branches
-        _refusal_debug["graph_traversal_count"] = sum(
-            1 for doc in retrieved_docs if doc.metadata.get("loai_du_lieu") == "knowledge_graph"
-        )
+        _refusal_debug["graph_traversal_count"] = len(served_graph_docs)
+        _refusal_debug["graph_evidence"] = serialize_debug_documents(served_graph_docs)
         _refusal_debug["graph_routed"] = graph_routed
         _refusal_debug["graph_edge_count"] = graph_edge_count
         _refusal_debug["graph_max_hops"] = graph_max_hops
@@ -1358,9 +1367,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     debug_info["final_generation_count"] = final_generation_count
     debug_info["deadline_exceeded"] = deadline_exceeded
     debug_info["decomposition_branches"] = decomposition_branches
-    debug_info["graph_traversal_count"] = sum(
-        1 for doc in retrieved_docs if doc.metadata.get("loai_du_lieu") == "knowledge_graph"
-    )
+    debug_info["graph_traversal_count"] = len(served_graph_docs)
+    debug_info["graph_evidence"] = serialize_debug_documents(served_graph_docs)
     debug_info["graph_routed"] = graph_routed
     debug_info["graph_edge_count"] = graph_edge_count
     debug_info["graph_max_hops"] = graph_max_hops

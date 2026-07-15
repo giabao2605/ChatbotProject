@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from mech_chatbot.rag.graph_retrieval import (
-    expand_seed_keys, filter_servable_edges, hydrate_graph_edges,
+    attach_served_graph_context, expand_seed_keys, filter_servable_edges,
+    hydrate_graph_edges,
     select_graph_seeds, should_attempt_graph,
 )
 
@@ -94,6 +95,59 @@ def test_graph_edge_requires_exact_qdrant_page_hydration():
     assert len(docs) == 1
     assert "Approved source text" in docs[0].page_content
     assert docs[0].metadata["graph_edge_id"] == 1
+
+
+def test_graph_context_survives_when_regular_retrieval_already_has_same_page():
+    from langchain_core.documents import Document
+
+    regular = Document(
+        page_content="Approved source text",
+        metadata={
+            "doc_id": 7, "trang_so": 3, "version_no": 2,
+            "noi_dung_goc": "Approved source text",
+        },
+    )
+    relation = Document(
+        page_content="Quan he duoc duyet: A --USES_MATERIAL--> B\n\nApproved source text",
+        metadata={
+            "doc_id": 7, "trang_so": 3, "version_no": 2,
+            "graph_edge_id": 1,
+        },
+    )
+
+    merged, served_evidence = attach_served_graph_context([regular], [relation])
+
+    assert len(merged) == 1
+    assert merged[0].page_content.startswith("Quan he duoc duyet: A --USES_MATERIAL--> B")
+    assert merged[0].page_content.endswith("Approved source text")
+    assert merged[0].metadata["noi_dung_goc"].startswith(
+        "Quan he duoc duyet: A --USES_MATERIAL--> B"
+    )
+    assert merged[0].metadata.get("graph_edge_id") is None
+    assert served_evidence == [relation]
+
+
+def test_graph_context_does_not_cross_document_versions():
+    from langchain_core.documents import Document
+
+    old_version = Document(
+        page_content="Old source text",
+        metadata={"doc_id": 7, "trang_so": 3, "version_no": 1},
+    )
+    current_relation = Document(
+        page_content="Quan he duoc duyet: A --SUPERSEDES--> B\n\nCurrent text",
+        metadata={
+            "doc_id": 7, "trang_so": 3, "version_no": 2,
+            "graph_edge_id": 2,
+        },
+    )
+
+    merged, served_evidence = attach_served_graph_context(
+        [old_version], [current_relation]
+    )
+
+    assert merged == [old_version]
+    assert served_evidence == []
 
 
 def test_graph_migration_defines_proposals_separately_from_serving_edges():

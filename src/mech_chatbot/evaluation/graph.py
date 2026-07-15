@@ -5,8 +5,11 @@ from __future__ import annotations
 
 def evaluate_graph_case(case: dict, debug: dict) -> dict:
     expected = case.get("expected_relation") or {}
+    evidence = debug.get("graph_evidence")
+    if evidence is None:
+        evidence = debug.get("retrieved_docs") or []
     graph_docs = [
-        item for item in debug.get("retrieved_docs") or []
+        item for item in evidence
         if item.get("graph_edge_id") is not None
     ]
     applicable = bool(expected)
