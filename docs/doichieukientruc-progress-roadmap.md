@@ -1,10 +1,10 @@
 # Tiến độ và roadmap hoàn thành mục tiêu `doichieukientruc.docx`
 
-Ngày cập nhật: 2026-07-14
+Ngày cập nhật: 2026-07-15
 
 Nhánh: `codex/p1-retrieval-intelligence`
 
-Commit đối chiếu: `adb8060`
+Commit đối chiếu runtime và artifact Grounded Math: `767c018`
 
 Tài liệu gốc: [`../doichieukientruc.docx`](../doichieukientruc.docx)
 Bản review ban đầu: [`doichieukientruc-review.md`](doichieukientruc-review.md)
@@ -40,7 +40,7 @@ Vì vậy, “100% mục đích” không đồng nghĩa phải bật mọi côn
 |---|---|---|---|---|---|
 | Telemetry và labeled evaluation | Có | Có | Có | Áp dụng cho evaluation | Foundation v4 hoàn tất; pilot labels thuộc Milestone A–F |
 | CRAG và claim repair | Có | Có | Ba gate đạt | Chưa | Hoàn tất staging và pilot control plane; live pilot chưa bắt đầu |
-| Grounded math | Có | Có | Chưa có baseline/candidate riêng | Chưa | Offline-ready |
+| Grounded math | Có | Có, gồm integration live | Một rollout pair đạt gate | Chưa | Staging gate đạt 1/3 pair; chưa production-ready |
 | Late Interaction | Có | Có | Có readiness offline; chưa có quality gate | Chưa | Serving-ready về hạ tầng, chưa production-ready |
 | Query decomposition | Có | Có | Chưa | Chưa | Implementation sớm, chưa được chứng minh chất lượng |
 | Governed GraphRAG | Có schema/API/retrieval | Có | Chưa có staging gate | Chưa | Implementation sớm, chưa được nghiệm thu live |
@@ -203,6 +203,9 @@ Trong cả ba run:
 - Đã có fixture staging riêng `grounded-math-eval-v1`, collection `MechChatbot_GroundedMath_Eval_v1`, 15 case positive/negative và source-row key cố định.
 - Preflight ánh xạ source-row key sang DocID/BOM ID thật và fail-closed khi lifecycle, governance, version, value, unit hoặc Qdrant page drift.
 - Đã có baseline/candidate runner chỉ toggle Grounded Math, gate latency/cost/citation/provenance, rollback evidence và cleanup giới hạn phạm vi.
+- Fixture đã đi qua lifecycle ingest, review, publish, current trên staging; preflight và opt-in integration test ingest → retrieval → deterministic calculation → cleanup đều xanh.
+- Rollout pair `reports/grounded-math/767c018/run-03` trên commit `767c018` đã đạt gate: candidate đúng 15/15 case, toàn bộ exact Decimal/status/operation/formula/unit/provenance và unsupported-number check đạt 15/15, citation accuracy/precision đạt 17/17, tối đa một calculation plan/query.
+- P95 candidate là 4.685,31 ms so với baseline 20.437,08 ms, tỷ lệ 0,229; gate latency/cost, leakage, wrong-answer, retry và rollback contract đều đạt.
 
 Implementation chính:
 
@@ -214,9 +217,9 @@ Implementation chính:
 
 #### Chưa có hoặc chưa hoàn tất
 
-- Fixture và harness đã có trong code nhưng chưa được coi là bằng chứng live cho đến khi ingest/preflight staging chạy xanh trên commit sạch.
-- Chưa có baseline/candidate artifact cho grounded math.
-- Gate đã triển khai nhưng chưa có artifact live chứng minh calculation/citation accuracy, latency và cost.
+- Mới có một rollout pair đạt; protocol yêu cầu ít nhất ba pair hợp lệ trước khi cân nhắc pilot.
+- Baseline của pair đầu bị ProxyLLM `503 no_capacity`; Voyage cũng từng trả `429` trong các run sửa lỗi. Cần thêm hai pair khi provider ổn định để giảm sai lệch môi trường.
+- Dependency CRAG chưa có quyết định milestone cuối, nên guardrail vẫn chặn production pilot Grounded Math.
 - Chưa production pilot.
 - Unit conversion có provenance vẫn nằm ngoài phạm vi và cần spec riêng nếu muốn bổ sung.
 
@@ -338,7 +341,7 @@ Implementation chính:
 
 - ProxyLLM không còn 503 trong ba CRAG benchmark gần nhất nhưng generation latency vẫn có variance lớn.
 - Ba cặp CRAG benchmark ghi nhận 19/48 external reranking call ở trạng thái error; log run cho thấy Voyage 429 là lỗi đã quan sát. Cần quyết định retry, rate-limit, fallback-only hoặc thay bằng Late Interaction trước production pilot rộng hơn.
-- Các integration test opt-in chưa thể được coi là bằng chứng live cho grounded math, decomposition và GraphRAG.
+- Integration test opt-in Grounded Math đã chạy xanh với fixture live và cleanup giới hạn phạm vi; decomposition và GraphRAG vẫn chưa có bằng chứng integration live tương đương.
 - Nhiều feature cùng bật có thể tạo interaction về cache namespace, timeout, cost và shared correction budget; chưa có integrated combination matrix.
 
 ## 2. Kế hoạch chi tiết để đạt 100% mục đích tài liệu
@@ -472,7 +475,7 @@ Protocol canary, labeling, artifact và abort này được tái sử dụng cho
 
 ### 2.4 Milestone B — Đóng Grounded Math live gate
 
-Trạng thái hiện tại: **code/harness hoàn tất, live gate chưa đóng**. Fixture, evaluator, isolated ingest/preflight/cleanup, baseline/candidate runner, rollback verifier và gate đã được triển khai. Các bước 5–7 vẫn cần artifact live trên commit sạch; production pilot còn bị chặn bởi quyết định milestone CRAG theo dependency guardrail.
+Trạng thái hiện tại: **code/harness và rollout pair đầu đã đạt, series gate chưa đóng**. Fixture, evaluator, isolated ingest/preflight/cleanup, baseline/candidate runner, rollback verifier và gate đã được triển khai. Pair `run-03` trên commit `767c018` đạt toàn bộ check, nhưng mới đáp ứng 1/3 pair tối thiểu; production pilot còn bị chặn bởi quyết định milestone CRAG theo dependency guardrail.
 
 #### Mục tiêu
 
@@ -495,9 +498,10 @@ Chứng minh deterministic calculation có provenance tốt hơn baseline mà kh
    - Provenance mơ hồ.
    - Số hoặc công thức không có nguồn.
 4. Bổ sung evaluator kiểm tra exact Decimal result, formula, unit, DocID/page/version/row citation.
-5. Chạy baseline với flag tắt và candidate với `RAG_GROUNDED_MATH_ENABLED=true`.
-6. Chạy `retrieval_intelligence_gate.py grounded_math` và bổ sung latency/cost/citation checks nếu còn thiếu.
-7. Nếu gate đạt, pilot production nhỏ rồi đo calculation failure/refusal/latency.
+5. [Đã chạy 1/3 pair] Chạy baseline với flag tắt và candidate với `RAG_GROUNDED_MATH_ENABLED=true`.
+6. [Đã đạt cho pair đầu] Chạy `retrieval_intelligence_gate.py grounded_math`; latency/cost/citation/provenance và rollback contract đều đạt.
+7. Chạy thêm ít nhất hai pair cùng snapshot khi provider ổn định, sau đó đóng series guardrail.
+8. Khi dependency CRAG đã có quyết định hoàn tất và series gate đạt, pilot production nhỏ rồi đo calculation failure/refusal/latency; nếu không đạt thì lưu artifact quyết định giữ flag tắt.
 
 #### Điều kiện hoàn tất
 
