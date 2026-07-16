@@ -23,6 +23,18 @@ PAIR_PROVENANCE_FIELDS = (
 )
 
 
+def review_contract_sha256(rows) -> str:
+    normalized = []
+    for row in rows:
+        value = dict(row)
+        value["human_review"] = dict(HUMAN_REVIEW_TEMPLATE)
+        normalized.append(value)
+    raw = json.dumps(
+        normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def pair_provenance(baseline_eval: dict, candidate_eval: dict) -> dict:
     if baseline_eval.get("schema") != "rag-labeled-eval-v4":
         raise ValueError("baseline evaluation schema must be rag-labeled-eval-v4")
@@ -132,6 +144,15 @@ def _markdown(rows: list[dict], pack_id: str) -> str:
         "",
         "File này chỉ dùng review local. Điền nhãn vào `review.jsonl`; không commit raw question hoặc answer.",
         "",
+        "Chỉ sửa object `human_review` của từng dòng:",
+        "",
+        "- `reviewer`: tên hoặc mã reviewer, không để trống.",
+        "- `answer_correct`, `citation_correct`, `safety_correct`: dùng JSON boolean `true`/`false`, không đặt trong dấu nháy.",
+        "- `decision`: `accepted` chỉ khi cả ba boolean đều `true`; dùng `rejected` khi có ít nhất một giá trị `false`; dùng `needs_discussion` khi cần phân xử.",
+        "- `note`: lý do ngắn, dựa trên expected claim/citation và nguồn.",
+        "",
+        "Không sửa các trường khác; finalizer sẽ so contract hash và từ chối file đã đổi nội dung ngoài `human_review`.",
+        "",
     ]
     for row in rows:
         lines.extend([
@@ -185,6 +206,7 @@ def write_review_pack(
         "local_only": True,
         "case_count": len(rows),
         "reviewed_cases": 0,
+        "review_contract_sha256": review_contract_sha256(rows),
         "source_commit": provenance["git_sha"],
         "pair_provenance": provenance,
         "baseline_schema": baseline_eval.get("schema"),

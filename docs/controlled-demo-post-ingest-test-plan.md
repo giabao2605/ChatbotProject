@@ -167,4 +167,30 @@ $run = "reports\controlled-demo\<run-id>"
   --manifest-inventory-artifact "$run\manifests\inventory.json"
 ```
 
-GraphRAG, Community Summaries và integrated matrix chưa có lệnh tự động trong runner này vì chúng phải đi qua human-review checkpoint và decision ledger trước. Không được bỏ qua checkpoint bằng cách bật flag trực tiếp.
+Sau khi Codex đã tạo hai review pack và Graph review queue, chủ dự án chỉ sửa các
+trường review được hướng dẫn trong từng file. Lệnh dưới đây kiểm tra toàn bộ nhãn,
+khóa nội dung gốc bằng SHA-256 và xuất một báo cáo chỉ chứa metadata:
+
+```powershell
+.\chat_env\Scripts\python.exe -m scripts.controlled_demo_eval.finalize_reviews `
+  --crag-pack "$run\review\crag-high-risk\pack.json" `
+  --crag-review "$run\review\crag-high-risk\review.jsonl" `
+  --grounded-math-pack "$run\review\grounded-math\pack.json" `
+  --grounded-math-review "$run\review\grounded-math\review.jsonl" `
+  --graph-source "reports\graph\20260715-130721\review-queue.jsonl" `
+  --graph-review "$run\graph\review-queue.jsonl" `
+  --review-anchor "data\integrated_hardening_v1\evidence\post-ingest-human-review-anchor-20260716.json" `
+  --output "$run\review\finalization.json"
+```
+
+Exit code `2` nghĩa là review chưa đủ hoặc không hợp lệ, không phải lỗi runner.
+Anchor được track trong repo khóa semantic hash của hai pack và raw SHA-256 của
+Graph queue lịch sử; vì vậy không thể sửa đồng thời pack/source và review để vượt
+validator. CLI từ chối ghi đè output cũ và không ghi raw question, answer, document, reviewer
+name hoặc review note vào báo cáo. Kể cả khi Graph review đủ 20 edge và precision
+đạt 95%, Community Summaries vẫn chưa tự mở; bước kế tiếp là chạy lại Graph quality
+gate trên cùng evidence.
+
+GraphRAG, Community Summaries và integrated matrix chưa tự chạy tiếp từ runner này
+vì chúng phải đi qua human-review checkpoint và decision ledger trước. Không được bỏ
+qua checkpoint bằng cách bật flag trực tiếp.

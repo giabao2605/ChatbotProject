@@ -143,6 +143,7 @@ def test_write_review_pack_is_local_only_and_does_not_overwrite(tmp_path, monkey
     assert payload["schema"] == "controlled-demo-human-review-pack-v1"
     assert payload["local_only"] is True
     assert payload["reviewed_cases"] == 0
+    assert len(payload["review_contract_sha256"]) == 64
     assert payload["source_artifacts"][0]["path"] == "baseline.json"
     persisted = json.loads((reports / "pack.json").read_text(encoding="utf-8"))
     assert persisted == payload
