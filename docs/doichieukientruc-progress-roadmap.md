@@ -863,6 +863,16 @@ Tất cả milestone đã đạt
         +--> Production hardening, runbook và final decision
 ```
 
+#### Checkpoint tự động hóa ngày 2026-07-16
+
+- Provider smoke đạt 5/5 request trên `gpt-5.4`, không còn `503/no_capacity` trong cửa sổ kiểm tra này.
+- Fixture Grounded Math đã ingest 3/3 tài liệu vào `MechChatbot_GroundedMath_Eval_v1`; preflight sau ingest đạt 15/15 case, không có failure. Kết quả này xác nhận staging sẵn sàng, chưa thay thế yêu cầu review thủ công 10 truy vấn demo.
+- Luồng trình duyệt local đã xác minh đăng nhập, mở `/chat`, gửi một truy vấn gợi ý có sẵn và nhận câu trả lời hoàn chỉnh kèm ba citation; credential và raw prompt không được ghi vào artifact roadmap.
+- Query Decomposition được chạy lại trên commit `7da6afa` với cùng manifest 8 case và provider không retry. Gate vẫn không đạt: baseline/candidate cùng đạt 1/8 case, wrong-answer tăng từ 4 lên 5, branch accuracy candidate là `0.4048` và citation accuracy là `0.4762`. Leakage, request budget, latency và cost checks đạt. Vì chưa có 10 câu hỏi phức hợp bổ sung, quyết định controlled-demo vẫn là `inconclusive` và flag giữ tắt.
+- Đã xuất queue 20 Graph edge có provenance; cả 20 để trống reviewer và `expected_correct`, đúng hợp đồng independent review. Trang `/review` hiện chỉ cung cấp document bulk review, chưa phải giao diện gán nhãn Graph proposal.
+- Integrated preflight trên commit `7da6afa` đạt toàn bộ capability checks, 15/15 security case, leakage bằng 0 và một admin exception được báo riêng. `ready_for_demo_matrix=true`; bảy tổ hợp đều được resolve về effective fallback vì các milestone chưa accepted hoặc đã rejected, nhưng chưa chạy bảy baseline/candidate pair. `ready_for_live_matrix=false` vẫn giữ nguyên.
+- Bản tóm tắt đã loại dữ liệu nhạy cảm được lưu tại [`../data/integrated_hardening_v1/evidence/controlled-demo-automation-20260716.json`](../data/integrated_hardening_v1/evidence/controlled-demo-automation-20260716.json). Raw artifact local nằm dưới `reports/controlled-demo/20260716-browser-computer/`; file tracked chỉ giữ metric, question hash và SHA-256 nguồn, không giữ credential, raw prompt, raw response hoặc raw document. Đây là evidence cho controlled demo, không được dùng để tuyên bố default rollout hoặc production-ready.
+
 ### 2.11 Checklist cuối để tuyên bố đạt 100%
 
 - [ ] CRAG/repair production pilot đạt hoặc có reject decision/artifact theo nhánh bác bỏ.
