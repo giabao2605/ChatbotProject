@@ -878,12 +878,23 @@ Tất cả milestone đã đạt
 - Integrated preflight trên commit `7da6afa` đạt toàn bộ capability checks, 15/15 security case, leakage bằng 0 và một admin exception được báo riêng. `ready_for_demo_matrix=true`; bảy tổ hợp đều được resolve về effective fallback vì các milestone chưa accepted hoặc đã rejected, nhưng chưa chạy bảy baseline/candidate pair. `ready_for_live_matrix=false` vẫn giữ nguyên.
 - Bản tóm tắt đã loại dữ liệu nhạy cảm được lưu tại [`../data/integrated_hardening_v1/evidence/controlled-demo-automation-20260716.json`](../data/integrated_hardening_v1/evidence/controlled-demo-automation-20260716.json). Raw artifact local nằm dưới `reports/controlled-demo/20260716-browser-computer/`; file tracked chỉ giữ metric, question hash và SHA-256 nguồn, không giữ credential, raw prompt, raw response hoặc raw document. Đây là evidence cho controlled demo, không được dùng để tuyên bố default rollout hoặc production-ready.
 
+#### Kết quả hậu ingest trên snapshot v3
+
+- Run chuẩn nằm dưới `reports/controlled-demo/20260716-post-ingest-v3/`, commit `7c411e9`, collection `TaiLieuKyThuat_v2`. Preflight đạt 44/44 case, 18 tài liệu, 0 failure; provider smoke đạt 5/5, không có `503/no_capacity` hoặc retry.
+- CRAG chạy 18 matched case. Baseline và candidate cùng đạt 3/18, wrong-answer cùng 10, wrong-refusal cùng 4, leakage 0; P95 giảm từ `36255.71 ms` xuống `15124.75 ms`, cost gần như không đổi. Gate không đạt và không xuất hiện correction/repair fixture; do thiếu ngưỡng 20 case, quyết định tối đa là `inconclusive`, hai flag giữ tắt. Review pack local đã tạo cho sáu case refusal/access-denied rủi ro cao.
+- Grounded Math chạy đủ 10 case nhưng candidate không tạo calculation plan nào, wrong-answer tăng từ 5 lên 7 và gate fail. SQL kiểm tra read-only cho thấy `technical_demo_process_v2.md` và `maintenance_demo_process_v1.md` đều không có `BangKeVatTu` row, nên Markdown đã vào Qdrant nhưng chưa tạo structured BOM provenance. Khuyến nghị hiện tại là `rejected`, chờ chủ dự án review toàn bộ 10 case trong review pack trước khi ghi decision cuối; flag giữ tắt.
+- Query Decomposition chạy 9 case. Candidate gọi planner 8 lần nhưng chỉ tạo tổng cộng 8 subquery cho các case được kỳ vọng có ba nhánh; branch accuracy và branch citation accuracy đều 0, passed giảm từ 1/9 xuống 0/9, wrong-answer tăng từ 7 lên 8. Budget, retry, leakage, latency và cost vẫn trong giới hạn; vì thiếu case thứ 10, decision ceiling là `inconclusive` và flag giữ tắt.
+- Graph fixture đã được cleanup đúng phạm vi, nên không còn row staging để export lại. Gói lịch sử bất biến còn 21 edge, hash `3d6982e6...`, toàn bộ reviewer/label để trống; bản copy và hướng dẫn review nằm ở `reports/controlled-demo/20260716-post-ingest-v3/graph/`. GraphRAG và Community Summaries tiếp tục fail-closed cho tới khi tối thiểu 20 edge được người độc lập review và precision đạt 95%.
+- Integrated offline readiness đạt 47 targeted test, rollback/cache/security contract xanh; 15 security case không leakage và admin exception được báo riêng. Bảy combination đều resolve về all-flags-disabled fallback, `ready_for_demo_matrix=true` nhưng `ready_for_live_matrix=false`.
+- Fallback HTTP benchmark dùng 12 factual case có 12/12 HTTP request hoàn tất thành công ở concurrency 1 và 12/12 ở concurrency 5; phép đo này không chấm answer correctness. P95 complete lần lượt là `17416 ms` và `39963 ms`. Đây là mixed-cache sample vì server demo đã có cache hit; không dùng p50 để tuyên bố cold-path performance và chưa thay thế bảy immutable baseline/candidate pair.
+- Evidence đã loại raw content được lưu tại [`../data/integrated_hardening_v1/evidence/post-ingest-controlled-demo-20260716.json`](../data/integrated_hardening_v1/evidence/post-ingest-controlled-demo-20260716.json). Không có tính năng thử nghiệm nào được bật sau run này.
+
 ### 2.11 Checklist cuối để tuyên bố đạt 100%
 
 - [ ] CRAG/repair production pilot đạt hoặc có reject decision/artifact theo nhánh bác bỏ.
-- [ ] Grounded math có live baseline/candidate, gate và pilot/decision.
+- [ ] Grounded math đã có live baseline/candidate và gate fail; còn human review và decision cuối.
 - [X] Late Interaction có clean-commit three-arm artifact và quyết định không dùng `late-v2` làm default; controlled demo vẫn là hạng mục quan sát tùy chọn, flags mặc định giữ tắt.
-- [ ] Query decomposition có complex-query gate và pilot/decision.
+- [ ] Query decomposition đã có complex-query gate `inconclusive`; còn bổ sung case thứ 10 và decision/pilot cuối.
 - [ ] GraphRAG migration, seed, reviewer flow, quality gate và pilot/decision đạt.
 - [ ] Community summaries đã pilot hoặc có quyết định chính thức không triển khai do không đủ điều kiện/không tạo giá trị.
 - [X] Claim precision, citation accuracy và risk–coverage evaluator đã được bổ sung; live reviewer sample vẫn thuộc gate của từng controlled demo.

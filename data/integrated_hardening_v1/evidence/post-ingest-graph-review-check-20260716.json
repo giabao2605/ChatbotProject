@@ -1,0 +1,25 @@
+{
+  "schema": "controlled-demo-graph-review-check-v1",
+  "scope": "controlled_demo",
+  "source_commit": "7c411e9f00fc40b192ab2361adaea9c7681b5899",
+  "checked_at": "2026-07-16T09:25:00Z",
+  "queue": {
+    "path": "reports/graph/20260715-130721/review-queue.jsonl",
+    "sha256": "3d6982e68bd729fd123e5c1bd722d01d2ba33ea55eed44d7104a43abc1ed04aa",
+    "edge_count": 21,
+    "unique_edge_count": 21,
+    "blank_reviewer_count": 21,
+    "unlabeled_expected_correct_count": 21,
+    "review_source": "independent"
+  },
+  "required_independent_review_edges": 20,
+  "independently_reviewed_edges": 0,
+  "fixture_rows_currently_present": {
+    "documents": 0,
+    "nodes": 0,
+    "edges": 0,
+    "proposals": 0
+  },
+  "fixture_state": "cleaned_after_staging_run",
+  "ready_for_graph_quality_gate": false
+}
