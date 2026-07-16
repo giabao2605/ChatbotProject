@@ -22,13 +22,17 @@ from mech_chatbot.evaluation.integrated_hardening import (
     validate_combination_matrix,
     validate_security_manifest,
 )
+from mech_chatbot.evaluation.milestone_decisions import (
+    build_demo_matrix,
+    verify_demo_decision_ledger,
+)
 from mech_chatbot.rag.semantic_cache import pipeline_namespace
 from scripts.integrated_eval.contracts import assert_clean_worktree
 
 
 def build_preflight(
     *, matrix, security_cases, prerequisites, offline_evidence, git_sha,
-    prerequisite_verification=None,
+    prerequisite_verification=None, demo_decision_verification=None,
 ) -> dict:
     matrix_report = validate_combination_matrix(matrix)
     security_report = validate_security_manifest(security_cases)
@@ -76,6 +80,18 @@ def build_preflight(
         "security_execution": security_execution,
         "cache_namespaces": namespaces,
         "prerequisite_verification": prerequisite_verification or {},
+        "ready_for_demo_matrix": (
+            readiness["capability_passed"]
+            and (demo_decision_verification or {}).get("ready_for_demo_matrix") is True
+        ),
+        "demo_decision_verification": demo_decision_verification or {},
+        "demo_fallback_milestones": list(
+            (demo_decision_verification or {}).get("fallback_milestones") or []
+        ),
+        "demo_matrix": build_demo_matrix(
+            matrix,
+            (demo_decision_verification or {}).get("decisions") or {},
+        ),
     })
     return readiness
 
@@ -174,6 +190,7 @@ def main(argv=None):
     parser.add_argument("--security-manifest", type=Path, required=True)
     parser.add_argument("--prerequisites", type=Path, required=True)
     parser.add_argument("--offline-evidence", type=Path, required=True)
+    parser.add_argument("--demo-decisions", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     assert_clean_worktree(ROOT)
@@ -183,6 +200,12 @@ def main(argv=None):
     prerequisites, prerequisite_verification = _prerequisites(
         _read_json(args.prerequisites), git_sha
     )
+    demo_verification = (
+        verify_demo_decision_ledger(
+            _read_json(args.demo_decisions), root=ROOT, current_commit=git_sha,
+        )
+        if args.demo_decisions else None
+    )
     artifact = build_preflight(
         matrix=_read_json(args.matrix),
         security_cases=_read_jsonl(args.security_manifest),
@@ -190,6 +213,7 @@ def main(argv=None):
         offline_evidence=_read_json(args.offline_evidence),
         git_sha=git_sha,
         prerequisite_verification=prerequisite_verification,
+        demo_decision_verification=demo_verification,
     )
     artifact.update({
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -197,8 +221,9 @@ def main(argv=None):
             str(path): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in (
                 args.matrix, args.security_manifest, args.prerequisites,
-                args.offline_evidence,
+                args.offline_evidence, args.demo_decisions,
             )
+            if path is not None
         },
     })
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -206,7 +231,8 @@ def main(argv=None):
         json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(json.dumps(artifact, ensure_ascii=False, indent=2))
-    return 0 if artifact["ready_for_live_matrix"] else 2
+    target = "ready_for_demo_matrix" if args.demo_decisions else "ready_for_live_matrix"
+    return 0 if artifact[target] else 2
 
 
 if __name__ == "__main__":

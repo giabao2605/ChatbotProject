@@ -5,6 +5,7 @@ import time
 from mech_chatbot.rag.query_decomposition import (
     BranchRetrievalResult,
     CorrectionBudget,
+    audit_decomposition_stream,
     build_plan,
     build_partial_answer_instruction,
     codes_in_query,
@@ -15,6 +16,16 @@ from langchain_core.documents import Document
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_decomposition_stream_audit_records_only_rendered_branch_sources():
+    branches = [{
+        "citations": [{"source_id": "D198P1"}, {"source_id": "D201P1"}],
+    }]
+    rendered = "".join(audit_decomposition_stream(iter(["Evidence [SRC:D198P1]"]), branches))
+
+    assert rendered == "Evidence [SRC:D198P1]"
+    assert branches[0]["rendered_source_ids"] == ["D198P1"]
 
 
 def test_branch_code_extraction_is_normalized_and_does_not_inherit_other_codes():

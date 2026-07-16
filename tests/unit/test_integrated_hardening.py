@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from mech_chatbot.evaluation.integrated_hardening import (
+    FEATURE_FLAGS,
     compare_load_reports,
     evaluate_integrated_readiness,
     evaluate_request_budgets,
@@ -18,10 +19,21 @@ from mech_chatbot.rag.semantic_cache import pipeline_namespace
 from mech_chatbot.config.settings import Settings
 from scripts.integrated_eval.load_report import build_integrated_load_report
 from scripts.integrated_eval.preflight import build_preflight, _prerequisites
+from mech_chatbot.evaluation.milestone_decisions import (
+    build_demo_matrix,
+    classify_provider_outcome,
+    evaluate_demo_readiness,
+    resolve_demo_flags,
+    validate_milestone_decision,
+    verify_demo_decision_ledger,
+    verify_milestone_decision,
+)
 from scripts.integrated_eval.results import build_results
 from scripts.integrated_eval.contracts import assert_clean_status
 from scripts.integrated_eval.compose_gate_metadata import evaluate_combination_evidence
 from scripts.eval.rag_trace_snapshot import build_snapshot
+from scripts.eval.milestone_decision import build_decision_artifact
+from scripts.eval.provider_smoke import run_provider_smoke
 
 
 pytestmark = pytest.mark.unit
@@ -228,6 +240,38 @@ def test_integrated_preflight_is_commit_pinned_and_fails_closed_on_current_depen
     assert artifact["offline_evidence_commit_matches"] is True
 
 
+def test_integrated_preflight_can_be_demo_ready_without_becoming_live_ready():
+    matrix = _json("data/integrated_hardening_v1/matrix.json")
+    cases = [
+        json.loads(line)
+        for line in Path("data/integrated_hardening_v1/security_matrix.jsonl")
+        .read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    artifact = build_preflight(
+        matrix=matrix,
+        security_cases=cases,
+        prerequisites={name: False for name in (
+            "crag", "grounded_math", "late_interaction",
+            "query_decomposition", "graph_retrieval",
+        )},
+        offline_evidence={
+            "schema": "integrated-offline-verification-v1",
+            "git_sha": "abc123", "passed": True,
+            "cache_isolation_passed": True,
+            "strict_stream_passed": True,
+            "rollback_passed": True,
+        },
+        git_sha="abc123",
+        demo_decision_verification={
+            "passed": True, "ready_for_demo_matrix": True,
+            "fallback_milestones": ["late_interaction"],
+        },
+    )
+    assert artifact["ready_for_demo_matrix"] is True
+    assert artifact["ready_for_live_matrix"] is False
+    assert artifact["demo_fallback_milestones"] == ["late_interaction"]
+
+
 def test_integrated_results_aggregate_budget_and_security_without_raw_prompts():
     eval_report = {
         "schema": "rag-labeled-eval-v4",
@@ -329,6 +373,216 @@ def test_prerequisite_completion_requires_hashed_decision_artifact(tmp_path):
     })
     assert _prerequisites(payload, "abc")[0]["crag"] is False
 
+
+def test_controlled_demo_decision_does_not_complete_default_rollout(tmp_path):
+    evidence = tmp_path / "crag-gate.json"
+    raw = b'{"schema":"crag-production-pilot-v1","git_sha":"old","passed":true}\n'
+    evidence.write_bytes(raw)
+    decision = {
+        "schema": "milestone-decision-v2",
+        "milestone": "crag",
+        "scope": "controlled_demo",
+        "decision": "accepted",
+        "source_commit": "old",
+        "evidence": [{
+            "path": str(evidence),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "schema": "crag-production-pilot-v1",
+        }],
+        "reason": "Demo gate passed.",
+        "reviewer_signoff": {"reviewer": "qa", "signed_at": "2026-07-16T00:00:00Z"},
+    }
+    report = validate_milestone_decision(decision)
+    assert report["passed"] is True
+    assert report["completes_controlled_demo"] is True
+    assert report["completes_default_rollout"] is False
+
+
+def test_historical_decision_is_verified_against_source_commit_not_current_head(tmp_path):
+    evidence = tmp_path / "late-gate.json"
+    raw = b'{"schema":"retrieval-intelligence-gate-v1","git_sha":"historical","stage":"late_interaction","passed":false}\n'
+    evidence.write_bytes(raw)
+    decision = {
+        "schema": "milestone-decision-v2",
+        "milestone": "late_interaction",
+        "scope": "controlled_demo",
+        "decision": "rejected",
+        "source_commit": "historical",
+        "evidence": [{
+            "path": str(evidence),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "schema": "retrieval-intelligence-gate-v1",
+        }],
+        "reason": "No nDCG improvement.",
+        "reviewer_signoff": {"reviewer": "qa", "signed_at": "2026-07-16T00:00:00Z"},
+    }
+    verified = verify_milestone_decision(decision, root=tmp_path, current_commit="new-head")
+    assert verified["passed"] is True
+    assert verified["source_commit_matches"] is True
+    assert verified["current_commit_matches"] is False
+
+
+def test_rejected_demo_feature_is_disabled_without_blocking_fallback_matrix():
+    flags = {name: True for name in FEATURE_FLAGS}
+    decisions = {
+        "late_interaction": {"scope": "controlled_demo", "decision": "rejected"},
+        "graph_retrieval": {"scope": "controlled_demo", "decision": "inconclusive"},
+    }
+    result = resolve_demo_flags(flags, decisions)
+    assert result["flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
+    assert result["flags"]["RAG_GRAPH_RETRIEVAL_ENABLED"] is False
+    assert result["fallback_milestones"] == ["graph_retrieval", "late_interaction"]
+    assert result["blocked"] is False
+
+
+def test_demo_matrix_keeps_seven_rows_and_pins_rejected_features_off():
+    matrix = _json("data/integrated_hardening_v1/matrix.json")
+    decisions = {
+        "late_interaction": {"scope": "controlled_demo", "decision": "rejected"},
+        "graph_retrieval": {"scope": "controlled_demo", "decision": "inconclusive"},
+    }
+    demo = build_demo_matrix(matrix, decisions)
+    assert demo["schema"] == "integrated-demo-feature-matrix-v1"
+    assert len(demo["combinations"]) == 7
+    late = next(row for row in demo["combinations"] if row["id"] == "crag_late_interaction")
+    assert late["requested_flags"]["RAG_LATE_INTERACTION_ENABLED"] is True
+    assert late["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
+    assert late["fallback_milestones"] == ["late_interaction"]
+
+
+def test_provider_capacity_failure_is_inconclusive_not_quality_rejection():
+    report = classify_provider_outcome([
+        "503 service_unavailable no_capacity",
+        "503 service_unavailable no_capacity",
+    ])
+    assert report == {
+        "decision": "inconclusive",
+        "provider_blocked": True,
+        "quality_evaluated": False,
+        "reason": "provider_capacity_unavailable",
+    }
+
+
+def test_provider_smoke_requires_five_clean_requests_and_records_no_prompt():
+    calls = []
+
+    def invoke(_messages, **kwargs):
+        calls.append(kwargs)
+        return "OK"
+
+    artifact = run_provider_smoke(invoke, request_count=5)
+    assert artifact["schema"] == "provider-smoke-v1"
+    assert artifact["passed"] is True
+    assert artifact["request_count"] == 5
+    assert artifact["successful_requests"] == 5
+    assert "prompt" not in artifact
+    assert "response" not in artifact
+    assert {call["surface"] for call in calls} == {"generation"}
+
+
+def test_demo_readiness_is_separate_from_live_readiness():
+    reports = {
+        name: {
+            "passed": True,
+            "scope": "controlled_demo",
+            "decision": decision,
+        }
+        for name, decision in {
+            "crag": "accepted",
+            "grounded_math": "accepted",
+            "late_interaction": "rejected",
+            "query_decomposition": "accepted",
+            "graph_retrieval": "inconclusive",
+            "community_summaries": "inconclusive",
+        }.items()
+    }
+    readiness = evaluate_demo_readiness(
+        capability_passed=True,
+        decision_reports=reports,
+    )
+    assert readiness["ready_for_demo_matrix"] is True
+    assert readiness["ready_for_live_matrix"] is False
+    assert readiness["fallback_milestones"] == [
+        "community_summaries", "graph_retrieval", "late_interaction",
+    ]
+
+
+def test_graph_acceptance_without_reviewer_signoff_fails_closed():
+    decision = {
+        "schema": "milestone-decision-v2",
+        "milestone": "graph_retrieval",
+        "scope": "controlled_demo",
+        "decision": "accepted",
+        "source_commit": "abc",
+        "evidence": [{"path": "graph.json", "sha256": "0" * 64, "schema": "graph-rollout-run-v1"}],
+        "reason": "Graph gate passed.",
+        "reviewer_signoff": {},
+    }
+    assert validate_milestone_decision(decision)["passed"] is False
+
+
+def test_demo_ledger_verifies_scoped_decisions_without_mutating_live_state(tmp_path):
+    refs = {}
+    for milestone in (
+        "crag", "grounded_math", "late_interaction", "query_decomposition",
+        "graph_retrieval", "community_summaries",
+    ):
+        evidence = tmp_path / f"{milestone}-evidence.json"
+        evidence_payload = {
+            "schema": f"{milestone}-evidence-v1", "git_sha": "historical",
+        }
+        evidence_raw = (json.dumps(evidence_payload) + "\n").encode()
+        evidence.write_bytes(evidence_raw)
+        decision = tmp_path / f"{milestone}-decision.json"
+        decision_payload = {
+            "schema": "milestone-decision-v2", "milestone": milestone,
+            "scope": "controlled_demo", "decision": "rejected",
+            "source_commit": "historical",
+            "evidence": [{
+                "path": str(evidence),
+                "sha256": hashlib.sha256(evidence_raw).hexdigest(),
+                "schema": evidence_payload["schema"],
+            }],
+            "reason": "Evidence-first demo decision.",
+            "reviewer_signoff": {
+                "reviewer": "qa", "signed_at": "2026-07-16T00:00:00Z",
+            },
+        }
+        decision_raw = (json.dumps(decision_payload) + "\n").encode()
+        decision.write_bytes(decision_raw)
+        refs[milestone] = {
+            "path": str(decision),
+            "sha256": hashlib.sha256(decision_raw).hexdigest(),
+        }
+    ledger = {"schema": "controlled-demo-decision-ledger-v2", "decisions": refs}
+    report = verify_demo_decision_ledger(ledger, root=tmp_path, current_commit="new")
+    assert report["passed"] is True
+    assert report["ready_for_demo_matrix"] is True
+    assert report["ready_for_live_matrix"] is False
+
+
+def test_decision_builder_binds_historical_artifact_without_rewriting_it(tmp_path):
+    gate = tmp_path / "gate.json"
+    raw = b'{"schema":"retrieval-intelligence-gate-v1","stage":"late_interaction","passed":false}\n'
+    gate.write_bytes(raw)
+    decision = build_decision_artifact(
+        milestone="late_interaction",
+        scope="controlled_demo",
+        decision="rejected",
+        source_commit="757b939",
+        evidence_paths=[gate],
+        reason="No nDCG improvement.",
+        reviewer="qa",
+        signed_at="2026-07-16T00:00:00Z",
+    )
+    assert decision["evidence"] == [{
+        "path": str(gate),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "schema": "retrieval-intelligence-gate-v1",
+        "source_commit": "757b939",
+    }]
+    assert gate.read_bytes() == raw
+    assert verify_milestone_decision(decision, root=tmp_path)["passed"] is True
 
 def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
     git_sha = subprocess.check_output(

@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any
 
+from mech_chatbot.rag.answer_checks import extract_source_ids
+
 
 _COMPLEX_CUES = (" và ", " đồng thời ", " so sánh ", " đối chiếu ", " versus ", " vs ")
 _CODE_RE = re.compile(r"\b[A-Z]{1,10}[-_][A-Z0-9][A-Z0-9._-]*\b", re.IGNORECASE)
@@ -48,6 +50,22 @@ class CorrectionBudget:
                 return False
             self._remaining -= 1
             return True
+
+
+def audit_decomposition_stream(stream, branches):
+    """Forward a final stream and record citations rendered for each branch."""
+    rendered_parts = []
+    for chunk in stream:
+        rendered_parts.append(str(chunk))
+        yield chunk
+    rendered_source_ids = extract_source_ids("".join(rendered_parts))
+    for branch in branches or ():
+        branch_source_ids = {
+            str(citation.get("source_id") or "").strip().upper()
+            for citation in branch.get("citations") or []
+            if citation.get("source_id")
+        }
+        branch["rendered_source_ids"] = sorted(branch_source_ids & rendered_source_ids)
 
 def is_complex_query(question: str) -> bool:
     normalized = " " + str(question or "").strip().lower() + " "

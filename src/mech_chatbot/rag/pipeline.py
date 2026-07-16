@@ -71,6 +71,7 @@ from mech_chatbot.rag.corrective import (
     run_corrected_retrieval,
     should_attempt_correction,
 )
+from mech_chatbot.rag.query_decomposition import audit_decomposition_stream
 
 
 from mech_chatbot.rag.pipeline_steps import _prepare_history, _analyze_image, _assemble_context, _generate, _retrieve, _RETRIEVE_UNSET, _route, _rewrite_and_anchor, _disambiguate
@@ -1388,27 +1389,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     debug_info["citation_docs"] = _citation_snapshot
 
     if decomposition_branches:
-        generated_stream = stream
-
-        def decomposition_audited_stream():
-            rendered_parts = []
-            for chunk in generated_stream:
-                rendered_parts.append(str(chunk))
-                yield chunk
-            rendered_source_ids = extract_source_ids(
-                "".join(rendered_parts)
-            )
-            for branch in decomposition_branches:
-                branch_source_ids = {
-                    str(citation.get("source_id") or "").strip().upper()
-                    for citation in branch.get("citations") or []
-                    if citation.get("source_id")
-                }
-                branch["rendered_source_ids"] = sorted(
-                    branch_source_ids & rendered_source_ids
-                )
-
-        stream = decomposition_audited_stream()
+        stream = audit_decomposition_stream(stream, decomposition_branches)
     # KH-2 (sua V4): neo lai tai lieu vua dung de tra loi cho luot tiep theo.
     try:
         from mech_chatbot.rag import conversation_state as _cs3
