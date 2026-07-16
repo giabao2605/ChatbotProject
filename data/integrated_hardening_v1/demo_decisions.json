@@ -4,27 +4,27 @@
   "decisions": {
     "crag": {
       "path": "data/integrated_hardening_v1/demo_decisions/crag.json",
-      "sha256": "41e50a7d7d07b41772f189c3aefafc89e38ba2722db03ed551a2c307146c5935"
+      "sha256": "ba0f65f9eb242e1ae0edd950a22b738254609315755fc73d809f51105cf3219d"
     },
     "grounded_math": {
       "path": "data/integrated_hardening_v1/demo_decisions/grounded_math.json",
-      "sha256": "fb76bfcc5d73c7831fbaf3a0c11c46b631716a53b13804b8d3702b6d4616d8a3"
+      "sha256": "c70539444342a3b99c887c204f37cd844caaa2e909a66d910a083869cbe13dd4"
     },
     "late_interaction": {
       "path": "data/integrated_hardening_v1/demo_decisions/late_interaction.json",
-      "sha256": "8567000209e31cbb8b4adc72f86db191d6a47b12a96edf17aa83fa5667fdc659"
+      "sha256": "b10c12c1992522eb3cc539244209d084c25278001459b7d885eb549930119624"
     },
     "query_decomposition": {
       "path": "data/integrated_hardening_v1/demo_decisions/query_decomposition.json",
-      "sha256": "f45a603f55b18251a039f148e3c365a80911fb654914c58ba466d657e97cd54e"
+      "sha256": "289791a465519c6605b8559e26cd39fb54adf582e5c1f07f708bec288c231f3c"
     },
     "graph_retrieval": {
       "path": "data/integrated_hardening_v1/demo_decisions/graph_retrieval.json",
-      "sha256": "7e3b1e946c0e9548ee0328525d28dcdeb06f85b20017b3ef8c462bdc3f20d7f2"
+      "sha256": "c0f271f5ba67708756be8b7e6cccd0e7858ef7e63e5fa691b01f4c10c67668a6"
     },
     "community_summaries": {
       "path": "data/integrated_hardening_v1/demo_decisions/community_summaries.json",
-      "sha256": "86a2a63c3f07740eeb5fd9866503c65051d6858c0c98c0cd6720d8f1393a240b"
+      "sha256": "768711d43a1de054648402b19b4522369f6234efcfd8a2d1273c179dc0106631"
     }
   }
 }

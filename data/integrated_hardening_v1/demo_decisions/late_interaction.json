@@ -6,10 +6,9 @@
   "source_commit": "757b9392275b22a826269959797c43d9d169bd8b",
   "evidence": [
     {
-      "path": "data/integrated_hardening_v1/evidence/late-interaction-757b939-gate.json",
-      "sha256": "9a73154fa9b34b6e3f0232dbad785290052d76e67830ff6d0b8be26f76de235a",
-      "schema": "retrieval-intelligence-gate-v1",
-      "source_commit": "757b9392275b22a826269959797c43d9d169bd8b"
+      "path": "data/integrated_hardening_v1/evidence/late-interaction-controlled-demo-result.json",
+      "sha256": "7f5bf8f69eed8aa806b7f806a45b591c134b8f98bfe54264777049f04395eaa0",
+      "schema": "controlled-demo-milestone-evidence-v1"
     }
   ],
   "reason": "The measured candidate did not establish the required nDCG@10 gain, so Late Interaction remains available only as an offline research path and is disabled in the controlled demo.",

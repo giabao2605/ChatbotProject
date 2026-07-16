@@ -1,0 +1,13 @@
+{
+  "schema": "controlled-demo-milestone-evidence-v1",
+  "git_sha": "757b9392275b22a826269959797c43d9d169bd8b",
+  "milestone": "late_interaction",
+  "result": "rejected",
+  "source_artifacts": [
+    {
+      "path": "data/integrated_hardening_v1/evidence/late-interaction-757b939-gate.json",
+      "sha256": "9a73154fa9b34b6e3f0232dbad785290052d76e67830ff6d0b8be26f76de235a",
+      "schema": "retrieval-intelligence-gate-v1"
+    }
+  ]
+}

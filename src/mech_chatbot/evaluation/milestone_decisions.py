@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 
 DECISION_SCOPES = {"controlled_demo", "default_rollout"}
@@ -18,6 +19,81 @@ MILESTONE_FLAGS = {
     "community_summaries": ("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",),
 }
 DEMO_MILESTONES = frozenset(MILESTONE_FLAGS)
+
+
+def _resolve_path(value: object, root: str | Path) -> Path:
+    path = Path(str(value or ""))
+    return path if path.is_absolute() else Path(root) / path
+
+
+def _load_json_reference(reference: dict, *, root: str | Path) -> tuple[dict, dict]:
+    path = _resolve_path(reference.get("path"), root)
+    try:
+        raw = path.read_bytes()
+        artifact = json.loads(raw.decode("utf-8"))
+        report = {
+            "path": str(path),
+            "exists": True,
+            "sha256_matches": hashlib.sha256(raw).hexdigest() == reference.get("sha256"),
+            "schema_matches": (
+                not reference.get("schema")
+                or artifact.get("schema") == reference.get("schema")
+            ),
+        }
+        return artifact, report
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}, {
+            "path": str(path), "exists": False, "sha256_matches": False,
+            "schema_matches": False,
+        }
+
+
+def _verify_artifact_reference(
+    reference: dict, *, root: str | Path, source_commit: str,
+    require_commit_anchor: bool,
+) -> dict:
+    artifact, report = _load_json_reference(reference, root=root)
+    artifact_commit = str(
+        artifact.get("git_sha") or artifact.get("source_commit") or ""
+    )
+    commit_anchor_present = bool(artifact_commit)
+    report["commit_anchor_present"] = commit_anchor_present
+    report["source_commit_matches"] = (
+        artifact_commit == source_commit if commit_anchor_present
+        else not require_commit_anchor
+    )
+
+    nested_references = artifact.get("source_artifacts")
+    nested_reports: list[dict[str, Any]] = []
+    nested_shape_valid = nested_references is None or (
+        isinstance(nested_references, list)
+        and bool(nested_references)
+        and all(
+            isinstance(item, dict)
+            and bool(str(item.get("path") or "").strip())
+            and len(str(item.get("sha256") or "")) == 64
+            and bool(str(item.get("schema") or "").strip())
+            for item in nested_references
+        )
+    )
+    if nested_shape_valid and isinstance(nested_references, list):
+        nested_reports = [
+            _verify_artifact_reference(
+                item, root=root, source_commit=source_commit,
+                require_commit_anchor=False,
+            )
+            for item in nested_references
+        ]
+    report["nested_artifacts_valid"] = nested_shape_valid
+    report["nested_artifacts_passed"] = (
+        nested_shape_valid and all(item["passed"] for item in nested_reports)
+    )
+    report["source_artifacts"] = nested_reports
+    report["passed"] = all(report[field] for field in (
+        "exists", "sha256_matches", "schema_matches", "source_commit_matches",
+        "nested_artifacts_valid", "nested_artifacts_passed",
+    ))
+    return report
 
 
 def validate_milestone_decision(payload: dict) -> dict:
@@ -68,33 +144,13 @@ def verify_milestone_decision(
 ) -> dict:
     validation = validate_milestone_decision(payload)
     source_commit = str(payload.get("source_commit") or "")
-    evidence_reports = []
-    for item in payload.get("evidence") or []:
-        path = Path(str(item.get("path") or ""))
-        if not path.is_absolute():
-            path = Path(root) / path
-        try:
-            raw = path.read_bytes()
-            artifact = json.loads(raw.decode("utf-8"))
-            commit = artifact.get("git_sha") or item.get("source_commit")
-            report = {
-                "path": str(path),
-                "exists": True,
-                "sha256_matches": hashlib.sha256(raw).hexdigest() == item.get("sha256"),
-                "schema_matches": artifact.get("schema") == item.get("schema"),
-                "source_commit_matches": commit == source_commit,
-            }
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            report = {
-                "path": str(path), "exists": False, "sha256_matches": False,
-                "schema_matches": False, "source_commit_matches": False,
-            }
-        report["passed"] = all(
-            report[field] for field in (
-                "exists", "sha256_matches", "schema_matches", "source_commit_matches"
-            )
+    evidence_reports = [
+        _verify_artifact_reference(
+            item, root=root, source_commit=source_commit,
+            require_commit_anchor=True,
         )
-        evidence_reports.append(report)
+        for item in payload.get("evidence") or []
+    ]
     source_matches = bool(evidence_reports) and all(
         report["source_commit_matches"] for report in evidence_reports
     )
@@ -120,13 +176,12 @@ def verify_demo_decision_ledger(
     reports = {}
     for milestone in DEMO_MILESTONES:
         reference = rows.get(milestone) or {}
-        path = Path(str(reference.get("path") or ""))
-        if not path.is_absolute():
-            path = Path(root) / path
         try:
-            raw = path.read_bytes()
-            decision = json.loads(raw.decode("utf-8"))
-            reference_valid = hashlib.sha256(raw).hexdigest() == reference.get("sha256")
+            decision, reference_report = _load_json_reference(reference, root=root)
+            reference_valid = (
+                reference_report["exists"]
+                and reference_report["sha256_matches"]
+            )
             verification = verify_milestone_decision(
                 decision, root=root, current_commit=current_commit,
             )

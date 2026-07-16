@@ -10,7 +10,7 @@
     "ready_for_serving": false
   },
   "source_artifacts": [
-    {"path": "reports/community-summaries/20260715-073433-27c13ce/readiness.json", "sha256": "77c965ff653f7099ff87b7d190a4a8963f325ada2db516ae35095fa63dd92009"}
+    {"path": "reports/community-summaries/20260715-073433-27c13ce/readiness.json", "sha256": "77c965ff653f7099ff87b7d190a4a8963f325ada2db516ae35095fa63dd92009", "schema": "community-summary-readiness-v1"}
   ],
   "missing_demo_evidence": {
     "graph_controlled_demo_accepted": false,

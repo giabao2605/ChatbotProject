@@ -32,24 +32,6 @@ DEFAULT_CONCURRENCY = (1, 5, 10)
 _STAGE_SUFFIXES = ("_ms", "_latency_ms")
 
 
-def load_questions(path: Path) -> list[str]:
-    values = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            parsed = json.loads(line)
-            question = parsed.get("question") if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            question = line
-        if question and str(question).strip():
-            values.append(str(question).strip())
-    if not values:
-        raise ValueError("Question file khong co cau hoi hop le")
-    return values
-
-
 def load_benchmark_cases(
     path: Path, *, default_username: str | None = None,
 ) -> list[dict[str, Any]]:

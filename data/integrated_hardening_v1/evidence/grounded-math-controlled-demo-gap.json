@@ -9,7 +9,7 @@
     "citation_checks_passed": true
   },
   "source_artifacts": [
-    {"path": "reports/grounded-math/d5ec3e1/series.json", "sha256": "6cc256d5206ebe468a831ec1c16862bc0371a62b83a8cad6a4dd89da5ca931c7"}
+    {"path": "reports/grounded-math/d5ec3e1/series.json", "sha256": "6cc256d5206ebe468a831ec1c16862bc0371a62b83a8cad6a4dd89da5ca931c7", "schema": "rollout-guardrail-series-v1"}
   ],
   "missing_demo_evidence": {
     "required_reviewed_user_queries": 10,

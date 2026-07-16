@@ -422,6 +422,75 @@ def test_historical_decision_is_verified_against_source_commit_not_current_head(
     assert verified["current_commit_matches"] is False
 
 
+def test_nested_source_artifact_tampering_invalidates_decision(tmp_path):
+    source = tmp_path / "source.json"
+    source_raw = b'{"schema":"raw-gate-v1","passed":true}\n'
+    source.write_bytes(source_raw)
+    wrapper = tmp_path / "wrapper.json"
+    wrapper_payload = {
+        "schema": "controlled-demo-evidence-v1",
+        "git_sha": "historical",
+        "source_artifacts": [{
+            "path": str(source),
+            "sha256": hashlib.sha256(source_raw).hexdigest(),
+            "schema": "raw-gate-v1",
+        }],
+    }
+    wrapper_raw = (json.dumps(wrapper_payload) + "\n").encode()
+    wrapper.write_bytes(wrapper_raw)
+    decision = {
+        "schema": "milestone-decision-v2",
+        "milestone": "crag",
+        "scope": "controlled_demo",
+        "decision": "accepted",
+        "source_commit": "historical",
+        "evidence": [{
+            "path": str(wrapper),
+            "sha256": hashlib.sha256(wrapper_raw).hexdigest(),
+            "schema": "controlled-demo-evidence-v1",
+        }],
+        "reason": "The controlled demo gate passed.",
+        "reviewer_signoff": {
+            "reviewer": "qa", "signed_at": "2026-07-16T00:00:00Z",
+        },
+    }
+    assert verify_milestone_decision(decision, root=tmp_path)["passed"] is True
+
+    source.write_text('{"schema":"raw-gate-v1","passed":false}\n', encoding="utf-8")
+
+    report = verify_milestone_decision(decision, root=tmp_path)
+    assert report["passed"] is False
+    assert report["evidence"][0]["nested_artifacts_passed"] is False
+
+
+def test_commitless_evidence_cannot_trust_reference_source_commit(tmp_path):
+    evidence = tmp_path / "gate.json"
+    raw = b'{"schema":"raw-gate-v1","passed":false}\n'
+    evidence.write_bytes(raw)
+    decision = {
+        "schema": "milestone-decision-v2",
+        "milestone": "late_interaction",
+        "scope": "controlled_demo",
+        "decision": "rejected",
+        "source_commit": "caller-supplied",
+        "evidence": [{
+            "path": str(evidence),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "schema": "raw-gate-v1",
+            "source_commit": "caller-supplied",
+        }],
+        "reason": "No quality gain.",
+        "reviewer_signoff": {
+            "reviewer": "qa", "signed_at": "2026-07-16T00:00:00Z",
+        },
+    }
+
+    report = verify_milestone_decision(decision, root=tmp_path)
+
+    assert report["passed"] is False
+    assert report["source_commit_matches"] is False
+
+
 def test_rejected_demo_feature_is_disabled_without_blocking_fallback_matrix():
     flags = {name: True for name in FEATURE_FLAGS}
     decisions = {
@@ -579,9 +648,9 @@ def test_repository_demo_ledger_is_complete_and_defaults_every_unaccepted_featur
     )
 
 
-def test_decision_builder_binds_historical_artifact_without_rewriting_it(tmp_path):
+def test_decision_builder_binds_commit_stamped_historical_artifact_without_rewriting_it(tmp_path):
     gate = tmp_path / "gate.json"
-    raw = b'{"schema":"retrieval-intelligence-gate-v1","stage":"late_interaction","passed":false}\n'
+    raw = b'{"schema":"retrieval-intelligence-gate-v1","git_sha":"757b939","stage":"late_interaction","passed":false}\n'
     gate.write_bytes(raw)
     decision = build_decision_artifact(
         milestone="late_interaction",
@@ -597,7 +666,6 @@ def test_decision_builder_binds_historical_artifact_without_rewriting_it(tmp_pat
         "path": str(gate),
         "sha256": hashlib.sha256(raw).hexdigest(),
         "schema": "retrieval-intelligence-gate-v1",
-        "source_commit": "757b939",
     }]
     assert gate.read_bytes() == raw
     assert verify_milestone_decision(decision, root=tmp_path)["passed"] is True

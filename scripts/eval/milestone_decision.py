@@ -35,7 +35,6 @@ def build_decision_artifact(
             "path": str(path),
             "sha256": hashlib.sha256(raw).hexdigest(),
             "schema": str(artifact.get("schema") or ""),
-            "source_commit": source_commit,
         })
     payload = {
         "schema": "milestone-decision-v2",
@@ -51,6 +50,11 @@ def build_decision_artifact(
     if not validation["passed"]:
         failed = [name for name, passed in validation["checks"].items() if not passed]
         raise ValueError(f"invalid milestone decision: {', '.join(failed)}")
+    verification = verify_milestone_decision(payload, root=ROOT)
+    if not verification["passed"]:
+        raise ValueError(
+            "evidence must carry a matching git_sha/source_commit and valid nested references"
+        )
     return payload
 
 

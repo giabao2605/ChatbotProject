@@ -260,11 +260,9 @@ Artifact local `reports/late-interaction/fb07b27-final/readiness.json` có SHA-2
 
 #### Chưa có hoặc chưa hoàn tất
 
-- Chưa có labeled retrieval manifest trên corpus phù hợp cho exact/near-code, rare term và OCR noise.
-- Chưa chạy baseline Voyage so với candidate MaxSim trên cùng snapshot.
-- Chưa chứng minh targeted nDCG@10 tăng ít nhất 5% tương đối và Recall@10 toàn bộ không giảm.
-- Chưa có wrong-answer/leakage/P95 quality gate live.
-- Chưa production pilot; `RAG_LATE_INTERACTION_ENABLED=false` và `RAG_LATE_ENCODER_READY=false` vẫn là mặc định.
+- Labeled manifest, three-arm benchmark RRF/Voyage/MaxSim và quality gate trên cùng snapshot đã chạy; candidate `late-v2` không chứng minh được mức tăng nDCG@10 yêu cầu.
+- Controlled-demo decision đã chốt `rejected`, nên đây không còn là prerequisite chặn các milestone sau. Shadow index và fallback path được giữ cho nghiên cứu.
+- Chưa có production pilot; `RAG_LATE_INTERACTION_ENABLED=false` và `RAG_LATE_ENCODER_READY=false` vẫn là mặc định đúng theo quyết định.
 
 ### 1.7 Query decomposition có ngân sách cố định
 
@@ -287,11 +285,10 @@ Implementation chính:
 
 #### Chưa có hoặc chưa hoàn tất
 
-- Chưa có manifest câu hỏi multi-intent/multi-source có đáp án gán nhãn.
-- Chưa có baseline/candidate chứng minh correct/partial-answer rate tăng ít nhất 10 điểm phần trăm.
-- Chưa đo simple-query planner call bằng 0 trên live run.
-- Chưa có cost/P95/leakage gate live.
-- Chưa production pilot.
+- Manifest multi-intent/multi-source, provider smoke 5/5 và một baseline/candidate pair sạch đã chạy trên cùng snapshot; pair có 0 harness error, 0 retry và không còn lỗi `503`.
+- Gate xác nhận simple query không gọi planner, budget/leakage/wrong-answer/P95/cost đều trong giới hạn, nhưng correct/partial-answer gain, branch accuracy và citation completeness không đạt target.
+- Controlled-demo decision đã chốt `rejected`; feature giữ tắt và fallback path được kiểm tra tiếp trong integrated matrix.
+- Chưa production pilot vì chất lượng không đạt gate, không phải vì thiếu harness hoặc manifest.
 
 ### 1.8 Governed GraphRAG trên SQL Server
 
@@ -778,11 +775,9 @@ Hoàn tất phần GraphRAG global sensemaking trong tài liệu gốc mà khôn
   toàn bộ gate fail. Gate không nhận boolean tự khai báo thay evidence.
 - [X] Đã viết ADR và operations runbook cho flag isolation, abort, rollback,
   cleanup có scope, baseline/candidate, load report và release decision.
-- [ ] Chưa chạy live bảy combination, load pair hoặc controlled demo pilot.
-  Đây là trạng thái chủ động fail-closed: CRAG, Grounded Math, Late Interaction,
-  decomposition và graph vẫn chưa đồng thời có decision artifact đã xác minh.
-- [ ] Chưa có release decision cuối cho toàn bộ matrix. Late Interaction và Query Decomposition đã có scoped controlled-demo reject decision; các feature
-  phải có quyết định accepted/rejected và immutable evidence hợp lệ trước gate.
+- [ ] Chưa chạy bảy baseline/candidate pair độc lập hoặc controlled demo pilot.
+  Controlled-demo ledger hiện có đủ sáu scoped decision đã xác minh: Late Interaction và Query Decomposition là `rejected`; CRAG, Grounded Math, GraphRAG và Community Summaries là `inconclusive`. Vì vậy `ready_for_demo_matrix=true` chỉ cho phép chạy fallback matrix, không chứng minh matrix đã đạt quality gate.
+- [ ] Chưa có integrated release decision cuối. Cần evidence riêng cho từng row ở concurrency 5; các row chứa feature `rejected` hoặc `inconclusive` phải chạy với flag đó tắt và chứng minh fallback không gây leakage hoặc wrong-answer regression.
 
 Kết luận hiện tại: phần triển khai có thể làm hoàn toàn offline của 2.9 đã hoàn
 tất; `capability_passed` có thể đạt, nhưng `ready_for_live_matrix` phải tiếp tục

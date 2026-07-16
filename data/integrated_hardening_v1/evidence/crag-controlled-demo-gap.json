@@ -10,9 +10,9 @@
     "provider_retry_count": 0
   },
   "source_artifacts": [
-    {"path": "reports/crag-rollout/20260714-latency-pair-01/gate.json", "sha256": "3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c"},
-    {"path": "reports/crag-rollout/20260714-latency-pair-02/gate.json", "sha256": "3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c"},
-    {"path": "reports/crag-rollout/20260714-latency-pair-03/gate.json", "sha256": "3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c"}
+    {"path": "reports/crag-rollout/20260714-latency-pair-01/gate.json", "sha256": "3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c", "schema": "crag-rollout-gate-v1"},
+    {"path": "reports/crag-rollout/20260714-latency-pair-02/gate.json", "sha256": "3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c", "schema": "crag-rollout-gate-v1"},
+    {"path": "reports/crag-rollout/20260714-latency-pair-03/gate.json", "sha256": "3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c", "schema": "crag-rollout-gate-v1"}
   ],
   "missing_demo_evidence": {
     "required_matched_pairs": 20,
