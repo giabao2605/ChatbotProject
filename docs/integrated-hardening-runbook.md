@@ -111,6 +111,7 @@ question hashes, not raw prompts:
 .\chat_env\Scripts\python.exe scripts/eval/benchmark_rag_concurrency.py `
   data/<fixture>/eval_manifest.jsonl `
   --base-url http://127.0.0.1:8100 `
+  --username <active-evaluation-user> `
   --concurrency 1,5,10 `
   --trace-jsonl logs/rag_trace.jsonl `
   --report reports/<combination>/benchmark.json
@@ -124,6 +125,12 @@ question hashes, not raw prompts:
 
 The comparison must contain P50/P95 first-token and completion latency,
 cost/query, provider retry rate and fallback rate.
+
+The benchmark requires a real active `username` or per-case `user_id` because
+the RAG service resolves RBAC server-side. Manifest department/site fields are
+sent for contract compatibility but never replace server-side identity. Reports
+contain only question hashes; username, raw question and service token are not
+persisted.
 
 Create baseline and candidate load reports at the same selected concurrency.
 Create `matrix-evidence.json` with schema `integrated-matrix-evidence-v1`. It

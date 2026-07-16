@@ -50,6 +50,34 @@ def load_questions(path: Path) -> list[str]:
     return values
 
 
+def load_benchmark_cases(
+    path: Path, *, default_username: str | None = None,
+) -> list[dict[str, Any]]:
+    cases = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            parsed = {"question": line}
+        if not isinstance(parsed, dict) or not str(parsed.get("question") or "").strip():
+            continue
+        case = dict(parsed)
+        case["question"] = str(case["question"]).strip()
+        if not case.get("username") and case.get("user_id") is None and default_username:
+            case["username"] = default_username
+        if not case.get("username") and case.get("user_id") is None:
+            raise ValueError(
+                f"Benchmark case {case.get('id') or '<missing>'} requires username or user_id"
+            )
+        cases.append(case)
+    if not cases:
+        raise ValueError("Question file khong co cau hoi hop le")
+    return cases
+
+
 def parse_concurrency_levels(raw: str) -> list[int]:
     levels: list[int] = []
     for item in str(raw or "").split(","):
@@ -167,10 +195,29 @@ def _question_id(question: str, sample_index: int) -> str:
     return f"q{sample_index:04d}-{digest}"
 
 
+def build_chat_payload(case: dict[str, Any]) -> dict[str, Any]:
+    payload = {"user_question": str(case.get("question") or "")}
+    if case.get("user_id") is not None:
+        payload["user_id"] = case["user_id"]
+    if case.get("username"):
+        payload["username"] = case["username"]
+    for field in (
+        "user_department", "user_roles", "allowed_departments", "allowed_sites",
+        "max_security_level",
+    ):
+        if field in case:
+            payload[field] = case[field]
+    return payload
+
+
+def _sample_identity(case: dict[str, Any], sample_index: int) -> dict[str, Any]:
+    return {"sample_id": _question_id(str(case.get("question") or ""), sample_index)}
+
+
 def measure_one(
     base_url: str,
     token: str,
-    question: str,
+    case: dict[str, Any],
     timeout: int,
     *,
     sample_index: int = 0,
@@ -181,12 +228,12 @@ def measure_one(
     server_done: dict[str, Any] = {}
     stage_metrics: dict[str, float] = {}
     headers = {"X-RAG-Service-Token": token} if token else {}
-    sample: dict[str, Any] = {"sample_id": _question_id(question, sample_index)}
+    sample: dict[str, Any] = _sample_identity(case, sample_index)
     try:
         response = requests.post(
             base_url.rstrip("/") + "/chat/stream",
             headers=headers,
-            json={"user_question": question},
+            json=build_chat_payload(case),
             stream=True,
             timeout=(10, timeout),
         )
@@ -381,6 +428,7 @@ def main() -> int:
     parser.add_argument("questions", type=Path, help="JSONL or one-question-per-line evaluation input")
     parser.add_argument("--base-url", default=os.getenv("RAG_SERVER_URL", "http://127.0.0.1:8100"))
     parser.add_argument("--token-env", default="RAG_SERVICE_TOKEN")
+    parser.add_argument("--username", default=os.getenv("RAG_BENCHMARK_USERNAME"))
     parser.add_argument("--concurrency", default="1,5,10", help="CSV levels (default: 1,5,10)")
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--trace-jsonl", type=Path, default=None, help="Optional rag_trace.jsonl for stage P50/P95")
@@ -389,7 +437,7 @@ def main() -> int:
     if args.timeout < 1:
         raise SystemExit("--timeout phai lon hon 0")
     try:
-        questions = load_questions(args.questions)
+        cases = load_benchmark_cases(args.questions, default_username=args.username)
         levels = parse_concurrency_levels(args.concurrency)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
@@ -407,11 +455,11 @@ def main() -> int:
                     measure_one,
                     args.base_url,
                     token,
-                    question,
+                    case,
                     args.timeout,
                     sample_index=index,
                 )
-                for index, question in enumerate(questions, start=1)
+                for index, case in enumerate(cases, start=1)
             ]
             for future in futures:
                 samples.append(future.result())
@@ -440,7 +488,7 @@ def main() -> int:
         "schema": "rag-concurrency-benchmark-v1",
         "base_url": _safe_base_url(args.base_url),
         "concurrency_levels": levels,
-        "question_count": len(questions),
+        "question_count": len(cases),
         "stage_metric_contract": {
             "sse": "done.data.trace_stages.{stage}.latency_ms",
             "trace_jsonl": "event + latency_ms, correlated by benchmark time window only",

@@ -365,7 +365,7 @@ Không đạt default-rollout gate không đồng nghĩa phải xóa tính năng
 | 2.6 Query Decomposition | `rejected`; smoke 5/5 và clean pair có 0 error/0 retry nhưng quality gate không đạt |
 | 2.7 GraphRAG | `inconclusive`; thiếu independent review tối thiểu 20 edge |
 | 2.8 Community summaries | `inconclusive`; bị khóa bởi 2.7, chưa generation/review/global-query run |
-| 2.9 Integrated matrix | Demo ledger đầy đủ và `ready_for_demo_matrix=true`; live/load pairs concurrency 1/5 chưa chạy |
+| 2.9 Integrated matrix | Demo ledger đầy đủ, `ready_for_demo_matrix=true` và fallback load observation concurrency 1/5 đạt; bảy pair độc lập chưa chạy |
 
 | Default rollout | Trạng thái 2026-07-16 |
 | --- | --- |
@@ -752,6 +752,9 @@ Hoàn tất phần GraphRAG global sensemaking trong tài liệu gốc mà khôn
   Mỗi row khai báo tường minh bảy feature flag, bốn version/serving namespace
   và prerequisite; cache namespace của các row không trùng nhau.
 - [X] Đã tách `milestone-decision-v2` và controlled-demo ledger khỏi default-rollout ledger. Artifact lịch sử được xác minh theo source commit/hash gốc, không theo HEAD hiện tại; feature bị reject/inconclusive được pin tắt trong effective demo matrix để kiểm tra fallback.
+- [X] Preflight commit `e686db1` đạt offline capability, 15/15 security case, leakage 0, cache/strict-stream/rollback và `ready_for_demo_matrix=true`; `ready_for_live_matrix=false` đúng thiết kế.
+- [X] Đã sửa concurrency benchmark để giữ identity server-side từ manifest hoặc `--username` nhưng chỉ lưu question hash. Fallback all-off observation đạt 8/8 request ở concurrency 1 và 8/8 ở concurrency 5; completion P95 lần lượt khoảng 20,9 giây và 47,1 giây.
+- [ ] Fallback observation chưa thay thế bảy baseline/candidate pair độc lập và chưa chứng minh wrong-answer regression/cost cho từng row. Vì mọi feature đang `rejected` hoặc `inconclusive`, không bật flag chỉ để tạo candidate matrix.
 - [X] Đã thêm request-budget gate fail-closed. Mọi case phải ghi đủ counter
   kiểu integer cho planner, subquery, correction, repair, calculation, graph
   edge, provider retry và final generation; thiếu telemetry cũng bị fail.

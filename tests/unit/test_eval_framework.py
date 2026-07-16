@@ -265,6 +265,41 @@ def test_benchmark_defaults_and_sse_trace_stage_summary():
     assert summary["stage_latency"]["stages"]["dense_retrieval"]["p95_ms"] == 22.0
 
 
+def test_benchmark_preserves_server_identity_without_persisting_it_in_sample(tmp_path):
+    manifest = tmp_path / "cases.jsonl"
+    _write_jsonl(manifest, [{
+        "id": "case-1",
+        "question": "Cau hoi co identity",
+        "username": "eval-technical",
+        "user_department": "Technical",
+        "user_roles": ["viewer"],
+        "allowed_departments": ["Technical"],
+        "allowed_sites": ["HQ"],
+        "max_security_level": "internal",
+    }])
+
+    cases = benchmark.load_benchmark_cases(manifest)
+    payload = benchmark.build_chat_payload(cases[0])
+
+    assert payload["username"] == "eval-technical"
+    assert payload["user_question"] == "Cau hoi co identity"
+    sample = benchmark._sample_identity(cases[0], 1)
+    assert "username" not in sample
+    assert "question" not in sample
+    assert sample["sample_id"].startswith("q0001-")
+
+
+def test_benchmark_requires_identity_when_manifest_has_none(tmp_path):
+    manifest = tmp_path / "cases.jsonl"
+    _write_jsonl(manifest, [{"id": "case-1", "question": "Missing identity"}])
+
+    with pytest.raises(ValueError, match="username or user_id"):
+        benchmark.load_benchmark_cases(manifest)
+
+    cases = benchmark.load_benchmark_cases(manifest, default_username="eval-technical")
+    assert cases[0]["username"] == "eval-technical"
+
+
 def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
     assert expected_outcome({"should_refuse": True}) == "insufficient_evidence"
     assert classify_outcome("full_answer", "insufficient_evidence", answer_correct=False, leaked=False) == "wrong_refusal"
