@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import sys
@@ -23,6 +24,25 @@ _SMOKE_MESSAGES = [
     ("system", "Return only the word OK."),
     ("human", "Provider readiness probe."),
 ]
+
+
+def resolve_provider_configuration() -> dict:
+    """Resolve the same non-secret provider identity used by the live runtime."""
+    from mech_chatbot.config.settings import settings
+    from mech_chatbot.llm.llm_client import get_llm_endpoint, get_llm_model_name
+
+    return {
+        "endpoint": get_llm_endpoint(),
+        "model": get_llm_model_name(),
+        "max_concurrent_rag": settings.MAX_CONCURRENT_RAG,
+    }
+
+
+def provider_configuration_sha256(configuration: dict | None = None) -> str:
+    configuration = configuration or resolve_provider_configuration()
+    return hashlib.sha256(
+        json.dumps(configuration, sort_keys=True).encode("utf-8")
+    ).hexdigest()
 
 
 def _percentile(values, percentile):
@@ -83,10 +103,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    from mech_chatbot.llm.llm_client import gpt_invoke, get_llm_model_name
+    from mech_chatbot.llm.llm_client import gpt_invoke
 
+    configuration = resolve_provider_configuration()
     artifact = run_provider_smoke(gpt_invoke)
-    artifact["model"] = get_llm_model_name()
+    artifact["model"] = configuration["model"]
+    artifact["provider_configuration_sha256"] = provider_configuration_sha256(
+        configuration
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

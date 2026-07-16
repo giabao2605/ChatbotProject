@@ -865,6 +865,7 @@ Tất cả milestone đã đạt
 
 #### Checkpoint tự động hóa ngày 2026-07-16
 
+- Kế hoạch chạy hậu ingest đã được tách thành [`controlled-demo-post-ingest-test-plan.md`](controlled-demo-post-ingest-test-plan.md). Plan khóa main collection ở chế độ evaluation read-only, tách 44 case theo feature và giới hạn decision ở `inconclusive` khi số case/human review chưa đạt ngưỡng roadmap.
 - Chủ dự án chấp nhận dùng collection chính `TaiLieuKyThuat_v2` cho controlled demo và khóa site live là `HQ`/`BRANCH-B`, `SourceSystem=upload`. Quyết định này chỉ áp dụng cho demo; không thay đổi yêu cầu staging cô lập của default rollout.
 - Đã sửa lỗi classifier chỉ bỏ đuôi `.pdf`: `.md`/`.markdown` và các suffix ingest được hỗ trợ nay được loại trước khi nhận diện `_vN`. Live lineage của `technical_demo_process_v1.md` → `technical_demo_process_v2.md` đã được repair fail-closed ở SQL/Qdrant; v1 hiện superseded/non-servable và v2 trỏ `SupersedesDocID` về v1.
 - `controlled-demo-main-preflight-v1` ánh xạ tường minh `DEMO-HQ→HQ`, `DEMO-BRANCH-B→BRANCH-B` và `controlled-demo-v2→upload`. Preflight trên 44 case đạt với 18/18 tài liệu được tham chiếu, không có failure. `technical_demo_process_expired_v0.md` không được case nào tham chiếu và vẫn là coverage gap: chưa có lifecycle transition thật từ published sang expired cho version 0.
