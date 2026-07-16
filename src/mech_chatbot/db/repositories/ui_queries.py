@@ -610,15 +610,29 @@ def mark_job_rejected(job_id):
 
 
 def list_docs_for_bulk_meta(dept=None, domain=None):
-	q = "SELECT DocID, TenFile, ThuMuc, Domain FROM TaiLieu WHERE IsCurrent = 1 AND LifecycleStatus <> 'deleting'"
+	q = """
+		SELECT t.DocID, t.TenFile, t.ThuMuc, t.Domain
+		FROM TaiLieu t
+		WHERE t.LifecycleStatus <> 'deleting'
+		  AND (
+			t.IsCurrent = 1
+			OR EXISTS (
+				SELECT 1
+				FROM IngestionJobs j
+				WHERE j.TenFile = t.TenFile
+				  AND j.ThuMuc = t.ThuMuc
+				  AND j.Status = 'pending_review'
+			)
+		  )
+	"""
 	params = {}
 	if dept:
-		q += " AND ThuMuc = :dept"
+		q += " AND t.ThuMuc = :dept"
 		params["dept"] = dept
 	if domain:
-		q += " AND Domain = :domain"
+		q += " AND t.Domain = :domain"
 		params["domain"] = domain
-	q += " ORDER BY ThuMuc, TenFile"
+	q += " ORDER BY t.ThuMuc, t.TenFile"
 	with engine.connect() as conn:
 		return conn.execute(text(q), params).fetchall()
 
