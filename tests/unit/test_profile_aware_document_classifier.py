@@ -6,6 +6,36 @@ import pytest
 from mech_chatbot.ingestion import document_classifier as classifier
 from mech_chatbot.ingestion.doc_type_registry import DOC_TYPES, normalize_doc_type
 from mech_chatbot.ingestion.domain_handlers import get_handler
+from mech_chatbot.db.repositories._shared import normalize_base_code
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_base", "expected_version", "expected_label"),
+    [
+        ("technical_demo_process_v1.md", "technical_demo_process", 1, "v1"),
+        ("technical_demo_process_v2.markdown", "technical_demo_process", 2, "v2"),
+        ("technical_demo_process_expired_v0.md", "technical_demo_process_expired", 0, "v0"),
+    ],
+)
+def test_markdown_filename_versions_share_a_stable_base_code(
+    filename, expected_base, expected_version, expected_label
+):
+    result = classifier.normalize_filename_to_classification(filename)
+
+    assert result == {
+        "base_code": expected_base,
+        "version_no": expected_version,
+        "version_label": expected_label,
+    }
+
+
+@pytest.mark.parametrize("suffix", [".md", ".markdown", ".PDF", ".docx", ".xlsx"])
+def test_base_code_normalization_removes_supported_file_suffixes(suffix):
+    assert normalize_base_code(f"Technical Demo Process{suffix}") == "technical-demo-process"
+
+
+def test_base_code_normalization_strips_whitespace_before_file_suffix():
+    assert normalize_base_code(" Technical Demo Process.md ") == "technical-demo-process"
 
 
 def test_handler_prompt_is_profile_aware_and_backward_compatible():

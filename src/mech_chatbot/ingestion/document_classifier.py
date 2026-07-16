@@ -70,8 +70,10 @@ def check_existing_family(base_code):
         return None
 
 def normalize_filename_to_classification(filename):
-    # Xoa extension khong phan biet hoa thuong
-    name_without_ext = re.sub(r'\.pdf$', '', filename, flags=re.IGNORECASE)
+    # Remove only a supported file suffix so dotted engineering/part codes remain intact.
+    from mech_chatbot.db.repositories._shared import strip_document_suffix
+
+    name_without_ext = strip_document_suffix(filename)
     
     # Tim version: _v2, -rev3, _version4
     match = re.search(r'([_-](v|rev|version)(\d+))$', name_without_ext, flags=re.IGNORECASE)

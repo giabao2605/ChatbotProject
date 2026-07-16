@@ -247,6 +247,8 @@ def run_evaluation(
                 from scripts.graph_eval.preflight import run_live_preflight
             elif preflight_kind == "community":
                 from scripts.graph_eval.preflight import run_live_preflight
+            elif preflight_kind == "controlled_demo":
+                from scripts.controlled_demo_eval.preflight import run_live_preflight
             elif preflight_kind == "crag":
                 from scripts.crag_eval.preflight import run_live_preflight
             else:

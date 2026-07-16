@@ -356,7 +356,7 @@ Không đạt default-rollout gate không đồng nghĩa phải xóa tính năng
 | Controlled demo 5–10 người | Trạng thái 2026-07-16 |
 | --- | --- |
 | 2.1–2.2 foundation | Hoàn tất implementation; 112 targeted tests xanh tại `937ec52` và có tracked technical evidence |
-| 2.3 CRAG | `inconclusive`; chưa có 20 matched pairs và reviewer sign-off |
+| 2.3 CRAG | `inconclusive`; main-collection preflight thích ứng đã đạt 44/44 case nhưng chưa có CRAG-only baseline/candidate đủ 20 matched pairs và reviewer sign-off |
 | 2.4 Grounded Math | `inconclusive`; staging đạt nhưng chưa có 10 truy vấn demo được review |
 | 2.5 Late Interaction | `rejected`; immutable evidence và decision v2 đã được thêm |
 | 2.6 Query Decomposition | `inconclusive`; smoke 5/5 và clean 8-case pair có 0 error/0 retry nhưng còn thiếu 10 câu hỏi phức hợp bổ sung |
@@ -865,6 +865,10 @@ Tất cả milestone đã đạt
 
 #### Checkpoint tự động hóa ngày 2026-07-16
 
+- Chủ dự án chấp nhận dùng collection chính `TaiLieuKyThuat_v2` cho controlled demo và khóa site live là `HQ`/`BRANCH-B`, `SourceSystem=upload`. Quyết định này chỉ áp dụng cho demo; không thay đổi yêu cầu staging cô lập của default rollout.
+- Đã sửa lỗi classifier chỉ bỏ đuôi `.pdf`: `.md`/`.markdown` và các suffix ingest được hỗ trợ nay được loại trước khi nhận diện `_vN`. Live lineage của `technical_demo_process_v1.md` → `technical_demo_process_v2.md` đã được repair fail-closed ở SQL/Qdrant; v1 hiện superseded/non-servable và v2 trỏ `SupersedesDocID` về v1.
+- `controlled-demo-main-preflight-v1` ánh xạ tường minh `DEMO-HQ→HQ`, `DEMO-BRANCH-B→BRANCH-B` và `controlled-demo-v2→upload`. Preflight trên 44 case đạt với 18/18 tài liệu được tham chiếu, không có failure. `technical_demo_process_expired_v0.md` không được case nào tham chiếu và vẫn là coverage gap: chưa có lifecycle transition thật từ published sang expired cho version 0.
+- Baseline/candidate phải được tách theo `evaluation_group`; không chạy một CRAG pair trên cả 44 case vì sẽ trộn Grounded Math, decomposition và GraphRAG rồi tạo quality signal sai.
 - Provider smoke đạt 5/5 request trên `gpt-5.4`, không còn `503/no_capacity` trong cửa sổ kiểm tra này.
 - Fixture Grounded Math đã ingest 3/3 tài liệu vào `MechChatbot_GroundedMath_Eval_v1`; preflight sau ingest đạt 15/15 case, không có failure. Kết quả này xác nhận staging sẵn sàng, chưa thay thế yêu cầu review thủ công 10 truy vấn demo.
 - Luồng trình duyệt local đã xác minh đăng nhập, mở `/chat`, gửi một truy vấn gợi ý có sẵn và nhận câu trả lời hoàn chỉnh kèm ba citation; credential và raw prompt không được ghi vào artifact roadmap.

@@ -16,7 +16,13 @@ __all__ = [
     '_sanitize_int',
     '_sanitize_text',
     'normalize_base_code',
+    'strip_document_suffix',
 ]
+
+_DOCUMENT_SUFFIX_RE = re.compile(
+    r"\.(?:pdf|docx?|xlsx?|txt|md|markdown|csv|tsv|pptx|png|jpe?g|bmp|gif|webp|tiff?)$",
+    flags=re.IGNORECASE,
+)
 
 # FIX C6: gioi han kich thuoc input chat (chong payload GB lam sap DB). Co the chinh qua env.
 MAX_USER_MSG_LEN = int(os.getenv("MAX_USER_MSG_LEN", "20000"))
@@ -60,12 +66,16 @@ def _sanitize_int(val, default=None):
         return default
         
 
+def strip_document_suffix(value):
+    """Remove one supported document/image suffix without touching dotted part codes."""
+    return _DOCUMENT_SUFFIX_RE.sub("", str(value or "").strip())
+
+
 def normalize_base_code(code):
     if not code:
         return ""
-    code = str(code).lower().strip()
+    code = strip_document_suffix(code).lower().strip()
     code = ''.join(c for c in unicodedata.normalize('NFD', code) if unicodedata.category(c) != 'Mn')
-    code = code.replace(".pdf", "").replace(".docx", "").replace(".xlsx", "")
     code = re.sub(r"[_\s]+", "-", code)
     return code
  
