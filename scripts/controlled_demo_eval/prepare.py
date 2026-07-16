@@ -26,7 +26,7 @@ def _write_jsonl(path: Path, rows: list[dict]) -> str:
         for row in rows
     )
     path.write_text(payload, encoding="utf-8")
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def prepare_manifests(

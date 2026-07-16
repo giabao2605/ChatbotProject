@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -38,6 +39,9 @@ def test_prepare_writes_group_manifests_and_crag_scope(tmp_path):
     ]
     assert [row["id"] for row in crag_rows] == ["factual", "refusal", "denied"]
     assert report["milestones"]["query_decomposition"]["minimum_met"] is False
+    assert report["milestones"]["crag"]["sha256"] == hashlib.sha256(
+        (tmp_path / "crag.jsonl").read_bytes()
+    ).hexdigest()
 
 
 def test_prepare_refuses_to_overwrite_existing_artifacts(tmp_path):
