@@ -49,10 +49,11 @@ def check_graph_fixture(
     cases, sql_documents, graph_edges, qdrant_points, *, applied_versions,
     pending_serving_edge_count, collection, graph_nodes=None, proposals=None,
     review_samples=None, review_sample_source="independent",
-    workflow_fixture_passed=False,
+    workflow_fixture_passed=False, expected_batch=FIXTURE_BATCH,
+    expected_collection=FIXTURE_COLLECTION,
 ):
-    if collection != FIXTURE_COLLECTION:
-        raise ValueError(f"collection must equal {FIXTURE_COLLECTION}")
+    if collection != expected_collection:
+        raise ValueError(f"collection must equal {expected_collection}")
     failures = []
     required_versions = {"V0033", "V0034"}
     missing_versions = sorted(required_versions - {str(value).upper() for value in applied_versions})
@@ -78,7 +79,7 @@ def check_graph_fixture(
             continue
         retrieval_expected = bool(case.get("expected_retrieval", True))
         sql_valid = all((
-            document.get("SourceSystem") == FIXTURE_BATCH,
+            document.get("SourceSystem") == expected_batch,
             int(document.get("VersionNo") or 0) == int(case.get("expected_version") or 0),
         ))
         if retrieval_expected:
@@ -106,7 +107,7 @@ def check_graph_fixture(
             int(point.get("doc_id") or 0) == int(document["DocID"])
             and int(point.get("trang_so") or point.get("page") or 0) == page
             and int(point.get("version_no") or 0) == int(document.get("VersionNo") or 0)
-            and point.get("source_system") == FIXTURE_BATCH
+            and point.get("source_system") == expected_batch
             and bool(point.get("servable")) and bool(point.get("is_current"))
             and str(point.get("publication_state") or "").casefold() == "published"
             and str(point.get("lifecycle_status") or "").casefold() == "published"
@@ -158,13 +159,13 @@ def check_graph_fixture(
                 expected_citation.get("version") or citation_document.get("VersionNo") or 0
             )
             citation_valid = (
-                citation_document.get("SourceSystem") == FIXTURE_BATCH
+                citation_document.get("SourceSystem") == expected_batch
                 and int(citation_document.get("VersionNo") or 0) == expected_version
                 and any(
                     int(point.get("doc_id") or 0) == int(citation_document["DocID"])
                     and int(point.get("trang_so") or point.get("page") or 0) == citation_page
                     and int(point.get("version_no") or 0) == expected_version
-                    and point.get("source_system") == FIXTURE_BATCH
+                    and point.get("source_system") == expected_batch
                     and bool(point.get("servable")) and bool(point.get("is_current"))
                     and str(point.get("publication_state") or "").casefold() == "published"
                     and str(point.get("lifecycle_status") or "").casefold() == "published"
@@ -205,6 +206,9 @@ def check_graph_fixture(
             resolution["expected_relation"] = case_relations[0] if case_relations else {}
         resolutions[case_id] = resolution
     fingerprint = hashlib.sha256(json.dumps({
+        "cases": cases,
+        "expected_batch": expected_batch,
+        "expected_collection": expected_collection,
         "documents": sql_documents, "edges": graph_edges, "points": qdrant_points,
         "versions": sorted(applied_versions),
     }, sort_keys=True, default=str).encode()).hexdigest()
@@ -219,7 +223,7 @@ def check_graph_fixture(
     graph_report["workflow_fixture_passed"] = bool(workflow_fixture_passed)
     return {
         "schema": "graph-fixture-preflight-v1", "passed": not failures,
-        "batch": FIXTURE_BATCH, "collection": collection,
+        "batch": expected_batch, "collection": collection,
         "checked_cases": len(cases or ()), "failures": failures,
         "case_resolutions": resolutions, "fixture_fingerprint": fingerprint,
         "graph_report": graph_report,

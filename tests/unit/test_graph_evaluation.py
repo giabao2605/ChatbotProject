@@ -229,6 +229,64 @@ def test_graph_preflight_resolves_canonical_part_and_material_symbols():
     assert relation["target_key"] == "material:demo-mat-rubber"
 
 
+def test_graph_preflight_can_validate_an_explicit_non_default_staging_scope():
+    case = {
+        "id": "controlled-demo-page",
+        "expected_document": "maintenance.md",
+        "expected_page": 1,
+        "expected_version": 1,
+        "expected_relation": {
+            "source_key": "$DOC:maintenance-v1",
+            "relation_type": "HAS_PAGE",
+            "target_key": "$PAGEKEY:maintenance-v1",
+        },
+    }
+    document = _document(
+        DocID=21,
+        TenFile="maintenance.md",
+        VersionNo=1,
+        FixtureKey="maintenance-v1",
+        SourceSystem="controlled-demo-v2",
+    )
+    point = {
+        "doc_id": 21,
+        "trang_so": 1,
+        "version_no": 1,
+        "source_system": "controlled-demo-v2",
+        "servable": True,
+        "is_current": True,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+    }
+    edge = _edge(
+        source_key="document:21",
+        relation_type="HAS_PAGE",
+        target_key="page:21:1",
+    )
+
+    report = check_graph_fixture(
+        [case], [document], [edge], [point],
+        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=0,
+        collection="MechChatbot_Controlled_Demo_v2",
+        expected_batch="controlled-demo-v2",
+        expected_collection="MechChatbot_Controlled_Demo_v2",
+    )
+
+    assert report["passed"] is True
+    assert report["batch"] == "controlled-demo-v2"
+
+    changed_case = {**case, "question": "Changed controlled-demo question"}
+    changed_report = check_graph_fixture(
+        [changed_case], [document], [edge], [point],
+        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=0,
+        collection="MechChatbot_Controlled_Demo_v2",
+        expected_batch="controlled-demo-v2",
+        expected_collection="MechChatbot_Controlled_Demo_v2",
+    )
+    assert changed_report["fixture_fingerprint"] != report["fixture_fingerprint"]
+
+
 def test_graph_preflight_reports_unresolved_relation_symbol_explicitly():
     case = {
         "id": "unsupported-symbol",
