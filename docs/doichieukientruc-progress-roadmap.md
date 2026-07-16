@@ -326,7 +326,7 @@ Implementation chính:
 
 #### Đã có và đã làm
 
-- Full pytest suite tại commit `c601e16` xanh: 766 collected, 743 passed, 23 opt-in skipped, 0 failure/error. Evidence được lưu tại `data/integrated_hardening_v1/evidence/evaluation-foundation-full-suite-c601e16.json`.
+- Full pytest suite tại commit `38731ef` xanh: 766 collected, 743 passed, 23 opt-in skipped, 0 failure/error. Evidence và JUnit gốc được track tại `data/integrated_hardening_v1/evidence/evaluation-foundation-full-suite-38731ef.json` và `reports/integrated-hardening/38731ef-final/full-suite.xml`.
 - Targeted tests cho grounded math, Late Interaction, decomposition, graph và retrieval intelligence gate đều xanh.
 - Tất cả tính năng mới có feature flag mặc định tắt.
 - HTTP/SSE chat contract không bị thay đổi bởi các milestone này.
