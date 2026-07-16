@@ -1,0 +1,14 @@
+{
+  "schema": "milestone-decision-v2",
+  "milestone": "graph_retrieval",
+  "scope": "controlled_demo",
+  "decision": "inconclusive",
+  "source_commit": "48e5fc61b62b402c2f48610cb90ae637c9e24bc4",
+  "evidence": [{
+    "path": "data/integrated_hardening_v1/evidence/graph-controlled-demo-gap.json",
+    "sha256": "98a539d62f9f970c061ca9d00d019a40624e70b2e609202a08e890aaa90aebc5",
+    "schema": "controlled-demo-gap-evidence-v1"
+  }],
+  "reason": "Graph staging quality and governance checks passed, but no independent reviewer has labeled the required 20-edge sample, so reviewed-edge precision is unknown.",
+  "reviewer_signoff": {"reviewer": "bao.nguyen-plan-approval", "signed_at": "2026-07-16T01:28:01Z"}
+}

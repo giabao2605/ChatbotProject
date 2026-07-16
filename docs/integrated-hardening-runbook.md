@@ -23,6 +23,38 @@ Run from the repository root on a clean commit:
 Exit code 2 is expected while any prerequisite is incomplete. Do not change a
 false prerequisite to true without a verified gate/pilot or rejection artifact.
 
+For the 5–10 user controlled demo, pass the separate demo ledger:
+
+```powershell
+.\chat_env\Scripts\python.exe -m scripts.integrated_eval.preflight `
+  --matrix data/integrated_hardening_v1/matrix.json `
+  --security-manifest data/integrated_hardening_v1/security_matrix.jsonl `
+  --prerequisites data/integrated_hardening_v1/prerequisites.json `
+  --demo-decisions data/integrated_hardening_v1/demo_decisions.json `
+  --offline-evidence reports/integrated-hardening/<run-id>/offline.json `
+  --output reports/integrated-hardening/<run-id>/demo-readiness.json
+```
+
+This command targets `ready_for_demo_matrix`. It never changes
+`ready_for_live_matrix`. Build or verify one scoped decision without editing
+the source gate artifact:
+
+```powershell
+.\chat_env\Scripts\python.exe -m scripts.eval.milestone_decision build `
+  --milestone late_interaction `
+  --scope controlled_demo `
+  --decision rejected `
+  --source-commit <source-commit> `
+  --evidence <gate.json> `
+  --reason "Gate did not establish the required quality gain." `
+  --reviewer <reviewer-id> `
+  --output <decision.json>
+```
+
+Rejected and inconclusive features are disabled in `demo_matrix.effective_flags`.
+Run those rows to verify the fallback path; do not restore the requested flag
+just to make the matrix look complete.
+
 ## 2. Feature flags and isolation
 
 Each candidate process receives exactly one row from

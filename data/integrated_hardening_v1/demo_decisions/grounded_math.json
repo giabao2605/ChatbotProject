@@ -1,0 +1,14 @@
+{
+  "schema": "milestone-decision-v2",
+  "milestone": "grounded_math",
+  "scope": "controlled_demo",
+  "decision": "inconclusive",
+  "source_commit": "d5ec3e1f8e592581f54d4e6fe695f00e4776408f",
+  "evidence": [{
+    "path": "data/integrated_hardening_v1/evidence/grounded-math-controlled-demo-gap.json",
+    "sha256": "3b2677119610d2a96300c24c811326236f4d416fbbb0543381a5ba1c613e1fbc",
+    "schema": "controlled-demo-gap-evidence-v1"
+  }],
+  "reason": "Fixture and staging math checks passed, but ten real demo queries have not been manually reviewed for formula, units, provenance, and citation.",
+  "reviewer_signoff": {"reviewer": "bao.nguyen-plan-approval", "signed_at": "2026-07-16T01:28:01Z"}
+}

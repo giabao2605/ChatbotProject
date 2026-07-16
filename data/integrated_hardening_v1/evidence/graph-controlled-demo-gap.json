@@ -1,0 +1,23 @@
+{
+  "schema": "controlled-demo-gap-evidence-v1",
+  "git_sha": "48e5fc61b62b402c2f48610cb90ae637c9e24bc4",
+  "milestone": "graph_retrieval",
+  "observed": {
+    "structured_coverage": 1.0,
+    "provenance_completeness": 1.0,
+    "relational_answer_gain_passed": true,
+    "leakage_count": 0,
+    "latency_budget_passed": true
+  },
+  "source_artifacts": [
+    {"path": "reports/graph/quality-gate/20260715-133845-48e5fc6/gate.json", "sha256": "ffc6e45c6ef780d8880a24788325af193eea3d4db5b29c821ec4a17e793d7e48"}
+  ],
+  "missing_demo_evidence": {
+    "required_independent_edge_reviews": 20,
+    "observed_independent_edge_reviews": 0,
+    "required_reviewed_edge_precision": 0.95,
+    "observed_reviewed_edge_precision": null,
+    "required_relational_user_queries": 10,
+    "observed_relational_user_queries": 0
+  }
+}

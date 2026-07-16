@@ -1,0 +1,30 @@
+{
+  "schema": "controlled-demo-decision-ledger-v2",
+  "status": "complete",
+  "decisions": {
+    "crag": {
+      "path": "data/integrated_hardening_v1/demo_decisions/crag.json",
+      "sha256": "41e50a7d7d07b41772f189c3aefafc89e38ba2722db03ed551a2c307146c5935"
+    },
+    "grounded_math": {
+      "path": "data/integrated_hardening_v1/demo_decisions/grounded_math.json",
+      "sha256": "fb76bfcc5d73c7831fbaf3a0c11c46b631716a53b13804b8d3702b6d4616d8a3"
+    },
+    "late_interaction": {
+      "path": "data/integrated_hardening_v1/demo_decisions/late_interaction.json",
+      "sha256": "8567000209e31cbb8b4adc72f86db191d6a47b12a96edf17aa83fa5667fdc659"
+    },
+    "query_decomposition": {
+      "path": "data/integrated_hardening_v1/demo_decisions/query_decomposition.json",
+      "sha256": "f45a603f55b18251a039f148e3c365a80911fb654914c58ba466d657e97cd54e"
+    },
+    "graph_retrieval": {
+      "path": "data/integrated_hardening_v1/demo_decisions/graph_retrieval.json",
+      "sha256": "7e3b1e946c0e9548ee0328525d28dcdeb06f85b20017b3ef8c462bdc3f20d7f2"
+    },
+    "community_summaries": {
+      "path": "data/integrated_hardening_v1/demo_decisions/community_summaries.json",
+      "sha256": "86a2a63c3f07740eeb5fd9866503c65051d6858c0c98c0cd6720d8f1393a240b"
+    }
+  }
+}

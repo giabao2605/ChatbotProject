@@ -1,0 +1,19 @@
+{
+  "schema": "controlled-demo-gap-evidence-v1",
+  "git_sha": "d5ec3e1f8e592581f54d4e6fe695f00e4776408f",
+  "milestone": "grounded_math",
+  "observed": {
+    "staging_pair_count": 3,
+    "fixture_cases_per_pair": 45,
+    "decimal_formula_unit_provenance_checks_passed": true,
+    "citation_checks_passed": true
+  },
+  "source_artifacts": [
+    {"path": "reports/grounded-math/d5ec3e1/series.json", "sha256": "6cc256d5206ebe468a831ec1c16862bc0371a62b83a8cad6a4dd89da5ca931c7"}
+  ],
+  "missing_demo_evidence": {
+    "required_reviewed_user_queries": 10,
+    "observed_reviewed_user_queries": 0,
+    "manual_review_complete": false
+  }
+}

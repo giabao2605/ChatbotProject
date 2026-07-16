@@ -1,0 +1,20 @@
+{
+  "schema": "milestone-decision-v2",
+  "milestone": "query_decomposition",
+  "scope": "controlled_demo",
+  "decision": "rejected",
+  "source_commit": "937ec52e8b39b6cd16a88b58288cf3bb43ec35ec",
+  "evidence": [
+    {
+      "path": "data/integrated_hardening_v1/evidence/query-decomposition-937ec52-gate.json",
+      "sha256": "04a3134a0f8565414585a49a386f3c76180d03aaf82c4bfdafe31b1a82f557c9",
+      "schema": "retrieval-intelligence-gate-v1",
+      "source_commit": "937ec52e8b39b6cd16a88b58288cf3bb43ec35ec"
+    }
+  ],
+  "reason": "A provider-stable clean pair had zero harness errors and zero provider retries, but did not improve complex-answer quality; branch accuracy and citation accuracy remained below the locked gate, so decomposition stays disabled for the controlled demo.",
+  "reviewer_signoff": {
+    "reviewer": "bao.nguyen-plan-approval",
+    "signed_at": "2026-07-16T01:25:43Z"
+  }
+}

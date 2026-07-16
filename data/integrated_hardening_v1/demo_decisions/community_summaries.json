@@ -1,0 +1,14 @@
+{
+  "schema": "milestone-decision-v2",
+  "milestone": "community_summaries",
+  "scope": "controlled_demo",
+  "decision": "inconclusive",
+  "source_commit": "27c13ce87296dffe756a713771376150160d8d95",
+  "evidence": [{
+    "path": "data/integrated_hardening_v1/evidence/community-controlled-demo-gap.json",
+    "sha256": "21040cd347b2b6c5a46cc360cc0db2fc02c0d3d56b965c82129011306f431956",
+    "schema": "controlled-demo-gap-evidence-v1"
+  }],
+  "reason": "Offline capability is ready, but GraphRAG lacks independent review; summary generation, review, serving, and global-query evaluation therefore remain fail-closed.",
+  "reviewer_signoff": {"reviewer": "bao.nguyen-plan-approval", "signed_at": "2026-07-16T01:28:01Z"}
+}

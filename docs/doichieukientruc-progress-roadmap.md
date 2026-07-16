@@ -1,6 +1,6 @@
 # Tiến độ và roadmap hoàn thành mục tiêu `doichieukientruc.docx`
 
-Ngày cập nhật: 2026-07-15
+Ngày cập nhật: 2026-07-16
 
 Nhánh: `codex/p1-retrieval-intelligence`
 
@@ -21,32 +21,30 @@ Tài liệu gốc đề xuất năm lớp nâng cấp chính:
 4. Late Interaction, query decomposition và GraphRAG có kiểm soát.
 5. Rollout theo feature flag, benchmark và governance gate.
 
-Trong trang này, một hạng mục chỉ được coi là hoàn tất 100% khi đáp ứng các tầng chung và một trong hai nhánh quyết định sau:
+Trong trang này, mục tiêu đang thực hiện là hoàn tất 100% **phạm vi controlled demo cho 5–10 người dùng**. Điều đó không đồng nghĩa sẵn sàng rollout mặc định. Một hạng mục demo chỉ được đóng khi đáp ứng các tầng chung và một trong các nhánh quyết định có bằng chứng sau:
 
 1. **Code:** implementation đã nối vào pipeline thật, có feature flag mặc định tắt.
 2. **Verification:** unit test, integration test cần thiết và full test suite đều xanh.
 3. **Evaluation:** có manifest hợp lệ, baseline/candidate chạy trên cùng snapshot và có artifact tái lập.
 4. **Gate:** gate đã được chạy, có artifact hợp lệ và quality, leakage, latency, cost, retry đã được đối chiếu với tiêu chí khóa; kết quả pass/fail quyết định nhánh tiếp theo.
 5. **Operations:** có rollback, cleanup, audit và runbook phù hợp với trạng thái triển khai.
-6. **Decision:** kết thúc bằng một trong hai nhánh rõ ràng:
-   - **Nhánh chấp nhận:** Gate đạt, production pilot có giới hạn đạt và telemetry không xuất hiện regression.
-   - **Nhánh bác bỏ:** Gate không đạt hoặc pilot bị dừng theo abort rule; có artifact ghi kết quả, nguyên nhân và quyết định giữ đường hiện tại/tắt feature. Nhánh này không bắt buộc tiếp tục pilot.
+6. **Decision:** dùng `milestone-decision-v2`, scope là `controlled_demo`, và kết thúc bằng `accepted`, `rejected` hoặc `inconclusive`. Quyết định demo không tự hoàn tất prerequisite của `default_rollout`.
 
-Vì vậy, “100% mục đích” không đồng nghĩa phải bật mọi công nghệ. Một quyết định không triển khai có bằng chứng vẫn hoàn thành mục tiêu nghiên cứu; không ép bật tính năng kém hiệu quả.
+Vì vậy, “100% controlled demo” không đồng nghĩa phải bật mọi công nghệ. Một quyết định không triển khai có bằng chứng vẫn hoàn thành mục tiêu nghiên cứu; không ép bật tính năng kém hiệu quả. Các yêu cầu 7–14 ngày, tối thiểu 100 matched pairs và độ tin cậy cao hơn vẫn được giữ nguyên cho `default_rollout` và hiện ở trạng thái deferred.
 
 ## 1. Hiện trạng: đã có, chưa có, đã làm và chưa làm
 
 ### 1.1 Bảng tổng quan
 
-| Hạng mục | Code | Test offline | Artifact/gate live | Controlled demo / default decision | Trạng thái thực tế |
-|---|---|---|---|---|---|
-| Telemetry và labeled evaluation | Có | Có | Có | Áp dụng cho evaluation | Foundation v4 hoàn tất; pilot labels thuộc Milestone A–F |
-| CRAG và claim repair | Có | Có | Ba gate đạt | Chưa | Hoàn tất staging và pilot control plane; live pilot chưa bắt đầu |
-| Grounded math | Có | Có, gồm integration live | 3/3 pair đạt; series bị chặn bởi CRAG | Chưa | Staging evidence hoàn tất; chưa production-ready |
-| Late Interaction | Có | Có | Có readiness và 3 pair clean-commit gate fail-closed | Chưa chạy controlled demo | `late-v2` không dùng mặc định, nhưng có thể opt-in demo để tìm nguyên nhân regression |
-| Query decomposition | Có | Có, full suite xanh | Có một pair fail-closed do ProxyLLM 503 | Chưa | Offline/staging readiness hoàn tất; quality gate phải chạy lại khi provider ổn định |
-| Governed GraphRAG | Có schema/API/retrieval | Có, gồm integration live | Có clean-commit pair; gate fail-closed vì thiếu independent review | Chưa chạy | Retrieval/answer/latency đạt; còn human edge review trước pilot |
-| Community summaries | Có offline control plane, chưa nối serving | Có; full suite xanh | Readiness fail-closed tại `27c13ce` | Chưa | Capability đạt; generation/serving bị khóa bởi graph gate và independent edge review |
+| Hạng mục                       | Code                                          | Test offline               | Artifact/gate live                                                    | Controlled demo / default decision | Trạng thái thực tế                                                                               |
+| -------------------------------- | --------------------------------------------- | -------------------------- | --------------------------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Telemetry và labeled evaluation | Có                                           | Có                        | Có                                                                   | Áp dụng cho evaluation           | Foundation v4 hoàn tất; pilot labels thuộc Milestone A–F                                         |
+| CRAG và claim repair            | Có                                           | Có                        | Ba gate đạt                                                         | Inconclusive | Thiếu 20 matched pairs, hai người dùng và reviewer sign-off; flag giữ tắt |
+| Grounded math                    | Có                                           | Có, gồm integration live | 3/3 pair đạt; series bị chặn bởi CRAG                            | Inconclusive | Thiếu 10 truy vấn demo được review thủ công; flag giữ tắt |
+| Late Interaction                 | Có                                           | Có                        | Có readiness và 3 pair clean-commit gate fail-closed                | Rejected cho controlled demo mặc định | `late-v2` được giữ làm research path; flag bị pin tắt trong demo matrix |
+| Query decomposition              | Có                                           | Có, full suite xanh       | Có provider-stable clean pair tại `937ec52`; quality gate không đạt | Rejected cho controlled demo | Không có harness/provider error; quality gain và branch accuracy/citation không đạt, flag giữ tắt |
+| Governed GraphRAG                | Có schema/API/retrieval                      | Có, gồm integration live | Có clean-commit pair; gate fail-closed vì thiếu independent review | Inconclusive | Thiếu 20 edge do reviewer độc lập gán nhãn; flag giữ tắt |
+| Community summaries              | Có offline control plane, chưa nối serving | Có; full suite xanh       | Readiness fail-closed tại `27c13ce` | Inconclusive | Bị khóa hợp lệ bởi GraphRAG; chưa generation/review/global-query run |
 
 Không gán một phần trăm tổng hợp cho bảng này vì các hạng mục có trọng số và rủi ro khác nhau. Tất cả workstream trong bảng đã có ít nhất foundation hoặc offline control plane; trạng thái live vẫn được quyết định riêng bằng artifact và gate, không suy ra từ số lượng code. Checklist tại mục 2.11 là denominator chính thức để tiến tới 100%.
 
@@ -142,11 +140,11 @@ Các implementation chính:
 
 Ba cặp benchmark hợp lệ trên commit `adb8060` đều đạt gate, candidate đạt 9/9. `reports/` là thư mục local bị gitignore, vì vậy bảng dưới lưu kết quả và digest ngay trong tài liệu tracked thay vì tạo link không tái lập được:
 
-| Run local | Gate | Candidate | Baseline P95 | Candidate P95 | Ratio | Candidate trace SHA-256 |
-|---|---|---:|---:|---:|---:|---|
-| `20260714-latency-pair-01` | Pass | 9/9 | 54,377 ms | 24,164 ms | 0.444 | `a99616a38b187f50f0e20b29afbc5b20ff948793c251b83d93d49e200f13a311` |
-| `20260714-latency-pair-02` | Pass | 9/9 | 16,176 ms | 16,530 ms | 1.022 | `d7a9ac1886d7f2d85ac8b9e139bc321b9234a785ff08a68b8b7ba8f4dd3867da` |
-| `20260714-latency-pair-03` | Pass | 9/9 | 13,515 ms | 15,740 ms | 1.165 | `e06d99961b8e5c5ddc42d2ee647f4f96a5e69a031fc2528e9277575d62bf179c` |
+| Run local                    | Gate | Candidate | Baseline P95 | Candidate P95 | Ratio | Candidate trace SHA-256                                              |
+| ---------------------------- | ---- | --------: | -----------: | ------------: | ----: | -------------------------------------------------------------------- |
+| `20260714-latency-pair-01` | Pass |       9/9 |    54,377 ms |     24,164 ms | 0.444 | `a99616a38b187f50f0e20b29afbc5b20ff948793c251b83d93d49e200f13a311` |
+| `20260714-latency-pair-02` | Pass |       9/9 |    16,176 ms |     16,530 ms | 1.022 | `d7a9ac1886d7f2d85ac8b9e139bc321b9234a785ff08a68b8b7ba8f4dd3867da` |
+| `20260714-latency-pair-03` | Pass |       9/9 |    13,515 ms |     15,740 ms | 1.165 | `e06d99961b8e5c5ddc42d2ee647f4f96a5e69a031fc2528e9277575d62bf179c` |
 
 Gate JSON của ba run có SHA-256 `3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c`. Artifact có thể được tái tạo bằng runner tracked:
 
@@ -342,7 +340,7 @@ Implementation chính:
 - ProxyLLM không còn 503 trong ba CRAG benchmark gần nhất nhưng generation latency vẫn có variance lớn.
 - Ba cặp CRAG benchmark ghi nhận 19/48 external reranking call ở trạng thái error; log run cho thấy Voyage 429 là lỗi đã quan sát. Policy đã chốt không retry, fallback local ngay và abort theo threshold; phần còn lại là quan sát/xác nhận error và fallback rate trong controlled demo.
 - Integration test opt-in Grounded Math đã chạy xanh với fixture live và cleanup giới hạn phạm vi; decomposition và GraphRAG vẫn chưa có bằng chứng integration live tương đương.
-- Nhiều feature cùng bật có thể tạo interaction về cache namespace, timeout, cost và shared correction budget; chưa có integrated combination matrix.
+- Nhiều feature cùng bật có thể tạo interaction về cache namespace, timeout, cost và shared correction budget; offline matrix bảy combination đã có, nhưng chưa có live pair/load evidence cho từng combination.
 
 ## 2. Kế hoạch chi tiết để đạt 100% mục đích tài liệu
 
@@ -356,15 +354,35 @@ Dự án hiện ở giai đoạn phát triển và demo có kiểm soát, chưa 
 
 Không đạt default-rollout gate không đồng nghĩa phải xóa tính năng hoặc cấm demo. Tính năng vẫn có thể vào controlled demo khi leakage bằng 0, governance không bị nới, có fallback/rollback và người thử được thông báo rõ đây là nhánh thử nghiệm.
 
+### Hai bảng tiến độ độc lập
+
+| Controlled demo 5–10 người | Trạng thái 2026-07-16 |
+| --- | --- |
+| 2.1–2.2 foundation | Hoàn tất implementation; 112 targeted tests xanh tại `937ec52` và có tracked technical evidence |
+| 2.3 CRAG | `inconclusive`; chưa có 20 matched pairs và reviewer sign-off |
+| 2.4 Grounded Math | `inconclusive`; staging đạt nhưng chưa có 10 truy vấn demo được review |
+| 2.5 Late Interaction | `rejected`; immutable evidence và decision v2 đã được thêm |
+| 2.6 Query Decomposition | `rejected`; smoke 5/5 và clean pair có 0 error/0 retry nhưng quality gate không đạt |
+| 2.7 GraphRAG | `inconclusive`; thiếu independent review tối thiểu 20 edge |
+| 2.8 Community summaries | `inconclusive`; bị khóa bởi 2.7, chưa generation/review/global-query run |
+| 2.9 Integrated matrix | Demo ledger đầy đủ và `ready_for_demo_matrix=true`; live/load pairs concurrency 1/5 chưa chạy |
+
+| Default rollout | Trạng thái 2026-07-16 |
+| --- | --- |
+| Bằng chứng 7–14 ngày, tối thiểu 100 matched pairs | Deferred |
+| Production/live prerequisites | Giữ fail-closed |
+| `ready_for_live_matrix` | `false`; không được thay đổi bởi decision demo |
+| Production feature flags | Mặc định `false` |
+
 ### Tổng hợp phần chưa hoàn tất từ 2.1 đến 2.5
 
-| Mục | Phần đã hoàn tất | Phần chưa hoàn tất | Trạng thái đối với demo |
-|---|---|---|---|
-| 2.1 Rollout guardrails | Policy, CLI và fail-closed checks đã có | Không còn implementation riêng; phải tiếp tục áp dụng guardrail cho từng run mới | Sẵn sàng |
-| 2.2 Evaluation foundation | Schema v4, manifest v2, claim/citation/risk-coverage evaluator, adjudication protocol và worked examples đã có | Chưa có sample controlled-demo đủ reviewer để chứng minh claim precision, faithfulness và citation accuracy >=99% trên traffic quan sát | Sẵn sàng thu thập bằng chứng demo |
-| 2.3 CRAG/repair | Code readiness, staging gates, canary isolation, replay, telemetry, abort, Voyage fallback policy và rollback đã có | Chưa chạy controlled demo thật; chưa có matched pairs được reviewer gán nhãn, reviewer sign-off và final demo artifact; provider error/fallback rate chưa được quan sát và xác nhận trong demo | Có thể demo giới hạn, flag mặc định tắt |
-| 2.4 Grounded Math | Fixture live, 3/3 pair, exact Decimal/provenance/citation gate và rollback đều đạt | Chưa chạy controlled demo để đo calculation failure, refusal và latency trên câu hỏi người dùng; dependency CRAG chỉ còn là điều kiện cho default rollout, không cấm demo cô lập | Có thể demo cô lập, flag mặc định tắt |
-| 2.5 Late Interaction | Shadow `late-v2`, coverage/governance, three-arm benchmark và clean-commit artifact đã có | Chưa chạy A/B controlled demo; chưa phân tích nguyên nhân nDCG regression/cold start; chưa có index revision mới tốt hơn `late-v2` | Chỉ opt-in demo, không dùng mặc định |
+| Mục                      | Phần đã hoàn tất                                                                                                   | Phần chưa hoàn tất                                                                                                                                                                                            | Trạng thái đối với demo                    |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| 2.1 Rollout guardrails    | Policy, CLI và fail-closed checks đã có                                                                             | Không còn implementation riêng; phải tiếp tục áp dụng guardrail cho từng run mới                                                                                                                        | Sẵn sàng                                      |
+| 2.2 Evaluation foundation | Schema v4, manifest v2, claim/citation/risk-coverage evaluator, adjudication protocol, worked examples và tracked 112-test artifact đã có | Sample controlled-demo đủ reviewer chưa được thu; đây là evidence gap của demo, không phải implementation gap | Hoàn tất kỹ thuật |
+| 2.3 CRAG/repair           | Code readiness, staging gates, canary isolation, replay, telemetry, abort, Voyage fallback policy và rollback đã có | Chưa có 20 matched pairs/tối thiểu hai user và reviewer sign-off | `inconclusive`, flag tắt |
+| 2.4 Grounded Math         | Fixture live, 3/3 pair, exact Decimal/provenance/citation gate và rollback đều đạt | Chưa có 10 truy vấn demo thật được review toàn bộ | `inconclusive`, flag tắt |
+| 2.5 Late Interaction      | Shadow `late-v2`, coverage/governance, three-arm benchmark, tracked immutable evidence và `milestone-decision-v2` đã có | Candidate không chứng minh nDCG gain; đã kết thúc nhánh evidence-first bằng quyết định `rejected` cho controlled demo mặc định | Hoàn tất quyết định; flag giữ tắt |
 
 Đối với controlled demo, các yêu cầu 7–14 ngày, tối thiểu 100 matched pairs và quality threshold đầy đủ vẫn là mục tiêu tham chiếu cho default rollout, không phải điều kiện bắt buộc để bắt đầu một demo nhỏ. Demo vẫn phải dừng ngay khi có leakage, governance escape hoặc rollback không hoạt động.
 
@@ -599,8 +617,8 @@ Chứng minh decomposition chỉ giúp câu phức tạp, không làm câu đơn
 4. [Đã chạy nhưng artifact không hợp lệ để rollout] Baseline flag tắt và candidate `RAG_QUERY_DECOMPOSITION_ENABLED=true` đã chạy cùng commit/snapshot. ProxyLLM trả `503 no_capacity` trên phần lớn request nên pair bị fail-closed.
 5. [Đã hoàn tất offline] Enforce tối đa ba subquery, một shared correction và một final generation; evaluator và gate báo budget violation.
 6. [Đã hoàn tất offline] Deadline được truyền dưới dạng monotonic deadline, retrieval chạy song song và trả về khi hết hạn; chỉ document từ nhánh `full_answer` đi vào generation; missing/access-denied chỉ tạo notice an toàn.
-7. [Đã có gate, cần rerun provider-stable] Gate đo accuracy, wrong-answer, leakage, provider retry, P95 và cost. Lần chạy đầu fail vì retry, latency và cost bị 503 làm nhiễu, không phải bằng chứng quality hợp lệ.
-8. [Chưa làm] Chưa controlled demo vì quality gate chưa đạt trên một pair provider-stable. Flag mặc định tiếp tục tắt.
+7. [Đã hoàn tất decision] Gate đo accuracy, wrong-answer, leakage, provider retry, P95 và cost. Pair provider-stable tại `937ec52` có 0 harness error và 0 provider retry ở cả hai arm; latency/cost, leakage, wrong-answer và request budget đều đạt nhưng complex-answer gain, branch accuracy và citation không đạt.
+8. [Đã reject cho controlled demo] `milestone-decision-v2` đã khóa kết luận không bật Query Decomposition trong demo hiện tại. Flag mặc định tiếp tục tắt; fallback path sẽ được kiểm tra trong integrated matrix.
 
 #### Điều kiện hoàn tất
 
@@ -616,9 +634,11 @@ Chứng minh decomposition chỉ giúp câu phức tạp, không làm câu đơn
 - Commit implementation: `c7e7b86`; code-review hai trục không còn blocker và full pytest xanh.
 - Fixture dùng batch `crag-eval-v1`, collection staging `MechChatbot_CRAG_Eval_v1`; preflight đạt 8/8 case, SQL BOM có hai row provenance cố định và integration SQL/Qdrant xanh.
 - Rollback evidence cho `RAG_QUERY_DECOMPOSITION_ENABLED` đạt; flag mặc định vẫn `false`.
-- Artifact lần chạy đầu: `reports/decomposition/quality-gate/20260715-101519-c7e7b86/`. Baseline và candidate dùng cùng commit, manifest SHA, fixture fingerprint và concurrency.
+- Artifact lần chạy đầu: `reports/decomposition/quality-gate/20260715-101519-c7e7b86/`. Baseline và candidate dùng cùng commit, manifest SHA, fixture fingerprint và concurrency nhưng bị ProxyLLM 503 nên chỉ là fail-closed evidence.
 - Gate trả `passed=false`: complex gain, branch accuracy/citation, retry, P95 và cost không đạt. Trace xác nhận ProxyLLM `gpt-5.4` trả nhiều `503 service_unavailable/no_capacity`; baseline có 10 retry, candidate 12 retry. Vì vậy artifact này là bằng chứng fail-closed/provider-invalid, chưa phải quyết định bác bỏ decomposition.
-- Việc còn lại của 2.6 là rerun một output directory mới khi provider ổn định; chỉ khi pair sạch đạt gate mới chạy controlled demo. Nếu pair sạch vẫn không đạt thì ghi reject decision và giữ flag tắt.
+- Provider smoke ngày 2026-07-16 đạt 5/5, 0 retry. Pair đầu tiên sau smoke phát hiện lỗi local `extract_source_ids` chưa import; lỗi đã có regression test và được sửa tại `937ec52`, artifact lỗi không được dùng làm quality decision.
+- Pair sạch sau fix: `reports/decomposition/quality-gate/20260716-fixed-937ec52/`, baseline/candidate 0 error và 0 provider retry. Gate vẫn `passed=false`: complex-answer gain, branch accuracy và branch citation không đạt; latency/cost/budget/safety đạt.
+- Kết luận evidence-first: Query Decomposition bị `rejected` cho controlled demo hiện tại, không tiếp tục tuning trong milestone này và giữ `RAG_QUERY_DECOMPOSITION_ENABLED=false`.
 
 ### 2.7 Milestone E — Đóng Governed GraphRAG gate
 
@@ -651,24 +671,24 @@ Nghiệm thu graph route trên staging thật trước khi dùng cho relational/
 
 #### Tiến độ hiện tại (2026-07-15)
 
-- [x] Clean migration từ database rỗng đến V0035 chạy hai lần idempotent; V0033/V0034 có trong ledger. Artifact: `reports/graph/20260715-104107/migration.json` (local, reports được ignore).
-- [x] Fixture staging độc lập `graph-eval-v1` đã ingest 10 tài liệu vào `MechChatbot_Graph_Eval_v1`; BOM fixture có 6 dòng để tạo đủ tập edge review, source collection production không bị sửa.
-- [x] Deterministic seed được giới hạn bằng `SourceSystem`, tạo family/version, supersedes, page, part và material edges cho Technical, Production và Maintenance.
-- [x] Preflight 13/13 case đạt; graph hiện có 25 node, 21 approved edge, structured coverage 6/6 = 100%, provenance completeness 100%, pending serving edge = 0 và cả ba pilot domain có node/approved edge.
-- [x] Reviewer workflow staging đạt: viewer bị chặn; pending proposal không serving; approve/reject giữ reviewer, note, timestamp; hai audit event không chứa raw prompt. Hai proposal scripted chỉ là workflow fixture, không được tính làm quality sample.
-- [x] Graph router chỉ gọi graph seam cho relational/global wording; simple query giữ regular retrieval. Traversal hai chiều vẫn giữ hướng edge gốc, fail-closed theo governance và bị chặn cứng ở 2 hop/50 edge.
-- [x] Graph evidence sống sót qua rerank/parent hydration được giữ riêng để evaluator audit và được đưa thật vào generation context; evidence bị loại khỏi serving context không được tính relation match.
-- [x] Evaluator và rollout gate đo riêng relation accuracy và fully-grounded relational-answer accuracy, cùng coverage, reviewer precision, provenance, pending-serving, router scope và traversal budget; rollback test xanh và chỉ cần tắt `RAG_GRAPH_RETRIEVAL_ENABLED`.
-- [x] Clean-commit baseline/candidate tại `48e5fc6` đã chạy cùng manifest, fixture fingerprint và provider config. Artifact local: `reports/graph/quality-gate/20260715-133845-48e5fc6/`.
+- [X] Clean migration từ database rỗng đến V0035 chạy hai lần idempotent; V0033/V0034 có trong ledger. Artifact: `reports/graph/20260715-104107/migration.json` (local, reports được ignore).
+- [X] Fixture staging độc lập `graph-eval-v1` đã ingest 10 tài liệu vào `MechChatbot_Graph_Eval_v1`; BOM fixture có 6 dòng để tạo đủ tập edge review, source collection production không bị sửa.
+- [X] Deterministic seed được giới hạn bằng `SourceSystem`, tạo family/version, supersedes, page, part và material edges cho Technical, Production và Maintenance.
+- [X] Preflight 13/13 case đạt; graph hiện có 25 node, 21 approved edge, structured coverage 6/6 = 100%, provenance completeness 100%, pending serving edge = 0 và cả ba pilot domain có node/approved edge.
+- [X] Reviewer workflow staging đạt: viewer bị chặn; pending proposal không serving; approve/reject giữ reviewer, note, timestamp; hai audit event không chứa raw prompt. Hai proposal scripted chỉ là workflow fixture, không được tính làm quality sample.
+- [X] Graph router chỉ gọi graph seam cho relational/global wording; simple query giữ regular retrieval. Traversal hai chiều vẫn giữ hướng edge gốc, fail-closed theo governance và bị chặn cứng ở 2 hop/50 edge.
+- [X] Graph evidence sống sót qua rerank/parent hydration được giữ riêng để evaluator audit và được đưa thật vào generation context; evidence bị loại khỏi serving context không được tính relation match.
+- [X] Evaluator và rollout gate đo riêng relation accuracy và fully-grounded relational-answer accuracy, cùng coverage, reviewer precision, provenance, pending-serving, router scope và traversal budget; rollback test xanh và chỉ cần tắt `RAG_GRAPH_RETRIEVAL_ENABLED`.
+- [X] Clean-commit baseline/candidate tại `48e5fc6` đã chạy cùng manifest, fixture fingerprint và provider config. Artifact local: `reports/graph/quality-gate/20260715-133845-48e5fc6/`.
   - Relation accuracy: `0% -> 100%`.
   - Fully-grounded relational-answer accuracy: `0% -> 16,67%`, vượt yêu cầu tăng 10 điểm phần trăm.
   - Wrong-answer: `7 -> 6`; leakage: `0 -> 0`; provider retry: `0 -> 0`.
   - P95: `74.639,75 ms -> 45.077,56 ms`; estimated cost: `0,017305 -> 0,02052`.
   - Các check answer quality, governance, provenance, domain, pending edge, router, traversal, rollback và latency đều đạt.
-- [x] Đã xuất queue 21 approved edge có provenance tại `reports/graph/20260715-130721/review-queue.jsonl`; queue cố ý để trống `reviewer`, `expected_correct` và `review_note`, không tự tạo nhãn giả.
+- [X] Đã xuất queue 21 approved edge có provenance tại `reports/graph/20260715-130721/review-queue.jsonl`; queue cố ý để trống `reviewer`, `expected_correct` và `review_note`, không tự tạo nhãn giả.
 - [ ] Chưa có reviewer độc lập điền tối thiểu 20 edge. Vì vậy `review_sample_count=0`, `reviewed_edge_precision` chưa đo được và ba check `reviewed_edge_precision`, `review_sample_is_independent`, `review_sample_size_sufficient` fail-closed.
-- [x] Gate hiện có reject/fail-closed decision bằng artifact: không chạy controlled demo pilot, giữ `RAG_GRAPH_RETRIEVAL_ENABLED=false` cho đến khi human review hoàn tất và pair được chạy lại.
-- [x] Community summaries đã bắt đầu ở phạm vi offline control plane; generation, serving và pilot vẫn bị khóa cho đến khi gate mục 2.7 đạt.
+- [X] Gate hiện có reject/fail-closed decision bằng artifact: không chạy controlled demo pilot, giữ `RAG_GRAPH_RETRIEVAL_ENABLED=false` cho đến khi human review hoàn tất và pair được chạy lại.
+- [X] Community summaries đã bắt đầu ở phạm vi offline control plane; generation, serving và pilot vẫn bị khóa cho đến khi gate mục 2.7 đạt.
 
 #### Điều kiện hoàn tất
 
@@ -704,14 +724,14 @@ Hoàn tất phần GraphRAG global sensemaking trong tài liệu gốc mà khôn
 
 #### Tiến độ hiện tại (2026-07-15)
 
-- [x] Migration additive V0036 tạo community version, membership và summary; summary mặc định `pending`. Community version chỉ được `approved` khi có attestation graph gate đạt, structured coverage >=80%, reviewed-edge precision >=95% và target global đã khóa. Clean migration từ database rỗng qua V0036 chạy hai lần idempotent và đạt.
-- [x] Community detection deterministic đã được version bằng `detection_version`, graph fingerprint và serving epoch. Run read-only tại commit `27c13ce` đọc 21 approved edge, tạo 5 community trong 24,096 ms, provenance completeness 100%, không persist và không sinh summary.
-- [x] Summary contract ánh xạ chính xác community node/edge tới doc/page/version/department/site/security. Approval kiểm tra transactionally membership, edge còn approved và document còn current/published/reviewed/servable; serving kiểm tra lại version readiness, epoch, fingerprint, membership, governance và RBAC.
-- [x] LLM-generated summary chỉ có thể được persist ở trạng thái `pending`; review API giới hạn cho `knowledge_approver`, `reviewer`, `admin` và audit không ghi raw prompt. Không có đường generation hoặc serving được nối vào chat pipeline khi prerequisite chưa đạt.
-- [x] Semantic cache namespace gồm feature flag `RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED` và `RAG_COMMUNITY_SERVING_EPOCH`; cả feature flag và rollback test đều mặc định tắt/xanh.
-- [x] Manifest `rag-eval-manifest-v2` đã tách 2 global, 2 local và 2 relational case, có identity RBAC, expected outcome, claim và citation labels. Graph fixture preflight hỗ trợ resolve nhiều citation cho global case.
-- [x] Community rollout gate fail-closed nếu thiếu claim/citation metric, graph prerequisite, provenance, epoch, stale behavior, latency/cost budget hoặc global gain target 10 điểm phần trăm.
-- [x] Artifact clean-commit local: `reports/community-summaries/20260715-073433-27c13ce/` (reports được ignore). `capability_passed=true`, structured coverage 100%, provenance 100%, rollback đạt.
+- [X] Migration additive V0036 tạo community version, membership và summary; summary mặc định `pending`. Community version chỉ được `approved` khi có attestation graph gate đạt, structured coverage >=80%, reviewed-edge precision >=95% và target global đã khóa. Clean migration từ database rỗng qua V0036 chạy hai lần idempotent và đạt.
+- [X] Community detection deterministic đã được version bằng `detection_version`, graph fingerprint và serving epoch. Run read-only tại commit `27c13ce` đọc 21 approved edge, tạo 5 community trong 24,096 ms, provenance completeness 100%, không persist và không sinh summary.
+- [X] Summary contract ánh xạ chính xác community node/edge tới doc/page/version/department/site/security. Approval kiểm tra transactionally membership, edge còn approved và document còn current/published/reviewed/servable; serving kiểm tra lại version readiness, epoch, fingerprint, membership, governance và RBAC.
+- [X] LLM-generated summary chỉ có thể được persist ở trạng thái `pending`; review API giới hạn cho `knowledge_approver`, `reviewer`, `admin` và audit không ghi raw prompt. Không có đường generation hoặc serving được nối vào chat pipeline khi prerequisite chưa đạt.
+- [X] Semantic cache namespace gồm feature flag `RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED` và `RAG_COMMUNITY_SERVING_EPOCH`; cả feature flag và rollback test đều mặc định tắt/xanh.
+- [X] Manifest `rag-eval-manifest-v2` đã tách 2 global, 2 local và 2 relational case, có identity RBAC, expected outcome, claim và citation labels. Graph fixture preflight hỗ trợ resolve nhiều citation cho global case.
+- [X] Community rollout gate fail-closed nếu thiếu claim/citation metric, graph prerequisite, provenance, epoch, stale behavior, latency/cost budget hoặc global gain target 10 điểm phần trăm.
+- [X] Artifact clean-commit local: `reports/community-summaries/20260715-073433-27c13ce/` (reports được ignore). `capability_passed=true`, structured coverage 100%, provenance 100%, rollback đạt.
 - [ ] `ready_for_generation=false` và `ready_for_serving=false` vì graph gate mục 2.7 vẫn `passed=false`, reviewed-edge precision độc lập hiện là 0 do chưa có nhãn reviewer. Preflight exit code 2 là quyết định fail-closed đúng thiết kế.
 - [ ] Chưa gọi LLM để tạo summary; chưa persist/approve summary staging; chưa chạy baseline/candidate, community quality gate hoặc controlled demo pilot.
 - [ ] Bước mở khóa tiếp theo là hoàn tất independent review tối thiểu 20 edge ở mục 2.7, chạy lại graph pair/gate, sau đó mới chạy generation → review → baseline/candidate của 2.8 trên cùng snapshot.
@@ -728,36 +748,37 @@ Hoàn tất phần GraphRAG global sensemaking trong tài liệu gốc mà khôn
 
 #### Trạng thái cập nhật 2026-07-15
 
-- [x] Đã hoàn thiện control plane offline cho đúng bảy combination bắt buộc.
+- [X] Đã hoàn thiện control plane offline cho đúng bảy combination bắt buộc.
   Mỗi row khai báo tường minh bảy feature flag, bốn version/serving namespace
   và prerequisite; cache namespace của các row không trùng nhau.
-- [x] Đã thêm request-budget gate fail-closed. Mọi case phải ghi đủ counter
+- [X] Đã tách `milestone-decision-v2` và controlled-demo ledger khỏi default-rollout ledger. Artifact lịch sử được xác minh theo source commit/hash gốc, không theo HEAD hiện tại; feature bị reject/inconclusive được pin tắt trong effective demo matrix để kiểm tra fallback.
+- [X] Đã thêm request-budget gate fail-closed. Mọi case phải ghi đủ counter
   kiểu integer cho planner, subquery, correction, repair, calculation, graph
   edge, provider retry và final generation; thiếu telemetry cũng bị fail.
-- [x] Đã thêm 15 security case phủ allow/deny theo role, department, site,
+- [X] Đã thêm 15 security case phủ allow/deny theo role, department, site,
   clearance, lifecycle, publication và current version. Legacy admin exception
   chỉ hợp lệ cho đúng role `admin` và tài liệu published/current/approved/
   effective/servable; admin vẫn không qua draft, unpublished hoặc non-current.
-- [x] Đã thêm load adapter đọc đúng artifact nhiều concurrency của
+- [X] Đã thêm load adapter đọc đúng artifact nhiều concurrency của
   `benchmark_rag_concurrency.py`, buộc chọn một mức concurrency và ghép P50/P95
   first-token/completion với cost/query, retry và fallback của labeled eval.
-- [x] Đã xác nhận bằng test rằng strict factual streaming vẫn buffer trước
+- [X] Đã xác nhận bằng test rằng strict factual streaming vẫn buffer trước
   post-check/repair, feature flags mặc định tắt và rollback không cần migration.
-- [x] Eval artifact lưu đúng bảy flag và bốn version; baseline phải all-off,
+- [X] Eval artifact lưu đúng bảy flag và bốn version; baseline phải all-off,
   candidate phải khớp chính xác matrix row. Trace snapshot được rebuild từ raw
   JSONL bất biến và các budget maxima phải khớp eval telemetry, nên nhãn
   combination hoặc snapshot tổng hợp giả không thể tự làm gate xanh.
-- [x] Đã thêm composer và integrated gate kiểm lại SHA-256/schema của artifact,
+- [X] Đã thêm composer và integrated gate kiểm lại SHA-256/schema của artifact,
   cùng commit, manifest, snapshot, provider configuration, governance scope,
   collection và concurrency cho từng pair trong bảy pair. Eval, trace, load và
   results của mỗi pair được bind end-to-end; một combination regression làm
   toàn bộ gate fail. Gate không nhận boolean tự khai báo thay evidence.
-- [x] Đã viết ADR và operations runbook cho flag isolation, abort, rollback,
+- [X] Đã viết ADR và operations runbook cho flag isolation, abort, rollback,
   cleanup có scope, baseline/candidate, load report và release decision.
 - [ ] Chưa chạy live bảy combination, load pair hoặc controlled demo pilot.
   Đây là trạng thái chủ động fail-closed: CRAG, Grounded Math, Late Interaction,
   decomposition và graph vẫn chưa đồng thời có decision artifact đã xác minh.
-- [ ] Chưa có release decision cuối. Template hiện để `incomplete`; mỗi feature
+- [ ] Chưa có release decision cuối cho toàn bộ matrix. Late Interaction và Query Decomposition đã có scoped controlled-demo reject decision; các feature
   phải có quyết định accepted/rejected và immutable evidence hợp lệ trước gate.
 
 Kết luận hiện tại: phần triển khai có thể làm hoàn toàn offline của 2.9 đã hoàn
@@ -848,11 +869,11 @@ Tất cả milestone đã đạt
 
 - [ ] CRAG/repair production pilot đạt hoặc có reject decision/artifact theo nhánh bác bỏ.
 - [ ] Grounded math có live baseline/candidate, gate và pilot/decision.
-- [x] Late Interaction có clean-commit three-arm artifact và quyết định không dùng `late-v2` làm default; controlled demo vẫn là hạng mục quan sát tùy chọn, flags mặc định giữ tắt.
+- [X] Late Interaction có clean-commit three-arm artifact và quyết định không dùng `late-v2` làm default; controlled demo vẫn là hạng mục quan sát tùy chọn, flags mặc định giữ tắt.
 - [ ] Query decomposition có complex-query gate và pilot/decision.
 - [ ] GraphRAG migration, seed, reviewer flow, quality gate và pilot/decision đạt.
 - [ ] Community summaries đã pilot hoặc có quyết định chính thức không triển khai do không đủ điều kiện/không tạo giá trị.
-- [ ] Claim precision, citation accuracy và risk–coverage evaluation đã được bổ sung.
+- [X] Claim precision, citation accuracy và risk–coverage evaluator đã được bổ sung; live reviewer sample vẫn thuộc gate của từng controlled demo.
 - [ ] Integrated feature-combination security/performance matrix xanh.
 - [ ] Không có leakage ngoài admin exception được khai báo; không wrong-answer regression.
 - [ ] Mọi enabled feature có flag rollback, cache namespace và operations runbook.

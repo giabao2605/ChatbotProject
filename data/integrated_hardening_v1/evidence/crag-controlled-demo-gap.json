@@ -1,0 +1,24 @@
+{
+  "schema": "controlled-demo-gap-evidence-v1",
+  "git_sha": "adb8060a2e3088bde66c0e092d6b4b7e006b8324",
+  "milestone": "crag",
+  "observed": {
+    "staging_pair_count": 3,
+    "staging_gate_passed": true,
+    "wrong_answer_regression": false,
+    "leakage_count": 0,
+    "provider_retry_count": 0
+  },
+  "source_artifacts": [
+    {"path": "reports/crag-rollout/20260714-latency-pair-01/gate.json", "sha256": "3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c"},
+    {"path": "reports/crag-rollout/20260714-latency-pair-02/gate.json", "sha256": "3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c"},
+    {"path": "reports/crag-rollout/20260714-latency-pair-03/gate.json", "sha256": "3a6721a266c36ac59b321bd8af59cd00934da01037dc4eead4f639c02199619c"}
+  ],
+  "missing_demo_evidence": {
+    "required_matched_pairs": 20,
+    "observed_matched_pairs": 0,
+    "required_distinct_users": 2,
+    "observed_distinct_users": 0,
+    "reviewer_signoff_complete": false
+  }
+}

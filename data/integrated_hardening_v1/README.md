@@ -26,3 +26,10 @@ when a row is missing or self-declares verification without a valid artifact.
 Live integrated evidence uses `integrated-matrix-evidence-v1`: exactly seven
 rows, each binding baseline/candidate eval, trace, load and aggregated results
 by path, SHA-256 and schema. The final gate fails if any one row regresses.
+
+`demo_decisions.json` is a separate controlled-demo ledger using
+`milestone-decision-v2`. A controlled-demo decision never completes a default
+rollout prerequisite. Rejected or inconclusive demo features are pinned off in
+the effective demo matrix and their fallback paths remain testable. The ledger
+is intentionally fail-closed until every milestone has immutable evidence and
+reviewer sign-off.

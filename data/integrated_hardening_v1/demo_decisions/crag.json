@@ -1,0 +1,14 @@
+{
+  "schema": "milestone-decision-v2",
+  "milestone": "crag",
+  "scope": "controlled_demo",
+  "decision": "inconclusive",
+  "source_commit": "adb8060a2e3088bde66c0e092d6b4b7e006b8324",
+  "evidence": [{
+    "path": "data/integrated_hardening_v1/evidence/crag-controlled-demo-gap.json",
+    "sha256": "14865ac373688a6a4022098b55943d62edbaf1725a4a8bf73d1dea753c20f74b",
+    "schema": "controlled-demo-gap-evidence-v1"
+  }],
+  "reason": "Three staging pairs passed, but the controlled demo has not collected 20 matched pairs from at least two users or reviewer sign-off.",
+  "reviewer_signoff": {"reviewer": "bao.nguyen-plan-approval", "signed_at": "2026-07-16T01:28:01Z"}
+}

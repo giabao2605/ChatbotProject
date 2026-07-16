@@ -561,6 +561,24 @@ def test_demo_ledger_verifies_scoped_decisions_without_mutating_live_state(tmp_p
     assert report["ready_for_live_matrix"] is False
 
 
+def test_repository_demo_ledger_is_complete_and_defaults_every_unaccepted_feature_off():
+    root = Path.cwd()
+    ledger = _json("data/integrated_hardening_v1/demo_decisions.json")
+    report = verify_demo_decision_ledger(ledger, root=root, current_commit="current")
+    assert report["passed"] is True
+    assert report["ready_for_demo_matrix"] is True
+    assert report["ready_for_live_matrix"] is False
+    matrix = build_demo_matrix(
+        _json("data/integrated_hardening_v1/matrix.json"),
+        report["decisions"],
+    )
+    assert len(matrix["combinations"]) == 7
+    assert all(
+        not any(row["effective_flags"].values())
+        for row in matrix["combinations"]
+    )
+
+
 def test_decision_builder_binds_historical_artifact_without_rewriting_it(tmp_path):
     gate = tmp_path / "gate.json"
     raw = b'{"schema":"retrieval-intelligence-gate-v1","stage":"late_interaction","passed":false}\n'

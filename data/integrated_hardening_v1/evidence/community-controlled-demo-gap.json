@@ -1,0 +1,22 @@
+{
+  "schema": "controlled-demo-gap-evidence-v1",
+  "git_sha": "27c13ce87296dffe756a713771376150160d8d95",
+  "milestone": "community_summaries",
+  "observed": {
+    "offline_capability_passed": true,
+    "structured_coverage": 1.0,
+    "provenance_completeness": 1.0,
+    "ready_for_generation": false,
+    "ready_for_serving": false
+  },
+  "source_artifacts": [
+    {"path": "reports/community-summaries/20260715-073433-27c13ce/readiness.json", "sha256": "77c965ff653f7099ff87b7d190a4a8963f325ada2db516ae35095fa63dd92009"}
+  ],
+  "missing_demo_evidence": {
+    "graph_controlled_demo_accepted": false,
+    "required_reviewed_summaries": 5,
+    "observed_reviewed_summaries": 0,
+    "required_global_queries": 10,
+    "observed_global_queries": 0
+  }
+}
