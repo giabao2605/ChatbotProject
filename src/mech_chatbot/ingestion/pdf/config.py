@@ -54,8 +54,11 @@ os.makedirs(IMAGE_DIR, exist_ok=True)
 PDF_EXTENSIONS = {".pdf"}
 
 
-TEXT_EXTENSIONS = {
-    ".txt", ".md", ".markdown", ".rst", ".log", ".sql",
+MARKDOWN_EXTENSIONS = {".md", ".markdown"}
+
+
+TEXT_EXTENSIONS = MARKDOWN_EXTENSIONS | {
+    ".txt", ".rst", ".log", ".sql",
     ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".cs",
     ".cpp", ".c", ".h", ".hpp", ".json", ".xml", ".yaml",
     ".yml", ".ini", ".cfg",

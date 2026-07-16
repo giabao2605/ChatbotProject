@@ -35,7 +35,7 @@ from mech_chatbot.llm.vision_client import describe_vision_error, is_retryable_e
 from mech_chatbot.llm.external_ai import external_document_context
 
 # cross-module (owned) imports
-from mech_chatbot.ingestion.pdf.config import IMAGE_DIR, IMAGE_EXTENSIONS, ROLLBACK_ON_INGEST_ERROR, STRICT_INGEST_REQUIRE_VISION
+from mech_chatbot.ingestion.pdf.config import IMAGE_DIR, IMAGE_EXTENSIONS, MARKDOWN_EXTENSIONS, ROLLBACK_ON_INGEST_ERROR, STRICT_INGEST_REQUIRE_VISION
 from mech_chatbot.ingestion.pdf.chunking import _build_chunk_context_prefix, _contextual_chunk_enabled, token_splitter, tokenize_cached
 from mech_chatbot.ingestion.pdf.vision import _prewarm_vision_cache, call_vision_model, format_vision_data, parse_vision_json
 from mech_chatbot.ingestion.pdf.quality import _normalize_phong_ban_quyen, calculate_quality_status
@@ -747,6 +747,17 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
                 vision_summary=text_content,
                 extraction_status="success",
                 image_path=rendered_image_path,
+            )
+        elif ext in MARKDOWN_EXTENSIONS:
+            report["pages_text_extracted"].append(1)
+            save_document_page(
+                doc_id=doc_id,
+                file_name=ten_file,
+                page_no=1,
+                text_extract=text_content,
+                vision_summary="",
+                extraction_status="success",
+                image_path=None,
             )
 
         # GD4: duong nap hang loat khong tin folder tuyet doi -> quet noi dung nhay cam

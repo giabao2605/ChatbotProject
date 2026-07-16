@@ -8,7 +8,7 @@ import html
 from PIL import Image
 
 # cross-module (owned) imports
-from mech_chatbot.ingestion.pdf.config import HTML_EXTENSIONS, IMAGE_EXTENSIONS, PRESENTATION_EXTENSIONS, SUPPORTED_LEARNING_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS, WORD_EXTENSIONS
+from mech_chatbot.ingestion.pdf.config import HTML_EXTENSIONS, IMAGE_EXTENSIONS, MARKDOWN_EXTENSIONS, PRESENTATION_EXTENSIONS, SUPPORTED_LEARNING_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS, WORD_EXTENSIONS
 from mech_chatbot.ingestion.pdf.vision import call_vision_model, format_vision_data, parse_vision_json
 
 
@@ -57,6 +57,28 @@ def _read_text_file(file_path):
         last_error.end,
         "Khong doc duoc file bang cac encoding pho bien.",
     )
+
+
+def _validate_markdown_text(text):
+    if "\x00" in text:
+        raise ValueError("File Markdown co dau hieu du lieu nhi phan (NUL byte).")
+    disallowed_controls = sum(
+        1 for char in text if ord(char) < 32 and char not in "\n\r\t"
+    )
+    if text and disallowed_controls / len(text) > 0.05:
+        raise ValueError("File Markdown co qua nhieu ky tu dieu khien, khong phai van ban hop le.")
+    return text
+
+
+def _read_markdown_file(file_path):
+    with open(file_path, "rb") as file_handle:
+        raw = file_handle.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("File Markdown phai la van ban UTF-8 hop le.") from exc
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return _validate_markdown_text(text)
 
 
 def _read_json_file(file_path):
@@ -197,6 +219,8 @@ def extract_text_from_supported_file(file_path, ten_file, vision_model=None):
         return _read_presentation_file(file_path), "slide"
     if ext in IMAGE_EXTENSIONS:
         return _read_image_file(file_path, ten_file, vision_model), "image_summary"
+    if ext in MARKDOWN_EXTENSIONS:
+        return _read_markdown_file(file_path), "van_ban"
     if ext in TEXT_EXTENSIONS:
         return _read_text_file(file_path), "van_ban"
     supported = ", ".join(sorted(SUPPORTED_LEARNING_EXTENSIONS))
