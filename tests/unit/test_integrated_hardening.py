@@ -424,7 +424,7 @@ def test_historical_decision_is_verified_against_source_commit_not_current_head(
 
 def test_nested_source_artifact_tampering_invalidates_decision(tmp_path):
     source = tmp_path / "source.json"
-    source_raw = b'{"schema":"raw-gate-v1","passed":true}\n'
+    source_raw = b'{"schema":"raw-gate-v1","git_sha":"historical","passed":true}\n'
     source.write_bytes(source_raw)
     wrapper = tmp_path / "wrapper.json"
     wrapper_payload = {
@@ -456,7 +456,10 @@ def test_nested_source_artifact_tampering_invalidates_decision(tmp_path):
     }
     assert verify_milestone_decision(decision, root=tmp_path)["passed"] is True
 
-    source.write_text('{"schema":"raw-gate-v1","passed":false}\n', encoding="utf-8")
+    source.write_text(
+        '{"schema":"raw-gate-v1","git_sha":"historical","passed":false}\n',
+        encoding="utf-8",
+    )
 
     report = verify_milestone_decision(decision, root=tmp_path)
     assert report["passed"] is False

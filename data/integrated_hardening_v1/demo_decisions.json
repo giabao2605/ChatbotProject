@@ -4,23 +4,23 @@
   "decisions": {
     "crag": {
       "path": "data/integrated_hardening_v1/demo_decisions/crag.json",
-      "sha256": "ba0f65f9eb242e1ae0edd950a22b738254609315755fc73d809f51105cf3219d"
+      "sha256": "78bdbf49368496f10702e63cc802e09bb3a7e46b81fb021dfcce1cd7a699540a"
     },
     "grounded_math": {
       "path": "data/integrated_hardening_v1/demo_decisions/grounded_math.json",
-      "sha256": "c70539444342a3b99c887c204f37cd844caaa2e909a66d910a083869cbe13dd4"
+      "sha256": "4d23b873ecd1fafeb7e0bec172d6b93ad27ba83c8b260333977cb1a23d53ef5a"
     },
     "late_interaction": {
       "path": "data/integrated_hardening_v1/demo_decisions/late_interaction.json",
-      "sha256": "b10c12c1992522eb3cc539244209d084c25278001459b7d885eb549930119624"
+      "sha256": "1533283ea427c1943f598903521927d5d6943c646a057c165c90c5ac39f575de"
     },
     "query_decomposition": {
       "path": "data/integrated_hardening_v1/demo_decisions/query_decomposition.json",
-      "sha256": "289791a465519c6605b8559e26cd39fb54adf582e5c1f07f708bec288c231f3c"
+      "sha256": "20ffda67ebff97bae740cf81a192e4dc8b4ecb9161b6c0e9e9016eaaacbc05d4"
     },
     "graph_retrieval": {
       "path": "data/integrated_hardening_v1/demo_decisions/graph_retrieval.json",
-      "sha256": "c0f271f5ba67708756be8b7e6cccd0e7858ef7e63e5fa691b01f4c10c67668a6"
+      "sha256": "4c365df096b4225894a99a6bfe808853a7c9a3d3e55dce848e824ef23afdf848"
     },
     "community_summaries": {
       "path": "data/integrated_hardening_v1/demo_decisions/community_summaries.json",

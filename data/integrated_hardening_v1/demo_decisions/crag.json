@@ -6,7 +6,7 @@
   "source_commit": "adb8060a2e3088bde66c0e092d6b4b7e006b8324",
   "evidence": [{
     "path": "data/integrated_hardening_v1/evidence/crag-controlled-demo-gap.json",
-    "sha256": "d4e3c34ab34f889f4f74f314de786bc337af5b9aa80fe50629ffa4201946206b",
+    "sha256": "cd20c5f70fd82de0234c0f857aee6e7c005dd5d51eafcea5302f62f42cd1fd9b",
     "schema": "controlled-demo-gap-evidence-v1"
   }],
   "reason": "Three staging pairs passed, but the controlled demo has not collected 20 matched pairs from at least two users or reviewer sign-off.",

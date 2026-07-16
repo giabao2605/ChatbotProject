@@ -53,8 +53,14 @@ def _verify_artifact_reference(
     require_commit_anchor: bool,
 ) -> dict:
     artifact, report = _load_json_reference(reference, root=root)
+    run_metadata = artifact.get("run_metadata")
+    metadata_commit = (
+        run_metadata.get("commit_sha")
+        if isinstance(run_metadata, dict) else None
+    )
     artifact_commit = str(
-        artifact.get("git_sha") or artifact.get("source_commit") or ""
+        artifact.get("git_sha") or artifact.get("commit_sha")
+        or artifact.get("source_commit") or metadata_commit or ""
     )
     commit_anchor_present = bool(artifact_commit)
     report["commit_anchor_present"] = commit_anchor_present
@@ -88,10 +94,24 @@ def _verify_artifact_reference(
     report["nested_artifacts_passed"] = (
         nested_shape_valid and all(item["passed"] for item in nested_reports)
     )
+    nested_commit_anchor_present = any(
+        item["provenance_commit_anchor"] for item in nested_reports
+    )
+    report["nested_commit_anchor_present"] = nested_commit_anchor_present
+    report["provenance_commit_anchor"] = (
+        nested_commit_anchor_present
+        if isinstance(nested_references, list)
+        else commit_anchor_present and report["source_commit_matches"]
+    )
+    report["commit_requirement_satisfied"] = (
+        report["provenance_commit_anchor"]
+        or (not require_commit_anchor and nested_references is None)
+    )
     report["source_artifacts"] = nested_reports
     report["passed"] = all(report[field] for field in (
         "exists", "sha256_matches", "schema_matches", "source_commit_matches",
         "nested_artifacts_valid", "nested_artifacts_passed",
+        "commit_requirement_satisfied",
     ))
     return report
 

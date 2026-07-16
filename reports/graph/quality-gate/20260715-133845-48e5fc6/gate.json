@@ -1,0 +1,39 @@
+{
+  "schema": "retrieval-intelligence-gate-v1",
+  "stage": "graph_retrieval",
+  "passed": false,
+  "checks": {
+    "wrong_answer_not_increased": true,
+    "leakage_zero": true,
+    "provider_retries_not_increased": true,
+    "relational_accuracy_gain": true,
+    "reviewed_edge_precision": false,
+    "review_workflow_fixture_passed": true,
+    "review_sample_is_independent": false,
+    "review_sample_size_sufficient": false,
+    "approved_edge_pool_sufficient": true,
+    "structured_coverage": true,
+    "provenance_complete": true,
+    "pilot_domains_covered": true,
+    "pending_edges_never_served": true,
+    "traversal_budget_respected": true,
+    "router_scope_respected": true,
+    "latency_within_budget": true
+  },
+  "limits": {
+    "min_accuracy_gain": 0.1,
+    "min_structured_coverage": 0.8,
+    "min_reviewed_edge_precision": 0.95,
+    "max_latency_ratio": 1.5,
+    "min_independent_review_sample": 20,
+    "min_approved_edge_pool": 20,
+    "max_hops": 2,
+    "max_edges": 50
+  },
+  "inputs": {
+    "baseline_eval_sha256": "282ff8c8b0ef11b8d2f7d4dabc59d857cef76167c5c2cf93e0a6e4936c917eb2",
+    "candidate_eval_sha256": "9086a5594c1e4648d3de5358101f88f1be16a0e6c77ae13b90e76177d72cfdc7",
+    "baseline_trace_sha256": "8405d401d7d8bace729a42c7899da083a1fa700c53a67ecd3f74b551519ad09e",
+    "candidate_trace_sha256": "781d8f9d5442de3f646d466830d73eb8699bb4e5ff20b073d9904747b9448399"
+  }
+}

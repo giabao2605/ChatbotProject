@@ -2,16 +2,16 @@
   "schema": "milestone-decision-v2",
   "milestone": "query_decomposition",
   "scope": "controlled_demo",
-  "decision": "rejected",
+  "decision": "inconclusive",
   "source_commit": "937ec52e8b39b6cd16a88b58288cf3bb43ec35ec",
   "evidence": [
     {
       "path": "data/integrated_hardening_v1/evidence/query-decomposition-controlled-demo-result.json",
-      "sha256": "fad94f7807247b5a6a381e31a0c3cb71c5f17b27ac1598119a4b7eb7790e1002",
+      "sha256": "929bf9d93e776c4d7c5b85515ce3e361b374ada897a65e9a1aa8ebae25cd58c4",
       "schema": "controlled-demo-milestone-evidence-v1"
     }
   ],
-  "reason": "A provider-stable clean pair had zero harness errors and zero provider retries, but did not improve complex-answer quality; branch accuracy and citation accuracy remained below the locked gate, so decomposition stays disabled for the controlled demo.",
+  "reason": "A provider-stable eight-case fixture pair had zero harness errors and zero provider retries but failed the quality target. The required ten additional complex demo questions were not collected, so the controlled-demo result remains inconclusive and decomposition stays disabled.",
   "reviewer_signoff": {
     "reviewer": "bao.nguyen-plan-approval",
     "signed_at": "2026-07-16T01:25:43Z"

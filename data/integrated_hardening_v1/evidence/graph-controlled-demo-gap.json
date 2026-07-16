@@ -10,7 +10,8 @@
     "latency_budget_passed": true
   },
   "source_artifacts": [
-    {"path": "reports/graph/quality-gate/20260715-133845-48e5fc6/gate.json", "sha256": "ffc6e45c6ef780d8880a24788325af193eea3d4db5b29c821ec4a17e793d7e48", "schema": "retrieval-intelligence-gate-v1"}
+    {"path": "reports/graph/quality-gate/20260715-133845-48e5fc6/gate.json", "sha256": "ffc6e45c6ef780d8880a24788325af193eea3d4db5b29c821ec4a17e793d7e48", "schema": "retrieval-intelligence-gate-v1"},
+    {"path": "reports/graph/quality-gate/20260715-133845-48e5fc6/run.json", "sha256": "33674001c9521284c7abd4c27bd61fce28e872e951bd5489d4386828f18b5c7a", "schema": "graph-rollout-run-v1"}
   ],
   "missing_demo_evidence": {
     "required_independent_edge_reviews": 20,

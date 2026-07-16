@@ -9,7 +9,8 @@
     "citation_checks_passed": true
   },
   "source_artifacts": [
-    {"path": "reports/grounded-math/d5ec3e1/series.json", "sha256": "6cc256d5206ebe468a831ec1c16862bc0371a62b83a8cad6a4dd89da5ca931c7", "schema": "rollout-guardrail-series-v1"}
+    {"path": "reports/grounded-math/d5ec3e1/series.json", "sha256": "6cc256d5206ebe468a831ec1c16862bc0371a62b83a8cad6a4dd89da5ca931c7", "schema": "rollout-guardrail-series-v1"},
+    {"path": "reports/grounded-math/d5ec3e1/pair-01/run.json", "sha256": "20100d6280c002c8d93b8fd21554c82ce2044c84646c98063fbf66f0188308ad", "schema": "grounded-math-rollout-run-v1"}
   ],
   "missing_demo_evidence": {
     "required_reviewed_user_queries": 10,

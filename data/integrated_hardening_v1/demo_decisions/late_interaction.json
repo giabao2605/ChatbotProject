@@ -7,7 +7,7 @@
   "evidence": [
     {
       "path": "data/integrated_hardening_v1/evidence/late-interaction-controlled-demo-result.json",
-      "sha256": "7f5bf8f69eed8aa806b7f806a45b591c134b8f98bfe54264777049f04395eaa0",
+      "sha256": "2c034b2e59e516903a57082cd09e5c60c028c1f89e126ac66cde5682c5aaa2dc",
       "schema": "controlled-demo-milestone-evidence-v1"
     }
   ],

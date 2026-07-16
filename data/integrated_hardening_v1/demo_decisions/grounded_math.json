@@ -6,7 +6,7 @@
   "source_commit": "d5ec3e1f8e592581f54d4e6fe695f00e4776408f",
   "evidence": [{
     "path": "data/integrated_hardening_v1/evidence/grounded-math-controlled-demo-gap.json",
-    "sha256": "a968e0398f7d2f545969f717338a425a0fb0e5d5739fd3ae158006f4025ba54e",
+    "sha256": "6f0d223ba1d3ca14b5b3cce6230e347275a791b2e3deac33d75249a16be7cb76",
     "schema": "controlled-demo-gap-evidence-v1"
   }],
   "reason": "Fixture and staging math checks passed, but ten real demo queries have not been manually reviewed for formula, units, provenance, and citation.",

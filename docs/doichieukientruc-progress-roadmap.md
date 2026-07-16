@@ -42,7 +42,7 @@ Vì vậy, “100% controlled demo” không đồng nghĩa phải bật mọi c
 | CRAG và claim repair            | Có                                           | Có                        | Ba gate đạt                                                         | Inconclusive | Thiếu 20 matched pairs, hai người dùng và reviewer sign-off; flag giữ tắt |
 | Grounded math                    | Có                                           | Có, gồm integration live | 3/3 pair đạt; series bị chặn bởi CRAG                            | Inconclusive | Thiếu 10 truy vấn demo được review thủ công; flag giữ tắt |
 | Late Interaction                 | Có                                           | Có                        | Có readiness và 3 pair clean-commit gate fail-closed                | Rejected cho controlled demo mặc định | `late-v2` được giữ làm research path; flag bị pin tắt trong demo matrix |
-| Query decomposition              | Có                                           | Có, full suite xanh       | Có provider-stable clean pair tại `937ec52`; quality gate không đạt | Rejected cho controlled demo | Không có harness/provider error; quality gain và branch accuracy/citation không đạt, flag giữ tắt |
+| Query decomposition              | Có                                           | Có, full suite xanh       | Có provider-stable 8-case pair tại `937ec52`; quality gate không đạt | Inconclusive cho controlled demo | Chưa có 10 câu hỏi phức hợp bổ sung theo hợp đồng nghiệm thu; flag giữ tắt |
 | Governed GraphRAG                | Có schema/API/retrieval                      | Có, gồm integration live | Có clean-commit pair; gate fail-closed vì thiếu independent review | Inconclusive | Thiếu 20 edge do reviewer độc lập gán nhãn; flag giữ tắt |
 | Community summaries              | Có offline control plane, chưa nối serving | Có; full suite xanh       | Readiness fail-closed tại `27c13ce` | Inconclusive | Bị khóa hợp lệ bởi GraphRAG; chưa generation/review/global-query run |
 
@@ -287,7 +287,7 @@ Implementation chính:
 
 - Manifest multi-intent/multi-source, provider smoke 5/5 và một baseline/candidate pair sạch đã chạy trên cùng snapshot; pair có 0 harness error, 0 retry và không còn lỗi `503`.
 - Gate xác nhận simple query không gọi planner, budget/leakage/wrong-answer/P95/cost đều trong giới hạn, nhưng correct/partial-answer gain, branch accuracy và citation completeness không đạt target.
-- Controlled-demo decision đã chốt `rejected`; feature giữ tắt và fallback path được kiểm tra tiếp trong integrated matrix.
+- Controlled-demo decision là `inconclusive`: pair tám fixture case không đạt quality gate, nhưng chưa có mười câu hỏi phức hợp bổ sung theo hợp đồng demo. Feature giữ tắt và fallback path được kiểm tra tiếp trong integrated matrix.
 - Chưa production pilot vì chất lượng không đạt gate, không phải vì thiếu harness hoặc manifest.
 
 ### 1.8 Governed GraphRAG trên SQL Server
@@ -359,7 +359,7 @@ Không đạt default-rollout gate không đồng nghĩa phải xóa tính năng
 | 2.3 CRAG | `inconclusive`; chưa có 20 matched pairs và reviewer sign-off |
 | 2.4 Grounded Math | `inconclusive`; staging đạt nhưng chưa có 10 truy vấn demo được review |
 | 2.5 Late Interaction | `rejected`; immutable evidence và decision v2 đã được thêm |
-| 2.6 Query Decomposition | `rejected`; smoke 5/5 và clean pair có 0 error/0 retry nhưng quality gate không đạt |
+| 2.6 Query Decomposition | `inconclusive`; smoke 5/5 và clean 8-case pair có 0 error/0 retry nhưng còn thiếu 10 câu hỏi phức hợp bổ sung |
 | 2.7 GraphRAG | `inconclusive`; thiếu independent review tối thiểu 20 edge |
 | 2.8 Community summaries | `inconclusive`; bị khóa bởi 2.7, chưa generation/review/global-query run |
 | 2.9 Integrated matrix | Demo ledger đầy đủ, `ready_for_demo_matrix=true` và fallback load observation concurrency 1/5 đạt; bảy pair độc lập chưa chạy |
@@ -615,7 +615,7 @@ Chứng minh decomposition chỉ giúp câu phức tạp, không làm câu đơn
 5. [Đã hoàn tất offline] Enforce tối đa ba subquery, một shared correction và một final generation; evaluator và gate báo budget violation.
 6. [Đã hoàn tất offline] Deadline được truyền dưới dạng monotonic deadline, retrieval chạy song song và trả về khi hết hạn; chỉ document từ nhánh `full_answer` đi vào generation; missing/access-denied chỉ tạo notice an toàn.
 7. [Đã hoàn tất decision] Gate đo accuracy, wrong-answer, leakage, provider retry, P95 và cost. Pair provider-stable tại `937ec52` có 0 harness error và 0 provider retry ở cả hai arm; latency/cost, leakage, wrong-answer và request budget đều đạt nhưng complex-answer gain, branch accuracy và citation không đạt.
-8. [Đã reject cho controlled demo] `milestone-decision-v2` đã khóa kết luận không bật Query Decomposition trong demo hiện tại. Flag mặc định tiếp tục tắt; fallback path sẽ được kiểm tra trong integrated matrix.
+8. [Đã ghi inconclusive cho controlled demo] `milestone-decision-v2` ghi đúng phần evidence còn thiếu. Flag mặc định tiếp tục tắt; fallback path sẽ được kiểm tra trong integrated matrix.
 
 #### Điều kiện hoàn tất
 
@@ -635,7 +635,7 @@ Chứng minh decomposition chỉ giúp câu phức tạp, không làm câu đơn
 - Gate trả `passed=false`: complex gain, branch accuracy/citation, retry, P95 và cost không đạt. Trace xác nhận ProxyLLM `gpt-5.4` trả nhiều `503 service_unavailable/no_capacity`; baseline có 10 retry, candidate 12 retry. Vì vậy artifact này là bằng chứng fail-closed/provider-invalid, chưa phải quyết định bác bỏ decomposition.
 - Provider smoke ngày 2026-07-16 đạt 5/5, 0 retry. Pair đầu tiên sau smoke phát hiện lỗi local `extract_source_ids` chưa import; lỗi đã có regression test và được sửa tại `937ec52`, artifact lỗi không được dùng làm quality decision.
 - Pair sạch sau fix: `reports/decomposition/quality-gate/20260716-fixed-937ec52/`, baseline/candidate 0 error và 0 provider retry. Gate vẫn `passed=false`: complex-answer gain, branch accuracy và branch citation không đạt; latency/cost/budget/safety đạt.
-- Kết luận evidence-first: Query Decomposition bị `rejected` cho controlled demo hiện tại, không tiếp tục tuning trong milestone này và giữ `RAG_QUERY_DECOMPOSITION_ENABLED=false`.
+- Kết luận evidence-first: Query Decomposition là `inconclusive` cho controlled demo hiện tại vì mới có tám fixture case mỗi arm, chưa có mười câu hỏi phức hợp bổ sung. Giữ `RAG_QUERY_DECOMPOSITION_ENABLED=false` cho đến khi có đủ evidence.
 
 ### 2.7 Milestone E — Đóng Governed GraphRAG gate
 
@@ -776,7 +776,7 @@ Hoàn tất phần GraphRAG global sensemaking trong tài liệu gốc mà khôn
 - [X] Đã viết ADR và operations runbook cho flag isolation, abort, rollback,
   cleanup có scope, baseline/candidate, load report và release decision.
 - [ ] Chưa chạy bảy baseline/candidate pair độc lập hoặc controlled demo pilot.
-  Controlled-demo ledger hiện có đủ sáu scoped decision đã xác minh: Late Interaction và Query Decomposition là `rejected`; CRAG, Grounded Math, GraphRAG và Community Summaries là `inconclusive`. Vì vậy `ready_for_demo_matrix=true` chỉ cho phép chạy fallback matrix, không chứng minh matrix đã đạt quality gate.
+  Controlled-demo ledger hiện có đủ sáu scoped decision đã xác minh: Late Interaction là `rejected`; CRAG, Grounded Math, Query Decomposition, GraphRAG và Community Summaries là `inconclusive`. Vì vậy `ready_for_demo_matrix=true` chỉ cho phép chạy fallback matrix, không chứng minh matrix đã đạt quality gate.
 - [ ] Chưa có integrated release decision cuối. Cần evidence riêng cho từng row ở concurrency 5; các row chứa feature `rejected` hoặc `inconclusive` phải chạy với flag đó tắt và chứng minh fallback không gây leakage hoặc wrong-answer regression.
 
 Kết luận hiện tại: phần triển khai có thể làm hoàn toàn offline của 2.9 đã hoàn
