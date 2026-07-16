@@ -15,6 +15,14 @@ EVALUATOR_MODELS = {
 }
 
 
+def is_valid_relation_contract(value: object) -> bool:
+    """Return whether a graph relation has the complete canonical identity."""
+    return isinstance(value, dict) and all(
+        isinstance(value.get(field), str) and value[field].strip()
+        for field in ("source_key", "relation_type", "target_key")
+    )
+
+
 def version_manifest_case(case: dict) -> str:
     schema = case.get("manifest_schema") or LEGACY_MANIFEST_SCHEMA
     if schema not in SUPPORTED_MANIFEST_SCHEMAS:
@@ -53,6 +61,29 @@ def validate_manifest_ground_truth(case: dict, *, expected_outcome: str) -> None
         if any(citation.get(field) in (None, "") for field in required):
             raise ValueError(
                 "each expected_citation requires document/doc_id/page/version/source_id"
+            )
+    single_relation = case.get("expected_relation")
+    multiple_relations = case.get("expected_relations")
+    graph_case = case.get("evaluation_group") in {"graphrag", "relational"}
+    if single_relation is not None and multiple_relations is not None:
+        raise ValueError("use expected_relation or expected_relations, not both")
+    if multiple_relations is not None:
+        if not isinstance(multiple_relations, list) or not multiple_relations:
+            raise ValueError("expected_relations must be a non-empty list")
+        relation_contracts = multiple_relations
+        relation_field = "expected_relations"
+    elif single_relation is not None:
+        relation_contracts = [single_relation]
+        relation_field = "expected_relation"
+    else:
+        relation_contracts = []
+        relation_field = "expected_relations"
+    if graph_case and not relation_contracts:
+        raise ValueError("graph cases require expected_relation or expected_relations")
+    for relation in relation_contracts:
+        if not is_valid_relation_contract(relation):
+            raise ValueError(
+                f"each {relation_field} item requires source_key/relation_type/target_key"
             )
     if case.get("evaluation_group") == "grounded_math":
         calculation = case.get("expected_calculation")

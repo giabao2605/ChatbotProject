@@ -423,7 +423,7 @@ def run_evaluation(
                 in {"1", "true", "yes", "on"}
             )
             graph_required = (
-                bool(case.get("expected_relation"))
+                bool(case.get("expected_relation") or case.get("expected_relations"))
                 and os.environ.get("RAG_GRAPH_RETRIEVAL_ENABLED", "false").strip().lower()
                 in {"1", "true", "yes", "on"}
             )

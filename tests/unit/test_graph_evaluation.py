@@ -7,6 +7,7 @@ from scripts.graph_eval.cleanup_fixture import (
     fixture_only_community_versions,
 )
 from mech_chatbot.evaluation.graph import evaluate_graph_case, summarize_graph_evaluation
+from mech_chatbot.evaluation.schema import validate_manifest_ground_truth
 
 
 pytestmark = pytest.mark.unit
@@ -129,6 +130,132 @@ def test_graph_preflight_resolves_relations_and_fails_closed_on_pending_edge():
     }
 
 
+def test_graph_preflight_resolves_and_verifies_every_multi_relation():
+    case = {
+        "id": "assembly-material",
+        "expected_document": "assembly.md",
+        "expected_page": 1,
+        "expected_version": 2,
+        "expected_relations": [
+            {
+                "source_key": "$DOC:assembly_v2",
+                "relation_type": "CONTAINS_PART",
+                "target_key": "part:graph-eval-part-a",
+            },
+            {
+                "source_key": "part:graph-eval-part-a",
+                "relation_type": "USES_MATERIAL",
+                "target_key": "material:steel",
+            },
+        ],
+    }
+    point = {
+        "doc_id": 10,
+        "trang_so": 1,
+        "version_no": 2,
+        "source_system": "graph-eval-v1",
+        "servable": True,
+        "is_current": True,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+    }
+    edges = [
+        _edge(),
+        _edge(
+            edge_id=2,
+            relation_type="USES_MATERIAL",
+            source_key="part:graph-eval-part-a",
+            target_key="material:steel",
+        ),
+    ]
+
+    report = check_graph_fixture(
+        [case],
+        [_document(FixtureKey="assembly_v2")],
+        edges,
+        [point],
+        applied_versions={"V0033", "V0034"},
+        pending_serving_edge_count=0,
+        collection="MechChatbot_Graph_Eval_v1",
+    )
+
+    assert report["passed"] is True
+    resolved = report["case_resolutions"]["assembly-material"]["expected_relations"]
+    assert len(resolved) == 2
+    assert resolved[0]["source_key"] == "document:10"
+
+
+def test_graph_preflight_resolves_canonical_part_and_material_symbols():
+    case = {
+        "id": "symbolic-bom-relation",
+        "expected_document": "assembly.md",
+        "expected_page": 1,
+        "expected_version": 2,
+        "expected_relations": [
+            {
+                "source_key": "$PART:DEMO-PART-C",
+                "relation_type": "USES_MATERIAL",
+                "target_key": "$MATERIAL:DEMO-MAT-RUBBER",
+            },
+        ],
+    }
+    point = {
+        "doc_id": 10,
+        "trang_so": 1,
+        "version_no": 2,
+        "source_system": "graph-eval-v1",
+        "servable": True,
+        "is_current": True,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+    }
+    edge = _edge(
+        relation_type="USES_MATERIAL",
+        source_key="part:demo-part-c",
+        target_key="material:demo-mat-rubber",
+    )
+
+    report = check_graph_fixture(
+        [case], [_document(FixtureKey="assembly_v2")], [edge], [point],
+        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=0,
+        collection="MechChatbot_Graph_Eval_v1",
+    )
+
+    assert report["passed"] is True
+    relation = report["case_resolutions"]["symbolic-bom-relation"]["expected_relations"][0]
+    assert relation["source_key"] == "part:demo-part-c"
+    assert relation["target_key"] == "material:demo-mat-rubber"
+
+
+def test_graph_preflight_reports_unresolved_relation_symbol_explicitly():
+    case = {
+        "id": "unsupported-symbol",
+        "expected_document": "assembly.md",
+        "expected_page": 1,
+        "expected_version": 2,
+        "expected_relation": {
+            "source_key": "$VERSION:assembly:2",
+            "relation_type": "HAS_VERSION",
+            "target_key": "$DOC:assembly_v2",
+        },
+    }
+
+    report = check_graph_fixture(
+        [case], [_document(FixtureKey="assembly_v2")], [], [],
+        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=0,
+        collection="MechChatbot_Graph_Eval_v1",
+    )
+
+    assert report["passed"] is False
+    assert any(
+        failure["reason"] == "relation_symbol_unresolved"
+        and failure["symbol"] == "$VERSION:assembly:2"
+        for failure in report["failures"]
+    )
+
+
 def test_graph_cleanup_is_scoped_to_fixture_assets_and_collection(tmp_path):
     workspace = tmp_path / "repo"
     expected = workspace / "data" / "graph_eval_v1"
@@ -203,6 +330,129 @@ def test_graph_evaluator_keeps_relation_evidence_after_document_deduplication():
 
     assert result["passed"] is True
     assert result["relation_matched"] is True
+
+
+def test_graph_evaluator_requires_every_expected_relation_in_multi_relation_case():
+    case = {
+        "evaluation_group": "graphrag",
+        "expected_relations": [
+            {
+                "source_key": "document:10",
+                "relation_type": "CONTAINS_PART",
+                "target_key": "part:a",
+            },
+            {
+                "source_key": "part:a",
+                "relation_type": "USES_MATERIAL",
+                "target_key": "material:steel",
+            },
+        ],
+    }
+    first_relation = {
+        "graph_edge_id": 7,
+        "graph_source_key": "document:10",
+        "graph_relation_type": "CONTAINS_PART",
+        "graph_target_key": "part:a",
+    }
+    second_relation = {
+        "graph_edge_id": 8,
+        "graph_source_key": "part:a",
+        "graph_relation_type": "USES_MATERIAL",
+        "graph_target_key": "material:steel",
+    }
+
+    incomplete = evaluate_graph_case(case, {
+        "graph_evidence": [first_relation],
+        "graph_routed": True,
+        "graph_max_hops": 2,
+        "graph_edge_count": 1,
+    })
+    complete = evaluate_graph_case(case, {
+        "graph_evidence": [first_relation, second_relation],
+        "graph_routed": True,
+        "graph_max_hops": 2,
+        "graph_edge_count": 2,
+    })
+
+    assert incomplete["applicable"] is True
+    assert incomplete["passed"] is False
+    assert incomplete["matched_relation_count"] == 1
+    assert incomplete["expected_relation_count"] == 2
+    assert complete["passed"] is True
+    assert complete["relation_matched"] is True
+    assert complete["matched_relation_count"] == 2
+
+
+@pytest.mark.parametrize(
+    "expected_relations",
+    [
+        [None],
+        [
+            {
+                "source_key": "document:10",
+                "relation_type": "CONTAINS_PART",
+                "target_key": "part:a",
+            },
+            {"source_key": "part:a"},
+        ],
+    ],
+)
+def test_manifest_rejects_any_invalid_multi_relation_contract(expected_relations):
+    case = {
+        "manifest_schema": "rag-eval-manifest-v2",
+        "evaluation_group": "graphrag",
+        "expected_claims": [
+            {
+                "id": "part",
+                "required_terms": ["part a"],
+                "allowed_source_ids": ["D10P1"],
+            }
+        ],
+        "expected_citations": [
+            {
+                "document": "assembly.md",
+                "doc_id": 10,
+                "page": 1,
+                "version": 2,
+                "source_id": "D10P1",
+            }
+        ],
+        "expected_relations": expected_relations,
+    }
+
+    with pytest.raises(ValueError, match="expected_relations"):
+        validate_manifest_ground_truth(case, expected_outcome="full_answer")
+
+
+def test_graph_evaluator_fails_closed_when_all_relations_are_invalid():
+    result = evaluate_graph_case(
+        {"evaluation_group": "graphrag", "expected_relations": [None]},
+        {"graph_evidence": []},
+    )
+
+    assert result["applicable"] is True
+    assert result["passed"] is False
+    assert result["invalid_relation_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "relation",
+    [
+        {},
+        {"source_key": "document:10", "relation_type": "CONTAINS_PART"},
+    ],
+)
+def test_graph_evaluator_never_matches_incomplete_relation_to_sparse_evidence(relation):
+    result = evaluate_graph_case(
+        {"evaluation_group": "graphrag", "expected_relations": [relation]},
+        {"graph_evidence": [{"graph_edge_id": 7}]},
+    )
+
+    assert result["applicable"] is True
+    assert result["passed"] is False
+    assert result["relation_matched"] is False
+    assert result["expected_relation_count"] == 0
+    assert result["invalid_relation_count"] == 1
 
 
 def test_graph_summary_reports_relational_answer_accuracy_separately():

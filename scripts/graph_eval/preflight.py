@@ -26,7 +26,7 @@ def _relation_identity(value):
 
 
 def _resolve_key(value, documents_by_key):
-    raw = str(value or "")
+    raw = str(value or "").strip()
     if raw.startswith("$DOC:"):
         document = documents_by_key.get(raw[5:])
         return f"document:{int(document['DocID'])}" if document else raw
@@ -36,6 +36,12 @@ def _resolve_key(value, documents_by_key):
     if raw.startswith("$FAMILY:"):
         document = documents_by_key.get("assembly_v2" if raw[8:] == "assembly" else raw[8:])
         return f"family:{int(document['FamilyID'])}" if document and document.get("FamilyID") else raw
+    if raw.startswith("$PART:"):
+        part_code = raw[6:].strip().casefold()
+        return f"part:{part_code}" if part_code else raw
+    if raw.startswith("$MATERIAL:"):
+        material_code = raw[10:].strip().casefold()
+        return f"material:{material_code}" if material_code else raw
     return raw
 
 
@@ -109,15 +115,32 @@ def check_graph_fixture(
         )
         if retrieval_expected and not point_valid:
             failures.append({"case_id": case_id, "reason": "qdrant_page_missing", "document": filename})
-        relation = dict(case.get("expected_relation") or {})
-        if relation:
+        raw_relations = case.get("expected_relations")
+        if not isinstance(raw_relations, list):
+            single_relation = case.get("expected_relation")
+            raw_relations = [single_relation] if single_relation else []
+        case_relations = []
+        for raw_relation in raw_relations:
+            relation = dict(raw_relation or {})
             relation["source_key"] = _resolve_key(relation.get("source_key"), documents_by_key)
             relation["target_key"] = _resolve_key(relation.get("target_key"), documents_by_key)
-            if _relation_identity(relation) not in edge_identities:
+            unresolved_symbols = [
+                relation[field]
+                for field in ("source_key", "target_key")
+                if str(relation.get(field) or "").startswith("$")
+            ]
+            for symbol in unresolved_symbols:
+                failures.append({
+                    "case_id": case_id,
+                    "reason": "relation_symbol_unresolved",
+                    "symbol": symbol,
+                })
+            if not unresolved_symbols and _relation_identity(relation) not in edge_identities:
                 failures.append({"case_id": case_id, "reason": "expected_relation_missing", "relation": relation})
+            case_relations.append(relation)
             resolved_relations.append(relation)
         requested_citations = case.get("expected_citations") or []
-        if not requested_citations and (relation or case.get("expected_claims")):
+        if not requested_citations and (case_relations or case.get("expected_claims")):
             requested_citations = [{"document": filename, "page": page}]
         resolved_citations = []
         source_ids = {}
@@ -163,7 +186,7 @@ def check_graph_fixture(
                 "source_id": source_id,
             })
             source_ids[str(expected_citation.get("source_id") or "")] = source_id
-        resolutions[case_id] = {
+        resolution = {
             "expected_citations": resolved_citations,
             "expected_claims": [
                 {
@@ -175,8 +198,12 @@ def check_graph_fixture(
                 }
                 for claim in case.get("expected_claims") or []
             ],
-            "expected_relation": relation,
         }
+        if isinstance(case.get("expected_relations"), list):
+            resolution["expected_relations"] = case_relations
+        else:
+            resolution["expected_relation"] = case_relations[0] if case_relations else {}
+        resolutions[case_id] = resolution
     fingerprint = hashlib.sha256(json.dumps({
         "documents": sql_documents, "edges": graph_edges, "points": qdrant_points,
         "versions": sorted(applied_versions),
