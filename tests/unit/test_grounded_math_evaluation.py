@@ -126,6 +126,39 @@ def test_grounded_calculation_evaluator_rejects_numbers_not_in_expected_formula_
     assert report["unsupported_numbers"] == ["6"]
 
 
+def test_grounded_calculation_evaluator_normalizes_legacy_controlled_demo_contract():
+    expected = {
+        "operation": "sum",
+        "status": "derived",
+        "formula": "2 + 3 = 5",
+        "value": "5",
+        "display": "5 piece",
+        "unit": "piece",
+        "sources": [
+            {"row_id": "BOM-101", "doc_id": 41, "page": 3, "version": 12,
+             "source_id": "D41P3", "value": "2", "unit": "piece"},
+            {"row_id": "BOM-102", "doc_id": 41, "page": 3, "version": 12,
+             "source_id": "D41P3", "value": "3", "unit": "piece"},
+        ],
+    }
+    actual = [{
+        "operation": "sum",
+        "status": "valid",
+        "exact_value": "5",
+        "display_value": "5",
+        "formula": "2 + 3 = 5 piece",
+        "unit": "piece",
+        "sources": [
+            {"doc_id": 41, "page": 3, "version": 12, "source_id": "BOM-101", "value": "2", "unit": "piece"},
+            {"doc_id": 41, "page": 3, "version": 12, "source_id": "BOM-102", "value": "3", "unit": "piece"},
+        ],
+    }]
+
+    report = evaluate_grounded_calculation(expected, actual, answer="5 piece")
+
+    assert report["passed"] is True
+
+
 def test_grounded_math_manifest_requires_a_complete_expected_calculation_contract():
     case = {
         "manifest_schema": CURRENT_MANIFEST_SCHEMA,

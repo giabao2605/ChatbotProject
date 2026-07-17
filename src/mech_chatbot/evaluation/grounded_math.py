@@ -51,6 +51,50 @@ def _allowed_numbers(expected: dict[str, Any]) -> set[str]:
     return normalized_number_values(" ".join(str(value or "") for value in values))
 
 
+def _normalize_expected_contract(expected: dict[str, Any]) -> dict[str, Any]:
+    """Map the pre-v2 controlled-demo BOM shape to the canonical contract.
+
+    New manifests use ``exact_value``/``display_value`` and BOM row source IDs.
+    Older controlled-demo manifests used ``value``/``display`` and document
+    page IDs in calculation sources; keep those artifacts evaluable without
+    weakening the canonical contract for new manifests.
+    """
+    normalized = dict(expected)
+    legacy = "value" in normalized or "display" in normalized
+    if not legacy:
+        return normalized
+    normalized.setdefault("exact_value", normalized.get("value"))
+    legacy_display = str(normalized.get("display") or "").strip()
+    if legacy_display:
+        display_value = legacy_display
+        unit_for_display = str(normalized.get("unit") or "").strip()
+        if unit_for_display and display_value.casefold().endswith(
+            f" {unit_for_display.casefold()}"
+        ):
+            display_value = display_value[: -(len(unit_for_display) + 1)].rstrip()
+        normalized.setdefault("display_value", display_value)
+    if normalized.get("status") == "derived":
+        normalized["status"] = "valid"
+    if normalized.get("operation") == "percentage":
+        normalized["operation"] = "percent"
+    unit = str(normalized.get("unit") or "").strip()
+    if unit == "percent":
+        normalized["unit"] = "%"
+        unit = "%"
+    formula = str(normalized.get("formula") or "").strip()
+    if unit and formula and not formula.casefold().endswith(unit.casefold()):
+        normalized["formula"] = f"{formula} {unit}"
+    sources = []
+    for source in normalized.get("sources") or []:
+        source_copy = dict(source)
+        row_id = str(source_copy.get("row_id") or "").strip()
+        if row_id:
+            source_copy["source_id"] = row_id
+        sources.append(source_copy)
+    normalized["sources"] = sources
+    return normalized
+
+
 def evaluate_grounded_calculation(
     expected: dict[str, Any] | None,
     actual_records: list[dict[str, Any]] | None,
@@ -68,6 +112,7 @@ def evaluate_grounded_calculation(
             "unsupported_numbers": [],
         }
 
+    expected = _normalize_expected_contract(expected)
     records = [record for record in (actual_records or []) if isinstance(record, dict)]
     actual = records[0] if len(records) == 1 else {}
     expected_decimal = _decimal(expected.get("exact_value"))
