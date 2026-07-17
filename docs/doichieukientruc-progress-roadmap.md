@@ -905,6 +905,14 @@ Tất cả milestone đã đạt
 - [X] Late Interaction có clean-commit three-arm artifact và quyết định không dùng `late-v2` làm default; controlled demo vẫn là hạng mục quan sát tùy chọn, flags mặc định giữ tắt.
 - [ ] Query decomposition đã có complex-query gate `inconclusive`; còn bổ sung case thứ 10 và decision/pilot cuối.
 - [ ] GraphRAG migration, seed, reviewer flow, quality gate và pilot/decision đạt.
+
+### Cập nhật thực thi 2026-07-17
+
+- Grounded Math matched rollout trên commit `0a0aa77` đã đạt candidate 16/16, rollback contract hợp lệ và `production_eligible=true`; vẫn giữ trạng thái `inconclusive` cho đến khi có review thủ công 10 truy vấn demo.
+- Query Decomposition preflight/rollback đã đạt, nhưng pair mới trên fixture 8 case chỉ đạt 1/8 và gate fail-closed; flag tiếp tục tắt.
+- GraphRAG đã apply migration additive `V0037`, ingest 25 node/20 approved edge, provenance 20/20 và structured coverage 100%. Pair quality gate vẫn fail vì relational gain và thiếu independent review 20 edge; queue đã xuất để reviewer gán nhãn.
+- CRAG rollout mới nhất vẫn fail latency gate; không nới ngưỡng và không bật flag.
+- Bốn mutation pack deterministic đã compile với hash/commit provenance; failure-family gate và integrated live matrix chưa chạy vì chưa có pair evidence tương ứng.
 - [ ] Community summaries đã pilot hoặc có quyết định chính thức không triển khai do không đủ điều kiện/không tạo giá trị.
 - [X] Claim precision, citation accuracy và risk–coverage evaluator đã được bổ sung; live reviewer sample vẫn thuộc gate của từng controlled demo.
 - [ ] Integrated feature-combination security/performance matrix xanh.
