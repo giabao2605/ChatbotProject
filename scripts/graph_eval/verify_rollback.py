@@ -4,24 +4,36 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.graph_eval.constants import ROOT
+from scripts.eval.verify_failure_family_rollback import (
+    ROLLBACK_TEST_PROFILES,
+    clean_git_sha,
+)
 
 
 def verify(output):
-    git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    command = [
-        sys.executable, "-m", "pytest", "tests/unit/test_graph_rag.py",
-        "tests/unit/test_graph_evaluation.py", "-q",
-    ]
-    result = subprocess.run(command, cwd=ROOT, check=False, capture_output=True, text=True)
+    git_sha = clean_git_sha(ROOT)
+    flags = frozenset({"RAG_GRAPH_RETRIEVAL_ENABLED"})
+    command = [sys.executable, *ROLLBACK_TEST_PROFILES[flags]]
+    rollback_environment = os.environ.copy()
+    rollback_environment["RAG_GRAPH_RETRIEVAL_ENABLED"] = "false"
+    result = subprocess.run(
+        command, cwd=ROOT, check=False, capture_output=True, text=True,
+        env=rollback_environment,
+    )
+    if clean_git_sha(ROOT) != git_sha:
+        raise RuntimeError("repository commit changed during rollback verification")
     report = {
         "schema": "rollback-test-evidence-v1", "git_sha": git_sha,
-        "flags": ["RAG_GRAPH_RETRIEVAL_ENABLED"], "passed": result.returncode == 0,
+        "flags": sorted(flags),
+        "verified_flag_state": {"RAG_GRAPH_RETRIEVAL_ENABLED": False},
+        "passed": result.returncode == 0,
         "tested_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "command": command[1:], "exit_code": result.returncode,
         "stdout_tail": result.stdout[-2000:], "stderr_tail": result.stderr[-2000:],

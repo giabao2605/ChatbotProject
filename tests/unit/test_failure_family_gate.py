@@ -10,20 +10,42 @@ from scripts.eval.verify_failure_family_rollback import compose_verification
 
 @pytest.fixture
 def valid_rollback(tmp_path):
-    evidence_groups = (
-        ("RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"),
-        ("RAG_GROUNDED_MATH_ENABLED",),
-        ("RAG_QUERY_DECOMPOSITION_ENABLED",),
-        ("RAG_GRAPH_RETRIEVAL_ENABLED",),
-    )
+    evidence_groups = {
+        ("RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"): [
+            "-m", "pytest",
+            "tests/unit/test_corrective_retrieval.py::test_crag_rollback_flag_disables_correction_runtime",
+            "tests/unit/test_claim_repair.py::test_claim_repair_rollback_flag_disables_runtime",
+            "-q",
+        ],
+        ("RAG_GROUNDED_MATH_ENABLED",): [
+            "-m", "pytest",
+            "tests/unit/test_strict_stream_guard.py::test_grounded_math_flag_defaults_to_normal_generation_path",
+            "tests/unit/test_grounded_math_eval_fixture.py::test_grounded_math_rollout_toggles_only_math_between_arms",
+            "-q",
+        ],
+        ("RAG_QUERY_DECOMPOSITION_ENABLED",): [
+            "-m", "pytest", "tests/unit/test_query_decomposition.py",
+            "tests/unit/test_decomposition_evaluation.py", "-q",
+        ],
+        ("RAG_GRAPH_RETRIEVAL_ENABLED",): [
+            "-m", "pytest", "tests/unit/test_graph_rag.py",
+            "tests/unit/test_graph_evaluation.py", "-q",
+        ],
+    }
     paths = []
-    for index, flags in enumerate(evidence_groups):
+    for index, (flags, command) in enumerate(evidence_groups.items()):
         path = tmp_path / f"rollback-{index}.json"
         path.write_text(json.dumps({
             "schema": "rollback-test-evidence-v1",
             "git_sha": "a" * 40,
             "flags": list(flags),
+            "verified_flag_state": {flag: False for flag in flags},
             "passed": True,
+            "tested_at": "2026-07-17T00:00:00Z",
+            "command": command,
+            "exit_code": 0,
+            "stdout_tail": ". [100%]\n",
+            "stderr_tail": "",
         }), encoding="utf-8")
         paths.append(path)
     return compose_verification(paths, git_sha="a" * 40)

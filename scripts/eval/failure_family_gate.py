@@ -7,6 +7,11 @@ import hashlib
 import json
 from pathlib import Path
 
+from scripts.eval.verify_failure_family_rollback import (
+    ROLLBACK_TEST_PROFILES,
+    validate_rollback_evidence,
+)
+
 
 _PAIR_FIELDS = (
     "git_sha",
@@ -49,6 +54,7 @@ def _rollback_verified(rollback: dict, *, expected_git_sha: str) -> bool:
     if not references:
         return False
     source_flags: set[str] = set()
+    source_profiles = set()
     for reference in references:
         try:
             path = Path(reference["path"])
@@ -64,21 +70,28 @@ def _rollback_verified(rollback: dict, *, expected_git_sha: str) -> bool:
             return False
         if not isinstance(artifact, dict) or not isinstance(reference, dict):
             return False
-        artifact_flags = _flags(artifact.get("flags"))
+        try:
+            artifact_flags = validate_rollback_evidence(
+                artifact, git_sha=expected_git_sha,
+            )
+        except ValueError:
+            return False
+        if artifact_flags in source_profiles:
+            return False
+        source_profiles.add(artifact_flags)
         reference_flags = _flags(reference.get("flags"))
         if (
-            artifact_flags is None
-            or hashlib.sha256(payload).hexdigest() != reference.get("sha256")
+            hashlib.sha256(payload).hexdigest() != reference.get("sha256")
             or reference.get("schema") != "rollback-test-evidence-v1"
             or reference.get("git_sha") != expected_git_sha
             or reference_flags != artifact_flags
-            or artifact.get("schema") != "rollback-test-evidence-v1"
-            or artifact.get("git_sha") != expected_git_sha
-            or artifact.get("passed") is not True
         ):
             return False
         source_flags.update(artifact_flags)
-    return source_flags == _REQUIRED_ROLLBACK_FLAGS
+    return (
+        source_flags == _REQUIRED_ROLLBACK_FLAGS
+        and source_profiles == set(ROLLBACK_TEST_PROFILES)
+    )
 
 
 def _ratio(candidate: float, baseline: float) -> float:

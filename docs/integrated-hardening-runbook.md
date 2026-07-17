@@ -23,6 +23,21 @@ Run from the repository root on a clean commit:
 Exit code 2 is expected while any prerequisite is incomplete. Do not change a
 false prerequisite to true without a verified gate/pilot or rejection artifact.
 
+When repairing controlled-demo Markdown BOM rows, pin the document to the
+versioned fixture identity. The command checks the declared relative path,
+content SHA-256, document version, complete structured row payload and every
+SQL column used by runtime retrieval before it can insert anything:
+
+```powershell
+.\chat_env\Scripts\python.exe -m scripts.controlled_demo_eval.repair_structured_bom `
+  --document <fixture-root>/Technical/technical_demo_process_v2.md `
+  --fixture-aliases <fixture-root>/fixture_aliases.json `
+  --output reports/<run-id>/bom-repair-preview.json
+```
+
+Add `--execute` only after the preview passes and
+`CONTROLLED_DEMO_LIVE_OPT_IN=1` is set.
+
 For the 5–10 user controlled demo, pass the separate demo ledger:
 
 ```powershell
@@ -189,6 +204,11 @@ commit thành một bằng chứng có thể kiểm tra nguồn, thay vì tự v
   --evidence <crag-rollback.json> <grounded-math-rollback.json> <decomposition-rollback.json> <graph-rollback.json> `
   --output <failure-family-rollback.json>
 ```
+
+Run all four rollback verifiers from a clean worktree. The composer and
+gate require the exact pytest command, disabled flag state, successful exit
+code, completion output, timestamp, commit and source SHA-256 for each required
+flag group; a handwritten `passed=true` source artifact is rejected.
 
 Abort the active combination immediately when any of these occurs:
 
