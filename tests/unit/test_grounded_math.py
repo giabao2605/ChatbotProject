@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from mech_chatbot.evaluation.grounding import extract_claims
 from mech_chatbot.rag.grounded_math import (
     CalculationPlan,
     CalculationResult,
@@ -371,15 +372,21 @@ def test_grounded_calculation_renderer_emits_verified_formula_and_citation():
     answer = render_grounded_calculation_answer(docs, language="vi")
 
     assert answer == (
-        "Kết quả tính có kiểm soát: 7 cái. Công thức: 2 + 5 = 7 cái. "
+        "Kết quả tính có kiểm soát: 7 cái; công thức: 2 + 5 = 7 cái. "
         "[Nguồn: bom-v12.pdf, Trang 3, Version 12, SourceID D41P3]"
     )
+    assert extract_claims(answer) == [
+        {
+            "text": "Kết quả tính có kiểm soát: 7 cái; công thức: 2 + 5 = 7 cái.",
+            "source_ids": ["D41P3"],
+        }
+    ]
     assert validate_grounded_calculation_answer(answer, docs) is None
     assert validate_grounded_calculation_answer("Kết quả là 7 cái.", docs) == "result_or_unit"
     assert validate_grounded_calculation_answer(
         answer.replace(
-            "Kết quả tính có kiểm soát: 7 cái.",
-            "Kết quả tính có kiểm soát: 700 kg.",
+            "Kết quả tính có kiểm soát: 7 cái;",
+            "Kết quả tính có kiểm soát: 700 kg;",
         ),
         docs,
     ) == "result_or_unit"

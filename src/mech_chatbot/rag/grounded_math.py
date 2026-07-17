@@ -493,8 +493,8 @@ def validate_grounded_calculation_answer(answer: str, documents) -> str | None:
             )
             qualifier_vi = "xấp xỉ " if recomputed.approximate else ""
             qualifier_en = "approximately " if recomputed.approximate else ""
-            result_vi = f"Kết quả tính có kiểm soát: {qualifier_vi}{shown}.".casefold()
-            result_en = f"Controlled calculation result: {qualifier_en}{shown}.".casefold()
+            result_vi = f"Kết quả tính có kiểm soát: {qualifier_vi}{shown}".casefold()
+            result_en = f"Controlled calculation result: {qualifier_en}{shown}".casefold()
             if result_vi not in text.casefold() and result_en not in text.casefold():
                 return "result_or_unit"
             if not formula or formula not in compact or not has_citation:
@@ -532,12 +532,12 @@ def render_grounded_calculation_answer(documents, *, language: str = "vi") -> st
             if is_english:
                 qualifier = "approximately " if approximate else ""
                 lines.append(
-                    f"Controlled calculation result: {qualifier}{shown}. Formula: {formula}. {citation}"
+                    f"Controlled calculation result: {qualifier}{shown}; formula: {formula}. {citation}"
                 )
             else:
                 qualifier = "xấp xỉ " if approximate else ""
                 lines.append(
-                    f"Kết quả tính có kiểm soát: {qualifier}{shown}. Công thức: {formula}. {citation}"
+                    f"Kết quả tính có kiểm soát: {qualifier}{shown}; công thức: {formula}. {citation}"
                 )
         elif is_english:
             reason = {
