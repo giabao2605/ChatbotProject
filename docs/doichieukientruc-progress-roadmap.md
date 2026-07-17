@@ -916,7 +916,7 @@ Khi toàn bộ checklist trên được đóng bằng artifact hoặc quyết đ
 
 ### Cập nhật thực thi 2026-07-17
 
-- Grounded Math matched rollout trên commit `0a0aa77` đã đạt candidate 16/16, rollback contract hợp lệ và `production_eligible=true`; vẫn giữ trạng thái `inconclusive` cho đến khi có review thủ công 10 truy vấn demo.
+- Grounded Math matched rollout trên commit `085f3f3` đã đạt candidate 16/16, rollback contract hợp lệ và `production_eligible=true`; vẫn giữ trạng thái `inconclusive` cho đến khi có review thủ công 10 truy vấn demo.
 - Query Decomposition preflight/rollback đã đạt, nhưng pair mới trên fixture 8 case chỉ đạt 1/8 và gate fail-closed; flag tiếp tục tắt.
 - GraphRAG đã apply migration additive `V0037` và `V0038`, ingest 27 node/21 approved edge, source evidence 21/21 và structured coverage 100%. Quality gate vẫn fail vì relational gain và thiếu independent review 20 edge; flag tiếp tục tắt.
 - CRAG rollout mới nhất vẫn fail latency gate; không nới ngưỡng và không bật flag.
