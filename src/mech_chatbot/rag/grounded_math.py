@@ -177,6 +177,21 @@ def build_calculation_plan(
             matched.append((match.start(), fact))
     matched.sort(key=lambda item: item[0])
     if operation == "sum" and not matched:
+        mentioned_units = {
+            str(fact.unit or "").strip().casefold()
+            for fact in available
+            if str(fact.unit or "").strip()
+            and re.search(
+                rf"(?<![a-z0-9]){re.escape(_fold(fact.unit).strip())}(?![a-z0-9])",
+                folded,
+            )
+        }
+        if len(mentioned_units) == 1:
+            requested_unit = next(iter(mentioned_units))
+            available = tuple(
+                fact for fact in available
+                if str(fact.unit or "").strip().casefold() == requested_unit
+            )
         return CalculationPlan(operation, available)
     return CalculationPlan(operation, tuple(fact for _, fact in matched))
 

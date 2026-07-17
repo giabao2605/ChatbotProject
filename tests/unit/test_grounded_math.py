@@ -142,6 +142,25 @@ def test_bom_total_uses_only_explicitly_named_operands_when_present():
     assert derive_claim(plan).value == Decimal("6")
 
 
+def test_bom_total_filters_operands_by_explicit_unit():
+    facts = (
+        fact("1500", "piece", "BOM-1", label="PART-A"),
+        fact("250", "PIECE", "BOM-2", label="PART-B"),
+        fact("12.50", "kg", "BOM-3", label="PART-C"),
+        fact("7.50", "kg", "BOM-4", label="PART-D"),
+    )
+
+    plan = build_calculation_plan(
+        "Tổng số part có đơn vị piece trong BOM Version 2 là bao nhiêu?", facts,
+    )
+    claim = derive_claim(plan)
+
+    assert plan == CalculationPlan("sum", facts[:2])
+    assert claim.status == "valid"
+    assert claim.value == Decimal("1750")
+    assert claim.unit == "piece"
+
+
 @pytest.mark.parametrize(
     ("question", "operation", "source_ids"),
     [
