@@ -11,6 +11,7 @@ from mech_chatbot.rag.grounded_math import (
     derive_claim,
     make_calculation_provenance,
     render_grounded_calculation_answer,
+    select_grounded_calculation_documents,
     select_grounded_bom_document_ids,
     solve_grounded_calculation,
     validate_grounded_calculation_answer,
@@ -77,6 +78,16 @@ def test_document_scoped_total_uses_only_the_top_ranked_retrieved_document():
     ]
 
     assert select_grounded_bom_document_ids(documents) == [31]
+
+
+def test_grounded_math_citations_include_only_documents_used_by_the_calculation():
+    calculation = SimpleNamespace(metadata={
+        "doc_id": 31,
+        "calculation_provenance": {"status": "valid"},
+    })
+    unrelated = SimpleNamespace(metadata={"doc_id": 27})
+
+    assert select_grounded_calculation_documents([calculation, unrelated]) == [calculation]
 
 
 def test_bom_total_uses_only_explicitly_named_operands_when_present():

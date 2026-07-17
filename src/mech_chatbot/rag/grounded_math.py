@@ -60,6 +60,17 @@ def select_grounded_bom_document_ids(documents) -> list[int]:
     return []
 
 
+def select_grounded_calculation_documents(documents):
+    """Return only evidence documents that carry a calculation provenance."""
+    return [
+        document for document in (documents or ())
+        if isinstance(
+            (getattr(document, "metadata", {}) or {}).get("calculation_provenance"),
+            dict,
+        )
+    ]
+
+
 def _fold(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
     return "".join(char for char in normalized if not unicodedata.combining(char)).replace("đ", "d")

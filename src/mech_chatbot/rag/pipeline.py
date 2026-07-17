@@ -1415,6 +1415,11 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         is_bom_query=is_bom_query,
         part_ids=new_part_ids,
     )
+    if grounded_math_enabled:
+        from mech_chatbot.rag.grounded_math import select_grounded_calculation_documents
+        calculation_citation_docs = select_grounded_calculation_documents(retrieved_docs)
+        if calculation_citation_docs:
+            citation_docs = calculation_citation_docs
     ref_text, ref_images = build_source_citations(citation_docs)
     _conf_docs = [d.metadata.get("file_goc") for d in retrieved_docs if d.metadata.get("security_level") == "confidential"]
     if _conf_docs:
