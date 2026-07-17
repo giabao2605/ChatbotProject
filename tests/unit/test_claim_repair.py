@@ -1,6 +1,6 @@
 from langchain_core.documents import Document
 
-from mech_chatbot.rag.claim_repair import repair_grounded_answer
+from mech_chatbot.rag.claim_repair import claim_repair_enabled, repair_grounded_answer
 
 
 def _doc():
@@ -8,6 +8,12 @@ def _doc():
         page_content="approved",
         metadata={"doc_id": 7, "trang_so": 3, "version_no": 1, "file_goc": "bom.pdf"},
     )
+
+
+def test_claim_repair_rollback_flag_disables_runtime(monkeypatch):
+    monkeypatch.setenv("RAG_CLAIM_REPAIR_ENABLED", "false")
+
+    assert claim_repair_enabled() is False
 
 
 def test_claim_repair_accepts_one_grounded_rewrite():

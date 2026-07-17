@@ -44,20 +44,35 @@ class CalculationResult:
     claim: DerivedClaim | None = None
 
 
-def select_grounded_bom_document_ids(documents) -> list[int]:
-    """Select one top-ranked document for an aggregate query without codes.
-
-    Mixing every retrieved candidate would combine unrelated BOM versions and
-    violate provenance. Multiple chunks from the selected document are still
-    covered by the repository's document-scoped query.
-    """
+def select_grounded_bom_document_ids(documents, question: str = "") -> list[int]:
+    """Resolve exactly one document for a code-free aggregate, or fail closed."""
+    candidates: dict[int, set[str]] = {}
     for document in documents or ():
         metadata = getattr(document, "metadata", {}) or {}
         try:
-            return [int(metadata.get("doc_id"))]
+            doc_id = int(metadata.get("doc_id"))
         except (TypeError, ValueError):
             continue
-    return []
+        descriptor = " ".join(str(value or "") for value in (
+            metadata.get("file_goc"),
+            metadata.get("title"),
+            metadata.get("document_title"),
+            metadata.get("doc_number"),
+            str(getattr(document, "page_content", ""))[:300],
+        ))
+        candidates.setdefault(doc_id, set()).update(_identity_tokens(descriptor))
+    if len(candidates) == 1:
+        return [next(iter(candidates))]
+    query_tokens = _identity_tokens(question)
+    scores = sorted(
+        ((len(query_tokens & tokens), doc_id) for doc_id, tokens in candidates.items()),
+        reverse=True,
+    )
+    if not scores or scores[0][0] < 2:
+        return []
+    if len(scores) > 1 and scores[0][0] == scores[1][0]:
+        return []
+    return [scores[0][1]]
 
 
 def select_grounded_calculation_documents(documents):
@@ -71,9 +86,57 @@ def select_grounded_calculation_documents(documents):
     ]
 
 
+def select_grounded_answer_citation_documents(documents, branches=()):
+    """Keep calculation evidence plus evidence from answerable branches."""
+    calculation_documents = select_grounded_calculation_documents(documents)
+    allowed_branch_sources = set()
+    for branch in branches or ():
+        if branch.get("outcome") not in {"full_answer", "partial_answer"}:
+            continue
+        for citation in branch.get("citations") or ():
+            try:
+                allowed_branch_sources.add((
+                    int(citation.get("doc_id")),
+                    int(citation.get("trang") or citation.get("page") or citation.get("page_no")),
+                ))
+            except (TypeError, ValueError):
+                continue
+    selected = list(calculation_documents)
+    seen = {_document_source_key(document) for document in selected}
+    for document in documents or ():
+        source_key = _document_source_key(document)
+        if source_key in allowed_branch_sources and source_key not in seen:
+            selected.append(document)
+            seen.add(source_key)
+    return selected
+
+
 def _fold(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
     return "".join(char for char in normalized if not unicodedata.combining(char)).replace("đ", "d")
+
+
+_DOCUMENT_IDENTITY_STOPWORDS = {
+    "bao", "bom", "cua", "la", "nhieu", "tai", "lieu", "tong", "trong",
+}
+
+
+def _identity_tokens(value: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[a-z0-9]+", _fold(value))
+        if len(token) >= 2 and token not in _DOCUMENT_IDENTITY_STOPWORDS
+    }
+
+
+def _document_source_key(document):
+    metadata = getattr(document, "metadata", {}) or {}
+    try:
+        return (
+            int(metadata.get("doc_id")),
+            int(metadata.get("trang_so") or metadata.get("page_no") or metadata.get("page")),
+        )
+    except (TypeError, ValueError):
+        return (None, None)
 
 
 def build_calculation_plan(

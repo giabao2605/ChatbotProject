@@ -263,12 +263,15 @@ def test_graph_traversal_hydrates_reviewed_proposal_source_quote():
 
 
 def test_graph_deterministic_edges_have_a_persisted_provenance_contract():
-    migration = Path("database/migrations/V0037__graph_edge_source_quote.sql").read_text(encoding="utf-8")
+    migration = Path("database/migrations/V0038__graph_edge_source_evidence.sql").read_text(encoding="utf-8")
     seed_source = Path("scripts/graph/seed_deterministic.py").read_text(encoding="utf-8")
     repository = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
 
     assert "SourceQuote" in migration
-    assert "SET SourceQuote" in seed_source
+    assert "TextExtract" in migration
+    assert "RawRowJson" in migration
+    assert "SET SourceQuote = CONCAT" not in migration
+    assert "Approved deterministic relation" not in seed_source
     assert "COALESCE(e.SourceQuote, proposal.source_quote) AS source_quote" in repository
 
 

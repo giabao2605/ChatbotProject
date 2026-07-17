@@ -29,7 +29,8 @@ def export_review_queue(output: Path, *, limit=50):
                    tn.CanonicalKey target_key, tn.DisplayName target_name,
                    e.Origin origin, e.SourceDocID doc_id, e.SourcePage page,
                    e.SourceVersion version, e.Department department, e.Site site,
-                   e.SecurityLevel security_level, t.TenFile document
+                   e.SecurityLevel security_level, t.TenFile document,
+                   e.SourceQuote source_quote
             FROM dbo.KnowledgeGraphEdge e
             JOIN dbo.KnowledgeGraphNode sn ON sn.NodeID=e.SourceNodeID
             JOIN dbo.KnowledgeGraphNode tn ON tn.NodeID=e.TargetNodeID

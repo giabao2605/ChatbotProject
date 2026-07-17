@@ -249,7 +249,12 @@ def ingest_fixture(output: Path = DEFAULT_OUTPUT):
             _seed_document_page(connection, doc_ids[record["key"]], record, output)
     for record in records:
         update_qdrant_metadata(doc_ids[record["key"]], _metadata(record, doc_ids[record["key"]]), require_points=True)
-    counts = seed(source_system=FIXTURE_BATCH)
+    # Keep the denied HR document in the review pool as a non-serving edge;
+    # graph traversal still enforces the caller's department scope.
+    counts = seed(
+        departments=("Technical", "Production", "Maintenance", "HR"),
+        source_system=FIXTURE_BATCH,
+    )
     return {"schema": "graph-eval-ingest-v1", "batch": FIXTURE_BATCH, "documents": len(doc_ids), **counts}
 
 

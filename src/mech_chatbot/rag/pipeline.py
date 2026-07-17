@@ -74,6 +74,7 @@ from mech_chatbot.rag.answer_policy import (
     explicit_negative_evidence_quote,
 )
 from mech_chatbot.rag.corrective import (
+    correction_enabled,
     merge_corrected_documents,
     run_corrected_retrieval,
     should_attempt_correction,
@@ -326,7 +327,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     auxiliary_retry_counter = {"count": 0}
     correction_attempts = 0
     correction_estimated_cost = 0.0
-    crag_enabled = env_bool("RAG_CRAG_ENABLED", False)
+    crag_enabled = correction_enabled()
     query_to_search = user_question  # Mac dinh, cac nhanh ben duoi se override neu can
     logger.info("Dang phan tich intent de tim kiem du lieu...")
     t_intent = time.time()
@@ -980,7 +981,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     bom_document_ids = []
     if grounded_math_enabled and not new_part_ids:
         from mech_chatbot.rag.grounded_math import select_grounded_bom_document_ids
-        bom_document_ids = select_grounded_bom_document_ids(retrieved_docs)
+        bom_document_ids = select_grounded_bom_document_ids(
+            retrieved_docs, user_question,
+        )
     should_inject_bom = bool(new_part_ids or bom_document_ids)
     if (
         not skip_retrieval
@@ -1416,8 +1419,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         part_ids=new_part_ids,
     )
     if grounded_math_enabled:
-        from mech_chatbot.rag.grounded_math import select_grounded_calculation_documents
-        calculation_citation_docs = select_grounded_calculation_documents(retrieved_docs)
+        from mech_chatbot.rag.grounded_math import select_grounded_answer_citation_documents
+        calculation_citation_docs = select_grounded_answer_citation_documents(
+            retrieved_docs, decomposition_branches,
+        )
         if calculation_citation_docs:
             citation_docs = calculation_citation_docs
     ref_text, ref_images = build_source_citations(citation_docs)

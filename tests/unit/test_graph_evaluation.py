@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from scripts.graph.report import build_graph_report, validate_review_samples
@@ -11,6 +13,46 @@ from mech_chatbot.evaluation.schema import validate_manifest_ground_truth
 
 
 pytestmark = pytest.mark.unit
+
+
+class _ReviewRows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _ReviewConnection:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, *_args, **_kwargs):
+        selected_source_quote = "e.SourceQuote source_quote" in str(_args[0])
+        rows = [
+            dict(row) if selected_source_quote else {
+                key: value for key, value in row.items() if key != "source_quote"
+            }
+            for row in self._rows
+        ]
+        return _ReviewRows(rows)
+
+
+class _ReviewEngine:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def connect(self):
+        return _ReviewConnection(self._rows)
 
 
 def _document(doc_id=10, **overrides):
@@ -534,3 +576,36 @@ def test_graph_summary_reports_relational_answer_accuracy_separately():
 
     assert summary["relation_accuracy"] == 1.0
     assert summary["relational_answer_accuracy"] == 0.5
+
+
+def test_independent_review_queue_contains_source_evidence(tmp_path, monkeypatch):
+    from mech_chatbot.db import engine as engine_module
+    from scripts.graph_eval.export_review_queue import export_review_queue
+
+    row = {
+        "edge_id": 7,
+        "relation_type": "CONTAINS_PART",
+        "source_key": "document:31",
+        "source_name": "Assembly",
+        "target_key": "part:p-100",
+        "target_name": "P-100",
+        "origin": "deterministic",
+        "doc_id": 31,
+        "page": 1,
+        "version": 2,
+        "department": "Technical",
+        "site": "GRAPH-EVAL-HQ",
+        "security_level": "internal",
+        "document": "assembly.md",
+        "source_quote": '{"part":"P-100","quantity":"2"}',
+    }
+    monkeypatch.setenv("RUN_GRAPH_EVAL_FIXTURE", "1")
+    monkeypatch.setattr(engine_module, "_ensure_engine", lambda: None)
+    monkeypatch.setattr(engine_module, "engine", _ReviewEngine([row]))
+    output = tmp_path / "review.jsonl"
+
+    report = export_review_queue(output, limit=20)
+    exported = json.loads(output.read_text(encoding="utf-8").strip())
+
+    assert report["edges"] == 1
+    assert exported["source_quote"] == row["source_quote"]

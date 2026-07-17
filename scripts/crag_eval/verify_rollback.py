@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -20,16 +21,27 @@ def verify(output: Path) -> dict:
         sys.executable,
         "-m",
         "pytest",
-        "tests/unit/test_answer_policy.py",
-        "tests/unit/test_crag_eval_harness.py",
-        "tests/unit/test_crag_production_pilot.py",
+        "tests/unit/test_corrective_retrieval.py::test_crag_rollback_flag_disables_correction_runtime",
+        "tests/unit/test_claim_repair.py::test_claim_repair_rollback_flag_disables_runtime",
         "-q",
     ]
-    result = subprocess.run(command, cwd=ROOT, check=False, capture_output=True, text=True)
+    rollback_environment = os.environ.copy()
+    rollback_environment.update({
+        "RAG_CRAG_ENABLED": "false",
+        "RAG_CLAIM_REPAIR_ENABLED": "false",
+    })
+    result = subprocess.run(
+        command, cwd=ROOT, check=False, capture_output=True, text=True,
+        env=rollback_environment,
+    )
     report = {
         "schema": "rollback-test-evidence-v1",
         "git_sha": git_sha,
         "flags": ["RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"],
+        "verified_flag_state": {
+            "RAG_CRAG_ENABLED": False,
+            "RAG_CLAIM_REPAIR_ENABLED": False,
+        },
         "passed": result.returncode == 0,
         "tested_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "command": command[1:],

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import re
 from typing import Callable, Iterable
 
@@ -23,6 +24,13 @@ class RepairResult:
     accepted: bool
     violation_reason: str = ""
     estimated_cost: float = 0.0
+
+
+def claim_repair_enabled() -> bool:
+    """Return the runtime repair switch; false is the rollback-safe default."""
+    return os.getenv("RAG_CLAIM_REPAIR_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def _citations_match_documents(answer, documents):

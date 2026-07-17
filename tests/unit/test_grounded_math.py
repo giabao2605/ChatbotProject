@@ -11,6 +11,7 @@ from mech_chatbot.rag.grounded_math import (
     derive_claim,
     make_calculation_provenance,
     render_grounded_calculation_answer,
+    select_grounded_answer_citation_documents,
     select_grounded_calculation_documents,
     select_grounded_bom_document_ids,
     solve_grounded_calculation,
@@ -70,14 +71,33 @@ def test_solve_grounded_calculation_fails_closed_without_operands():
     assert result.claim.value is None
 
 
-def test_document_scoped_total_uses_only_the_top_ranked_retrieved_document():
+def test_document_scoped_total_resolves_explicit_document_identity_not_rank():
     documents = [
-        SimpleNamespace(metadata={"doc_id": 31, "domain": "mechanical"}),
-        SimpleNamespace(metadata={"doc_id": 27, "domain": "mechanical"}),
-        SimpleNamespace(metadata={"doc_id": 31, "domain": "mechanical"}),
+        SimpleNamespace(
+            page_content="# BOM khác",
+            metadata={"doc_id": 27, "file_goc": "other_bom.md"},
+        ),
+        SimpleNamespace(
+            page_content="# BOM tổng hợp khối lượng",
+            metadata={"doc_id": 31, "file_goc": "grounded_math_aggregate_v1.md"},
+        ),
     ]
 
-    assert select_grounded_bom_document_ids(documents) == [31]
+    assert select_grounded_bom_document_ids(
+        documents,
+        "Tổng khối lượng trong tài liệu BOM tổng hợp khối lượng là bao nhiêu?",
+    ) == [31]
+
+
+def test_document_scoped_total_fails_closed_when_document_is_ambiguous():
+    documents = [
+        SimpleNamespace(page_content="# BOM A", metadata={"doc_id": 31}),
+        SimpleNamespace(page_content="# BOM B", metadata={"doc_id": 32}),
+    ]
+
+    assert select_grounded_bom_document_ids(
+        documents, "Tổng khối lượng trong tài liệu là bao nhiêu?",
+    ) == []
 
 
 def test_grounded_math_citations_include_only_documents_used_by_the_calculation():
@@ -88,6 +108,24 @@ def test_grounded_math_citations_include_only_documents_used_by_the_calculation(
     unrelated = SimpleNamespace(metadata={"doc_id": 27})
 
     assert select_grounded_calculation_documents([calculation, unrelated]) == [calculation]
+
+
+def test_grounded_math_citations_preserve_other_answered_branch_evidence():
+    calculation = SimpleNamespace(metadata={
+        "doc_id": 31,
+        "trang_so": 1,
+        "calculation_provenance": {"status": "valid"},
+    })
+    branch_document = SimpleNamespace(metadata={"doc_id": 44, "trang_so": 2})
+    unrelated = SimpleNamespace(metadata={"doc_id": 99, "trang_so": 1})
+    branches = [{
+        "outcome": "full_answer",
+        "citations": [{"doc_id": 44, "trang": 2}],
+    }]
+
+    assert select_grounded_answer_citation_documents(
+        [calculation, branch_document, unrelated], branches,
+    ) == [calculation, branch_document]
 
 
 def test_bom_total_uses_only_explicitly_named_operands_when_present():

@@ -1,6 +1,7 @@
 from langchain_core.documents import Document
 
 from mech_chatbot.rag.corrective import (
+    correction_enabled,
     merge_corrected_documents,
     run_corrected_retrieval,
     should_attempt_correction,
@@ -20,6 +21,21 @@ def test_correction_budget_allows_exactly_one_ambiguous_retry():
     assert should_attempt_correction(decision, attempts=0, enabled=True) is True
     assert should_attempt_correction(decision, attempts=1, enabled=True) is False
     assert should_attempt_correction(decision, attempts=0, enabled=False) is False
+
+
+def test_crag_rollback_flag_disables_correction_runtime(monkeypatch):
+    monkeypatch.setenv("RAG_CRAG_ENABLED", "false")
+    decision = AnswerDecision(
+        AnswerOutcome.INSUFFICIENT_EVIDENCE,
+        EvidenceState.AMBIGUOUS,
+        reason="missing coverage",
+        correction_allowed=True,
+    )
+
+    assert correction_enabled() is False
+    assert should_attempt_correction(
+        decision, attempts=0, enabled=correction_enabled(),
+    ) is False
 
 
 def test_ambiguous_state_does_not_override_policy_that_forbids_correction():

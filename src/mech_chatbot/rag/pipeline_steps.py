@@ -34,7 +34,7 @@ from mech_chatbot.rag.evidence_gate import (
     has_unsupported_numbers,
     make_insufficient_evidence_message,
 )
-from mech_chatbot.rag.claim_repair import repair_grounded_answer
+from mech_chatbot.rag.claim_repair import claim_repair_enabled, repair_grounded_answer
 from mech_chatbot.rag.grounded_math import (
     render_grounded_calculation_answer,
     validate_grounded_calculation_answer,
@@ -513,9 +513,7 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
     }
     _stream_attempts = max(1, int(os.getenv("GPT_STREAM_MAX_ATTEMPTS", "3")))
     _strict_realtime = strict_realtime_streaming_enabled(STRICT_ANSWER_MODE)
-    _claim_repair_enabled = os.getenv("RAG_CLAIM_REPAIR_ENABLED", "false").strip().lower() in {
-        "1", "true", "yes", "on"
-    }
+    _claim_repair_enabled = claim_repair_enabled()
     if _claim_repair_enabled:
         # Repair requires full-answer holdback; never release a violating draft.
         _strict_realtime = False
