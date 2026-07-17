@@ -979,13 +979,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     grounded_math_enabled = env_bool("RAG_GROUNDED_MATH_ENABLED", False)
     bom_document_ids = []
     if grounded_math_enabled and not new_part_ids:
-        for document in retrieved_docs:
-            try:
-                doc_id = int((document.metadata or {}).get("doc_id"))
-            except (TypeError, ValueError):
-                continue
-            if doc_id not in bom_document_ids:
-                bom_document_ids.append(doc_id)
+        from mech_chatbot.rag.grounded_math import select_grounded_bom_document_ids
+        bom_document_ids = select_grounded_bom_document_ids(retrieved_docs)
     should_inject_bom = bool(new_part_ids or bom_document_ids)
     if (
         not skip_retrieval

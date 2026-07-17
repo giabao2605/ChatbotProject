@@ -11,6 +11,7 @@ from mech_chatbot.rag.grounded_math import (
     derive_claim,
     make_calculation_provenance,
     render_grounded_calculation_answer,
+    select_grounded_bom_document_ids,
     solve_grounded_calculation,
     validate_grounded_calculation_answer,
 )
@@ -66,6 +67,16 @@ def test_solve_grounded_calculation_fails_closed_without_operands():
     assert result.plan == CalculationPlan("sum", ())
     assert result.claim is not None
     assert result.claim.value is None
+
+
+def test_document_scoped_total_uses_only_the_top_ranked_retrieved_document():
+    documents = [
+        SimpleNamespace(metadata={"doc_id": 31, "domain": "mechanical"}),
+        SimpleNamespace(metadata={"doc_id": 27, "domain": "mechanical"}),
+        SimpleNamespace(metadata={"doc_id": 31, "domain": "mechanical"}),
+    ]
+
+    assert select_grounded_bom_document_ids(documents) == [31]
 
 
 def test_bom_total_uses_only_explicitly_named_operands_when_present():

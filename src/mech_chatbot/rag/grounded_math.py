@@ -44,6 +44,22 @@ class CalculationResult:
     claim: DerivedClaim | None = None
 
 
+def select_grounded_bom_document_ids(documents) -> list[int]:
+    """Select one top-ranked document for an aggregate query without codes.
+
+    Mixing every retrieved candidate would combine unrelated BOM versions and
+    violate provenance. Multiple chunks from the selected document are still
+    covered by the repository's document-scoped query.
+    """
+    for document in documents or ():
+        metadata = getattr(document, "metadata", {}) or {}
+        try:
+            return [int(metadata.get("doc_id"))]
+        except (TypeError, ValueError):
+            continue
+    return []
+
+
 def _fold(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
     return "".join(char for char in normalized if not unicodedata.combining(char)).replace("đ", "d")
