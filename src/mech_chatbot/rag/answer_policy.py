@@ -178,11 +178,35 @@ def decide_answer_policy(
     )
 
 
+def decide_terminal_policy(
+    question: str,
+    *,
+    reason: str,
+    access_denied: bool = False,
+) -> AnswerDecision:
+    """Normalize early terminal paths through the shared policy seam."""
+    return decide_answer_policy(
+        question,
+        PolicyEvidence(
+            decision=EvidenceDecision(
+                EvidenceState.INSUFFICIENT,
+                reason=reason,
+                stage="terminal",
+                telemetry_status="terminal",
+            ),
+            has_retrieved_evidence=False,
+            retrieval_can_improve=False,
+        ),
+        {"access_denied": access_denied},
+    )
+
+
 __all__ = [
     "AnswerDecision",
     "AnswerOutcome",
     "PolicyEvidence",
     "decide_answer_policy",
+    "decide_terminal_policy",
     "has_explicit_negative_evidence",
     "explicit_negative_evidence_quote",
 ]

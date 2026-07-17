@@ -150,6 +150,7 @@ __all__ = [
     'set_document_lifecycle',
     'normalize_material_name',
     'save_bom_records',
+    'search_bom_facts',
     'search_bom_by_code',
     '_refresh_material_cache',
     'add_material_synonym',

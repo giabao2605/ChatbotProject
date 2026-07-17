@@ -68,6 +68,7 @@ def filter_servable_edges(edges, access_context):
             str(edge.get("publication_state") or "").lower() == "published",
             str(edge.get("lifecycle_status") or "").lower() == "published",
             str(edge.get("review_status") or "").lower() == "approved",
+            bool(str(edge.get("source_quote") or "").strip()),
         )):
             continue
         if not is_admin:

@@ -14,7 +14,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
-from mech_chatbot.db.repository import search_bom_by_code, traverse_knowledge_graph
+from mech_chatbot.db.repository import search_bom_facts, traverse_knowledge_graph
 from mech_chatbot.rag.rbac import (
     compose_retrieval_filters,
     create_rbac_filter,
@@ -69,6 +69,7 @@ from mech_chatbot.rag.evidence_gate import *
 from mech_chatbot.rag.answer_policy import (
     PolicyEvidence,
     decide_answer_policy,
+    decide_terminal_policy,
     has_explicit_negative_evidence,
     explicit_negative_evidence_quote,
 )
@@ -93,6 +94,24 @@ def make_debug_info(docs=None):
         "pipeline_namespace": namespace,
         "retrieved_docs": serialize_debug_documents(docs),
     }
+
+
+def _make_terminal_debug(question, reason, docs=None, *, access_denied=False):
+    """Keep early refusal telemetry on the same policy contract as late gates."""
+    decision = decide_terminal_policy(
+        question,
+        reason=reason,
+        access_denied=access_denied,
+    )
+    debug = make_debug_info(docs)
+    debug.update({
+        "answer_outcome": decision.outcome.value,
+        "evidence_state": decision.evidence_state.value,
+        "evidence_stage": "terminal",
+        "correction_allowed": False,
+        "evidence_quotes": list(decision.evidence_quotes),
+    })
+    return debug
 
 
 def serialize_debug_documents(docs=None):
@@ -861,7 +880,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         def restricted_stream():
             yield message
 
-        debug = make_debug_info([])
+        debug = _make_terminal_debug(
+            user_question, "access_denied", [], access_denied=True,
+        )
         debug["access_hint"] = {
             "restricted": True,
             "reason": access_reason,
@@ -920,7 +941,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 refusal=True,
                 refusal_reason="no_docs_for_exact_code",
             )
-            return insufficient_evidence_stream(), "", [], current_part_ids, make_debug_info([])
+            return insufficient_evidence_stream(), "", [], current_part_ids, _make_terminal_debug(
+                user_question, "no_docs_for_exact_code",
+            )
 
     if not skip_retrieval:
         # P0 slice #7: resolve candidates + bang lua chon variant + insufficient tach sang pipeline_steps._disambiguate
@@ -951,12 +974,29 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                   broad_filter=serialize_qdrant_filter(broad_filter) if "broad_filter" in locals() else None,
                   top_k=base_k if "base_k" in locals() else None)
 
-    # Inject SQL BOM Data
-    if not skip_retrieval and new_part_ids and _context_is_mechanical(retrieved_docs, new_part_ids):
+    # Inject governed SQL BOM data. Grounded aggregate questions may not name a
+    # part code, so scope those reads to the exact documents already retrieved.
+    grounded_math_enabled = env_bool("RAG_GROUNDED_MATH_ENABLED", False)
+    bom_document_ids = []
+    if grounded_math_enabled and not new_part_ids:
+        for document in retrieved_docs:
+            try:
+                doc_id = int((document.metadata or {}).get("doc_id"))
+            except (TypeError, ValueError):
+                continue
+            if doc_id not in bom_document_ids:
+                bom_document_ids.append(doc_id)
+    should_inject_bom = bool(new_part_ids or bom_document_ids)
+    if (
+        not skip_retrieval
+        and should_inject_bom
+        and _context_is_mechanical(retrieved_docs, new_part_ids)
+    ):
         t_sql = time.time()
         try:
-            bom_results = search_bom_by_code(
-                new_part_ids,
+            bom_results = search_bom_facts(
+                part_codes=new_part_ids,
+                document_ids=bom_document_ids,
                 version_policy=intent_data.get("version_policy", "current_only"),
                 detected_versions=intent_data.get("detected_versions"),
                 user_department=user_department,
@@ -995,7 +1035,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                         f"{row.unit or ''}, Ghi chú: {row.note}"
                     )
                     if (
-                        env_bool("RAG_GROUNDED_MATH_ENABLED", False)
+                            grounded_math_enabled
                         and row.quantity is not None
                     ):
                         try:
@@ -1013,7 +1053,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                             pass
 
                 calculation_claims = {}
-                if env_bool("RAG_GROUNDED_MATH_ENABLED", False):
+                if grounded_math_enabled:
                     from mech_chatbot.rag.grounded_math import solve_grounded_calculation
                     facts_by_document = {}
                     for (source_doc_id, _), source in bom_by_source.items():
@@ -1084,12 +1124,24 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     )
                 retrieved_docs = bom_docs + retrieved_docs
                 logger.info("Da them %s dong BOM tu SQL vao context (%s nguon co the citation).", len(bom_results), len(bom_docs))
-                log_trace("sql_bom", trace_id, latency_ms=int((time.time() - t_sql)*1000), rows=len(bom_results), part_ids=new_part_ids)
+                log_trace(
+                    "sql_bom", trace_id,
+                    latency_ms=int((time.time() - t_sql)*1000), rows=len(bom_results),
+                    part_ids=new_part_ids, document_ids=bom_document_ids,
+                )
             else:
-                log_trace("sql_bom", trace_id, latency_ms=int((time.time() - t_sql)*1000), rows=0, part_ids=new_part_ids)
+                log_trace(
+                    "sql_bom", trace_id,
+                    latency_ms=int((time.time() - t_sql)*1000), rows=0,
+                    part_ids=new_part_ids, document_ids=bom_document_ids,
+                )
         except Exception as e:
             logger.error(f"Loi inject SQL BOM: {e}")
-            log_trace("sql_bom", trace_id, latency_ms=int((time.time() - t_sql)*1000), error=str(e), part_ids=new_part_ids)
+            log_trace(
+                "sql_bom", trace_id,
+                latency_ms=int((time.time() - t_sql)*1000), error=str(e),
+                part_ids=new_part_ids, document_ids=bom_document_ids,
+            )
  
     if image_analysis:
         fake_doc = Document(
@@ -1137,7 +1189,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             docs_count=0,
         )
 
-        return empty_stream(), "", [], current_part_ids, make_debug_info([])
+        return empty_stream(), "", [], current_part_ids, _make_terminal_debug(
+            user_question, "no_retrieved_docs",
+        )
 
     # Optional CRAG pass.  It reuses the exact same strict/broad/RBAC filters;
     # only the query formulation changes, so correction can never widen access.
@@ -1335,7 +1389,9 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             def mock_stream():
                 yield empty_msg
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="empty_context", docs_count=0, version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, user_department=user_department, user_roles=user_roles)
-            return mock_stream(), "", [], new_part_ids, make_debug_info([])
+            return mock_stream(), "", [], new_part_ids, _make_terminal_debug(
+                user_question, "empty_context",
+            )
 
         t_parent_context = time.time()
         real_docs = hydrate_parent_context(real_docs)

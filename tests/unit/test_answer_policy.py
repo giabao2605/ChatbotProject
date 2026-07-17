@@ -6,6 +6,7 @@ from mech_chatbot.rag.answer_policy import (
     AnswerOutcome,
     PolicyEvidence,
     decide_answer_policy,
+    decide_terminal_policy,
     has_explicit_negative_evidence,
     explicit_negative_evidence_quote,
 )
@@ -155,4 +156,25 @@ def test_clarification_policy_is_terminal_without_retrieval_correction():
     )
 
     assert decision.outcome is AnswerOutcome.CLARIFICATION_REQUIRED
+    assert decision.correction_allowed is False
+
+
+@pytest.mark.parametrize(
+    ("reason", "access_denied", "outcome"),
+    [
+        ("no_retrieved_docs", False, AnswerOutcome.INSUFFICIENT_EVIDENCE),
+        ("no_docs_for_exact_code", False, AnswerOutcome.INSUFFICIENT_EVIDENCE),
+        ("access_denied", True, AnswerOutcome.ACCESS_DENIED),
+    ],
+)
+def test_terminal_outcomes_use_the_same_answer_policy_seam(reason, access_denied, outcome):
+    decision = decide_terminal_policy(
+        "Câu hỏi cần dữ liệu nguồn",
+        reason=reason,
+        access_denied=access_denied,
+    )
+
+    assert decision.outcome is outcome
+    assert decision.evidence_state is EvidenceState.INSUFFICIENT
+    assert decision.reason == ("access_denied" if access_denied else reason)
     assert decision.correction_allowed is False

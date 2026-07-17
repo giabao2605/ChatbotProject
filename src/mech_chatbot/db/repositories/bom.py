@@ -17,6 +17,7 @@ __all__ = [
     'BomSearchRow',
     'normalize_material_name',
     'save_bom_records',
+    'search_bom_facts',
     'search_bom_by_code',
 ]
 
@@ -131,8 +132,9 @@ def _normalize_bom_result_row(row):
         source_row_id=source_row_id,
     )
 
-def search_bom_by_code(
-    ma_hang_list,
+def search_bom_facts(
+    part_codes=None,
+    document_ids=None,
     version_policy="current_only",
     detected_versions=None,
     user_department=None,
@@ -141,12 +143,16 @@ def search_bom_by_code(
     max_security_level=None,
     allowed_sites=None,
 ):
-    """Tim kiem bang ke vat tu tren SQL theo ma hang hoac ma doi tuong (parent assembly).
+    """Return governed BOM facts scoped by part codes or retrieved documents.
 
-    Su dung CONTAINS() neu Full-Text Index da duoc cai dat tren BangKeVatTu,
-    fallback ve LIKE '%...%' neu Full-Text Search khong kha dung.
+    ``document_ids`` supports aggregate questions that do not mention a part
+    code while preserving the same lifecycle and RBAC predicates as code
+    search.  When both scopes are supplied, the document scope narrows the
+    code search instead of widening it.
     """
-    if not ma_hang_list:
+    part_codes = [str(value).strip() for value in (part_codes or []) if str(value).strip()]
+    document_ids = sorted({int(value) for value in (document_ids or [])})
+    if not part_codes and not document_ids:
         return []
     if not user_roles:
         logger.warning("Deny SQL BOM search because user_roles is empty.")
@@ -165,7 +171,7 @@ def search_bom_by_code(
             # Tao dieu kien OR cho tung ma
             conditions = []
             params = {}
-            for i, m in enumerate(ma_hang_list):
+            for i, m in enumerate(part_codes):
                 if use_fulltext:
                     # CONTAINS dung double-quote de tim cum tu chinh xac hon
                     # prefix search: "ma*" khop maHang bat dau bang ma
@@ -194,7 +200,16 @@ def search_bom_by_code(
                     )
                     """)
 
-            filter_sql = "1=1"
+            if document_ids:
+                params["document_ids"] = json.dumps(document_ids)
+                document_scope = "b.DocID IN (SELECT TRY_CAST([value] AS INT) FROM OPENJSON(:document_ids))"
+                if conditions:
+                    filter_sql = "1=1 AND " + document_scope
+                else:
+                    conditions.append(document_scope)
+                    filter_sql = "1=1"
+            else:
+                filter_sql = "1=1"
             if version_policy in ["current_only", "all_current_variants"]:
                 filter_sql += " AND t.Servable = 1 AND t.PublicationState = 'published' AND t.LifecycleStatus = 'published' AND t.ReviewStatus = 'approved' AND t.IsCurrent = 1"
             elif version_policy == "specific_version":
@@ -297,5 +312,28 @@ def search_bom_by_code(
             result = conn.execute(query, params).fetchall()
             return [_normalize_bom_result_row(row) for row in result]
     except Exception as e:
-        logger.error(f"Loi search_bom_by_code: {e}", exc_info=True)
+        logger.error(f"Loi search_bom_facts: {e}", exc_info=True)
         return []
+
+
+def search_bom_by_code(
+    ma_hang_list,
+    version_policy="current_only",
+    detected_versions=None,
+    user_department=None,
+    user_roles=None,
+    allowed_departments=None,
+    max_security_level=None,
+    allowed_sites=None,
+):
+    """Backward-compatible code-scoped BOM search."""
+    return search_bom_facts(
+        part_codes=ma_hang_list,
+        version_policy=version_policy,
+        detected_versions=detected_versions,
+        user_department=user_department,
+        user_roles=user_roles,
+        allowed_departments=allowed_departments,
+        max_security_level=max_security_level,
+        allowed_sites=allowed_sites,
+    )

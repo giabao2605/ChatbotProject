@@ -267,6 +267,25 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
                     source.SecurityLevel,'deterministic-seed',SYSUTCDATETIME());
         """,
         """
+        UPDATE edge
+        SET SourceQuote = CONCAT(
+                N'Approved deterministic relation ', edge.RelationType,
+                N' between ', source_node.DisplayName, N' and ', target_node.DisplayName,
+                N' from ', COALESCE(document.TenFile, CONCAT(N'DocID ', edge.SourceDocID)),
+                N' page ', edge.SourcePage, N' version ', edge.SourceVersion
+            )
+        FROM dbo.KnowledgeGraphEdge edge
+        JOIN dbo.KnowledgeGraphNode source_node ON source_node.NodeID = edge.SourceNodeID
+        JOIN dbo.KnowledgeGraphNode target_node ON target_node.NodeID = edge.TargetNodeID
+        LEFT JOIN dbo.TaiLieu document ON document.DocID = edge.SourceDocID
+        WHERE edge.Origin='deterministic' AND edge.SourcePage > 0
+          AND NULLIF(LTRIM(RTRIM(edge.SourceQuote)), '') IS NULL
+          AND (:source_system IS NULL OR EXISTS (
+              SELECT 1 FROM dbo.TaiLieu t
+              WHERE t.DocID=edge.SourceDocID AND t.SourceSystem=:source_system
+          ));
+        """,
+        """
         UPDATE e
         SET ServingStatus='disabled'
         FROM dbo.KnowledgeGraphEdge e

@@ -93,6 +93,7 @@ def edge(**overrides):
         "department": "Technical",
         "site": "HQ",
         "security_level": "internal",
+        "source_quote": "Assembly A contains part P-100.",
     }
     value.update(overrides)
     return value
@@ -114,6 +115,17 @@ def test_graph_evidence_is_fail_closed_for_review_lifecycle_and_rbac():
     ]
 
     assert [item["edge_id"] for item in filter_servable_edges(candidates, access)] == [1]
+
+
+def test_graph_evidence_rejects_serving_edge_without_source_quote():
+    access = {
+        "roles": ["viewer"],
+        "allowed_departments": ["Technical"],
+        "allowed_sites": ["HQ"],
+        "max_security_level": "internal",
+    }
+
+    assert filter_servable_edges([edge(source_quote="")], access) == []
 
 
 def test_graph_edge_requires_exact_qdrant_page_hydration():
@@ -246,8 +258,18 @@ def test_llm_edge_producer_only_inserts_pending_proposals():
 
 def test_graph_traversal_hydrates_reviewed_proposal_source_quote():
     source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
-    assert "proposal.source_quote AS source_quote" in source
+    assert "COALESCE(e.SourceQuote, proposal.source_quote) AS source_quote" in source
     assert "JSON_VALUE(p.EvidenceJson, '$.source_quote')" in source
+
+
+def test_graph_deterministic_edges_have_a_persisted_provenance_contract():
+    migration = Path("database/migrations/V0037__graph_edge_source_quote.sql").read_text(encoding="utf-8")
+    seed_source = Path("scripts/graph/seed_deterministic.py").read_text(encoding="utf-8")
+    repository = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
+
+    assert "SourceQuote" in migration
+    assert "SET SourceQuote" in seed_source
+    assert "COALESCE(e.SourceQuote, proposal.source_quote) AS source_quote" in repository
 
 
 @pytest.mark.parametrize("role", ["knowledge_approver", "reviewer", "admin"])

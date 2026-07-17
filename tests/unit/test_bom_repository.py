@@ -27,6 +27,7 @@ class _Connection:
     def __init__(self, rows):
         self.rows = rows
         self.calls = 0
+        self.params = []
 
     def __enter__(self):
         return self
@@ -36,6 +37,7 @@ class _Connection:
 
     def execute(self, *_args, **_kwargs):
         self.calls += 1
+        self.params.append(_args[1] if len(_args) > 1 else _kwargs.get("params", {}))
         if self.calls == 1:
             return _Result(scalar_value=0)
         return _Result(rows=self.rows)
@@ -81,3 +83,30 @@ def test_bom_search_restores_exact_decimal_and_stable_source_row(monkeypatch):
     assert results[0].unit == "kg"
     assert results[1][5] == Decimal("4")
     assert results[1][14] == "BOM-302"
+
+
+def test_bom_fact_search_supports_document_scope_without_part_code(monkeypatch):
+    raw = json.dumps({
+        "quantity_decimal": "12.50",
+        "source_row_id": "TECH-BOM-003",
+    })
+    rows = [
+        (41, 1, "DEMO-PART-C", "Chi tiết C", "DEMO-MAT-RUBBER", None,
+         None, "technical_demo_process_v2.md", 2, "internal", "HQ",
+         "all_external", 301, "kg", raw),
+    ]
+    fake_engine = _Engine(rows)
+    monkeypatch.setattr(bom, "_ensure_engine", lambda: None)
+    monkeypatch.setattr(bom, "engine", fake_engine)
+
+    results = bom.search_bom_facts(
+        document_ids=[41],
+        user_roles=["admin"],
+        allowed_departments=["Technical"],
+        allowed_sites=["HQ"],
+        max_security_level="internal",
+    )
+
+    assert [row.source_row_id for row in results] == ["TECH-BOM-003"]
+    assert results[0].quantity == Decimal("12.50")
+    assert json.loads(fake_engine.connection.params[-1]["document_ids"]) == [41]

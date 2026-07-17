@@ -235,7 +235,7 @@ def traverse_knowledge_graph(seed_keys, access_context, max_hops=2, limit=50):
                    t.SecurityLevel AS security_level, t.Servable AS servable,
                    t.IsCurrent AS is_current, t.PublicationState AS publication_state,
                    t.LifecycleStatus AS lifecycle_status, t.ReviewStatus AS review_status,
-                   proposal.source_quote AS source_quote
+                   COALESCE(e.SourceQuote, proposal.source_quote) AS source_quote
             FROM Walk w
             JOIN EligibleEdges e ON (e.SourceNodeID = w.NodeID OR e.TargetNodeID = w.NodeID)
             JOIN dbo.KnowledgeGraphNode sn ON sn.NodeID = e.SourceNodeID
