@@ -833,6 +833,8 @@ Các lỗi đã quan sát trong controlled demo và lộ trình cải thiện th
 
 Cập nhật 2026-07-17: code/fixture deterministic cho Outcome Policy, Markdown structured facts, Grounded Math seam, intent coverage, Graph ontology, Late Interaction query-family reporting và failure-family gate đã hoàn thành. Bốn mutation pack nằm tại `data/failure_family_eval_v1/`. Các milestone vẫn chưa chuyển sang `accepted` cho controlled demo cho đến khi baseline/candidate mới, rollback artifact và human graph review được hoàn tất; default rollout không thay đổi.
 
+Checkpoint tự động ngày 2026-07-17: provider smoke trên `gpt-5.4` đạt 5/5 request, 0 retry và không có `503/no_capacity` (artifact local `reports/controlled-demo/20260717-provider-smoke.json`). Preflight CRAG fixture staging được thử lại với 9 case nhưng cả 9 tài liệu đều thiếu trong SQL (`sql_document_missing`), nên chưa chạy baseline/candidate và không tạo quality decision. Đây là thiếu fixture staging, không phải bằng chứng CRAG đạt hoặc bị loại; cần ingest/khôi phục đúng batch `crag-eval-v1` và collection `MechChatbot_CRAG_Eval_v1` trước bước live tiếp theo.
+
 Thứ tự còn lại nên là:
 
 1. [Đã hoàn tất implementation] **Evaluation foundation** đã khóa evaluator, adjudication và metric definitions dùng chung; live reviewer evidence tiếp tục được thu trong các demo.
