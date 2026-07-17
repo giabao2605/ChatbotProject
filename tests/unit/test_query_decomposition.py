@@ -3,12 +3,14 @@ import threading
 import time
 
 from mech_chatbot.rag.query_decomposition import (
+    BranchPlan,
     BranchRetrievalResult,
     CorrectionBudget,
     audit_decomposition_stream,
     build_plan,
     build_partial_answer_instruction,
     codes_in_query,
+    compile_query_plan,
     execute_plan,
     sufficient_branch_documents,
 )
@@ -59,6 +61,44 @@ def test_complex_query_is_limited_to_three_subqueries_and_drops_invented_codes()
     assert all("ZZ-999" not in query for query in plan.subqueries)
 
 
+def test_compile_query_plan_falls_back_when_planner_repeats_whole_question():
+    question = (
+        "Cho biết số lượng DEMO-PART-A, đồng thời nêu vật liệu DEMO-PART-B "
+        "và quy trình bảo trì DEMO-PART-C?"
+    )
+
+    plan = compile_query_plan(
+        question,
+        {"allowed_departments": ("Technical",), "allowed_sites": ("HQ",)},
+        planner=lambda original: {"subqueries": [original]},
+    )
+
+    assert isinstance(plan, BranchPlan)
+    assert plan.is_complex is True
+    assert len(plan.intents) == 3
+    assert len(plan.subqueries) == 3
+    assert plan.used_fallback is True
+    assert plan.intent_coverage == (True, True, True)
+    assert set(code for query in plan.subqueries for code in codes_in_query(query)) == {
+        "demo-part-a", "demo-part-b", "demo-part-c",
+    }
+
+
+def test_compile_query_plan_keeps_complete_bounded_planner_output():
+    question = "Cho biết BOM MA-100 và quy trình bảo trì MA-200?"
+    plan = compile_query_plan(
+        question,
+        {},
+        planner=lambda _original: {
+            "subqueries": ["BOM MA-100", "quy trình bảo trì MA-200"]
+        },
+    )
+
+    assert plan.subqueries == ("BOM MA-100", "quy trình bảo trì MA-200")
+    assert plan.intent_coverage == (True, True)
+    assert plan.used_fallback is False
+
+
 def test_decomposed_retrieval_reuses_access_context_and_one_shared_correction():
     context = {"allowed_departments": ["Technical"], "allowed_sites": ["HQ"]}
     seen = []
@@ -97,6 +137,13 @@ def test_partial_answer_instruction_counts_missing_and_denied_without_source_nam
     assert "1 nhánh chưa có đủ bằng chứng" in instruction
     assert "1 nhánh không thể truy cập" in instruction
     assert "secret-payroll.md" not in instruction
+
+
+def test_grounded_negative_branch_is_allowed_without_missing_notice():
+    instruction = build_partial_answer_instruction([
+        {"outcome": "insufficient_evidence", "grounded_negative": True},
+    ])
+    assert instruction == ""
 
 
 def test_execute_plan_returns_at_deadline_without_waiting_for_slow_branch():
@@ -139,3 +186,12 @@ def test_only_sufficient_branch_documents_reach_final_generation():
     ])
 
     assert selected == [sufficient]
+
+
+def test_grounded_negative_branch_documents_reach_final_generation():
+    negative = Document(page_content="Không có trường đơn giá.", metadata={"doc_id": 3, "trang_so": 1})
+    results = [BranchRetrievalResult([negative], 5, "strict", 1.0, None)]
+    selected = sufficient_branch_documents(results, [
+        {"outcome": "insufficient_evidence", "grounded_negative": True},
+    ])
+    assert selected == [negative]

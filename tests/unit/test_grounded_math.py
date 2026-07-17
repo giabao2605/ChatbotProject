@@ -5,11 +5,13 @@ import pytest
 
 from mech_chatbot.rag.grounded_math import (
     CalculationPlan,
+    CalculationResult,
     GroundedFact,
     build_calculation_plan,
     derive_claim,
     make_calculation_provenance,
     render_grounded_calculation_answer,
+    solve_grounded_calculation,
     validate_grounded_calculation_answer,
 )
 
@@ -42,6 +44,28 @@ def test_calculation_planner_selects_operation_and_ordered_bom_operands():
     assert total == CalculationPlan("sum", facts)
     assert grand_total == CalculationPlan("sum", facts)
     assert difference == CalculationPlan("subtract", (facts[1], facts[0]))
+
+
+def test_solve_grounded_calculation_is_the_single_plan_and_decimal_seam():
+    facts = (fact("12.50", "kg"), fact("7.50", "KG", "BOM-2"))
+
+    result = solve_grounded_calculation("Tổng hai dòng BOM là bao nhiêu?", facts)
+
+    assert isinstance(result, CalculationResult)
+    assert result.status == "valid"
+    assert result.plan == CalculationPlan("sum", facts)
+    assert result.claim is not None
+    assert result.claim.value == Decimal("20.00")
+    assert result.claim.unit == "kg"
+
+
+def test_solve_grounded_calculation_fails_closed_without_operands():
+    result = solve_grounded_calculation("Tổng BOM là bao nhiêu?", ())
+
+    assert result.status == "missing_operand"
+    assert result.plan == CalculationPlan("sum", ())
+    assert result.claim is not None
+    assert result.claim.value is None
 
 
 def test_bom_total_uses_only_explicitly_named_operands_when_present():

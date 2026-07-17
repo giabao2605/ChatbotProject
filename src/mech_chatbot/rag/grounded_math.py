@@ -37,6 +37,13 @@ class DerivedClaim:
     provenance: tuple[GroundedFact, ...] = ()
 
 
+@dataclass(frozen=True)
+class CalculationResult:
+    status: str
+    plan: CalculationPlan | None = None
+    claim: DerivedClaim | None = None
+
+
 def _fold(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
     return "".join(char for char in normalized if not unicodedata.combining(char)).replace("đ", "d")
@@ -212,6 +219,18 @@ def derive_claim(plan: CalculationPlan) -> DerivedClaim:
         approximate=approximate,
         provenance=facts,
     )
+
+
+def solve_grounded_calculation(
+    question: str,
+    facts: tuple[GroundedFact, ...],
+) -> CalculationResult:
+    """Build and execute at most one deterministic calculation plan."""
+    plan = build_calculation_plan(question, tuple(facts or ()))
+    if plan is None:
+        return CalculationResult(status="plan_missing")
+    claim = derive_claim(plan)
+    return CalculationResult(status=claim.status, plan=plan, claim=claim)
 
 
 def make_calculation_provenance(plan: CalculationPlan, claim: DerivedClaim) -> dict:

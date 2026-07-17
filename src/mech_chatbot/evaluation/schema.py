@@ -17,10 +17,12 @@ EVALUATOR_MODELS = {
 
 def is_valid_relation_contract(value: object) -> bool:
     """Return whether a graph relation has the complete canonical identity."""
+    from mech_chatbot.rag.graph_ontology import RELATION_ONTOLOGY
+
     return isinstance(value, dict) and all(
         isinstance(value.get(field), str) and value[field].strip()
         for field in ("source_key", "relation_type", "target_key")
-    )
+    ) and str(value["relation_type"]).strip().upper() in RELATION_ONTOLOGY
 
 
 def version_manifest_case(case: dict) -> str:
@@ -33,6 +35,9 @@ def version_manifest_case(case: dict) -> str:
 
 def validate_manifest_ground_truth(case: dict, *, expected_outcome: str) -> None:
     """Validate v2 human-authored claim/citation labels; legacy stays readable."""
+    from mech_chatbot.evaluation.failure_families import validate_failure_contract
+
+    validate_failure_contract(case)
     if case.get("manifest_schema") != CURRENT_MANIFEST_SCHEMA:
         return
     for field in ("expected_claims", "expected_citations"):

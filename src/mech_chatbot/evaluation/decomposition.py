@@ -130,12 +130,25 @@ def evaluate_decomposition_case(case: Mapping[str, Any], debug: Mapping[str, Any
         })
     branch_accuracy = mean(row["outcome_passed"] for row in results) if results else 0.0
     citation_accuracy = mean(row["citation_passed"] for row in results) if results else 0.0
+    intent_coverage = debug.get("decomposition_intent_coverage")
+    if intent_coverage is None:
+        intent_coverage_ok = True
+    else:
+        expected_intent_count = int(
+            debug.get("decomposition_intent_count") or len(intent_coverage)
+        )
+        intent_coverage_ok = bool(
+            isinstance(intent_coverage, (list, tuple))
+            and len(intent_coverage) == expected_intent_count
+            and all(bool(value) for value in intent_coverage)
+        )
     budget_checks = {
         "planner_count": int(debug.get("planner_count") or 0) <= (0 if case.get("evaluation_group") == "simple" else 1),
         "subquery_count": int(debug.get("subquery_count") or 0) <= 3,
         "correction_count": int(debug.get("correction_count") or 0) <= 1,
         "final_generation_count": int(debug.get("final_generation_count") or 0) <= 1,
         "deadline": not bool(debug.get("deadline_exceeded")),
+        "intent_coverage": intent_coverage_ok,
     }
     budget_passed = all(budget_checks.values())
     return {

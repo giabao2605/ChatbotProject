@@ -39,7 +39,10 @@ from mech_chatbot.ingestion.pdf.config import IMAGE_DIR, IMAGE_EXTENSIONS, MARKD
 from mech_chatbot.ingestion.pdf.chunking import _build_chunk_context_prefix, _contextual_chunk_enabled, token_splitter, tokenize_cached
 from mech_chatbot.ingestion.pdf.vision import _prewarm_vision_cache, call_vision_model, format_vision_data, parse_vision_json
 from mech_chatbot.ingestion.pdf.quality import _normalize_phong_ban_quyen, calculate_quality_status
-from mech_chatbot.ingestion.pdf.bom import extract_bom_records
+from mech_chatbot.ingestion.pdf.bom import (
+    extract_bom_records,
+    extract_bom_records_from_markdown,
+)
 from mech_chatbot.ingestion.pdf.readers import extract_text_from_supported_file
 from mech_chatbot.ingestion.pdf.metadata import extract_metadata_smart
 
@@ -490,8 +493,12 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                             # Parse BOM records and save to SQL
                             bom_records = extract_bom_records(table, table_idx=table_idx)
                             if bom_records:
-                                report["bom_rows_count"] += len(bom_records)
-                                save_bom_records(doc_id, page_num + 1, bom_records)
+                                persisted = save_bom_records(doc_id, page_num + 1, bom_records)
+                                report["bom_rows_count"] += persisted
+                                if not persisted:
+                                    report["warnings"].append(
+                                        f"structured_bom_persistence_failed:page:{page_num + 1}"
+                                    )
                                 
                             for row in table:
                                 cleaned_row = [str(cell).replace("\n", " ").strip() if cell else "" for cell in row]
@@ -759,6 +766,15 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
                 extraction_status="success",
                 image_path=None,
             )
+            markdown_bom_records = extract_bom_records_from_markdown(text_content)
+            if markdown_bom_records:
+                persisted = save_bom_records(doc_id, 1, markdown_bom_records)
+                report["bom_rows_count"] += persisted
+                report["pages_table_extracted"].append(1)
+                if not persisted:
+                    report["warnings"].append(
+                        "structured_bom_persistence_failed:page:1"
+                    )
 
         # GD4: duong nap hang loat khong tin folder tuyet doi -> quet noi dung nhay cam
         if scan_sensitive:

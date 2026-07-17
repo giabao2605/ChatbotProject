@@ -1,0 +1,18 @@
+{
+  "failure_family": "GRAPH_RELATION_ERROR",
+  "seed_case_id": "demo-case-032",
+  "expected_policy": {
+    "outcome": "full_answer",
+    "evidence_state": "SUFFICIENT",
+    "correction_allowed": false
+  },
+  "invariants": [
+    "relation_ontology_whitelist",
+    "approved_edges_only",
+    "source_provenance_complete",
+    "maximum_two_hops",
+    "leakage_zero"
+  ],
+  "mutation_axes": [],
+  "holdout": false
+}

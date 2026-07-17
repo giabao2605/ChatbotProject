@@ -829,6 +829,10 @@ Chứng minh các tính năng khi kết hợp không phá governance, cache, lat
 
 ### 2.10 Thứ tự thực hiện đề xuất
 
+Các lỗi đã quan sát trong controlled demo và lộ trình cải thiện theo họ lỗi được theo dõi chi tiết tại [`chatbot-failure-family-improvement-plan.md`](chatbot-failure-family-improvement-plan.md). Tài liệu đó là implementation roadmap cho các regression seed và mutation gate; trang này tiếp tục là ledger nghiệm thu chính thức của các milestone 2.1–2.9.
+
+Cập nhật 2026-07-17: code/fixture deterministic cho Outcome Policy, Markdown structured facts, Grounded Math seam, intent coverage, Graph ontology, Late Interaction query-family reporting và failure-family gate đã hoàn thành. Bốn mutation pack nằm tại `data/failure_family_eval_v1/`. Các milestone vẫn chưa chuyển sang `accepted` cho controlled demo cho đến khi baseline/candidate mới, rollback artifact và human graph review được hoàn tất; default rollout không thay đổi.
+
 Thứ tự còn lại nên là:
 
 1. [Đã hoàn tất implementation] **Evaluation foundation** đã khóa evaluator, adjudication và metric definitions dùng chung; live reviewer evidence tiếp tục được thu trong các demo.

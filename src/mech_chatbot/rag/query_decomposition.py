@@ -17,11 +17,18 @@ _CODE_RE = re.compile(r"\b[A-Z]{1,10}[-_][A-Z0-9][A-Z0-9._-]*\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
-class DecompositionPlan:
+class BranchPlan:
     original_query: str
     is_complex: bool
     subqueries: tuple[str, ...] = ()
     planner_version: str = "planner-v1"
+    intents: tuple[str, ...] = ()
+    intent_coverage: tuple[bool, ...] = ()
+    used_fallback: bool = False
+    intent_overflow: bool = False
+
+
+DecompositionPlan = BranchPlan
 
 
 @dataclass(frozen=True)
@@ -73,20 +80,84 @@ def is_complex_query(question: str) -> bool:
     return cue_count > 0 or normalized.count("?") > 1
 
 
+_INTENT_SEPARATOR = re.compile(
+    r"\s*(?:[;\n]+|,\s*(?:đồng\s+thời|dong\s+thoi)|"
+    r"\b(?:đồng\s+thời|dong\s+thoi|và|va|also)\b)\s*",
+    re.IGNORECASE,
+)
+_INTENT_STOP_WORDS = {
+    "cho", "biet", "neu", "dong", "thoi", "va", "cua", "la", "bao",
+    "nhieu", "the", "please", "also", "and",
+}
+
+
+def _fold(value: str) -> str:
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    ).replace("đ", "d")
+
+
+def split_query_intents(question: str) -> tuple[tuple[str, ...], bool]:
+    original = str(question or "").strip()
+    parts = [
+        part.strip(" ,;?\t\r\n")
+        for part in _INTENT_SEPARATOR.split(original)
+        if part.strip(" ,;?\t\r\n")
+    ]
+    if len(parts) <= 3:
+        return tuple(parts or ([original] if original else [])), False
+    return tuple(parts[:2] + [" và ".join(parts[2:])]), True
+
+
+def _intent_tokens(value: str) -> set[str]:
+    codes = {code.casefold() for code in _CODE_RE.findall(str(value or ""))}
+    tokens = set(re.findall(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", _fold(value)))
+    return tokens - codes - _INTENT_STOP_WORDS
+
+
+def _query_covers_intent(query: str, intent: str) -> bool:
+    expected_codes = {code.casefold() for code in _CODE_RE.findall(intent)}
+    actual_codes = {code.casefold() for code in _CODE_RE.findall(query)}
+    if not expected_codes.issubset(actual_codes):
+        return False
+    expected_tokens = _intent_tokens(intent)
+    if not expected_tokens:
+        return bool(expected_codes) or bool(str(query or "").strip())
+    return bool(expected_tokens & _intent_tokens(query))
+
+
+def _coverage(intents: tuple[str, ...], queries: tuple[str, ...]) -> tuple[bool, ...]:
+    return tuple(
+        any(_query_covers_intent(query, intent) for query in queries)
+        for intent in intents
+    )
+
+
 def codes_in_query(question: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(code.lower() for code in _CODE_RE.findall(str(question or ""))))
 
 
-def build_plan(question: str, planner=None, *, planner_version="planner-v1") -> DecompositionPlan:
+def compile_query_plan(
+    question: str,
+    access_context,
+    *,
+    planner=None,
+    planner_version="planner-v1",
+) -> BranchPlan:
+    del access_context
     original = str(question or "").strip()
     if not is_complex_query(original):
-        return DecompositionPlan(original, False, (), planner_version)
-    if planner is None:
-        return DecompositionPlan(original, True, (original,), planner_version)
-    try:
-        payload = planner(original) or {}
-    except Exception:
-        payload = {}
+        return BranchPlan(original, False, (), planner_version)
+    intents, overflow = split_query_intents(original)
+    payload = {}
+    if planner is not None:
+        try:
+            payload = planner(original) or {}
+        except Exception:
+            payload = {}
     proposed = payload.get("subqueries", ()) if isinstance(payload, dict) else ()
     allowed_codes = {code.upper() for code in _CODE_RE.findall(original)}
     accepted = []
@@ -105,7 +176,35 @@ def build_plan(question: str, planner=None, *, planner_version="planner-v1") -> 
         accepted.append(query)
         if len(accepted) == 3:
             break
-    return DecompositionPlan(original, True, tuple(accepted or [original]), planner_version)
+    proposed_queries = tuple(accepted)
+    proposed_coverage = _coverage(intents, proposed_queries)
+    planner_complete = bool(
+        proposed_queries
+        and len(proposed_queries) >= len(intents)
+        and all(proposed_coverage)
+    )
+    final_queries = proposed_queries if planner_complete else intents[:3]
+    final_coverage = _coverage(intents, final_queries)
+    return BranchPlan(
+        original_query=original,
+        is_complex=True,
+        subqueries=final_queries,
+        planner_version=planner_version,
+        intents=intents,
+        intent_coverage=final_coverage,
+        used_fallback=not planner_complete,
+        intent_overflow=overflow,
+    )
+
+
+def build_plan(question: str, planner=None, *, planner_version="planner-v1") -> BranchPlan:
+    """Backward-compatible adapter for callers that do not pass access context."""
+    return compile_query_plan(
+        question,
+        {},
+        planner=planner,
+        planner_version=planner_version,
+    )
 
 
 def execute_plan(
@@ -147,7 +246,11 @@ def execute_plan(
 def build_partial_answer_instruction(branches) -> str:
     """Build a safe generation instruction without naming inaccessible sources."""
     outcomes = [str((branch or {}).get("outcome") or "") for branch in (branches or ())]
-    missing = sum(outcome in {"insufficient_evidence", "partial_answer"} for outcome in outcomes)
+    missing = sum(
+        outcome in {"insufficient_evidence", "partial_answer"}
+        and not bool((branch or {}).get("grounded_negative"))
+        for outcome, branch in zip(outcomes, branches or ())
+    )
     denied = sum(outcome == "access_denied" for outcome in outcomes)
     if not missing and not denied:
         return ""
@@ -188,4 +291,5 @@ def sufficient_branch_documents(results, branches):
         result.documents
         for result, branch in zip(results or (), branches or ())
         if (branch or {}).get("outcome") == "full_answer"
+        or bool((branch or {}).get("grounded_negative"))
     )

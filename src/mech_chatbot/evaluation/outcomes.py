@@ -70,6 +70,7 @@ def classify_actual_outcome(answer: str) -> str:
         return "insufficient_evidence"
     if any(marker in folded for marker in [
         "khong ghi thong tin", "tai lieu hien tai khong", "khong cong bo",
+        "khong de cap", "khong co truong", "khong cung cap",
         "khong du", "thieu du kien", "khong tu uoc luong", "khong the ho tro yeu cau nay",
     ]):
         return "insufficient_evidence"

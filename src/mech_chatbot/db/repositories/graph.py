@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import re
 
 from sqlalchemy import text
+
+from mech_chatbot.rag.graph_ontology import validate_graph_proposal
 
 from ..engine import _ensure_engine, engine
 
@@ -21,15 +22,30 @@ def propose_graph_edge(
     confidence=None, evidence=None, proposed_by="graph-extractor",
 ):
     """Persist an extracted edge as pending; this path never creates a serving edge."""
-    relation = str(relation_type or "").strip().upper()
-    if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,99}", relation):
-        raise ValueError("invalid graph relation type")
     safe_evidence = {
         str(key): value for key, value in dict(evidence or {}).items()
         if str(key).strip().lower() not in {"prompt", "raw_prompt", "question"}
     }
+    decision = validate_graph_proposal(relation_type, evidence=safe_evidence)
+    if not decision.accepted:
+        return {"ok": False, "reason": decision.reason}
+    relation = decision.relation_type
+    safe_evidence["source_quote"] = decision.source_quote
     _ensure_engine()
     with engine.begin() as conn:
+        duplicate = conn.execute(text("""
+            SELECT TOP (1) e.EdgeID
+            FROM dbo.KnowledgeGraphEdge e WITH (UPDLOCK, HOLDLOCK)
+            WHERE e.SourceNodeID=:source_node
+              AND e.TargetNodeID=:target_node
+              AND e.RelationType=:relation
+              AND e.ServingStatus='approved'
+        """), {
+            "source_node": int(source_node_id), "target_node": int(target_node_id),
+            "relation": relation,
+        }).first()
+        if duplicate:
+            return {"ok": False, "reason": "duplicate_serving_edge"}
         row = conn.execute(text("""
             INSERT dbo.GraphExtractionProposal
                 (SourceNodeID, TargetNodeID, RelationType, SourceDocID, SourcePage,
@@ -218,12 +234,25 @@ def traverse_knowledge_graph(seed_keys, access_context, max_hops=2, limit=50):
                    t.TenFile AS file_goc, t.ThuMuc AS department, t.Site AS site,
                    t.SecurityLevel AS security_level, t.Servable AS servable,
                    t.IsCurrent AS is_current, t.PublicationState AS publication_state,
-                   t.LifecycleStatus AS lifecycle_status, t.ReviewStatus AS review_status
+                   t.LifecycleStatus AS lifecycle_status, t.ReviewStatus AS review_status,
+                   proposal.source_quote AS source_quote
             FROM Walk w
             JOIN EligibleEdges e ON (e.SourceNodeID = w.NodeID OR e.TargetNodeID = w.NodeID)
             JOIN dbo.KnowledgeGraphNode sn ON sn.NodeID = e.SourceNodeID
             JOIN dbo.KnowledgeGraphNode tn ON tn.NodeID = e.TargetNodeID
             JOIN dbo.TaiLieu t ON t.DocID = e.SourceDocID
+            OUTER APPLY (
+                SELECT TOP (1) JSON_VALUE(p.EvidenceJson, '$.source_quote') AS source_quote
+                FROM dbo.GraphExtractionProposal p
+                WHERE p.Status = 'approved'
+                  AND p.SourceNodeID = e.SourceNodeID
+                  AND p.TargetNodeID = e.TargetNodeID
+                  AND p.RelationType = e.RelationType
+                  AND p.SourceDocID = e.SourceDocID
+                  AND p.SourcePage = e.SourcePage
+                  AND p.SourceVersion = e.SourceVersion
+                ORDER BY p.ProposalID DESC
+            ) proposal
             WHERE w.Depth < :max_hops
             OPTION (MAXRECURSION 2)
         """), params).mappings().all()

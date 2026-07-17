@@ -309,6 +309,7 @@ def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
     assert classify_actual_outcome("Tôi trả lời được một phần; phần còn lại chưa đủ dữ kiện.") == "partial_answer"
     assert classify_actual_outcome("Bạn muốn so sánh với phiên bản nào? Vui lòng chỉ định.") == "clarification_required"
     assert classify_actual_outcome("Tài liệu không công bố chi phí hoặc đơn giá.") == "insufficient_evidence"
+    assert classify_actual_outcome("Tài liệu không có trường đơn giá cho DEMO-PART-A.") == "insufficient_evidence"
     assert classify_actual_outcome(
         "Tài liệu CRAG-EVAL-BOM-001 không có tổng số lượng BOM được phê duyệt trong tài liệu này. "
         "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"

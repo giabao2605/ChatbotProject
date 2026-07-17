@@ -5,15 +5,32 @@ from mech_chatbot.rag.corrective import (
     run_corrected_retrieval,
     should_attempt_correction,
 )
-from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+from mech_chatbot.rag.answer_policy import AnswerDecision, AnswerOutcome
+from mech_chatbot.rag.evidence_gate import EvidenceState
 
 
 def test_correction_budget_allows_exactly_one_ambiguous_retry():
-    decision = EvidenceDecision(EvidenceState.AMBIGUOUS, reason="missing coverage")
+    decision = AnswerDecision(
+        AnswerOutcome.INSUFFICIENT_EVIDENCE,
+        EvidenceState.AMBIGUOUS,
+        reason="missing coverage",
+        correction_allowed=True,
+    )
 
     assert should_attempt_correction(decision, attempts=0, enabled=True) is True
     assert should_attempt_correction(decision, attempts=1, enabled=True) is False
     assert should_attempt_correction(decision, attempts=0, enabled=False) is False
+
+
+def test_ambiguous_state_does_not_override_policy_that_forbids_correction():
+    decision = AnswerDecision(
+        AnswerOutcome.INSUFFICIENT_EVIDENCE,
+        EvidenceState.AMBIGUOUS,
+        reason="explicit negative evidence",
+        correction_allowed=False,
+    )
+
+    assert should_attempt_correction(decision, attempts=0, enabled=True) is False
 
 
 def test_corrected_documents_are_deduplicated_without_changing_metadata():

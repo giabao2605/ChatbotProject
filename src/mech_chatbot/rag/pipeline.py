@@ -66,6 +66,12 @@ from mech_chatbot.rag.rerank import *
 from mech_chatbot.rag.intent import *
 from mech_chatbot.rag.retrieval import *
 from mech_chatbot.rag.evidence_gate import *
+from mech_chatbot.rag.answer_policy import (
+    PolicyEvidence,
+    decide_answer_policy,
+    has_explicit_negative_evidence,
+    explicit_negative_evidence_quote,
+)
 from mech_chatbot.rag.corrective import (
     merge_corrected_documents,
     run_corrected_retrieval,
@@ -287,6 +293,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     decomposition_notice = ""
     decomposition_states = []
     decomposition_branches = []
+    decomposition_intents = []
+    decomposition_intent_coverage = []
+    decomposition_used_fallback = False
+    decomposition_intent_overflow = False
     planner_count = 0
     subquery_count = 0
     deadline_exceeded = False
@@ -354,8 +364,45 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                    "mình đối chiếu số liệu chính xác nhé.")
         def ask_version_stream():
             yield _t_rag(_ver_vi, response_language)
-        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, reason="missing_compare_versions")
-        return ask_version_stream(), "", [], current_part_ids, make_debug_info([])
+        clarification_policy = decide_answer_policy(
+            user_question,
+            PolicyEvidence(
+                decision=EvidenceDecision(
+                    EvidenceState.AMBIGUOUS,
+                    reason="missing_compare_versions",
+                    stage="intent",
+                    telemetry_status="heuristic_block",
+                ),
+                has_retrieved_evidence=False,
+                clarification_required=True,
+            ),
+            {},
+        )
+        log_trace(
+            "evidence_gate", trace_id,
+            answerable=False,
+            state=clarification_policy.evidence_state.value,
+            outcome=clarification_policy.outcome.value,
+            correction_allowed=False,
+            stage="intent",
+            status="heuristic_block",
+            reason=clarification_policy.reason,
+        )
+        log_trace(
+            "rag_end", trace_id,
+            final_latency_ms=int((time.time() - t_start) * 1000),
+            refusal=True,
+            refusal_reason="missing_compare_versions",
+        )
+        clarification_debug = make_debug_info([])
+        clarification_debug.update({
+            "answer_outcome": clarification_policy.outcome.value,
+            "evidence_state": clarification_policy.evidence_state.value,
+            "evidence_stage": "intent",
+            "correction_allowed": False,
+            "correction_count": 0,
+        })
+        return ask_version_stream(), "", [], current_part_ids, clarification_debug
 
     if intent_data.get("is_chitchat"):
         logger.info("LLM xac nhan la cau hoi ngoai le/xa giao. Bo qua toan bo Retrieval va HyDE.")
@@ -388,10 +435,19 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         decomposition_enabled = env_bool("RAG_QUERY_DECOMPOSITION_ENABLED", False)
         if decomposition_enabled:
             from mech_chatbot.rag.query_decomposition import (
-                build_plan, build_partial_answer_instruction, codes_in_query,
+                compile_query_plan, build_partial_answer_instruction, codes_in_query,
                 BranchRetrievalResult, CorrectionBudget, execute_plan,
                 merge_branch_documents, sufficient_branch_documents,
             )
+
+            access_context = {
+                "user_department": user_department,
+                "roles": tuple(user_roles or ()),
+                "allowed_departments": tuple(allowed_departments or ()),
+                "allowed_sites": tuple(allowed_sites or ()),
+                "max_security_level": max_security_level,
+                "version_policy": intent_data.get("version_policy"),
+            }
 
             def _planner(question):
                 nonlocal planner_count, auxiliary_input_tokens, auxiliary_output_tokens, planner_estimated_cost
@@ -417,11 +473,16 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 ) / 1_000_000
                 return _safe_json_loads(response)
 
-            decomp_plan = build_plan(
+            decomp_plan = compile_query_plan(
                 effective_question,
+                access_context,
                 planner=_planner,
                 planner_version=os.getenv("RAG_PLANNER_VERSION", "planner-v1"),
             )
+            decomposition_intents = list(decomp_plan.intents)
+            decomposition_intent_coverage = list(decomp_plan.intent_coverage)
+            decomposition_used_fallback = decomp_plan.used_fallback
+            decomposition_intent_overflow = decomp_plan.intent_overflow
             if decomp_plan.is_complex:
                 try:
                     request_deadline_seconds = max(
@@ -430,14 +491,6 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 except (TypeError, ValueError):
                     request_deadline_seconds = 120.0
                 request_deadline_monotonic = request_started_monotonic + request_deadline_seconds
-                access_context = {
-                    "user_department": user_department,
-                    "roles": tuple(user_roles or ()),
-                    "allowed_departments": tuple(allowed_departments or ()),
-                    "allowed_sites": tuple(allowed_sites or ()),
-                    "max_security_level": max_security_level,
-                    "version_policy": intent_data.get("version_policy"),
-                }
                 shared_correction_budget = CorrectionBudget(1)
 
                 def _retrieve_branch(
@@ -488,16 +541,37 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                             result[3], result[4],
                         )
                         branch_docs = []
+                    branch_context = (
+                        _assemble_context(branch_docs, subquery)
+                        if branch_docs else ""
+                    )
                     branch_decision = evaluate_answerability(
                         subquery,
-                        _assemble_context(branch_docs, subquery) if branch_docs else "",
+                        branch_context,
                         docs=branch_docs,
                         trace_id=trace_id,
+                    )
+                    branch_policy = decide_answer_policy(
+                        subquery,
+                        PolicyEvidence(
+                            decision=branch_decision,
+                            has_retrieved_evidence=bool(branch_docs),
+                            retrieval_can_improve=bool(
+                                crag_enabled and not branch_deadline_exceeded
+                            ),
+                            negative_evidence=has_explicit_negative_evidence(
+                                subquery, branch_context
+                            ),
+                            negative_evidence_quote=explicit_negative_evidence_quote(
+                                subquery, branch_context
+                            ),
+                        ),
+                        {},
                     )
                     if (
                         crag_enabled
                         and not branch_deadline_exceeded
-                        and branch_decision.state is EvidenceState.AMBIGUOUS
+                        and branch_policy.correction_allowed
                         and _correction_budget.claim()
                     ):
                         corrected = True
@@ -605,24 +679,41 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     zip(decomp_plan.subqueries, branch_results), 1
                 ):
                     branch_docs = result.documents
+                    branch_context = (
+                        _assemble_context(branch_docs, subquery)
+                        if branch_docs else ""
+                    )
                     decision = evaluate_answerability(
                         subquery,
-                        _assemble_context(branch_docs, subquery) if branch_docs else "",
+                        branch_context,
                         docs=branch_docs,
                         trace_id=trace_id,
                     )
-                    decomposition_states.append(decision.state.value)
+                    branch_policy = decide_answer_policy(
+                        subquery,
+                        PolicyEvidence(
+                            decision=decision,
+                            has_retrieved_evidence=bool(branch_docs),
+                            retrieval_can_improve=False,
+                            negative_evidence=has_explicit_negative_evidence(
+                                subquery, branch_context
+                            ),
+                            negative_evidence_quote=explicit_negative_evidence_quote(
+                                subquery, branch_context
+                            ),
+                        ),
+                        {"access_denied": bool(result.access_denied)},
+                    )
+                    decomposition_states.append(branch_policy.evidence_state.value)
                     deadline_exceeded = deadline_exceeded or result.deadline_exceeded
-                    if result.access_denied:
-                        branch_outcome = "access_denied"
-                    elif decision.state is EvidenceState.SUFFICIENT:
-                        branch_outcome = "full_answer"
-                    else:
-                        branch_outcome = "insufficient_evidence"
+                    branch_outcome = branch_policy.outcome.value
                     decomposition_branches.append({
                         "branch_id": f"branch-{branch_index}",
                         "outcome": branch_outcome,
-                        "evaluator_state": decision.state.value,
+                        "evaluator_state": branch_policy.evidence_state.value,
+                        "grounded_negative": (
+                            branch_policy.reason == "explicit_negative_evidence"
+                        ),
                         "citations": make_source_snapshot(branch_docs),
                         "correction_attempted": result.correction_attempted,
                         "deadline_exceeded": result.deadline_exceeded,
@@ -638,6 +729,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     trace_id,
                     planner_count=planner_count,
                     subquery_count=subquery_count,
+                    intent_count=len(decomp_plan.intents),
+                    intent_coverage=list(decomp_plan.intent_coverage),
+                    deterministic_fallback=decomp_plan.used_fallback,
+                    intent_overflow=decomp_plan.intent_overflow,
                     evaluator_states=decomposition_states,
                     correction_budget=1,
                     deadline_exceeded=deadline_exceeded,
@@ -876,24 +971,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 # attributed safely in the final answer or chat history.
                 bom_by_source = {}
                 for row in bom_results:
-                    (
-                        doc_id,
-                        page_no,
-                        ma,
-                        ten,
-                        vat_lieu,
-                        sl,
-                        gc,
-                        file,
-                        version_no,
-                        security_level,
-                        site,
-                        external_processing_policy,
-                        bom_row_id,
-                        unit,
-                    ) = row
                     try:
-                        source_key = (int(doc_id), int(page_no))
+                        source_key = (int(row.doc_id), int(row.page))
                     except (TypeError, ValueError):
                         # The SQL query excludes NULL pages, but keep the
                         # context fail-closed if a legacy row is malformed.
@@ -901,38 +980,41 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                     source = bom_by_source.setdefault(
                         source_key,
                         {
-                            "file_goc": file,
-                            "version_no": version_no,
-                            "security_level": security_level,
-                            "site": site,
-                            "external_processing_policy": external_processing_policy,
+                            "file_goc": row.document,
+                            "version_no": row.version,
+                            "security_level": row.security_level,
+                            "site": row.site,
+                            "external_processing_policy": row.external_processing_policy,
                             "lines": [],
                             "facts": [],
                         },
                     )
                     source["lines"].append(
-                        f"- Mã: {ma}, Tên: {ten}, Vật liệu: {vat_lieu}, "
-                        f"SL: {sl}, Ghi chú: {gc}"
+                        f"- Mã: {row.part_code}, Tên: {row.description}, "
+                        f"Vật liệu: {row.material}, SL: {row.quantity} "
+                        f"{row.unit or ''}, Ghi chú: {row.note}"
                     )
-                    if env_bool("RAG_GROUNDED_MATH_ENABLED", False) and sl is not None:
+                    if (
+                        env_bool("RAG_GROUNDED_MATH_ENABLED", False)
+                        and row.quantity is not None
+                    ):
                         try:
                             from decimal import Decimal
                             from mech_chatbot.rag.grounded_math import GroundedFact
                             source["facts"].append(GroundedFact(
-                                value=Decimal(str(sl)), unit=str(unit or "").strip(),
-                                doc_id=int(doc_id), page=int(page_no), version=int(version_no),
-                                source_id=f"BOM-{int(bom_row_id)}",
-                                label=str(ma or "").strip(),
+                                value=Decimal(str(row.quantity)),
+                                unit=str(row.unit or "").strip(),
+                                doc_id=int(row.doc_id), page=int(row.page),
+                                version=int(row.version),
+                                source_id=str(row.source_row_id),
+                                label=str(row.part_code or "").strip(),
                             ))
                         except (ValueError, TypeError, ArithmeticError):
                             pass
 
                 calculation_claims = {}
                 if env_bool("RAG_GROUNDED_MATH_ENABLED", False):
-                    from mech_chatbot.rag.grounded_math import (
-                        build_calculation_plan,
-                        derive_claim,
-                    )
+                    from mech_chatbot.rag.grounded_math import solve_grounded_calculation
                     facts_by_document = {}
                     for (source_doc_id, _), source in bom_by_source.items():
                         claim_key = (source_doc_id, int(source["version_no"]))
@@ -942,13 +1024,18 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                         for facts in facts_by_document.values()
                         for fact in facts
                     )
-                    plan = build_calculation_plan(user_question, all_facts)
-                    if plan is not None and facts_by_document:
+                    calculation_result = solve_grounded_calculation(
+                        user_question, all_facts
+                    )
+                    if calculation_result.plan is not None and facts_by_document:
+                        plan = calculation_result.plan
                         operand_keys = tuple(dict.fromkeys(
                             (fact.doc_id, fact.version) for fact in plan.operands
                         ))
                         claim_key = operand_keys[0] if operand_keys else next(iter(facts_by_document))
-                        calculation_claims[claim_key] = (plan, derive_claim(plan))
+                        calculation_claims[claim_key] = (
+                            plan, calculation_result.claim,
+                        )
 
                 bom_docs = []
                 emitted_calculations = set()
@@ -1073,8 +1160,23 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
                 telemetry_status="heuristic_block",
             )
             log_trace("evaluation_override", trace_id, override="force_ambiguous")
+        coverage_policy = decide_answer_policy(
+            user_question,
+            PolicyEvidence(
+                decision=coverage_decision,
+                has_retrieved_evidence=bool(retrieved_docs),
+                retrieval_can_improve=True,
+                negative_evidence=has_explicit_negative_evidence(
+                    user_question, preliminary_context
+                ),
+                negative_evidence_quote=explicit_negative_evidence_quote(
+                    user_question, preliminary_context
+                ),
+            ),
+            {},
+        )
         if should_attempt_correction(
-            coverage_decision, attempts=correction_attempts, enabled=crag_enabled
+            coverage_policy, attempts=correction_attempts, enabled=crag_enabled
         ):
             correction_started = time.time()
             before_count = len(retrieved_docs)
@@ -1276,20 +1378,41 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         trace_id=trace_id,
     )
     has_sufficient_decomposition_branch = any(
-        branch.get("outcome") == "full_answer"
+        branch.get("outcome") == "full_answer" or branch.get("grounded_negative")
         for branch in decomposition_branches
     )
-    answerable = (
-        evidence_decision.answerable or has_sufficient_decomposition_branch
+    sufficient_branch_count = sum(
+        branch.get("outcome") == "full_answer" or branch.get("grounded_negative")
+        for branch in decomposition_branches
     )
-    evidence_reason = evidence_decision.reason
-    evidence_quotes = list(evidence_decision.evidence_quotes)
+    answer_policy = decide_answer_policy(
+        user_question,
+        PolicyEvidence(
+            decision=evidence_decision,
+            has_retrieved_evidence=bool(retrieved_docs),
+            retrieval_can_improve=bool(crag_enabled and correction_attempts < 1),
+            negative_evidence=has_explicit_negative_evidence(
+                user_question, context_text
+            ),
+            negative_evidence_quote=explicit_negative_evidence_quote(
+                user_question, context_text
+            ),
+            sufficient_branch_count=sufficient_branch_count,
+            total_branch_count=len(decomposition_branches),
+        ),
+        {},
+    )
+    answerable = answer_policy.allows_answer_generation
+    evidence_reason = answer_policy.reason
+    evidence_quotes = list(answer_policy.evidence_quotes)
     log_trace(
         "evidence_gate",
         trace_id,
         latency_ms=int((time.time() - t_gate)*1000),
         answerable=answerable,
-        state=evidence_decision.state.value,
+        state=answer_policy.evidence_state.value,
+        outcome=answer_policy.outcome.value,
+        correction_allowed=answer_policy.correction_allowed,
         stage=evidence_decision.stage,
         status=evidence_decision.telemetry_status,
         reason=evidence_reason,
@@ -1308,8 +1431,13 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="evidence_gate", docs_count=len(retrieved_docs), doc_ids=[d.metadata.get("doc_id") for d in retrieved_docs], retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=[d.metadata.get("relevance_score") for d in retrieved_docs], user_department=user_department, user_roles=user_roles)
         _refusal_debug = make_debug_info(retrieved_docs)
         _refusal_debug["citation_docs"] = make_debug_info(retrieved_docs)["retrieved_docs"]
-        _refusal_debug["evidence_state"] = evidence_decision.state.value
+        _refusal_debug["evidence_state"] = answer_policy.evidence_state.value
+        _refusal_debug["answer_outcome"] = answer_policy.outcome.value
+        _refusal_debug["correction_allowed"] = bool(
+            correction_attempts > 0 or answer_policy.correction_allowed
+        )
         _refusal_debug["evidence_stage"] = evidence_decision.stage
+        _refusal_debug["evidence_quotes"] = evidence_quotes
         _refusal_debug["correction_count"] = correction_attempts
         _refusal_debug["generation_metrics"] = {
             "estimated_cost": correction_estimated_cost + planner_estimated_cost,
@@ -1323,6 +1451,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         _refusal_debug["final_generation_count"] = final_generation_count
         _refusal_debug["deadline_exceeded"] = deadline_exceeded
         _refusal_debug["decomposition_branches"] = decomposition_branches
+        _refusal_debug["decomposition_intent_count"] = len(decomposition_intents)
+        _refusal_debug["decomposition_intent_coverage"] = decomposition_intent_coverage
+        _refusal_debug["decomposition_used_fallback"] = decomposition_used_fallback
+        _refusal_debug["decomposition_intent_overflow"] = decomposition_intent_overflow
         _refusal_debug["graph_traversal_count"] = len(served_graph_docs)
         _refusal_debug["graph_evidence"] = serialize_debug_documents(served_graph_docs)
         _refusal_debug["graph_routed"] = graph_routed
@@ -1360,14 +1492,23 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)
     debug_info = make_debug_info(retrieved_docs)
-    debug_info["evidence_state"] = evidence_decision.state.value
+    debug_info["evidence_state"] = answer_policy.evidence_state.value
+    debug_info["answer_outcome"] = answer_policy.outcome.value
+    debug_info["correction_allowed"] = bool(
+        correction_attempts > 0 or answer_policy.correction_allowed
+    )
     debug_info["evidence_stage"] = evidence_decision.stage
+    debug_info["evidence_quotes"] = evidence_quotes
     debug_info["correction_count"] = correction_attempts
     debug_info["planner_count"] = planner_count
     debug_info["subquery_count"] = subquery_count
     debug_info["final_generation_count"] = final_generation_count
     debug_info["deadline_exceeded"] = deadline_exceeded
     debug_info["decomposition_branches"] = decomposition_branches
+    debug_info["decomposition_intent_count"] = len(decomposition_intents)
+    debug_info["decomposition_intent_coverage"] = decomposition_intent_coverage
+    debug_info["decomposition_used_fallback"] = decomposition_used_fallback
+    debug_info["decomposition_intent_overflow"] = decomposition_intent_overflow
     debug_info["graph_traversal_count"] = len(served_graph_docs)
     debug_info["graph_evidence"] = serialize_debug_documents(served_graph_docs)
     debug_info["graph_routed"] = graph_routed

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+from mech_chatbot.rag.answer_policy import AnswerDecision
 
 
 MAX_CORRECTION_PASSES = 1
 
 
 def should_attempt_correction(
-    decision: EvidenceDecision,
+    decision: AnswerDecision,
     *,
     attempts: int,
     enabled: bool,
@@ -17,7 +17,7 @@ def should_attempt_correction(
     return bool(
         enabled
         and attempts < MAX_CORRECTION_PASSES
-        and decision.state is EvidenceState.AMBIGUOUS
+        and decision.correction_allowed
     )
 
 

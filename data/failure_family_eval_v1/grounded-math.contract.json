@@ -1,0 +1,17 @@
+{
+  "failure_family": "CALCULATION_PLAN_ERROR",
+  "seed_case_id": "demo-case-013",
+  "expected_policy": {
+    "outcome": "full_answer",
+    "evidence_state": "SUFFICIENT",
+    "correction_allowed": false
+  },
+  "invariants": [
+    "decimal_exact",
+    "unit_unchanged",
+    "row_provenance_complete",
+    "no_duplicate_operand"
+  ],
+  "mutation_axes": [],
+  "holdout": false
+}

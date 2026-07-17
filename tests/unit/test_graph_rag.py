@@ -7,9 +7,50 @@ from mech_chatbot.rag.graph_retrieval import (
     hydrate_graph_edges,
     select_graph_seeds, should_attempt_graph,
 )
+from mech_chatbot.rag.graph_ontology import validate_graph_proposal
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_graph_proposal_ontology_rejects_historical_ambiguous_relation_seed():
+    decision = validate_graph_proposal(
+        "RELATED_COMPONENT",
+        evidence={"source_quote": "Assembly A contains part P-100."},
+    )
+
+    assert decision.accepted is False
+    assert decision.reason == "ambiguous_or_redundant_relation"
+
+
+def test_graph_proposal_ontology_requires_source_quote():
+    decision = validate_graph_proposal(
+        "USES_MATERIAL",
+        evidence={"extractor": "graph-v1"},
+    )
+
+    assert decision.accepted is False
+    assert decision.reason == "source_quote_required"
+
+
+def test_graph_proposal_ontology_accepts_supported_relation_with_quote():
+    decision = validate_graph_proposal(
+        "USES_MATERIAL",
+        evidence={"source_quote": "Part P-100 uses material SS304."},
+    )
+
+    assert decision.accepted is True
+    assert decision.relation_type == "USES_MATERIAL"
+
+
+def test_graph_proposal_ontology_rejects_relation_outside_whitelist():
+    decision = validate_graph_proposal(
+        "LIKELY_CONNECTED_TO",
+        evidence={"source_quote": "A may be connected to B."},
+    )
+
+    assert decision.accepted is False
+    assert decision.reason == "relation_not_in_ontology"
 
 
 @pytest.mark.parametrize("question", [
@@ -192,9 +233,21 @@ def test_llm_edge_producer_only_inserts_pending_proposals():
     producer = source[source.index("def propose_graph_edge"):source.index("def list_graph_proposals")]
     assert "GraphExtractionProposal" in producer
     assert "'pending'" in producer
-    assert "KnowledgeGraphEdge" not in producer
+    assert "INSERT dbo.KnowledgeGraphEdge" not in producer
+    assert "duplicate_serving_edge" in producer
+    assert "validate_graph_proposal" in producer
+    duplicate_query = producer[producer.index("SELECT TOP (1) e.EdgeID"):producer.index("if duplicate")]
+    assert "e.SourceDocID=:doc_id" not in duplicate_query
+    assert "e.SourcePage=:page" not in duplicate_query
+    assert "e.SourceVersion=:version" not in duplicate_query
     assert "t.VersionNo=:version" in producer
     assert ":page > 0" in producer
+
+
+def test_graph_traversal_hydrates_reviewed_proposal_source_quote():
+    source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
+    assert "proposal.source_quote AS source_quote" in source
+    assert "JSON_VALUE(p.EvidenceJson, '$.source_quote')" in source
 
 
 @pytest.mark.parametrize("role", ["knowledge_approver", "reviewer", "admin"])

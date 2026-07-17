@@ -445,6 +445,11 @@ def test_graph_evaluator_requires_every_expected_relation_in_multi_relation_case
     "expected_relations",
     [
         [None],
+        [{
+            "source_key": "document:10",
+            "relation_type": "RELATED_COMPONENT",
+            "target_key": "part:a",
+        }],
         [
             {
                 "source_key": "document:10",

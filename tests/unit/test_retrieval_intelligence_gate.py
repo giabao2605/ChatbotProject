@@ -50,6 +50,16 @@ def late_arm(payload, variant):
         "commit_sha": "commit-1",
         "manifest_sha256": "manifest-1",
     }
+    families = [
+        "alias_mismatch", "near_code_family", "near_meaning", "ocr_noise", "rare_term",
+    ]
+    payload["hard_negative_coverage"] = {
+        "required": families, "observed": families, "missing": [], "complete": True,
+    }
+    payload["query_families"] = {
+        family: {"recall_at_10": 1.0, "ndcg_at_10": 1.0, "leakage": 0}
+        for family in families
+    }
     return payload
 
 
@@ -177,6 +187,37 @@ def test_late_gate_rejects_commit_or_manifest_drift_between_variants():
 
     assert result["checks"]["commit_frozen_across_variants"] is False
     assert result["checks"]["manifest_frozen_across_variants"] is False
+
+
+def test_late_gate_requires_hard_negative_coverage_without_family_recall_regression():
+    gate = _module()
+    reference = late_arm(report(ndcg10=0.49), "rrf")
+    baseline = late_arm(report(ndcg10=0.50), "voyage")
+    candidate = late_arm(report(ndcg10=0.53, p95=120), "maxsim")
+    candidate["hard_negative_coverage"] = {
+        "required": ["ocr_noise", "rare_term"],
+        "observed": ["ocr_noise"],
+        "missing": ["rare_term"],
+        "complete": False,
+    }
+    candidate["query_families"]["ocr_noise"]["recall_at_10"] = 0.0
+    readiness = {
+        "schema": "late-interaction-readiness-v1",
+        "capability_passed": True,
+        "ready_for_serving": True,
+        "shadow_storage_ratio": 20,
+        "shadow_coverage": 1.0,
+        "governance_drift": 0,
+        "provenance_drift": 0,
+        "vector_schema_rejected": 0,
+        "orphan_points": 0,
+    }
+
+    result = gate.compare("late_interaction", baseline, candidate, readiness, reference)
+
+    assert result["checks"]["hard_negative_coverage_complete"] is False
+    assert result["checks"]["query_family_recall_not_decreased"] is False
+    assert result["passed"] is False
 
 
 def test_decomposition_gate_requires_complex_gain_and_zero_simple_planner_calls():

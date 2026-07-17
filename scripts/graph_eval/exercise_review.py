@@ -40,17 +40,25 @@ def exercise_review(output: Path):
     except HTTPException as exc:
         viewer_blocked = exc.status_code == 403
     correct = propose_graph_edge(
-        document["NodeID"], part_a["NodeID"], "RELATED_COMPONENT",
+        document["NodeID"], part_a["NodeID"], "APPLIES_TO",
         doc_id=document["SourceDocID"], page=1, version=document["SourceVersion"],
         confidence=1.0,
-        evidence={"fixture_batch": FIXTURE_BATCH, "expected_correct": True},
+        evidence={
+            "fixture_batch": FIXTURE_BATCH,
+            "expected_correct": True,
+            "source_quote": "GRAPH-EVAL-ASM-001 applies to GRAPH-EVAL-PART-A.",
+        },
         proposed_by="graph-eval-extractor",
     )
     wrong = propose_graph_edge(
-        part_a["NodeID"], material_aluminum["NodeID"], "USES_MATERIAL",
+        part_a["NodeID"], material_aluminum["NodeID"], "APPLIES_TO",
         doc_id=document["SourceDocID"], page=1, version=document["SourceVersion"],
         confidence=1.0,
-        evidence={"fixture_batch": FIXTURE_BATCH, "expected_correct": False},
+        evidence={
+            "fixture_batch": FIXTURE_BATCH,
+            "expected_correct": False,
+            "source_quote": "The fixture mentions aluminum only as a negative example.",
+        },
         proposed_by="graph-eval-extractor",
     )
     if not correct.get("ok") or not wrong.get("ok"):
@@ -60,7 +68,7 @@ def exercise_review(output: Path):
         "allowed_sites": ["GRAPH-EVAL-HQ"], "max_security_level": "internal",
     }
     before = traverse_knowledge_graph(["GRAPH-EVAL-ASM-001"], access, max_hops=2, limit=50)
-    pending_not_served = all(edge.get("relation_type") != "RELATED_COMPONENT" for edge in before)
+    pending_not_served = all(edge.get("relation_type") != "APPLIES_TO" for edge in before)
     approved = app_server.graph_proposal_approve(
         int(correct["proposal_id"]), {"note": "fixture expected correct"},
         {"roles": ["knowledge_approver"], "username": "graph-eval-approver"},

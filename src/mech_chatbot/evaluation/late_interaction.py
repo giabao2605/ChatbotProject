@@ -41,6 +41,13 @@ SCENARIOS = {
     "rbac_site_denial",
     "lifecycle_negative",
 }
+HARD_NEGATIVE_SCENARIOS = frozenset({
+    "near_code_family",
+    "rare_term",
+    "alias_mismatch",
+    "ocr_noise",
+    "near_meaning",
+})
 
 
 @dataclass(frozen=True)
@@ -236,6 +243,7 @@ def build_report(
     latencies = []
     coverages = []
     fallback_count = 0
+    family_rows: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         case = row["case"]
         ranked = list(row.get("ranked_sources") or [])
@@ -254,7 +262,7 @@ def build_report(
         fallback_count += int(bool(row.get("fallback_reason")))
         if expected:
             metric_rows.append(metrics)
-        case_rows.append({
+        case_result = {
             "case_id": case["case_id"],
             "scenario": case["scenario"],
             **metrics,
@@ -264,11 +272,39 @@ def build_report(
             "coverage": coverage,
             "fallback_reason": row.get("fallback_reason"),
             "ranked_sources": ranked,
+        }
+        case_rows.append(case_result)
+        family_rows.setdefault(str(case["scenario"]), []).append({
+            **metrics,
+            "has_expected": bool(expected),
+            "wrong_answer": wrong,
+            "leakage": leaked,
+            "latency_ms": latency,
+            "fallback": bool(row.get("fallback_reason")),
         })
     aggregate = {
         name: mean(row[name] for row in metric_rows) if metric_rows else 0.0
         for name in ("recall_at_5", "ndcg_at_5", "recall_at_10", "ndcg_at_10")
     }
+    query_families = {}
+    for family, items in sorted(family_rows.items()):
+        relevant = [item for item in items if item["has_expected"]]
+        query_families[family] = {
+            "case_count": len(items),
+            "relevant_case_count": len(relevant),
+            "recall_at_5": mean(item["recall_at_5"] for item in relevant) if relevant else None,
+            "ndcg_at_5": mean(item["ndcg_at_5"] for item in relevant) if relevant else None,
+            "recall_at_10": mean(item["recall_at_10"] for item in relevant) if relevant else None,
+            "ndcg_at_10": mean(item["ndcg_at_10"] for item in relevant) if relevant else None,
+            "wrong_answer": sum(bool(item["wrong_answer"]) for item in items),
+            "leakage": sum(bool(item["leakage"]) for item in items),
+            "latency_p95_ms": nearest_rank(
+                [float(item["latency_ms"]) for item in items], 0.95
+            ) or 0.0,
+            "fallback_count": sum(bool(item["fallback"]) for item in items),
+        }
+    observed_hard_negatives = sorted(HARD_NEGATIVE_SCENARIOS & set(family_rows))
+    missing_hard_negatives = sorted(HARD_NEGATIVE_SCENARIOS - set(family_rows))
     return {
         "schema": "late-interaction-eval-v1",
         "variant": variant,
@@ -282,6 +318,13 @@ def build_report(
             "fallback_count": fallback_count,
             "fallback_rate": fallback_count / len(rows) if rows else 0.0,
             "shadow_coverage": mean(coverages) if coverages else 0.0,
+        },
+        "query_families": query_families,
+        "hard_negative_coverage": {
+            "required": sorted(HARD_NEGATIVE_SCENARIOS),
+            "observed": observed_hard_negatives,
+            "missing": missing_hard_negatives,
+            "complete": not missing_hard_negatives,
         },
         "cases": case_rows,
     }

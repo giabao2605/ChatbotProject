@@ -93,6 +93,32 @@ def test_branch_evaluator_checks_outcome_and_accessible_citation_identity():
     assert result["budget_passed"] is True
 
 
+def test_branch_evaluator_rejects_plans_that_do_not_cover_every_detected_intent():
+    debug = {
+        "planner_count": 1,
+        "subquery_count": 2,
+        "correction_count": 0,
+        "final_generation_count": 1,
+        "deadline_exceeded": False,
+        "decomposition_intent_count": 2,
+        "decomposition_intent_coverage": [True, False],
+        "decomposition_branches": [
+            {
+                "branch_id": "torque",
+                "outcome": "full_answer",
+                "citations": [{"document": "technical_effective_core.md", "doc_id": 32}],
+                "rendered_source_ids": [],
+            },
+            {"branch_id": "cost", "outcome": "insufficient_evidence", "citations": []},
+        ],
+    }
+
+    result = evaluate_decomposition_case(_case(), debug)
+
+    assert result["passed"] is False
+    assert result["budget_checks"]["intent_coverage"] is False
+
+
 def test_access_denied_branch_fails_if_restricted_source_is_exposed():
     case = _case(
         id="denied",

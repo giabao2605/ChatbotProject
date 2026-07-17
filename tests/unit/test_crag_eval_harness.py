@@ -320,6 +320,116 @@ def test_eval_artifact_preserves_provider_retries_when_generation_stream_fails(t
         }
 
 
+def test_eval_artifact_reports_failure_family_seed_and_holdout_coverage(tmp_path):
+    runner = _load("run_eval_failure_families", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "failure-family.jsonl"
+    case_ids = ["evidence-seed", "dev-1", "dev-2", "dev-3", "dev-4", "holdout-1", "holdout-2"]
+    cases = []
+    for case_id in case_ids:
+        cases.append(_case(
+            id=case_id,
+            failure_family="EVIDENCE_POLICY_ERROR",
+            seed_case_id="evidence-seed",
+            expected_policy={
+                "outcome": "full_answer",
+                "evidence_state": "SUFFICIENT",
+                "correction_allowed": False,
+            },
+            invariants=["leakage_zero", "governance_unchanged"],
+            mutation_axes=["paraphrase"],
+            holdout=case_id.startswith("holdout-"),
+        ))
+    manifest.write_text(
+        "\n".join(json.dumps(case) for case in cases) + "\n",
+        encoding="utf-8",
+    )
+    intent_extractor = lambda *args, **kwargs: (
+        None, None, None, None, None, {"version_policy": "current_only"}
+    )
+    retrieved = {
+        "file_goc": "crag_eval_numbers_v12.md",
+        "doc_id": 41,
+        "trang": 1,
+        "version_no": 12,
+    }
+    rag_chat = lambda *args, **kwargs: (
+        iter(["Giá trị được xác nhận từ tài liệu."]),
+        "",
+        [],
+        [],
+        {"retrieved_docs": [retrieved], "citation_docs": [], "evidence_state": "SUFFICIENT"},
+    )
+
+    report, passed = runner.run_evaluation(
+        [manifest], tmp_path / "result", "candidate", preflight=False,
+        intent_extractor=intent_extractor, rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is True
+    assert report["failure_family_evaluation"]["decision"] == "accepted"
+    assert report["failure_family_evaluation"]["families"]["EVIDENCE_POLICY_ERROR"][
+        "holdout_variant_count"
+    ] == 2
+    assert all(row["seed_case_id"] == "evidence-seed" for row in report["cases"])
+    assert "Failure families" in (
+        tmp_path / "result" / "candidate" / "eval.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_eval_case_fails_when_runtime_answer_policy_differs_from_family_contract(tmp_path):
+    runner = _load("run_eval_policy_contract", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "policy-contract.jsonl"
+    manifest.write_text(json.dumps(_case(
+        id="policy-seed",
+        failure_family="EVIDENCE_POLICY_ERROR",
+        seed_case_id="policy-seed",
+        expected_policy={
+            "outcome": "full_answer",
+            "evidence_state": "AMBIGUOUS",
+            "correction_allowed": True,
+        },
+        invariants=["leakage_zero"],
+        mutation_axes=[],
+        holdout=False,
+    )) + "\n", encoding="utf-8")
+    intent_extractor = lambda *args, **kwargs: (
+        None, None, None, None, None, {"version_policy": "current_only"}
+    )
+    rag_chat = lambda *args, **kwargs: (
+        iter(["Giá trị được xác nhận từ tài liệu."]),
+        "",
+        [],
+        [],
+        {
+            "retrieved_docs": [{
+                "file_goc": "crag_eval_numbers_v12.md",
+                "doc_id": 41,
+                "trang": 1,
+                "version_no": 12,
+            }],
+            "citation_docs": [],
+            "answer_outcome": "full_answer",
+            "evidence_state": "SUFFICIENT",
+            "correction_allowed": False,
+        },
+    )
+
+    report, passed = runner.run_evaluation(
+        [manifest], tmp_path / "result", "candidate", preflight=False,
+        intent_extractor=intent_extractor, rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is False
+    assert report["cases"][0]["policy_evaluation"]["passed"] is False
+    assert report["cases"][0]["policy_evaluation"]["actual"] == {
+        "outcome": "full_answer",
+        "evidence_state": "SUFFICIENT",
+        "correction_allowed": False,
+    }
+
+
 def test_eval_report_includes_decomposition_branch_and_budget_evidence(tmp_path, monkeypatch):
     runner = _load("run_eval_decomposition", "scripts/eval/run_eval.py")
     manifest = tmp_path / "decomposition.jsonl"

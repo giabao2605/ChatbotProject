@@ -195,7 +195,7 @@ def _markdown(report):
     ranked = report["ranked_retrieval"]
     outcomes = report["outcome_confusion"]
     fallback = report["fallback_coverage"]
-    return "\n".join([
+    lines = [
         f"# Late Interaction evaluation: {report['variant']}",
         "",
         f"- Snapshot: `{report['run_metadata']['snapshot_fingerprint']}`",
@@ -206,7 +206,29 @@ def _markdown(report):
         f"- Fallback rate: `{fallback['fallback_rate']:.4f}`",
         f"- Shadow coverage: `{fallback['shadow_coverage']:.4f}`",
         "",
+        "## Query families",
+        "",
+        "| Family | Cases | Recall@10 | nDCG@10 | Wrong | Leakage | P95 ms |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for family, values in report.get("query_families", {}).items():
+        recall = values.get("recall_at_10")
+        ndcg = values.get("ndcg_at_10")
+        lines.append(
+            f"| {family} | {values['case_count']} | "
+            f"{'n/a' if recall is None else f'{recall:.4f}'} | "
+            f"{'n/a' if ndcg is None else f'{ndcg:.4f}'} | "
+            f"{values['wrong_answer']} | {values['leakage']} | "
+            f"{values['latency_p95_ms']:.2f} |"
+        )
+    hard_negatives = report.get("hard_negative_coverage", {})
+    lines.extend([
+        "",
+        f"- Hard-negative coverage complete: `{bool(hard_negatives.get('complete'))}`",
+        f"- Missing hard-negative families: `{', '.join(hard_negatives.get('missing') or []) or 'none'}`",
+        "",
     ])
+    return "\n".join(lines)
 
 
 def main(argv=None):

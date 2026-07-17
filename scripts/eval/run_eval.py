@@ -48,6 +48,15 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _content_metadata(value) -> dict:
+    """Keep evaluation artifacts auditable without persisting raw content."""
+    text = str(value or "")
+    return {
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "char_count": len(text),
+    }
+
+
 def _git_sha() -> str | None:
     try:
         return subprocess.check_output(
@@ -202,6 +211,7 @@ def _render_markdown(report: dict) -> str:
         f"- Citation evaluation: `{json.dumps(report.get('citation_evaluation', {}))}`",
         f"- Grounded math evaluation: `{json.dumps(report.get('grounded_math_evaluation', {}))}`",
         f"- Decomposition evaluation: `{json.dumps(report.get('decomposition_evaluation', {}))}`",
+        f"- Failure families: `{json.dumps(report.get('failure_family_evaluation', {}))}`",
         f"- Risk coverage: `{json.dumps(report.get('risk_coverage', {}))}`",
         f"- Pipeline variants: `{json.dumps(report.get('pipeline_variants', {}))}`",
         f"- Estimated cost: `{report.get('total_estimated_cost', 0.0)}`", "",
@@ -283,6 +293,7 @@ def run_evaluation(
         outcome_matches_expected, summarize_outcomes,
     )
     from mech_chatbot.evaluation.risk_coverage import build_risk_coverage_report
+    from mech_chatbot.evaluation.failure_families import build_failure_family_report
     from mech_chatbot.evaluation.integrated_hardening import FEATURE_FLAGS, VERSION_FIELDS
     from mech_chatbot.evaluation.schema import (
         EVALUATION_REPORT_SCHEMA, EVALUATOR_MODELS, EVALUATOR_VERSION,
@@ -374,7 +385,9 @@ def run_evaluation(
                 if should_refuse and keywords else all(keyword_present(k) for k in keywords)
             )
             outcome_ok = outcome_matches_expected(expected, actual)
-            policy_ok = actual_policy == case.get("expected_version_policy", "current_only")
+            version_policy_ok = actual_policy == case.get(
+                "expected_version_policy", "current_only"
+            )
             is_admin = "admin" in {str(role).lower() for role in roles}
             leaked = bool(forbidden_hits) and not is_admin
             accessible_source_ids = {
@@ -429,9 +442,32 @@ def run_evaluation(
                 and os.environ.get("RAG_GRAPH_RETRIEVAL_ENABLED", "false").strip().lower()
                 in {"1", "true", "yes", "on"}
             )
+            evidence_state = str(
+                debug.get("evidence_state")
+                or ("SUFFICIENT" if actual in ANSWER_OUTCOMES else "INSUFFICIENT")
+            ).upper()
+            expected_policy_contract = case.get("expected_policy")
+            actual_policy_contract = {
+                "outcome": str(debug.get("answer_outcome") or actual),
+                "evidence_state": evidence_state,
+                "correction_allowed": bool(debug.get(
+                    "correction_allowed",
+                    int(debug.get("correction_count") or 0) > 0,
+                )),
+            }
+            policy_contract_ok = (
+                not isinstance(expected_policy_contract, dict)
+                or all(
+                    actual_policy_contract.get(field)
+                    == expected_policy_contract.get(field)
+                    for field in (
+                        "outcome", "evidence_state", "correction_allowed"
+                    )
+                )
+            )
             passed = (
                 keyword_ok and source_ok and not forbidden_hits and outcome_ok
-                and policy_ok and grounding_ok
+                and version_policy_ok and policy_contract_ok and grounding_ok
                 and (not decomposition_required or decomposition_evaluation["passed"])
                 and (
                     not graph_required
@@ -444,10 +480,6 @@ def run_evaluation(
                 and graph_evaluation["budget_ok"]
                 and passed
             )
-            evidence_state = str(
-                debug.get("evidence_state")
-                or ("SUFFICIENT" if actual in ANSWER_OUTCOMES else "INSUFFICIENT")
-            ).upper()
             default_confidence = {
                 "SUFFICIENT": 1.0,
                 "AMBIGUOUS": 0.5,
@@ -465,9 +497,12 @@ def run_evaluation(
             })
             row = {
                 "id": case["id"], "passed": passed, "expected_outcome": expected,
-                "actual_outcome": actual, "latency_ms": latency_ms, "answer": answer,
-                "reference": ref_text,
-                "retrieved_sources": [item["document"] for item in retrieved],
+                "actual_outcome": actual, "latency_ms": latency_ms,
+                "answer_metadata": _content_metadata(answer),
+                "reference_metadata": _content_metadata(ref_text),
+                "retrieved_source_metadata": [
+                    _content_metadata(item.get("document")) for item in retrieved
+                ],
                 "retrieval_expected": retrieval_expected,
                 "retrieval_passed": source_ok,
                 "trace_id": trace_id,
@@ -484,10 +519,20 @@ def run_evaluation(
                 "decomposition_evaluation": decomposition_evaluation,
                 "graph_evaluation": graph_evaluation,
                 "evidence_state": evidence_state,
+                "policy_evaluation": {
+                    "applicable": isinstance(expected_policy_contract, dict),
+                    "passed": policy_contract_ok,
+                    "expected": expected_policy_contract,
+                    "actual": actual_policy_contract,
+                },
                 "evaluation_confidence": evaluation_confidence,
                 "answer_correct": passed,
                 "leaked": leaked,
                 "manifest_schema": case["manifest_schema"],
+                "failure_family": case.get("failure_family"),
+                "seed_case_id": case.get("seed_case_id"),
+                "holdout": bool(case.get("holdout")),
+                "provider_failure": False,
                 **_execution_metrics(
                     debug,
                     calculation_count=calculation_evaluation["calculation_count"],
@@ -505,7 +550,8 @@ def run_evaluation(
             row = {
                 "id": case["id"], "passed": False, "expected_outcome": expected,
                 "actual_outcome": "error", "latency_ms": latency_ms,
-                "error": str(exc), "retrieval_expected": False, "retrieval_passed": False,
+                "error_type": type(exc).__name__, "retrieval_expected": False,
+                "retrieval_passed": False,
                 "trace_id": trace_id, "requires_correction": bool(case.get("requires_correction")),
                 "requires_repair": bool(case.get("requires_repair")),
                 "claim_evaluation": {"applicable": False},
@@ -514,10 +560,26 @@ def run_evaluation(
                 "decomposition_evaluation": {"applicable": False, "passed": False},
                 "graph_evaluation": {"applicable": False, "passed": False, "budget_ok": False},
                 "evidence_state": "INSUFFICIENT",
+                "policy_evaluation": {
+                    "applicable": isinstance(case.get("expected_policy"), dict),
+                    "passed": False,
+                    "expected": case.get("expected_policy"),
+                    "actual": None,
+                },
                 "evaluation_confidence": 0.0,
                 "answer_correct": False,
                 "leaked": False,
                 "manifest_schema": case["manifest_schema"],
+                "failure_family": case.get("failure_family"),
+                "seed_case_id": case.get("seed_case_id"),
+                "holdout": bool(case.get("holdout")),
+                "provider_failure": any(
+                    marker in str(exc).casefold()
+                    for marker in (
+                        "no_capacity", "service_unavailable", "provider unavailable",
+                        "provider timeout", "rate limit", "http 429", "http 503",
+                    )
+                ),
                 **_execution_metrics(debug),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
@@ -710,6 +772,7 @@ def run_evaluation(
         },
         "decomposition_evaluation": summarize_decomposition_evaluation(rows),
         "graph_evaluation": summarize_graph_evaluation(rows),
+        "failure_family_evaluation": build_failure_family_report(rows),
         "risk_coverage": build_risk_coverage_report(risk_rows),
         "latency_p50_ms": nearest_rank(latencies, 0.50),
         "latency_p95_ms": nearest_rank(latencies, 0.95),

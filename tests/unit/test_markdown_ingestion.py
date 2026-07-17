@@ -1,6 +1,32 @@
 from pathlib import Path
+import json
 
 from mech_chatbot.ingestion.pdf import pipeline
+from mech_chatbot.ingestion.pdf.bom import (
+    extract_bom_records,
+    extract_bom_records_from_markdown,
+    extract_markdown_tables,
+)
+
+
+def test_pdf_bom_table_identity_keeps_zero_based_tables_distinct():
+    table = [
+        ["Mã", "Số lượng", "Vật liệu"],
+        ["PART-A", "1", "steel"],
+    ]
+    first = extract_bom_records(table, table_idx=0)
+    second = extract_bom_records(table, table_idx=1)
+    assert first[0]["source_row_id"] == "table-1-row-1"
+    assert second[0]["source_row_id"] == "table-2-row-1"
+
+
+def test_markdown_bom_table_identity_is_one_based():
+    records = extract_bom_records_from_markdown(
+        "| Mã | Số lượng | Vật liệu |\n"
+        "|---|---:|---|\n"
+        "| PART-A | 1 | steel |\n"
+    )
+    assert records[0]["source_row_id"] == "table-1-row-1"
 
 
 class _ClientStub:
@@ -33,7 +59,7 @@ def _metadata_stub(*_args, **_kwargs):
     }
 
 
-def _install_success_path_stubs(monkeypatch, saved_pages):
+def _install_success_path_stubs(monkeypatch, saved_pages, saved_bom=None):
     monkeypatch.setattr(pipeline, "extract_metadata_smart", _metadata_stub)
     monkeypatch.setattr(pipeline, "reset_document_metadata", lambda *_args, **_kwargs: 101)
     monkeypatch.setattr(pipeline, "save_page_metadata", lambda *_args, **_kwargs: 101)
@@ -46,6 +72,14 @@ def _install_success_path_stubs(monkeypatch, saved_pages):
         pipeline,
         "save_document_page",
         lambda **kwargs: saved_pages.append(kwargs),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "save_bom_records",
+        lambda doc_id, page, records: (
+            saved_bom.append((doc_id, page, records))
+            if saved_bom is not None else None
+        ) or len(records),
     )
     monkeypatch.setattr(pipeline, "_delete_vectors_for_file", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(pipeline, "_add_docs_with_retry", lambda _chunks: None)
@@ -132,3 +166,101 @@ def test_binary_content_renamed_to_markdown_is_blocked(tmp_path, monkeypatch):
     assert report["status"] == "error"
     assert report["quality_status"] == "blocked"
     assert saved_pages == []
+
+
+def test_markdown_bom_parser_preserves_decimal_and_source_row_identity():
+    markdown = """
+# BOM
+
+| row_id | part_code | material_code | description | quantity | unit |
+|---|---|---|---|---:|---|
+| TECH-BOM-001 | DEMO-PART-A | DEMO-MAT-STEEL | Chi tiết A | 1,500 | piece |
+| TECH-BOM-002 | DEMO-PART-B | DEMO-MAT-RUBBER | Chi tiết B | 12.50 | kg |
+"""
+
+    tables = extract_markdown_tables(markdown)
+    records = extract_bom_records_from_markdown(markdown)
+
+    assert len(tables) == 1
+    assert [record["ma_hang"] for record in records] == ["DEMO-PART-A", "DEMO-PART-B"]
+    assert [record["quantity_decimal"] for record in records] == ["1500", "12.50"]
+    assert [record["so_luong"] for record in records] == [1500, None]
+    assert [record["source_row_id"] for record in records] == ["TECH-BOM-001", "TECH-BOM-002"]
+    raw = json.loads(records[1]["raw_row_json"])
+    assert raw["quantity_decimal"] == "12.50"
+    assert raw["source_row_id"] == "TECH-BOM-002"
+    assert raw["source_table_index"] == 1
+    assert raw["source_row_index"] == 2
+
+
+def test_markdown_bom_parser_ignores_tables_inside_code_fences():
+    markdown = """
+```md
+| part_code | quantity |
+|---|---:|
+| FAKE-PART | 999 |
+```
+"""
+
+    assert extract_markdown_tables(markdown) == []
+    assert extract_bom_records_from_markdown(markdown) == []
+
+
+def test_markdown_ingestion_saves_structured_bom_with_page_provenance(tmp_path, monkeypatch):
+    markdown_path = tmp_path / "technical_demo_process_v2.md"
+    markdown_path.write_text(
+        "# Quy trình\n\n"
+        "| row_id | part_code | material_code | description | quantity | unit |\n"
+        "|---|---|---|---|---:|---|\n"
+        "| TECH-BOM-001 | DEMO-PART-A | DEMO-MAT-STEEL | Chi tiết A | 1500 | piece |\n"
+        "| TECH-BOM-002 | DEMO-PART-B | DEMO-MAT-RUBBER | Chi tiết B | 12.50 | kg |\n",
+        encoding="utf-8",
+    )
+    saved_pages = []
+    saved_bom = []
+    _install_success_path_stubs(monkeypatch, saved_pages, saved_bom)
+
+    report = pipeline.process_and_ingest_file(
+        file_path=str(markdown_path),
+        ten_file=markdown_path.name,
+        thu_muc="Technical",
+        domain_override="mechanical",
+        security_override="internal",
+        site_override="HQ",
+    )
+
+    assert report["status"] == "success"
+    assert report["pages_table_extracted"] == [1]
+    assert report["bom_rows_count"] == 2
+    assert len(saved_bom) == 1
+    doc_id, page, records = saved_bom[0]
+    assert (doc_id, page) == (101, 1)
+    assert [record["quantity_decimal"] for record in records] == ["1500", "12.50"]
+
+
+def test_markdown_ingestion_does_not_report_bom_rows_when_sql_persistence_fails(
+    tmp_path, monkeypatch,
+):
+    markdown_path = tmp_path / "bom.md"
+    markdown_path.write_text(
+        "| part_code | quantity | unit |\n"
+        "|---|---:|---|\n"
+        "| PART-A | 2 | piece |\n",
+        encoding="utf-8",
+    )
+    saved_pages = []
+    _install_success_path_stubs(monkeypatch, saved_pages)
+    monkeypatch.setattr(pipeline, "save_bom_records", lambda *_args, **_kwargs: 0)
+
+    report = pipeline.process_and_ingest_file(
+        file_path=str(markdown_path),
+        ten_file=markdown_path.name,
+        thu_muc="Technical",
+        domain_override="mechanical",
+        security_override="internal",
+        site_override="HQ",
+    )
+
+    assert report["bom_rows_count"] == 0
+    assert report["pages_table_extracted"] == [1]
+    assert "structured_bom_persistence_failed:page:1" in report["warnings"]

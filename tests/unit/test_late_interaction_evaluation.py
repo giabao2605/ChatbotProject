@@ -146,3 +146,54 @@ def test_report_uses_worked_graded_ndcg_and_flags_forbidden_source():
     assert report["outcome_confusion"]["leakage"] == 1
     assert report["latency_p95_ms"] == 100
     assert report["fallback_coverage"]["shadow_coverage"] == 1.0
+
+
+def test_report_breaks_quality_out_by_query_family_and_hard_negative_coverage():
+    exact = _case(case_id="exact", scenario="exact_code")
+    ocr = _case(case_id="ocr", scenario="ocr_noise")
+    denied = _case(
+        case_id="denied",
+        scenario="rbac_site_denial",
+        expected_sources=[],
+        forbidden_sources=[{"document": "restricted.md", "doc_id": 99}],
+    )
+    rows = [
+        {
+            "case": exact,
+            "ranked_sources": exact["expected_sources"],
+            "latency_ms": 10,
+            "coverage": 1.0,
+        },
+        {
+            "case": ocr,
+            "ranked_sources": [],
+            "latency_ms": 20,
+            "coverage": 1.0,
+        },
+        {
+            "case": denied,
+            "ranked_sources": [],
+            "latency_ms": 30,
+            "coverage": 1.0,
+        },
+    ]
+
+    report = build_report(rows, variant="maxsim", run_metadata={})
+
+    assert report["query_families"]["exact_code"]["recall_at_10"] == 1.0
+    assert report["query_families"]["ocr_noise"]["recall_at_10"] == 0.0
+    assert report["query_families"]["rbac_site_denial"]["leakage"] == 0
+    assert report["hard_negative_coverage"]["required"] == [
+        "alias_mismatch",
+        "near_code_family",
+        "near_meaning",
+        "ocr_noise",
+        "rare_term",
+    ]
+    assert report["hard_negative_coverage"]["missing"] == [
+        "alias_mismatch",
+        "near_code_family",
+        "near_meaning",
+        "rare_term",
+    ]
+    assert report["hard_negative_coverage"]["complete"] is False

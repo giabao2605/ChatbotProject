@@ -1,0 +1,17 @@
+{
+  "failure_family": "MULTI_INTENT_COVERAGE_ERROR",
+  "seed_case_id": "demo-case-023",
+  "expected_policy": {
+    "outcome": "full_answer",
+    "evidence_state": "SUFFICIENT",
+    "correction_allowed": false
+  },
+  "invariants": [
+    "all_intents_mapped",
+    "maximum_three_subqueries",
+    "shared_correction_budget",
+    "branch_citations_complete"
+  ],
+  "mutation_axes": [],
+  "holdout": false
+}

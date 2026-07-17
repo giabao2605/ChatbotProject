@@ -4,6 +4,9 @@ KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repo
 """
 import re
 import os
+from decimal import Decimal, InvalidOperation
+import json
+from typing import NamedTuple
 from sqlalchemy import text
 from ..engine import _ensure_engine, engine
 from mech_chatbot.config.logging import logger
@@ -11,10 +14,29 @@ from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
 from ._shared import _sanitize_int, _sanitize_text
 
 __all__ = [
+    'BomSearchRow',
     'normalize_material_name',
     'save_bom_records',
     'search_bom_by_code',
 ]
+
+
+class BomSearchRow(NamedTuple):
+    doc_id: int
+    page: int
+    part_code: str | None
+    description: str | None
+    material: str | None
+    quantity: Decimal | None
+    note: str | None
+    document: str
+    version: int
+    security_level: str | None
+    site: str | None
+    external_processing_policy: str | None
+    bom_row_id: int
+    unit: str | None
+    source_row_id: str
 
 def normalize_material_name(raw):
     """P2: uy quyen cho material_registry (tu dien DB). Fallback logic cu neu loi."""
@@ -34,7 +56,7 @@ def normalize_material_name(raw):
 def save_bom_records(doc_id, trang_so, records):
     """Luu danh sach cac vat tu cua bang ke vao SQL"""
     if not doc_id or not records:
-        return
+        return 0
     _ensure_engine()
     try:
         # Perf (GD1): bulk insert thay N+1 (executemany). Giu nguyen tung dong.
@@ -64,8 +86,50 @@ def save_bom_records(doc_id, trang_so, records):
                     """),
                     _rows,
                 )
+        return len(_rows)
     except Exception as e:
         logger.error(f"Loi save_bom_records cho doc_id {doc_id}, trang {trang_so}: {e}", exc_info=True)
+        return 0
+
+
+def _normalize_bom_result_row(row):
+    values = list(row)
+    raw = values[14] if len(values) > 14 else None
+    structured = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                structured = parsed
+        except (TypeError, ValueError, json.JSONDecodeError):
+            structured = {}
+    quantity_raw = structured.get("quantity_decimal")
+    if quantity_raw in (None, ""):
+        quantity_raw = values[5]
+    try:
+        quantity = Decimal(str(quantity_raw)) if quantity_raw is not None else None
+    except (InvalidOperation, TypeError, ValueError):
+        quantity = None
+    source_row_id = str(structured.get("source_row_id") or "").strip()
+    if not source_row_id:
+        source_row_id = f"BOM-{int(values[12])}"
+    return BomSearchRow(
+        doc_id=values[0],
+        page=values[1],
+        part_code=values[2],
+        description=values[3],
+        material=values[4],
+        quantity=quantity,
+        note=values[6],
+        document=values[7],
+        version=values[8],
+        security_level=values[9],
+        site=values[10],
+        external_processing_policy=values[11],
+        bom_row_id=values[12],
+        unit=values[13],
+        source_row_id=source_row_id,
+    )
 
 def search_bom_by_code(
     ma_hang_list,
@@ -222,7 +286,7 @@ def search_bom_by_code(
             query = text(f"""
                 SELECT DISTINCT b.DocID, b.TrangSo, b.MaHang, b.TenVatTu, b.VatLieu,
                        b.SoLuong, b.GhiChu, t.TenFile, t.VersionNo, t.SecurityLevel,
-                       t.Site, t.ExternalProcessingPolicy, b.ID, b.Unit
+                       t.Site, t.ExternalProcessingPolicy, b.ID, b.Unit, b.RawRowJson
                 FROM BangKeVatTu b
                 JOIN TaiLieu t ON b.DocID = t.DocID
                 WHERE {filter_sql} AND b.TrangSo IS NOT NULL AND (
@@ -231,7 +295,7 @@ def search_bom_by_code(
             """)
 
             result = conn.execute(query, params).fetchall()
-            return result
+            return [_normalize_bom_result_row(row) for row in result]
     except Exception as e:
         logger.error(f"Loi search_bom_by_code: {e}", exc_info=True)
         return []

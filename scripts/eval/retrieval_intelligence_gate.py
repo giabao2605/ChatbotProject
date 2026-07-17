@@ -6,6 +6,16 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from mech_chatbot.evaluation.late_interaction import HARD_NEGATIVE_SCENARIOS
 
 
 def _ratio(candidate, baseline):
@@ -194,6 +204,26 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             str((report.get("run_metadata") or {}).get("manifest_sha256") or "")
             for report in (reference, baseline, candidate)
         }
+        required_hard_negatives = set(HARD_NEGATIVE_SCENARIOS)
+        family_sets = [set((report.get("query_families") or {}).keys()) for report in (
+            reference, baseline, candidate,
+        )]
+        candidate_hard_negative = candidate.get("hard_negative_coverage") or {}
+        baseline_families = baseline.get("query_families") or {}
+        candidate_families = candidate.get("query_families") or {}
+
+        def _family_recall(report, family):
+            value = ((report.get("query_families") or {}).get(family) or {}).get(
+                "recall_at_10"
+            )
+            return float(value) if value is not None else None
+
+        family_recall_not_decreased = all(
+            _family_recall(candidate, family) is not None
+            and _family_recall(baseline, family) is not None
+            and _family_recall(candidate, family) >= _family_recall(baseline, family)
+            for family in required_hard_negatives
+        )
         checks = {
             **common,
             "voyage_baseline_valid": (
@@ -207,6 +237,18 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "provider_configuration_frozen": len(provider_hashes) == 1 and "" not in provider_hashes,
             "commit_frozen_across_variants": len(commits) == 1 and "" not in commits,
             "manifest_frozen_across_variants": len(manifests) == 1 and "" not in manifests,
+            "query_family_coverage_frozen": (
+                bool(family_sets[0]) and family_sets[0] == family_sets[1] == family_sets[2]
+            ),
+            "hard_negative_coverage_complete": (
+                candidate_hard_negative.get("complete") is True
+                and set(candidate_hard_negative.get("required") or ())
+                == required_hard_negatives
+                and not candidate_hard_negative.get("missing")
+                and required_hard_negatives <= set(candidate_families)
+                and required_hard_negatives <= set(baseline_families)
+            ),
+            "query_family_recall_not_decreased": family_recall_not_decreased,
             "readiness_artifact_valid": metadata.get("schema") == "late-interaction-readiness-v1",
             "capability_passed": metadata.get("capability_passed") is True,
             "ready_for_serving": metadata.get("ready_for_serving") is True,
