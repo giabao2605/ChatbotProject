@@ -160,6 +160,11 @@ def test_bom_total_filters_operands_by_explicit_unit():
     assert claim.value == Decimal("1750")
     assert claim.unit == "piece"
 
+    aggregate_add = build_calculation_plan(
+        "Cộng quantity của mọi dòng có unit piece trong BOM Version 2.", facts,
+    )
+    assert aggregate_add == CalculationPlan("sum", facts[:2])
+
 
 @pytest.mark.parametrize(
     ("question", "operation", "source_ids"),

@@ -165,6 +165,11 @@ def build_calculation_plan(
     else:
         return None
 
+    if operation == "add" and any(
+        phrase in folded for phrase in ("moi dong", "tat ca", "cac dong", "toan bo")
+    ):
+        operation = "sum"
+
     available = tuple(facts or ())
     matched = []
     for fact in available:

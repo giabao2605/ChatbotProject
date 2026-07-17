@@ -1,6 +1,7 @@
 {
   "failure_family": "CALCULATION_PLAN_ERROR",
   "seed_case_id": "demo-case-013",
+  "expected_version_policy": "specific_version",
   "expected_policy": {
     "outcome": "full_answer",
     "evidence_state": "SUFFICIENT",

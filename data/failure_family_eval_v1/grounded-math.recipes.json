@@ -2,7 +2,7 @@
   {"id":"grounded-math-dev-1","axes":["unit_format"],"replacements":{"piece":"PIECE"},"holdout":false},
   {"id":"grounded-math-dev-2","axes":["paraphrase"],"question":"Cộng quantity của mọi dòng có unit piece trong BOM Version 2.","holdout":false},
   {"id":"grounded-math-dev-3","axes":["unit_format","paraphrase"],"question":"BOM version 2 có tổng bao nhiêu Piece?","holdout":false},
-  {"id":"grounded-math-dev-4","axes":["paraphrase"],"question":"Hãy tính tổng chính xác các part đơn vị piece thuộc Version 2.","holdout":false},
+  {"id":"grounded-math-dev-4","axes":["paraphrase"],"question":"Hãy tính tổng chính xác các part đơn vị piece thuộc BOM Version 2.","holdout":false},
   {"id":"grounded-math-holdout-1","axes":["unit_format"],"question":"Tổng số lượng với UNIT PIECE trong BOM v2 là bao nhiêu?","holdout":true},
   {"id":"grounded-math-holdout-2","axes":["paraphrase"],"question":"Nếu chỉ lấy các dòng piece của BOM Version 2 thì tổng quantity bằng bao nhiêu?","holdout":true}
 ]
