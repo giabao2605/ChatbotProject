@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from sqlalchemy import text
@@ -36,6 +37,27 @@ def _metadata(record):
     }
 
 
+def build_bom_seed_rows(doc_id: int, rows: list[dict]) -> list[dict]:
+    """Adapt exact Decimal fixture values to the legacy integer SQL column."""
+    payload = []
+    for row in rows:
+        try:
+            quantity = Decimal(str(row["value"]))
+        except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"invalid BOM fixture quantity: {row.get('value')}") from exc
+        raw = {**row, "quantity_decimal": format(quantity, "f")}
+        sql_quantity = int(quantity) if quantity == quantity.to_integral_value() else None
+        payload.append({
+            "doc_id": doc_id,
+            "part": row["part"],
+            "value": sql_quantity,
+            "unit": row["unit"],
+            "row_index": int(row["source_table_index"]),
+            "raw": json.dumps(raw, ensure_ascii=False, sort_keys=True),
+        })
+    return payload
+
+
 def _seed_bom_rows(connection, doc_id: int, rows: list[dict]) -> None:
     connection.execute(text("DELETE FROM dbo.BangKeVatTu WHERE DocID=:doc_id"), {"doc_id": doc_id})
     connection.execute(text("""
@@ -44,11 +66,7 @@ def _seed_bom_rows(connection, doc_id: int, rows: list[dict]) -> None:
              RawRowJson, SourceTableIndex)
         VALUES
             (:doc_id, 1, :part, :part, :value, :unit, 1.0, :raw, :row_index)
-    """), [{
-        "doc_id": doc_id, "part": row["part"], "value": row["value"],
-        "unit": row["unit"], "row_index": int(row["source_table_index"]),
-        "raw": json.dumps(row, ensure_ascii=False, sort_keys=True),
-    } for row in rows])
+    """), build_bom_seed_rows(doc_id, rows))
     count = connection.execute(text(
         "SELECT COUNT(1) FROM dbo.BangKeVatTu WHERE DocID=:doc_id"
     ), {"doc_id": doc_id}).scalar_one()

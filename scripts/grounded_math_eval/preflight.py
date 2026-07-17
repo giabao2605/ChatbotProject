@@ -35,6 +35,15 @@ def _source_row_key(row):
     return str(payload.get("row_key") or "").strip()
 
 
+def _row_quantity(row):
+    try:
+        payload = json.loads(row.get("RawRowJson") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    exact = payload.get("quantity_decimal") if isinstance(payload, dict) else None
+    return _decimal(exact if exact not in (None, "") else row.get("SoLuong"))
+
+
 def check_fixture_cases(cases, sql_documents, bom_rows, qdrant_points, *, collection):
     if collection != FIXTURE_COLLECTION:
         raise ValueError(f"collection must equal {FIXTURE_COLLECTION}")
@@ -66,7 +75,7 @@ def check_fixture_cases(cases, sql_documents, bom_rows, qdrant_points, *, collec
                 reason = "bom_source_row_missing"
             elif (
                 int(row.get("TrangSo") or 0) != int(source.get("page") or 0)
-                or _decimal(row.get("SoLuong")) != _decimal(source.get("value"))
+                or _row_quantity(row) != _decimal(source.get("value"))
                 or str(row.get("Unit") or "").strip().casefold()
                 != str(source.get("unit") or "").strip().casefold()
             ):

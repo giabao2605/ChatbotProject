@@ -41,6 +41,15 @@ DOCUMENTS = (
             {"row_key": "row-other", "source_table_index": 1, "part": "GROUND-MATH-EVAL-OTHER-A-700", "value": "1", "unit": "kg"},
         ),
     },
+    {
+        "key": "bom_aggregate_v1", "filename": "grounded_math_aggregate_v1.md",
+        "doc_number": "GROUND-MATH-EVAL-AGG-001", "title": "BOM tổng hợp khối lượng",
+        "version": 1,
+        "rows": (
+            {"row_key": "row-aggregate-a", "source_table_index": 1, "part": "GROUND-MATH-EVAL-AGG-A-800", "value": "5.25", "unit": "kg"},
+            {"row_key": "row-aggregate-b", "source_table_index": 2, "part": "GROUND-MATH-EVAL-AGG-B-900", "value": "1.75", "unit": "kg"},
+        ),
+    },
 )
 
 
@@ -69,7 +78,10 @@ def _calculation(operation, status, formula, unit, sources, **values):
 
 
 def _case(case_id, question, expected, *, outcome="full_answer"):
-    primary = DOCUMENTS[0]
+    primary = next(
+        item for item in DOCUMENTS
+        if item["filename"] == expected["sources"][0]["document"]
+    )
     citations = []
     seen_documents = set()
     for source in expected["sources"]:
@@ -103,8 +115,11 @@ def _cases() -> list[dict]:
     metre = _source("bom_v12", "row-metre", value="3", unit="m")
     old = _source("bom_v11", "row-old-a", value="1", unit="kg")
     other = _source("bom_other_v12", "row-other", value="1", unit="kg")
+    aggregate_a = _source("bom_aggregate_v1", "row-aggregate-a", value="5.25", unit="kg")
+    aggregate_b = _source("bom_aggregate_v1", "row-aggregate-b", value="1.75", unit="kg")
     return [
         _case("math-bom-total", "Tổng BOM của GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-PART-B-200?", _calculation("sum", "valid", "2 + 4 = 6 kg", "kg", [a, b], exact_value="6", display_value="6", allowed_numbers=["2", "4"])),
+        _case("math-document-total", "Tổng khối lượng trong tài liệu BOM tổng hợp khối lượng là bao nhiêu?", _calculation("sum", "valid", "5.25 + 1.75 = 7 kg", "kg", [aggregate_a, aggregate_b], exact_value="7.00", display_value="7", allowed_numbers=["5.25", "1.75"])),
         _case("math-dedupe-source", "Tổng GROUND-MATH-EVAL-PART-A-100, GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-PART-B-200", _calculation("sum", "valid", "2 + 4 = 6 kg", "kg", [a, b], exact_value="6", display_value="6", allowed_numbers=["2", "4"])),
         _case("math-add", "Cộng GROUND-MATH-EVAL-PART-A-100 và GROUND-MATH-EVAL-PART-B-200", _calculation("add", "valid", "2 + 4 = 6 kg", "kg", [a, b], exact_value="6", display_value="6", allowed_numbers=["2", "4"])),
         _case("math-subtract", "Lấy GROUND-MATH-EVAL-PART-B-200 trừ GROUND-MATH-EVAL-PART-A-100", _calculation("subtract", "valid", "4 - 2 = 2 kg", "kg", [b, a], exact_value="2", display_value="2", allowed_numbers=["4", "2"])),
