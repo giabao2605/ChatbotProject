@@ -296,7 +296,7 @@ Mỗi giai đoạn phải có targeted tests, integration test phù hợp, artif
 | GraphRAG | `rag/graph_ontology.py`, proposal validator và duplicate-serving-edge check | Fixture 27 node/21 edge, source evidence 21/21 và preflight đạt; quality gate vẫn fail vì relational gain/review độc lập, flag vẫn tắt |
 | Community Summaries | Gate hiện hữu tiếp tục yêu cầu GraphRAG accepted, coverage, precision và summary review | Không mở serving; trạng thái đúng là chờ human review GraphRAG |
 | Late Interaction | Artifact có `query_families`, hard-negative coverage và gate không cho giảm Recall@10 theo family | Giữ `late-v2`, không tạo index mới, flag mặc định tắt |
-| Controlled-demo gate | `scripts/eval/failure_family_gate.py` | Hoàn thành phân biệt accepted/rejected/inconclusive, pair provenance, budget và rollback |
+| Controlled-demo gate | `scripts/eval/failure_family_gate.py`, `scripts/eval/verify_failure_family_rollback.py` | Hoàn thành phân biệt accepted/rejected/inconclusive, pair provenance, budget và composer rollback commit-pinned |
 
 Các regression seed đã được đóng gói trong `data/failure_family_eval_v1/` cho bốn họ lỗi quan sát trực tiếp:
 

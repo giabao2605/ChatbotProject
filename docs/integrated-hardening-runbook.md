@@ -181,6 +181,15 @@ rejected decision; a self-declared `evidence_verified` boolean is not accepted.
 
 ## 5. Abort and rollback
 
+Khi chạy failure-family gate, ghép các rollback artifact riêng lẻ trên cùng
+commit thành một bằng chứng có thể kiểm tra nguồn, thay vì tự viết JSON tổng hợp:
+
+```powershell
+.\chat_env\Scripts\python.exe -m scripts.eval.verify_failure_family_rollback `
+  --evidence <crag-rollback.json> <grounded-math-rollback.json> <decomposition-rollback.json> <graph-rollback.json> `
+  --output <failure-family-rollback.json>
+```
+
 Abort the active combination immediately when any of these occurs:
 
 - leakage outside the declared admin exception;
