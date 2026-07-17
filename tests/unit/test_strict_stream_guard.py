@@ -183,7 +183,7 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
     emitted = list(_generate(module, question="Cộng PART-A và PART-B", docs=docs))
 
     assert emitted == [
-        "Kết quả tính có kiểm soát: 7 cái. Công thức: 2 + 5 = 7 cái. "
+        "Kết quả tính có kiểm soát: 7 cái; công thức: 2 + 5 = 7 cái. "
         "[Nguồn: bom-v12.pdf, Trang 3, Version 12, SourceID D41P3] "
         "[Nguồn: bom-v12.pdf, Trang 4, Version 12, SourceID D41P4]"
     ]

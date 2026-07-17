@@ -291,7 +291,7 @@ Mỗi giai đoạn phải có targeted tests, integration test phù hợp, artif
 | Failure contract | `evaluation/failure_families.py`, `evaluation/failure_mutations.py`, `scripts/eval/generate_failure_mutations.py` | Hoàn thành validator, compiler 1 seed + 4 dev + 2 holdout và artifact có hash/commit |
 | Outcome Policy | `rag/answer_policy.py`, adapter trong `rag/pipeline.py` và policy evaluation trong `run_eval.py` | Hoàn thành năm outcome, ba evidence state và correction policy fail-closed |
 | Structured facts | `ingestion/pdf/bom.py`, Markdown path trong `ingestion/pdf/pipeline.py`, exact Decimal/source row ở BOM repository, controlled-demo BOM repair command | Hoàn thành code cho lần ingest mới; DocID 19 đã repair 4 row với idempotence/provenance verification |
-| Grounded Math | `solve_grounded_calculation()` và post-check/evaluator hiện hữu | Matched rollout commit `085f3f3` đạt 16/16, rollback và guardrail đạt; vẫn chờ review 10 truy vấn demo thật |
+| Grounded Math | `solve_grounded_calculation()`, post-check/evaluator và controlled-demo BOM repair | Failure-family gate commit `4a1803e` đạt 7/7 gồm 1 seed, 4 dev và 2 holdout; calculation, claim faithfulness và citation đều 100%; feature flag vẫn tắt cho đến khi milestone decision được duyệt |
 | Query Decomposition | `compile_query_plan()` với deterministic intent split/coverage/fallback | Preflight/rollback đạt; matched 8-case candidate chỉ 1/8 và gate fail-closed, flag vẫn tắt |
 | GraphRAG | `rag/graph_ontology.py`, proposal validator và duplicate-serving-edge check | Fixture 27 node/21 edge, source evidence 21/21 và preflight đạt; quality gate vẫn fail vì relational gain/review độc lập, flag vẫn tắt |
 | Community Summaries | Gate hiện hữu tiếp tục yêu cầu GraphRAG accepted, coverage, precision và summary review | Không mở serving; trạng thái đúng là chờ human review GraphRAG |
@@ -309,9 +309,16 @@ Mỗi bộ có đúng bốn development variant và hai holdout variant. Recipe 
 
 ### 7.2 Chưa được phép đánh dấu accepted
 
-Các thay đổi trên mới chứng minh implementation và fixture contract, chưa chứng minh chất lượng live trên collection chính. Còn phải:
+Các thay đổi trên đã chứng minh implementation, fixture contract và một phần live quality trên collection chính. Trạng thái bốn failure-family gate:
 
-1. Chạy `failure_family_gate.py` trên bốn mutation pack đã compile.
+- `CALCULATION_PLAN_ERROR`: `accepted` tại `reports/controlled-demo/20260717-failure-family-completion/grounded-math-v6/gate.json`; 7/7 case pass trên commit `4a1803e`.
+- `EVIDENCE_POLICY_ERROR`: `rejected` tại `reports/controlled-demo/20260717-failure-family-completion/evidence-policy-v2/gate.json`; leakage bằng 0 nhưng quality và latency chưa đạt.
+- `MULTI_INTENT_COVERAGE_ERROR`: lần live mới nhất `inconclusive` tại `reports/controlled-demo/20260717-failure-family-completion/multi-intent-v1/gate.json` vì provider trả lỗi cho 7/7 case. Provider smoke ngay sau đó thất bại 5/5 request với 15 retry, nên không được diễn giải thành quality failure.
+- `GRAPH_RELATION_ERROR`: chưa chạy mutation pair cuối do cùng provider outage; matched Graph rollout trước đó vẫn `rejected` vì relational gain, review và provider retry.
+
+Còn phải:
+
+1. Chạy lại Multi-intent và chạy Graph Relation mutation pair trong provider window ổn định; giữ kết quả `inconclusive` nếu provider tiếp tục lỗi.
 2. Lấy independent human review tối thiểu 20 graph edge; chỉ khi precision ít nhất 95% mới chạy Community Summary generation/review.
 3. Bổ sung và review đủ 10 câu hỏi phức hợp cho Query Decomposition.
 4. Chạy lại CRAG khi có matched samples/provider window ổn định để xử lý latency gate.
@@ -321,8 +328,8 @@ Các thay đổi trên mới chứng minh implementation và fixture contract, c
 
 ### 7.3 Tóm tắt công việc đã làm và phần chờ review
 
-Đã làm: đóng AnswerDecision fail-closed; bổ sung exact Decimal và document-scoped Grounded Math; thêm source evidence thật cho Graph edge qua migration V0038; khôi phục/ingest/preflight fixture cho CRAG, Grounded Math, Decomposition và GraphRAG; rollback CRAG giờ ép runtime flags về false; compile đủ bốn mutation pack; thêm composer rollback commit-pinned cho failure-family gate; repair có kiểm soát 4 BOM row của DocID 19 và tương thích manifest Grounded Math legacy; chạy lại Grounded Math matched gate trên commit `085f3f3` đạt 16/16 sau disambiguation/citation merge; xuất Graph review queue 20 edge có evidence; sửa generator Graph để governance contract hợp lệ và deterministic seed không còn synthetic provenance.
+Đã làm: đóng AnswerDecision fail-closed; bổ sung exact Decimal và document-scoped Grounded Math; thêm source evidence thật cho Graph edge qua migration V0038; khôi phục/ingest/preflight fixture cho CRAG, Grounded Math, Decomposition và GraphRAG; rollback CRAG giờ ép runtime flags về false; compile đủ bốn mutation pack; thêm composer rollback commit-pinned cho failure-family gate; repair có kiểm soát 4 BOM row của DocID 19 và tương thích manifest Grounded Math legacy; chạy Grounded Math failure-family gate trên commit `4a1803e` đạt 7/7 với toàn bộ calculation/claim/citation check đạt 100%; chạy Evidence Policy gate hợp lệ và ghi `rejected`; chạy Multi-intent gate nhưng ghi đúng `inconclusive` do provider outage; chạy integrated offline gate đạt và demo-readiness xác nhận đủ điều kiện demo matrix nhưng chưa đủ điều kiện live matrix; xuất Graph review queue 20 edge có evidence; sửa generator Graph để governance contract hợp lệ và deterministic seed không còn synthetic provenance.
 
-Chưa làm hoặc chưa được phép bật: CRAG còn fail latency gate; Query Decomposition còn fail quality gate 1/8; GraphRAG còn thiếu independent review và relational gain; Community Summaries chưa mở; Late Interaction vẫn rejected; chưa chạy failure-family gate và integration matrix cuối; chưa có quyết định accepted cho controlled demo.
+Chưa làm hoặc chưa được phép bật: CRAG còn fail latency gate; Query Decomposition cần live rerun sau provider outage và vẫn chưa có accepted decision; GraphRAG còn thiếu independent review, relational gain và mutation pair cuối; Community Summaries chưa mở; Late Interaction vẫn rejected; live integration matrix chưa được phép chạy vì các scoped decision vẫn inconclusive/rejected; chưa có quyết định accepted cho controlled demo.
 
-Chờ bạn review: file review queue Graph 20 edge, kết quả Grounded Math 16/16, các mutation pack và các artifact rollout trong `reports/controlled-demo/`. Sau khi bạn chốt nhãn Graph và 10 câu hỏi Decomposition, mình sẽ chạy lại gate và cập nhật decision artifact.
+Chờ bạn review: file review queue Graph 20 edge, Grounded Math failure-family result 7/7, 10 câu hỏi Decomposition và các artifact rollout trong `reports/controlled-demo/`. Sau khi bạn chốt nhãn Graph/câu hỏi Decomposition và provider ổn định trở lại, chạy lại hai gate còn thiếu rồi cập nhật decision artifact; không cần sửa thêm Grounded Math nếu không có regression mới.
