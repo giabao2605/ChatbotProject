@@ -57,11 +57,11 @@ def _claim(claim_id, terms, key):
 def _case(case_id, question, outcome, key, relation, claims, *, scenario="relational", **extra):
     document = next(item for item in DOCUMENTS if item["key"] == key)
     citations = [_citation(key)] if outcome in {"full_answer", "partial_answer"} else []
-    return {
+    case = {
         "manifest_schema": "rag-eval-manifest-v2", "id": case_id,
         "question": question, "evaluation_group": scenario,
         "expected_outcome": outcome, "expected_claims": claims,
-        "expected_citations": citations, "expected_relation": relation,
+        "expected_citations": citations,
         "expected_document": document["filename"], "expected_page": 1,
         "expected_version": document["version"],
         "expected_sources": [document["filename"]],
@@ -69,6 +69,9 @@ def _case(case_id, question, outcome, key, relation, claims, *, scenario="relati
         "expected_security_level": document["security_level"],
         **_identity(), **extra,
     }
+    if relation:
+        case["expected_relation"] = relation
+    return case
 
 
 def cases():

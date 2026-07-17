@@ -171,10 +171,12 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
                    AND target.SourcePage=source.SourcePage
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
-              SourceVersion,Department,Site,SecurityLevel,ReviewedBy,ReviewedAt)
+              SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
              VALUES(source.SourceNodeID,source.TargetNodeID,source.RelationType,'deterministic','approved',1,
                     source.SourceDocID,source.SourcePage,source.SourceVersion,source.Department,source.Site,
-                    source.SecurityLevel,'deterministic-seed',SYSUTCDATETIME());
+                    source.SecurityLevel,CONCAT(N'Approved deterministic relation ', source.RelationType,
+                    N' from DocID ', source.SourceDocID, N' page ', source.SourcePage,
+                    N' version ', source.SourceVersion), 'deterministic-seed',SYSUTCDATETIME());
         """,
         """
         MERGE dbo.KnowledgeGraphEdge AS target
@@ -196,10 +198,12 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
                    AND target.SourcePage=source.SourcePage
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
-              SourceVersion,Department,Site,SecurityLevel,ReviewedBy,ReviewedAt)
+              SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
              VALUES(source.SourceNodeID,source.TargetNodeID,source.RelationType,'deterministic','approved',1,
                     source.SourceDocID,source.SourcePage,source.SourceVersion,source.Department,source.Site,
-                    source.SecurityLevel,'deterministic-seed',SYSUTCDATETIME());
+                    source.SecurityLevel,CONCAT(N'Approved deterministic relation ', source.RelationType,
+                    N' from DocID ', source.SourceDocID, N' page ', source.SourcePage,
+                    N' version ', source.SourceVersion), 'deterministic-seed',SYSUTCDATETIME());
         """,
         """
         MERGE dbo.KnowledgeGraphEdge AS target
@@ -217,10 +221,12 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
                    AND target.SourcePage=source.SourcePage
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
-              SourceVersion,Department,Site,SecurityLevel,ReviewedBy,ReviewedAt)
+              SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
              VALUES(source.SourceNodeID,source.TargetNodeID,source.RelationType,'deterministic','approved',1,
                     source.SourceDocID,source.SourcePage,source.SourceVersion,source.Department,source.Site,
-                    source.SecurityLevel,'deterministic-seed',SYSUTCDATETIME());
+                    source.SecurityLevel,CONCAT(N'Approved deterministic relation ', source.RelationType,
+                    N' from DocID ', source.SourceDocID, N' page ', source.SourcePage,
+                    N' version ', source.SourceVersion), 'deterministic-seed',SYSUTCDATETIME());
         """,
         """
         MERGE dbo.KnowledgeGraphEdge AS target
@@ -239,10 +245,12 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
                    AND target.SourcePage=source.SourcePage
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
-              SourceVersion,Department,Site,SecurityLevel,ReviewedBy,ReviewedAt)
+              SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
              VALUES(source.SourceNodeID,source.TargetNodeID,source.RelationType,'deterministic','approved',1,
                     source.SourceDocID,source.SourcePage,source.SourceVersion,source.Department,source.Site,
-                    source.SecurityLevel,'deterministic-seed',SYSUTCDATETIME());
+                    source.SecurityLevel,CONCAT(N'Approved deterministic relation ', source.RelationType,
+                    N' from DocID ', source.SourceDocID, N' page ', source.SourcePage,
+                    N' version ', source.SourceVersion), 'deterministic-seed',SYSUTCDATETIME());
         """,
         """
         MERGE dbo.KnowledgeGraphEdge AS target
@@ -261,10 +269,12 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
                    AND target.SourcePage=source.SourcePage
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
-              SourceVersion,Department,Site,SecurityLevel,ReviewedBy,ReviewedAt)
+              SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
              VALUES(source.SourceNodeID,source.TargetNodeID,source.RelationType,'deterministic','approved',1,
                     source.SourceDocID,source.SourcePage,source.SourceVersion,source.Department,source.Site,
-                    source.SecurityLevel,'deterministic-seed',SYSUTCDATETIME());
+                    source.SecurityLevel,CONCAT(N'Approved deterministic relation ', source.RelationType,
+                    N' from DocID ', source.SourceDocID, N' page ', source.SourcePage,
+                    N' version ', source.SourceVersion), 'deterministic-seed',SYSUTCDATETIME());
         """,
         """
         UPDATE edge
