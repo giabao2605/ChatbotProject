@@ -392,6 +392,23 @@ def test_grounded_calculation_renderer_emits_verified_formula_and_citation():
     ) == "result_or_unit"
 
 
+@pytest.mark.parametrize("language", ["vi", "en"])
+def test_grounded_calculation_validator_rejects_numeric_prefix_result(language):
+    plan = CalculationPlan(
+        "add",
+        (
+            fact("2", "", "BOM-1", label="PART-A", page=3),
+            fact("5", "", "BOM-2", label="PART-B", page=3),
+        ),
+    )
+    docs = [calculation_doc(make_calculation_provenance(plan, derive_claim(plan)))]
+    answer = render_grounded_calculation_answer(docs, language=language)
+
+    assert validate_grounded_calculation_answer(answer, docs) is None
+    tampered = answer.replace(": 7;", ": 70;", 1)
+    assert validate_grounded_calculation_answer(tampered, docs) == "result_or_unit"
+
+
 @pytest.mark.parametrize(
     ("field", "tampered"),
     [

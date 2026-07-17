@@ -19,6 +19,67 @@ _PAIR_FIELDS = (
     "execution_context",
 )
 
+_REQUIRED_ROLLBACK_FLAGS = frozenset({
+    "RAG_CLAIM_REPAIR_ENABLED",
+    "RAG_CRAG_ENABLED",
+    "RAG_GRAPH_RETRIEVAL_ENABLED",
+    "RAG_GROUNDED_MATH_ENABLED",
+    "RAG_QUERY_DECOMPOSITION_ENABLED",
+})
+
+
+def _flags(value) -> frozenset[str] | None:
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return None
+    if not all(isinstance(flag, str) and flag for flag in value):
+        return None
+    return frozenset(value)
+
+
+def _rollback_verified(rollback: dict, *, expected_git_sha: str) -> bool:
+    rollback_flags = _flags(rollback.get("flags"))
+    if (
+        rollback.get("schema") != "feature-rollback-verification-v1"
+        or rollback.get("passed") is not True
+        or rollback.get("git_sha") != expected_git_sha
+        or rollback_flags != _REQUIRED_ROLLBACK_FLAGS
+    ):
+        return False
+    references = rollback.get("source_artifacts") or []
+    if not references:
+        return False
+    source_flags: set[str] = set()
+    for reference in references:
+        try:
+            path = Path(reference["path"])
+            payload = path.read_bytes()
+            artifact = json.loads(payload.decode("utf-8"))
+        except (
+            KeyError,
+            TypeError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
+            return False
+        if not isinstance(artifact, dict) or not isinstance(reference, dict):
+            return False
+        artifact_flags = _flags(artifact.get("flags"))
+        reference_flags = _flags(reference.get("flags"))
+        if (
+            artifact_flags is None
+            or hashlib.sha256(payload).hexdigest() != reference.get("sha256")
+            or reference.get("schema") != "rollback-test-evidence-v1"
+            or reference.get("git_sha") != expected_git_sha
+            or reference_flags != artifact_flags
+            or artifact.get("schema") != "rollback-test-evidence-v1"
+            or artifact.get("git_sha") != expected_git_sha
+            or artifact.get("passed") is not True
+        ):
+            return False
+        source_flags.update(artifact_flags)
+    return source_flags == _REQUIRED_ROLLBACK_FLAGS
+
 
 def _ratio(candidate: float, baseline: float) -> float:
     if baseline == 0:
@@ -104,9 +165,9 @@ def compare_failure_family_pair(
             float(candidate.get("total_estimated_cost") or 0),
             float(baseline.get("total_estimated_cost") or 0),
         ) <= max_cost_ratio,
-        "rollback_verified": (
-            rollback.get("schema") == "feature-rollback-verification-v1"
-            and rollback.get("passed") is True
+        "rollback_verified": _rollback_verified(
+            rollback,
+            expected_git_sha=str(baseline.get("git_sha") or ""),
         ),
     }
     safety_or_quality_checks = (

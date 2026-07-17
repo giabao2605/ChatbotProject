@@ -21,15 +21,15 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
-def _source_row_id(raw_row: dict) -> str:
-    payload = raw_row.get("RawRowJson")
+def _structured_row(raw_row: dict, *, payload_key: str) -> dict:
+    payload = raw_row.get(payload_key)
     if not payload:
-        return ""
+        return {}
     try:
-        value = json.loads(payload).get("source_row_id")
+        value = json.loads(payload)
     except (TypeError, ValueError, json.JSONDecodeError):
-        return ""
-    return str(value or "").strip()
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def build_repair_plan(records, existing_rows) -> dict:
@@ -38,15 +38,30 @@ def build_repair_plan(records, existing_rows) -> dict:
         raise ValueError("every extracted BOM row must have a source_row_id")
     if len(set(source_row_ids)) != len(source_row_ids):
         raise ValueError("extracted BOM source_row_id values must be unique")
-    existing_source_row_ids = [_source_row_id(row) for row in existing_rows]
+    extracted_by_id = {}
+    for source_row_id, record in zip(source_row_ids, records):
+        structured = _structured_row(record, payload_key="raw_row_json")
+        if str(structured.get("source_row_id") or "").strip() != source_row_id:
+            raise ValueError("extracted BOM row lacks matching raw provenance")
+        extracted_by_id[source_row_id] = structured
+    existing_by_id = {}
+    for row in existing_rows:
+        structured = _structured_row(row, payload_key="RawRowJson")
+        source_row_id = str(structured.get("source_row_id") or "").strip()
+        if source_row_id in existing_by_id:
+            raise ValueError("existing BOM source_row_id values must be unique")
+        existing_by_id[source_row_id] = structured
+    existing_source_row_ids = list(existing_by_id)
     if any(not value for value in existing_source_row_ids):
         raise ValueError("existing BOM rows lack source row provenance")
     if not existing_source_row_ids:
         action = "insert"
-    elif set(existing_source_row_ids) == set(source_row_ids) and len(existing_source_row_ids) == len(source_row_ids):
-        action = "already_present"
-    else:
+    elif set(existing_source_row_ids) != set(source_row_ids):
         raise ValueError("existing BOM rows differ from extracted source rows")
+    elif existing_by_id != extracted_by_id:
+        raise ValueError("existing BOM row content differs from extracted source rows")
+    else:
+        action = "already_present"
     return {
         "action": action,
         "source_row_ids": source_row_ids,
