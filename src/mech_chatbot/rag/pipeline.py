@@ -57,6 +57,7 @@ from mech_chatbot.rag.context_builders import (  # noqa: F401
     build_common_metadata_context,
     format_docs,
     hydrate_parent_context,
+    parent_context_max_workers,
 )
 
 # owned names tu cac module con (bao gom ca ten _underscore qua __all__)
@@ -72,6 +73,7 @@ from mech_chatbot.rag.answer_policy import (
     decide_terminal_policy,
     has_explicit_negative_evidence,
     explicit_negative_evidence_quote,
+    source_id_for_evidence_quote,
 )
 from mech_chatbot.rag.corrective import (
     correction_enabled,
@@ -1392,7 +1394,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             )
 
         t_parent_context = time.time()
-        real_docs = hydrate_parent_context(real_docs)
+        parent_workers = parent_context_max_workers()
+        real_docs = hydrate_parent_context(real_docs, max_workers=parent_workers)
         if graph_docs:
             from mech_chatbot.rag.graph_retrieval import attach_served_graph_context
             real_docs, served_graph_docs = attach_served_graph_context(real_docs, graph_docs)
@@ -1401,6 +1404,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             trace_id,
             latency_ms=int((time.time() - t_parent_context) * 1000),
             sections=len(real_docs),
+            max_workers=parent_workers,
         )
         retrieved_docs = fake_docs + real_docs
 
@@ -1523,13 +1527,22 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         _refusal_debug["graph_max_hops"] = graph_max_hops
         return refusal_stream(), ref_text, ref_images, new_part_ids, _refusal_debug
 
+    explicit_negative_quote = (
+        evidence_quotes[0]
+        if answer_policy.reason == "explicit_negative_evidence" and evidence_quotes
+        else ""
+    )
+    explicit_negative_source_id = source_id_for_evidence_quote(
+        explicit_negative_quote, citation_docs
+    )
+
     generation_metrics = {
         "estimated_cost": correction_estimated_cost + planner_estimated_cost,
         "input_tokens": auxiliary_input_tokens,
         "output_tokens": auxiliary_output_tokens,
         "provider_retries": int(auxiliary_retry_counter["count"]),
     }
-    final_generation_count = 1
+    final_generation_count = 0 if explicit_negative_quote else 1
     stream = _generate(
         context_text=context_text,
         user_question=user_question,
@@ -1549,6 +1562,8 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         _active_filter=(active_filter if "active_filter" in locals() else None),
         cancel_event=cancel_event,
         metrics=generation_metrics,
+        explicit_negative_quote=explicit_negative_quote,
+        explicit_negative_source_id=explicit_negative_source_id,
     )
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)

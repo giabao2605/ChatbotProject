@@ -95,6 +95,41 @@ def explicit_negative_evidence_quote(question: str, context_text: str) -> str:
     return ""
 
 
+def render_explicit_negative_answer(
+    quote: str,
+    *,
+    source_id: str = "",
+    language: str = "vi",
+) -> str:
+    """Render direct negative evidence without another provider round trip."""
+    statement = str(quote or "").strip()[:500]
+    citation = f" [SRC:{source_id.strip().upper()}]" if source_id else ""
+    if str(language or "vi").strip().casefold().startswith("en"):
+        return f"The document states directly: “{statement}”{citation}"
+    return f"Theo tài liệu, thông tin được nêu rõ: “{statement}”{citation}"
+
+
+def source_id_for_evidence_quote(quote: str, documents) -> str:
+    """Resolve a citation only when the exact governed document contains the quote."""
+    target = str(quote or "").strip()
+    if not target:
+        return ""
+    for document in documents or []:
+        metadata = getattr(document, "metadata", {}) or {}
+        content = str(
+            metadata.get("noi_dung_goc")
+            or getattr(document, "page_content", "")
+            or ""
+        )
+        if target not in content:
+            continue
+        doc_id = metadata.get("doc_id")
+        page_no = metadata.get("trang_so") or metadata.get("page_no")
+        if doc_id is not None and page_no is not None:
+            return f"D{doc_id}P{page_no}"
+    return ""
+
+
 def decide_answer_policy(
     question: str,
     evidence: PolicyEvidence,
@@ -209,4 +244,6 @@ __all__ = [
     "decide_terminal_policy",
     "has_explicit_negative_evidence",
     "explicit_negative_evidence_quote",
+    "render_explicit_negative_answer",
+    "source_id_for_evidence_quote",
 ]

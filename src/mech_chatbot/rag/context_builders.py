@@ -6,6 +6,7 @@ Chi phu thuoc logger + cac lazy import (repository, json, datetime) BEN TRONG ha
 nen moi cho goi cu + tests van chay.
 """
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from mech_chatbot.config.logging import logger
 
@@ -400,7 +401,44 @@ def _load_parent_section_chunks(parent_key, limit, selected_metadata):
         return []
 
 
-def hydrate_parent_context(documents, max_sections=None, max_chunks_per_section=None):
+def parent_context_max_workers(value=None):
+    """Return the bounded worker count used for parent-section hydration."""
+    raw = value if value is not None else os.getenv("PARENT_CONTEXT_MAX_WORKERS", "4")
+    try:
+        return max(1, min(16, int(raw)))
+    except (TypeError, ValueError):
+        return 4
+
+
+def _render_parent_context(selected, children):
+    if len(children) <= 1:
+        return selected
+    try:
+        from langchain_core.documents import Document
+
+        parent_text = "\n\n".join(
+            str(
+                (child.metadata or {}).get("noi_dung_goc")
+                or child.page_content
+                or ""
+            ).strip()
+            for child in children
+        ).strip()
+        parent_metadata = dict(getattr(selected, "metadata", {}) or {})
+        parent_metadata["noi_dung_goc"] = parent_text
+        parent_metadata["parent_context_hydrated"] = True
+        parent_metadata["parent_context_chunk_count"] = len(children)
+        return Document(page_content=parent_text, metadata=parent_metadata)
+    except Exception:
+        return selected
+
+
+def hydrate_parent_context(
+    documents,
+    max_sections=None,
+    max_chunks_per_section=None,
+    max_workers=None,
+):
     """Replace selected child chunks with bounded parent section/page context.
 
     Retrieval remains chunk-level for precision.  Only after reranking do we
@@ -415,40 +453,53 @@ def hydrate_parent_context(documents, max_sections=None, max_chunks_per_section=
         1,
         int(max_chunks_per_section or os.getenv("PARENT_CONTEXT_MAX_CHUNKS", "6")),
     )
-    hydrated = []
+    max_workers = parent_context_max_workers(max_workers)
+    selected_parents = []
     seen = set()
     for selected in docs:
         metadata = getattr(selected, "metadata", {}) or {}
         if metadata.get("parent_context_enabled") is False:
-            hydrated.append(selected)
+            selected_parents.append((selected, None, metadata))
             continue
         parent_key = _parent_context_key(selected)
         if parent_key is None or parent_key in seen or len(seen) >= max_sections:
             if parent_key is None:
-                hydrated.append(selected)
+                selected_parents.append((selected, None, metadata))
             continue
         seen.add(parent_key)
-        children = _load_parent_section_chunks(
-            parent_key,
-            max_chunks_per_section,
-            metadata,
-        )
-        if len(children) <= 1:
-            hydrated.append(selected)
-            continue
-        try:
-            from langchain_core.documents import Document
-            parent_text = "\n\n".join(
-                str((child.metadata or {}).get("noi_dung_goc") or child.page_content or "").strip()
-                for child in children
-            ).strip()
-            parent_metadata = dict(metadata)
-            parent_metadata["noi_dung_goc"] = parent_text
-            parent_metadata["parent_context_hydrated"] = True
-            parent_metadata["parent_context_chunk_count"] = len(children)
-            hydrated.append(Document(page_content=parent_text, metadata=parent_metadata))
-        except Exception:
-            hydrated.append(selected)
+        selected_parents.append((selected, parent_key, metadata))
+
+    loadable = [item for item in selected_parents if item[1] is not None]
+    loaded_by_key = {}
+    if loadable:
+        if max_workers == 1 or len(loadable) == 1:
+            for _selected, parent_key, metadata in loadable:
+                loaded_by_key[parent_key] = _load_parent_section_chunks(
+                    parent_key, max_chunks_per_section, metadata
+                )
+        else:
+            with ThreadPoolExecutor(
+                max_workers=min(max_workers, len(loadable)),
+                thread_name_prefix="parent-context",
+            ) as executor:
+                futures = {
+                    parent_key: executor.submit(
+                        _load_parent_section_chunks,
+                        parent_key,
+                        max_chunks_per_section,
+                        metadata,
+                    )
+                    for _selected, parent_key, metadata in loadable
+                }
+                for parent_key, future in futures.items():
+                    loaded_by_key[parent_key] = future.result()
+
+    hydrated = [
+        selected
+        if parent_key is None
+        else _render_parent_context(selected, loaded_by_key.get(parent_key) or [])
+        for selected, parent_key, _metadata in selected_parents
+    ]
     return hydrated or docs
 
 

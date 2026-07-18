@@ -57,7 +57,14 @@ def _no_network_audit(**_kwargs):
     yield None
 
 
-def _generate(module, *, cancel_event=None, question="Gia tri la bao nhieu?", docs=None):
+def _generate(
+    module,
+    *,
+    cancel_event=None,
+    question="Gia tri la bao nhieu?",
+    docs=None,
+    **overrides,
+):
     docs = docs or [SimpleNamespace(metadata={"doc_id": 7, "security_level": "internal"})]
     return module._generate(
         context_text="Tai lieu chi ghi gia tri 10.",
@@ -75,6 +82,7 @@ def _generate(module, *, cancel_event=None, question="Gia tri la bao nhieu?", do
         base_k=5,
         retrieval_mode="general:explicit_dense_bm25_rrf",
         cancel_event=cancel_event,
+        **overrides,
     )
 
 
@@ -122,6 +130,43 @@ def test_normal_policy_question_does_not_apply_global_numeric_holdback(monkeypat
 
     assert list(_generate(module, question="Quy định hiện hành là gì?")) == ["Quy định là 20."]
     assert seen_strict_values == [False]
+
+
+def test_explicit_negative_evidence_skips_provider_and_claim_repair(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    monkeypatch.setattr(
+        module,
+        "_build_prompt_template",
+        lambda *_args, **_kwargs: pytest.fail("provider chain must not be built"),
+    )
+    trace_events = []
+    monkeypatch.setattr(
+        module,
+        "log_trace",
+        lambda event, _trace_id, **fields: trace_events.append((event, fields)),
+    )
+    docs = [
+        SimpleNamespace(
+            metadata={"doc_id": 73, "trang_so": 3, "security_level": "internal"}
+        )
+    ]
+
+    emitted = list(
+        _generate(
+            module,
+            question="Đơn giá là bao nhiêu?",
+            docs=docs,
+            explicit_negative_quote="Không có trường đơn giá trong BOM này.",
+            explicit_negative_source_id="D73P3",
+        )
+    )
+
+    assert emitted == [
+        "Theo tài liệu, thông tin được nêu rõ: “Không có trường đơn giá "
+        "trong BOM này.” [SRC:D73P3]"
+    ]
+    deterministic = dict(trace_events)["deterministic_generation"]
+    assert deterministic["claim_repair_skipped_reason"] == "explicit_negative_evidence"
 
 
 def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch):

@@ -145,6 +145,7 @@ class Settings(BaseModel):
     STRICT_ANSWER_MODE: bool = True
     STRICT_REALTIME_STREAMING: bool = False
     INTENT_MAX_WORKERS: int = 8
+    PARENT_CONTEXT_MAX_WORKERS: int = 4
     INTENT_TIMEOUT: float = 6.0
     CONTEXT_TIMEOUT: float = 5.0
     HISTORY_BUDGET: int = 4000
@@ -235,6 +236,7 @@ class Settings(BaseModel):
             STRICT_ANSWER_MODE=_bool("STRICT_ANSWER_MODE", True, _TRUTHY_5),
             STRICT_REALTIME_STREAMING=_bool("STRICT_REALTIME_STREAMING", False, _TRUTHY_5),
             INTENT_MAX_WORKERS=_int("INTENT_MAX_WORKERS", 8),
+            PARENT_CONTEXT_MAX_WORKERS=_int("PARENT_CONTEXT_MAX_WORKERS", 4),
             INTENT_TIMEOUT=_float("INTENT_TIMEOUT", 6.0),
             CONTEXT_TIMEOUT=_float("CONTEXT_TIMEOUT", 5.0),
             HISTORY_BUDGET=_int("HISTORY_BUDGET", 4000),

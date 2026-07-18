@@ -284,6 +284,11 @@ Mỗi giai đoạn phải có targeted tests, integration test phù hợp, artif
 
 ## 7. Trạng thái triển khai ngày 2026-07-17
 
+Kế hoạch triển khai bước tiếp theo cho candidate đầu tiên được theo dõi tại
+[`crag-claim-repair-controlled-demo-plan.md`](crag-claim-repair-controlled-demo-plan.md).
+Tài liệu đó tách rõ phần Codex có thể tự thực hiện và phần bắt buộc cần người dùng,
+reviewer hoặc quyết định vận hành.
+
 ### 7.1 Đã hoàn thành ở mức code và fixture deterministic
 
 | Tracer | Implementation evidence | Trạng thái |

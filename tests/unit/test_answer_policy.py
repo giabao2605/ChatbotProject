@@ -9,6 +9,8 @@ from mech_chatbot.rag.answer_policy import (
     decide_terminal_policy,
     has_explicit_negative_evidence,
     explicit_negative_evidence_quote,
+    render_explicit_negative_answer,
+    source_id_for_evidence_quote,
 )
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
 
@@ -79,6 +81,37 @@ def test_negative_evidence_quote_is_preserved_for_audit():
     )
     assert decision.evidence_quotes == (quote,)
     assert "Không có trường đơn giá" in quote
+
+
+def test_explicit_negative_answer_is_deterministic_and_keeps_source_id():
+    answer = render_explicit_negative_answer(
+        "Không có trường đơn giá trong BOM này.",
+        source_id="D73P3",
+        language="vi",
+    )
+
+    assert answer == (
+        "Theo tài liệu, thông tin được nêu rõ: “Không có trường đơn giá "
+        "trong BOM này.” [SRC:D73P3]"
+    )
+
+
+def test_negative_evidence_source_id_comes_from_document_containing_quote():
+    documents = [
+        type("Doc", (), {
+            "page_content": "Quy trình lắp ráp.",
+            "metadata": {"doc_id": 10, "trang_so": 1},
+        })(),
+        type("Doc", (), {
+            "page_content": "Không có trường đơn giá trong BOM này.",
+            "metadata": {"doc_id": 73, "trang_so": 3},
+        })(),
+    ]
+
+    assert source_id_for_evidence_quote(
+        "Không có trường đơn giá trong BOM này.", documents
+    ) == "D73P3"
+    assert source_id_for_evidence_quote("Nội dung không tồn tại.", documents) == ""
 
 
 @pytest.mark.parametrize("context", [

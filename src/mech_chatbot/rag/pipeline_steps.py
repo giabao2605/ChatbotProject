@@ -35,6 +35,7 @@ from mech_chatbot.rag.evidence_gate import (
     make_insufficient_evidence_message,
 )
 from mech_chatbot.rag.claim_repair import claim_repair_enabled, repair_grounded_answer
+from mech_chatbot.rag.answer_policy import render_explicit_negative_answer
 from mech_chatbot.rag.grounded_math import (
     render_grounded_calculation_answer,
     validate_grounded_calculation_answer,
@@ -420,7 +421,8 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                new_part_ids, response_language, trace_id, t_start,
                user_department, user_roles, effective_question, intent_data,
                base_k, retrieval_mode, _has_active_filter=False, _active_filter=None,
-               cancel_event=None, metrics=None):
+               cancel_event=None, metrics=None, explicit_negative_quote="",
+               explicit_negative_source_id=""):
     """BUOC C/D: sinh cau tra loi streaming (guarded_stream / normal_stream).
     Tra ve stream. Tach nguyen van tu chat_with_rag (P0 slice #4).
     active_filter bind co dieu kien de bao toan ngu nghia locals() nhu ban goc.
@@ -433,6 +435,37 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
     metrics.setdefault("estimated_cost", 0.0)
     metrics.setdefault("provider_retries", 0)
     metrics.setdefault("repair_count", 0)
+    if explicit_negative_quote:
+        answer = render_explicit_negative_answer(
+            explicit_negative_quote,
+            source_id=explicit_negative_source_id,
+            language=response_language,
+        )
+        metrics["output_tokens"] += len(answer) // 4
+        metrics["repair_count"] = 0
+
+        def explicit_negative_stream():
+            if cancel_event is not None and cancel_event.is_set():
+                raise ExternalAICallCancelled("RAG stream da bi client huy")
+            yield answer
+            log_trace(
+                "deterministic_generation",
+                trace_id,
+                latency_ms=0,
+                reason="explicit_negative_evidence",
+                claim_repair_skipped_reason="explicit_negative_evidence",
+                output_tokens=len(answer) // 4,
+            )
+            log_trace(
+                "rag_end",
+                trace_id,
+                final_latency_ms=int((time.time() - t_start) * 1000),
+                refusal=False,
+                docs_count=len(retrieved_docs),
+                doc_ids=[document.metadata.get("doc_id") for document in retrieved_docs],
+            )
+
+        return explicit_negative_stream()
     calculation_docs = [
         document for document in retrieved_docs
         if isinstance((getattr(document, "metadata", {}) or {}).get("calculation_provenance"), dict)
