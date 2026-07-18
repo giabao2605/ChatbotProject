@@ -552,6 +552,29 @@ def test_provider_smoke_requires_five_clean_requests_and_records_no_prompt():
     assert {call["surface"] for call in calls} == {"generation"}
 
 
+def test_provider_smoke_unwraps_retry_error_without_persisting_raw_message():
+    class LastAttempt:
+        @staticmethod
+        def exception():
+            return RuntimeError("503 service_unavailable no_capacity secret-detail")
+
+    class FakeRetryError(Exception):
+        last_attempt = LastAttempt()
+
+    def invoke(_messages, **kwargs):
+        kwargs["retry_counter"]["count"] = 3
+        raise FakeRetryError("opaque retry wrapper")
+
+    artifact = run_provider_smoke(invoke, request_count=5)
+
+    assert artifact["passed"] is False
+    assert artifact["provider_outcome"]["decision"] == "inconclusive"
+    assert artifact["root_error_types"] == ["RuntimeError"] * 5
+    assert artifact["status_codes"] == [503] * 5
+    assert artifact["error_categories"] == ["capacity"] * 5
+    assert "secret-detail" not in json.dumps(artifact)
+
+
 def test_demo_readiness_is_separate_from_live_readiness():
     reports = {
         name: {

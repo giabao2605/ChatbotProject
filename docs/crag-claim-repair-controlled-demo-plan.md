@@ -27,7 +27,7 @@ Do chỉ có `bao.nguyen` làm reviewer, kết luận cuối của lần chạy 
 | Regression/targeted/full tests | Codex | Đã đạt ngày 2026-07-18 | Full pytest đạt; các integration test cần live SQL/Qdrant/RAG được skip đúng opt-in |
 | Self-review hai trục Standards/Spec | Codex | Đã đạt ngày 2026-07-18 | Hai review độc lập xác nhận không còn finding actionable |
 | Rollback CRAG + Claim Repair | Codex | Đã đạt trên commit sạch | Hai flag false, targeted rollback 2/2 test đạt |
-| Provider smoke đầu/cuối | Codex chạy lệnh; provider phải sẵn sàng | Lần đầu fail ngày 2026-07-18: 0/5, 15 retry | Evidence: `reports/controlled-demo/20260718-crag-controlled-demo-readiness/provider-smoke-before.json`; dừng staging/live eval |
+| Provider smoke đầu/cuối | Codex chạy lệnh; provider phải sẵn sàng | Ba lần đều fail ngày 2026-07-18; diagnostic: 0/5, 15 retry, HTTP 503 capacity | Evidence đúng: `reports/controlled-demo/20260718-crag-controlled-demo-readiness/provider-smoke-diagnostic.json`; quyết định `inconclusive`, dừng staging/live eval |
 | Ba staging baseline/candidate pairs | Codex chạy lệnh; SQL/Qdrant/provider phải sẵn sàng | Chờ provider smoke | Cùng commit/snapshot/manifest/config/concurrency; cả ba gate đạt |
 | Chọn 2–10 tài khoản Technical/HQ và xác nhận được phép tham gia | Con người | Chưa làm | Có cohort hash; không ghi username vào artifact |
 | Xác nhận snapshot `TaiLieuKyThuat_v2` không đổi trong ba ngày | Con người vận hành | Chưa làm | Điền snapshot fingerprint vào config trước khi start |
@@ -52,6 +52,11 @@ Do chỉ có `bao.nguyen` làm reviewer, kết luận cuối của lần chạy 
    hiện có 18 case trong khi milestone yêu cầu 20, nên kết quả này vẫn có ceiling
    `inconclusive`; không tạo case giả để vượt gate.
 7. Chạy provider smoke lần hai và xác nhận hash cấu hình giống lần một.
+
+Provider smoke tooling đã được sửa để unwrap exception cuối từ Tenacity nhưng chỉ
+lưu root exception type, HTTP status và error category. Nhờ đó lỗi capacity 503
+không còn bị phân loại nhầm thành `non_capacity_failure`, đồng thời artifact vẫn
+không chứa raw error message, prompt, response hoặc secret.
 
 ## Các bước bắt buộc con người làm
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import statistics
 import sys
 import time
@@ -24,6 +25,43 @@ _SMOKE_MESSAGES = [
     ("system", "Return only the word OK."),
     ("human", "Provider readiness probe."),
 ]
+
+
+def _root_exception(exc: Exception) -> Exception:
+    last_attempt = getattr(exc, "last_attempt", None)
+    exception = getattr(last_attempt, "exception", None)
+    if callable(exception):
+        root = exception()
+        if isinstance(root, Exception):
+            return root
+    return exc
+
+
+def _status_code(exc: Exception) -> int | None:
+    direct = getattr(exc, "status_code", None)
+    try:
+        if direct is not None:
+            return int(direct)
+    except (TypeError, ValueError):
+        pass
+    match = re.search(r"\b([1-5]\d\d)\b", str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _error_category(exc: Exception) -> str:
+    message = str(exc).casefold()
+    status = _status_code(exc)
+    if "no_capacity" in message or (
+        status == 503 and "service_unavailable" in message
+    ):
+        return "capacity"
+    if status in {401, 403}:
+        return "authentication_or_authorization"
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    if status is not None:
+        return "http_error"
+    return "other"
 
 
 def resolve_provider_configuration() -> dict:
@@ -59,6 +97,9 @@ def run_provider_smoke(invoke, *, request_count: int = 5) -> dict:
     latencies = []
     errors = []
     error_types = []
+    root_error_types = []
+    status_codes = []
+    error_categories = []
     retry_total = 0
     successful = 0
     started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -76,8 +117,12 @@ def run_provider_smoke(invoke, *, request_count: int = 5) -> dict:
             )
             successful += 1
         except Exception as exc:  # the artifact stores only the class/category
-            errors.append(str(exc))
+            root = _root_exception(exc)
+            errors.append(str(root))
             error_types.append(type(exc).__name__)
+            root_error_types.append(type(root).__name__)
+            status_codes.append(_status_code(root))
+            error_categories.append(_error_category(root))
         finally:
             retry_total += int(retry_counter.get("count") or 0)
             latencies.append((time.perf_counter() - started) * 1000)
@@ -94,6 +139,9 @@ def run_provider_smoke(invoke, *, request_count: int = 5) -> dict:
         "latency_p50_ms": statistics.median(latencies) if latencies else 0.0,
         "latency_p95_ms": _percentile(latencies, 0.95),
         "error_types": error_types,
+        "root_error_types": root_error_types,
+        "status_codes": status_codes,
+        "error_categories": error_categories,
         "provider_outcome": provider_outcome,
         "passed": passed,
     }
