@@ -705,6 +705,78 @@ def test_rollout_provider_router_mode_preserves_explicit_router_configuration(mo
     assert env["RAG_EVAL_ROUTER_MODE"] == "provider"
 
 
+def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
+    monkeypatch, tmp_path
+):
+    rollout = _load("crag_rollout_provider_hash", "scripts/crag_eval/run_rollout.py")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "rollout"
+
+    monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+    monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
+    monkeypatch.setattr(
+        rollout,
+        "provider_configuration_sha256",
+        lambda: "runtime-resolved-provider-sha",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        rollout.subprocess,
+        "check_output",
+        lambda *args, **kwargs: "abc123\n",
+    )
+
+    def fake_arm(label, *args, **kwargs):
+        run_dir = output / label
+        run_dir.mkdir(parents=True)
+        (run_dir / "eval.json").write_text(
+            json.dumps({"schema": "rag-labeled-eval-v4", "arm": label}),
+            encoding="utf-8",
+        )
+        (run_dir / "trace.json").write_text(
+            json.dumps({"schema": "rag-refusal-snapshot-v1", "arm": label}),
+            encoding="utf-8",
+        )
+        (run_dir / "preflight.json").write_text(
+            json.dumps({"fixture_fingerprint": "fixture-sha"}),
+            encoding="utf-8",
+        )
+        return {
+            "label": label,
+            "started_at": "2026-07-18T00:00:00Z",
+            "completed_at": "2026-07-18T00:01:00Z",
+            "runner_exit": 0,
+        }
+
+    def fake_subprocess_run(command, **kwargs):
+        gate_path = Path(command[command.index("--output") + 1])
+        gate_path.write_text(
+            json.dumps({"schema": "crag-rollout-gate-v1", "passed": True}),
+            encoding="utf-8",
+        )
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(rollout, "_run", fake_arm)
+    monkeypatch.setattr(rollout.subprocess, "run", fake_subprocess_run)
+    from mech_chatbot.evaluation import rollout_guardrails
+
+    monkeypatch.setattr(
+        rollout_guardrails,
+        "evaluate_rollout_pair",
+        lambda pair: {"production_eligible": True, "checks": {}},
+    )
+
+    report = rollout.run_rollout(manifest, output, trace)
+
+    assert (
+        report["provider_configuration_sha256"]
+        == "runtime-resolved-provider-sha"
+    )
+
+
 def test_rollout_rejects_dirty_tracked_worktree(monkeypatch):
     rollout = _load("crag_rollout_clean_tree", "scripts/crag_eval/run_rollout.py")
     monkeypatch.setattr(

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.crag_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN
+from scripts.eval.provider_smoke import provider_configuration_sha256
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -221,14 +222,7 @@ def run_rollout(
             raise ValueError(f"refusing to overwrite non-empty run directory: {run_dir}")
     git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest_sha = _sha(manifest)
-    provider_config = {
-        key: os.getenv(key)
-        for key in ("GPT_MODEL_NAME", "OPENAI_BASE_URL", "MAX_CONCURRENT_RAG")
-        if os.getenv(key)
-    }
-    provider_config_sha = hashlib.sha256(
-        json.dumps(provider_config, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    provider_config_sha = provider_configuration_sha256()
     governance_sha = governance_scope_sha256(manifest)
     baseline = _run(
         "baseline", manifest, output, trace, enabled=False, router_mode=router_mode,
