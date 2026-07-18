@@ -42,7 +42,6 @@ from mech_chatbot.rag.answer_checks import (  # noqa: F401
     has_unsupported_codes,
     requires_source_citation,
     has_required_source_citation,
-    source_id_for_evidence_quote,
 )
 from mech_chatbot.rag.glossary_expand import (  # noqa: F401
     _GLOSSARY_TTL,
@@ -74,7 +73,7 @@ from mech_chatbot.rag.answer_policy import (
     decide_terminal_policy,
     has_explicit_negative_evidence,
     explicit_negative_evidence_quote,
-    render_explicit_negative_answer,
+    render_cited_explicit_negative_answer,
 )
 from mech_chatbot.rag.corrective import (
     correction_enabled,
@@ -1533,17 +1532,10 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         if answer_policy.reason == "explicit_negative_evidence" and evidence_quotes
         else ""
     )
-    explicit_negative_source_id = source_id_for_evidence_quote(
-        explicit_negative_quote, retrieved_docs
-    )
-    deterministic_answer = (
-        render_explicit_negative_answer(
-            explicit_negative_quote,
-            source_id=explicit_negative_source_id,
-            language=response_language,
-        )
-        if explicit_negative_quote
-        else ""
+    explicit_negative_answer = render_cited_explicit_negative_answer(
+        explicit_negative_quote,
+        retrieved_docs,
+        language=response_language,
     )
 
     generation_metrics = {
@@ -1552,7 +1544,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         "output_tokens": auxiliary_output_tokens,
         "provider_retries": int(auxiliary_retry_counter["count"]),
     }
-    final_generation_count = 0 if explicit_negative_quote else 1
+    final_generation_count = 0 if explicit_negative_answer else 1
     stream = _generate(
         context_text=context_text,
         user_question=user_question,
@@ -1572,7 +1564,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         _active_filter=(active_filter if "active_filter" in locals() else None),
         cancel_event=cancel_event,
         metrics=generation_metrics,
-        deterministic_answer=deterministic_answer,
+        explicit_negative_answer=explicit_negative_answer,
     )
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)

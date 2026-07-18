@@ -20,7 +20,7 @@ Do chỉ có `bao.nguyen` làm reviewer, kết luận cuối của lần chạy 
 | Việc | Ai làm | Trạng thái | Điều kiện hoàn tất |
 | --- | --- | --- | --- |
 | Tối ưu parent-context bằng worker pool giới hạn | Codex | Đã làm ở code | Targeted test và full suite đạt; worker `1` giữ đường rollback tuần tự |
-| Bỏ lượt gọi LLM khi có explicit negative evidence | Codex | Đã làm ở code | Câu trả lời deterministic giữ quote/citation; trace ghi lý do bỏ qua Claim Repair |
+| Bỏ lượt gọi LLM khi có explicit negative evidence | Codex | Đã làm ở code | Chỉ dùng deterministic khi resolve được SourceID; nếu không thì fallback generation an toàn |
 | CLI phân tích latency từ raw trace | Codex | Đã làm ở code | Artifact `crag-latency-breakdown-v1` chỉ có trace ID đã hash và số latency |
 | CLI tạo cohort hash | Codex | Đã làm ở code | Input user ID chỉ đọc local; output không chứa raw identity hoặc secret |
 | Script start/enable/status/stop control, candidate và gateway | Codex | Đã làm ở code | Start chỉ mở hai arm và tạo preflight; enable gateway là lệnh riêng sau phê duyệt |

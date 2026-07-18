@@ -109,6 +109,25 @@ def render_explicit_negative_answer(
     return f"Theo tài liệu, thông tin được nêu rõ: “{statement}”{citation}"
 
 
+def render_cited_explicit_negative_answer(
+    quote: str,
+    documents,
+    *,
+    language: str = "vi",
+) -> str:
+    """Fail closed to normal generation when the evidence source is unresolved."""
+    from mech_chatbot.rag.answer_checks import source_id_for_evidence_quote
+
+    source_id = source_id_for_evidence_quote(quote, documents)
+    if not source_id:
+        return ""
+    return render_explicit_negative_answer(
+        quote,
+        source_id=source_id,
+        language=language,
+    )
+
+
 def decide_answer_policy(
     question: str,
     evidence: PolicyEvidence,
@@ -224,4 +243,5 @@ __all__ = [
     "has_explicit_negative_evidence",
     "explicit_negative_evidence_quote",
     "render_explicit_negative_answer",
+    "render_cited_explicit_negative_answer",
 ]

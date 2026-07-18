@@ -10,6 +10,7 @@ from mech_chatbot.rag.answer_policy import (
     has_explicit_negative_evidence,
     explicit_negative_evidence_quote,
     render_explicit_negative_answer,
+    render_cited_explicit_negative_answer,
 )
 from mech_chatbot.rag.answer_checks import source_id_for_evidence_quote
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
@@ -112,6 +113,19 @@ def test_negative_evidence_source_id_comes_from_document_containing_quote():
         "Không có trường đơn giá trong BOM này.", documents
     ) == "D73P3"
     assert source_id_for_evidence_quote("Nội dung không tồn tại.", documents) == ""
+
+
+def test_cited_negative_answer_falls_back_when_source_cannot_be_resolved():
+    documents = [
+        type("Doc", (), {
+            "page_content": "Quy trình lắp ráp.",
+            "metadata": {"doc_id": 10, "trang_so": 1},
+        })(),
+    ]
+
+    assert render_cited_explicit_negative_answer(
+        "Không có trường đơn giá.", documents
+    ) == ""
 
 
 @pytest.mark.parametrize("context", [

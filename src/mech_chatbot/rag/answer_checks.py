@@ -173,6 +173,15 @@ def extract_source_ids(value):
     return {match.upper() for match in matches}
 
 
+def _canonical_source_id(metadata):
+    try:
+        doc_id = int(metadata.get("doc_id"))
+        page_no = int(metadata.get("trang_so") or metadata.get("page_no"))
+    except (AttributeError, TypeError, ValueError):
+        return ""
+    return f"D{doc_id}P{page_no}" if page_no > 0 else ""
+
+
 def source_id_for_evidence_quote(quote, documents):
     """Resolve a SourceID only from the document containing the exact quote."""
     target = str(quote or "").strip()
@@ -187,10 +196,9 @@ def source_id_for_evidence_quote(quote, documents):
         )
         if target not in content:
             continue
-        doc_id = metadata.get("doc_id")
-        page_no = metadata.get("trang_so") or metadata.get("page_no")
-        if doc_id is not None and page_no is not None:
-            return f"D{doc_id}P{page_no}"
+        source_id = _canonical_source_id(metadata)
+        if source_id:
+            return source_id
     return ""
 
 
@@ -202,11 +210,7 @@ def has_valid_source_citation(answer, documents, require_version=True):
     expected = set()
     for document in documents or []:
         metadata = getattr(document, "metadata", {}) or {}
-        try:
-            doc_id = int(metadata.get("doc_id"))
-            page_no = int(metadata.get("trang_so"))
-        except (TypeError, ValueError):
-            continue
-        if page_no > 0:
-            expected.add(f"D{doc_id}P{page_no}")
+        source_id = _canonical_source_id(metadata)
+        if source_id:
+            expected.add(source_id)
     return bool(cited and expected and cited.issubset(expected))

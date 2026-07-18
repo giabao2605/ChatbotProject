@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $PSScriptRoot "crag_controlled_demo_common.ps1")
 $pythonExe = Join-Path $projectRoot "chat_env\Scripts\python.exe"
 $stateDir = Join-Path $projectRoot ".agents\state"
 $statePath = Join-Path $stateDir "crag-controlled-demo.json"
@@ -91,24 +92,6 @@ function Start-DemoProcess {
     }
 }
 
-function Wait-HttpHealth {
-    param(
-        [string]$Url,
-        [int]$Attempts,
-        [string]$FailureMessage
-    )
-    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-        try {
-            $health = Invoke-RestMethod -Uri $Url -TimeoutSec 5
-            if ($health.status -eq "ok") { return }
-        }
-        catch {
-        }
-        if ($attempt -eq $Attempts) { throw $FailureMessage }
-        Start-Sleep -Seconds 2
-    }
-}
-
 $common = @{
     RAG_DEPLOYMENT_GIT_SHA = [string]$demoConfig.git_sha
     RAG_SNAPSHOT_FINGERPRINT = [string]$demoConfig.snapshot_fingerprint
@@ -142,8 +125,8 @@ try {
 
     $controlUrl = ([string]$demoConfig.deployment_urls.control).TrimEnd('/')
     $candidateUrl = ([string]$demoConfig.deployment_urls.candidate).TrimEnd('/')
-    Wait-HttpHealth "$controlUrl/health" 60 "Control RAG deployment khong healthy."
-    Wait-HttpHealth "$candidateUrl/health" 60 "Candidate RAG deployment khong healthy."
+    Wait-CragDemoHttpHealth "$controlUrl/health" 60 "Control RAG deployment khong healthy."
+    Wait-CragDemoHttpHealth "$candidateUrl/health" 60 "Candidate RAG deployment khong healthy."
 
     $preflightPath = Join-Path (Split-Path -Parent $configPath) "deployment-preflight.json"
     & $pythonExe -m scripts.eval.crag_pilot_preflight `
@@ -155,7 +138,9 @@ try {
     @{
         schema = "crag-controlled-demo-process-state-v1"
         config = $configPath
+        config_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $configPath).Hash.ToLowerInvariant()
         preflight = $preflightPath
+        preflight_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $preflightPath).Hash.ToLowerInvariant()
         gateway_enabled = $false
         processes = $started
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding utf8

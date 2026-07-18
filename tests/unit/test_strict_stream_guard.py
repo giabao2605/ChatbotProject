@@ -156,7 +156,7 @@ def test_explicit_negative_evidence_skips_provider_and_claim_repair(monkeypatch)
             module,
             question="Đơn giá là bao nhiêu?",
             docs=docs,
-            deterministic_answer=(
+            explicit_negative_answer=(
                 "Theo tài liệu, thông tin được nêu rõ: “Không có trường đơn giá "
                 "trong BOM này.” [SRC:D73P3]"
             ),
