@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import asyncio
 import hashlib
 import importlib.util
 import json
@@ -192,6 +193,56 @@ def test_adjudication_sampling_is_complete_for_risk_cases_and_stable_for_normal_
     assert first == second
 
 
+def _latency_breakdown(
+    *, arm, window, git_sha, trace_sha256, latency_ms, estimated_cost
+):
+    traces = [
+        {
+            "trace_id_sha256": hashlib.sha256(
+                f"{arm}|{window['start_at']}|{index}".encode("utf-8")
+            ).hexdigest(),
+            "stages_ms": {"total": latency_ms},
+            "estimated_cost": estimated_cost,
+        }
+        for index in range(50)
+    ]
+    return {
+        "schema": "crag-latency-breakdown-v1",
+        "source": {"sha256": trace_sha256, "git_sha": git_sha},
+        "filters": {
+            "start": window["start_at"],
+            "end": window["end_at"],
+            "execution_contexts": ["pilot_replay", "production"],
+        },
+        "query_count": 50,
+        "parse_errors": 0,
+        "estimated_cost": estimated_cost * 50,
+        "stage_summary": {
+            "total": {
+                "sample_count": 50,
+                "latency_p50_ms": latency_ms,
+                "latency_p95_ms": latency_ms,
+                "latency_max_ms": latency_ms,
+            }
+        },
+        "traces": traces,
+    }
+
+
+def _latency_entry(artifact, file_sha256):
+    canonical = json.dumps(
+        artifact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "artifact": artifact,
+        "file_sha256": file_sha256,
+        "content_sha256": hashlib.sha256(canonical).hexdigest(),
+    }
+
+
 def _pilot_inputs(*, pair_count=100, duration_days=8):
     start = datetime(2026, 7, 1, tzinfo=timezone.utc)
     pairs = []
@@ -263,6 +314,11 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
         "assignment_version": "hmac-sha256-v1",
         "sampling_version": "sha256-25pct-v1",
         "snapshot_fingerprint": "snapshot-v1",
+        "runtime_contract": {
+            "execution_context": "production",
+            "evaluation_force_ambiguous": False,
+            "request_deadline_seconds": 120.0,
+        },
         "deployments": {
             "control": {
                 "id": "control-c155670",
@@ -289,6 +345,11 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
             "passed": True,
             "git_sha": "c155670",
             "snapshot_fingerprint": "snapshot-v1",
+            "runtime_contract": {
+                "execution_context": "production",
+                "evaluation_force_ambiguous": False,
+                "request_deadline_seconds": 120.0,
+            },
             "deployments": {
                 "control": {
                     "id": "control-c155670",
@@ -296,12 +357,22 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
                         "RAG_CRAG_ENABLED": False,
                         "RAG_CLAIM_REPAIR_ENABLED": False,
                     },
+                    "runtime_contract": {
+                        "execution_context": "production",
+                        "evaluation_force_ambiguous": False,
+                        "request_deadline_seconds": 120.0,
+                    },
                 },
                 "candidate": {
                     "id": "candidate-c155670",
                     "feature_flags": {
                         "RAG_CRAG_ENABLED": True,
                         "RAG_CLAIM_REPAIR_ENABLED": True,
+                    },
+                    "runtime_contract": {
+                        "execution_context": "production",
+                        "evaluation_force_ambiguous": False,
+                        "request_deadline_seconds": 120.0,
                     },
                 },
             },
@@ -360,8 +431,8 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
             "eligible_queries": 50,
             "control_p95_ms": 100,
             "candidate_p95_ms": 120,
-            "control_cost": 10,
-            "candidate_cost": 12,
+            "control_cost": 50,
+            "candidate_cost": 60,
             "trace_sha256": "e" * 64,
         },
         {
@@ -371,8 +442,8 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
             "eligible_queries": 50,
             "control_p95_ms": 100,
             "candidate_p95_ms": 120,
-            "control_cost": 10,
-            "candidate_cost": 12,
+            "control_cost": 50,
+            "candidate_cost": 60,
             "trace_sha256": "e" * 64,
         },
         {
@@ -384,6 +455,46 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
             "trace_sha256": "e" * 64,
         },
     ]
+    control_trace_sha256 = "1" * 64
+    candidate_trace_sha256 = "2" * 64
+    performance_windows = [
+        window for window in windows if window["kind"] == "performance"
+    ]
+    latency_file_hashes = {
+        "control": ["3" * 64, "4" * 64],
+        "candidate": ["5" * 64, "6" * 64],
+    }
+    config["latency_breakdowns"] = {
+        "control": [
+            _latency_entry(_latency_breakdown(
+                arm="control",
+                window=window,
+                git_sha=config["git_sha"],
+                trace_sha256=control_trace_sha256,
+                latency_ms=window["control_p95_ms"],
+                estimated_cost=1.0,
+            ), latency_file_hashes["control"][index])
+            for index, window in enumerate(performance_windows)
+        ],
+        "candidate": [
+            _latency_entry(_latency_breakdown(
+                arm="candidate",
+                window=window,
+                git_sha=config["git_sha"],
+                trace_sha256=candidate_trace_sha256,
+                latency_ms=window["candidate_p95_ms"],
+                estimated_cost=1.2,
+            ), latency_file_hashes["candidate"][index])
+            for index, window in enumerate(performance_windows)
+        ],
+    }
+    config["source_artifacts"].update(
+        {
+            "control_trace_sha256": control_trace_sha256,
+            "candidate_trace_sha256": candidate_trace_sha256,
+            "latency_breakdown_sha256s": latency_file_hashes,
+        }
+    )
     return config, pairs, assignments, windows
 
 
@@ -418,6 +529,74 @@ def test_pilot_artifact_accepts_qualified_matched_window():
     }
     assert artifact["checks"]["daily_sampling_complete"] is True
     assert artifact["checks"]["sampled_pairs_complete"] is True
+
+
+def test_latency_evidence_requires_both_execution_modes_for_every_arm_window():
+    config, pairs, assignments, windows = _pilot_inputs()
+    config["latency_breakdowns"]["candidate"][0]["artifact"]["filters"][
+        "execution_contexts"
+    ] = ["production"]
+
+    artifact = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    assert artifact["checks"]["latency_breakdowns_bound"] is False
+    assert artifact["checks"]["monitoring_evidence_complete"] is False
+    assert artifact["passed"] is False
+
+
+@pytest.mark.parametrize("tamper", ["window_p95", "trace_hash", "artifact_hash"])
+def test_latency_evidence_rejects_unbound_or_manually_edited_metrics(tamper):
+    config, pairs, assignments, windows = _pilot_inputs()
+    if tamper == "window_p95":
+        windows[0]["candidate_p95_ms"] = 1
+    elif tamper == "trace_hash":
+        config["latency_breakdowns"]["candidate"][0]["artifact"]["source"][
+            "sha256"
+        ] = "f" * 64
+    else:
+        config["source_artifacts"]["latency_breakdown_sha256s"]["candidate"][0] = "bad"
+
+    artifact = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    assert artifact["checks"]["latency_breakdowns_bound"] is False
+    assert artifact["passed"] is False
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["same_arm_trace", "reused_trace_id", "aggregate_p50", "aggregate_query_count"],
+)
+def test_latency_evidence_requires_independent_arms_and_complete_aggregate(tamper):
+    config, pairs, assignments, windows = _pilot_inputs()
+    if tamper == "same_arm_trace":
+        config["source_artifacts"]["candidate_trace_sha256"] = config[
+            "source_artifacts"
+        ]["control_trace_sha256"]
+    elif tamper == "reused_trace_id":
+        control_id = config["latency_breakdowns"]["control"][0]["artifact"][
+            "traces"
+        ][0]["trace_id_sha256"]
+        entry = config["latency_breakdowns"]["candidate"][0]
+        entry["artifact"]["traces"][0]["trace_id_sha256"] = control_id
+        entry["content_sha256"] = _latency_entry(
+            entry["artifact"], entry["file_sha256"]
+        )["content_sha256"]
+    elif tamper == "aggregate_p50":
+        for pair in pairs[:60]:
+            pair["candidate"]["latency_ms"] = 1
+    else:
+        pairs.pop()
+
+    artifact = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    assert artifact["checks"]["latency_breakdowns_bound"] is False
+    assert artifact["passed"] is False
 
 
 def test_pilot_aborts_on_two_bad_windows_or_voyage_error_budget():
@@ -568,6 +747,8 @@ def test_pilot_gate_cli_writes_isolated_json_and_markdown_artifacts(tmp_path):
     windows_path = tmp_path / "windows.jsonl"
     preflight_path = tmp_path / "preflight.json"
     raw_trace_path = tmp_path / "rag_trace.jsonl"
+    control_trace_path = tmp_path / "control-trace.jsonl"
+    candidate_trace_path = tmp_path / "candidate-trace.jsonl"
     trace_snapshot_path = tmp_path / "trace-snapshot.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     pairs_path.write_text(
@@ -577,7 +758,21 @@ def test_pilot_gate_cli_writes_isolated_json_and_markdown_artifacts(tmp_path):
         "\n".join(json.dumps(row) for row in assignments) + "\n", encoding="utf-8"
     )
     raw_trace_path.write_text("{}\n", encoding="utf-8")
+    control_trace_path.write_text('{"arm":"control"}\n', encoding="utf-8")
+    candidate_trace_path.write_text('{"arm":"candidate"}\n', encoding="utf-8")
     raw_trace_sha256 = hashlib.sha256(raw_trace_path.read_bytes()).hexdigest()
+    arm_trace_sha256s = {
+        "control": hashlib.sha256(control_trace_path.read_bytes()).hexdigest(),
+        "candidate": hashlib.sha256(candidate_trace_path.read_bytes()).hexdigest(),
+    }
+    latency_paths = {"control": [], "candidate": []}
+    for arm in ("control", "candidate"):
+        for index, entry in enumerate(config["latency_breakdowns"][arm]):
+            artifact = entry["artifact"]
+            artifact["source"]["sha256"] = arm_trace_sha256s[arm]
+            path = tmp_path / f"{arm}-latency-{index}.json"
+            path.write_text(json.dumps(artifact), encoding="utf-8")
+            latency_paths[arm].append(path)
     for window in windows:
         window["trace_sha256"] = raw_trace_sha256
     windows_path.write_text(
@@ -595,15 +790,22 @@ def test_pilot_gate_cli_writes_isolated_json_and_markdown_artifacts(tmp_path):
     )
     output = tmp_path / "report"
 
-    exit_code = module.main([
+    cli_args = [
         "--config", str(config_path),
         "--pairs", str(pairs_path),
         "--assignments", str(assignments_path),
         "--windows", str(windows_path),
         "--preflight", str(preflight_path),
         "--trace-snapshot", str(trace_snapshot_path),
+        "--control-trace", str(control_trace_path),
+        "--candidate-trace", str(candidate_trace_path),
         "--output-dir", str(output),
-    ])
+    ]
+    for arm in ("control", "candidate"):
+        for path in latency_paths[arm]:
+            cli_args.extend([f"--{arm}-latency-breakdown", str(path)])
+
+    exit_code = module.main(cli_args)
 
     assert exit_code == 0
     assert json.loads((output / "pilot.json").read_text(encoding="utf-8"))[
@@ -613,11 +815,36 @@ def test_pilot_gate_cli_writes_isolated_json_and_markdown_artifacts(tmp_path):
         encoding="utf-8"
     )
 
+    reused_trace_args = list(cli_args)
+    reused_trace_args[reused_trace_args.index("--candidate-trace") + 1] = str(
+        control_trace_path
+    )
+    reused_trace_args[reused_trace_args.index("--output-dir") + 1] = str(
+        tmp_path / "reused-trace-report"
+    )
+    with pytest.raises(ValueError, match="trace paths must be distinct"):
+        module.main(reused_trace_args)
+
+    reused_artifact_args = list(cli_args)
+    reused_artifact_args[
+        reused_artifact_args.index("--candidate-latency-breakdown") + 1
+    ] = str(latency_paths["control"][0])
+    reused_artifact_args[reused_artifact_args.index("--output-dir") + 1] = str(
+        tmp_path / "reused-artifact-report"
+    )
+    with pytest.raises(ValueError, match="paths must be distinct across both arms"):
+        module.main(reused_artifact_args)
+
 
 def test_deployment_preflight_requires_same_commit_snapshot_and_opposite_flags():
     config = {
         "git_sha": "c155670",
         "snapshot_fingerprint": "snapshot-v1",
+        "runtime_contract": {
+            "execution_context": "production",
+            "evaluation_force_ambiguous": False,
+            "request_deadline_seconds": 120.0,
+        },
         "deployments": {
             "control": {"id": "control-1"},
             "candidate": {"id": "candidate-1"},
@@ -629,6 +856,9 @@ def test_deployment_preflight_requires_same_commit_snapshot_and_opposite_flags()
         "feature_flags": {
             "RAG_CRAG_ENABLED": False, "RAG_CLAIM_REPAIR_ENABLED": False,
         },
+        "execution_context": "production",
+        "evaluation_force_ambiguous": False,
+        "request_deadline_seconds": 120.0,
     }
     candidate = {
         "status": "ok", "deployment_id": "candidate-1", "git_sha": "c155670",
@@ -636,15 +866,66 @@ def test_deployment_preflight_requires_same_commit_snapshot_and_opposite_flags()
         "feature_flags": {
             "RAG_CRAG_ENABLED": True, "RAG_CLAIM_REPAIR_ENABLED": True,
         },
+        "execution_context": "production",
+        "evaluation_force_ambiguous": False,
+        "request_deadline_seconds": 120.0,
     }
 
     passed = validate_deployment_contract(config, control, candidate)
+    runtime_failed = validate_deployment_contract(
+        config,
+        control,
+        {**candidate, "request_deadline_seconds": 60.0},
+    )
+    unpinned_deadline = validate_deployment_contract(
+        {
+            **config,
+            "runtime_contract": {
+                **config["runtime_contract"],
+                "request_deadline_seconds": 60.0,
+            },
+        },
+        {**control, "request_deadline_seconds": 60.0},
+        {**candidate, "request_deadline_seconds": 60.0},
+    )
+    canonical_deadline = validate_deployment_contract(
+        {
+            **config,
+            "runtime_contract": {
+                **config["runtime_contract"],
+                "request_deadline_seconds": "120",
+            },
+        },
+        {**control, "request_deadline_seconds": "120.0"},
+        candidate,
+    )
     candidate["snapshot_fingerprint"] = "different"
     failed = validate_deployment_contract(config, control, candidate)
 
     assert passed["schema"] == "crag-pilot-deployment-preflight-v1"
     assert passed["passed"] is True
+    assert passed["runtime_contract"] == config["runtime_contract"]
+    assert runtime_failed["passed"] is False
+    assert runtime_failed["checks"]["runtime_contract_pinned"] is False
+    assert unpinned_deadline["passed"] is False
+    assert unpinned_deadline["checks"]["runtime_contract_pinned"] is False
+    assert canonical_deadline["passed"] is True
+    assert canonical_deadline["runtime_contract"]["request_deadline_seconds"] == 120.0
     assert failed["passed"] is False
+
+
+def test_health_reports_runtime_contract_used_by_requests(monkeypatch):
+    from mech_chatbot.api import rag_server
+
+    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "production")
+    monkeypatch.setenv("RAG_EVAL_FORCE_AMBIGUOUS", "false")
+    monkeypatch.setenv("RAG_REQUEST_DEADLINE_SECONDS", "90")
+
+    health = asyncio.run(rag_server.health_check())
+
+    assert health.execution_context == "production"
+    assert health.evaluation_force_ambiguous is False
+    assert health.request_deadline_seconds == 90.0
 
 
 def test_confusion_is_canonical_for_safety_gate_and_conflicts_fail_closed():
@@ -776,3 +1057,51 @@ def test_deployment_preflight_is_bound_to_ids_and_flag_state():
     )
     assert artifact["checks"]["deployment_preflight_passed"] is False
     assert artifact["passed"] is False
+
+
+def test_deployment_preflight_is_bound_to_runtime_contract():
+    config, pairs, assignments, windows = _pilot_inputs()
+    config["deployment_preflight"]["runtime_contract"][
+        "request_deadline_seconds"
+    ] = 60.0
+
+    artifact = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    assert artifact["checks"]["deployment_preflight_passed"] is False
+    assert artifact["passed"] is False
+
+
+def test_final_artifact_canonicalizes_and_requires_120_second_runtime_contract():
+    config, pairs, assignments, windows = _pilot_inputs()
+    config["runtime_contract"]["request_deadline_seconds"] = "120"
+    config["deployment_preflight"]["runtime_contract"][
+        "request_deadline_seconds"
+    ] = "120.0"
+    for arm in ("control", "candidate"):
+        config["deployment_preflight"]["deployments"][arm]["runtime_contract"][
+            "request_deadline_seconds"
+        ] = "120"
+
+    canonical = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    assert canonical["checks"]["deployment_preflight_passed"] is True
+    assert canonical["runtime_contract"]["request_deadline_seconds"] == 120.0
+
+    for contract in (
+        config["runtime_contract"],
+        config["deployment_preflight"]["runtime_contract"],
+        config["deployment_preflight"]["deployments"]["control"]["runtime_contract"],
+        config["deployment_preflight"]["deployments"]["candidate"]["runtime_contract"],
+    ):
+        contract["request_deadline_seconds"] = 60.0
+
+    unpinned = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    assert unpinned["checks"]["deployment_preflight_passed"] is False
+    assert unpinned["passed"] is False

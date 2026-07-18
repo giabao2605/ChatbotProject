@@ -120,15 +120,27 @@ chat_env\Scripts\python.exe -m scripts.eval.crag_pilot_gate `
   --config reports\crag-pilot\config.json `
   --preflight reports\crag-pilot\deployment-preflight.json `
   --trace-snapshot reports\crag-pilot\trace-snapshot.json `
+  --control-trace logs\crag-pilot\control-trace.jsonl `
+  --candidate-trace logs\crag-pilot\candidate-trace.jsonl `
+  --control-latency-breakdown reports\crag-pilot\control-latency-window-1.json `
+  --control-latency-breakdown reports\crag-pilot\control-latency-window-2.json `
+  --candidate-latency-breakdown reports\crag-pilot\candidate-latency-window-1.json `
+  --candidate-latency-breakdown reports\crag-pilot\candidate-latency-window-2.json `
   --assignments reports\crag-pilot\assignments.jsonl `
   --pairs reports\crag-pilot\matched-pairs.jsonl `
   --windows reports\crag-pilot\monitoring-windows.jsonl `
   --output-dir reports\crag-pilot\decision
 ```
 
-The gate hashes assignments, pairs, monitoring windows and preflight into the
-decision artifact. It derives daily sampling and arm balance from all assignment
-events rather than trusting a manually entered aggregate.
+The gate hashes assignments, pairs, monitoring windows, preflight, both raw arm
+traces and every latency artifact into the decision artifact, and binds each file
+hash to a canonical content digest. The two arms must use distinct trace,
+artifact and trace-ID evidence. Each performance window needs one breakdown per
+arm filtered to exactly `production` and `pilot_replay`; P95/cost must match its
+monitoring window, while aggregate query count, P50/P95 and cost must match the
+matched-pair metrics. It
+also derives daily sampling and arm balance from all assignment events rather
+than trusting a manually entered aggregate.
 
 Only `decision=accepted` and `passed=true` closes milestone 2.3. At day 14,
 fewer than 100 adjudicated pairs yields `inconclusive`; do not lower the sample.

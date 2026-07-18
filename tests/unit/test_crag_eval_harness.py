@@ -150,6 +150,113 @@ def test_cli_accepts_multiple_manifests():
     assert args.manifest == [Path("one.jsonl"), Path("two.jsonl")]
 
 
+def test_main_evaluator_uses_typed_evaluation_invocation(tmp_path, monkeypatch):
+    from mech_chatbot.rag.execution import (
+        RagCompleted,
+        RagDiagnostics,
+        RagPrepared,
+        RagToken,
+    )
+
+    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "production")
+    runner = _load("run_eval_typed_execution", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "cases.jsonl"
+    manifest.write_text(
+        json.dumps(_case(expected_document="target.md", expected_sources=["target.md"])) + "\n",
+        encoding="utf-8",
+    )
+    diagnostics = RagDiagnostics.from_mapping({
+        "retrieved_docs": [{"file_goc": "target.md", "source_id": "D41P1"}],
+        "pipeline_namespace": "typed-evaluation",
+        "generation_metrics": {},
+    })
+    observed = []
+
+    class FakeExecutor:
+        def run(self, request, invocation, cancellation=None):
+            observed.append((request, invocation))
+            yield RagPrepared("", (), (), diagnostics)
+            yield RagToken("Cau tra loi co can cu")
+            yield RagCompleted("answered", invocation.trace_id, diagnostics)
+
+    report, passed = runner.run_evaluation(
+        [manifest],
+        tmp_path / "output",
+        "candidate",
+        preflight=False,
+        intent_extractor=lambda *args, **kwargs: (
+            None, None, None, None, None, {"version_policy": "current_only"}
+        ),
+        rag_executor=FakeExecutor(),
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is True
+    request, invocation = observed[0]
+    assert invocation.mode == "evaluation"
+    assert invocation.trace_id == "eval:candidate:case-1"
+    assert request.question == "Gia tri la bao nhieu?"
+    assert request.access.department == "CRAG_EVAL"
+    assert request.access.roles == frozenset({"viewer"})
+    assert request.access.allowed_departments == frozenset({"CRAG_EVAL"})
+    assert request.access.allowed_sites == frozenset({"CRAG-EVAL-HQ"})
+    assert request.access.max_security_level == "internal"
+    assert report["execution_context"] == "evaluation"
+    assert report["pipeline_variants"]["typed-evaluation"]["cases"] == 1
+
+
+def test_typed_evaluator_preserves_failure_diagnostics(tmp_path):
+    from mech_chatbot.rag.execution import RagDiagnostics, RagFailed, RagPrepared
+
+    runner = _load("run_eval_typed_failure", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "cases.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    diagnostics = RagDiagnostics.from_mapping({
+        "pipeline_namespace": "typed-evaluation",
+        "correction_count": 1,
+        "final_generation_count": 1,
+        "generation_metrics": {
+            "provider_retries": 2,
+            "input_tokens": 120,
+            "output_tokens": 8,
+            "estimated_cost": 0.25,
+            "repair_count": 1,
+        },
+    })
+
+    class FailingExecutor:
+        def run(self, request, invocation, cancellation=None):
+            yield RagPrepared("", (), (), diagnostics)
+            yield RagFailed(
+                "RuntimeError",
+                "provider unavailable after retries",
+                True,
+                RuntimeError("provider unavailable after retries"),
+                diagnostics=diagnostics,
+            )
+
+    report, passed = runner.run_evaluation(
+        [manifest],
+        tmp_path / "output",
+        "candidate",
+        preflight=False,
+        intent_extractor=lambda *args, **kwargs: (
+            None, None, None, None, None, {"version_policy": "current_only"}
+        ),
+        rag_executor=FailingExecutor(),
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is False
+    assert report["provider_retries"] == 2
+    assert report["total_input_tokens"] == 120
+    assert report["total_output_tokens"] == 8
+    assert report["total_estimated_cost"] == 0.25
+    assert report["cases"][0]["correction_count"] == 1
+    assert report["cases"][0]["repair_count"] == 1
+    assert report["cases"][0]["final_generation_count"] == 1
+
+
 def test_eval_v4_artifact_contains_shared_foundation_metrics(tmp_path, monkeypatch):
     runner = _load("run_eval_v4_artifact", "scripts/eval/run_eval.py")
 

@@ -24,11 +24,11 @@ def test_latency_breakdown_groups_stages_and_hashes_trace_ids(tmp_path):
         trace,
         [
             {**base, "event": "retrieval", "trace_id": "raw-trace", "latency_ms": 100, "question": "secret"},
-            {**base, "event": "corrective_retrieval", "trace_id": "raw-trace", "latency_ms": 50},
+            {**base, "event": "corrective_retrieval", "trace_id": "raw-trace", "latency_ms": 50, "estimated_cost": 0.1},
             {**base, "event": "rerank", "trace_id": "raw-trace", "latency_ms": 20},
             {**base, "event": "parent_context", "trace_id": "raw-trace", "latency_ms": 30},
-            {**base, "event": "llm_generation", "trace_id": "raw-trace", "latency_ms": 200},
-            {**base, "event": "claim_repair", "trace_id": "raw-trace", "latency_ms": 70},
+            {**base, "event": "llm_generation", "trace_id": "raw-trace", "latency_ms": 200, "estimated_cost": 0.5},
+            {**base, "event": "claim_repair", "trace_id": "raw-trace", "latency_ms": 70, "estimated_cost": 0.2},
             {**base, "event": "rag_end", "trace_id": "raw-trace", "final_latency_ms": 500},
         ],
     )
@@ -49,6 +49,8 @@ def test_latency_breakdown_groups_stages_and_hashes_trace_ids(tmp_path):
         "claim_repair": 70,
         "total": 500,
     }
+    assert row["estimated_cost"] == 0.8
+    assert report["estimated_cost"] == 0.8
     serialized = json.dumps(report, ensure_ascii=False)
     assert "raw-trace" not in serialized
     assert "secret" not in serialized

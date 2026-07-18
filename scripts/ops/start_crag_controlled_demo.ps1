@@ -29,11 +29,30 @@ $required = @(
     $demoConfig.experiment_id,
     $demoConfig.eligible_cohort.department,
     $demoConfig.eligible_cohort.sha256,
+    $demoConfig.runtime_contract.execution_context,
+    $demoConfig.runtime_contract.request_deadline_seconds,
     $demoConfig.deployments.control.id,
     $demoConfig.deployments.candidate.id
 )
 if ($required | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) -or [string]$_ -match "REPLACE_WITH" }) {
     throw "Config con thieu gia tri pinned hoac van chua placeholder."
+}
+if ([string]$demoConfig.runtime_contract.execution_context -ne "production") {
+    throw "runtime_contract.execution_context phai la production."
+}
+if ($demoConfig.runtime_contract.evaluation_force_ambiguous -ne $false) {
+    throw "runtime_contract.evaluation_force_ambiguous phai la false."
+}
+$requestDeadline = 0.0
+if (
+    ![double]::TryParse(
+        [string]$demoConfig.runtime_contract.request_deadline_seconds,
+        [Globalization.NumberStyles]::Float,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [ref]$requestDeadline
+    ) -or $requestDeadline -ne 120.0
+) {
+    throw "runtime_contract.request_deadline_seconds phai dung bang 120."
 }
 
 Push-Location $projectRoot
@@ -62,6 +81,11 @@ $common = @{
     RAG_DEPLOYMENT_GIT_SHA = [string]$demoConfig.git_sha
     RAG_SNAPSHOT_FINGERPRINT = [string]$demoConfig.snapshot_fingerprint
     CRAG_PILOT_ASSIGNMENT_SALT = [string]$env:CRAG_PILOT_ASSIGNMENT_SALT
+    RAG_EXECUTION_CONTEXT = "production"
+    RAG_EVAL_FORCE_AMBIGUOUS = "false"
+    RAG_REQUEST_DEADLINE_SECONDS = $requestDeadline.ToString(
+        [Globalization.CultureInfo]::InvariantCulture
+    )
     RAG_GROUNDED_MATH_ENABLED = "false"
     RAG_LATE_INTERACTION_ENABLED = "false"
     RAG_QUERY_DECOMPOSITION_ENABLED = "false"

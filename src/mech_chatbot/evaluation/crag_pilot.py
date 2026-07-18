@@ -16,6 +16,7 @@ from typing import Any
 
 from mech_chatbot.evaluation.metrics import nearest_rank
 from mech_chatbot.evaluation.outcomes import VALID_OUTCOMES
+from mech_chatbot.rag.execution import RagRuntimeContract
 
 
 ASSIGNMENT_VERSION = "hmac-sha256-v1"
@@ -46,6 +47,13 @@ PILOT_ENV_FIELDS = {
     "candidate_deployment_id": "CRAG_PILOT_CANDIDATE_DEPLOYMENT_ID",
     "snapshot_fingerprint": "CRAG_PILOT_SNAPSHOT_FINGERPRINT",
 }
+
+
+def _runtime_contract(value: Any) -> RagRuntimeContract | None:
+    try:
+        return RagRuntimeContract.from_mapping(value or {})
+    except (TypeError, ValueError):
+        return None
 
 
 def _digest(salt: str, value: str) -> str:
@@ -151,8 +159,17 @@ def validate_deployment_contract(
     deployments = config.get("deployments") or {}
     expected_git = config.get("git_sha")
     expected_snapshot = config.get("snapshot_fingerprint")
+    expected_runtime = _runtime_contract(config.get("runtime_contract"))
+    control_runtime = _runtime_contract(control_health)
+    candidate_runtime = _runtime_contract(candidate_health)
+    runtime_contract = (
+        expected_runtime.to_dict()
+        if expected_runtime is not None
+        else dict(config.get("runtime_contract") or {})
+    )
     control_flags = control_health.get("feature_flags") or {}
     candidate_flags = candidate_health.get("feature_flags") or {}
+
     checks = {
         "both_healthy": control_health.get("status") == "ok"
         and candidate_health.get("status") == "ok",
@@ -173,6 +190,10 @@ def validate_deployment_contract(
         and control_flags.get("RAG_CLAIM_REPAIR_ENABLED") is False,
         "candidate_flags_enabled": candidate_flags.get("RAG_CRAG_ENABLED") is True
         and candidate_flags.get("RAG_CLAIM_REPAIR_ENABLED") is True,
+        "runtime_contract_pinned": expected_runtime is not None
+        and expected_runtime.is_controlled_demo
+        and control_runtime == expected_runtime
+        and candidate_runtime == expected_runtime,
     }
     return {
         "schema": "crag-pilot-deployment-preflight-v1",
@@ -180,14 +201,21 @@ def validate_deployment_contract(
         "checks": checks,
         "git_sha": expected_git,
         "snapshot_fingerprint": expected_snapshot,
+        "runtime_contract": runtime_contract,
         "deployments": {
             "control": {
                 "id": control_health.get("deployment_id"),
                 "feature_flags": control_flags,
+                "runtime_contract": control_runtime.to_dict()
+                if control_runtime is not None
+                else {},
             },
             "candidate": {
                 "id": candidate_health.get("deployment_id"),
                 "feature_flags": candidate_flags,
+                "runtime_contract": candidate_runtime.to_dict()
+                if candidate_runtime is not None
+                else {},
             },
         },
     }
@@ -747,6 +775,206 @@ def _is_sha256(value: Any) -> bool:
     return len(text) == 64 and all(char in "0123456789abcdef" for char in text.lower())
 
 
+def canonical_artifact_sha256(value: Any) -> str:
+    """Return the canonical digest used to bind parsed provenance artifacts."""
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _latency_breakdowns_are_bound(
+    config: dict[str, Any],
+    performance_windows: list[dict[str, Any]],
+    arm_metrics: dict[str, dict[str, Any]],
+) -> bool:
+    """Verify per-arm window metrics against immutable two-context artifacts."""
+    breakdowns = config.get("latency_breakdowns") or {}
+    sources = config.get("source_artifacts") or {}
+    artifact_hashes = sources.get("latency_breakdown_sha256s") or {}
+    ordered_windows = sorted(
+        performance_windows,
+        key=lambda window: _parse_time(window.get("start_at")),
+    )
+    if not ordered_windows:
+        return False
+    try:
+        control_trace_sha256 = sources.get("control_trace_sha256")
+        candidate_trace_sha256 = sources.get("candidate_trace_sha256")
+        if not (
+            _is_sha256(control_trace_sha256)
+            and _is_sha256(candidate_trace_sha256)
+            and control_trace_sha256 != candidate_trace_sha256
+        ):
+            return False
+        observed_trace_ids: set[str] = set()
+        observed_file_hashes: set[str] = set()
+        observed_content_hashes: set[str] = set()
+        for arm in ("control", "candidate"):
+            entries = breakdowns.get(arm)
+            hashes = artifact_hashes.get(arm)
+            trace_sha256 = sources.get(f"{arm}_trace_sha256")
+            if not (
+                isinstance(entries, list)
+                and isinstance(hashes, list)
+                and len(entries) == len(ordered_windows)
+                and len(hashes) == len(entries)
+                and _is_sha256(trace_sha256)
+                and all(_is_sha256(value) for value in hashes)
+            ):
+                return False
+
+            for entry, expected_file_hash in zip(entries, hashes):
+                if not isinstance(entry, dict):
+                    return False
+                artifact = entry.get("artifact")
+                file_hash = entry.get("file_sha256")
+                content_hash = entry.get("content_sha256")
+                if not (
+                    isinstance(artifact, dict)
+                    and file_hash == expected_file_hash
+                    and _is_sha256(file_hash)
+                    and _is_sha256(content_hash)
+                    and canonical_artifact_sha256(artifact) == content_hash
+                    and file_hash not in observed_file_hashes
+                    and content_hash not in observed_content_hashes
+                ):
+                    return False
+                observed_file_hashes.add(file_hash)
+                observed_content_hashes.add(content_hash)
+
+            remaining = list(entries)
+            all_latencies: list[float] = []
+            total_cost = 0.0
+            for window in ordered_windows:
+                start = _parse_time(window.get("start_at"))
+                end = _parse_time(window.get("end_at"))
+                matching = [
+                    entry
+                    for entry in remaining
+                    if _parse_time(
+                        ((entry.get("artifact") or {}).get("filters") or {}).get(
+                            "start"
+                        )
+                    )
+                    == start
+                    and _parse_time(
+                        ((entry.get("artifact") or {}).get("filters") or {}).get(
+                            "end"
+                        )
+                    )
+                    == end
+                ]
+                if len(matching) != 1:
+                    return False
+                entry = matching[0]
+                remaining.remove(entry)
+                artifact = entry["artifact"]
+                filters = artifact.get("filters") or {}
+                source = artifact.get("source") or {}
+                traces = artifact.get("traces")
+                summary = (artifact.get("stage_summary") or {}).get("total") or {}
+                eligible_queries = _nonnegative_int(
+                    window.get("eligible_queries"), "eligible_queries"
+                )
+                if not (
+                    artifact.get("schema") == "crag-latency-breakdown-v1"
+                    and source.get("git_sha") == config.get("git_sha")
+                    and source.get("sha256") == trace_sha256
+                    and set(filters.get("execution_contexts") or [])
+                    == {"production", "pilot_replay"}
+                    and _nonnegative_int(artifact.get("parse_errors"), "parse_errors")
+                    == 0
+                    and isinstance(traces, list)
+                    and len(traces) == eligible_queries
+                    and _nonnegative_int(artifact.get("query_count"), "query_count")
+                    == len(traces)
+                ):
+                    return False
+
+                window_latencies: list[float] = []
+                window_cost = 0.0
+                for trace in traces:
+                    trace_id = trace.get("trace_id_sha256")
+                    if not _is_sha256(trace_id) or trace_id in observed_trace_ids:
+                        return False
+                    observed_trace_ids.add(trace_id)
+                    latency = _nonnegative_float(
+                        (trace.get("stages_ms") or {}).get("total"),
+                        "total latency",
+                    )
+                    cost = _nonnegative_float(
+                        trace.get("estimated_cost"), "estimated_cost"
+                    )
+                    window_latencies.append(latency)
+                    window_cost += cost
+
+                derived_p50 = nearest_rank(window_latencies, 0.50)
+                derived_p95 = nearest_rank(window_latencies, 0.95)
+                derived_max = max(window_latencies)
+                if not (
+                    _nonnegative_int(summary.get("sample_count"), "sample_count")
+                    == len(window_latencies)
+                    and _nonnegative_float(summary.get("latency_p50_ms"), "p50")
+                    == derived_p50
+                    and _nonnegative_float(summary.get("latency_p95_ms"), "p95")
+                    == derived_p95
+                    and _nonnegative_float(summary.get("latency_max_ms"), "max")
+                    == derived_max
+                    and math.isclose(
+                        _nonnegative_float(
+                            artifact.get("estimated_cost"), "estimated_cost"
+                        ),
+                        window_cost,
+                        rel_tol=0.0,
+                        abs_tol=1e-8,
+                    )
+                    and _nonnegative_float(
+                        window.get(f"{arm}_p95_ms"), f"{arm}_p95_ms"
+                    )
+                    == derived_p95
+                    and math.isclose(
+                        _nonnegative_float(
+                            window.get(f"{arm}_cost"), f"{arm}_cost"
+                        ),
+                        window_cost,
+                        rel_tol=0.0,
+                        abs_tol=1e-8,
+                    )
+                ):
+                    return False
+                all_latencies.extend(window_latencies)
+                total_cost += window_cost
+
+            if remaining or not (
+                _nonnegative_int(arm_metrics[arm].get("queries"), "queries")
+                == len(all_latencies)
+                and _nonnegative_float(
+                    arm_metrics[arm].get("latency_p50_ms"), "latency_p50_ms"
+                )
+                == nearest_rank(all_latencies, 0.50)
+                and _nonnegative_float(
+                    arm_metrics[arm].get("latency_p95_ms"), "latency_p95_ms"
+                )
+                == nearest_rank(all_latencies, 0.95)
+                and math.isclose(
+                    _nonnegative_float(
+                        arm_metrics[arm].get("estimated_cost"), "estimated_cost"
+                    ),
+                    total_cost,
+                    rel_tol=0.0,
+                    abs_tol=1e-8,
+                )
+            ):
+                return False
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
 def build_pilot_artifact(
     config: dict[str, Any],
     matched_pairs: list[dict[str, Any]],
@@ -774,8 +1002,24 @@ def build_pilot_artifact(
     deployments = config.get("deployments") or {}
     control_flags = (deployments.get("control") or {}).get("flags") or {}
     candidate_flags = (deployments.get("candidate") or {}).get("flags") or {}
+    runtime_model = _runtime_contract(config.get("runtime_contract"))
+    runtime_contract = runtime_model.to_dict() if runtime_model is not None else {}
     deployment_preflight = config.get("deployment_preflight") or {}
+    preflight_runtime_model = _runtime_contract(
+        deployment_preflight.get("runtime_contract")
+    )
+    preflight_runtime_contract = (
+        preflight_runtime_model.to_dict()
+        if preflight_runtime_model is not None
+        else {}
+    )
     preflight_deployments = deployment_preflight.get("deployments") or {}
+    preflight_control_runtime = _runtime_contract(
+        (preflight_deployments.get("control") or {}).get("runtime_contract")
+    )
+    preflight_candidate_runtime = _runtime_contract(
+        (preflight_deployments.get("candidate") or {}).get("runtime_contract")
+    )
     assigned_counts = {
         arm: sum(event.get("assigned_arm") == arm for event in assignments)
         for arm in ("control", "candidate")
@@ -878,6 +1122,14 @@ def build_pilot_artifact(
             "trace_snapshot_sha256",
             "trace_sha256",
         )
+    ) and all(
+        _is_sha256(source_artifacts.get(key))
+        for key in ("control_trace_sha256", "candidate_trace_sha256")
+    )
+    latency_breakdowns_bound = _latency_breakdowns_are_bound(
+        config,
+        performance_windows,
+        {"control": control, "candidate": candidate},
     )
     trace_snapshot_valid = (
         trace_snapshot.get("schema") == "rag-refusal-snapshot-v1"
@@ -952,6 +1204,7 @@ def build_pilot_artifact(
         and all(start <= timestamp <= end for timestamp in assignment_times),
         "monitoring_evidence_complete": coverage_valid
         and trace_snapshot_valid
+        and latency_breakdowns_bound
         and performance_windows_valid
         and performance_windows_non_overlapping
         and performance_windows_cover_range
@@ -959,6 +1212,7 @@ def build_pilot_artifact(
         and monitoring_windows_in_range
         and windows_trace_bound
         and sources_bound,
+        "latency_breakdowns_bound": latency_breakdowns_bound,
         "isolated_deployments": bool((deployments.get("control") or {}).get("id"))
         and bool((deployments.get("candidate") or {}).get("id"))
         and (deployments.get("control") or {}).get("id")
@@ -970,12 +1224,16 @@ def build_pilot_artifact(
             and candidate_flags.get("RAG_CLAIM_REPAIR_ENABLED") is True
         ),
         "deployment_preflight_passed": (
-            deployment_preflight.get("schema")
+            runtime_model is not None
+            and runtime_model.is_controlled_demo
+            and preflight_runtime_model is not None
+            and deployment_preflight.get("schema")
             == "crag-pilot-deployment-preflight-v1"
             and deployment_preflight.get("passed") is True
             and deployment_preflight.get("git_sha") == config.get("git_sha")
             and deployment_preflight.get("snapshot_fingerprint")
             == config.get("snapshot_fingerprint")
+            and preflight_runtime_contract == runtime_contract
             and (preflight_deployments.get("control") or {}).get("id")
             == (deployments.get("control") or {}).get("id")
             and (preflight_deployments.get("candidate") or {}).get("id")
@@ -984,6 +1242,8 @@ def build_pilot_artifact(
             == control_flags
             and (preflight_deployments.get("candidate") or {}).get("feature_flags")
             == candidate_flags
+            and preflight_control_runtime == runtime_model
+            and preflight_candidate_runtime == runtime_model
         ),
         "assignment_version_pinned": config.get("assignment_version")
         == ASSIGNMENT_VERSION,
@@ -1050,6 +1310,7 @@ def build_pilot_artifact(
         "assignment_version": config.get("assignment_version"),
         "sampling_version": config.get("sampling_version"),
         "snapshot_fingerprint": config.get("snapshot_fingerprint"),
+        "runtime_contract": runtime_contract,
         "eligible_cohort": config.get("eligible_cohort"),
         "deployments": deployments,
         "deployment_preflight": deployment_preflight,

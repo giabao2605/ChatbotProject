@@ -11,6 +11,7 @@ from contextlib import ExitStack
 from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass, field
 from datetime import datetime
+import math
 import os
 from pathlib import Path
 import re
@@ -23,6 +24,7 @@ from typing import Any, Iterator, Literal, Mapping, Protocol
 
 ExecutionMode = Literal["production", "evaluation", "pilot_replay", "test"]
 CompletionOutcome = Literal["answered", "refused"]
+CONTROLLED_DEMO_REQUEST_DEADLINE_SECONDS = 120.0
 _EXECUTION_CONTEXT: ContextVar[str | None] = ContextVar(
     "rag_execution_context",
     default=None,
@@ -45,7 +47,9 @@ def current_execution_context() -> str:
     if value is None:
         value = os.getenv("RAG_EXECUTION_CONTEXT", "production")
     normalized = str(value).strip().lower()
-    return normalized if normalized in {"production", "evaluation", "test"} else "production"
+    return normalized if normalized in {
+        "production", "evaluation", "pilot_replay", "test",
+    } else "production"
 
 
 def current_request_budget() -> "RequestBudgetLedger | None":
@@ -80,6 +84,80 @@ class RagInvocation:
     def __post_init__(self) -> None:
         if self.mode not in {"production", "evaluation", "pilot_replay", "test"}:
             raise ValueError(f"Unsupported RAG execution mode: {self.mode}")
+
+
+@dataclass(frozen=True, slots=True)
+class RagRuntimeContract:
+    """Canonical process-level settings reported by health and pilot evidence."""
+
+    execution_context: ExecutionMode
+    evaluation_force_ambiguous: bool
+    request_deadline_seconds: float
+
+    @classmethod
+    def from_mapping(
+        cls,
+        value: Mapping[str, Any] | "RagRuntimeContract",
+    ) -> "RagRuntimeContract":
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, MappingABC):
+            raise ValueError("runtime contract must be a mapping")
+        context = str(value.get("execution_context") or "").strip().lower()
+        if context not in {"production", "evaluation", "pilot_replay", "test"}:
+            raise ValueError("runtime contract has an unsupported execution context")
+        force_ambiguous = value.get("evaluation_force_ambiguous")
+        if not isinstance(force_ambiguous, bool):
+            raise ValueError("runtime contract requires a boolean evaluation override")
+        raw_deadline = value.get("request_deadline_seconds")
+        if isinstance(raw_deadline, bool):
+            raise ValueError("runtime contract requires a numeric deadline")
+        try:
+            deadline = float(raw_deadline)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("runtime contract requires a numeric deadline") from exc
+        if not math.isfinite(deadline) or deadline <= 0:
+            raise ValueError("runtime contract deadline must be finite and positive")
+        return cls(
+            execution_context=context,
+            evaluation_force_ambiguous=force_ambiguous,
+            request_deadline_seconds=deadline,
+        )
+
+    @classmethod
+    def from_environment(cls) -> "RagRuntimeContract":
+        raw_override = os.getenv("RAG_EVAL_FORCE_AMBIGUOUS", "false").strip().lower()
+        if raw_override not in {
+            "1", "true", "yes", "y", "on",
+            "0", "false", "no", "n", "off",
+        }:
+            raise ValueError("RAG_EVAL_FORCE_AMBIGUOUS must be a boolean")
+        return cls.from_mapping(
+            {
+                "execution_context": os.getenv("RAG_EXECUTION_CONTEXT", "production"),
+                "evaluation_force_ambiguous": raw_override
+                in {"1", "true", "yes", "y", "on"},
+                "request_deadline_seconds": os.getenv(
+                    "RAG_REQUEST_DEADLINE_SECONDS", "120"
+                ),
+            }
+        )
+
+    @property
+    def is_controlled_demo(self) -> bool:
+        return (
+            self.execution_context == "production"
+            and self.evaluation_force_ambiguous is False
+            and self.request_deadline_seconds
+            == CONTROLLED_DEMO_REQUEST_DEADLINE_SECONDS
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "execution_context": self.execution_context,
+            "evaluation_force_ambiguous": self.evaluation_force_ambiguous,
+            "request_deadline_seconds": self.request_deadline_seconds,
+        }
 
 
 class CancellationSignal(Protocol):
@@ -232,15 +310,24 @@ class RagDiagnostics(MappingABC[str, Any]):
         return NotImplemented
 
 
+class _NormalizesRagDiagnostics:
+    __slots__ = ()
+    diagnostics: RagDiagnostics
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "diagnostics",
+            RagDiagnostics.from_mapping(self.diagnostics),
+        )
+
+
 @dataclass(frozen=True, slots=True)
-class RagPrepared:
+class RagPrepared(_NormalizesRagDiagnostics):
     ref_text: str
     ref_images: tuple[str, ...]
     new_part_ids: tuple[str, ...]
     diagnostics: RagDiagnostics
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "diagnostics", RagDiagnostics.from_mapping(self.diagnostics))
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,23 +341,19 @@ class RagCitation:
 
 
 @dataclass(frozen=True, slots=True)
-class RagCompleted:
+class RagCompleted(_NormalizesRagDiagnostics):
     outcome: CompletionOutcome
     trace_id: str
     diagnostics: RagDiagnostics
     refusal_reason: str | None = None
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "diagnostics", RagDiagnostics.from_mapping(self.diagnostics))
-
-
 @dataclass(frozen=True, slots=True)
-class RagFailed:
+class RagFailed(_NormalizesRagDiagnostics):
     code: str
     message: str
     retryable: bool
     cause: BaseException = field(repr=False, compare=False)
-
+    diagnostics: RagDiagnostics = field(default_factory=RagDiagnostics)
 
 @dataclass(frozen=True, slots=True)
 class RagCancelled:
@@ -518,10 +601,10 @@ def _prepare_legacy_events(events: Iterator[RagEvent]) -> RagEvent | None:
     return next(events, None)
 
 
-def collect_rag_events(events: Iterator[RagEvent]) -> RagCollectedResult:
-    """Fold a complete event stream for sync, worker and evaluation callers."""
-    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
-
+def consume_rag_events(
+    events: Iterator[RagEvent],
+) -> RagCollectedResult | RagFailed | RagCancelled:
+    """Consume one event stream while preserving a typed terminal failure."""
     prepared: RagPrepared | None = None
     completed: RagCompleted | None = None
     answer_parts: list[str] = []
@@ -547,11 +630,9 @@ def collect_rag_events(events: Iterator[RagEvent]) -> RagCollectedResult:
                     raise RuntimeError("RAG executor completed before RagPrepared")
                 completed = event
             elif isinstance(event, RagFailed):
-                raise event.cause
+                return event
             elif isinstance(event, RagCancelled):
-                if event.cause is not None:
-                    raise event.cause
-                raise ExternalAICallCancelled(event.reason)
+                return event
     finally:
         close = getattr(events, "close", None)
         if callable(close):
@@ -572,6 +653,20 @@ def collect_rag_events(events: Iterator[RagEvent]) -> RagCollectedResult:
         diagnostics=completed.diagnostics,
         refusal_reason=completed.refusal_reason,
     )
+
+
+def collect_rag_events(events: Iterator[RagEvent]) -> RagCollectedResult:
+    """Collect a successful stream and preserve legacy exception behavior."""
+    terminal = consume_rag_events(events)
+    if isinstance(terminal, RagFailed):
+        raise terminal.cause
+    if isinstance(terminal, RagCancelled):
+        if terminal.cause is not None:
+            raise terminal.cause
+        from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+
+        raise ExternalAICallCancelled(terminal.reason)
+    return terminal
 
 
 _SOURCE_ID_RE = re.compile(
@@ -650,16 +745,7 @@ class DefaultRagExecutor:
         from mech_chatbot.rag.semantic_cache import replay_cache_disabled
 
         with ExitStack() as stack:
-            ambient_context = current_execution_context()
-            if invocation.mode in {"evaluation", "test"}:
-                execution_context = invocation.mode
-            elif invocation.mode == "production" and ambient_context in {"evaluation", "test"}:
-                execution_context = ambient_context
-            elif invocation.mode == "pilot_replay" and ambient_context == "test":
-                execution_context = "test"
-            else:
-                execution_context = "production"
-            context_token = _EXECUTION_CONTEXT.set(execution_context)
+            context_token = _EXECUTION_CONTEXT.set(invocation.mode)
             stack.callback(_EXECUTION_CONTEXT.reset, context_token)
             if invocation.mode in {"evaluation", "pilot_replay"}:
                 stack.enter_context(replay_cache_disabled(True))
@@ -736,11 +822,19 @@ class DefaultRagExecutor:
                 yield RagPrepared("", (), (), {})
             yield terminal
         except Exception as exc:
+            failure_diagnostics = dict(diagnostics or {})
+            generation_metrics = failure_diagnostics.get("generation_metrics")
+            if isinstance(generation_metrics, dict):
+                generation_metrics["provider_retries"] = state.budget.provider_retries
             terminal = RagFailed(
                 code=type(exc).__name__,
                 message=str(exc),
                 retryable=False,
                 cause=exc,
+                diagnostics=RagDiagnostics.from_mapping(
+                    failure_diagnostics,
+                    ledger=state.budget,
+                ),
             )
             if state.phase != "prepared":
                 owner.note_setup_terminal(terminal)
@@ -771,12 +865,15 @@ __all__ = [
     "RagInvocation",
     "RagPrepared",
     "RagRequest",
+    "RagRuntimeContract",
     "RagDiagnostics",
     "RagToken",
     "RequestBudgetLedger",
     "RequestBudgetLimits",
+    "CONTROLLED_DEMO_REQUEST_DEADLINE_SECONDS",
     "attributed_citations",
     "collect_rag_events",
+    "consume_rag_events",
     "current_execution_context",
     "current_request_budget",
 ]

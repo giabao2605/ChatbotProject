@@ -178,7 +178,9 @@ def log_trace(event_name, trace_id, **kwargs):
         except Exception:
             execution_context = os.getenv("RAG_EXECUTION_CONTEXT", "production")
     execution_context = str(execution_context).strip().lower()
-    if execution_context not in {"production", "evaluation", "test"}:
+    if execution_context not in {
+        "production", "evaluation", "pilot_replay", "test",
+    }:
         execution_context = "production"
     if event_name == "rag_end":
         legacy_reason = kwargs.pop("reason", None)

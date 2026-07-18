@@ -20,6 +20,11 @@
   "sampling_version": "sha256-25pct-v1",
   "snapshot_fingerprint": "REPLACE_WITH_TAILIEUKYTHUAT_V2_SNAPSHOT",
   "collection": "TaiLieuKyThuat_v2",
+  "runtime_contract": {
+    "execution_context": "production",
+    "evaluation_force_ambiguous": false,
+    "request_deadline_seconds": 120.0
+  },
   "deployment_urls": {
     "control": "http://127.0.0.1:8101",
     "candidate": "http://127.0.0.1:8102"

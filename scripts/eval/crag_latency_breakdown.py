@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import subprocess
 from collections import defaultdict
 from datetime import datetime
@@ -73,6 +74,7 @@ def build_latency_breakdown(
     end_at = _parse_timestamp(end)
     contexts = execution_contexts or {"evaluation"}
     stages_by_trace: dict[str, dict[str, int]] = defaultdict(dict)
+    cost_by_trace: dict[str, float] = defaultdict(float)
     completed_traces: set[str] = set()
     parse_errors = 0
 
@@ -96,6 +98,16 @@ def build_latency_breakdown(
         if not trace_id:
             continue
         event_name = str(event.get("event") or "")
+        if event.get("estimated_cost") is not None:
+            try:
+                estimated_cost = float(event["estimated_cost"])
+            except (TypeError, ValueError):
+                parse_errors += 1
+                continue
+            if not math.isfinite(estimated_cost) or estimated_cost < 0:
+                parse_errors += 1
+                continue
+            cost_by_trace[trace_id] += estimated_cost
         if event_name == "rag_end":
             latency = _latency(event.get("final_latency_ms"))
             if latency is not None:
@@ -123,6 +135,7 @@ def build_latency_breakdown(
             {
                 "trace_id_sha256": hashlib.sha256(trace_id.encode("utf-8")).hexdigest(),
                 "stages_ms": values,
+                "estimated_cost": round(cost_by_trace.get(trace_id, 0.0), 8),
             }
         )
 
@@ -150,6 +163,10 @@ def build_latency_breakdown(
         },
         "query_count": len(traces),
         "parse_errors": parse_errors,
+        "estimated_cost": round(
+            sum(cost_by_trace.get(trace_id, 0.0) for trace_id in completed_traces),
+            8,
+        ),
         "stage_summary": stage_summary,
         "traces": traces,
     }

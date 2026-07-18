@@ -24,9 +24,9 @@ Do chỉ có `bao.nguyen` làm reviewer, kết luận cuối của lần chạy 
 | CLI phân tích latency từ raw trace | Codex | Đã làm ở code | Artifact `crag-latency-breakdown-v1` chỉ có trace ID đã hash và số latency |
 | CLI tạo cohort hash | Codex | Đã làm ở code | Input user ID chỉ đọc local; output không chứa raw identity hoặc secret |
 | Script start/enable/status/stop control, candidate và gateway | Codex | Đã làm ở code | Start chỉ mở hai arm và tạo preflight; enable gateway là lệnh riêng sau phê duyệt |
-| Regression/targeted/full tests | Codex | Đã đạt ngày 2026-07-18 | Full pytest đạt; các integration test cần live SQL/Qdrant/RAG được skip đúng opt-in |
-| Self-review hai trục Standards/Spec | Codex | Đã đạt ngày 2026-07-18 | Hai review độc lập xác nhận không còn finding actionable |
-| Rollback CRAG + Claim Repair | Codex | Đã đạt trên commit sạch | Hai flag false, targeted rollback 2/2 test đạt |
+| Regression/targeted/full tests | Codex | Đã đạt sau typed-facade hardening ngày 2026-07-18 | Targeted và full pytest đạt trên code cuối; 22 integration/eval test cần live SQL/Qdrant/RAG/encoder được skip đúng opt-in |
+| Self-review hai trục Standards/Spec | Codex | Đã đạt sau nhiều vòng sửa và re-review | Hai review độc lập đối chiếu từ `351d53d` đến code cuối; không còn finding actionable ảnh hưởng demo |
+| Rollback CRAG + Claim Repair | Codex | Evidence `59d432d` chỉ còn là lịch sử | Artifact hợp lệ là `reports/controlled-demo/20260718-crag-controlled-demo-readiness/crag-rollback-latest.json` với `git_sha` đúng bằng clean HEAD và hai rollback test đạt |
 | Provider smoke đầu/cuối | Codex chạy lệnh; provider phải sẵn sàng | Ba lần đều fail ngày 2026-07-18; diagnostic: 0/5, 15 retry, HTTP 503 capacity | Evidence đúng: `reports/controlled-demo/20260718-crag-controlled-demo-readiness/provider-smoke-diagnostic.json`; quyết định `inconclusive`, dừng staging/live eval |
 | Ba staging baseline/candidate pairs | Codex chạy lệnh; SQL/Qdrant/provider phải sẵn sàng | Chờ provider smoke | Cùng commit/snapshot/manifest/config/concurrency; cả ba gate đạt |
 | Chọn 2–10 tài khoản Technical/HQ và xác nhận được phép tham gia | Con người | Chưa làm | Có cohort hash; không ghi username vào artifact |
@@ -57,6 +57,13 @@ Provider smoke tooling đã được sửa để unwrap exception cuối từ Te
 lưu root exception type, HTTP status và error category. Nhờ đó lỗi capacity 503
 không còn bị phân loại nhầm thành `non_capacity_failure`, đồng thời artifact vẫn
 không chứa raw error message, prompt, response hoặc secret.
+
+Sau typed-event-facade hardening, hai serving arm của controlled demo phải pin
+runtime contract trong config: `execution_context=production`,
+`evaluation_force_ambiguous=false` và `request_deadline_seconds=120`. Hai arm phải
+báo đúng cùng contract qua `/health`; deployment preflight fail nếu thiếu, lệch
+hoặc deadline chỉ là một giá trị dương khác 120. Staging baseline/candidate chạy
+qua evaluator typed vẫn dùng `execution_context=evaluation`.
 
 ## Các bước bắt buộc con người làm
 
@@ -115,15 +122,32 @@ scripts\ops\status_crag_controlled_demo.ps1
 scripts\ops\stop_crag_controlled_demo.ps1
 ```
 
-Mỗi arm ghi raw trace riêng để không trộn control/candidate. Phân tích latency
-theo đúng UTC window của từng arm:
+Mỗi arm ghi raw trace riêng để không trộn control/candidate. Trace snapshot dùng
+cho traffic người dùng chỉ lọc `production`. Với từng performance window 50
+matched pairs, tạo một latency artifact cho mỗi arm từ cả request chính
+(`production`) và lượt matched-pair đối diện (`pilot_replay`):
 
 ```powershell
 chat_env\Scripts\python.exe -m scripts.eval.crag_latency_breakdown `
   logs\crag-controlled-demo\candidate-trace.jsonl `
-  --start <UTC_START> --end <UTC_END> --context production `
-  --output reports\controlled-demo\<run-id>\latency-breakdown.json
+  --start <WINDOW_UTC_START> --end <WINDOW_UTC_END> `
+  --context production --context pilot_replay `
+  --output reports\controlled-demo\<run-id>\candidate-latency-<window>.json
+
+chat_env\Scripts\python.exe -m scripts.eval.crag_latency_breakdown `
+  logs\crag-controlled-demo\control-trace.jsonl `
+  --start <WINDOW_UTC_START> --end <WINDOW_UTC_END> `
+  --context production --context pilot_replay `
+  --output reports\controlled-demo\<run-id>\control-latency-<window>.json
 ```
+
+Khi tạo final pilot artifact, truyền raw trace của hai arm và lặp lại tham số
+`--control-latency-breakdown`/`--candidate-latency-breakdown` cho mọi performance
+window. Gate tự hash lại file trace và latency artifact, gắn từng file hash với
+canonical content digest, bắt buộc hai arm dùng evidence độc lập và context đúng
+`production + pilot_replay`, rồi tự đối chiếu P95/cost với từng monitoring
+window và query count/P50/P95/cost với matched-pair aggregate. Thiếu một
+arm/window hoặc sửa số bằng tay đều fail-closed.
 
 ## Điều kiện abort và kết thúc
 

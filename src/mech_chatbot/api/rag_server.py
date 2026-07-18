@@ -158,6 +158,9 @@ class HealthResponse(BaseModel):
     git_sha: Optional[str] = None
     snapshot_fingerprint: Optional[str] = None
     feature_flags: Dict[str, bool] = Field(default_factory=dict)
+    execution_context: str = "production"
+    evaluation_force_ambiguous: bool = False
+    request_deadline_seconds: float = 120.0
 
 
 class UserContextRequest(BaseModel):
@@ -264,6 +267,10 @@ def _audit_admin_query(
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check():
     """Health check endpoint for monitoring/load balancer."""
+    from mech_chatbot.rag.execution import RagRuntimeContract
+
+    runtime_contract = RagRuntimeContract.from_environment()
+
     return HealthResponse(
         status="ok" if _rag_ready else "degraded",
         rag_loaded=_rag_ready,
@@ -281,6 +288,7 @@ async def health_check():
             ).strip().lower()
             in {"1", "true", "yes", "on"},
         },
+        **runtime_contract.to_dict(),
     )
 
 

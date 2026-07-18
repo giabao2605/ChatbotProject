@@ -15,6 +15,7 @@ from mech_chatbot.rag.execution import (
     RagToken,
     attributed_citations,
     collect_rag_events,
+    consume_rag_events,
     current_execution_context,
     current_request_budget,
 )
@@ -293,17 +294,18 @@ def test_pilot_replay_branches_inherit_cache_and_trace_controls(monkeypatch):
 
     assert isinstance(events[-1], RagCompleted)
     assert sorted(observed) == [
-        ("first", "production", False),
-        ("second", "production", False),
+        ("first", "pilot_replay", False),
+        ("second", "pilot_replay", False),
     ]
     payloads = [json.loads(message) for message in trace_messages]
     assert len(payloads) == 2
+    assert all(payload["execution_context"] == "pilot_replay" for payload in payloads)
     assert all(payload["safe_field"] == "kept" for payload in payloads)
     assert all("query" not in payload for payload in payloads)
     assert semantic_cache.enabled() is True
 
 
-def test_default_invocation_preserves_ambient_test_context(monkeypatch):
+def test_typed_invocation_mode_is_authoritative_over_ambient_context(monkeypatch):
     from mech_chatbot.rag import pipeline
 
     observed = []
@@ -312,17 +314,17 @@ def test_default_invocation_preserves_ambient_test_context(monkeypatch):
         observed.append(current_execution_context())
         return state.prepared((iter(["answer"]), "", [], [], {}))
 
-    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "test")
+    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "evaluation")
     monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
 
     list(
         DefaultRagExecutor().run(
             RagRequest("question", AccessScope()),
-            RagInvocation(trace_id="rag-contract-ambient-test"),
+            RagInvocation(trace_id="rag-contract-explicit-production", mode="production"),
         )
     )
 
-    assert observed == ["test"]
+    assert observed == ["production"]
 
 
 def test_setup_failure_still_emits_prepared_before_failed(monkeypatch):
@@ -723,6 +725,49 @@ def test_event_collector_builds_one_non_streaming_result():
     assert result.new_part_ids == ("PART-1",)
     assert result.outcome == "answered"
     assert result.diagnostics == {"phase": "completed"}
+
+
+def test_event_consumer_returns_typed_failure_with_final_diagnostics():
+    failure = RuntimeError("provider unavailable")
+    terminal = consume_rag_events(
+        iter(
+            [
+                RagPrepared("refs", (), (), {"phase": "prepared"}),
+                RagFailed(
+                    "RuntimeError",
+                    "provider unavailable",
+                    True,
+                    failure,
+                    diagnostics={"provider_retries": 2},
+                ),
+            ]
+        )
+    )
+
+    assert isinstance(terminal, RagFailed)
+    assert terminal.cause is failure
+    assert terminal.diagnostics == {"provider_retries": 2}
+
+
+def test_legacy_event_collector_still_raises_original_failure():
+    failure = RuntimeError("provider unavailable")
+
+    with pytest.raises(RuntimeError, match="provider unavailable") as raised:
+        collect_rag_events(
+            iter(
+                [
+                    RagPrepared("refs", (), (), {}),
+                    RagFailed(
+                        "RuntimeError",
+                        "provider unavailable",
+                        True,
+                        failure,
+                    ),
+                ]
+            )
+        )
+
+    assert raised.value is failure
 
 
 def test_legacy_adapter_mutates_same_debug_dictionary_after_stream_consumption(monkeypatch):

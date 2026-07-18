@@ -38,6 +38,7 @@ VALID_EXPECTED_OUTCOMES = {
     "insufficient_evidence", "access_denied",
 }
 RUN_LABELS = ("baseline", "candidate")
+EVALUATION_EXECUTION_MODE = "evaluation"
 
 
 def _utc_now() -> str:
@@ -236,6 +237,7 @@ def run_evaluation(
     preflight: bool = True,
     intent_extractor=None,
     rag_chat=None,
+    rag_executor=None,
     number_normalizer=None,
     preflight_runner=None,
 ) -> tuple[dict, bool]:
@@ -298,10 +300,20 @@ def run_evaluation(
     from mech_chatbot.evaluation.schema import (
         EVALUATION_REPORT_SCHEMA, EVALUATOR_MODELS, EVALUATOR_VERSION,
     )
-    if intent_extractor is None or rag_chat is None:
-        from mech_chatbot.rag.service import chat_with_rag, extract_search_intent
-        intent_extractor = intent_extractor or extract_search_intent
-        rag_chat = rag_chat or chat_with_rag
+    from mech_chatbot.rag.execution import (
+        AccessScope,
+        DefaultRagExecutor,
+        RagCancelled,
+        RagFailed,
+        RagInvocation,
+        RagRequest,
+        consume_rag_events,
+    )
+    if intent_extractor is None:
+        from mech_chatbot.rag.service import extract_search_intent
+        intent_extractor = extract_search_intent
+    if rag_chat is None and rag_executor is None:
+        rag_executor = DefaultRagExecutor()
     if number_normalizer is None:
         from mech_chatbot.rag.evidence_gate import normalized_number_values
         number_normalizer = normalized_number_values
@@ -337,12 +349,41 @@ def run_evaluation(
                         os.environ.pop(name, None)
                     else:
                         os.environ[name] = str(value)
-                stream, ref_text, _, _, debug = rag_chat(
-                    case["question"], None, [], [], case["user_department"], roles,
-                    case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
-                    trace_id=trace_id,
-                )
-                answer = "".join(stream)
+                if rag_chat is not None:
+                    stream, ref_text, _, _, debug = rag_chat(
+                        case["question"], None, [], [], case["user_department"], roles,
+                        case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
+                        trace_id=trace_id,
+                    )
+                    answer = "".join(stream)
+                else:
+                    events = rag_executor.run(
+                        RagRequest(
+                            question=case["question"],
+                            access=AccessScope(
+                                department=case["user_department"],
+                                roles=frozenset(roles),
+                                allowed_departments=frozenset(case["allowed_departments"]),
+                                max_security_level=case["max_security_level"],
+                                allowed_sites=frozenset(case["allowed_sites"]),
+                            ),
+                        ),
+                        RagInvocation(
+                            trace_id=trace_id,
+                            mode=EVALUATION_EXECUTION_MODE,
+                        ),
+                    )
+                    terminal = consume_rag_events(events)
+                    if isinstance(terminal, RagFailed):
+                        debug = dict(terminal.diagnostics)
+                        raise terminal.cause
+                    if isinstance(terminal, RagCancelled):
+                        if terminal.cause is not None:
+                            raise terminal.cause
+                        raise RuntimeError(terminal.reason)
+                    ref_text = terminal.ref_text
+                    debug = dict(terminal.diagnostics)
+                    answer = terminal.answer
             finally:
                 for name, value in previous_env.items():
                     if value is None:
@@ -668,7 +709,7 @@ def run_evaluation(
         ),
         "benchmark_concurrency": int(os.environ.get("RAG_EVAL_CONCURRENCY", "1")),
         "collection": os.environ.get("QDRANT_COLLECTION"),
-        "execution_context": os.environ.get("RAG_EXECUTION_CONTEXT"),
+        "execution_context": EVALUATION_EXECUTION_MODE,
         "feature_flags": {
             "crag": os.environ.get("RAG_CRAG_ENABLED", "false"),
             "claim_repair": os.environ.get("RAG_CLAIM_REPAIR_ENABLED", "false"),
