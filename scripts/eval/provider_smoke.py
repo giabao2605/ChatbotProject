@@ -95,11 +95,7 @@ def run_provider_smoke(invoke, *, request_count: int = 5) -> dict:
     if request_count != 5:
         raise ValueError("controlled-demo provider smoke requires exactly five requests")
     latencies = []
-    errors = []
-    error_types = []
-    root_error_types = []
-    status_codes = []
-    error_categories = []
+    failures = []
     retry_total = 0
     successful = 0
     started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -118,15 +114,19 @@ def run_provider_smoke(invoke, *, request_count: int = 5) -> dict:
             successful += 1
         except Exception as exc:  # the artifact stores only the class/category
             root = _root_exception(exc)
-            errors.append(str(root))
-            error_types.append(type(exc).__name__)
-            root_error_types.append(type(root).__name__)
-            status_codes.append(_status_code(root))
-            error_categories.append(_error_category(root))
+            failures.append({
+                "classification_text": str(root),
+                "error_type": type(exc).__name__,
+                "root_error_type": type(root).__name__,
+                "status_code": _status_code(root),
+                "error_category": _error_category(root),
+            })
         finally:
             retry_total += int(retry_counter.get("count") or 0)
             latencies.append((time.perf_counter() - started) * 1000)
-    provider_outcome = classify_provider_outcome(errors)
+    provider_outcome = classify_provider_outcome(
+        [failure["classification_text"] for failure in failures]
+    )
     passed = successful == request_count and retry_total == 0
     return {
         "schema": "provider-smoke-v1",
@@ -134,14 +134,14 @@ def run_provider_smoke(invoke, *, request_count: int = 5) -> dict:
         "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "request_count": request_count,
         "successful_requests": successful,
-        "failed_requests": len(errors),
+        "failed_requests": len(failures),
         "provider_retries": retry_total,
         "latency_p50_ms": statistics.median(latencies) if latencies else 0.0,
         "latency_p95_ms": _percentile(latencies, 0.95),
-        "error_types": error_types,
-        "root_error_types": root_error_types,
-        "status_codes": status_codes,
-        "error_categories": error_categories,
+        "error_types": [failure["error_type"] for failure in failures],
+        "root_error_types": [failure["root_error_type"] for failure in failures],
+        "status_codes": [failure["status_code"] for failure in failures],
+        "error_categories": [failure["error_category"] for failure in failures],
         "provider_outcome": provider_outcome,
         "passed": passed,
     }
