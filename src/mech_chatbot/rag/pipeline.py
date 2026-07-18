@@ -17,6 +17,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.db.repository import search_bom_facts, traverse_knowledge_graph
 from mech_chatbot.rag.rbac import (
     compose_retrieval_filters,
@@ -87,7 +88,8 @@ from mech_chatbot.rag.corrective import (
 from mech_chatbot.rag.query_decomposition import audit_decomposition_stream
 
 
-from mech_chatbot.rag.pipeline_steps import GenerationPlan, _prepare_history, _analyze_image, _assemble_context, _generate, _retrieve, _RETRIEVE_UNSET, _route, _rewrite_and_anchor, _disambiguate
+from mech_chatbot.rag.execution import current_execution_context
+from mech_chatbot.rag.pipeline_steps import GenerationControl, GenerationEvidence, GenerationOutcome, GenerationPlan, GenerationTurn, _prepare_history, _analyze_image, _assemble_context, generate_answer, _retrieve, _RETRIEVE_UNSET, _route, _rewrite_and_anchor, _disambiguate
 
 def make_debug_info(docs=None):
     docs = docs or []
@@ -194,8 +196,12 @@ def make_source_snapshot(docs=None):
     return snapshots
 
 
-def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
-    """Private orchestration implementation behind the typed execution seam."""
+def execute_pipeline(state):
+    """Execute all RAG stages through one request-owned execution state."""
+    request = state.request
+    trace_id = state.trace_id
+    cancel_event = state.cancellation
+    state.transition("preparing")
     user_question = request.question
     image_path = str(request.image_path) if request.image_path is not None else None
     chat_history = list(request.history)
@@ -216,7 +222,6 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         
     trace_id = trace_id or f"rag_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     t_start = time.time()
-    request_started_monotonic = time.monotonic()
     
     log_trace("rag_start", trace_id,
               question_length=len(user_question or ""),
@@ -238,6 +243,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         logger.error("Pre-cache safety check failed: %s", _safety_error, exc_info=True)
         _safety_reason = "safety_check_unavailable"
     if _safety_reason:
+        state.refuse("safety_block")
         from mech_chatbot.rag import route_responses as _route_responses_sb
         _safety_text = _route_responses_sb.build_safety_response(
             response_language, user_department, allowed_departments
@@ -246,7 +252,9 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             yield _safety_text
         log_trace("safety", trace_id, reason=_safety_reason, blocked=True, layer="pre_cache")
         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="safety_block")
-        return _pre_cache_safety_stream(), "", [], current_part_ids or [], make_debug_info([])
+        return state.prepared(
+            (_pre_cache_safety_stream(), "", [], current_part_ids or [], make_debug_info([]))
+        )
 
     _sc_qemb = None
     _sc_scope = None
@@ -289,13 +297,13 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                         cache_hit=True,
                         cache_type="exact",
                     )
-                    return (
+                    return state.prepared((
                         _exact_cached_stream(),
                         _exact_hit.get("ref_text", ""),
                         _exact_hit.get("ref_images", []),
                         current_part_ids or [],
                         _dbg,
-                    )
+                    ))
         except Exception as _sce_fast:
             logger.warning(f"exact cache lookup loi: {_sce_fast}")
     if _sc_cache_eligible:
@@ -303,14 +311,24 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                   latency_ms=int((time.time() - _exact_cache_started) * 1000))
 
     # P0 slice #1: lich su hoi thoai tach sang pipeline_steps._prepare_history
+    state.checkpoint("history")
     chat_history_str, _history_summary_new, _summary_covered_new = _prepare_history(
         chat_history, conversation_context, response_language, trace_id=trace_id
     )
+    state.checkpoint("history")
  
     # P0 slice #2: phan tich anh tach sang pipeline_steps._analyze_image
-    image_analysis = _analyze_image(image_path, user_question, trace_id)
+    state.checkpoint("vision")
+    image_analysis = _analyze_image(
+        image_path,
+        user_question,
+        trace_id,
+        retry_budget=state.budget,
+    )
+    state.checkpoint("vision")
  
     # BUOC B: TIM KIEM THONG MINH KET HOP STATE MEMORY
+    state.transition("routing")
     # P0 slice #4: dinh tuyen hoi thoai (interaction router + safety + meta + chitchat) tach sang pipeline_steps._route
     _route_terminal, _route_bundle = _route(
         user_question=user_question,
@@ -322,9 +340,11 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         trace_id=trace_id,
         t_start=t_start,
         make_debug_info=make_debug_info,
+        lifecycle=state,
     )
+    state.checkpoint("routing")
     if _route_terminal is not None:
-        return _route_terminal
+        return state.prepared(_route_terminal)
     mock_stream = _route_bundle["mock_stream"]
     _embed_cached = _route_bundle["_embed_cached"]
     is_chitchat = _route_bundle["is_chitchat"]
@@ -338,15 +358,9 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
     decomposition_intent_coverage = []
     decomposition_used_fallback = False
     decomposition_intent_overflow = False
-    planner_count = 0
-    subquery_count = 0
-    deadline_exceeded = False
-    final_generation_count = 0
     auxiliary_input_tokens = 0
     auxiliary_output_tokens = 0
     planner_estimated_cost = 0.0
-    auxiliary_retry_counter = {"count": 0}
-    correction_attempts = 0
     correction_estimated_cost = 0.0
     crag_enabled = correction_enabled()
     query_to_search = user_question  # Mac dinh, cac nhanh ben duoi se override neu can
@@ -374,7 +388,9 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                 log_trace("cache", trace_id, cache_type="semantic", hit=True,
                           latency_ms=int((time.time() - _semantic_cache_started) * 1000))
                 log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start) * 1000), refusal=False, cache_hit=True)
-                return _cached_stream(), _hit.get("ref_text", ""), _hit.get("ref_images", []), current_part_ids, _dbg
+                return state.prepared(
+                    (_cached_stream(), _hit.get("ref_text", ""), _hit.get("ref_images", []), current_part_ids, _dbg)
+                )
     except Exception as _sce:
         logger.warning(f"semantic cache lookup loi: {_sce}")
     if _sc_cache_eligible:
@@ -383,6 +399,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
 
     # === BUOC B0 (P0-1): PHAN DOAN NGU CANH + QUERY REWRITING + NEO STATE MEMORY ===
     # P0 slice #5: tach sang pipeline_steps._rewrite_and_anchor (analyze_context + rewrite + anchor + intent)
+    state.checkpoint("rewrite_and_anchor")
     (effective_question, new_part_ids, is_inherited, is_bom_query, intent_data,
      strict_filter, broad_filter, rbac_filter, _skip_hyde_anchor) = _rewrite_and_anchor(
         user_question=user_question,
@@ -397,6 +414,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         trace_id=trace_id,
         t_intent=t_intent,
     )
+    state.checkpoint("rewrite_and_anchor")
 
     if intent_data.get("version_policy") == "compare_versions" and not intent_data.get("detected_versions"):
         logger.info("Nguoi dung muon so sanh nhung khong chi dinh version. Yeu cau xac minh.")
@@ -443,13 +461,18 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             "correction_allowed": False,
             "correction_count": 0,
         })
-        return ask_version_stream(), "", [], current_part_ids, clarification_debug
+        state.refuse("clarification_required")
+        return state.prepared(
+            (ask_version_stream(), "", [], current_part_ids, clarification_debug)
+        )
 
     if intent_data.get("is_chitchat"):
         logger.info("LLM xac nhan la cau hoi ngoai le/xa giao. Bo qua toan bo Retrieval va HyDE.")
         log_trace("route", trace_id, route="chitchat", layer="L2_llm_intent", confidence=1.0)
         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, is_chitchat=True)
-        return mock_stream(), "", [], current_part_ids, make_debug_info([])
+        return state.prepared(
+            (mock_stream(), "", [], current_part_ids, make_debug_info([]))
+        )
     else:
         # Tien xu ly cau hoi bang underthesea de match voi du lieu BM25
         tokenized_question = tokenize_cached(effective_question)
@@ -473,6 +496,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         except Exception as _ge:
             logger.warning(f"glossary expansion loi: {_ge}")
 
+        state.transition("retrieval")
         decomposition_enabled = env_bool("RAG_QUERY_DECOMPOSITION_ENABLED", False)
         if decomposition_enabled:
             from mech_chatbot.rag.query_decomposition import (
@@ -491,8 +515,9 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             }
 
             def _planner(question):
-                nonlocal planner_count, auxiliary_input_tokens, auxiliary_output_tokens, planner_estimated_cost
-                planner_count += 1
+                nonlocal auxiliary_input_tokens, auxiliary_output_tokens, planner_estimated_cost
+                state.budget.record("planners", 1, cumulative=True)
+                state.checkpoint("planner")
                 prompt = (
                     "Tach cau hoi noi bo phuc hop thanh toi da 3 truy van doc lap. "
                     "Giu nguyen thu tu cac y trong cau hoi goc. "
@@ -503,8 +528,9 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                     [HumanMessage(content=prompt)],
                     surface="query_decomposition",
                     trace_id=trace_id,
-                    retry_counter=auxiliary_retry_counter,
+                    retry_counter=state.budget,
                 ).content
+                state.checkpoint("planner")
                 planner_input = len(prompt) // 4
                 planner_output = len(str(response)) // 4
                 auxiliary_input_tokens += planner_input
@@ -525,18 +551,13 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             decomposition_used_fallback = decomp_plan.used_fallback
             decomposition_intent_overflow = decomp_plan.intent_overflow
             if decomp_plan.is_complex:
-                try:
-                    request_deadline_seconds = max(
-                        0.1, float(os.getenv("RAG_REQUEST_DEADLINE_SECONDS", "120"))
-                    )
-                except (TypeError, ValueError):
-                    request_deadline_seconds = 120.0
-                request_deadline_monotonic = request_started_monotonic + request_deadline_seconds
-                shared_correction_budget = CorrectionBudget(1)
+                request_deadline_monotonic = state.budget.deadline_monotonic
+                shared_correction_budget = CorrectionBudget(state.budget.limits.corrections)
 
                 def _retrieve_branch(
                     subquery, inherited_access, _correction_budget, branch_deadline_monotonic,
                 ):
+                    state.checkpoint("branch_retrieval")
                     if (
                         branch_deadline_monotonic is not None
                         and time.monotonic() >= branch_deadline_monotonic
@@ -567,6 +588,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                         rbac_filter=rbac_filter,
                         trace_id=trace_id,
                     )
+                    state.checkpoint("branch_retrieval")
                     correction_cost = 0.0
                     correction_input = 0
                     correction_output = 0
@@ -626,7 +648,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                                 [HumanMessage(content=rewrite_prompt)],
                                 surface="corrective_retrieval",
                                 trace_id=trace_id,
-                                retry_counter=auxiliary_retry_counter,
+                                retry_counter=state.budget,
                             ).content
                             corrected_result = run_corrected_retrieval(
                                 _retrieve,
@@ -657,6 +679,8 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                                 evaluator_state=branch_decision.state.value,
                                 estimated_cost=correction_cost,
                             )
+                        except (ExternalAICallCancelled, TimeoutError):
+                            raise
                         except Exception as exc:
                             logger.warning("Decomposed corrective retrieval failed: %s", exc)
                             log_trace(
@@ -706,9 +730,13 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                         deadline_exceeded=True,
                     ),
                 )
-                subquery_count = len(decomp_plan.subqueries)
+                state.budget.record("subqueries", len(decomp_plan.subqueries))
                 correction_estimated_cost += sum(result.correction_cost for result in branch_results)
-                correction_attempts += sum(result.correction_attempted for result in branch_results)
+                state.budget.record(
+                    "corrections",
+                    sum(result.correction_attempted for result in branch_results),
+                    cumulative=True,
+                )
                 auxiliary_input_tokens += sum(result.correction_input_tokens for result in branch_results)
                 auxiliary_output_tokens += sum(result.correction_output_tokens for result in branch_results)
                 retrieved_docs = merge_branch_documents(result.documents for result in branch_results)
@@ -746,7 +774,9 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                         {"access_denied": bool(result.access_denied)},
                     )
                     decomposition_states.append(branch_policy.evidence_state.value)
-                    deadline_exceeded = deadline_exceeded or result.deadline_exceeded
+                    state.budget.deadline_exceeded = (
+                        state.budget.deadline_exceeded or result.deadline_exceeded
+                    )
                     branch_outcome = branch_policy.outcome.value
                     decomposition_branches.append({
                         "branch_id": f"branch-{branch_index}",
@@ -768,15 +798,15 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                 log_trace(
                     "query_decomposition",
                     trace_id,
-                    planner_count=planner_count,
-                    subquery_count=subquery_count,
+                    planner_count=state.budget.planners,
+                    subquery_count=state.budget.subqueries,
                     intent_count=len(decomp_plan.intents),
                     intent_coverage=list(decomp_plan.intent_coverage),
                     deterministic_fallback=decomp_plan.used_fallback,
                     intent_overflow=decomp_plan.intent_overflow,
                     evaluator_states=decomposition_states,
                     correction_budget=1,
-                    deadline_exceeded=deadline_exceeded,
+                    deadline_exceeded=state.budget.deadline_exceeded,
                     estimated_cost=planner_estimated_cost + correction_estimated_cost,
                     input_tokens=auxiliary_input_tokens,
                     output_tokens=auxiliary_output_tokens,
@@ -799,10 +829,12 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             )
         if _af is not _RETRIEVE_UNSET:
             active_filter = _af
+        state.checkpoint("retrieval")
 
         if not retrieved_docs and _hyde_eligible:
             logger.info("Retrieval rong; kich hoat HyDE fallback mot lan.")
             try:
+                state.checkpoint("hyde")
                 hyde_prompt = (
                     "Viet mot doan van ban ngan gon (1-2 cau) tra loi cho cau hoi sau "
                     f"dua tren tai lieu noi bo: '{effective_question}'"
@@ -810,8 +842,9 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                 t_hyde = time.time()
                 hyde_response = cohere_invoke(
                     [HumanMessage(content=hyde_prompt)], surface="hyde",
-                    trace_id=trace_id, retry_counter=auxiliary_retry_counter,
+                    trace_id=trace_id, retry_counter=state.budget,
                 ).content
+                state.checkpoint("hyde")
                 hyde_query = tokenize_cached(hyde_response)
                 (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = _retrieve(
                     new_part_ids=new_part_ids,
@@ -822,6 +855,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                     rbac_filter=rbac_filter,
                     trace_id=trace_id,
                 )
+                state.checkpoint("hyde_retrieval")
                 retrieval_mode = f"{retrieval_mode}_hyde_fallback"
                 if _af is not _RETRIEVE_UNSET:
                     active_filter = _af
@@ -833,6 +867,8 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                     hyde_chars=len(hyde_response),
                     fallback_docs=len(retrieved_docs),
                 )
+            except (ExternalAICallCancelled, TimeoutError):
+                raise
             except Exception as e:
                 logger.warning(f"Loi HyDE fallback: {e}")
                 log_trace("hyde", trace_id, used=True, error=str(e))
@@ -843,6 +879,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
     graph_docs = []
     served_graph_docs = []
     if not skip_retrieval and env_bool("RAG_GRAPH_RETRIEVAL_ENABLED", False):
+        state.checkpoint("graph")
         from mech_chatbot.rag.graph_retrieval import (
             filter_servable_edges, hydrate_graph_edges, select_graph_seeds,
             should_attempt_graph,
@@ -872,6 +909,8 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             else:
                 graph_edges, graph_docs = [], []
             graph_edge_count = len(graph_edges)
+            state.budget.record("graph_edges", graph_edge_count)
+            state.checkpoint("graph")
             log_trace(
                 "graph_retrieval", trace_id,
                 latency_ms=int((time.time() - graph_started) * 1000),
@@ -880,11 +919,14 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                 seed_count=len(graph_seeds), edge_count=len(graph_edges),
                 hydrated_count=len(graph_docs), max_hops=2, edge_limit=50,
             )
+        except (ExternalAICallCancelled, TimeoutError):
+            raise
         except Exception as exc:
             logger.warning("Graph retrieval unavailable: %s", exc)
             log_trace("graph_retrieval", trace_id, error=type(exc).__name__, edge_count=0)
 
     def _access_denied_terminal(access_reason):
+        state.refuse("access_denied")
         stub_vi = (
             "Có tài liệu liên quan đến câu hỏi, nhưng tài khoản của bạn chưa đủ quyền truy cập. "
             "Nội dung được bảo vệ theo chính sách truy cập.\n\n"
@@ -917,7 +959,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             refusal_reason="access_denied",
             access_reason=access_reason,
         )
-        return restricted_stream(), "", [], current_part_ids, debug
+        return state.prepared((restricted_stream(), "", [], current_part_ids, debug))
 
     # Kiem tra ket qua tim kiem ma cu the (khong fallback semantic lung tung)
     if not skip_retrieval and not retrieved_docs and new_part_ids:
@@ -963,11 +1005,15 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                 refusal=True,
                 refusal_reason="no_docs_for_exact_code",
             )
-            return insufficient_evidence_stream(), "", [], current_part_ids, _make_terminal_debug(
-                user_question, "no_docs_for_exact_code",
+            state.refuse("no_docs_for_exact_code")
+            return state.prepared(
+                (insufficient_evidence_stream(), "", [], current_part_ids, _make_terminal_debug(
+                    user_question, "no_docs_for_exact_code",
+                ))
             )
 
     if not skip_retrieval:
+        state.transition("retrieval")
         # P0 slice #7: resolve candidates + bang lua chon variant + insufficient tach sang pipeline_steps._disambiguate
         _disambig_terminal, retrieved_docs = _disambiguate(
             retrieved_docs=retrieved_docs,
@@ -979,9 +1025,10 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             trace_id=trace_id,
             t_start=t_start,
             make_debug_info=make_debug_info,
+            lifecycle=state,
         )
         if _disambig_terminal is not None:
-            return _disambig_terminal
+            return state.prepared(_disambig_terminal)
 
         log_trace("retrieval", trace_id, 
                   latency_ms=int((time.time() - t_retrieval)*1000),
@@ -1208,8 +1255,11 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             docs_count=0,
         )
 
-        return empty_stream(), "", [], current_part_ids, _make_terminal_debug(
-            user_question, "no_retrieved_docs",
+        state.refuse("no_retrieved_docs")
+        return state.prepared(
+            (empty_stream(), "", [], current_part_ids, _make_terminal_debug(
+                user_question, "no_retrieved_docs",
+            ))
         )
 
     # Optional CRAG pass.  It reuses the exact same strict/broad/RBAC filters;
@@ -1223,7 +1273,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             trace_id=trace_id,
         )
         if (
-            os.getenv("RAG_EXECUTION_CONTEXT", "production").strip().lower() == "evaluation"
+            current_execution_context() == "evaluation"
             and os.getenv("RAG_EVAL_FORCE_AMBIGUOUS", "false").strip().lower() in {"1", "true", "yes", "on"}
         ):
             coverage_decision = EvidenceDecision(
@@ -1249,12 +1299,13 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             {},
         )
         if should_attempt_correction(
-            coverage_policy, attempts=correction_attempts, enabled=crag_enabled
+            coverage_policy, attempts=state.budget.corrections, enabled=crag_enabled
         ):
             correction_started = time.time()
             before_count = len(retrieved_docs)
-            correction_attempts += 1
+            state.budget.record("corrections", 1, cumulative=True)
             try:
+                state.checkpoint("corrective_retrieval")
                 rewrite_prompt = (
                     "Rewrite this internal-document search query once to improve evidence recall. "
                     "Keep every technical code and do not add facts. Return only the query.\n\n"
@@ -1264,8 +1315,9 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                     [HumanMessage(content=rewrite_prompt)],
                     surface="corrective_retrieval",
                     trace_id=trace_id,
-                    retry_counter=auxiliary_retry_counter,
+                    retry_counter=state.budget,
                 ).content
+                state.checkpoint("corrective_retrieval")
                 corrected_query = tokenize_cached(str(rewritten or effective_question))
                 correction_cost = (
                     (len(rewrite_prompt) // 4) * 2.5 + (len(str(rewritten)) // 4) * 15.0
@@ -1282,6 +1334,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                     rbac_filter=rbac_filter,
                     trace_id=trace_id,
                 )
+                state.checkpoint("corrective_retrieval")
                 correction_estimated_cost += correction_cost
                 retrieved_docs = merge_corrected_documents(retrieved_docs, corrected_docs)
                 log_trace(
@@ -1289,7 +1342,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                     trace_id,
                     latency_ms=int((time.time() - correction_started) * 1000),
                     strategy="query_rewrite",
-                    attempt=correction_attempts,
+                    attempt=state.budget.corrections,
                     before_docs=before_count,
                     corrected_docs=len(corrected_docs),
                     after_docs=len(retrieved_docs),
@@ -1297,6 +1350,8 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                     evaluator_state=coverage_decision.state.value,
                     estimated_cost=correction_cost,
                 )
+            except (ExternalAICallCancelled, TimeoutError):
+                raise
             except Exception as exc:
                 logger.warning("Corrective retrieval failed: %s", exc)
                 log_trace(
@@ -1304,7 +1359,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
                     trace_id,
                     latency_ms=int((time.time() - correction_started) * 1000),
                     strategy="query_rewrite",
-                    attempt=correction_attempts,
+                    attempt=state.budget.corrections,
                     before_docs=before_count,
                     after_docs=len(retrieved_docs),
                     evaluator_state=coverage_decision.state.value,
@@ -1408,8 +1463,11 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             def mock_stream():
                 yield empty_msg
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="empty_context", docs_count=0, version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, user_department=user_department, user_roles=user_roles)
-            return mock_stream(), "", [], new_part_ids, _make_terminal_debug(
-                user_question, "empty_context",
+            state.refuse("empty_context")
+            return state.prepared(
+                (mock_stream(), "", [], new_part_ids, _make_terminal_debug(
+                    user_question, "empty_context",
+                ))
             )
 
         t_parent_context = time.time()
@@ -1454,6 +1512,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         logger.warning(f"[audit][confidential] dept={user_department} roles={user_roles} truy cap tai lieu mat: {_conf_docs}")
 
     # LOP PHONG THU 2: Evidence Gate cho cau hoi bay / cau hoi can so lieu
+    state.transition("evidence")
     t_gate = time.time()
     evidence_decision = evaluate_answerability(
         user_question,
@@ -1474,7 +1533,9 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         PolicyEvidence(
             decision=evidence_decision,
             has_retrieved_evidence=bool(retrieved_docs),
-            retrieval_can_improve=bool(crag_enabled and correction_attempts < 1),
+            retrieval_can_improve=bool(
+                crag_enabled and state.budget.corrections < state.budget.limits.corrections
+            ),
             negative_evidence=has_explicit_negative_evidence(
                 user_question, context_text
             ),
@@ -1500,7 +1561,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         stage=evidence_decision.stage,
         status=evidence_decision.telemetry_status,
         reason=evidence_reason,
-        correction_attempts=correction_attempts,
+        correction_attempts=state.budget.corrections,
         partial_serving=(
             has_sufficient_decomposition_branch
             and not evidence_decision.answerable
@@ -1518,22 +1579,22 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         _refusal_debug["evidence_state"] = answer_policy.evidence_state.value
         _refusal_debug["answer_outcome"] = answer_policy.outcome.value
         _refusal_debug["correction_allowed"] = bool(
-            correction_attempts > 0 or answer_policy.correction_allowed
+            state.budget.corrections > 0 or answer_policy.correction_allowed
         )
         _refusal_debug["evidence_stage"] = evidence_decision.stage
         _refusal_debug["evidence_quotes"] = evidence_quotes
-        _refusal_debug["correction_count"] = correction_attempts
+        _refusal_debug["correction_count"] = state.budget.corrections
         _refusal_debug["generation_metrics"] = {
             "estimated_cost": correction_estimated_cost + planner_estimated_cost,
             "input_tokens": auxiliary_input_tokens,
             "output_tokens": auxiliary_output_tokens,
-            "provider_retries": int(auxiliary_retry_counter["count"]),
+            "provider_retries": state.budget.provider_retries,
             "repair_count": 0,
         }
-        _refusal_debug["planner_count"] = planner_count
-        _refusal_debug["subquery_count"] = subquery_count
-        _refusal_debug["final_generation_count"] = final_generation_count
-        _refusal_debug["deadline_exceeded"] = deadline_exceeded
+        _refusal_debug["planner_count"] = state.budget.planners
+        _refusal_debug["subquery_count"] = state.budget.subqueries
+        _refusal_debug["final_generation_count"] = state.budget.final_generations
+        _refusal_debug["deadline_exceeded"] = state.budget.deadline_exceeded
         _refusal_debug["decomposition_branches"] = decomposition_branches
         _refusal_debug["decomposition_intent_count"] = len(decomposition_intents)
         _refusal_debug["decomposition_intent_coverage"] = decomposition_intent_coverage
@@ -1544,7 +1605,10 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         _refusal_debug["graph_routed"] = graph_routed
         _refusal_debug["graph_edge_count"] = graph_edge_count
         _refusal_debug["graph_max_hops"] = graph_max_hops
-        return refusal_stream(), ref_text, ref_images, new_part_ids, _refusal_debug
+        state.refuse("evidence_gate")
+        return state.prepared(
+            (refusal_stream(), ref_text, ref_images, new_part_ids, _refusal_debug)
+        )
 
     explicit_negative_quote = (
         evidence_quotes[0]
@@ -1561,27 +1625,39 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
         "estimated_cost": correction_estimated_cost + planner_estimated_cost,
         "input_tokens": auxiliary_input_tokens,
         "output_tokens": auxiliary_output_tokens,
-        "provider_retries": int(auxiliary_retry_counter["count"]),
+        "provider_retries": state.budget.provider_retries,
     }
-    final_generation_count = 0 if explicit_negative_answer else 1
-    stream = _generate(
+    state.budget.record("final_generations", 0 if explicit_negative_answer else 1)
+    state.transition("generation")
+    generation_outcome = GenerationOutcome()
+    state.bind_generation(generation_outcome)
+    stream = generate_answer(
         GenerationPlan(
-            context_text=context_text,
-            user_question=user_question,
-            chat_history_str=chat_history_str,
-            retrieved_docs=retrieved_docs,
-            new_part_ids=new_part_ids,
-            response_language=response_language,
-            trace_id=trace_id,
-            started_at=t_start,
-            user_department=user_department,
-            user_roles=user_roles,
-            effective_question=effective_question,
-            intent_data=intent_data,
-            base_k=base_k,
-            retrieval_mode=retrieval_mode,
-            has_active_filter=("active_filter" in locals()),
-            active_filter=(active_filter if "active_filter" in locals() else None),
+            turn=GenerationTurn(
+                user_question=user_question,
+                effective_question=effective_question,
+                chat_history_str=chat_history_str,
+                new_part_ids=new_part_ids,
+                response_language=response_language,
+                user_department=user_department,
+                user_roles=user_roles,
+            ),
+            evidence=GenerationEvidence(
+                context_text=context_text,
+                retrieved_docs=retrieved_docs,
+                intent_data=intent_data,
+                base_k=base_k,
+                retrieval_mode=retrieval_mode,
+                has_active_filter=("active_filter" in locals()),
+                active_filter=(active_filter if "active_filter" in locals() else None),
+            ),
+            control=GenerationControl(
+                trace_id=trace_id,
+                started_at=t_start,
+                deadline_monotonic=state.budget.deadline_monotonic,
+                budget=state.budget,
+                outcome=generation_outcome,
+            ),
             explicit_negative_answer=explicit_negative_answer,
         ),
         cancel_event=cancel_event,
@@ -1593,15 +1669,15 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
     debug_info["evidence_state"] = answer_policy.evidence_state.value
     debug_info["answer_outcome"] = answer_policy.outcome.value
     debug_info["correction_allowed"] = bool(
-        correction_attempts > 0 or answer_policy.correction_allowed
+        state.budget.corrections > 0 or answer_policy.correction_allowed
     )
     debug_info["evidence_stage"] = evidence_decision.stage
     debug_info["evidence_quotes"] = evidence_quotes
-    debug_info["correction_count"] = correction_attempts
-    debug_info["planner_count"] = planner_count
-    debug_info["subquery_count"] = subquery_count
-    debug_info["final_generation_count"] = final_generation_count
-    debug_info["deadline_exceeded"] = deadline_exceeded
+    debug_info["correction_count"] = state.budget.corrections
+    debug_info["planner_count"] = state.budget.planners
+    debug_info["subquery_count"] = state.budget.subqueries
+    debug_info["final_generation_count"] = state.budget.final_generations
+    debug_info["deadline_exceeded"] = state.budget.deadline_exceeded
     debug_info["decomposition_branches"] = decomposition_branches
     debug_info["decomposition_intent_count"] = len(decomposition_intents)
     debug_info["decomposition_intent_coverage"] = decomposition_intent_coverage
@@ -1669,7 +1745,7 @@ def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
             )
     except Exception as _sce2:
         logger.warning(f"semantic cache store loi: {_sce2}")
-    return stream, ref_text, ref_images, new_part_ids, debug_info
+    return state.prepared((stream, ref_text, ref_images, new_part_ids, debug_info))
 
 
 def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None, trace_id=None, cancel_event=None):
@@ -1691,6 +1767,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         RagPrepared,
         RagRequest,
         RagToken,
+        current_execution_context,
     )
 
     request = RagRequest(
@@ -1708,10 +1785,14 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         response_language=response_language,
         conversation_context=conversation_context,
     )
+    ambient_context = current_execution_context()
+    invocation_mode = (
+        ambient_context if ambient_context in {"evaluation", "test"} else "production"
+    )
     events = iter(
         DefaultRagExecutor().run(
             request,
-            RagInvocation(trace_id=trace_id or "", mode="production"),
+            RagInvocation(trace_id=trace_id or "", mode=invocation_mode),
             cancellation=cancel_event or NEVER_CANCELLED,
         )
     )

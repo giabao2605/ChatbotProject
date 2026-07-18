@@ -15,6 +15,42 @@ from mech_chatbot.config.logging import logger
 from mech_chatbot.db import repository as repo
 
 
+def _consume_regression_events(events):
+    """Preserve the legacy batch runner's best-effort partial-stream behavior."""
+    from mech_chatbot.rag.execution import (
+        RagCancelled,
+        RagCompleted,
+        RagFailed,
+        RagPrepared,
+        RagToken,
+    )
+
+    parts = []
+    diagnostics = {}
+    try:
+        for event in events:
+            if isinstance(event, RagPrepared):
+                diagnostics = dict(event.diagnostics)
+            elif isinstance(event, RagToken):
+                if event.text:
+                    parts.append(str(event.text))
+            elif isinstance(event, RagCompleted):
+                diagnostics = dict(event.diagnostics)
+            elif isinstance(event, RagFailed):
+                logger.error("[regression] Loi doc stream: %s", event.message)
+                break
+            elif isinstance(event, RagCancelled):
+                logger.error("[regression] Stream bi huy: %s", event.reason)
+                break
+    except Exception as exc:
+        logger.error("[regression] Loi doc stream: %s", exc, exc_info=True)
+    finally:
+        close = getattr(events, "close", None)
+        if callable(close):
+            close()
+    return "".join(parts), diagnostics
+
+
 def _split_keywords(raw):
     if not raw:
         return []
@@ -28,7 +64,6 @@ def run_regression_batch(limit=None, run_by="System"):
         DefaultRagExecutor,
         RagInvocation,
         RagRequest,
-        collect_rag_events,
     )
 
     questions = repo.list_regression_questions(active_only=True)
@@ -51,7 +86,7 @@ def run_regression_batch(limit=None, run_by="System"):
         passed = False
         error_text = None
         try:
-            result = collect_rag_events(
+            answer_text, debug_info = _consume_regression_events(
                 DefaultRagExecutor().run(
                     RagRequest(
                         question=question,
@@ -63,8 +98,6 @@ def run_regression_batch(limit=None, run_by="System"):
                     RagInvocation(trace_id="", mode="production"),
                 )
             )
-            debug_info = dict(result.diagnostics)
-            answer_text = result.answer
             for d in (debug_info or {}).get("retrieved_docs", []):
                 did = d.get("doc_id")
                 if did is not None:

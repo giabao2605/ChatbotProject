@@ -4,7 +4,7 @@ Moi ham la mot lat cat mechanical extraction tu rag/pipeline.py:chat_with_rag.
 KHONG doi logic — chi di chuyen nguyen van + truyen state qua tham so/return.
 """
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 from mech_chatbot.config.logging import logger
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_gpt_rate_limit
@@ -60,30 +60,56 @@ from mech_chatbot.rag.entity_resolver import (
     resolve_candidates_from_docs,
     build_candidate_table_markdown,
 )
+from mech_chatbot.rag.execution import current_execution_context
 
 _RETRIEVE_UNSET = object()
 
 
-@dataclass(frozen=True, slots=True)
-class GenerationPlan:
-    """Request-local inputs needed by the generation/verification stage."""
+@dataclass(slots=True)
+class GenerationOutcome:
+    """Mutable request-local outcome populated while a generation stream runs."""
 
-    context_text: str
+    refusal_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationTurn:
     user_question: str
+    effective_question: str
     chat_history_str: str
-    retrieved_docs: Sequence[Any]
     new_part_ids: Sequence[str]
     response_language: str
-    trace_id: str
-    started_at: float
     user_department: str | None
     user_roles: Sequence[str]
-    effective_question: str
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationEvidence:
+    context_text: str
+    retrieved_docs: Sequence[Any]
     intent_data: Mapping[str, Any]
     base_k: int
     retrieval_mode: str
     has_active_filter: bool = False
     active_filter: Any = None
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationControl:
+    trace_id: str
+    started_at: float
+    deadline_monotonic: float | None = None
+    budget: Any = None
+    outcome: GenerationOutcome = field(default_factory=GenerationOutcome)
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationPlan:
+    """Cohesive request-local inputs for generation and verification."""
+
+    turn: GenerationTurn
+    evidence: GenerationEvidence
+    control: GenerationControl
     explicit_negative_answer: str = ""
 
 
@@ -102,6 +128,7 @@ def _attempt_number_claim_repair(
     retrieved_docs,
     trace_id,
     enabled,
+    retry_counter=None,
 ):
     document_metadata = [
         getattr(document, "metadata", {}) or {} for document in (retrieved_docs or [])
@@ -123,6 +150,7 @@ def _attempt_number_claim_repair(
                 metadata.get("external_processing_policy") or "all_external"
                 for metadata in document_metadata
             ],
+            retry_counter=retry_counter,
         ).content,
         require_citation=(
             requires_source_citation(user_question)
@@ -359,7 +387,7 @@ def _prepare_history(chat_history, conversation_context, response_language, trac
     return chat_history_str, _history_summary_new, _summary_covered_new
 
 
-def _analyze_image(image_path, user_question, trace_id):
+def _analyze_image(image_path, user_question, trace_id, retry_budget=None):
     """BUOC A: phan tich anh nguoi dung tai len (Vision). Tra ve image_analysis (str).
     Tach nguyen van tu chat_with_rag (P0 slice #2).
     """
@@ -378,10 +406,15 @@ def _analyze_image(image_path, user_question, trace_id):
                 img_to_analyze = Image.open(image_path)
                 prompt = f"Nguoi dung tai len mot hinh anh va hoi: '{user_question}'. Hay mo ta chinh xac va chi tiet nhung gi ban thay trong anh nay de lam ngu canh tra loi. Neu do la ma code hay giao dien phan mem, hay noi ro. Tra loi bang tieng Viet."
  
+                def _authorize_vision_retry(_retry_state):
+                    if retry_budget is not None:
+                        retry_budget.consume_provider_retry()
+
                 @retry(
                     retry=retry_if_exception(is_retryable_error),
                     wait=wait_exponential(multiplier=2, min=2, max=30),
-                    stop=stop_after_attempt(5)
+                    stop=stop_after_attempt(5),
+                    before_sleep=_authorize_vision_retry,
                 )
                 def call_vision():
                     return _VISION_MODEL.generate_content([prompt, img_to_analyze])
@@ -441,28 +474,31 @@ def _assemble_context(retrieved_docs, user_question):
     return context_text
 
 
-def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
+def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
+    """Generate and verify one answer from a request-local plan."""
     """BUOC C/D: sinh cau tra loi streaming (guarded_stream / normal_stream).
     Tra ve stream. Tach nguyen van tu chat_with_rag (P0 slice #4).
     active_filter bind co dieu kien de bao toan ngu nghia locals() nhu ban goc.
     """
-    context_text = plan.context_text
-    user_question = plan.user_question
-    chat_history_str = plan.chat_history_str
-    retrieved_docs = plan.retrieved_docs
-    new_part_ids = plan.new_part_ids
-    response_language = plan.response_language
-    trace_id = plan.trace_id
-    t_start = plan.started_at
-    user_department = plan.user_department
-    user_roles = plan.user_roles
-    effective_question = plan.effective_question
-    intent_data = plan.intent_data
-    base_k = plan.base_k
-    retrieval_mode = plan.retrieval_mode
+    context_text = plan.evidence.context_text
+    user_question = plan.turn.user_question
+    chat_history_str = plan.turn.chat_history_str
+    retrieved_docs = plan.evidence.retrieved_docs
+    new_part_ids = plan.turn.new_part_ids
+    response_language = plan.turn.response_language
+    trace_id = plan.control.trace_id
+    t_start = plan.control.started_at
+    user_department = plan.turn.user_department
+    user_roles = plan.turn.user_roles
+    effective_question = plan.turn.effective_question
+    intent_data = plan.evidence.intent_data
+    base_k = plan.evidence.base_k
+    retrieval_mode = plan.evidence.retrieval_mode
     explicit_negative_answer = plan.explicit_negative_answer
-    if plan.has_active_filter:
-        active_filter = plan.active_filter
+    outcome = plan.control.outcome
+    budget = plan.control.budget
+    if plan.evidence.has_active_filter:
+        active_filter = plan.evidence.active_filter
     metrics = metrics if metrics is not None else {}
     metrics.setdefault("input_tokens", 0)
     metrics.setdefault("output_tokens", 0)
@@ -504,6 +540,8 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         "1", "true", "yes", "y", "on",
     }
     if grounded_math_enabled and calculation_docs:
+        if budget is not None:
+            budget.record("calculations", 1, cumulative=True)
         answer = render_grounded_calculation_answer(
             retrieved_docs,
             language=response_language,
@@ -513,12 +551,13 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
             if answer is not None else "missing_calculation_citation"
         )
         if violation:
+            outcome.refusal_reason = "grounded_math_post_check"
             answer = make_insufficient_evidence_message(
                 user_question,
                 f"grounded calculation failed closed: {violation}",
                 lang=response_language,
             )
-        metrics["calculation_count"] = len(calculation_docs)
+        metrics["calculation_count"] = 1
         metrics["output_tokens"] += len(answer) // 4
 
         def grounded_math_stream():
@@ -584,6 +623,11 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     def _raise_if_cancelled():
         if cancel_event is not None and cancel_event.is_set():
             raise ExternalAICallCancelled("RAG stream da bi client huy")
+        if (
+            plan.control.deadline_monotonic is not None
+            and time.monotonic() >= plan.control.deadline_monotonic
+        ):
+            raise TimeoutError("RAG request deadline exceeded during generation")
     try:
         _strict_holdback_chars = max(
             64, int(os.getenv("STRICT_STREAMING_HOLDBACK_CHARS", "160"))
@@ -613,6 +657,8 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     except Exception as stream_error:
                         if attempt >= _stream_attempts or not _is_gpt_rate_limit(stream_error):
                             raise
+                        if budget is not None:
+                            budget.consume_provider_retry()
                         delay = min(8, 2 ** attempt)
                         logger.warning(
                             "LLM stream tam thoi loi; retry %s/%s sau %ss: %s",
@@ -634,7 +680,7 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         time.sleep(delay)
                 _raise_if_cancelled()
                 answer = "".join(chunks)
-                if os.getenv("RAG_EXECUTION_CONTEXT", "production").strip().lower() == "evaluation":
+                if current_execution_context() == "evaluation":
                     draft_override = os.getenv("RAG_EVAL_DRAFT_OVERRIDE")
                     if draft_override:
                         answer = draft_override
@@ -660,6 +706,7 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     bad_units, unsupported_units = False, []
                 
                 if bad_mats or bad_codes:
+                    outcome.refusal_reason = "post_check_materials_codes"
                     ans = make_insufficient_evidence_message(
                         user_question,
                         f"Câu trả lời chứa thông tin tự tạo không có trong nguồn: materials={unsupported_mats}, codes={unsupported_codes}",
@@ -669,6 +716,7 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_materials_codes", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                 elif bad_units:
+                    outcome.refusal_reason = "post_check_units"
                     ans = make_insufficient_evidence_message(
                         user_question,
                         f"Câu trả lời chứa đơn vị/ký hiệu kỹ thuật không có trong nguồn: {unsupported_units}",
@@ -688,6 +736,8 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     user_question,
                     strict_mode=is_high_risk_question(user_question),
                 ):
+                    if _claim_repair_enabled and budget is not None:
+                        budget.record("repairs", 1, cumulative=True)
                     repair_started = time.time()
                     repair_result = _attempt_number_claim_repair(
                         answer,
@@ -696,6 +746,7 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         retrieved_docs=retrieved_docs,
                         trace_id=trace_id,
                         enabled=_claim_repair_enabled,
+                        retry_counter=budget,
                     )
                     log_trace(
                         "claim_repair",
@@ -720,6 +771,7 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         "cau tra loi sinh ra co so lieu khong truy vet duoc trong tai lieu",
                         lang=response_language,
                     )
+                    outcome.refusal_reason = "post_check_numbers"
                     yield ans
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_numbers", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
@@ -732,6 +784,7 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     and not os.getenv("RAG_AUTO_SOURCE_CARDS", "true").strip().lower() in {"1", "true", "yes", "on"}
                     and not has_valid_source_citation(answer, retrieved_docs, require_version=True)
                 ):
+                    outcome.refusal_reason = "missing_source_page_version"
                     ans = make_insufficient_evidence_message(
                         user_question,
                         "câu trả lời không có đủ nguồn file/trang/version rõ ràng",
@@ -793,6 +846,8 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     except Exception as stream_error:
                         if chunks or attempt >= _stream_attempts or not _is_gpt_rate_limit(stream_error):
                             raise
+                        if budget is not None:
+                            budget.consume_provider_retry()
                         delay = min(8, 2 ** attempt)
                         logger.warning(
                             "LLM stream tam thoi loi; retry %s/%s sau %ss: %s",
@@ -863,6 +918,7 @@ def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         ):
                             violation_reason = "missing_source_page_version"
                         if violation_reason:
+                            outcome.refusal_reason = "strict_stream_" + violation_reason
                             refusal = make_insufficient_evidence_message(
                                 user_question,
                                 "streaming post-check khong xac nhan duoc bang chung cua cau tra loi",
@@ -987,7 +1043,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
 
 def _route(*, user_question, conversation_context, response_language,
            user_department, allowed_departments, current_part_ids,
-           trace_id, t_start, make_debug_info):
+           trace_id, t_start, make_debug_info, lifecycle):
     """P0 slice #4: dinh tuyen hoi thoai (Interaction Router L0/L1/L2 + safety_block + meta + chitchat).
     Tra ve (terminal_or_None, bundle). terminal la 5-tuple return som (safety/meta/chitchat).
     bundle chua closure dung chung (mock_stream, _embed_cached) + is_chitchat de caller dung tiep.
@@ -1042,6 +1098,7 @@ def _route(*, user_question, conversation_context, response_language,
 
     # P2: safety_block -> chan NGAY truoc pipeline + log audit.
     if _route_result.route == _interaction_router.ROUTE_SAFETY_BLOCK:
+        lifecycle.refuse("safety_block")
         from mech_chatbot.rag import route_responses as _route_responses_sb
         _safety_text = _route_responses_sb.build_safety_response(response_language, user_department, allowed_departments)
         def safety_stream():
@@ -1067,6 +1124,8 @@ def _route(*, user_question, conversation_context, response_language,
                 yield _meta_text
             logger.info("Route meta -> tra template, bo qua retrieval.")
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=(_route_result.route == _interaction_router.ROUTE_OUT_OF_SCOPE), is_chitchat=False, route=_route_result.route)
+            if _route_result.route == _interaction_router.ROUTE_OUT_OF_SCOPE:
+                lifecycle.refuse("out_of_scope")
             return (meta_stream(), "", [], current_part_ids, make_debug_info([])), None
 
     if is_chitchat:
@@ -1188,7 +1247,7 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
 
 def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
                   response_language, current_part_ids, trace_id, t_start,
-                  make_debug_info):
+                  make_debug_info, lifecycle):
     """P0 slice #7: disambiguation (resolve candidates + bang lua chon variant + insufficient).
     Tra ve (terminal_or_None, retrieved_docs). terminal la 5-tuple return som (ambiguous/insufficient).
     'single' -> retrieved_docs duoc thu hep; 'pass'/khong disambig -> giu nguyen.
@@ -1262,6 +1321,7 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
                 logger.info(f"Disambiguation: chot 1 candidate {_sel.get('key')} tu rang buoc {_constraints}.")
                 retrieved_docs = resolution["selected_docs"] or retrieved_docs
             elif resolution["decision"] == "ambiguous":
+                lifecycle.refuse("multiple_candidates_need_choice")
                 logger.info(f"Nhieu candidate sau disambiguation: {[c.get('key') for c in resolution['candidates']]}.")
                 _table_md = build_candidate_table_markdown(resolution["candidates"])
                 def variant_ambiguity_stream():
@@ -1284,6 +1344,7 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
                     logger.warning(f"[ConvState] luu pending loi: {_e_cs}")
                 return (variant_ambiguity_stream(), "", [], current_part_ids, _dbg_amb), retrieved_docs
             elif resolution["decision"] == "insufficient":
+                lifecycle.refuse("no_confident_candidate")
                 # Co mo ta nhung khong tai lieu nao khop du chac -> xin them thong tin.
                 logger.info(f"Khong resolve duoc candidate du chac voi rang buoc {_constraints}.")
                 def insufficient_candidate_stream():

@@ -107,7 +107,17 @@ def _is_cohere_rate_limit(exc):
 def _before_llm_retry(retry_state):
     kwargs = retry_state.kwargs or {}
     counter = kwargs.get("retry_counter")
-    if isinstance(counter, dict):
+    if counter is None:
+        try:
+            from mech_chatbot.rag.execution import current_request_budget
+
+            counter = current_request_budget()
+        except Exception:
+            counter = None
+    consume_retry = getattr(counter, "consume_provider_retry", None)
+    if callable(consume_retry):
+        consume_retry()
+    elif isinstance(counter, dict):
         counter["count"] = int(counter.get("count") or 0) + 1
     error = retry_state.outcome.exception() if retry_state.outcome else None
     log_trace(
@@ -115,7 +125,10 @@ def _before_llm_retry(retry_state):
         kwargs.get("trace_id"),
         surface=kwargs.get("surface") or "generation",
         attempt=retry_state.attempt_number,
-        max_attempts=4,
+        max_attempts=(
+            int(counter.limits.provider_retries) + 1
+            if hasattr(counter, "limits") else 4
+        ),
         error=type(error).__name__ if error else "unknown",
     )
 

@@ -169,10 +169,15 @@ def log_trace(event_name, trace_id, **kwargs):
             for key, value in kwargs.items()
             if not any(part in str(key).casefold() for part in _SENSITIVE_TRACE_KEY_PARTS)
         }
-    execution_context = str(
-        kwargs.pop("execution_context", None)
-        or os.getenv("RAG_EXECUTION_CONTEXT", "production")
-    ).strip().lower()
+    execution_context = kwargs.pop("execution_context", None)
+    if execution_context is None:
+        try:
+            from mech_chatbot.rag.execution import current_execution_context
+
+            execution_context = current_execution_context()
+        except Exception:
+            execution_context = os.getenv("RAG_EXECUTION_CONTEXT", "production")
+    execution_context = str(execution_context).strip().lower()
     if execution_context not in {"production", "evaluation", "test"}:
         execution_context = "production"
     if event_name == "rag_end":

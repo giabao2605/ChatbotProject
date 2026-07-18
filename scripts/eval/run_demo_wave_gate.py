@@ -68,17 +68,34 @@ def _contains_expected_evidence(answer: str, expected: str) -> bool:
 
 
 def _evaluate_one(case: dict, mode: str) -> dict:
-    from mech_chatbot.rag.service import chat_with_rag
+    from mech_chatbot.rag.execution import (
+        AccessScope,
+        DefaultRagExecutor,
+        RagInvocation,
+        RagRequest,
+        collect_rag_events,
+    )
 
     started = time.perf_counter()
-    allowed_sites = [case["user_site"]] if case.get("user_site") else None
-    stream, ref_text, _images, _parts, debug = chat_with_rag(
-        case["question"], None, [], [], case.get("user_department"),
-        case.get("user_roles") or ["viewer"], case.get("allowed_departments") or [],
-        max_security_level=case.get("max_security_level", "internal"),
-        allowed_sites=allowed_sites,
+    allowed_sites = frozenset({case["user_site"]}) if case.get("user_site") else frozenset()
+    execution = collect_rag_events(
+        DefaultRagExecutor().run(
+            RagRequest(
+                question=case["question"],
+                access=AccessScope(
+                    department=case.get("user_department"),
+                    roles=frozenset(case.get("user_roles") or ["viewer"]),
+                    allowed_departments=frozenset(case.get("allowed_departments") or []),
+                    max_security_level=case.get("max_security_level", "internal"),
+                    allowed_sites=allowed_sites,
+                ),
+            ),
+            RagInvocation(trace_id="", mode="evaluation"),
+        )
     )
-    answer = "".join(str(chunk) for chunk in stream)
+    answer = execution.answer
+    ref_text = execution.ref_text
+    debug = dict(execution.diagnostics)
     if any(marker in answer.lower() for marker in ("servers are currently overloaded", "service unavailable", "error code: 5")):
         raise RuntimeError("service_unavailable response from generation provider")
     docs = (debug or {}).get("retrieved_docs") or []
