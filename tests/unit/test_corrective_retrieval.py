@@ -1,3 +1,6 @@
+import ast
+from pathlib import Path
+
 from langchain_core.documents import Document
 
 from mech_chatbot.rag.corrective import (
@@ -85,3 +88,26 @@ def test_corrected_retrieval_reuses_governance_filters_unchanged():
     assert observed["strict_filter"] is strict_filter
     assert observed["broad_filter"] is broad_filter
     assert observed["rbac_filter"] is rbac_filter
+
+
+def test_corrective_query_rewrites_use_approved_disambiguation_surface():
+    pipeline_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "mech_chatbot"
+        / "rag"
+        / "pipeline.py"
+    )
+    tree = ast.parse(pipeline_path.read_text(encoding="utf-8"))
+    surfaces = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "cohere_invoke":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "surface" and isinstance(keyword.value, ast.Constant):
+                surfaces.append(keyword.value.value)
+
+    assert "corrective_retrieval" not in surfaces
+    assert surfaces.count("query_disambiguation") >= 2

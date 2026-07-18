@@ -649,7 +649,7 @@ def execute_pipeline(state):
                             )
                             rewritten = cohere_invoke(
                                 [HumanMessage(content=rewrite_prompt)],
-                                surface="corrective_retrieval",
+                                surface="query_disambiguation",
                                 trace_id=trace_id,
                                 retry_counter=state.budget,
                             ).content
@@ -1319,7 +1319,7 @@ def execute_pipeline(state):
                 )
                 rewritten = cohere_invoke(
                     [HumanMessage(content=rewrite_prompt)],
-                    surface="corrective_retrieval",
+                    surface="query_disambiguation",
                     trace_id=trace_id,
                     retry_counter=state.budget,
                 ).content
