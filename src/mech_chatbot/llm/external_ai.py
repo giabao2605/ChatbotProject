@@ -438,6 +438,9 @@ def make_external_call_spec(
 
 def external_error_metadata(exc: BaseException) -> ExternalAIErrorMetadata:
     status_code = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+    if status_code is None:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
     try:
         status_code = int(status_code) if status_code is not None else None
     except (TypeError, ValueError):

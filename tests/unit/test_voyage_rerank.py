@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 pytestmark = pytest.mark.unit
 
@@ -91,3 +92,17 @@ def test_voyage_pilot_policy_records_429_and_immediate_local_fallback():
         "retry_attempted": False,
     }
     assert "voyage_failure_metadata" in rerank.__all__
+
+
+def test_voyage_pilot_policy_reads_status_from_requests_http_error_response():
+    response = SimpleNamespace(status_code=429)
+    error = requests.HTTPError(
+        "429 Client Error: Too Many Requests",
+        response=response,
+    )
+
+    metadata = rerank.voyage_failure_metadata(error)
+
+    assert metadata["provider_status_code"] == 429
+    assert metadata["retryable"] is True
+    assert metadata["retry_attempted"] is False
