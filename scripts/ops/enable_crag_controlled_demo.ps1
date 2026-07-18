@@ -78,40 +78,19 @@ $appEnv = @{
     CRAG_PILOT_CANDIDATE_DEPLOYMENT_ID = [string]$demoConfig.deployments.candidate.id
     CRAG_PILOT_SNAPSHOT_FINGERPRINT = [string]$demoConfig.snapshot_fingerprint
 }
-$saved = @{}
-foreach ($key in $appEnv.Keys) {
-    $saved[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
-    [Environment]::SetEnvironmentVariable($key, [string]$appEnv[$key], "Process")
-}
-try {
-    $process = Start-Process -FilePath $pythonExe `
-        -ArgumentList @("-m", "mech_chatbot.api.app_server") `
-        -WorkingDirectory $projectRoot `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput (Join-Path $logsDir "gateway.out.log") `
-        -RedirectStandardError (Join-Path $logsDir "gateway.err.log") `
-        -PassThru
-}
-finally {
-    foreach ($key in $appEnv.Keys) {
-        [Environment]::SetEnvironmentVariable($key, $saved[$key], "Process")
-    }
-}
+$gatewayProcess = Start-CragDemoProcess $pythonExe $projectRoot "gateway" $appEnv `
+    "mech_chatbot.api.app_server" (Join-Path $logsDir "gateway.out.log") `
+    (Join-Path $logsDir "gateway.err.log")
 
 try {
     Wait-CragDemoHttpHealth "http://127.0.0.1:8080/api/health" 30 `
         "Browser gateway khong healthy tren port 8080."
-    $gateway = [pscustomobject]@{
-        name = "gateway"
-        pid = $process.Id
-        started_at = $process.StartTime.ToUniversalTime().ToString("o")
-    }
-    $state.processes = @($state.processes) + $gateway
+    $state.processes = @($state.processes) + [pscustomobject]$gatewayProcess
     $state.gateway_enabled = $true
     $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding utf8
     Write-Output "Gateway da enable sau khi preflight duoc review."
 }
 catch {
-    Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+    Stop-Process -Id $gatewayProcess.pid -ErrorAction SilentlyContinue
     throw
 }

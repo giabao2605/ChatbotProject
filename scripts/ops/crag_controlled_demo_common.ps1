@@ -15,3 +15,40 @@ function Wait-CragDemoHttpHealth {
         Start-Sleep -Seconds 2
     }
 }
+
+
+function Start-CragDemoProcess {
+    param(
+        [string]$PythonExe,
+        [string]$ProjectRoot,
+        [string]$Name,
+        [hashtable]$Environment,
+        [string]$Module,
+        [string]$OutLog,
+        [string]$ErrLog
+    )
+    $saved = @{}
+    foreach ($key in $Environment.Keys) {
+        $saved[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+        [Environment]::SetEnvironmentVariable($key, [string]$Environment[$key], "Process")
+    }
+    try {
+        $process = Start-Process -FilePath $PythonExe `
+            -ArgumentList @("-m", $Module) `
+            -WorkingDirectory $ProjectRoot `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $OutLog `
+            -RedirectStandardError $ErrLog `
+            -PassThru
+        return @{
+            name = $Name
+            pid = $process.Id
+            started_at = $process.StartTime.ToUniversalTime().ToString("o")
+        }
+    }
+    finally {
+        foreach ($key in $Environment.Keys) {
+            [Environment]::SetEnvironmentVariable($key, $saved[$key], "Process")
+        }
+    }
+}

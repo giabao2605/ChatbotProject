@@ -58,40 +58,6 @@ foreach ($port in 8101, 8102) {
 
 New-Item -ItemType Directory -Force -Path $stateDir, $logsDir | Out-Null
 
-function Start-DemoProcess {
-    param(
-        [string]$Name,
-        [hashtable]$Environment,
-        [string]$Module,
-        [string]$OutLog,
-        [string]$ErrLog
-    )
-    $saved = @{}
-    foreach ($key in $Environment.Keys) {
-        $saved[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
-        [Environment]::SetEnvironmentVariable($key, [string]$Environment[$key], "Process")
-    }
-    try {
-        $process = Start-Process -FilePath $pythonExe `
-            -ArgumentList @("-m", $Module) `
-            -WorkingDirectory $projectRoot `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $OutLog `
-            -RedirectStandardError $ErrLog `
-            -PassThru
-        return @{
-            name = $Name
-            pid = $process.Id
-            started_at = $process.StartTime.ToUniversalTime().ToString("o")
-        }
-    }
-    finally {
-        foreach ($key in $Environment.Keys) {
-            [Environment]::SetEnvironmentVariable($key, $saved[$key], "Process")
-        }
-    }
-}
-
 $common = @{
     RAG_DEPLOYMENT_GIT_SHA = [string]$demoConfig.git_sha
     RAG_SNAPSHOT_FINGERPRINT = [string]$demoConfig.snapshot_fingerprint
@@ -111,8 +77,9 @@ try {
     $controlEnv.RAG_CRAG_ENABLED = "false"
     $controlEnv.RAG_CLAIM_REPAIR_ENABLED = "false"
     $controlEnv.RAG_TRACE_LOG_FILE = Join-Path $logsDir "control-trace.jsonl"
-    $started += Start-DemoProcess "control" $controlEnv "mech_chatbot.api.rag_server" `
-        (Join-Path $logsDir "control.out.log") (Join-Path $logsDir "control.err.log")
+    $started += Start-CragDemoProcess $pythonExe $projectRoot "control" $controlEnv `
+        "mech_chatbot.api.rag_server" (Join-Path $logsDir "control.out.log") `
+        (Join-Path $logsDir "control.err.log")
 
     $candidateEnv = $common.Clone()
     $candidateEnv.RAG_SERVER_PORT = "8102"
@@ -120,8 +87,9 @@ try {
     $candidateEnv.RAG_CRAG_ENABLED = "true"
     $candidateEnv.RAG_CLAIM_REPAIR_ENABLED = "true"
     $candidateEnv.RAG_TRACE_LOG_FILE = Join-Path $logsDir "candidate-trace.jsonl"
-    $started += Start-DemoProcess "candidate" $candidateEnv "mech_chatbot.api.rag_server" `
-        (Join-Path $logsDir "candidate.out.log") (Join-Path $logsDir "candidate.err.log")
+    $started += Start-CragDemoProcess $pythonExe $projectRoot "candidate" $candidateEnv `
+        "mech_chatbot.api.rag_server" (Join-Path $logsDir "candidate.out.log") `
+        (Join-Path $logsDir "candidate.err.log")
 
     $controlUrl = ([string]$demoConfig.deployment_urls.control).TrimEnd('/')
     $candidateUrl = ([string]$demoConfig.deployment_urls.candidate).TrimEnd('/')
