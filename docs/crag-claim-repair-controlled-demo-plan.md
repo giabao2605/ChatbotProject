@@ -25,8 +25,9 @@ Do chỉ có `bao.nguyen` làm reviewer, kết luận cuối của lần chạy 
 | CLI tạo cohort hash | Codex | Đã làm ở code | Input user ID chỉ đọc local; output không chứa raw identity hoặc secret |
 | Script start/enable/status/stop control, candidate và gateway | Codex | Đã làm ở code | Start chỉ mở hai arm và tạo preflight; enable gateway là lệnh riêng sau phê duyệt |
 | Regression/targeted/full tests | Codex | Đã đạt ngày 2026-07-18 | Full pytest đạt; các integration test cần live SQL/Qdrant/RAG được skip đúng opt-in |
-| Self-review hai trục Standards/Spec | Codex | Đang làm | Không còn finding nghiêm trọng trước commit cuối |
-| Provider smoke đầu/cuối | Codex chạy lệnh; provider phải sẵn sàng | Lần đầu fail ngày 2026-07-18: 0/5, 15 retry | Dừng staging/live eval; chạy lại khi provider ổn định |
+| Self-review hai trục Standards/Spec | Codex | Đã đạt ngày 2026-07-18 | Hai review độc lập xác nhận không còn finding actionable |
+| Rollback CRAG + Claim Repair | Codex | Đã đạt trên commit sạch | Hai flag false, targeted rollback 2/2 test đạt |
+| Provider smoke đầu/cuối | Codex chạy lệnh; provider phải sẵn sàng | Lần đầu fail ngày 2026-07-18: 0/5, 15 retry | Evidence: `reports/controlled-demo/20260718-crag-controlled-demo-readiness/provider-smoke-before.json`; dừng staging/live eval |
 | Ba staging baseline/candidate pairs | Codex chạy lệnh; SQL/Qdrant/provider phải sẵn sàng | Chờ provider smoke | Cùng commit/snapshot/manifest/config/concurrency; cả ba gate đạt |
 | Chọn 2–10 tài khoản Technical/HQ và xác nhận được phép tham gia | Con người | Chưa làm | Có cohort hash; không ghi username vào artifact |
 | Xác nhận snapshot `TaiLieuKyThuat_v2` không đổi trong ba ngày | Con người vận hành | Chưa làm | Điền snapshot fingerprint vào config trước khi start |
