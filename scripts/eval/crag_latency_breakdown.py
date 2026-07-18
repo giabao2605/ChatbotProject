@@ -140,7 +140,6 @@ def build_latency_breakdown(
     return {
         "schema": "crag-latency-breakdown-v1",
         "source": {
-            "path": str(path.resolve()),
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "git_sha": _git_sha(),
         },

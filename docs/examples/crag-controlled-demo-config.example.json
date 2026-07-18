@@ -8,6 +8,10 @@
     "department": "Technical",
     "site": "HQ",
     "sha256": "REPLACE_WITH_PINNED_COHORT_SHA256",
+    "actor_hashes": [
+      "REPLACE_WITH_ACTOR_1_HMAC_SHA256",
+      "REPLACE_WITH_ACTOR_2_HMAC_SHA256"
+    ],
     "minimum_users": 2,
     "maximum_users": 10
   },

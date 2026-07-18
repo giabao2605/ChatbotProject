@@ -65,9 +65,22 @@ class PilotConfig:
     control_deployment_id: str
     candidate_deployment_id: str
     snapshot_fingerprint: str
+    eligible_site: str = ""
+    allowed_actor_hashes: tuple[str, ...] = ()
 
     def __post_init__(self):
-        for field, value in self.__dict__.items():
+        for field in (
+            "experiment_id",
+            "assignment_salt",
+            "eligible_department",
+            "cohort_sha256",
+            "control_url",
+            "candidate_url",
+            "control_deployment_id",
+            "candidate_deployment_id",
+            "snapshot_fingerprint",
+        ):
+            value = getattr(self, field)
             if not str(value or "").strip():
                 raise ValueError(f"pilot config requires {field}")
         if self.control_url.rstrip("/") == self.candidate_url.rstrip("/"):
@@ -116,6 +129,16 @@ def load_pilot_config(environ: dict[str, str] | None = None) -> PilotConfig | No
         if not value:
             raise ValueError(f"{name} is required when CRAG_PILOT_ENABLED=true")
         values[field] = value
+    values["eligible_site"] = str(env.get("CRAG_PILOT_SITE") or "").strip()
+    raw_actor_hashes = str(env.get("CRAG_PILOT_ALLOWED_ACTOR_HASHES") or "")
+    values["allowed_actor_hashes"] = tuple(
+        sorted({value.strip().casefold() for value in raw_actor_hashes.split(",") if value.strip()})
+    )
+    if values["allowed_actor_hashes"] and any(
+        len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
+        for value in values["allowed_actor_hashes"]
+    ):
+        raise ValueError("CRAG_PILOT_ALLOWED_ACTOR_HASHES requires SHA-256 hex values")
     return PilotConfig(**values)
 
 
@@ -176,6 +199,7 @@ def assign_pilot_route(
     user_id: str,
     department: str,
     request_id: str,
+    sites=(),
 ) -> PilotRoute:
     """Assign one identity to a stable arm without inspecting query content."""
     actor = str(user_id or "").strip()
@@ -185,9 +209,17 @@ def assign_pilot_route(
     actor_hash = _digest(
         config.assignment_salt, f"{config.experiment_id}|actor|{actor}"
     )
-    eligible = str(department or "").strip().casefold() == str(
+    department_eligible = str(department or "").strip().casefold() == str(
         config.eligible_department
     ).strip().casefold()
+    normalized_sites = {str(site).strip().casefold() for site in sites or []}
+    site_eligible = not config.eligible_site or (
+        config.eligible_site.strip().casefold() in normalized_sites
+    )
+    cohort_eligible = not config.allowed_actor_hashes or (
+        actor_hash.casefold() in set(config.allowed_actor_hashes)
+    )
+    eligible = department_eligible and site_eligible and cohort_eligible
     bucket = int(
         _digest(
             config.assignment_salt,

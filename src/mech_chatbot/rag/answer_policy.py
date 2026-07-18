@@ -109,27 +109,6 @@ def render_explicit_negative_answer(
     return f"Theo tài liệu, thông tin được nêu rõ: “{statement}”{citation}"
 
 
-def source_id_for_evidence_quote(quote: str, documents) -> str:
-    """Resolve a citation only when the exact governed document contains the quote."""
-    target = str(quote or "").strip()
-    if not target:
-        return ""
-    for document in documents or []:
-        metadata = getattr(document, "metadata", {}) or {}
-        content = str(
-            metadata.get("noi_dung_goc")
-            or getattr(document, "page_content", "")
-            or ""
-        )
-        if target not in content:
-            continue
-        doc_id = metadata.get("doc_id")
-        page_no = metadata.get("trang_so") or metadata.get("page_no")
-        if doc_id is not None and page_no is not None:
-            return f"D{doc_id}P{page_no}"
-    return ""
-
-
 def decide_answer_policy(
     question: str,
     evidence: PolicyEvidence,
@@ -245,5 +224,4 @@ __all__ = [
     "has_explicit_negative_evidence",
     "explicit_negative_evidence_quote",
     "render_explicit_negative_answer",
-    "source_id_for_evidence_quote",
 ]

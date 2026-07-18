@@ -62,6 +62,46 @@ def test_stable_canary_assignment_uses_identity_not_query_text():
     assert outside.eligible is False
 
 
+def test_controlled_demo_assignment_requires_site_and_pinned_actor_hash():
+    base = _config()
+    actor_hash = assign_pilot_route(
+        base, user_id="42", department="Technical", request_id="seed"
+    ).actor_hash
+    config = PilotConfig(
+        **{
+            **base.__dict__,
+            "eligible_site": "HQ",
+            "allowed_actor_hashes": (actor_hash,),
+        }
+    )
+
+    eligible = assign_pilot_route(
+        config,
+        user_id="42",
+        department="Technical",
+        sites=["HQ"],
+        request_id="turn-1",
+    )
+    wrong_site = assign_pilot_route(
+        config,
+        user_id="42",
+        department="Technical",
+        sites=["DN"],
+        request_id="turn-2",
+    )
+    outside_cohort = assign_pilot_route(
+        config,
+        user_id="99",
+        department="Technical",
+        sites=["HQ"],
+        request_id="turn-3",
+    )
+
+    assert eligible.eligible is True
+    assert wrong_site.eligible is False
+    assert outside_cohort.eligible is False
+
+
 def test_replay_targets_other_arm_and_disables_side_effects():
     route = assign_pilot_route(
         _config(), user_id="42", department="Technical", request_id="turn-1"
@@ -480,6 +520,30 @@ def test_pilot_config_requires_isolated_deployments_and_pinned_snapshot():
     assert config is not None
     assert config.control_url == "http://control:8100"
     assert config.candidate_url == "http://candidate:8100"
+
+
+def test_pilot_config_parses_optional_site_and_actor_allowlist():
+    actor_hash = "a" * 64
+    env = {
+        "CRAG_PILOT_ENABLED": "true",
+        "CRAG_PILOT_EXPERIMENT_ID": "exp-1",
+        "CRAG_PILOT_ASSIGNMENT_SALT": "secret-ref-value",
+        "CRAG_PILOT_DEPARTMENT": "Technical",
+        "CRAG_PILOT_SITE": "HQ",
+        "CRAG_PILOT_ALLOWED_ACTOR_HASHES": actor_hash,
+        "CRAG_PILOT_COHORT_SHA256": "cohort-v1",
+        "CRAG_PILOT_CONTROL_URL": "http://control:8100",
+        "CRAG_PILOT_CANDIDATE_URL": "http://candidate:8100",
+        "CRAG_PILOT_CONTROL_DEPLOYMENT_ID": "control-1",
+        "CRAG_PILOT_CANDIDATE_DEPLOYMENT_ID": "candidate-1",
+        "CRAG_PILOT_SNAPSHOT_FINGERPRINT": "snapshot-v1",
+    }
+
+    config = load_pilot_config(env)
+
+    assert config is not None
+    assert config.eligible_site == "HQ"
+    assert config.allowed_actor_hashes == (actor_hash,)
 
 
 def test_replay_context_disables_semantic_cache_without_mutating_environment(monkeypatch):

@@ -35,7 +35,6 @@ from mech_chatbot.rag.evidence_gate import (
     make_insufficient_evidence_message,
 )
 from mech_chatbot.rag.claim_repair import claim_repair_enabled, repair_grounded_answer
-from mech_chatbot.rag.answer_policy import render_explicit_negative_answer
 from mech_chatbot.rag.grounded_math import (
     render_grounded_calculation_answer,
     validate_grounded_calculation_answer,
@@ -421,8 +420,7 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
                new_part_ids, response_language, trace_id, t_start,
                user_department, user_roles, effective_question, intent_data,
                base_k, retrieval_mode, _has_active_filter=False, _active_filter=None,
-               cancel_event=None, metrics=None, explicit_negative_quote="",
-               explicit_negative_source_id=""):
+               cancel_event=None, metrics=None, deterministic_answer=""):
     """BUOC C/D: sinh cau tra loi streaming (guarded_stream / normal_stream).
     Tra ve stream. Tach nguyen van tu chat_with_rag (P0 slice #4).
     active_filter bind co dieu kien de bao toan ngu nghia locals() nhu ban goc.
@@ -435,12 +433,8 @@ def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
     metrics.setdefault("estimated_cost", 0.0)
     metrics.setdefault("provider_retries", 0)
     metrics.setdefault("repair_count", 0)
-    if explicit_negative_quote:
-        answer = render_explicit_negative_answer(
-            explicit_negative_quote,
-            source_id=explicit_negative_source_id,
-            language=response_language,
-        )
+    if deterministic_answer:
+        answer = deterministic_answer
         metrics["output_tokens"] += len(answer) // 4
         metrics["repair_count"] = 0
 

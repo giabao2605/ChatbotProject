@@ -10,8 +10,8 @@ from mech_chatbot.rag.answer_policy import (
     has_explicit_negative_evidence,
     explicit_negative_evidence_quote,
     render_explicit_negative_answer,
-    source_id_for_evidence_quote,
 )
+from mech_chatbot.rag.answer_checks import source_id_for_evidence_quote
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
 
 

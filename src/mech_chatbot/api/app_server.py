@@ -396,6 +396,7 @@ def _pilot_route(profile: dict[str, Any], request_id: str):
         user_id=str(profile.get("user_id") or ""),
         department=str(profile.get("department") or ""),
         request_id=request_id,
+        sites=profile.get("allowed_sites") or [],
     )
 
 

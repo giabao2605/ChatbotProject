@@ -52,6 +52,7 @@ def test_latency_breakdown_groups_stages_and_hashes_trace_ids(tmp_path):
     serialized = json.dumps(report, ensure_ascii=False)
     assert "raw-trace" not in serialized
     assert "secret" not in serialized
+    assert str(tmp_path) not in serialized
 
 
 def test_latency_breakdown_filters_utc_window_and_sums_repeated_stage_events(tmp_path):

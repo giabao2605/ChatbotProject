@@ -1,7 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Config,
-    [switch]$StartGateway
+    [string]$Config
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,7 +49,7 @@ finally {
     Pop-Location
 }
 
-foreach ($port in 8080, 8101, 8102) {
+foreach ($port in 8101, 8102) {
     if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) {
         throw "Port $port dang duoc su dung."
     }
@@ -92,18 +91,22 @@ function Start-DemoProcess {
     }
 }
 
-function Wait-RagHealth {
-    param([string]$Url)
-    for ($attempt = 1; $attempt -le 60; $attempt++) {
+function Wait-HttpHealth {
+    param(
+        [string]$Url,
+        [int]$Attempts,
+        [string]$FailureMessage
+    )
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
         try {
-            $health = Invoke-RestMethod -Uri "$($Url.TrimEnd('/'))/health" -TimeoutSec 5
+            $health = Invoke-RestMethod -Uri $Url -TimeoutSec 5
             if ($health.status -eq "ok") { return }
         }
         catch {
         }
+        if ($attempt -eq $Attempts) { throw $FailureMessage }
         Start-Sleep -Seconds 2
     }
-    throw "RAG deployment khong healthy: $Url"
 }
 
 $common = @{
@@ -124,6 +127,7 @@ try {
     $controlEnv.RAG_DEPLOYMENT_ID = [string]$demoConfig.deployments.control.id
     $controlEnv.RAG_CRAG_ENABLED = "false"
     $controlEnv.RAG_CLAIM_REPAIR_ENABLED = "false"
+    $controlEnv.RAG_TRACE_LOG_FILE = Join-Path $logsDir "control-trace.jsonl"
     $started += Start-DemoProcess "control" $controlEnv "mech_chatbot.api.rag_server" `
         (Join-Path $logsDir "control.out.log") (Join-Path $logsDir "control.err.log")
 
@@ -132,11 +136,14 @@ try {
     $candidateEnv.RAG_DEPLOYMENT_ID = [string]$demoConfig.deployments.candidate.id
     $candidateEnv.RAG_CRAG_ENABLED = "true"
     $candidateEnv.RAG_CLAIM_REPAIR_ENABLED = "true"
+    $candidateEnv.RAG_TRACE_LOG_FILE = Join-Path $logsDir "candidate-trace.jsonl"
     $started += Start-DemoProcess "candidate" $candidateEnv "mech_chatbot.api.rag_server" `
         (Join-Path $logsDir "candidate.out.log") (Join-Path $logsDir "candidate.err.log")
 
-    Wait-RagHealth ([string]$demoConfig.deployment_urls.control)
-    Wait-RagHealth ([string]$demoConfig.deployment_urls.candidate)
+    $controlUrl = ([string]$demoConfig.deployment_urls.control).TrimEnd('/')
+    $candidateUrl = ([string]$demoConfig.deployment_urls.candidate).TrimEnd('/')
+    Wait-HttpHealth "$controlUrl/health" 60 "Control RAG deployment khong healthy."
+    Wait-HttpHealth "$candidateUrl/health" 60 "Candidate RAG deployment khong healthy."
 
     $preflightPath = Join-Path (Split-Path -Parent $configPath) "deployment-preflight.json"
     & $pythonExe -m scripts.eval.crag_pilot_preflight `
@@ -145,43 +152,14 @@ try {
         throw "Deployment preflight khong dat."
     }
 
-    if ($StartGateway) {
-        $appEnv = @{
-            APP_SERVER_PORT = "8080"
-            RAG_SERVER_URL = [string]$demoConfig.deployment_urls.control
-            CRAG_PILOT_ENABLED = "true"
-            CRAG_PILOT_EXPERIMENT_ID = [string]$demoConfig.experiment_id
-            CRAG_PILOT_ASSIGNMENT_SALT = [string]$env:CRAG_PILOT_ASSIGNMENT_SALT
-            CRAG_PILOT_DEPARTMENT = [string]$demoConfig.eligible_cohort.department
-            CRAG_PILOT_COHORT_SHA256 = [string]$demoConfig.eligible_cohort.sha256
-            CRAG_PILOT_CONTROL_URL = [string]$demoConfig.deployment_urls.control
-            CRAG_PILOT_CANDIDATE_URL = [string]$demoConfig.deployment_urls.candidate
-            CRAG_PILOT_CONTROL_DEPLOYMENT_ID = [string]$demoConfig.deployments.control.id
-            CRAG_PILOT_CANDIDATE_DEPLOYMENT_ID = [string]$demoConfig.deployments.candidate.id
-            CRAG_PILOT_SNAPSHOT_FINGERPRINT = [string]$demoConfig.snapshot_fingerprint
-        }
-        $started += Start-DemoProcess "gateway" $appEnv "mech_chatbot.api.app_server" `
-            (Join-Path $logsDir "gateway.out.log") (Join-Path $logsDir "gateway.err.log")
-        for ($attempt = 1; $attempt -le 30; $attempt++) {
-            try {
-                $appHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/health" -TimeoutSec 5
-                if ($appHealth.status -eq "ok") { break }
-            }
-            catch {
-            }
-            if ($attempt -eq 30) { throw "Browser gateway khong healthy tren port 8080." }
-            Start-Sleep -Seconds 2
-        }
-    }
-
     @{
         schema = "crag-controlled-demo-process-state-v1"
         config = $configPath
         preflight = $preflightPath
-        gateway_enabled = [bool]$StartGateway
+        gateway_enabled = $false
         processes = $started
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding utf8
-    Write-Output "Controlled demo da start. State: $statePath"
+    Write-Output "Control/candidate va preflight da san sang. Hay review preflight truoc khi enable gateway."
 }
 catch {
     foreach ($item in ($started | Sort-Object { if ($_.name -eq "gateway") { 0 } else { 1 } })) {

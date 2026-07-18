@@ -53,7 +53,9 @@ if not logger.handlers:
 import json
 from datetime import datetime, timezone
 
-trace_log_file = os.path.join(log_dir, 'rag_trace.jsonl')
+trace_log_file = os.getenv(
+    "RAG_TRACE_LOG_FILE", os.path.join(log_dir, 'rag_trace.jsonl')
+)
 trace_logger = logging.getLogger("RagTrace")
 trace_logger.setLevel(logging.INFO)
 

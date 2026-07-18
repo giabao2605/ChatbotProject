@@ -42,6 +42,7 @@ from mech_chatbot.rag.answer_checks import (  # noqa: F401
     has_unsupported_codes,
     requires_source_citation,
     has_required_source_citation,
+    source_id_for_evidence_quote,
 )
 from mech_chatbot.rag.glossary_expand import (  # noqa: F401
     _GLOSSARY_TTL,
@@ -73,7 +74,7 @@ from mech_chatbot.rag.answer_policy import (
     decide_terminal_policy,
     has_explicit_negative_evidence,
     explicit_negative_evidence_quote,
-    source_id_for_evidence_quote,
+    render_explicit_negative_answer,
 )
 from mech_chatbot.rag.corrective import (
     correction_enabled,
@@ -1533,7 +1534,16 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         else ""
     )
     explicit_negative_source_id = source_id_for_evidence_quote(
-        explicit_negative_quote, citation_docs
+        explicit_negative_quote, retrieved_docs
+    )
+    deterministic_answer = (
+        render_explicit_negative_answer(
+            explicit_negative_quote,
+            source_id=explicit_negative_source_id,
+            language=response_language,
+        )
+        if explicit_negative_quote
+        else ""
     )
 
     generation_metrics = {
@@ -1562,8 +1572,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         _active_filter=(active_filter if "active_filter" in locals() else None),
         cancel_event=cancel_event,
         metrics=generation_metrics,
-        explicit_negative_quote=explicit_negative_quote,
-        explicit_negative_source_id=explicit_negative_source_id,
+        deterministic_answer=deterministic_answer,
     )
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)

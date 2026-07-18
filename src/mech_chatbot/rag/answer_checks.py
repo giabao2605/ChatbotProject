@@ -173,6 +173,27 @@ def extract_source_ids(value):
     return {match.upper() for match in matches}
 
 
+def source_id_for_evidence_quote(quote, documents):
+    """Resolve a SourceID only from the document containing the exact quote."""
+    target = str(quote or "").strip()
+    if not target:
+        return ""
+    for document in documents or []:
+        metadata = getattr(document, "metadata", {}) or {}
+        content = str(
+            metadata.get("noi_dung_goc")
+            or getattr(document, "page_content", "")
+            or ""
+        )
+        if target not in content:
+            continue
+        doc_id = metadata.get("doc_id")
+        page_no = metadata.get("trang_so") or metadata.get("page_no")
+        if doc_id is not None and page_no is not None:
+            return f"D{doc_id}P{page_no}"
+    return ""
+
+
 def has_valid_source_citation(answer, documents, require_version=True):
     """Require exact SourceIDs that map to the generation evidence set."""
     if not has_required_source_citation(answer, require_version=require_version):
