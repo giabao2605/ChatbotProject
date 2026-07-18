@@ -21,7 +21,13 @@ def test_grounded_math_fixture_ingest_preflight_calculate_and_cleanup():
     from scripts.grounded_math_eval.generate_fixture import generate_fixture
     from scripts.grounded_math_eval.ingest_fixture import ingest_fixture
     from scripts.grounded_math_eval.preflight import run_live_preflight
-    from mech_chatbot.rag.service import chat_with_rag
+    from mech_chatbot.rag.execution import (
+        AccessScope,
+        DefaultRagExecutor,
+        RagInvocation,
+        RagRequest,
+        collect_rag_events,
+    )
 
     generate_fixture(DEFAULT_OUTPUT)
     try:
@@ -31,11 +37,23 @@ def test_grounded_math_fixture_ingest_preflight_calculate_and_cleanup():
         preflight = run_live_preflight(cases)
         assert preflight["passed"] is True
         case = next(item for item in cases if item["id"] == "math-add")
-        stream, _, _, _, debug = chat_with_rag(
-            case["question"], None, [], [], case["user_department"], case["user_roles"],
-            case["allowed_departments"], case["max_security_level"], case["allowed_sites"],
+        execution = collect_rag_events(
+            DefaultRagExecutor().run(
+                RagRequest(
+                    question=case["question"],
+                    access=AccessScope(
+                        department=case["user_department"],
+                        roles=frozenset(case["user_roles"]),
+                        allowed_departments=frozenset(case["allowed_departments"]),
+                        max_security_level=case["max_security_level"],
+                        allowed_sites=frozenset(case["allowed_sites"]),
+                    ),
+                ),
+                RagInvocation(trace_id="", mode="evaluation"),
+            )
         )
-        answer = "".join(stream)
+        answer = execution.answer
+        debug = dict(execution.diagnostics)
         assert "2 + 4 = 6 kg" in answer
         assert len(debug.get("calculation_provenance") or []) == 1
     finally:

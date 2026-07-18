@@ -7,6 +7,7 @@ import pytest
 
 from mech_chatbot.api import rag_server
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.rag.execution import RagCancelled, RagCompleted, RagPrepared, RagToken
 
 
 pytestmark = pytest.mark.unit
@@ -67,20 +68,22 @@ def test_client_disconnect_cancels_stream_and_releases_rag_permit(monkeypatch):
         lambda _profile, _trace, _surface, *, outcome, debug_info=None: audit_outcomes.append(outcome),
     )
 
-    def fake_open(_req, _profile, trace_id=None, cancel_event=None):
-        del trace_id
+    def fake_open(_req, _profile, trace_id=None, cancel_event=None, mode=None):
+        del trace_id, mode
 
-        def stream():
-            yield "first token"
+        def events():
+            yield RagPrepared("", (), (), {"citation_docs": []})
+            yield RagToken("first token")
             assert cancel_event is not None
             if not cancel_event.wait(timeout=2):
                 raise AssertionError("client disconnect was not forwarded to worker")
             observed_cancel.set()
-            raise ExternalAICallCancelled("cancelled by test client")
+            error = ExternalAICallCancelled("cancelled by test client")
+            yield RagCancelled(str(error), cause=error)
 
-        return stream(), "", [], [], {"citation_docs": []}
+        return events()
 
-    monkeypatch.setattr(rag_server, "_open_rag_stream", fake_open)
+    monkeypatch.setattr(rag_server, "_open_rag_events", fake_open)
 
     async def scenario():
         response = await rag_server.chat_stream_endpoint(
@@ -129,8 +132,14 @@ def test_stream_done_exposes_numeric_trace_stages_for_benchmark(monkeypatch):
     )
     monkeypatch.setattr(
         rag_server,
-        "_open_rag_stream",
-        lambda *_args, **_kwargs: (iter(["safe answer"]), "", [], [], {"citation_docs": []}),
+        "_open_rag_events",
+        lambda *_args, **_kwargs: iter(
+            [
+                RagPrepared("", (), (), {"citation_docs": []}),
+                RagToken("safe answer"),
+                RagCompleted("answered", "trace-test", {"citation_docs": []}),
+            ]
+        ),
     )
     monkeypatch.setattr(
         rag_server,
@@ -194,9 +203,15 @@ def test_pilot_replay_header_disables_cache_inside_worker(monkeypatch):
 
     def fake_open(*_args, **_kwargs):
         observed.append(semantic_cache.enabled())
-        return iter(["replay answer"]), "", [], [], {"citation_docs": []}
+        return iter(
+            [
+                RagPrepared("", (), (), {"citation_docs": []}),
+                RagToken("replay answer"),
+                RagCompleted("answered", "trace-replay", {"citation_docs": []}),
+            ]
+        )
 
-    monkeypatch.setattr(rag_server, "_open_rag_stream", fake_open)
+    monkeypatch.setattr(rag_server, "_open_rag_events", fake_open)
     route = assign_pilot_route(
         PilotConfig(
             experiment_id="exp-1",

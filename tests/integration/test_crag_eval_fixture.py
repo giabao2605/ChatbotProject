@@ -22,7 +22,31 @@ def test_crag_fixture_ingest_publish_retrieval_and_denial(tmp_path):
     from scripts.crag_eval.ingest_fixture import ingest_fixture
     from scripts.crag_eval.preflight import run_live_preflight
     from scripts.eval.run_eval import load_manifest_files
-    from mech_chatbot.rag.service import chat_with_rag
+    from mech_chatbot.rag.execution import (
+        AccessScope,
+        DefaultRagExecutor,
+        RagInvocation,
+        RagRequest,
+        collect_rag_events,
+    )
+
+    def run_case(case):
+        result = collect_rag_events(
+            DefaultRagExecutor().run(
+                RagRequest(
+                    question=case["question"],
+                    access=AccessScope(
+                        department=case["user_department"],
+                        roles=frozenset(case["user_roles"]),
+                        allowed_departments=frozenset(case["allowed_departments"]),
+                        max_security_level=case["max_security_level"],
+                        allowed_sites=frozenset(case["allowed_sites"]),
+                    ),
+                ),
+                RagInvocation(trace_id="", mode="evaluation"),
+            )
+        )
+        return result.answer, dict(result.diagnostics)
 
     # The live scripts intentionally use the fixed workspace asset root so cleanup can prove scope.
     from scripts.crag_eval.constants import DEFAULT_OUTPUT
@@ -34,18 +58,11 @@ def test_crag_fixture_ingest_publish_retrieval_and_denial(tmp_path):
         assert run_live_preflight(cases)["passed"] is True
 
         allowed = next(case for case in cases if case["id"] == "crag-number-thousands")
-        stream, *_ = chat_with_rag(
-            allowed["question"], None, [], [], allowed["user_department"], allowed["user_roles"],
-            allowed["allowed_departments"], allowed["max_security_level"], allowed["allowed_sites"],
-        )
-        assert "1,500" in "".join(stream)
+        answer, _ = run_case(allowed)
+        assert "1,500" in answer
 
         denied = next(case for case in cases if case["id"] == "crag-restricted-denial")
-        stream, _, _, _, debug = chat_with_rag(
-            denied["question"], None, [], [], denied["user_department"], denied["user_roles"],
-            denied["allowed_departments"], denied["max_security_level"], denied["allowed_sites"],
-        )
-        answer = "".join(stream)
+        answer, debug = run_case(denied)
         assert "chưa đủ quyền truy cập" in answer
         assert (debug.get("access_hint") or {}).get("restricted") is True
         assert "CRAG-EVAL-SECRET-RED" not in answer

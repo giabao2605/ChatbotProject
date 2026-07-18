@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Auto-split tu rag/service.py (P1.2). Orchestrator: chat_with_rag + citations.
-Giu nguyen tung byte cua chat_with_rag; chi di chuyen sang file rieng + re-import cac module con."""
+"""Private orchestration core and the one-release legacy tuple adapter.
+
+New callers use :mod:`mech_chatbot.rag.execution`; this module keeps the
+existing retrieval/generation implementation and compatibility surface.
+"""
 
 import os
 import re
@@ -84,7 +87,7 @@ from mech_chatbot.rag.corrective import (
 from mech_chatbot.rag.query_decomposition import audit_decomposition_stream
 
 
-from mech_chatbot.rag.pipeline_steps import _prepare_history, _analyze_image, _assemble_context, _generate, _retrieve, _RETRIEVE_UNSET, _route, _rewrite_and_anchor, _disambiguate
+from mech_chatbot.rag.pipeline_steps import GenerationPlan, _prepare_history, _analyze_image, _assemble_context, _generate, _retrieve, _RETRIEVE_UNSET, _route, _rewrite_and_anchor, _disambiguate
 
 def make_debug_info(docs=None):
     docs = docs or []
@@ -191,7 +194,23 @@ def make_source_snapshot(docs=None):
     return snapshots
 
 
-def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None, trace_id=None, cancel_event=None):
+def _execute_rag_request(request, *, trace_id=None, cancel_event=None):
+    """Private orchestration implementation behind the typed execution seam."""
+    user_question = request.question
+    image_path = str(request.image_path) if request.image_path is not None else None
+    chat_history = list(request.history)
+    current_part_ids = list(request.current_part_ids)
+    user_department = request.access.department
+    user_roles = list(request.access.roles)
+    allowed_departments = list(request.access.allowed_departments)
+    max_security_level = request.access.max_security_level
+    allowed_sites = list(request.access.allowed_sites)
+    response_language = request.response_language
+    conversation_context = (
+        dict(request.conversation_context)
+        if request.conversation_context is not None
+        else None
+    )
     if chat_history is None:
         chat_history = []
         
@@ -1546,25 +1565,27 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     }
     final_generation_count = 0 if explicit_negative_answer else 1
     stream = _generate(
-        context_text=context_text,
-        user_question=user_question,
-        chat_history_str=chat_history_str,
-        retrieved_docs=retrieved_docs,
-        new_part_ids=new_part_ids,
-        response_language=response_language,
-        trace_id=trace_id,
-        t_start=t_start,
-        user_department=user_department,
-        user_roles=user_roles,
-        effective_question=effective_question,
-        intent_data=intent_data,
-        base_k=base_k,
-        retrieval_mode=retrieval_mode,
-        _has_active_filter=("active_filter" in locals()),
-        _active_filter=(active_filter if "active_filter" in locals() else None),
+        GenerationPlan(
+            context_text=context_text,
+            user_question=user_question,
+            chat_history_str=chat_history_str,
+            retrieved_docs=retrieved_docs,
+            new_part_ids=new_part_ids,
+            response_language=response_language,
+            trace_id=trace_id,
+            started_at=t_start,
+            user_department=user_department,
+            user_roles=user_roles,
+            effective_question=effective_question,
+            intent_data=intent_data,
+            base_k=base_k,
+            retrieval_mode=retrieval_mode,
+            has_active_filter=("active_filter" in locals()),
+            active_filter=(active_filter if "active_filter" in locals() else None),
+            explicit_negative_answer=explicit_negative_answer,
+        ),
         cancel_event=cancel_event,
         metrics=generation_metrics,
-        explicit_negative_answer=explicit_negative_answer,
     )
 
     # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)
@@ -1649,6 +1670,89 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
     except Exception as _sce2:
         logger.warning(f"semantic cache store loi: {_sce2}")
     return stream, ref_text, ref_images, new_part_ids, debug_info
+
+
+def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None, trace_id=None, cancel_event=None):
+    """Compatibility adapter for the legacy five-value RAG interface.
+
+    New in-repo callers should consume ``mech_chatbot.rag.execution`` events.
+    This adapter remains for one release so external imports keep their tuple
+    shape and the same mutable debug dictionary lifecycle.
+    """
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    from mech_chatbot.rag.execution import (
+        AccessScope,
+        DefaultRagExecutor,
+        NEVER_CANCELLED,
+        RagCancelled,
+        RagCompleted,
+        RagFailed,
+        RagInvocation,
+        RagPrepared,
+        RagRequest,
+        RagToken,
+    )
+
+    request = RagRequest(
+        question=user_question,
+        image_path=image_path,
+        history=tuple(chat_history or ()),
+        current_part_ids=tuple(current_part_ids or ()),
+        access=AccessScope(
+            department=user_department,
+            roles=frozenset(user_roles or ()),
+            allowed_departments=frozenset(allowed_departments or ()),
+            max_security_level=max_security_level,
+            allowed_sites=frozenset(allowed_sites or ()),
+        ),
+        response_language=response_language,
+        conversation_context=conversation_context,
+    )
+    events = iter(
+        DefaultRagExecutor().run(
+            request,
+            RagInvocation(trace_id=trace_id or "", mode="production"),
+            cancellation=cancel_event or NEVER_CANCELLED,
+        )
+    )
+    first = next(events, None)
+    if isinstance(first, RagFailed):
+        raise first.cause
+    if isinstance(first, RagCancelled):
+        if first.cause is not None:
+            raise first.cause
+        raise ExternalAICallCancelled(first.reason)
+    if not isinstance(first, RagPrepared):
+        raise RuntimeError("RAG executor did not emit RagPrepared first")
+
+    legacy_debug = dict(first.diagnostics)
+
+    def legacy_stream():
+        try:
+            for event in events:
+                if isinstance(event, RagToken):
+                    yield event.text
+                elif isinstance(event, RagCompleted):
+                    legacy_debug.clear()
+                    legacy_debug.update(event.diagnostics)
+                elif isinstance(event, RagFailed):
+                    raise event.cause
+                elif isinstance(event, RagCancelled):
+                    if event.cause is not None:
+                        raise event.cause
+                    raise ExternalAICallCancelled(event.reason)
+        finally:
+            close = getattr(events, "close", None)
+            if callable(close):
+                close()
+
+    return (
+        legacy_stream(),
+        first.ref_text,
+        list(first.ref_images),
+        list(first.new_part_ids),
+        legacy_debug,
+    )
 
 
 def select_citation_docs(docs, question="", is_bom_query=False, part_ids=None, limit=None):

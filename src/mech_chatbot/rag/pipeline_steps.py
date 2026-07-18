@@ -4,6 +4,8 @@ Moi ham la mot lat cat mechanical extraction tu rag/pipeline.py:chat_with_rag.
 KHONG doi logic — chi di chuyen nguyen van + truyen state qua tham so/return.
 """
 import os
+from dataclasses import dataclass
+from typing import Any, Mapping, Sequence
 from mech_chatbot.config.logging import logger
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_gpt_rate_limit
 from langchain_core.messages import HumanMessage
@@ -60,6 +62,29 @@ from mech_chatbot.rag.entity_resolver import (
 )
 
 _RETRIEVE_UNSET = object()
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationPlan:
+    """Request-local inputs needed by the generation/verification stage."""
+
+    context_text: str
+    user_question: str
+    chat_history_str: str
+    retrieved_docs: Sequence[Any]
+    new_part_ids: Sequence[str]
+    response_language: str
+    trace_id: str
+    started_at: float
+    user_department: str | None
+    user_roles: Sequence[str]
+    effective_question: str
+    intent_data: Mapping[str, Any]
+    base_k: int
+    retrieval_mode: str
+    has_active_filter: bool = False
+    active_filter: Any = None
+    explicit_negative_answer: str = ""
 
 
 def _env_int(name, default):
@@ -416,17 +441,28 @@ def _assemble_context(retrieved_docs, user_question):
     return context_text
 
 
-def _generate(*, context_text, user_question, chat_history_str, retrieved_docs,
-               new_part_ids, response_language, trace_id, t_start,
-               user_department, user_roles, effective_question, intent_data,
-               base_k, retrieval_mode, _has_active_filter=False, _active_filter=None,
-               cancel_event=None, metrics=None, explicit_negative_answer=""):
+def _generate(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     """BUOC C/D: sinh cau tra loi streaming (guarded_stream / normal_stream).
     Tra ve stream. Tach nguyen van tu chat_with_rag (P0 slice #4).
     active_filter bind co dieu kien de bao toan ngu nghia locals() nhu ban goc.
     """
-    if _has_active_filter:
-        active_filter = _active_filter
+    context_text = plan.context_text
+    user_question = plan.user_question
+    chat_history_str = plan.chat_history_str
+    retrieved_docs = plan.retrieved_docs
+    new_part_ids = plan.new_part_ids
+    response_language = plan.response_language
+    trace_id = plan.trace_id
+    t_start = plan.started_at
+    user_department = plan.user_department
+    user_roles = plan.user_roles
+    effective_question = plan.effective_question
+    intent_data = plan.intent_data
+    base_k = plan.base_k
+    retrieval_mode = plan.retrieval_mode
+    explicit_negative_answer = plan.explicit_negative_answer
+    if plan.has_active_filter:
+        active_filter = plan.active_filter
     metrics = metrics if metrics is not None else {}
     metrics.setdefault("input_tokens", 0)
     metrics.setdefault("output_tokens", 0)

@@ -66,23 +66,26 @@ def _generate(
     **overrides,
 ):
     docs = docs or [SimpleNamespace(metadata={"doc_id": 7, "security_level": "internal"})]
+    plan_fields = {
+        "context_text": "Tai lieu chi ghi gia tri 10.",
+        "user_question": question,
+        "chat_history_str": "",
+        "retrieved_docs": docs,
+        "new_part_ids": [],
+        "response_language": "vi",
+        "trace_id": "strict-stream-test",
+        "started_at": time.time(),
+        "user_department": "Technical",
+        "user_roles": ["viewer"],
+        "effective_question": question,
+        "intent_data": {},
+        "base_k": 5,
+        "retrieval_mode": "general:explicit_dense_bm25_rrf",
+    }
+    plan_fields.update(overrides)
     return module._generate(
-        context_text="Tai lieu chi ghi gia tri 10.",
-        user_question=question,
-        chat_history_str="",
-        retrieved_docs=docs,
-        new_part_ids=[],
-        response_language="vi",
-        trace_id="strict-stream-test",
-        t_start=time.time(),
-        user_department="Technical",
-        user_roles=["viewer"],
-        effective_question=question,
-        intent_data={},
-        base_k=5,
-        retrieval_mode="general:explicit_dense_bm25_rrf",
+        module.GenerationPlan(**plan_fields),
         cancel_event=cancel_event,
-        **overrides,
     )
 
 

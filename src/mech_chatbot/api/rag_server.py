@@ -355,44 +355,9 @@ def _sse(event, payload):
 
 def _final_stream_citations(debug_info: dict[str, Any] | None, answer: str) -> list[dict[str, Any]]:
     """Emit only SourceIDs actually attributed by the completed answer."""
-    source_ids = {
-        value.upper()
-        for value in re.findall(
-            r"(?:source[_ ]?id\s*[:#]?\s*|\[SRC:)(D\d+P\d+)",
-            str(answer or ""),
-            flags=re.IGNORECASE,
-        )
-    }
-    if not source_ids:
-        return []
-    raw_docs = (debug_info or {}).get("citation_docs") or []
-    result = []
-    seen = set()
-    for item in raw_docs:
-        if not isinstance(item, dict):
-            continue
-        try:
-            doc_id = int(item.get("doc_id"))
-            page_no = int(item.get("trang") or item.get("trang_so") or item.get("page_no"))
-        except (TypeError, ValueError):
-            continue
-        source_id = str(item.get("source_id") or f"D{doc_id}P{page_no}").upper()
-        if source_id not in source_ids or source_id in seen:
-            continue
-        seen.add(source_id)
-        result.append(
-            {
-                "doc_id": doc_id,
-                "page_no": page_no,
-                "file_name": item.get("file_goc") or item.get("file_name"),
-                "file_goc": item.get("file_goc") or item.get("file_name"),
-                "version_no": item.get("version_no"),
-                "score": item.get("score"),
-                "trang": page_no,
-                "source_id": source_id,
-            }
-        )
-    return result
+    from mech_chatbot.rag.execution import attributed_citations
+
+    return [dict(item) for item in attributed_citations(debug_info, answer)]
 
 
 @app.post("/chat/stream", tags=["RAG"], dependencies=[Depends(require_service_auth)])
@@ -492,8 +457,16 @@ async def chat_stream_endpoint(
     request_trace_id = f"rag_{secrets.token_hex(8)}"
 
     def worker():
-        stream = None
+        events = None
         debug_info: dict[str, Any] = {}
+        from mech_chatbot.rag.execution import (
+            RagCancelled,
+            RagCitation,
+            RagCompleted,
+            RagFailed,
+            RagPrepared,
+            RagToken,
+        )
         from mech_chatbot.rag.semantic_cache import replay_cache_disabled
 
         with external_processing_context(
@@ -517,36 +490,47 @@ async def chat_stream_endpoint(
             try:
                 if cancel_event.is_set():
                     raise ExternalAICallCancelled("RAG stream da bi client huy truoc khi bat dau")
-                stream, ref_text, ref_images, new_part_ids, debug_info = _open_rag_stream(
+                events = _open_rag_events(
                     req,
                     user_profile,
                     trace_id=request_trace_id,
                     cancel_event=cancel_event,
+                    mode="pilot_replay" if replay else "production",
                 )
-                emit(
-                    "metadata",
-                    {
-                        "ref_text": ref_text or "",
-                        "ref_images": ref_images or [],
-                        "new_part_ids": new_part_ids or [],
-                        "debug_info": debug_info or {},
-                    },
-                )
-                answer_parts = []
-                for chunk in stream:
+                completed = False
+                for event in events:
                     if cancel_event.is_set():
                         raise ExternalAICallCancelled("RAG stream da bi client huy")
-                    if first_token_ms is None:
-                        first_token_ms = int((time.time() - started) * 1000)
-                        logger.info("RAG first token in %sms", first_token_ms)
-                        log_trace("first_token", request_trace_id, latency_ms=first_token_ms)
-                    token = str(chunk)
-                    answer_parts.append(token)
-                    emit("token", {"text": token})
-                if cancel_event.is_set():
-                    raise ExternalAICallCancelled("RAG stream da bi client huy")
-                for citation in _final_stream_citations(debug_info, "".join(answer_parts)):
-                    emit("citation", citation)
+                    if isinstance(event, RagPrepared):
+                        debug_info = dict(event.diagnostics)
+                        emit(
+                            "metadata",
+                            {
+                                "ref_text": event.ref_text,
+                                "ref_images": list(event.ref_images),
+                                "new_part_ids": list(event.new_part_ids),
+                                "debug_info": debug_info,
+                            },
+                        )
+                    elif isinstance(event, RagToken):
+                        if first_token_ms is None:
+                            first_token_ms = int((time.time() - started) * 1000)
+                            logger.info("RAG first token in %sms", first_token_ms)
+                            log_trace("first_token", request_trace_id, latency_ms=first_token_ms)
+                        emit("token", {"text": event.text})
+                    elif isinstance(event, RagCitation):
+                        emit("citation", dict(event.citation))
+                    elif isinstance(event, RagCompleted):
+                        debug_info = dict(event.diagnostics)
+                        completed = True
+                    elif isinstance(event, RagCancelled):
+                        if event.cause is not None:
+                            raise event.cause
+                        raise ExternalAICallCancelled(event.reason)
+                    elif isinstance(event, RagFailed):
+                        raise event.cause
+                if not completed:
+                    raise RuntimeError("RAG executor ended without a completion event")
                 if not replay:
                     _audit_admin_query(
                         user_profile,
@@ -616,7 +600,7 @@ async def chat_stream_endpoint(
                     },
                 )
             finally:
-                close = getattr(stream, "close", None)
+                close = getattr(events, "close", None)
                 if callable(close):
                     try:
                         close()
@@ -772,49 +756,75 @@ async def save_chat_feedback(req: FeedbackRequest):
     return {"ok": True}
 
 
-def _open_rag_stream(
+def _open_rag_events(
     req: ChatRequest,
     user_profile: Dict[str, Any],
-    trace_id: str | None = None,
-    cancel_event=None,
+    trace_id: str,
+    cancel_event,
+    *,
+    mode: str = "production",
 ):
-    from mech_chatbot.rag.service import chat_with_rag
+    from mech_chatbot.rag.execution import (
+        AccessScope,
+        DefaultRagExecutor,
+        NEVER_CANCELLED,
+        RagInvocation,
+        RagRequest,
+    )
 
-    return chat_with_rag(
-        user_question=req.user_question,
+    request = RagRequest(
+        question=req.user_question,
         image_path=req.image_path,
-        chat_history=req.chat_history,
-        current_part_ids=req.current_part_ids,
-        user_department=user_profile.get("department"),
-        user_roles=user_profile.get("roles") or [],
-        allowed_departments=user_profile.get("allowed_departments") or [],
-        max_security_level=user_profile.get("max_security_level") or "public",
-        allowed_sites=user_profile.get("allowed_sites") or [],
-        response_language=req.response_language,
+        history=tuple(req.chat_history),
+        current_part_ids=tuple(req.current_part_ids),
+        access=AccessScope(
+            department=user_profile.get("department"),
+            roles=frozenset(user_profile.get("roles") or ()),
+            allowed_departments=frozenset(user_profile.get("allowed_departments") or ()),
+            max_security_level=user_profile.get("max_security_level") or "public",
+            allowed_sites=frozenset(user_profile.get("allowed_sites") or ()),
+        ),
+        response_language=req.response_language or "vi",
         conversation_context=req.conversation_context,
-        trace_id=trace_id,
-        cancel_event=cancel_event,
+    )
+    return DefaultRagExecutor().run(
+        request,
+        RagInvocation(trace_id=trace_id, mode=mode),
+        cancellation=cancel_event or NEVER_CANCELLED,
     )
 
 
 def _run_rag_sync(req: ChatRequest, user_profile: Dict[str, Any]) -> ChatResponse:
-    """Synchronous compatibility wrapper for the non-streaming endpoint."""
+    """Fold the public RAG event stream into the non-streaming response."""
+    from mech_chatbot.rag.execution import collect_rag_events
+
     request_trace_id = f"rag_{secrets.token_hex(8)}"
     debug_info: Dict[str, Any] = {}
+    ref_text = ""
+    ref_images: list[str] = []
+    new_part_ids: list[str] = []
+    chunks: list[str] = []
+    final_citations: list[dict[str, Any]] = []
     try:
         with external_processing_context(
             user_profile.get("username"),
             _is_admin(user_profile),
             request_trace_id,
         ):
-            stream, ref_text, ref_images, new_part_ids, debug_info = _open_rag_stream(
-                req, user_profile, trace_id=request_trace_id
+            result = collect_rag_events(
+                _open_rag_events(
+                    req,
+                    user_profile,
+                    trace_id=request_trace_id,
+                    cancel_event=None,
+                )
             )
-
-            # Consume the stream to get the full response text
-            chunks = []
-            for chunk in stream:
-                chunks.append(str(chunk))
+            ref_text = result.ref_text
+            ref_images = list(result.ref_images)
+            new_part_ids = list(result.new_part_ids)
+            chunks = [result.answer]
+            final_citations = [dict(item) for item in result.citations]
+            debug_info = dict(result.diagnostics)
     except Exception:
         _audit_admin_query(
             user_profile,
@@ -826,7 +836,6 @@ def _run_rag_sync(req: ChatRequest, user_profile: Dict[str, Any]) -> ChatRespons
         raise
 
     answer = "".join(chunks)
-    final_citations = _final_stream_citations(debug_info, answer)
     if final_citations:
         reference_lines = []
         for item in final_citations:

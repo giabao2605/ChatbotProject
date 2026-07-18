@@ -1,6 +1,6 @@
 """P3-5: Chay bo cau hoi hoi quy (regression) qua engine RAG that su.
 
-Moi cau hoi se duoc dua qua chat_with_rag (role admin de bo qua RBAC, lay recall rong nhat),
+Moi cau hoi se duoc dua qua public RAG executor (role admin de lay recall rong nhat),
 sau do cham diem:
   - DocHit: ExpectedDocID nam trong danh sach tai lieu duoc truy hoi (neu khong dat ky vong -> coi nhu pass).
   - KeywordHit: TAT CA tu khoa ky vong xuat hien trong cau tra loi (so khop sau khi chuan hoa khong dau).
@@ -15,17 +15,6 @@ from mech_chatbot.config.logging import logger
 from mech_chatbot.db import repository as repo
 
 
-def _consume_stream(stream):
-    parts = []
-    try:
-        for chunk in stream:
-            if chunk:
-                parts.append(str(chunk))
-    except Exception as e:
-        logger.error(f"[regression] Loi doc stream: {e}", exc_info=True)
-    return "".join(parts)
-
-
 def _split_keywords(raw):
     if not raw:
         return []
@@ -34,7 +23,13 @@ def _split_keywords(raw):
 
 def run_regression_batch(limit=None, run_by="System"):
     """Chay toan bo cau hoi hoi quy dang active. Tra ve summary dict."""
-    from mech_chatbot.rag.service import chat_with_rag
+    from mech_chatbot.rag.execution import (
+        AccessScope,
+        DefaultRagExecutor,
+        RagInvocation,
+        RagRequest,
+        collect_rag_events,
+    )
 
     questions = repo.list_regression_questions(active_only=True)
     if limit:
@@ -56,14 +51,20 @@ def run_regression_batch(limit=None, run_by="System"):
         passed = False
         error_text = None
         try:
-            result = chat_with_rag(
-                question,
-                user_roles=["admin"],
-                max_security_level="confidential",
+            result = collect_rag_events(
+                DefaultRagExecutor().run(
+                    RagRequest(
+                        question=question,
+                        access=AccessScope(
+                            roles=frozenset({"admin"}),
+                            max_security_level="confidential",
+                        ),
+                    ),
+                    RagInvocation(trace_id="", mode="production"),
+                )
             )
-            stream = result[0]
-            debug_info = result[4] if len(result) > 4 else {}
-            answer_text = _consume_stream(stream)
+            debug_info = dict(result.diagnostics)
+            answer_text = result.answer
             for d in (debug_info or {}).get("retrieved_docs", []):
                 did = d.get("doc_id")
                 if did is not None:
