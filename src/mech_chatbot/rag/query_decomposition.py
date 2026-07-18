@@ -6,10 +6,12 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
+from contextvars import copy_context
 from dataclasses import dataclass
 from typing import Any
 
 from mech_chatbot.rag.answer_checks import extract_source_ids
+from mech_chatbot.rag.execution import _raise_if_request_budget_exceeded
 
 
 _COMPLEX_CUES = (" và ", " đồng thời ", " so sánh ", " đối chiếu ", " versus ", " vs ")
@@ -156,7 +158,8 @@ def compile_query_plan(
     if planner is not None:
         try:
             payload = planner(original) or {}
-        except Exception:
+        except Exception as exc:
+            _raise_if_request_budget_exceeded(exc)
             payload = {}
     proposed = payload.get("subqueries", ()) if isinstance(payload, dict) else ()
     allowed_codes = {code.upper() for code in _CODE_RE.findall(original)}
@@ -225,7 +228,10 @@ def execute_plan(
         return retrieve(query, access_context, budget, deadline_monotonic)
 
     executor = ThreadPoolExecutor(max_workers=min(max(1, max_workers), len(queries)))
-    futures = [executor.submit(run, query) for query in queries]
+    futures = [
+        executor.submit(copy_context().run, run, query)
+        for query in queries
+    ]
     try:
         timeout = None
         if deadline_monotonic is not None:

@@ -255,6 +255,9 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
             telemetry_status="verifier_pass" if state is EvidenceState.SUFFICIENT else "verifier_block",
         )
     except Exception as e:
+        from mech_chatbot.rag.execution import _raise_if_request_budget_exceeded
+
+        _raise_if_request_budget_exceeded(e)
         logger.warning(f"Evidence gate loi ({e}). Fallback sang heuristic/prompt nghiem ngat.")
         return EvidenceDecision(
             EvidenceState.SUFFICIENT,

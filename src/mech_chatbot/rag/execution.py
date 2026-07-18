@@ -8,12 +8,13 @@ of the legacy five-value tuple and its post-consumption mutation rules.
 from __future__ import annotations
 
 from contextlib import ExitStack
-from contextvars import ContextVar
+from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass, field
 from datetime import datetime
 import os
 from pathlib import Path
 import re
+import threading
 import time
 import uuid
 from collections.abc import Mapping as MappingABC
@@ -314,6 +315,16 @@ class RequestBudgetLimits:
         return cls(deadline_seconds=deadline)
 
 
+class RequestBudgetExceeded(RuntimeError):
+    """Internal control-flow error for a request-wide budget violation."""
+
+
+def _raise_if_request_budget_exceeded(error: BaseException) -> None:
+    """Keep request budget control flow out of best-effort fallbacks."""
+    if isinstance(error, RequestBudgetExceeded):
+        raise error
+
+
 @dataclass(slots=True)
 class RequestBudgetLedger:
     limits: RequestBudgetLimits
@@ -327,6 +338,11 @@ class RequestBudgetLedger:
     provider_retries: int = 0
     final_generations: int = 0
     deadline_exceeded: bool = False
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def deadline_monotonic(self) -> float:
@@ -339,11 +355,14 @@ class RequestBudgetLedger:
         }:
             raise ValueError(f"Unknown request budget field: {field_name}")
         normalized = max(0, int(value))
-        current = int(getattr(self, field_name))
-        proposed = current + normalized if cumulative else normalized
-        if proposed > getattr(self.limits, field_name):
-            raise RuntimeError(f"RAG request budget exceeded: {field_name}")
-        setattr(self, field_name, proposed)
+        with self._lock:
+            current = int(getattr(self, field_name))
+            proposed = current + normalized if cumulative else normalized
+            if proposed > getattr(self.limits, field_name):
+                raise RequestBudgetExceeded(
+                    f"RAG request budget exceeded: {field_name}"
+                )
+            setattr(self, field_name, proposed)
 
     def consume_provider_retry(self) -> None:
         self.record("provider_retries", 1, cumulative=True)
@@ -433,6 +452,70 @@ class _PreparedExecution:
     ref_images: tuple[str, ...]
     new_part_ids: tuple[str, ...]
     diagnostics: dict[str, Any]
+
+
+class _ContextBoundRagIterator:
+    """Run one lazy event source inside an iterator-owned context."""
+
+    def __init__(self, source_factory):
+        self._context: Context = copy_context()
+        self._source_factory = source_factory
+        self._source: Iterator[RagEvent] | None = None
+        self._closed = False
+        self._setup_terminal: RagFailed | RagCancelled | None = None
+
+    def __iter__(self) -> "_ContextBoundRagIterator":
+        return self
+
+    def __next__(self) -> RagEvent:
+        if self._closed:
+            raise StopIteration
+        return self._context.run(self._next_in_context)
+
+    def _next_in_context(self) -> RagEvent:
+        if self._source is None:
+            self._source = iter(self._source_factory(self))
+        try:
+            return next(self._source)
+        except StopIteration:
+            self._closed = True
+            raise
+
+    def note_setup_terminal(self, terminal: RagFailed | RagCancelled) -> None:
+        self._setup_terminal = terminal
+
+    def prepare_for_legacy(self) -> RagEvent:
+        """Consume preparation only and restore legacy synchronous failures."""
+        first = next(self)
+        terminal = self._setup_terminal
+        if terminal is None:
+            return first
+        self.close()
+        if isinstance(terminal, RagFailed):
+            raise terminal.cause
+        if terminal.cause is not None:
+            raise terminal.cause
+        from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+
+        raise ExternalAICallCancelled(terminal.reason)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        source = self._source
+        if source is None:
+            return
+        close = getattr(source, "close", None)
+        if callable(close):
+            self._context.run(close)
+
+
+def _prepare_legacy_events(events: Iterator[RagEvent]) -> RagEvent | None:
+    prepare = getattr(events, "prepare_for_legacy", None)
+    if callable(prepare):
+        return prepare()
+    return next(events, None)
 
 
 def collect_rag_events(events: Iterator[RagEvent]) -> RagCollectedResult:
@@ -547,6 +630,22 @@ class DefaultRagExecutor:
         invocation: RagInvocation,
         cancellation: CancellationSignal = NEVER_CANCELLED,
     ) -> Iterator[RagEvent]:
+        return _ContextBoundRagIterator(
+            lambda owner: self._run_bound(
+                request,
+                invocation,
+                cancellation,
+                owner,
+            )
+        )
+
+    def _run_bound(
+        self,
+        request: RagRequest,
+        invocation: RagInvocation,
+        cancellation: CancellationSignal,
+        owner: _ContextBoundRagIterator,
+    ) -> Iterator[RagEvent]:
         from mech_chatbot.config.logging import redact_sensitive_trace_fields
         from mech_chatbot.rag.semantic_cache import replay_cache_disabled
 
@@ -566,13 +665,19 @@ class DefaultRagExecutor:
                 stack.enter_context(replay_cache_disabled(True))
             if invocation.mode == "pilot_replay":
                 stack.enter_context(redact_sensitive_trace_fields(True))
-            yield from self._run_in_context(request, invocation, cancellation)
+            yield from self._run_in_context(
+                request,
+                invocation,
+                cancellation,
+                owner,
+            )
 
     def _run_in_context(
         self,
         request: RagRequest,
         invocation: RagInvocation,
         cancellation: CancellationSignal,
+        owner: _ContextBoundRagIterator,
     ) -> Iterator[RagEvent]:
         from mech_chatbot.llm.external_ai import ExternalAICallCancelled
         from mech_chatbot.rag import pipeline
@@ -625,18 +730,22 @@ class DefaultRagExecutor:
                 refusal_reason=refusal_reason,
             )
         except ExternalAICallCancelled as exc:
+            terminal = RagCancelled(reason=str(exc), cause=exc)
             if state.phase != "prepared":
+                owner.note_setup_terminal(terminal)
                 yield RagPrepared("", (), (), {})
-            yield RagCancelled(reason=str(exc), cause=exc)
+            yield terminal
         except Exception as exc:
-            if state.phase != "prepared":
-                yield RagPrepared("", (), (), {})
-            yield RagFailed(
+            terminal = RagFailed(
                 code=type(exc).__name__,
                 message=str(exc),
                 retryable=False,
                 cause=exc,
             )
+            if state.phase != "prepared":
+                owner.note_setup_terminal(terminal)
+                yield RagPrepared("", (), (), {})
+            yield terminal
         finally:
             close = getattr(stream, "close", None)
             if callable(close):

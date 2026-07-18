@@ -60,7 +60,10 @@ from mech_chatbot.rag.entity_resolver import (
     resolve_candidates_from_docs,
     build_candidate_table_markdown,
 )
-from mech_chatbot.rag.execution import current_execution_context
+from mech_chatbot.rag.execution import (
+    _raise_if_request_budget_exceeded,
+    current_execution_context,
+)
 
 _RETRIEVE_UNSET = object()
 
@@ -371,6 +374,7 @@ def _prepare_history(chat_history, conversation_context, response_language, trac
                     ).content.strip()
                     _summary_covered_new = len(_ov)
                 except Exception as _e_sum:
+                    _raise_if_request_budget_exceeded(_e_sum)
                     logger.warning(f"[KH-3] Tom tat hoi thoai loi: {_e_sum}")
                     _history_summary_new = _prev_summary or None
                     _summary_covered_new = _prev_covered
@@ -383,6 +387,7 @@ def _prepare_history(chat_history, conversation_context, response_language, trac
                 _summary_label = "=== EARLIER CONVERSATION SUMMARY ===" if _is_en else "=== TOM TAT HOI THOAI TRUOC DO ==="
                 chat_history_str = f"{_summary_label}\n{_eff_summary}\n\n{chat_history_str}"
     except Exception as _e_sumwrap:
+        _raise_if_request_budget_exceeded(_e_sumwrap)
         logger.warning(f"[KH-3] Summary buffer loi: {_e_sumwrap}")
     return chat_history_str, _history_summary_new, _summary_covered_new
 
@@ -428,6 +433,7 @@ def _analyze_image(image_path, user_question, trace_id, retry_budget=None):
                           success=True,
                           analysis_chars=len(image_analysis))
             except Exception as e:
+                _raise_if_request_budget_exceeded(e)
                 logger.error(f"Loi khi doc anh bang vision model: {e}", exc_info=True)
                 log_trace("image_analysis", trace_id, 
                           latency_ms=int((time.time() - t_img_start)*1000),
@@ -1084,7 +1090,8 @@ def _route(*, user_question, conversation_context, response_language,
         try:
             from mech_chatbot.rag import route_llm as _route_llm
             return _route_llm.classify_llm(_t, _ctx, trace_id=trace_id)
-        except Exception:
+        except Exception as exc:
+            _raise_if_request_budget_exceeded(exc)
             return None
     _route_started = time.time()
     _router_context = dict(conversation_context or {})

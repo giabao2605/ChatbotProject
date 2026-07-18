@@ -23,6 +23,7 @@ from mech_chatbot.rag.execution import (
     RagInvocation,
     RagRequest,
     RagToken,
+    RequestBudgetExceeded,
     RequestBudgetLedger,
     RequestBudgetLimits,
 )
@@ -367,11 +368,12 @@ def test_vision_retries_share_the_request_wide_provider_budget(monkeypatch):
     monkeypatch.setattr(module, "is_retryable_error", lambda _error: True)
     monkeypatch.setattr(module, "wait_exponential", lambda **_kwargs: wait_none())
 
-    assert module._analyze_image(
-        "image.png",
-        "what is this?",
-        "vision-budget-test",
-        retry_budget=budget,
-    ) == ""
+    with pytest.raises(RequestBudgetExceeded, match="provider_retries"):
+        module._analyze_image(
+            "image.png",
+            "what is this?",
+            "vision-budget-test",
+            retry_budget=budget,
+        )
     assert len(attempts) == 3
     assert budget.provider_retries == 2

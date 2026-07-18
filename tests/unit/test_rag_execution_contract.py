@@ -16,6 +16,7 @@ from mech_chatbot.rag.execution import (
     attributed_citations,
     collect_rag_events,
     current_execution_context,
+    current_request_budget,
 )
 
 
@@ -129,6 +130,179 @@ def test_evaluation_mode_is_request_local_and_visible_to_pipeline(monkeypatch):
     assert current_execution_context() == before
 
 
+def test_interleaved_event_streams_keep_context_and_budget_request_local(monkeypatch):
+    from mech_chatbot.rag import pipeline
+
+    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "production")
+    observed = []
+
+    def scripted_pipeline(state):
+        observed.append(
+            (
+                "prepare",
+                state.trace_id,
+                current_execution_context(),
+                current_request_budget() is state.budget,
+            )
+        )
+
+        def stream():
+            observed.append(
+                (
+                    "stream",
+                    state.trace_id,
+                    current_execution_context(),
+                    current_request_budget() is state.budget,
+                )
+            )
+            yield state.trace_id
+
+        return state.prepared((stream(), "", [], [], {}))
+
+    monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
+    executor = DefaultRagExecutor()
+    evaluation = iter(
+        executor.run(
+            RagRequest("evaluation", AccessScope()),
+            RagInvocation(trace_id="evaluation", mode="evaluation"),
+        )
+    )
+    production = iter(
+        executor.run(
+            RagRequest("production", AccessScope()),
+            RagInvocation(trace_id="production", mode="production"),
+        )
+    )
+
+    assert observed == []
+    assert isinstance(next(evaluation), RagPrepared)
+    assert current_execution_context() == "production"
+    assert current_request_budget() is None
+    assert isinstance(next(production), RagPrepared)
+    assert current_execution_context() == "production"
+    assert current_request_budget() is None
+    assert isinstance(next(evaluation), RagToken)
+
+    evaluation.close()
+    evaluation.close()
+    production.close()
+    production.close()
+
+    assert observed == [
+        ("prepare", "evaluation", "evaluation", True),
+        ("prepare", "production", "production", True),
+        ("stream", "evaluation", "evaluation", True),
+    ]
+    assert current_execution_context() == "production"
+    assert current_request_budget() is None
+
+
+def test_decomposition_branches_inherit_request_context_and_budget(monkeypatch):
+    from mech_chatbot.rag import pipeline
+    from mech_chatbot.rag.query_decomposition import BranchPlan, execute_plan
+
+    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "production")
+    observed = []
+
+    def scripted_pipeline(state):
+        plan = BranchPlan(
+            original_query="compare",
+            is_complex=True,
+            subqueries=("first", "second"),
+        )
+
+        def retrieve(query, *_args):
+            observed.append(
+                (
+                    query,
+                    current_execution_context(),
+                    current_request_budget() is state.budget,
+                )
+            )
+            return query
+
+        execute_plan(plan, retrieve, {})
+        return state.prepared((iter(["answer"]), "", [], [], {}))
+
+    monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
+
+    events = list(
+        DefaultRagExecutor().run(
+            RagRequest("compare", AccessScope()),
+            RagInvocation(trace_id="decomposition-context", mode="evaluation"),
+        )
+    )
+
+    assert isinstance(events[-1], RagCompleted)
+    assert sorted(observed) == [
+        ("first", "evaluation", True),
+        ("second", "evaluation", True),
+    ]
+
+
+def test_pilot_replay_branches_inherit_cache_and_trace_controls(monkeypatch):
+    import json
+
+    from mech_chatbot.config import logging as trace_logging
+    from mech_chatbot.rag import pipeline, semantic_cache
+    from mech_chatbot.rag.query_decomposition import BranchPlan, execute_plan
+
+    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "production")
+    monkeypatch.setenv("SEMANTIC_CACHE_ENABLED", "true")
+    trace_messages = []
+    observed = []
+    monkeypatch.setattr(trace_logging.trace_logger, "info", trace_messages.append)
+
+    def scripted_pipeline(state):
+        plan = BranchPlan(
+            original_query="compare",
+            is_complex=True,
+            subqueries=("first", "second"),
+        )
+
+        def retrieve(query, *_args):
+            observed.append(
+                (
+                    query,
+                    current_execution_context(),
+                    semantic_cache.enabled(),
+                )
+            )
+            trace_logging.log_trace(
+                "pilot_replay_branch",
+                state.trace_id,
+                query=query,
+                safe_field="kept",
+            )
+            return query
+
+        execute_plan(plan, retrieve, {})
+        return state.prepared((iter(["answer"]), "", [], [], {}))
+
+    monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
+    trace_id = "pilot-replay-context"
+    try:
+        events = list(
+            DefaultRagExecutor().run(
+                RagRequest("compare", AccessScope()),
+                RagInvocation(trace_id=trace_id, mode="pilot_replay"),
+            )
+        )
+    finally:
+        trace_logging._TRACE_ACC.pop(trace_id, None)
+
+    assert isinstance(events[-1], RagCompleted)
+    assert sorted(observed) == [
+        ("first", "production", False),
+        ("second", "production", False),
+    ]
+    payloads = [json.loads(message) for message in trace_messages]
+    assert len(payloads) == 2
+    assert all(payload["safe_field"] == "kept" for payload in payloads)
+    assert all("query" not in payload for payload in payloads)
+    assert semantic_cache.enabled() is True
+
+
 def test_default_invocation_preserves_ambient_test_context(monkeypatch):
     from mech_chatbot.rag import pipeline
 
@@ -234,6 +408,164 @@ def test_request_wide_retry_budget_stops_third_retry_before_any_token(monkeypatc
     assert "provider_retries" in str(events[-1].cause)
 
 
+def test_parallel_decomposition_retries_share_atomic_request_budget(monkeypatch):
+    import threading
+
+    from tenacity import stop_after_attempt, wait_none
+
+    from mech_chatbot.llm import llm_client
+    from mech_chatbot.rag import pipeline
+    from mech_chatbot.rag.query_decomposition import BranchPlan, execute_plan
+
+    attempts = []
+    attempts_lock = threading.Lock()
+    ledgers = []
+
+    class FailingLlm:
+        def invoke(self, _messages):
+            with attempts_lock:
+                attempts.append(threading.get_ident())
+            raise RuntimeError("429 no_capacity")
+
+    monkeypatch.setattr(llm_client, "_get_runtime_llm", lambda: FailingLlm())
+    monkeypatch.setattr(
+        llm_client,
+        "audited_external_call",
+        lambda **_kwargs: nullcontext(),
+    )
+    budgeted_invoke = llm_client.gpt_invoke.retry_with(
+        wait=wait_none(),
+        stop=stop_after_attempt(4),
+    )
+
+    def scripted_pipeline(state):
+        ledgers.append(state.budget)
+        plan = BranchPlan(
+            original_query="compare",
+            is_complex=True,
+            subqueries=("first", "second"),
+        )
+
+        def retrieve(query, *_args):
+            budgeted_invoke([query], surface="branch-test", trace_id=state.trace_id)
+            return query
+
+        execute_plan(plan, retrieve, {})
+        pytest.fail("budget exhaustion must stop request setup")
+
+    monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
+
+    events = list(
+        DefaultRagExecutor().run(
+            RagRequest("compare", AccessScope()),
+            RagInvocation(trace_id="parallel-retry-budget", mode="test"),
+        )
+    )
+
+    assert [type(event) for event in events] == [RagPrepared, RagFailed]
+    assert events[-1].code == "RequestBudgetExceeded"
+    assert len(attempts) == 4
+    assert ledgers[0].provider_retries == 2
+
+
+def test_budget_exhaustion_is_not_swallowed_by_evidence_fallback(monkeypatch):
+    from mech_chatbot.rag import evidence_gate, pipeline
+
+    monkeypatch.setenv("LLM_EVIDENCE_VERIFIER_ENABLED", "true")
+    monkeypatch.setattr(evidence_gate, "STRICT_ANSWER_MODE", True)
+    monkeypatch.setattr(
+        evidence_gate,
+        "heuristic_missing_evidence_reason",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def scripted_pipeline(state):
+        state.budget.record("provider_retries", 2)
+
+        def exhaust_budget(*_args, **_kwargs):
+            state.budget.consume_provider_retry()
+
+        monkeypatch.setattr(evidence_gate, "cohere_invoke", exhaust_budget)
+        evidence_gate.evaluate_answerability(
+            "Chi phí là bao nhiêu?",
+            "Tài liệu có bằng chứng trực tiếp.",
+            trace_id=state.trace_id,
+        )
+        return state.prepared((iter(["unreachable"]), "", [], [], {}))
+
+    monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
+
+    events = list(
+        DefaultRagExecutor().run(
+            RagRequest("Chi phí là bao nhiêu?", AccessScope()),
+            RagInvocation(trace_id="budget-evidence-fallback", mode="test"),
+        )
+    )
+
+    assert [type(event) for event in events] == [RagPrepared, RagFailed]
+    assert events[-1].code == "RequestBudgetExceeded"
+
+
+def test_budget_exhaustion_is_not_swallowed_by_planner_fallback(monkeypatch):
+    from mech_chatbot.rag import pipeline
+    from mech_chatbot.rag.query_decomposition import compile_query_plan
+
+    def scripted_pipeline(state):
+        state.budget.record("provider_retries", 2)
+
+        def exhaust_budget(_question):
+            state.budget.consume_provider_retry()
+
+        compile_query_plan(
+            "So sánh MA-100 và MA-200",
+            {},
+            planner=exhaust_budget,
+        )
+        return state.prepared((iter(["unreachable"]), "", [], [], {}))
+
+    monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
+
+    events = list(
+        DefaultRagExecutor().run(
+            RagRequest("So sánh MA-100 và MA-200", AccessScope()),
+            RagInvocation(trace_id="budget-planner-fallback", mode="test"),
+        )
+    )
+
+    assert [type(event) for event in events] == [RagPrepared, RagFailed]
+    assert events[-1].code == "RequestBudgetExceeded"
+
+
+def test_budget_exhaustion_is_not_swallowed_by_router_fallback(monkeypatch):
+    from mech_chatbot.rag import interaction_router, pipeline, route_config
+
+    monkeypatch.setattr(route_config, "semantic_enabled", lambda: False)
+
+    def scripted_pipeline(state):
+        state.budget.record("provider_retries", 2)
+
+        def exhaust_budget(_text, _context):
+            state.budget.consume_provider_retry()
+
+        interaction_router.classify(
+            "một câu mơ hồ",
+            llm_classifier=exhaust_budget,
+        )
+        return state.prepared((iter(["unreachable"]), "", [], [], {}))
+
+    monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
+
+    events = list(
+        DefaultRagExecutor().run(
+            RagRequest("một câu mơ hồ", AccessScope()),
+            RagInvocation(trace_id="budget-router-fallback", mode="test"),
+        )
+    )
+
+    assert [type(event) for event in events] == [RagPrepared, RagFailed]
+    assert events[-1].code == "RequestBudgetExceeded"
+
+
 def test_request_deadline_is_checked_before_emitting_answer_token(monkeypatch):
     from mech_chatbot.rag import execution, pipeline
 
@@ -319,6 +651,35 @@ def test_legacy_chat_with_rag_keeps_five_tuple_and_stream_contract():
     assert isinstance(diagnostics, dict)
 
 
+def test_legacy_adapter_raises_setup_failure_before_returning_tuple(monkeypatch):
+    from mech_chatbot.rag import pipeline
+
+    failure = RuntimeError("pipeline setup failed")
+    monkeypatch.setattr(
+        pipeline,
+        "execute_pipeline",
+        lambda _state: (_ for _ in ()).throw(failure),
+    )
+
+    with pytest.raises(RuntimeError, match="pipeline setup failed") as raised:
+        pipeline.chat_with_rag("question")
+
+    assert raised.value is failure
+
+
+def test_legacy_adapter_raises_pre_cancellation_before_returning_tuple():
+    import threading
+
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    from mech_chatbot.rag.pipeline import chat_with_rag
+
+    cancellation = threading.Event()
+    cancellation.set()
+
+    with pytest.raises(ExternalAICallCancelled):
+        chat_with_rag("question", cancel_event=cancellation)
+
+
 @pytest.mark.parametrize(
     "answer",
     [
@@ -371,16 +732,20 @@ def test_legacy_adapter_mutates_same_debug_dictionary_after_stream_consumption(m
     class ScriptedExecutor:
         def run(self, *_args, **_kwargs):
             yield RagPrepared("refs", (), (), {"phase": "prepared"})
+            token_started.append(True)
             yield RagToken("answer")
             yield RagCompleted("answered", "trace-scripted", {"phase": "completed"})
 
+    token_started = []
     monkeypatch.setattr(execution, "DefaultRagExecutor", ScriptedExecutor)
 
     stream, _, _, _, diagnostics = chat_with_rag("question")
     original_identity = id(diagnostics)
     assert diagnostics == {"phase": "prepared"}
+    assert token_started == []
 
     assert "".join(stream) == "answer"
 
+    assert token_started == [True]
     assert id(diagnostics) == original_identity
     assert diagnostics == {"phase": "completed"}

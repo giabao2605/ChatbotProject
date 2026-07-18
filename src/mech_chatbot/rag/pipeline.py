@@ -88,7 +88,10 @@ from mech_chatbot.rag.corrective import (
 from mech_chatbot.rag.query_decomposition import audit_decomposition_stream
 
 
-from mech_chatbot.rag.execution import current_execution_context
+from mech_chatbot.rag.execution import (
+    _raise_if_request_budget_exceeded,
+    current_execution_context,
+)
 from mech_chatbot.rag.pipeline_steps import GenerationControl, GenerationEvidence, GenerationOutcome, GenerationPlan, GenerationTurn, _prepare_history, _analyze_image, _assemble_context, generate_answer, _retrieve, _RETRIEVE_UNSET, _route, _rewrite_and_anchor, _disambiguate
 
 def make_debug_info(docs=None):
@@ -682,6 +685,7 @@ def execute_pipeline(state):
                         except (ExternalAICallCancelled, TimeoutError):
                             raise
                         except Exception as exc:
+                            _raise_if_request_budget_exceeded(exc)
                             logger.warning("Decomposed corrective retrieval failed: %s", exc)
                             log_trace(
                                 "corrective_retrieval", trace_id,
@@ -870,6 +874,7 @@ def execute_pipeline(state):
             except (ExternalAICallCancelled, TimeoutError):
                 raise
             except Exception as e:
+                _raise_if_request_budget_exceeded(e)
                 logger.warning(f"Loi HyDE fallback: {e}")
                 log_trace("hyde", trace_id, used=True, error=str(e))
  
@@ -922,6 +927,7 @@ def execute_pipeline(state):
         except (ExternalAICallCancelled, TimeoutError):
             raise
         except Exception as exc:
+            _raise_if_request_budget_exceeded(exc)
             logger.warning("Graph retrieval unavailable: %s", exc)
             log_trace("graph_retrieval", trace_id, error=type(exc).__name__, edge_count=0)
 
@@ -1353,6 +1359,7 @@ def execute_pipeline(state):
             except (ExternalAICallCancelled, TimeoutError):
                 raise
             except Exception as exc:
+                _raise_if_request_budget_exceeded(exc)
                 logger.warning("Corrective retrieval failed: %s", exc)
                 log_trace(
                     "corrective_retrieval",
@@ -1767,6 +1774,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         RagPrepared,
         RagRequest,
         RagToken,
+        _prepare_legacy_events,
         current_execution_context,
     )
 
@@ -1796,7 +1804,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
             cancellation=cancel_event or NEVER_CANCELLED,
         )
     )
-    first = next(events, None)
+    first = _prepare_legacy_events(events)
     if isinstance(first, RagFailed):
         raise first.cause
     if isinstance(first, RagCancelled):
