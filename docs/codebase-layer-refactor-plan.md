@@ -938,6 +938,61 @@ rõ. Coverage tăng từ 8.818/16.808 lên 9.535/16.808 statement và từ
 **47,441406% branch**; checker 80/80 vẫn trả exit `1` đúng thiết kế. Còn thiếu
 3.912 statement và 1.667 branch để chạm threshold; Phase 1 tiếp tục bị chặn.
 
+#### Coverage hardening Wave 2
+
+Wave 2 tiếp tục chỉ thêm contract/characterization test, không sửa production.
+195 test mới pass cùng nhau; full suite tuần tự pass với 22 skip đã biết.
+
+| Test mới | Contract được khóa | Vòng đời |
+|---|---|---|
+| `test_catalog_repository.py`, `test_doc_metadata_repository.py` | Catalog lifecycle/RBAC/Qdrant rollback và document metadata validation/mapping | Giữ đến khi repository port mới có cùng result, mutation và fail-closed contract. |
+| `test_feedback_repository_contract.py`, `test_knowledge_governance_repository_contract.py` | Feedback/golden/regression flow và governance validation/audit/cache | Giữ; không thay thế SQL/Qdrant integration semantics. |
+| `test_jobs_repository.py` | Ingestion job create/pick/update/quota/cancel/requeue/ETA | Giữ cùng worker test; chỉ xóa khi job repository port và worker adapter cùng thay thế state transitions. |
+| `test_pdf_vision.py` | Vision response parsing/formatting và opt-in prewarm cache | Giữ đến khi vision adapter/prewarm port mới bảo vệ cùng no-op, cache và best-effort behavior. |
+| `test_semantic_cache_public_contract.py` | Exact/semantic lookup, provenance, stale record, store và stream lifecycle | Giữ như security/cache contract. |
+| `test_rag_server_endpoints.py` | Service auth, server-side RBAC, `/chat`, SSE, history/save/feedback | Giữ như HTTP/SSE contract; không xóa các auth/cancellation test cũ. |
+
+Không có test tracked nào bị xóa trong Wave 2 và review không tìm thấy case
+mới trùng đủ để thay thế test cũ, ngoại trừ stream-failure case được xử lý theo
+mapping sau. Assertions raw exception đã bị loại để không đóng băng việc lộ chi
+tiết nội bộ thành public contract; chat và stream đều gửi RBAC field độc hại rồi
+xác nhận server-side profile thắng.
+
+| Test cũ đã xóa | Replacement mạnh hơn | Contract |
+|---|---|---|
+| `test_semantic_cache_stream_lifecycle.py::test_partial_or_cancelled_stream_is_never_saved_to_semantic_cache` | `test_semantic_cache_public_contract.py::test_failed_stream_propagates_error_without_storing` và `::test_cancelled_stream_does_not_store_partial_answer` | Error phải propagate, cancellation/close và stream chưa hoàn tất không được ghi partial answer; replacement đi qua repository boundary và tách hai failure mode. |
+
+Các case gọi private helper trong catalog/doc-metadata/PDF-vision chỉ là
+characterization **tạm thời**: khi public repository/vision port mới cover cùng
+input class và failure mode, ledger phải map từng case sang replacement rồi xóa
+case private-detail trong chính commit thay thế. Các public route/repository
+contract còn lại là test giữ lâu dài.
+
+Coverage sau review Wave 2: 10.818/16.808 statement = **64,362208% line** và
+2.849/5.120 branch = **55,644531% branch**. So với Wave 1 tăng 1.283 statement
+và 420 branch. Checker 80/80 vẫn trả exit `1`; còn thiếu 2.629 statement và
+1.247 branch nên Phase 1 tiếp tục bị chặn.
+
+Known issues không được đóng băng thành contract:
+
+- `semantic_cache.lookup_exact()` có thể raise nếu record cache chứa
+  `est_cost` sai định dạng thay vì fail closed; `source_doc_ids` là JSON hợp lệ
+  nhưng không chuyển được sang integer có thể tạo danh sách normalize rỗng và
+  bỏ qua freshness verification.
+- Error path hiện tại của RAG HTTP/SSE có thể chứa tên exception và message
+  provider. Wave 2 chỉ assert status/event shape, không assert raw detail; việc
+  sanitize cần một security fix TDD riêng có phê duyệt thay đổi behavior.
+- Department guard của `create_ingestion_job()` đang fallback cho mọi
+  SQLAlchemy `OperationalError`, chưa phân biệt legacy missing-schema với outage
+  thật. Test fail-open đã bị loại; cần security/reliability fix TDD riêng trước
+  khi coi legacy fallback là contract.
+- `/chat/feedback` hiện bỏ qua boolean trả về từ persistence và luôn trả
+  `{"ok": true}`. Test success dùng boundary trả `True`; failure response chưa
+  được đóng băng và cần application/API fix riêng.
+- Các fake SQLAlchemy protocol đang lặp giữa repository test files; chỉ tách
+  shared test helper nếu chứng minh không làm mất fidelity hoặc che boundary
+  mismatch. Không xóa suite chỉ để giảm số dòng.
+
 Điều kiện gỡ blocker trước Phase 1: bổ sung characterization test để toàn bộ
 `mech_chatbot` đạt tối thiểu 80% line và branch như kế hoạch hiện tại, hoặc có
 quyết định sửa chính sách gate thành coverage 80% cho package refactor-owned
