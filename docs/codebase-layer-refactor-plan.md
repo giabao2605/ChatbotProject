@@ -1,6 +1,6 @@
 # Kế hoạch refactor codebase theo deep module và dependency một chiều
 
-Trạng thái: **In progress — Phase 0 đã hoàn tất; Phase 1 đã validated và chờ commit ledger**
+Trạng thái: **In progress — Phase 0 và Phase 1 đã hoàn tất; Phase 2 chưa bắt đầu**
 
 Ngày lập kế hoạch: **2026-07-20**
 
@@ -1113,7 +1113,7 @@ warning Starlette/httpx và dependency drift trong `chat_env`; các mục này v
 
 ### 9.2. Phase 1 — `ChatTurnRunner`
 
-Trạng thái: **Validated / ready to commit**. Phase 1 không thay đổi feature
+Trạng thái: **Completed / Validated**. Phase 1 không thay đổi feature
 flag, rollout decision, RAG algorithm, database schema hay HTTP/OpenAPI/SSE
 wire contract.
 
@@ -1128,7 +1128,7 @@ wire contract.
 | Architecture delta | Xóa dependency `direct_getenv` mới khỏi adapter bằng cách để composition truyền config; API không còn import concrete adapter. Citation attribution nằm trong application module. Architecture suite `8 pass` và không thêm violation/allowlist. |
 | Test lifecycle | `test_app_chat_orchestration.py` đã bỏ test pilot endpoint phụ thuộc transport/repository monkeypatch vì runner/adapter contract đã thay thế; giữ queue-boundary test và thin endpoint SSE tests. Không xóa test contract nào nếu chưa có replacement; các suite runner/adapter/composition là durable cho đến khi seam tương ứng thay đổi. |
 | Known issues | SQL/Qdrant/RAG integration thật chưa chạy; 22 skip giữ nguyên opt-in. `StarletteDeprecationWarning` về `httpx`/`TestClient` còn mở. `chat_env` dependency drift so với lock vẫn là diagnostic. Full backend coverage pass nhưng một số module legacy riêng lẻ dưới 80%; đây là debt ngoài Phase 1 và không hạ global gate. |
-| Rollback | Revert commit Phase 1 logic sau khi commit được tạo; chỉ có một implementation chat. Nếu cần tách lịch sử, revert commit code/tests trước rồi revert commit ledger docs. Không cần data/schema rollback vì không có migration hoặc thay đổi persistence contract. |
+| Rollback | Revert `97e4183` (`refactor: deepen browser chat into turn runner`) rồi revert commit ledger docs nếu cần; chỉ có một implementation chat. Không cần data/schema rollback vì không có migration hoặc thay đổi persistence contract. |
 
 Review hai trục đã chạy sau GREEN. Các finding về audit fail-open, raw error
 leakage, response cleanup, composition placement, citation ownership và test
