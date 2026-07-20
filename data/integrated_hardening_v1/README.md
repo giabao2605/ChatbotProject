@@ -29,9 +29,11 @@ The preflight publishes `release_matrix.requested_flags` and
 always effective OFF. A rejected Late Interaction row therefore validates the
 local-reranker fallback instead of re-enabling the rejected encoder.
 
-Live integrated evidence uses `integrated-matrix-evidence-v1`: exactly eight
+Live integrated evidence uses `integrated-matrix-evidence-v1`: exactly five
 rows, each binding baseline/candidate eval, trace, load and aggregated results
 by path, SHA-256 and schema. The final gate fails if any one row regresses.
+The rows are cumulative activation profiles; Late Interaction remains OFF and
+is validated through the local-reranker fallback.
 
 `demo_decisions.json` is a separate controlled-demo ledger using
 `milestone-decision-v2`. A controlled-demo decision never completes a default

@@ -191,52 +191,70 @@ def _artifact_commit(artifact: dict) -> str:
     )
 
 
-def _accepted_release_evidence(flag: str, row: object, root: Path, source_commit: str) -> bool:
-    if not isinstance(row, dict):
+def _artifact_review_mode(artifact: dict, milestone: str) -> str | None:
+    governance = artifact.get("review_governance")
+    if isinstance(governance, dict) and governance.get("mode"):
+        return str(governance["mode"])
+    if artifact.get("review_mode"):
+        return str(artifact["review_mode"])
+    return "multi_reviewer" if milestone == "crag" else None
+
+
+def _milestone_artifact_valid(
+    artifact: dict,
+    *,
+    milestone: str,
+    decision: str,
+    source_commit: str,
+    review_mode: str,
+) -> bool:
+    expected_schema = _RELEASE_SCHEMAS[MILESTONE_FLAGS[milestone][0]]
+    if (
+        artifact.get("schema") != expected_schema
+        or _artifact_commit(artifact) != source_commit
+    ):
         return False
-    if row.get("decision") != "accepted" or row.get("source_commit") != source_commit:
+    if (
+        expected_schema == "retrieval-intelligence-gate-v1"
+        and artifact.get("stage") != milestone
+    ):
         return False
-    artifact = _read_reference(row.get("evidence"), root)
-    if artifact is None or artifact.get("schema") != _RELEASE_SCHEMAS[flag]:
+    artifact_review_mode = _artifact_review_mode(artifact, milestone)
+    if artifact_review_mode is not None and artifact_review_mode != review_mode:
         return False
-    if _artifact_commit(artifact) != source_commit:
-        return False
-    stage = FEATURE_MILESTONES[flag]
-    if artifact.get("schema") == "retrieval-intelligence-gate-v1":
-        if artifact.get("stage") != stage:
-            return False
-    return (
-        artifact.get("passed") is True
-        and artifact.get("production_eligible", True) is True
-        and artifact.get("decision", "accepted") == "accepted"
+    if decision == "accepted":
+        return (
+            artifact.get("passed") is True
+            and artifact.get("production_eligible", True) is True
+            and artifact.get("decision", "accepted") == "accepted"
+        )
+    return decision == "rejected" and (
+        artifact.get("passed") is False
+        or artifact.get("production_eligible") is False
+        or artifact.get("decision") == "rejected"
     )
 
 
 def _verified_release_evidence(
-    flag: str, row: object, root: Path, source_commit: str,
+    flag: str, row: object, root: Path, source_commit: str, review_mode: str,
 ) -> bool:
     if not isinstance(row, dict):
         return False
     decision = row.get("decision")
     if decision not in {"accepted", "rejected"}:
         return False
-    if row.get("source_commit") != source_commit:
+    row_commit = str(row.get("source_commit") or "")
+    if not row_commit or (decision == "accepted" and row_commit != source_commit):
         return False
     artifact = _read_reference(row.get("evidence"), root)
     if artifact is None or artifact.get("schema") != _RELEASE_SCHEMAS[flag]:
         return False
-    if _artifact_commit(artifact) != source_commit:
-        return False
-    stage = FEATURE_MILESTONES[flag]
-    if artifact.get("schema") == "retrieval-intelligence-gate-v1":
-        if artifact.get("stage") != stage:
-            return False
-    if decision == "accepted":
-        return _accepted_release_evidence(flag, row, root, source_commit)
-    return (
-        artifact.get("passed") is False
-        or artifact.get("production_eligible") is False
-        or artifact.get("decision") == "rejected"
+    return _milestone_artifact_valid(
+        artifact,
+        milestone=FEATURE_MILESTONES[flag],
+        decision=decision,
+        source_commit=row_commit,
+        review_mode=review_mode,
     )
 
 
@@ -246,6 +264,7 @@ def validate_release_decision_ledger(
     root: str | Path,
     source_commit: str,
     expected_enabled: set[str] | frozenset[str] | None = None,
+    review_mode: str = "multi_reviewer",
 ) -> bool:
     if not isinstance(ledger, dict):
         return False
@@ -258,6 +277,7 @@ def validate_release_decision_ledger(
         and all(
             _verified_release_evidence(
                 flag, rows.get(flag), Path(root), source_commit,
+                review_mode,
             )
             for flag in FEATURE_FLAGS
         )
@@ -274,6 +294,7 @@ def validate_release_decision_ledger(
 
 def _accepted_demo_decision(
     milestone: str, reference: object, root: Path, source_commit: str,
+    review_mode: str,
 ) -> bool:
     decision = _read_reference(reference, root)
     if decision is None or not all((
@@ -287,14 +308,51 @@ def _accepted_demo_decision(
     evidence = decision.get("evidence")
     if not isinstance(evidence, list) or not evidence:
         return False
+    technical_gate_accepted = False
     for item in evidence:
         artifact = _read_reference(item, root)
         if artifact is None or _artifact_commit(artifact) != source_commit:
             return False
+        if _milestone_artifact_valid(
+            artifact,
+            milestone=milestone,
+            decision="accepted",
+            source_commit=source_commit,
+            review_mode=review_mode,
+        ):
+            technical_gate_accepted = True
     signoff = decision.get("reviewer_signoff")
-    return isinstance(signoff, dict) and bool(
+    return technical_gate_accepted and isinstance(signoff, dict) and bool(
         str(signoff.get("reviewer") or "").strip()
         and str(signoff.get("signed_at") or "").strip()
+    )
+
+
+def validate_controlled_demo_decision_ledger(
+    ledger: object,
+    *,
+    active_milestones: set[str] | frozenset[str],
+    root: str | Path,
+    source_commit: str,
+    review_mode: str = "multi_reviewer",
+) -> bool:
+    if not isinstance(ledger, dict):
+        return False
+    rows = ledger.get("decisions")
+    return (
+        ledger.get("schema") == "controlled-demo-decision-ledger-v2"
+        and ledger.get("status") == "complete"
+        and isinstance(rows, dict)
+        and all(
+            _accepted_demo_decision(
+                milestone,
+                rows.get(milestone),
+                Path(root),
+                source_commit,
+                review_mode,
+            )
+            for milestone in active_milestones
+        )
     )
 
 
@@ -434,6 +492,7 @@ def activation_status(
             root=project_root,
             source_commit=source_commit,
             expected_enabled=set(enabled),
+            review_mode=review_mode,
         ):
             authorized = False
             fallbacks = ()
@@ -444,15 +503,15 @@ def activation_status(
                 if rows[flag].get("decision") == "rejected"
             )
     else:
-        rows = ledger.get("decisions") if ledger.get("schema") == "controlled-demo-decision-ledger-v2" else None
         active_milestones = {
             FEATURE_MILESTONES[flag] for flag in enabled
         }
-        authorized = isinstance(rows, dict) and all(
-            _accepted_demo_decision(
-                milestone, rows.get(milestone), project_root, source_commit,
-            )
-            for milestone in active_milestones
+        authorized = validate_controlled_demo_decision_ledger(
+            ledger,
+            active_milestones=active_milestones,
+            root=project_root,
+            source_commit=source_commit,
+            review_mode=review_mode,
         )
         fallbacks = ()
     return _status(
@@ -481,5 +540,6 @@ __all__ = [
     "feature_flags",
     "feature_versions",
     "profile_environment",
+    "validate_controlled_demo_decision_ledger",
     "validate_release_decision_ledger",
 ]

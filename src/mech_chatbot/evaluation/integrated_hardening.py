@@ -4,26 +4,18 @@ from __future__ import annotations
 
 from collections import Counter
 
-from mech_chatbot.rag.feature_activation import FEATURE_FLAGS, VERSION_FIELDS
+from mech_chatbot.rag.feature_activation import (
+    ACTIVATION_PROFILES,
+    FEATURE_FLAGS,
+    VERSION_FIELDS,
+)
 
 REQUIRED_COMBINATIONS = {
-    "crag_repair": {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"},
-    "crag_grounded_math": {"RAG_CRAG_ENABLED", "RAG_GROUNDED_MATH_ENABLED"},
-    "crag_late_interaction": {"RAG_CRAG_ENABLED", "RAG_LATE_INTERACTION_ENABLED"},
-    "crag_query_decomposition": {"RAG_CRAG_ENABLED", "RAG_QUERY_DECOMPOSITION_ENABLED"},
-    "crag_graph_retrieval": {"RAG_CRAG_ENABLED", "RAG_GRAPH_RETRIEVAL_ENABLED"},
-    "decomposition_graph": {
-        "RAG_CRAG_ENABLED", "RAG_QUERY_DECOMPOSITION_ENABLED",
-        "RAG_GRAPH_RETRIEVAL_ENABLED",
-    },
-    "decomposition_late_interaction": {
-        "RAG_CRAG_ENABLED", "RAG_QUERY_DECOMPOSITION_ENABLED",
-        "RAG_LATE_INTERACTION_ENABLED",
-    },
-    "graph_community_summaries": {
-        "RAG_CRAG_ENABLED", "RAG_GRAPH_RETRIEVAL_ENABLED",
-        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
-    },
+    name: set(ACTIVATION_PROFILES[name])
+    for name in (
+        "crag_claim", "grounded_math", "query_decomposition",
+        "graph_retrieval", "community_summaries",
+    )
 }
 REQUIRED_SECURITY_DIMENSIONS = {
     "role", "department", "site", "clearance", "lifecycle", "publication",

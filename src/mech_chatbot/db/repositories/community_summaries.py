@@ -58,7 +58,7 @@ def propose_community_summary(community_version_id, **values):
               AND v.PrerequisiteGraphGatePassed=1
               AND v.StructuredCoverage >= 0.80000
               AND v.ReviewedEdgePrecision >= 0.95000
-              AND v.MinGlobalAnswerGain > 0
+              AND v.MinGlobalAnswerGain >= 0.10000
         """), {
             "version_id": int(community_version_id),
             "community_key": proposal["community_key"],
@@ -264,7 +264,7 @@ def review_community_summary(summary_id, action, reviewer, note=None):
             bool(row["PrerequisiteGraphGatePassed"])
             and float(row["StructuredCoverage"] or 0) >= 0.80
             and float(row["ReviewedEdgePrecision"] or 0) >= 0.95
-            and float(row["MinGlobalAnswerGain"] or 0) > 0
+            and float(row["MinGlobalAnswerGain"] or 0) >= 0.10
         ):
             return {"ok": False, "reason": "community_prerequisite_not_met"}
         if action == "approve":

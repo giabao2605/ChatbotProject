@@ -175,7 +175,7 @@ persisted.
 
 Create baseline and candidate load reports at the same selected concurrency.
 Create `matrix-evidence.json` with schema `integrated-matrix-evidence-v1`. It
-must contain exactly the eight IDs from the versioned matrix. Every row has
+must contain exactly the five cumulative IDs from the versioned matrix. Every row has
 hashed/schema-pinned references named `baseline_eval`, `candidate_eval`,
 `baseline_trace`, `candidate_trace`, `baseline_load`, `candidate_load` and
 `results`, plus `baseline_benchmark`/`candidate_benchmark` and a hashed
@@ -196,7 +196,7 @@ generation count is enforced from labeled-eval request telemetry because repair
 can emit an additional `llm_generation` event and the raw event name alone does
 not distinguish the request's single final-generation budget.
 
-Then compose gate metadata from all eight evidence pairs. The composer rejects
+Then compose gate metadata from all five evidence pairs. The composer rejects
 a different commit, manifest, snapshot, provider configuration, governance
 scope, collection or concurrency inside any pair. It also rejects an unrelated
 trace, load report or results artifact:
@@ -213,7 +213,7 @@ trace, load report or results artifact:
 
 Invoke the final gate with the baseline, candidate and trace files referenced
 by `primary_combination_id`. The gate recomputes their hashes and requires them
-to equal the primary row, then requires all eight per-combination quality,
+to equal the primary row, then requires all five per-combination quality,
 security, budget and load results to pass.
 
 Every release-decision row must contain an evidence reference with path,

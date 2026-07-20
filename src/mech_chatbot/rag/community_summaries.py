@@ -330,7 +330,7 @@ def evaluate_summary_serving(
         and version.get("prerequisite_graph_gate_passed") is True
         and float(version.get("structured_coverage") or 0) >= 0.80
         and float(version.get("reviewed_edge_precision") or 0) >= 0.95
-        and float(version.get("min_global_answer_gain") or 0) > 0
+        and float(version.get("min_global_answer_gain") or 0) >= 0.10
     ):
         return SummaryServingDecision(False, "community_version_not_servable")
     if (

@@ -26,7 +26,7 @@ from mech_chatbot.evaluation.milestone_decisions import (
     build_demo_matrix, build_release_matrix,
     verify_demo_decision_ledger,
 )
-from mech_chatbot.rag.feature_activation import FEATURE_FLAGS
+from mech_chatbot.rag.feature_activation import validate_release_decision_ledger
 from mech_chatbot.rag.semantic_cache import pipeline_namespace
 from scripts.integrated_eval.contracts import assert_clean_worktree
 
@@ -80,13 +80,10 @@ def build_preflight(
         if release_payload.get("schema") == "integrated-release-decisions-v1"
         else {}
     )
-    release_complete = (
-        set(release_rows) == set(FEATURE_FLAGS)
-        and all(
-            isinstance(row, dict)
-            and row.get("decision") in {"accepted", "rejected"}
-            for row in release_rows.values()
-        )
+    release_complete = validate_release_decision_ledger(
+        release_payload,
+        root=ROOT,
+        source_commit=git_sha,
     )
     release_matrix = build_release_matrix(matrix, release_rows)
     release_matrix["decisions_complete"] = release_complete

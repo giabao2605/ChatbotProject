@@ -202,6 +202,13 @@ def test_serving_fails_closed_for_pending_stale_epoch_rbac_and_source_drift():
     )
     assert decision.allowed is True
     assert decision.reason == "approved_current_authorized"
+    below_target = evaluate_summary_serving(
+        approved, serving_epoch="community-v1", graph_fingerprint="graph-sha-1",
+        access_context=access, current_sources=current, current_edges=current_edges,
+        community_version={**version, "min_global_answer_gain": 0.01},
+    )
+    assert below_target.allowed is False
+    assert below_target.reason == "community_version_not_servable"
 
 
 def test_summary_rejects_unmapped_or_stale_edge_provenance():
@@ -286,6 +293,16 @@ def test_community_summary_migration_is_additive_and_pending_by_default():
     assert "ServingEpoch" in migration
     assert "PrerequisiteGraphGatePassed" in migration
     assert "ReviewedEdgePrecision >= 0.95000" in migration
+
+
+def test_community_gain_hardening_migration_disables_weak_approved_versions():
+    migration = Path(
+        "database/migrations/V0039__community_minimum_global_gain.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "MinGlobalAnswerGain < 0.10000" in migration
+    assert "MinGlobalAnswerGain >= 0.10000" in migration
+    assert "Status = 'disabled'" in migration
 
 
 def test_repository_never_inserts_generated_summary_as_approved():
@@ -541,6 +558,26 @@ def test_readiness_requires_graph_gate_review_precision_and_all_eval_groups():
     assert readiness["serving_epoch_valid"] is True
     assert readiness["indexing_latency_ms"] == 10.0
     assert readiness["max_indexing_latency_ms"] == 60000.0
+
+    weak_target = build_readiness(
+        graph_gate={"schema": "retrieval-intelligence-gate-v1", "passed": True},
+        graph_readiness={
+            "schema": "graph-readiness-v1",
+            "structured_coverage": 1.0,
+            "reviewed_edge_precision": 0.96,
+        },
+        detection_report={
+            "schema": "graph-community-detection-v1",
+            "serving_edge_validation_passed": True,
+            "provenance_completeness": 1.0,
+            "indexing_latency_ms": 10.0,
+        },
+        manifest_groups=groups,
+        detection_version="connected-components-v1",
+        serving_epoch="community-v1",
+        min_global_answer_gain=0.01,
+    )
+    assert weak_target["capability_passed"] is False
 
 
 def test_readiness_can_generate_after_prerequisites_but_cannot_serve_without_review():

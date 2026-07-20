@@ -23,6 +23,7 @@ from mech_chatbot.evaluation.integrated_hardening import (
     compare_load_reports,
     evaluate_request_budgets,
 )
+from mech_chatbot.rag.feature_activation import validate_release_decision_ledger
 from scripts.integrated_eval.contracts import (
     read_json_artifact,
     require_artifact_reference,
@@ -360,62 +361,6 @@ def load_matrix_evidence(
     }, references)
 
 
-_RELEASE_SCHEMAS = {
-    "RAG_CRAG_ENABLED": "crag-production-pilot-v1",
-    "RAG_CLAIM_REPAIR_ENABLED": "crag-production-pilot-v1",
-    "RAG_GROUNDED_MATH_ENABLED": "grounded-math-rollout-run-v1",
-    "RAG_LATE_INTERACTION_ENABLED": "retrieval-intelligence-gate-v1",
-    "RAG_QUERY_DECOMPOSITION_ENABLED": "decomposition-rollout-run-v1",
-    "RAG_GRAPH_RETRIEVAL_ENABLED": "graph-rollout-run-v1",
-    "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "retrieval-intelligence-gate-v1",
-}
-
-
-def _release_evidence_matches(flag, row, artifact) -> bool:
-    if artifact.get("schema") != _RELEASE_SCHEMAS[flag]:
-        return False
-    if flag == "RAG_LATE_INTERACTION_ENABLED" and artifact.get("stage") != "late_interaction":
-        return False
-    if flag == "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED" and artifact.get("stage") != "community_summaries":
-        return False
-    decision = row.get("decision")
-    if decision == "accepted":
-        return (
-            artifact.get("passed") is True
-            and artifact.get("production_eligible", True) is True
-            and artifact.get("decision", "accepted") == "accepted"
-        )
-    return (
-        decision == "rejected"
-        and (
-            artifact.get("passed") is False
-            or artifact.get("production_eligible") is False
-            or artifact.get("decision") == "rejected"
-        )
-    )
-
-
-def _release_decisions_complete(decisions: dict) -> bool:
-    rows = decisions.get("decisions") or {}
-    if not (
-        decisions.get("schema") == "integrated-release-decisions-v1"
-        and set(rows) == set(FEATURE_FLAGS)
-        and all(
-            isinstance(row, dict) and row.get("decision") in {"accepted", "rejected"}
-            and isinstance(row.get("evidence"), dict) for row in rows.values()
-        )
-    ):
-        return False
-    try:
-        evidence = [require_artifact_reference(row["evidence"], root=ROOT) for row in rows.values()]
-    except (OSError, ValueError, json.JSONDecodeError):
-        return False
-    return all(
-        _release_evidence_matches(flag, rows[flag], artifact)
-        for flag, artifact in zip(rows, evidence)
-    )
-
-
 def compose_gate_metadata(
     *, readiness, offline, decisions, matrix_report, references,
 ) -> dict:
@@ -447,7 +392,11 @@ def compose_gate_metadata(
         "cache_isolation": {"passed": offline.get("cache_isolation_passed") is True},
         "rollback_evidence": {"passed": offline.get("rollback_passed") is True},
         "prerequisites": readiness.get("prerequisites") or {},
-        "release_decisions_complete": _release_decisions_complete(decisions),
+        "release_decisions_complete": validate_release_decision_ledger(
+            decisions,
+            root=ROOT,
+            source_commit=str(readiness.get("git_sha") or ""),
+        ),
     }
 
 

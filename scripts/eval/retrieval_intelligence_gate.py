@@ -16,6 +16,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from mech_chatbot.evaluation.late_interaction import HARD_NEGATIVE_SCENARIOS
+from mech_chatbot.evaluation.integrated_hardening import (
+    REQUIRED_COMBINATIONS,
+    REQUIRED_PREREQUISITES,
+)
 
 
 def _ratio(candidate, baseline):
@@ -362,7 +366,7 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             ) >= 0.95,
             "quality_target_locked": (
                 metadata.get("target_locked_before_benchmark") is True
-                and target > 0.0
+                and target >= 0.10
             ),
             "global_answer_gain": _group_rate(candidate, "global")
             >= _group_rate(baseline, "global") + target,
@@ -415,15 +419,8 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         matrix_evidence = metadata.get("combination_matrix_evidence") or {}
         combination_results = matrix_evidence.get("combination_results") or []
         prerequisites = metadata.get("prerequisites") or {}
-        required_prerequisites = {
-            "crag", "grounded_math", "late_interaction",
-            "query_decomposition", "graph_retrieval",
-        }
-        required_combinations = {
-            "crag_repair", "crag_grounded_math", "crag_late_interaction",
-            "crag_query_decomposition", "crag_graph_retrieval",
-            "decomposition_graph", "decomposition_late_interaction",
-        }
+        required_prerequisites = set(REQUIRED_PREREQUISITES)
+        required_combinations = set(REQUIRED_COMBINATIONS)
         checks = {
             **common,
             "artifact_integrity_verified": (

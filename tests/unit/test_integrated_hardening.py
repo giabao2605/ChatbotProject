@@ -43,6 +43,56 @@ def _json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _complete_release_ledger(tmp_path, source_commit="abc123"):
+    schemas = {
+        "RAG_CRAG_ENABLED": ("crag-production-pilot-v1", None),
+        "RAG_CLAIM_REPAIR_ENABLED": ("crag-production-pilot-v1", None),
+        "RAG_GROUNDED_MATH_ENABLED": ("grounded-math-rollout-run-v1", None),
+        "RAG_LATE_INTERACTION_ENABLED": (
+            "retrieval-intelligence-gate-v1", "late_interaction",
+        ),
+        "RAG_QUERY_DECOMPOSITION_ENABLED": (
+            "decomposition-rollout-run-v1", None,
+        ),
+        "RAG_GRAPH_RETRIEVAL_ENABLED": ("graph-rollout-run-v1", None),
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": (
+            "retrieval-intelligence-gate-v1", "community_summaries",
+        ),
+    }
+    rows = {}
+    for flag, (schema, stage) in schemas.items():
+        rejected = flag == "RAG_LATE_INTERACTION_ENABLED"
+        artifact_commit = "historical-late" if rejected else source_commit
+        artifact = {
+            "schema": schema,
+            "git_sha": artifact_commit,
+            "passed": not rejected,
+            "production_eligible": not rejected,
+            "decision": "rejected" if rejected else "accepted",
+        }
+        if flag in {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"}:
+            artifact["review_governance"] = {"mode": "multi_reviewer"}
+        if stage:
+            artifact["stage"] = stage
+        path = tmp_path / f"{flag.lower()}.json"
+        raw = (json.dumps(artifact) + "\n").encode()
+        path.write_bytes(raw)
+        rows[flag] = {
+            "decision": "rejected" if rejected else "accepted",
+            "source_commit": artifact_commit,
+            "evidence": {
+                "path": str(path),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "schema": schema,
+            },
+        }
+    return {
+        "schema": "integrated-release-decisions-v1",
+        "status": "complete",
+        "decisions": rows,
+    }
+
+
 def test_combination_matrix_covers_roadmap_and_declares_dependencies():
     report = validate_combination_matrix(
         _json("data/integrated_hardening_v1/matrix.json")
@@ -50,10 +100,8 @@ def test_combination_matrix_covers_roadmap_and_declares_dependencies():
 
     assert report["passed"] is True
     assert set(report["combination_ids"]) == {
-        "crag_repair", "crag_grounded_math", "crag_late_interaction",
-        "crag_query_decomposition", "crag_graph_retrieval",
-        "decomposition_graph", "decomposition_late_interaction",
-        "graph_community_summaries",
+        "crag_claim", "grounded_math", "query_decomposition",
+        "graph_retrieval", "community_summaries",
     }
     assert report["checks"]["all_flags_explicit"] is True
 
@@ -74,10 +122,14 @@ def test_every_combination_and_version_has_a_distinct_cache_namespace():
     }
     assert len(set(namespaces.values())) == len(namespaces)
 
-    late = next(item for item in matrix["combinations"] if item["id"] == "crag_late_interaction")
-    before = pipeline_namespace({**late["flags"], **late["versions"]})
+    community = next(
+        item for item in matrix["combinations"]
+        if item["id"] == "community_summaries"
+    )
+    before = pipeline_namespace({**community["flags"], **community["versions"]})
     after = pipeline_namespace({
-        **late["flags"], **late["versions"], "RAG_LATE_INDEX_VERSION": "late-next",
+        **community["flags"], **community["versions"],
+        "RAG_COMMUNITY_SERVING_EPOCH": "community-next",
     })
     assert before != after
 
@@ -91,15 +143,15 @@ def test_release_matrix_disables_rejected_features_without_erasing_requested_fla
     decisions["RAG_LATE_INTERACTION_ENABLED"] = {"decision": "rejected"}
 
     resolved = build_release_matrix(matrix, decisions)
-    late = next(
+    community = next(
         row for row in resolved["combinations"]
-        if row["id"] == "crag_late_interaction"
+        if row["id"] == "community_summaries"
     )
 
-    assert late["requested_flags"]["RAG_LATE_INTERACTION_ENABLED"] is True
-    assert late["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
-    assert late["fallback_features"] == ["RAG_LATE_INTERACTION_ENABLED"]
-    assert late["unresolved_features"] == []
+    assert community["requested_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
+    assert community["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
+    assert community["fallback_features"] == ["RAG_LATE_INTERACTION_ENABLED"]
+    assert community["unresolved_features"] == []
     assert resolved["decisions_complete"] is True
 
 
@@ -107,7 +159,7 @@ def test_release_matrix_fails_closed_for_missing_decisions():
     matrix = _json("data/integrated_hardening_v1/matrix.json")
     resolved = build_release_matrix(matrix, {})
 
-    crag = next(row for row in resolved["combinations"] if row["id"] == "crag_repair")
+    crag = next(row for row in resolved["combinations"] if row["id"] == "crag_claim")
     assert crag["effective_flags"]["RAG_CRAG_ENABLED"] is False
     assert crag["effective_flags"]["RAG_CLAIM_REPAIR_ENABLED"] is False
     assert crag["unresolved_features"] == [
@@ -149,7 +201,7 @@ def test_all_integrated_feature_flags_default_disabled():
 
 def test_request_budget_is_shared_across_combined_features():
     valid = {
-        "id": "case-ok", "combination_id": "decomposition_graph",
+        "id": "case-ok", "combination_id": "graph_retrieval",
         "planner_count": 1, "subquery_count": 3, "correction_count": 1,
         "repair_count": 0, "calculation_count": 0,
         "graph_edge_count": 12, "provider_retries": 2,
@@ -165,7 +217,7 @@ def test_request_budget_is_shared_across_combined_features():
     assert report["violations"][0]["field"] == "correction_count"
 
     inactive = {
-        **valid, "id": "inactive-feature", "combination_id": "crag_repair",
+        **valid, "id": "inactive-feature", "combination_id": "crag_claim",
         "planner_count": 1, "subquery_count": 1, "graph_edge_count": 1,
     }
     report = evaluate_request_budgets([inactive])
@@ -299,24 +351,14 @@ def test_integrated_preflight_is_commit_pinned_and_fails_closed_on_current_depen
     )
 
 
-def test_integrated_preflight_uses_effective_release_flags_and_keeps_late_off():
+def test_integrated_preflight_uses_effective_release_flags_and_keeps_late_off(tmp_path):
     matrix = _json("data/integrated_hardening_v1/matrix.json")
     cases = [
         json.loads(line)
         for line in Path("data/integrated_hardening_v1/security_matrix.jsonl")
         .read_text(encoding="utf-8").splitlines() if line.strip()
     ]
-    decisions = {
-        "schema": "integrated-release-decisions-v1",
-        "status": "complete",
-        "decisions": {
-            name: {"decision": "accepted"}
-            for name in FEATURE_FLAGS
-        },
-    }
-    decisions["decisions"]["RAG_LATE_INTERACTION_ENABLED"] = {
-        "decision": "rejected",
-    }
+    decisions = _complete_release_ledger(tmp_path)
     artifact = build_preflight(
         matrix=matrix,
         security_cases=cases,
@@ -335,17 +377,13 @@ def test_integrated_preflight_uses_effective_release_flags_and_keeps_late_off():
         release_decisions=decisions,
     )
 
-    late_rows = [
-        row for row in artifact["release_matrix"]["combinations"]
-        if row["requested_flags"]["RAG_LATE_INTERACTION_ENABLED"]
-    ]
+    matrix_rows = artifact["release_matrix"]["combinations"]
     assert artifact["release_decisions_complete"] is True
     assert artifact["ready_for_live_matrix"] is True
-    assert late_rows
     assert all(
         row["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
         and row["fallback_features"] == ["RAG_LATE_INTERACTION_ENABLED"]
-        for row in late_rows
+        for row in matrix_rows
     )
 
 
@@ -385,7 +423,7 @@ def test_integrated_results_aggregate_budget_and_security_without_raw_prompts():
     eval_report = {
         "schema": "rag-labeled-eval-v4",
         "cases": [{
-            "id": "safe-case", "combination_id": "crag_repair",
+            "id": "safe-case", "combination_id": "crag_claim",
             "planner_count": 0, "subquery_count": 0, "correction_count": 1,
             "repair_count": 1, "calculation_count": 0,
             "graph_edge_count": 0, "provider_retries": 0,
@@ -627,11 +665,12 @@ def test_demo_matrix_keeps_all_rows_and_pins_rejected_features_off():
     }
     demo = build_demo_matrix(matrix, decisions)
     assert demo["schema"] == "integrated-demo-feature-matrix-v1"
-    assert len(demo["combinations"]) == 8
-    late = next(row for row in demo["combinations"] if row["id"] == "crag_late_interaction")
-    assert late["requested_flags"]["RAG_LATE_INTERACTION_ENABLED"] is True
-    assert late["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
-    assert late["fallback_milestones"] == ["late_interaction"]
+    assert len(demo["combinations"]) == 5
+    assert all(
+        row["requested_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
+        and row["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
+        for row in demo["combinations"]
+    )
 
 
 def test_provider_capacity_failure_is_inconclusive_not_quality_rejection():
@@ -779,7 +818,7 @@ def test_repository_demo_ledger_is_complete_and_defaults_every_unaccepted_featur
         _json("data/integrated_hardening_v1/matrix.json"),
         report["decisions"],
     )
-    assert len(matrix["combinations"]) == 8
+    assert len(matrix["combinations"]) == 5
     assert all(
         not any(row["effective_flags"].values())
         for row in matrix["combinations"]
@@ -842,7 +881,7 @@ def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
                  "outcome_confusion": {"wrong_answer": 0, "leakage": 0},
                  "claim_evaluation": metric, "citation_evaluation": citation}
     budget_case = {
-        "id": "budget", "combination_id": "crag_repair",
+        "id": "budget", "combination_id": "crag_claim",
         "planner_count": 0, "subquery_count": 0, "correction_count": 0,
         "repair_count": 0, "calculation_count": 0, "graph_edge_count": 0,
         "provider_retries": 0, "final_generation_count": 1,
@@ -891,29 +930,29 @@ def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
         "baseline_benchmark": {}, "candidate_benchmark": {},
         "baseline_load": load, "candidate_load": candidate_load,
         "results": {"passed": True, "source_eval_sha256s": ["candidate_eval"],
-                    "budget_report": {"combination_ids": ["crag_repair"]}},
+                    "budget_report": {"combination_ids": ["crag_claim"]}},
     }
-    report = evaluate_combination_evidence("crag_repair", artifacts, digests)
+    report = evaluate_combination_evidence("crag_claim", artifacts, digests)
     assert report["passed"] is True
     artifacts["candidate_eval"]["snapshot_fingerprint"] = "other"
-    assert evaluate_combination_evidence("crag_repair", artifacts, digests)["passed"] is False
+    assert evaluate_combination_evidence("crag_claim", artifacts, digests)["passed"] is False
     artifacts["candidate_eval"]["snapshot_fingerprint"] = "snapshot"
     artifacts["candidate_eval"]["outcome_confusion"]["leakage"] = 1
-    assert evaluate_combination_evidence("crag_repair", artifacts, digests)["passed"] is False
+    assert evaluate_combination_evidence("crag_claim", artifacts, digests)["passed"] is False
 
     artifacts["candidate_eval"]["outcome_confusion"]["leakage"] = 0
     artifacts["candidate_load"]["concurrency"] = 1
-    assert evaluate_combination_evidence("crag_repair", artifacts, digests)["passed"] is False
+    assert evaluate_combination_evidence("crag_claim", artifacts, digests)["passed"] is False
     artifacts["candidate_load"]["concurrency"] = 5
 
     original_sha = artifacts["candidate_trace"]["source"].pop("sha256")
-    assert evaluate_combination_evidence("crag_repair", artifacts, digests)["passed"] is False
+    assert evaluate_combination_evidence("crag_claim", artifacts, digests)["passed"] is False
     artifacts["candidate_trace"]["source"]["sha256"] = original_sha
 
     artifacts["candidate_trace"]["observed_budget_metrics"][
         "max_correction_count"
     ] = 2
-    assert evaluate_combination_evidence("crag_repair", artifacts, digests)["passed"] is False
+    assert evaluate_combination_evidence("crag_claim", artifacts, digests)["passed"] is False
     artifacts["candidate_trace"]["observed_budget_metrics"][
         "max_correction_count"
     ] = 0
@@ -934,11 +973,11 @@ def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
         "flags": dict(expected["flags"]), "versions": dict(expected["versions"]),
     }
     assert evaluate_combination_evidence(
-        "crag_repair", artifacts, digests, expected_configuration=expected
+        "crag_claim", artifacts, digests, expected_configuration=expected
     )["passed"] is True
     artifacts["candidate_eval"]["pipeline_configuration"]["flags"][
         "RAG_CRAG_ENABLED"
     ] = False
     assert evaluate_combination_evidence(
-        "crag_repair", artifacts, digests, expected_configuration=expected
+        "crag_claim", artifacts, digests, expected_configuration=expected
     )["passed"] is False

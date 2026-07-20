@@ -287,7 +287,14 @@ def build_demo_matrix(feature_matrix: dict, decisions: dict) -> dict:
 def build_release_matrix(feature_matrix: dict, decisions: dict) -> dict:
     """Resolve requested matrix flags through per-feature release decisions."""
     combinations = []
-    all_unresolved = set()
+    all_unresolved = {
+        flag for flag in FEATURE_FLAGS
+        if (decisions.get(flag) or {}).get("decision") not in {"accepted", "rejected"}
+    }
+    rejected = [
+        flag for flag in FEATURE_FLAGS
+        if (decisions.get(flag) or {}).get("decision") == "rejected"
+    ]
     for row in feature_matrix.get("combinations") or []:
         requested = {
             name: (
@@ -297,7 +304,7 @@ def build_release_matrix(feature_matrix: dict, decisions: dict) -> dict:
             for name, value in (row.get("flags") or {}).items()
         }
         effective = dict(requested)
-        fallbacks = []
+        fallbacks = list(rejected)
         unresolved = []
         for flag, enabled in requested.items():
             if not enabled:
@@ -305,11 +312,9 @@ def build_release_matrix(feature_matrix: dict, decisions: dict) -> dict:
             decision = (decisions.get(flag) or {}).get("decision")
             if decision == "rejected":
                 effective[flag] = False
-                fallbacks.append(flag)
             elif decision != "accepted":
                 effective[flag] = False
                 unresolved.append(flag)
-                all_unresolved.add(flag)
         combinations.append({
             "id": row.get("id"),
             "prerequisites": list(row.get("prerequisites") or []),

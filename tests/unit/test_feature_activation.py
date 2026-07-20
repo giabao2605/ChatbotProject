@@ -34,13 +34,16 @@ def _environment(**overrides):
     return environ
 
 
-def _default_bundle(tmp_path, *, source_commit="a" * 40):
+def _default_bundle(
+    tmp_path, *, source_commit="a" * 40, review_mode="multi_reviewer",
+):
     evidence = {
         "schema": "crag-production-pilot-v1",
         "git_sha": source_commit,
         "passed": True,
         "production_eligible": True,
         "decision": "accepted",
+        "review_governance": {"mode": review_mode},
     }
     evidence_path = tmp_path / "crag-evidence.json"
     evidence_sha = _write_json(evidence_path, evidence)
@@ -74,9 +77,12 @@ def _default_bundle(tmp_path, *, source_commit="a" * 40):
         ),
     }
     for name, (schema, stage) in rejected.items():
+        rejected_commit = (
+            "b" * 40 if name == "RAG_LATE_INTERACTION_ENABLED" else source_commit
+        )
         rejected_evidence = {
             "schema": schema,
-            "git_sha": source_commit,
+            "git_sha": rejected_commit,
             "passed": False,
             "production_eligible": False,
             "decision": "rejected",
@@ -87,7 +93,7 @@ def _default_bundle(tmp_path, *, source_commit="a" * 40):
         rejected_sha = _write_json(rejected_path, rejected_evidence)
         ledger["decisions"][name] = {
             "decision": "rejected",
-            "source_commit": source_commit,
+            "source_commit": rejected_commit,
             "evidence": {
                 "path": str(rejected_path),
                 "sha256": rejected_sha,
@@ -116,6 +122,97 @@ def _default_bundle(tmp_path, *, source_commit="a" * 40):
     bundle_path = tmp_path / "activation-bundle.json"
     bundle_sha = _write_json(bundle_path, bundle)
     return bundle_path, bundle_sha
+
+
+def _controlled_crag_bundle(
+    tmp_path, *, evidence_passed=True, single_owner=False, bind_governance=False,
+):
+    source_commit = "a" * 40
+    review_mode = "single_owner" if single_owner else "multi_reviewer"
+    evidence = {
+        "schema": "crag-production-pilot-v1",
+        "git_sha": source_commit,
+        "passed": evidence_passed,
+        "production_eligible": evidence_passed,
+        "decision": "accepted" if evidence_passed else "rejected",
+        "review_governance": {"mode": review_mode},
+    }
+    evidence_path = tmp_path / "controlled-crag-evidence.json"
+    evidence_sha = _write_json(evidence_path, evidence)
+    decision = {
+        "schema": "milestone-decision-v2",
+        "milestone": "crag",
+        "scope": "controlled_demo",
+        "decision": "accepted",
+        "source_commit": source_commit,
+        "evidence": [{
+            "path": str(evidence_path),
+            "sha256": evidence_sha,
+            "schema": "crag-production-pilot-v1",
+        }],
+        "reviewer_signoff": {
+            "reviewer": "bao.nguyen",
+            "signed_at": "2026-07-20T10:00:00Z",
+        },
+    }
+    decision_path = tmp_path / "controlled-crag-decision.json"
+    decision_sha = _write_json(decision_path, decision)
+    ledger = {
+        "schema": "controlled-demo-decision-ledger-v2",
+        "status": "complete",
+        "decisions": {
+            "crag": {
+                "path": str(decision_path),
+                "sha256": decision_sha,
+                "schema": "milestone-decision-v2",
+            },
+        },
+    }
+    ledger_path = tmp_path / "controlled-demo-decisions.json"
+    ledger_sha = _write_json(ledger_path, ledger)
+    bundle = {
+        "schema": "rag-activation-bundle-v1",
+        "scope": "controlled_demo",
+        "source_commit": source_commit,
+        "activation_profile": "crag_claim",
+        "feature_flags": {
+            name: name in {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"}
+            for name in FEATURE_FLAGS
+        },
+        "versions": dict(VERSION_DEFAULTS),
+        "graph_fingerprint": None,
+        "decision_ledger": {
+            "path": str(ledger_path),
+            "sha256": ledger_sha,
+            "schema": "controlled-demo-decision-ledger-v2",
+        },
+    }
+    if bind_governance:
+        governance = {
+            "schema": "rag-review-governance-v1",
+            "mode": "single_owner",
+            "owner": "bao.nguyen",
+            "scope": "controlled_demo",
+            "source_commit": source_commit,
+            "risk_accepted": True,
+            "accepted_at": "2026-07-20T10:00:00Z",
+            "role_signoffs": {
+                role: {
+                    "owner": "bao.nguyen", "signed": True,
+                    "note": f"{role} reviewed",
+                }
+                for role in ("rag", "security_qa", "operations")
+            },
+        }
+        governance_path = tmp_path / "controlled-governance.json"
+        governance_sha = _write_json(governance_path, governance)
+        bundle["review_governance"] = {
+            "path": str(governance_path),
+            "sha256": governance_sha,
+            "schema": "rag-review-governance-v1",
+        }
+    bundle_path = tmp_path / "controlled-activation-bundle.json"
+    return bundle_path, _write_json(bundle_path, bundle)
 
 
 def test_all_disabled_is_live_safe_without_a_decision_bundle(tmp_path):
@@ -211,6 +308,58 @@ def test_default_rollout_rejects_incomplete_ledger_even_when_active_rows_pass(tm
 
     assert result.valid is False
     assert result.reason == "live_decision_not_accepted"
+
+
+def test_controlled_demo_rejects_accepted_decision_when_gate_failed(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(
+        tmp_path, evidence_passed=False,
+    )
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.reason == "live_decision_not_accepted"
+
+
+def test_single_owner_crag_requires_single_owner_governance_in_bundle(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(
+        tmp_path, single_owner=True, bind_governance=False,
+    )
+    environ = _environment(
+        RAG_ACTIVATION_SCOPE="controlled_demo",
+        RAG_CRAG_ENABLED="true",
+        RAG_CLAIM_REPAIR_ENABLED="true",
+        RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+        RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+    )
+    missing = activation_status(
+        environ, root=tmp_path, current_commit="a" * 40,
+    )
+    assert missing.valid is False
+
+    governed_path, governed_sha = _controlled_crag_bundle(
+        tmp_path, single_owner=True, bind_governance=True,
+    )
+    governed = activation_status(
+        {
+            **environ,
+            "RAG_ACTIVATION_BUNDLE_PATH": str(governed_path),
+            "RAG_ACTIVATION_BUNDLE_SHA256": governed_sha,
+        },
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+    assert governed.valid is True
+    assert governed.review_mode == "single_owner"
 
 
 @pytest.mark.parametrize("tamper", ["bundle_hash", "deployment_commit", "decision"])
@@ -340,7 +489,7 @@ def test_activation_bundle_builder_hashes_ledger_and_single_owner_governance(tmp
     _write_json(governance_path, governance)
     output = tmp_path / "bundle.json"
 
-    with pytest.raises(ValueError, match="complete release decision ledger"):
+    with pytest.raises(ValueError, match="verified release decision ledger"):
         build_activation_bundle(
             scope="default_rollout",
             profile="all_off",
@@ -376,7 +525,7 @@ def test_activation_bundle_builder_hashes_ledger_and_single_owner_governance(tmp
             root=tmp_path,
         )
 
-    _default_bundle(tmp_path)
+    _default_bundle(tmp_path, review_mode="single_owner")
     ledger_path = tmp_path / "release-decisions.json"
 
     bundle, digest = build_activation_bundle(
@@ -399,6 +548,31 @@ def test_activation_bundle_builder_hashes_ledger_and_single_owner_governance(tmp
     assert len(bundle["decision_ledger"]["sha256"]) == 64
     assert len(bundle["review_governance"]["sha256"]) == 64
     assert hashlib.sha256(output.read_bytes()).hexdigest() == digest
+
+
+def test_controlled_bundle_builder_rejects_failed_gate_and_unbound_single_owner(tmp_path):
+    _controlled_crag_bundle(tmp_path, evidence_passed=False)
+    ledger_path = tmp_path / "controlled-demo-decisions.json"
+    with pytest.raises(ValueError, match="verified controlled-demo decision ledger"):
+        build_activation_bundle(
+            scope="controlled_demo",
+            profile="crag_claim",
+            source_commit="a" * 40,
+            decision_ledger=ledger_path,
+            output=tmp_path / "failed-gate-bundle.json",
+            root=tmp_path,
+        )
+
+    _controlled_crag_bundle(tmp_path, single_owner=True)
+    with pytest.raises(ValueError, match="verified controlled-demo decision ledger"):
+        build_activation_bundle(
+            scope="controlled_demo",
+            profile="crag_claim",
+            source_commit="a" * 40,
+            decision_ledger=ledger_path,
+            output=tmp_path / "ungoverned-owner-bundle.json",
+            root=tmp_path,
+        )
 
 
 def test_health_reports_complete_activation_contract(monkeypatch):

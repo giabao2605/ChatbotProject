@@ -10,9 +10,10 @@ from pathlib import Path
 from mech_chatbot.evaluation.review_governance import review_governance_status
 from mech_chatbot.rag.feature_activation import (
     ACTIVATION_PROFILES,
-    FEATURE_FLAGS,
+    MILESTONE_FLAGS,
     VERSION_DEFAULTS,
     profile_environment,
+    validate_controlled_demo_decision_ledger,
     validate_release_decision_ledger,
 )
 
@@ -65,31 +66,50 @@ def build_activation_bundle(
     ledger_path = Path(decision_ledger)
     if not ledger_path.is_absolute():
         ledger_path = project_root / ledger_path
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    review_mode = "multi_reviewer"
+    governance_reference = None
+    if review_governance is not None:
+        governance_path = Path(review_governance)
+        if not governance_path.is_absolute():
+            governance_path = project_root / governance_path
+        governance_value = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance = review_governance_status(
+            governance_value, source_commit=source_commit, scope=scope,
+        )
+        if not governance.valid:
+            raise ValueError(f"review governance is invalid: {governance.reason}")
+        review_mode = governance.mode
+        governance_reference = _reference(
+            governance_path, root=project_root,
+            expected_schema="rag-review-governance-v1",
+        )
     if scope == "default_rollout":
-        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-        decisions = ledger.get("decisions") if isinstance(ledger, dict) else None
-        if not (
-            ledger.get("schema") == _LEDGER_SCHEMAS[scope]
-            and ledger.get("status") == "complete"
-            and isinstance(decisions, dict)
-            and set(decisions) == set(FEATURE_FLAGS)
-            and all(
-                isinstance(decisions[name], dict)
-                and decisions[name].get("decision") in {"accepted", "rejected"}
-                and decisions[name].get("source_commit") == source_commit
-                and isinstance(decisions[name].get("evidence"), dict)
-                for name in FEATURE_FLAGS
-            )
-        ):
-            raise ValueError("default_rollout requires a complete release decision ledger")
         if not validate_release_decision_ledger(
             ledger,
             root=project_root,
             source_commit=source_commit,
             expected_enabled=ACTIVATION_PROFILES[profile],
+            review_mode=review_mode,
         ):
             raise ValueError(
                 "default_rollout requires a verified release decision ledger"
+            )
+    else:
+        active_milestones = {
+            milestone
+            for milestone, flags in MILESTONE_FLAGS.items()
+            if set(flags) & set(ACTIVATION_PROFILES[profile])
+        }
+        if not validate_controlled_demo_decision_ledger(
+            ledger,
+            active_milestones=active_milestones,
+            root=project_root,
+            source_commit=source_commit,
+            review_mode=review_mode,
+        ):
+            raise ValueError(
+                "controlled_demo requires a verified controlled-demo decision ledger"
             )
     bundle = {
         "schema": "rag-activation-bundle-v1",
@@ -107,20 +127,8 @@ def build_activation_bundle(
             expected_schema=_LEDGER_SCHEMAS[scope],
         ),
     }
-    if review_governance is not None:
-        governance_path = Path(review_governance)
-        if not governance_path.is_absolute():
-            governance_path = project_root / governance_path
-        governance_value = json.loads(governance_path.read_text(encoding="utf-8"))
-        governance = review_governance_status(
-            governance_value, source_commit=source_commit, scope=scope,
-        )
-        if not governance.valid:
-            raise ValueError(f"review governance is invalid: {governance.reason}")
-        bundle["review_governance"] = _reference(
-            governance_path, root=project_root,
-            expected_schema="rag-review-governance-v1",
-        )
+    if governance_reference is not None:
+        bundle["review_governance"] = governance_reference
     output_path = Path(output)
     if not output_path.is_absolute():
         output_path = project_root / output_path

@@ -2,21 +2,28 @@
 
 ## Status
 
-Accepted for the offline control plane. Live combination evaluation remains
-blocked until its prerequisite milestone decisions are complete.
+Accepted for the offline control plane; amended 2026-07-20 for cumulative
+activation profiles and Community Summaries. Live evaluation remains blocked
+until its prerequisite decisions and immutable evidence are complete.
 
 ## Context
 
-CRAG, claim repair, Grounded Math, Late Interaction, query decomposition and
-GraphRAG each have independent budgets and rollback controls. Enabling more
-than one path can still create cross-feature failures in cache isolation,
-shared correction budget, governance filtering, streaming, latency and cost.
+CRAG, claim repair, Grounded Math, Late Interaction, query decomposition,
+GraphRAG and Community Summaries each have independent budgets and rollback
+controls. Enabling more than one path can still create cross-feature failures
+in cache isolation, shared correction budget, governance filtering, streaming,
+latency and cost.
 
 ## Decision
 
-- Maintain a versioned matrix containing the seven combinations required by
-  roadmap 2.9. Every row explicitly pins all retrieval feature flags and all
+- Maintain a versioned matrix containing the five cumulative candidate
+  profiles: CRAG + Claim Repair, then Grounded Math, Query Decomposition,
+  GraphRAG and Community Summaries. The baseline for every row is `all_off`.
+  Every row explicitly pins all seven feature flags and all
   planner/index/graph/community versions.
+- Late Interaction remains `rejected` and is always effective OFF. The matrix
+  verifies the current local-reranker fallback instead of launching the
+  rejected encoder as a candidate.
 - Treat correction as one request-wide budget. Enforce at most one planner,
   three subqueries, one correction, one repair, one calculation, 50 served
   graph edges, two provider retries and one final generation.
@@ -38,5 +45,6 @@ shared correction budget, governance filtering, streaming, latency and cost.
   `ready_for_live_matrix=false`; this is an intentional fail-closed state.
 - Rollback is disabling the affected flags and restoring the pinned version or
   serving epoch. No database migration is required for runtime rollback.
-- Community summaries remain outside the minimum integrated matrix until their
-  conditional milestone passes its own gate.
+- Community Summaries is the final cumulative row, but remains effective OFF
+  until GraphRAG, its 10-case evaluation, the 10-point global-answer gain, and
+  at least one approved summary all pass their own gates.

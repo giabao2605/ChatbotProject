@@ -59,7 +59,7 @@ def build_readiness(
         ),
         "detection_version_present": bool(str(detection_version or "").strip()),
         "serving_epoch_present": bool(str(serving_epoch or "").strip()),
-        "quality_target_locked": target > 0.0,
+        "quality_target_locked": target >= 0.10,
         "detection_schema": (
             detection_report.get("schema") == "graph-community-detection-v1"
         ),
@@ -102,7 +102,7 @@ def build_readiness(
         "ready_for_serving": ready_for_serving,
         "detection_version": str(detection_version or ""),
         "serving_epoch": str(serving_epoch or ""),
-        "target_locked_before_benchmark": target > 0.0,
+        "target_locked_before_benchmark": target >= 0.10,
         "min_global_answer_gain": target,
         "prerequisite_graph_gate_passed": graph_gate_passed,
         "reviewed_edge_precision": precision,

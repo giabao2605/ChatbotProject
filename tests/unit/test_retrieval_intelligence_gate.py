@@ -389,6 +389,13 @@ def test_community_summary_gate_requires_global_gain_without_local_regression():
 
     assert result["passed"] is True
 
+    metadata["min_global_answer_gain"] = 0.01
+    weak_target = gate.compare(
+        "community_summaries", baseline, candidate, metadata,
+    )
+    assert weak_target["checks"]["quality_target_locked"] is False
+    assert weak_target["passed"] is False
+
 
 def test_community_summary_gate_fails_closed_when_quality_metrics_are_missing():
     gate = _module()
@@ -470,9 +477,8 @@ def test_integrated_hardening_gate_requires_every_control_plane_report(tmp_path,
         "candidate_trace_sha256": "candidate-trace",
     }
     combination_ids = [
-        "crag_repair", "crag_grounded_math", "crag_late_interaction",
-        "crag_query_decomposition", "crag_graph_retrieval",
-        "decomposition_graph", "decomposition_late_interaction",
+        "crag_claim", "grounded_math", "query_decomposition",
+        "graph_retrieval", "community_summaries",
     ]
     metadata = {
         "schema": "integrated-gate-metadata-v1",
@@ -497,7 +503,7 @@ def test_integrated_hardening_gate_requires_every_control_plane_report(tmp_path,
         "rollback_evidence": {"passed": True},
         "prerequisites": {name: True for name in (
             "crag", "grounded_math", "late_interaction",
-            "query_decomposition", "graph_retrieval",
+            "query_decomposition", "graph_retrieval", "community_summaries",
         )},
         "release_decisions_complete": True,
     }
