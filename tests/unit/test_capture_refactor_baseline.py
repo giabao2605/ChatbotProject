@@ -11,7 +11,10 @@ import pytest
 
 from scripts.quality.capture_refactor_baseline import (
     ARTIFACT_NAMES,
+    _ObservedRagResponse,
+    _default_sse_capture,
     _ensure_source_root_importable,
+    _isolated_app_client,
     _load_factory,
     capture_refactor_baseline,
     main,
@@ -102,20 +105,38 @@ def test_capture_writes_complete_deterministic_privacy_safe_bundle(tmp_path: Pat
         calls.append("rag")
         return _FakeApp("RAG API")
 
+    def sse_capture():
+        calls.append("sse")
+        return {
+            "success": (
+                {"event": "thinking", "data": {"message": "Đang suy nghĩ"}},
+                {"event": "delta", "data": {"text": "Câu trả lời "}},
+                {"event": "delta", "data": {"text": "mẫu."}},
+                {"event": "citation", "data": {"source_id": "D42P3"}},
+                {"event": "done", "data": {"chat_id": 123}},
+            ),
+            "busy": (
+                {"event": "thinking", "data": {"message": "Đang suy nghĩ"}},
+                {"event": "error", "data": {"status": 503}},
+            ),
+        }
+
     first_manifest = capture_refactor_baseline(
         first,
         provenance=_provenance(),
         app_factory=app_factory,
         rag_app_factory=rag_factory,
+        sse_capture=sse_capture,
     )
     second_manifest = capture_refactor_baseline(
         second,
         provenance=_provenance(),
         app_factory=app_factory,
         rag_app_factory=rag_factory,
+        sse_capture=sse_capture,
     )
 
-    assert calls == ["app", "rag", "app", "rag"]
+    assert calls == ["sse", "app", "rag", "sse", "app", "rag"]
     assert {path.name for path in first.iterdir()} == set(ARTIFACT_NAMES)
     assert first_manifest == second_manifest
     for name in ARTIFACT_NAMES:
@@ -156,19 +177,13 @@ def test_capture_writes_complete_deterministic_privacy_safe_bundle(tmp_path: Pat
     assert [event["event"] for event in success_events] == [
         "thinking",
         "delta",
+        "delta",
         "citation",
         "done",
     ]
     assert [event["event"] for event in busy_events] == ["thinking", "error"]
     assert success_events[0]["data"] == {"message": "Đang suy nghĩ"}
-    assert success_events[-1]["data"]["citations"] == [
-        {
-            "doc_id": 42,
-            "file_name": "sample.pdf",
-            "page_no": 3,
-            "source_id": "D42P3",
-        }
-    ]
+    assert success_events[-1]["data"] == {"chat_id": 123}
     assert busy_events[-1]["data"]["status"] == 503
 
     samples = _read_json(first / "upload-review-samples.json")
@@ -196,6 +211,7 @@ def test_capture_rejects_missing_or_unknown_explicit_provenance(tmp_path: Path):
             provenance=missing,
             app_factory=lambda: _FakeApp("App"),
             rag_app_factory=lambda: _FakeApp("RAG"),
+            sse_capture=lambda: {},
         )
 
     unknown = {**_provenance(), "environment": {"SECRET": "must-not-read"}}
@@ -205,6 +221,7 @@ def test_capture_rejects_missing_or_unknown_explicit_provenance(tmp_path: Path):
             provenance=unknown,
             app_factory=lambda: _FakeApp("App"),
             rag_app_factory=lambda: _FakeApp("RAG"),
+            sse_capture=lambda: {},
         )
 
     invalid_commands = {**_provenance(), "commands": "pytest -q"}
@@ -214,6 +231,7 @@ def test_capture_rejects_missing_or_unknown_explicit_provenance(tmp_path: Path):
             provenance=invalid_commands,
             app_factory=lambda: _FakeApp("App"),
             rag_app_factory=lambda: _FakeApp("RAG"),
+            sse_capture=lambda: {},
         )
 
 
@@ -226,6 +244,10 @@ def test_cli_uses_explicit_provenance_and_injected_factories(
     factories = {
         "tests.fake:app": lambda: _FakeApp("CLI App"),
         "tests.fake:rag": lambda: _FakeApp("CLI RAG"),
+        "tests.fake:sse": lambda: {
+            "success": ({"event": "done", "data": {}},),
+            "busy": ({"event": "error", "data": {"status": 503}},),
+        },
     }
     monkeypatch.setattr(
         "scripts.quality.capture_refactor_baseline._load_factory",
@@ -242,6 +264,8 @@ def test_cli_uses_explicit_provenance_and_injected_factories(
             "tests.fake:app",
             "--rag-app-factory",
             "tests.fake:rag",
+            "--sse-capture",
+            "tests.fake:sse",
         ]
     )
 
@@ -313,6 +337,95 @@ def test_capture_validates_all_provenance_before_calling_factories(
             provenance=provenance,
             app_factory=unexpected_factory,
             rag_app_factory=unexpected_factory,
+            sse_capture=unexpected_factory,
+        )
+
+
+def test_default_sse_capture_observes_real_app_endpoint_and_serializer():
+    transcripts = _default_sse_capture()
+
+    assert [event["event"] for event in transcripts["success"]] == [
+        "thinking",
+        "delta",
+        "delta",
+        "citation",
+        "done",
+    ]
+    assert [event["event"] for event in transcripts["busy"]] == [
+        "thinking",
+        "error",
+    ]
+    assert transcripts["success"][1]["data"] == {"text": "Câu trả lời "}
+    assert transcripts["success"][2]["data"] == {
+        "text": "[Nguồn: sample.pdf, Trang 3, Version 1, SourceID D42P3]"
+    }
+    citation = transcripts["success"][3]["data"]
+    assert citation["source_id"] == "D42P3"
+    assert transcripts["success"][-1]["data"]["chat_id"] == 123
+    assert transcripts["busy"][-1]["data"] == {
+        "detail": "busy",
+        "message": "RAG server busy",
+        "status": 503,
+    }
+
+
+def test_isolated_observer_restores_dependency_overrides_after_failure():
+    app_server = pytest.importorskip("mech_chatbot.api.app_server")
+
+    def existing_dependency():
+        return "existing"
+
+    previous = dict(app_server.app.dependency_overrides)
+    app_server.app.dependency_overrides[existing_dependency] = existing_dependency
+    expected = dict(app_server.app.dependency_overrides)
+    try:
+        with pytest.raises(RuntimeError, match="observer failed"):
+            with _isolated_app_client(app_server, _ObservedRagResponse()):
+                raise RuntimeError("observer failed")
+        assert app_server.app.dependency_overrides == expected
+    finally:
+        app_server.app.dependency_overrides.clear()
+        app_server.app.dependency_overrides.update(previous)
+
+
+def test_isolated_observer_restores_overrides_when_client_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    app_server = pytest.importorskip("mech_chatbot.api.app_server")
+    fastapi_testclient = pytest.importorskip("fastapi.testclient")
+    previous = dict(app_server.app.dependency_overrides)
+
+    def fail_client(_app):
+        raise RuntimeError("client creation failed")
+
+    monkeypatch.setattr(fastapi_testclient, "TestClient", fail_client)
+    with pytest.raises(RuntimeError, match="client creation failed"):
+        with _isolated_app_client(app_server, _ObservedRagResponse()):
+            raise AssertionError("unreachable")
+    assert app_server.app.dependency_overrides == previous
+
+
+@pytest.mark.parametrize(
+    ("transcripts", "message"),
+    [
+        ({"success": ()}, "exactly success and busy"),
+        ({"success": "invalid", "busy": ()}, "success transcript must be a sequence"),
+        (
+            {"success": ({"event": "done"},), "busy": ()},
+            "events must contain event and data",
+        ),
+    ],
+)
+def test_capture_rejects_invalid_observed_transcripts(
+    tmp_path: Path, transcripts: object, message: str
+):
+    with pytest.raises(ValueError, match=message):
+        capture_refactor_baseline(
+            tmp_path / "invalid-sse",
+            provenance=_provenance(),
+            app_factory=lambda: _FakeApp("App"),
+            rag_app_factory=lambda: _FakeApp("RAG"),
+            sse_capture=lambda: transcripts,
         )
 
 

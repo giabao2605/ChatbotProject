@@ -8,8 +8,10 @@ import importlib
 import json
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
+from unittest.mock import patch
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -68,44 +70,8 @@ class _OpenAPIApp(Protocol):
 
 
 AppFactory = Callable[[], _OpenAPIApp]
-
-
-_SSE_SUCCESS = (
-    {"event": "thinking", "data": {"message": "Đang suy nghĩ"}},
-    {"event": "delta", "data": {"text": "Câu trả lời mẫu."}},
-    {
-        "event": "citation",
-        "data": {
-            "doc_id": 42,
-            "page_no": 3,
-            "file_name": "sample.pdf",
-            "source_id": "D42P3",
-        },
-    },
-    {
-        "event": "done",
-        "data": {
-            "chat_id": 123,
-            "new_part_ids": ["P123"],
-            "conversation_context": {"topic": "sample"},
-            "citations": [
-                {
-                    "doc_id": 42,
-                    "page_no": 3,
-                    "file_name": "sample.pdf",
-                    "source_id": "D42P3",
-                }
-            ],
-        },
-    },
-)
-_SSE_BUSY = (
-    {"event": "thinking", "data": {"message": "Đang suy nghĩ"}},
-    {
-        "event": "error",
-        "data": {"status": 503, "message": "RAG server busy"},
-    },
-)
+SseTranscripts = Mapping[str, Sequence[Mapping[str, Any]]]
+SseCapture = Callable[[], SseTranscripts]
 _UPLOAD_REVIEW_SAMPLES = {
     "upload_accepted": {
         "ok": True,
@@ -141,6 +107,165 @@ def _default_rag_app_factory() -> _OpenAPIApp:
     from mech_chatbot.api.rag_server import app
 
     return app
+
+
+class _ObservedRagResponse:
+    def __init__(
+        self,
+        *,
+        status_code: int = 200,
+        text: str = "",
+        events: Sequence[tuple[str, Mapping[str, Any]]] = (),
+    ) -> None:
+        self.status_code = status_code
+        self.text = text
+        self.ok = 200 <= status_code < 400
+        self._events = tuple(events)
+
+    def __enter__(self) -> _ObservedRagResponse:
+        return self
+
+    def __exit__(self, *_args: object) -> bool:
+        return False
+
+    def iter_lines(self, decode_unicode: bool = True) -> Iterator[str]:
+        del decode_unicode
+        for event, data in self._events:
+            yield f"event: {event}"
+            yield "data: " + json.dumps(data, ensure_ascii=False)
+            yield ""
+
+
+def _evidence_profile() -> dict[str, Any]:
+    return {
+        "user_id": 7,
+        "username": "baseline-observer",
+        "display_name": "Baseline Observer",
+        "department": "Engineering",
+        "roles": ["viewer"],
+        "allowed_departments": ["Engineering"],
+        "max_security_level": "internal",
+        "allowed_sites": ["TEST"],
+        "preferred_language": "vi",
+    }
+
+
+def _success_rag_response() -> _ObservedRagResponse:
+    citation = {
+        "doc_id": 42,
+        "trang": 3,
+        "file_goc": "sample.pdf",
+        "version_no": 1,
+        "score": 0.91,
+        "security_level": "internal",
+        "source_id": "D42P3",
+    }
+    return _ObservedRagResponse(
+        events=(
+            (
+                "metadata",
+                {
+                    "new_part_ids": ["P123"],
+                    "debug_info": {
+                        "conversation_context": {"topic": "sample"},
+                        "retrieved_docs": [citation],
+                        "citation_docs": [citation],
+                    },
+                },
+            ),
+            ("delta", {"text": "Câu trả lời "}),
+            (
+                "delta",
+                {
+                    "text": (
+                        "[Nguồn: sample.pdf, Trang 3, Version 1, "
+                        "SourceID D42P3]"
+                    )
+                },
+            ),
+            ("done", {"ok": True, "elapsed_ms": 25}),
+        )
+    )
+
+
+def _parse_sse(body: str) -> tuple[dict[str, Any], ...]:
+    events: list[dict[str, Any]] = []
+    for block in body.strip().split("\n\n"):
+        lines = block.splitlines()
+        names = [
+            line.removeprefix("event: ")
+            for line in lines
+            if line.startswith("event: ")
+        ]
+        data = [
+            json.loads(line.removeprefix("data: "))
+            for line in lines
+            if line.startswith("data: ")
+        ]
+        if names:
+            events.append({"event": names[0], "data": data[0] if data else None})
+    return tuple(events)
+
+
+@contextmanager
+def _isolated_app_client(
+    app_server: Any, rag_response: _ObservedRagResponse
+) -> Iterator[Any]:
+    from fastapi.testclient import TestClient
+
+    previous_overrides = dict(app_server.app.dependency_overrides)
+    client = None
+    try:
+        app_server.app.dependency_overrides[app_server.csrf_profile] = _evidence_profile
+        client = TestClient(app_server.app)
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(app_server.requests, "post", return_value=rag_response)
+            )
+            stack.enter_context(patch.object(app_server, "_pilot_route", return_value=None))
+            stack.enter_context(
+                patch.object(app_server, "_verify_image_upload", return_value=None)
+            )
+            stack.enter_context(
+                patch.object(app_server, "save_chat_history", return_value=123)
+            )
+            for name in ("save_answer_evidence", "save_answer_sources", "write_audit_log"):
+                stack.enter_context(patch.object(app_server, name, return_value=None))
+            stack.enter_context(patch.object(app_server, "page_has_vision", return_value=False))
+            yield client
+    finally:
+        if client is not None:
+            client.close()
+        app_server.app.dependency_overrides.clear()
+        app_server.app.dependency_overrides.update(previous_overrides)
+
+
+def _observe_chat_endpoint(
+    app_server: Any, response: _ObservedRagResponse
+) -> tuple[dict[str, Any], ...]:
+    with _isolated_app_client(app_server, response) as client:
+        result = client.post(
+            "/api/chat/message",
+            json={"session_id": "baseline-session", "question": "Câu hỏi mẫu"},
+        )
+    if result.status_code != 200:
+        raise RuntimeError(f"chat evidence endpoint returned HTTP {result.status_code}")
+    return _parse_sse(result.text)
+
+
+def _default_sse_capture() -> SseTranscripts:
+    """Observe browser-facing SSE through the real FastAPI endpoint in memory."""
+
+    _ensure_source_root_importable()
+    from mech_chatbot.api import app_server
+
+    return {
+        "success": _observe_chat_endpoint(app_server, _success_rag_response()),
+        "busy": _observe_chat_endpoint(
+            app_server,
+            _ObservedRagResponse(status_code=503, text="busy"),
+        ),
+    }
 
 
 def _json_value(value: Any) -> Any:
@@ -317,6 +442,17 @@ def _render_pytest_baseline(value: Mapping[str, Any]) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+def _validate_sse_transcripts(value: SseTranscripts) -> None:
+    if frozenset(value) != {"success", "busy"}:
+        raise ValueError("SSE capture must contain exactly success and busy transcripts")
+    for scenario, events in value.items():
+        if isinstance(events, (str, bytes)) or not isinstance(events, Sequence):
+            raise ValueError(f"SSE {scenario} transcript must be a sequence")
+        for event in events:
+            if not isinstance(event, Mapping) or frozenset(event) != {"event", "data"}:
+                raise ValueError(f"SSE {scenario} events must contain event and data")
+
+
 def _make_manifest_inputs(
     provenance: Mapping[str, Any], artifact_sha256: Mapping[str, str]
 ) -> ManifestInputs:
@@ -346,17 +482,20 @@ def capture_refactor_baseline(
     provenance: Mapping[str, Any],
     app_factory: AppFactory = _default_app_factory,
     rag_app_factory: AppFactory = _default_rag_app_factory,
+    sse_capture: SseCapture = _default_sse_capture,
 ) -> dict[str, Any]:
     """Write the complete Phase 0 evidence bundle without external I/O.
 
-    Runtime provenance is accepted only as explicit data. The two factories are
-    invoked solely to call FastAPI's in-memory ``openapi()`` method; the capture
-    itself never contacts providers, databases, vector stores, or the network.
+    Runtime provenance is accepted only as explicit data. OpenAPI and browser
+    SSE contracts are observed in memory. Default SSE capture replaces RAG,
+    persistence, audit, and vision system boundaries with deterministic fakes.
     """
 
     _validate_provenance(provenance)
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
+    transcripts = sse_capture()
+    _validate_sse_transcripts(transcripts)
 
     payloads = {
         "openapi-app.json": _write_openapi_json(
@@ -365,8 +504,12 @@ def capture_refactor_baseline(
         "openapi-rag.json": _write_openapi_json(
             target / "openapi-rag.json", rag_app_factory().openapi()
         ),
-        "sse-success.jsonl": _write_jsonl(target / "sse-success.jsonl", _SSE_SUCCESS),
-        "sse-busy.jsonl": _write_jsonl(target / "sse-busy.jsonl", _SSE_BUSY),
+        "sse-success.jsonl": _write_jsonl(
+            target / "sse-success.jsonl", transcripts["success"]
+        ),
+        "sse-busy.jsonl": _write_jsonl(
+            target / "sse-busy.jsonl", transcripts["busy"]
+        ),
         "upload-review-samples.json": _write_json(
             target / "upload-review-samples.json", _UPLOAD_REVIEW_SAMPLES
         ),
@@ -404,6 +547,10 @@ def _parser() -> argparse.ArgumentParser:
         "--rag-app-factory",
         default="scripts.quality.capture_refactor_baseline:_default_rag_app_factory",
     )
+    parser.add_argument(
+        "--sse-capture",
+        default="scripts.quality.capture_refactor_baseline:_default_sse_capture",
+    )
     return parser
 
 
@@ -417,6 +564,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         provenance=provenance,
         app_factory=_load_factory(args.app_factory),
         rag_app_factory=_load_factory(args.rag_app_factory),
+        sse_capture=_load_factory(args.sse_capture),
     )
     return 0
 
