@@ -1031,6 +1031,21 @@ Coverage sau review Wave 3: 12.274/16.808 statement = **73,024750% line** và
 3.338/5.120 branch = **65,195312% branch**. Checker 80/80 vẫn exit `1`; còn
 thiếu 1.173 statement và 758 branch. Phase 1 tiếp tục bị chặn.
 
+#### Coverage hardening Wave 4
+
+Wave 4 thêm 140 test cho RAG pipeline/steps, app endpoints, PDF resilience,
+publication workflow và năm repository nhỏ; không sửa production. Full suite
+pass với 22 skip. Coverage đạt 13.264/16.808 statement = **78,914802% line** và
+3.600/5.120 branch = **70,312500% branch**. Checker 80/80 vẫn exit `1`; còn
+thiếu 183 statement và 496 branch nên Phase 1 tiếp tục bị chặn.
+
+`test_pipeline_steps_orchestration.py` và các fake repository chi tiết là
+characterization tạm, phải xóa sau khi public `RagExecutor.run`/repository port
+test thay thế cùng behavior. Review loại assertion chấp nhận invalid cache doc
+IDs và đổi fixture reconciliation sang policy `internal_only`, không đóng băng
+fallback `all_external` khi policy thiếu. Missing external-processing policy
+vẫn là security decision cần fail-closed fix riêng.
+
 Điều kiện gỡ blocker trước Phase 1: bổ sung characterization test để toàn bộ
 `mech_chatbot` đạt tối thiểu 80% line và branch như kế hoạch hiện tại, hoặc có
 quyết định sửa chính sách gate thành coverage 80% cho package refactor-owned
