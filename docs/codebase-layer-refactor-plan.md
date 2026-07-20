@@ -1,0 +1,878 @@
+# Kế hoạch refactor codebase theo deep module và dependency một chiều
+
+Trạng thái: **In progress — Phase 0 validated nhưng bị chặn bởi coverage**
+
+Ngày lập kế hoạch: **2026-07-20**
+
+Phạm vi đã chốt: **backend cốt lõi**
+
+Chính sách tương thích: **giữ nguyên toàn bộ contract hiện tại**
+
+Nguồn đối chiếu chính: **tài liệu này**
+
+## 1. Mục tiêu và cách sử dụng tài liệu
+
+### 1.1. Đích đến
+
+Refactor backend thành các module sâu: mỗi module có một interface nhỏ, sở hữu trọn một hành vi có ý nghĩa, che giấu orchestration và dependency bên trong. Sau khi hoàn tất:
+
+- FastAPI router và worker chỉ còn là adapter nhận/gửi dữ liệu.
+- Logic chat, document workflow, ingestion và RAG có owner rõ ràng.
+- Dependency đi một chiều từ delivery vào application/domain rồi ra adapter.
+- Không module application/domain nào tự tạo SQL engine, Qdrant client, LLM, Vision model hoặc đọc environment tại nơi sử dụng.
+- `RagExecutor.run()` tiếp tục là interface công khai duy nhất để chạy một request RAG.
+- HTTP, SSE, RBAC, database schema, feature flag, trace/evaluation contract và hành vi rollout không thay đổi.
+
+### 1.2. Tài liệu này là refactor ledger
+
+Mỗi phase phải cập nhật trực tiếp các trường sau trước khi được đánh dấu hoàn tất:
+
+| Trường evidence | Nội dung bắt buộc |
+|---|---|
+| Baseline | Commit, branch, trạng thái working tree và test result trước phase |
+| Contract được bảo vệ | Interface và observable behavior không được đổi |
+| RED | Tên test mới và lý do nó fail trước implementation |
+| GREEN | Commit hoặc diff làm test pass qua interface mới |
+| Validation | Lệnh đã chạy, exit code, số test pass/fail/skip và coverage |
+| Architecture delta | Violation nào được xóa khỏi allowlist/ratchet |
+| Known issues | Lỗi còn mở, warning và điều kiện môi trường |
+| Rollback | Commit hoặc phase boundary có thể revert độc lập |
+
+Không đánh dấu `Completed` chỉ vì code đã được di chuyển. Trạng thái hợp lệ của một phase là:
+
+```text
+Not started -> Characterized -> RED -> GREEN -> Reviewed -> Validated -> Completed
+```
+
+Nếu unit/contract gate pass nhưng service, SQL/Qdrant fixture hoặc provider cần cho integration chưa sẵn sàng, trạng thái duy nhất được phép là `Validated offline / Blocked integration`. Trạng thái này không tương đương `Completed` và không cho phép bắt đầu phase phụ thuộc tiếp theo.
+
+### 1.3. Ngoài phạm vi
+
+- Không redesign Vue; chỉ sửa frontend nếu cần giữ nguyên contract browser sau refactor backend.
+- Không đổi database schema hoặc chạy data migration.
+- Không thay thuật toán retrieval, ranking, prompt, evidence policy hoặc quality threshold.
+- Không bật thêm CRAG, claim repair, grounded math, decomposition, graph hoặc community summary.
+- Không dùng refactor/test pass làm bằng chứng chấp thuận live rollout.
+- Không xóa compatibility shim được coi là public nếu chưa có inventory và deprecation decision riêng.
+
+## 2. Baseline hiện tại và invariant phải giữ
+
+### 2.1. Hotspot đã xác nhận
+
+| Khu vực | Baseline hiện tại | Vấn đề chính |
+|---|---:|---|
+| `api/app_server.py` | 2.763 dòng, 125 route, 169 top-level function | HTTP, RAG proxy, citation, persistence, audit, upload, publication và SQL trộn trong một module |
+| `rag/pipeline.py` | 2.017 dòng | `execute_pipeline()` kéo dài từ khoảng dòng 202 đến 1.802 và sở hữu gần toàn bộ orchestration |
+| `rag/pipeline_steps.py` | 1.366 dòng | Nhiều phase helper cùng phụ thuộc global RAG/LLM/DB state |
+| `ingestion/pdf/pipeline.py` | 979 dòng | Extraction, Vision, metadata, SQL, Qdrant, quality và rollback cùng implementation |
+| `workers/ingestion_worker.py` | 189 dòng, một `run_worker()` | Polling, classification, raw SQL, state transition và error policy cùng một vòng lặp |
+| `services/` | 18 file, 0 function/class, 131 export entry | Migration facade nông; `app_server` import khoảng 119 tên từ namespace phẳng |
+| Architecture guard | 8/8 pass | Đang quét `src/mech_chatbot/ui` cũ nên không bắt violation trong FastAPI hiện tại |
+
+### 2.2. Baseline validation ngày 2026-07-20
+
+- `test_app_chat_orchestration.py`, `test_rag_execution_contract.py` và `test_markdown_ingestion.py`: **47 test pass, exit code 0**.
+- Architecture guard độc lập: **8/8 pass, exit code 0**.
+- Test process hai lần in `Windows fatal exception: access violation` trong đường import `pyarrow -> pandas -> sklearn -> sentence_transformers`, sau đó pytest vẫn trả exit code 0. Đây là **known baseline infrastructure issue**; một run có fatal diagnostic không được coi là validation sạch cho phase refactor.
+- Working tree hiện có nhiều thay đổi chưa commit, gồm các file trùng phạm vi tương lai như `rag_server.py`, `settings.py`, `rag/pipeline.py` và `services/graph_service.py`.
+
+### 2.3. Precondition trước khi implement Phase 0
+
+1. Chốt một commit nền đã review cho công việc retrieval-intelligence đang dở. Không tự `stash`, reset hoặc ghi đè thay đổi hiện tại.
+2. Tạo branch refactor riêng từ commit nền bằng prefix `codex/`.
+3. Ghi commit SHA, `git status --short` và diff liên quan vào ledger này.
+4. Tái hiện native import diagnostic bằng một run tuần tự. Nếu `import pyarrow` độc lập crash, dựng lại môi trường từ lock trong một virtual environment mới trước khi sửa source. Nếu chỉ pytest path gây diagnostic, cô lập file/import path và ghi thành baseline blocker; không chấp nhận exit code 0 kèm fatal diagnostic làm gate.
+5. Chụp OpenAPI của `app_server` và `rag_server`, cùng một transcript SSE thành công, một transcript busy/error và response mẫu của upload/review. Các artifact phải loại secrets và nội dung nhạy cảm.
+
+### 2.4. Invariant toàn chương trình
+
+- Browser endpoints, request/response field, status code và SSE event name/order giữ nguyên.
+- `thinking`, `delta`/`token`, `citation`, `warning`, `error`, `done` giữ semantic hiện tại.
+- User profile và RBAC luôn được resolve server-side; không tin `allowed_departments` hoặc clearance do client gửi.
+- Evidence manifest và answer-attributed citation tiếp tục được lưu tách biệt.
+- Confidential source access tiếp tục được audit.
+- SQL vẫn là workflow source of truth; Qdrant chỉ phục vụ point có metadata hợp lệ và `servable=true`.
+- Budget, deadline, cancellation, execution mode và fail-closed behavior của typed RAG events không đổi.
+- Evaluation/pilot replay không tạo chat history hoặc user-visible side effect.
+- Tất cả feature flag giữ default hiện tại; refactor không mở rollout gate.
+
+## 3. Kiến trúc mục tiêu
+
+```text
+Vue / internal clients
+        |
+        v
+FastAPI routers / worker loop                 delivery adapters
+        |
+        v
+Application modules theo use case            deep modules
+        |
+        +--> pure policy/domain modules
+        |
+        v
+Ports tại system seam
+        |
+        +--> SQL adapters
+        +--> Qdrant/vector adapters
+        +--> internal RAG HTTP adapter
+        +--> LLM/Vision adapters
+        +--> filesystem adapter
+```
+
+RAG giữ topology riêng:
+
+```text
+RAG API / worker / evaluation
+        |
+        v
+RagExecutor.run(request, invocation, cancellation)
+        |
+        v
+private preparation -> routing -> retrieval -> evidence -> generation
+        |
+        v
+SQL / Qdrant / LLM adapters
+```
+
+Hai sơ đồ trên mô tả runtime call flow. Source-code dependency được đảo tại port: `composition` được phép import delivery/application/adapter để wire; delivery import application; adapter implement và import port/type do application sở hữu; application/domain không import adapter hay framework bên ngoài.
+
+Quy tắc seam:
+
+- Không tạo `IService` hoặc repository interface cho mọi CRUD.
+- Chỉ tạo port khi có production adapter và fake/in-memory adapter dùng trong test.
+- Pure computation được gọi trực tiếp, không bọc thêm pass-through.
+- Test chính đi qua interface của deep module; không mock các helper nội bộ.
+- Compatibility shim là lớp chuyển tiếp tạm thời, không phải nơi thêm logic mới.
+
+Layout đích được khóa để implementer không phải tự chọn lại cấu trúc:
+
+```text
+src/mech_chatbot/
+  application/
+    chat_turn.py
+    document_upload.py
+    document_review.py
+    protected_files.py
+    ingestion.py
+  adapters/
+    rag_http.py
+    filesystem.py
+  composition/
+    app_runtime.py
+    rag_runtime.py
+    worker_runtime.py
+  rag/
+    execution.py                 # public execution seam, giữ nguyên
+    phases/                      # private preparation/routing/retrieval/evidence/generation
+  db/repositories/              # SQL adapters hiện có, tiếp tục tách theo domain
+  llm/                          # provider adapters hiện có
+```
+
+Protocol/port được đặt cạnh application module sở hữu nó, không gom vào một file `ports.py` toàn cục. SQL adapter tiếp tục nằm trong `db/repositories`; không di chuyển file chỉ để khớp tên tầng. Composition root được tạo dần ngay khi deep module xuất hiện: `build_app_runtime(settings)` ở Phase 1, `build_worker_runtime(settings)` ở Phase 3 và `build_rag_runtime(settings)` ở đầu Phase 4. Phase 5 chỉ hoàn tất việc gom dependency còn sót, xóa import-time singleton và phá các cạnh dependency ngược; không chờ đến Phase 5 mới bắt đầu dependency injection.
+
+Các test seam được chốt cho roadmap:
+
+1. HTTP/OpenAPI/SSE cho browser-facing contract.
+2. `ChatTurnRunner.stream()` cho toàn bộ chat-turn behavior.
+3. `DocumentUpload.enqueue()`, `ReviewDocuments.execute()`, `PublicationCoordinator.publish_job()` và `ProtectedFileResolver.resolve()` cho document workflows.
+4. `IngestionRunner.run()` cho một ingestion lifecycle hoàn chỉnh.
+5. `RagExecutor.run()` cho execution lifecycle và mọi RAG phase extraction.
+6. SQL/Qdrant/HTTP/LLM/filesystem adapter contract tại system seam; không tạo test seam cho helper private.
+
+## 4. Roadmap thực hiện
+
+## Phase 0 — Baseline tin cậy và architecture ratchet
+
+### Mục cần refactor
+
+- Architecture test đang nằm ngoài default `pytest` collection.
+- Guard UI/API đang trỏ vào package UI Python không còn tồn tại.
+- Chưa có machine-checkable rule ngăn dependency ngược hoặc debt tăng thêm.
+- Chưa có coverage gate chính thức trong CI.
+
+### Gợi ý refactor
+
+Đưa architecture guard vào `tests/architecture/` để default suite thu thập. Tạo dependency ratchet đọc AST source hiện tại và dùng allowlist cho debt có sẵn; mỗi phase sau phải xóa entry, không được thêm entry.
+
+Các rule bắt buộc:
+
+1. `api/` không được thêm import mới từ `db.engine`, `db.repositories` hoặc `sqlalchemy`; các violation hiện tại được allowlist theo file và loại violation.
+2. `application/` không import `adapters/`, FastAPI, SQLAlchemy, Qdrant SDK hoặc provider SDK.
+3. `db/` không được thêm import sang `rag/`, `ingestion/`, `api/` hoặc `evaluation/`.
+4. `rag/` không import `evaluation/`; `evaluation/` chỉ được gọi public RAG contract.
+5. Không tăng số `import *`, `os.getenv` ngoài bootstrap/config hoặc import-time singleton.
+6. `services/__init__.py` không được thêm export mới.
+
+### Cách làm chi tiết
+
+1. Characterize: thêm test chứng minh guard hiện tại vẫn pass dù `app_server.py` dùng `engine`/raw SQL.
+2. RED: thêm architecture test quét đúng `api/`; test phải fail và liệt kê đúng violation hiện tại.
+3. GREEN: thêm allowlist baseline có chú thích phase sẽ xóa từng entry; test pass nhưng fail với một synthetic/new violation.
+4. Di chuyển hoặc thay thế layered guard cũ; default `pytest` phải thu thập architecture tests.
+5. Thêm coverage command cho Python và Vue CI. Tạo `scripts/quality/check_coverage.py` đọc JSON của coverage.py và fail độc lập khi line hoặc branch coverage dưới ngưỡng, tránh dựa vào một tỷ lệ tổng hợp. Intermediate gate: từng package refactor-owned (`application`, `adapters`, `composition`, `rag/phases`) đạt ít nhất 80% line và branch coverage. Final gate dùng toàn bộ `mech_chatbot`; nếu baseline toàn backend thấp hơn 80%, Phase 0 phải bổ sung characterization test trước khi Phase 1 bắt đầu, không hạ ngưỡng.
+6. Ghi OpenAPI/SSE baseline hash và known native import diagnostic vào ledger. Artifact chuẩn nằm dưới `reports/refactor/phase-0/baseline/`: `openapi-app.json`, `openapi-rag.json`, `sse-success.jsonl`, `sse-busy.jsonl`, `upload-review-samples.json` và `pytest-baseline.txt`.
+7. Trước khi hash/diff, canonicalize timestamp, trace/request ID, elapsed time, absolute path, token/secret và nội dung tài liệu nhạy cảm. Mỗi thư mục artifact có `manifest.json` ghi commit SHA, fixture/data snapshot, settings fingerprint đã lọc secret, Python dependency lock hash và lệnh tạo artifact.
+
+### Test và acceptance gate
+
+- Architecture test phát hiện được import DB/SQL mới trong một fixture giả.
+- Default `pytest --collect-only` chứa architecture tests.
+- Không test nào phụ thuộc DB/Qdrant/LLM thật.
+- Fast unit/security suite pass sạch, không có fatal native diagnostic.
+- `git diff --check` pass.
+
+### Kết quả mong đợi và điểm debug
+
+- Debt kiến trúc trở thành danh sách hữu hạn, có thể đếm và giảm sau mỗi phase.
+- Khi regression dependency xảy ra, output chỉ rõ source package, target package và rule bị vi phạm.
+- Rollback: revert riêng commit architecture-test/CI; không đụng application behavior.
+
+## Phase 1 — Deepen browser chat thành `ChatTurnRunner`
+
+### Mục cần refactor
+
+`app_server.chat_message()` hiện sở hữu HTTP/SSE transport, pilot routing/replay, citation attribution, persistence, audit và error translation. Test phải monkeypatch global `requests`, persistence và audit functions.
+
+### Gợi ý refactor
+
+Tạo một deep application module `ChatTurnRunner` sở hữu trọn chat turn từ RAG stream tới citation, persistence, audit và pilot replay. Router chỉ chuyển HTTP sang command, typed event sang SSE; external RAG, SQL, audit và pilot là port có adapter cụ thể.
+
+### Interface mục tiêu
+
+```python
+@dataclass(frozen=True, slots=True)
+class ChatActor:
+    user_id: int
+    username: str
+    roles: frozenset[str]
+    department: str | None
+    allowed_departments: frozenset[str]
+    allowed_sites: frozenset[str]
+    max_security_level: str
+    response_language: str
+
+@dataclass(frozen=True, slots=True)
+class ChatTurnCommand:
+    request_id: str
+    session_id: str
+    question: str
+    image_path: Path | None
+    history: tuple[Mapping[str, Any], ...]
+    current_part_ids: tuple[str, ...]
+    conversation_context: Mapping[str, Any] | None
+
+@dataclass(frozen=True, slots=True)
+class ChatThinking:
+    message: str
+
+@dataclass(frozen=True, slots=True)
+class ChatDelta:
+    text: str
+
+@dataclass(frozen=True, slots=True)
+class ChatCitation:
+    citation: Mapping[str, Any]
+
+@dataclass(frozen=True, slots=True)
+class ChatWarning:
+    code: str
+    message: str
+    detail: str | Mapping[str, Any] | None = None
+
+@dataclass(frozen=True, slots=True)
+class ChatError:
+    code: str
+    message: str
+    http_status: int | None = None
+    retryable: bool = False
+    elapsed_ms: int | None = None
+    detail: str | Mapping[str, Any] | None = None
+
+@dataclass(frozen=True, slots=True)
+class ChatDone:
+    chat_id: int | None
+    ref_text: str
+    citations: tuple[Mapping[str, Any], ...]
+    new_part_ids: tuple[str, ...]
+    conversation_context: Mapping[str, Any] | None
+    elapsed_ms: int | None
+
+ChatTurnEvent = ChatThinking | ChatDelta | ChatCitation | ChatWarning | ChatError | ChatDone
+
+class ChatTurnRunner:
+    def stream(self, command: ChatTurnCommand, actor: ChatActor) -> Iterator[ChatTurnEvent]: ...
+```
+
+Ports tại seam hệ thống:
+
+- `RagStreamPort.stream(request, route)`: production dùng HTTP/SSE adapter; test dùng scripted in-memory adapter.
+- `ChatStore`: production dùng SQL adapter; test dùng in-memory adapter.
+- `AuditSink`: production dùng SQL audit adapter; test dùng recording adapter.
+- `PilotExperimentPort.assign(actor, command)` và `schedule_replay(assignment, replay_input)`: production adapter bọc hành vi hiện tại trong `evaluation.crag_pilot`; test dùng deterministic fake. Application không import `evaluation` và pilot replay không được tạo lịch sử chat hoặc side effect nhìn thấy bởi user.
+
+### Cách làm chi tiết
+
+1. Giữ endpoint và Pydantic schema hiện tại làm outer contract.
+2. RED từng tracer bullet qua `ChatTurnRunner.stream()`:
+   - success event order và answer aggregation;
+   - citation attribution/ref text;
+   - chat/evidence/source persistence;
+   - confidential audit;
+   - RAG 503/busy không persistence;
+   - stream thiếu `done` fail closed;
+   - persistence failure phát `warning` nhưng vẫn hoàn tất response;
+   - pilot assignment, bounded replay và drop behavior.
+3. GREEN bằng cách di chuyển orchestration nguyên trạng vào runner, chưa tối ưu thuật toán. Typed event phải chứa đủ dữ liệu để serializer tái tạo payload SSE hiện tại; không dùng `kind + Mapping` làm contract nội bộ vì sẽ đẩy lỗi field về runtime.
+4. Tạo HTTP RAG adapter chịu trách nhiệm timeout, headers, `requests.post`, parse SSE và mapping lỗi transport. Adapter không lưu chat hoặc audit.
+5. Tạo `build_app_runtime(existing_settings)` trong `composition/app_runtime.py` ngay trong phase này. Factory dựng `ChatTurnRunner` và adapter từ `Settings` hiện có; router/lifespan lấy frozen runtime bundle, không dùng temporary global hoặc service locator.
+6. Router chỉ: resolve actor gồm `department`, verify image token, tạo command với request ID tương đương `<session_id>|<uuid>`, gọi runner và serialize typed `ChatTurnEvent` sang đúng SSE event/payload hiện tại.
+7. Chuyển test cũ từ monkeypatch helper nội bộ sang scripted external adapters; giữ một nhóm endpoint contract test mỏng.
+8. Xóa architecture allowlist cho `requests`/persistence orchestration trong chat router nếu rule đã đạt.
+
+### Test và acceptance gate
+
+- Toàn bộ chat characterization tests cũ pass.
+- Test mới gọi `ChatTurnRunner.stream`, không gọi private method và không assert call order của internal helper.
+- OpenAPI và sanitized SSE transcript không đổi.
+- RBAC/service-token, CSRF, image ownership và citation access tests pass.
+- Không HTTP provider/SQL thật trong unit test.
+- Changed module coverage >=80% cho cả line và branch.
+
+### Kết quả mong đợi và điểm debug
+
+- Một chat request có một owner duy nhất từ RAG call đến persistence/audit.
+- Có thể tái hiện lỗi bằng một scripted RAG event sequence mà không chạy RAG server.
+- Router không chứa RAG HTTP loop, citation business rule, persistence hoặc audit branching.
+- Rollback: `git revert` các commit Phase 1 theo thứ tự ngược. Không giữ hai implementation chat old/new, không thêm runtime toggle và không đổi wire contract hoặc data.
+
+## Phase 2 — Deepen document upload, review, publication và protected-file access
+
+### Mục cần refactor
+
+- Upload endpoint tự validate, ghi filesystem và enqueue DB.
+- Bulk review/publish điều phối nhiều repository operation trong router.
+- Một số endpoint chạy raw SQL trực tiếp.
+- `api/file_access.py` trộn SQL authorization query và filesystem resolution.
+- `services/` vẫn là namespace phẳng chứa pass-through operation.
+
+### Gợi ý refactor
+
+Tách theo use case, không theo CRUD: upload, review/publication và protected-file access là ba application owner riêng. Filesystem, SQL publication/job store và authorization query là adapter; router chỉ validate transport shape và serialize result về contract cũ.
+
+### Interface mục tiêu
+
+```python
+@dataclass(frozen=True, slots=True)
+class UploadDocumentCommand:
+    file_name: str
+    content: bytes
+    owner_department: str
+    shared_departments: tuple[str, ...]
+    domain: str | None
+    security_level: str | None
+    process_stage: str | None
+    site: str | None
+    upload_metadata: Mapping[str, Any]
+
+@dataclass(frozen=True, slots=True)
+class UploadReceipt:
+    job_id: int
+    file_name: str
+    owner_department: str
+
+@dataclass(frozen=True, slots=True)
+class UploadFailure:
+    code: str
+    file_name: str
+    message: str
+    detail: Mapping[str, Any] | None = None
+
+@dataclass(frozen=True, slots=True)
+class UploadBatchResult:
+    jobs: tuple[UploadReceipt, ...]
+    errors: tuple[UploadFailure, ...]
+    created: int
+    failed: int
+
+    @property
+    def ok(self) -> bool:
+        return self.failed == 0
+
+@dataclass(frozen=True, slots=True)
+class ReviewItem:
+    job_id: int | None
+    doc_id: int | None
+
+@dataclass(frozen=True, slots=True)
+class ReviewDocumentsCommand:
+    action: Literal["publish", "reject", "delete"]
+    publish_mode: Literal["standalone", "new_version", "new_variant"]
+    reason: str | None
+    items: tuple[ReviewItem, ...]
+
+@dataclass(frozen=True, slots=True)
+class ReviewItemOutcome:
+    status: Literal["updated", "pending", "failed"]
+    job_id: int | None
+    doc_id: int | None
+    code: str | None
+    message: str | None
+    detail: Mapping[str, Any] | None = None
+
+@dataclass(frozen=True, slots=True)
+class BatchReviewResult:
+    outcomes: tuple[ReviewItemOutcome, ...]
+    updated: int
+    pending: int
+    failed: int
+
+DocumentUpload.enqueue(command, actor) -> UploadReceipt
+DocumentUpload.enqueue_batch(commands, actor) -> UploadBatchResult
+ReviewDocuments.execute(command, actor) -> BatchReviewResult
+PublicationCoordinator.publish_job(command, actor) -> PublicationOutcome
+ProtectedFileResolver.resolve(reference, actor) -> AuthorizedFile
+```
+
+`PublicationCommand` chứa `job_id`, `doc_id`, `publish_mode` và actor context; route theo job được phép đưa `doc_id=None`, khi đó `JobStore` resolve latest document đúng như raw SQL hiện tại. `ProtectedFileReference` chứa loại reference, document/page hoặc image identifier và requested path; `AuthorizedFile` chỉ trả resolved absolute path sau khi RBAC và allowed-root đều pass. Các result là frozen dataclass có status/code/message/data rõ ràng; FastAPI adapter chịu trách nhiệm map sang đúng HTTP status/response snapshot hiện tại.
+
+Error code tối thiểu được khóa: `invalid_extension`, `empty_file`, `file_too_large`, `invalid_batch`, `missing_job_id`, `missing_doc_id`, `unauthorized`, `not_found`, `storage_failed`, `enqueue_failed`, `cleanup_failed`, `publish_contract_failed`, `publication_pending`, `job_reject_failed` và `delete_failed`. Router không parse exception text để quyết định status.
+
+### Cách làm chi tiết
+
+1. Làm từng vertical slice theo thứ tự: protected files -> single upload -> batch upload -> single publication -> bulk review.
+2. Mỗi slice bắt đầu bằng endpoint characterization test cho success, unauthorized, invalid input và partial failure. Snapshot phải chốt chính xác body/status hiện tại trước khi chuyển logic.
+3. Single upload giữ invariant hiện tại: extension allowlist, file không rỗng, tối đa 100 MB, department authorization và sanitized department folder. Nếu file đã ghi nhưng enqueue thất bại, filesystem adapter phải xóa file; nếu cleanup cũng thất bại, ghi audit/cleanup error và trả `cleanup_failed` detail nhưng không báo đã tạo job.
+4. Batch upload giới hạn 50 file và xử lý độc lập từng file. Job đã tạo thành công không rollback khi file sau lỗi. Response serializer giữ `{ok, jobs, errors, created, failed}` với `ok = failed == 0`.
+5. API hiện không có idempotency key: retry tạo stored file/job mới. Phase này phải giữ nguyên hành vi đó và không tự bổ sung idempotency. Chỉ thêm idempotency trong feature decision riêng có schema/API design và migration plan.
+6. Bulk review xử lý từng item và giữ partial-success contract. Input thiếu `items`/action không hợp lệ map HTTP 400; actor không đủ role map 403; business failure theo item vẫn trả HTTP 200 với `{ok, updated, pending, failed, failures}`. `publish` yêu cầu `job_id` và `doc_id`; `reject` yêu cầu `job_id`; `delete` chấp nhận `doc_id`, `job_id` hoặc cả hai. Transport normalize `publish_mode` thiếu/không biết thành `standalone`, không trả 400. Characterization phải khóa cả hai behavior lạ hiện tại: delete thiếu cả hai ID là no-op được đếm `updated`, và reject fallback không kiểm tra giá trị trả về cuối; không âm thầm “sửa đúng” chúng trong structural refactor. Mọi thay đổi hai behavior này cần bug/security decision riêng.
+7. Single publication theo job dùng `JobStore` resolve latest `doc_id`; không có document map 404. `standalone`, `new_version`, `new_variant`, outbox state và mapping `published`/`pending` giữ nguyên. Coordinator dùng publication contract hiện tại, không trực tiếp flip `IsCurrent` hoặc Qdrant visibility.
+8. Di chuyển actor validation, business invariant và multi-step coordination vào application module. Di chuyển raw SQL sang repository/SQL adapter có parameterized query; không tạo application wrapper chỉ để forward một CRUD call.
+9. Tách filesystem adapter chịu path normalization, allowed-root check và atomic write. Application module chỉ nhận logical file reference; adapter phân biệt `not_found`, `unauthorized` và `storage_failed`.
+10. Sau khi logic có owner mới, chia transport thành `api/routers/chat.py`, `api/routers/documents.py` và `api/routers/operations.py`; `api/app_server.py` chỉ còn app factory, SPA wiring và compatibility export trong thời gian migrate. Không split router trước khi behavior đã có owner mới.
+11. Mở rộng `build_app_runtime(existing_settings)` đã tạo ở Phase 1 để wire document/file modules và adapters; không thêm module global tạm trong lúc split router.
+12. Các test và script đang import symbol trực tiếp từ `app_server.py`, gồm chat/document/graph tests và `scripts/graph_eval/exercise_review.py`, phải chuyển sang application interface hoặc HTTP contract. Trong thời gian đó, giữ wrapper cùng tên ở `app_server.py` gọi owner mới; wrapper không chứa duplicate logic và chỉ xóa theo chính sách Phase 6.
+13. Với read-only/simple CRUD, dùng explicit feature query adapter; không export lại qua một global `services` namespace. Xóa từng service pass-through export chỉ khi mọi repo caller trong slice đã dùng import/interface mới.
+
+### Test và acceptance gate
+
+- Auth/CSRF/RBAC matrix cho upload, review, publish và file access giữ nguyên.
+- Path traversal, dot-file, missing file, unauthorized document/page và chat image ownership fail closed.
+- Publication integration tests giữ SQL/Qdrant outbox/servable behavior.
+- Bulk operation trả đúng updated/pending/failed/failures như baseline.
+- Upload contract tests xác nhận cleanup khi enqueue lỗi, batch partial success, giới hạn 50 file và retry không-idempotent hiện tại.
+- Review contract tests xác nhận từng error code và HTTP mapping nêu trên; serializer snapshot giữ nguyên tên field hiện tại.
+- API OpenAPI snapshot và Vue API tests pass; không cần redesign frontend.
+- `api/app_server.py` và feature routers không import `db.engine`, `db.repositories`, `sqlalchemy` hoặc gọi raw SQL.
+
+### Kết quả mong đợi và điểm debug
+
+- Mỗi upload/review/publication operation có command/result và error code ổn định.
+- Partial failure được truy ngược từ `BatchReviewResult`, không phải đọc log exception chung.
+- File authorization và filesystem failure được phân biệt.
+- Rollback bằng `git revert` từng vertical-slice commit; không giữ implementation cũ song song. Publication outbox là data recovery path, không cần schema rollback.
+
+## Phase 3 — Tạo một owner cho ingestion lifecycle
+
+### Mục cần refactor
+
+- Worker loop vừa poll, classify, chạy SQL, ingest, quyết định quality state và retry.
+- `file_ingestor.learn_new_file()` chỉ là dispatcher mỏng.
+- PDF/file pipeline sở hữu extraction, Vision, SQL, Qdrant, metadata, quality và rollback.
+- Progress callback dùng string magic như `__STATUS__:embedding`.
+
+### Gợi ý refactor
+
+Đặt toàn bộ lifecycle của một job sau khi claim vào `IngestionRunner`, gồm progress, persistence, quality outcome và rollback. Worker trở thành process adapter cho polling/backoff/reconciliation; SQL/Qdrant/Vision/filesystem được đưa vào runner qua port.
+
+### Interface mục tiêu
+
+```python
+@dataclass(frozen=True, slots=True)
+class IngestionJob:
+    job_id: int
+    file_path: Path
+    file_name: str
+    owner_department: str
+    shared_departments: tuple[str, ...]
+    domain: str | None
+    security_level: str | None
+    process_stage: str | None
+    site: str | None
+
+@dataclass(frozen=True, slots=True)
+class IngestionResult:
+    outcome: Literal["pending_review", "blocked", "waiting_quota", "failed"]
+    report: Mapping[str, Any]
+    reason_code: str | None
+    message: str
+
+class IngestionRunner:
+    def run(self, job: IngestionJob) -> IngestionResult: ...
+```
+
+`IngestionJobStore` sở hữu `claim_next`, normalization dữ liệu DB sang `IngestionJob`, mọi status/progress/report/final transition và audit job. Adapter phải normalize `PhongBan` dù DB trả comma-separated string hay collection thành `shared_departments: tuple[str, ...]`. Internal progress dùng typed event: `classifying`, `extracting`, `embedding`, `quality_check`, `completed`.
+
+### Cách làm chi tiết
+
+1. RED contract tests cho state transitions hiện tại: success/pending review, blocked quality, report-persistence failure, quota error, unexpected error và rollback.
+2. GREEN: bọc implementation hiện tại bằng `IngestionRunner` trước. Runner sở hữu toàn bộ transition từ job đã claim qua progress, report persistence, final outcome và rollback thông qua `IngestionJobStore`; không trả việc persist result về worker.
+3. Worker chỉ gọi `claim_next`, `runner.run`, ghi structured log/metric cho result và điều khiển backoff/reconciler. Worker không classify, không raw SQL và không tự ghi trạng thái kết quả.
+4. Di chuyển classification/status/progress/report SQL update vào `IngestionJobStore` adapter.
+5. Tách internal phase theo dữ liệu chuyển giao rõ ràng:
+   - load/classify source;
+   - extract pages/content;
+   - enrich Vision/metadata/BOM;
+   - persist SQL snapshot;
+   - index Qdrant vectors;
+   - calculate quality/finalize report.
+6. Giữ các phase private; test external behavior qua runner, chỉ test riêng pure parser/quality policy đã có.
+7. Thay string progress callback bằng typed progress event; `IngestionJobStore` adapter map event về status/message hiện tại.
+8. Reconciliation scheduling tách khỏi per-job runner nhưng vẫn do worker process sở hữu.
+9. Tạo `build_worker_runtime(existing_settings)` trong `composition/worker_runtime.py` ngay ở phase này. Runtime bundle dựng runner, JobStore, clock/backoff và adapter; không tạo temporary global.
+10. Giữ `process_and_ingest_pdf/file` làm compatibility wrapper trong phase này; wrapper chỉ forward vào owner mới và không chứa duplicate pipeline.
+
+### Test và acceptance gate
+
+- Markdown/PDF unit tests và ingestion quality tests pass.
+- Worker contract test dùng fake JobStore/Runner/Clock; không `sleep` thật, SQL thật hoặc provider thật.
+- SQL/Qdrant consistency integration test bắt buộc chạy trên fixture/snapshot đã pin. Nếu environment hoặc fixture chưa sẵn sàng, phase chỉ được ghi `Validated offline / Blocked integration`, không được đánh dấu `Completed`.
+- Failure trước vector indexing không để document servable.
+- Failure sau SQL snapshot kích hoạt rollback/restore hiện tại.
+- Quota error đi `waiting_quota`; lỗi khác không bị phân loại nhầm.
+- Changed module coverage >=80% cho cả line và branch.
+
+### Kết quả mong đợi và điểm debug
+
+- Một JobID luôn có typed progress trail, final outcome và reason code.
+- Worker loop không chứa raw SQL, classification hoặc quality business logic.
+- Có thể replay một job bằng fake adapters để xác định phase lỗi.
+- Rollback bằng `git revert` các commit Phase 3; không giữ old/new runner song song. Compatibility entrypoint và DB schema không đổi.
+
+## Phase 4 — Chia RAG implementation phía sau `RagExecutor`
+
+### Mục cần refactor
+
+- External execution seam đã tốt nhưng `execute_pipeline()` vẫn là orchestration monolith.
+- Routing, retrieval, decomposition, graph, correction, evidence, generation và cache branching nằm chung.
+- Budget control-flow error còn phải được bảo vệ thủ công tại một số catch-all.
+- Wildcard imports làm interface nội bộ khó đọc.
+
+### Gợi ý refactor
+
+Giữ `RagExecutor.run()` làm public facade sâu và chỉ tách implementation phía sau nó thành các phase private có typed handoff. Mỗi extraction là một behavior-preserving commit; không biến từng phase thành public service hoặc cho caller bypass executor.
+
+### Interface giữ nguyên
+
+```python
+RagExecutor.run(
+    request: RagRequest,
+    invocation: RagInvocation,
+    cancellation: CancellationSignal,
+) -> Iterator[RagEvent]
+```
+
+Không thêm public interface cho từng phase. Internal contracts dự kiến:
+
+```text
+prepare(state) -> PreparedRequest
+route(prepared) -> RouteDecision
+retrieve(route) -> RetrievalOutcome
+evaluate(retrieval) -> EvidenceOutcome
+generate(evidence) -> PreparedGeneration
+```
+
+### Cách làm chi tiết
+
+1. Tạo `build_rag_runtime(existing_settings)` trong `composition/rag_runtime.py` trước extraction đầu tiên. Runtime bundle dựng `RagExecutor`, retrieval và provider adapter từ `Settings` hiện có; không thêm singleton tạm hoặc service locator.
+2. Chụp contract test qua `RagExecutor`: event order, diagnostics mapping, citation attribution, cancellation, deadline, request-local context và budget.
+3. Tách từng phase theo thứ tự preparation -> routing -> retrieval -> evidence -> generation; một phase/commit, không di chuyển đồng thời nhiều phase.
+4. RED cho observable behavior của phase qua public executor trước khi di chuyển branch tương ứng.
+5. GREEN bằng behavior-preserving extraction; không thay prompt, threshold, filter, retry count hoặc feature flag.
+6. Phase module chỉ catch exception recoverable cụ thể. `RequestBudgetExceeded` và cancellation phải propagate đến executor; không dùng generic fallback cho control-flow error.
+7. Xóa manual budget propagation helper tại caller chỉ sau khi public executor tests chứng minh fail-closed ở router/evidence/planner/decomposition.
+8. Thay wildcard imports trong pipeline bằng explicit imports sau từng extraction.
+9. Chuyển tests đang monkeypatch private `execute_pipeline` sang scripted executor/public event seam khi chúng chỉ kiểm tra lifecycle. Giữ pure-policy tests cho routing/filter/number logic.
+10. `execute_pipeline()` cuối phase chỉ còn ordered composition và construction của result/stream; feature-specific branches nằm trong private phase owner.
+
+### Test và acceptance gate
+
+- Toàn bộ `test_rag_execution_contract.py`, strict stream, RBAC/filter, cache, CRAG, graph, grounded math và decomposition unit tests pass.
+- Legacy five-tuple wrapper vẫn giữ call-time behavior và debug-dict mutation contract.
+- Sanitized event transcript/OpenAPI không đổi.
+- Offline/golden evaluation không regression; provider outage được ghi `inconclusive`, không sửa threshold.
+- Concurrency benchmark đạt ngưỡng định lượng trong mục 5; budget/cost/retry invariant giữ nguyên.
+- Không feature flag nào đổi default và không release decision nào tự chuyển `accepted`.
+
+### Kết quả mong đợi và điểm debug
+
+- Trace stage map thẳng với preparation/routing/retrieval/evidence/generation, giúp khoanh vùng regression.
+- Mỗi phase có typed input/output và reason code; external callers vẫn chỉ biết `RagExecutor`.
+- Có thể `git revert` từng phase extraction độc lập; không giữ branch runtime old/new hoặc feature toggle cho refactor.
+- Không cần migration hoặc rollout rollback vì observable behavior không đổi.
+
+## Phase 5 — Composition root, config và dependency một chiều
+
+### Mục cần refactor
+
+- Engine, Vision model và RAG singleton được tạo khi import.
+- Nhiều module đọc `os.getenv` trực tiếp.
+- DB repository còn import RAG logic; RAG còn chạm ingestion/evaluation ở một số đường.
+- `registry_ports.py` dùng lazy import/global registry để che dependency ngược.
+
+### Gợi ý refactor
+
+Hoàn thiện composition riêng cho ba process thay vì một global container:
+
+```text
+build_app_runtime(settings) -> routers + application modules + adapters
+build_rag_runtime(settings) -> RagExecutor + retrieval/provider adapters
+build_worker_runtime(settings) -> IngestionRunner + job/adapters
+```
+
+Mỗi runtime là frozen dependency bundle được tạo trong lifespan/entrypoint, không phải service locator.
+
+### Cách làm chi tiết
+
+1. Mở rộng frozen Pydantic `Settings` hiện có tại `src/mech_chatbot/config/settings.py`; không tạo source-of-truth thứ hai. Parse/validate environment một lần tại startup và giữ tên/default key hiện tại.
+2. Hoàn tất ba composition root đã được tạo dần ở Phase 1, 3 và 4; chuyển các module còn sót sang runtime bundle tương ứng.
+3. Application/domain nhận typed dependency qua constructor; adapter nhận config cụ thể, không nhận toàn bộ settings object nếu không cần.
+4. Engine/Qdrant/LLM/Vision creation chuyển vào process composition. Import module không được mở connection hoặc load model.
+5. Di chuyển pure graph ontology, normalization và registry policy khỏi `rag/`/`ingestion/` sang domain-neutral module để DB có thể dùng mà không import tầng trên.
+6. Loại dependency `rag -> evaluation`; activation/governance contract đặt ở neutral governance module và evaluation/RAG cùng phụ thuộc xuống.
+7. Thay global lazy registry bằng explicit registration tại composition hoặc pure module trực tiếp; không dùng importlib fallback.
+8. Mỗi lần migrate một env key, xóa đường đọc cũ ngay sau parity test; không giữ hai nguồn cấu hình lâu dài.
+
+### Test và acceptance gate
+
+- Import smoke test không load model, không tạo DB connection và không cần external secrets.
+- Invalid/missing required setting fail fast tại đúng process startup với sanitized error.
+- Concurrent tests không chia sẻ mutated environment/global singleton state.
+- Source import graph đạt: `composition -> delivery/application/adapters`, `delivery -> application`, `adapters -> application ports/domain`, `application -> domain`; không có `application -> adapters`, `db -> rag`, `db -> ingestion`, `rag -> evaluation` hoặc `config -> db/rag` callback.
+- Startup health/OpenAPI và controlled-demo activation checks giữ nguyên.
+
+### Kết quả mong đợi và điểm debug
+
+- Dependency của mỗi process nhìn được tại một composition root.
+- Test thay adapter bằng constructor injection, không monkeypatch module global.
+- Config error phân biệt với provider/DB runtime error.
+- Rollback bằng `git revert` theo từng process-runtime commit; không thay wire/data contract và không giữ wiring song song.
+
+## Phase 6 — Xóa migration facade và compatibility debt nội bộ
+
+### Mục cần refactor
+
+- `services/__init__.py`, `db/repository.py`, `rag/service.py` và `ingestion/pdf_processor.py` flatten interface bằng dynamic/star re-export.
+- Internal callers còn dùng broad legacy import surface.
+- Legacy `chat_with_rag` vẫn là compatibility contract có test riêng.
+
+### Gợi ý refactor
+
+Xử lý shim như migration inventory: chuyển internal caller về owner thật, xóa từng internal-only wrapper khi caller bằng 0, nhưng giữ mọi public/unknown compatibility surface cho đến một quyết định deprecation riêng. Không thay namespace phẳng cũ bằng namespace phẳng mới.
+
+### Cách làm chi tiết
+
+1. Inventory bằng `rg` cho từng symbol và phân loại:
+   - internal-only shim;
+   - test-only shim;
+   - public/unknown external compatibility.
+2. Migrate internal caller sang explicit module/interface. Chỉ shim được chứng minh `internal-only` mới được xóa khi repo caller count bằng 0 và import smoke/full suite pass. Shim `public/unknown external compatibility` vẫn phải giữ dù repo caller bằng 0, cho đến khi có external inventory và deprecation decision riêng.
+3. Xóa dynamic global service re-export; không thay bằng một global application namespace khác.
+4. Xóa `db.repository`, `rag.service`, `pdf_processor` chỉ khi được phân loại internal-only và không còn startup/repo caller phụ thuộc; nếu public status chưa rõ thì giữ wrapper mỏng.
+5. Mặc định **giữ `chat_with_rag`** vì chính sách tương thích đã chọn. Chỉ xóa bằng một deprecation decision riêng sau external caller inventory; refactor này không tự quyết định xóa.
+6. Xóa test implementation-detail gắn với shim sau khi interface-level test thay thế hoàn toàn.
+7. Chốt architecture ratchet: không còn allowlist tạm cho dependency đã refactor, không còn wildcard import trong production source ngoài trường hợp được ghi rõ.
+
+### Test và acceptance gate
+
+- `rg` không còn internal import qua shim bị xóa.
+- Import smoke cho mọi entrypoint pass.
+- Fast/full tests, integration được cấu hình, frontend test/build và OpenAPI diff pass.
+- Coverage backend >=80%; changed application modules >=80% line/branch coverage.
+- `git diff --check`, stale-term grep và architecture graph pass.
+
+### Kết quả mong đợi và điểm debug
+
+- Import path thể hiện đúng owner của behavior.
+- Xóa một module thật sẽ làm complexity quay về owner rõ ràng, không biến mất vì chỉ là pass-through.
+- Legacy public behavior vẫn được test qua compatibility facade còn giữ.
+- Mỗi shim removal là commit riêng, có thể revert mà không hoàn tác phase trước.
+
+## 5. Validation matrix dùng cho mọi phase
+
+| Gate | Chạy mỗi slice | Chạy cuối phase | Chạy cuối roadmap |
+|---|---:|---:|---:|
+| RED test đúng seam | Có | Có | N/A |
+| Targeted unit/contract tests | Có | Có | Có |
+| Architecture ratchet | Có | Có | Có |
+| Fast unit + security suite | Không bắt buộc | Có | Có |
+| Coverage refactor-owned packages >=80% line/branch | Có | Có | Có |
+| Python full suite | Không | Có | Có |
+| SQL/Qdrant integration | Không | Bắt buộc nếu phase chạm SQL/Qdrant | Bắt buộc |
+| Vue Vitest + build | Khi HTTP contract chạm | Có với API phase | Có |
+| OpenAPI + sanitized SSE diff | Khi API/RAG chạm | Có | Có |
+| Offline RAG/golden evaluation | Khi RAG behavior chạm | Phase 4 | Có |
+| Concurrency/latency benchmark | Không | Phase 4 | Có |
+| `git diff --check` | Có | Có | Có |
+| Independent code/security review | Không | Có | Có |
+
+Lệnh chuẩn dự kiến:
+
+```powershell
+chat_env\Scripts\python.exe -m pytest -m "not integration and not eval" -q
+chat_env\Scripts\python.exe -m pytest tests\architecture -q
+chat_env\Scripts\python.exe -m pytest tests\unit tests\integration -q --cov=mech_chatbot.application --cov=mech_chatbot.adapters --cov=mech_chatbot.composition --cov=mech_chatbot.rag.phases --cov-branch --cov-report=term-missing --cov-report=json:reports\refactor\coverage-owned.json
+chat_env\Scripts\python.exe scripts\quality\check_coverage.py reports\refactor\coverage-owned.json --min-line 80 --min-branch 80
+chat_env\Scripts\python.exe -m pytest -q --cov=mech_chatbot --cov-branch --cov-report=term-missing --cov-report=json:reports\refactor\coverage-backend.json
+chat_env\Scripts\python.exe scripts\quality\check_coverage.py reports\refactor\coverage-backend.json --min-line 80 --min-branch 80
+npm --prefix web-ui run test
+npm --prefix web-ui run build
+git diff --check
+```
+
+Nếu một package đích chưa tồn tại ở phase sớm thì bỏ đúng `--cov=<package>` đó khỏi lệnh intermediate và ghi denominator vào manifest; từ khi package được tạo, nó bắt buộc nằm trong denominator. Final gate luôn dùng toàn bộ `mech_chatbot` và yêu cầu cả line/branch coverage tối thiểu 80%. Integration/evaluation chỉ chạy với service và fixture được cấu hình; skip phải được ghi rõ, không được trình bày như pass. Phase chạm SQL/Qdrant không được `Completed` nếu integration bị skip.
+
+### 5.1. Artifact và provenance bắt buộc
+
+Mỗi phase ghi evidence dưới cấu trúc sau; artifact là output đã sanitize/canonicalize, không chứa secret hoặc raw confidential content:
+
+```text
+reports/refactor/phase-<n>/
+  baseline/
+    manifest.json
+    openapi-app.json
+    openapi-rag.json
+    sse-success.jsonl
+    sse-busy.jsonl
+    pytest.txt
+  candidate/
+    manifest.json
+    openapi-app.json
+    openapi-rag.json
+    sse-success.jsonl
+    sse-busy.jsonl
+    pytest.txt
+    diff-summary.json
+```
+
+Chỉ tạo artifact phù hợp với phase, nhưng `manifest.json` luôn bắt buộc và phải ghi: commit SHA, parent/baseline SHA, working-tree status, OS/Python, dependency lock hash, sanitized settings fingerprint, feature-flag snapshot, SQL/Qdrant fixture/snapshot ID, collection, provider/model configuration, concurrency và lệnh đã chạy. Ledger ở đầu tài liệu link thẳng tới artifact và ghi exit code; không chấp nhận dòng mô tả “tests pass” thiếu output/path.
+
+### 5.2. Benchmark RAG Phase 4
+
+Baseline và candidate dùng cùng `scripts/eval/golden_set.jsonl`, SQL/Qdrant snapshot, collection, provider/model config, feature flags, governance scope và concurrency. Khởi động process riêng cho từng arm; không toggle flag trong process đang chạy. Chạy ít nhất ba run hoàn chỉnh mỗi arm với concurrency `1,5,10`, timeout 300 giây:
+
+```powershell
+$RefactorBaseUrl = "http://127.0.0.1:8000"
+$RefactorEvalUser = "<approved-eval-user>"
+$RefactorTrace = "logs\refactor-phase4-candidate-rag-trace.jsonl"
+1..3 | ForEach-Object {
+  chat_env\Scripts\python.exe scripts\eval\benchmark_rag_concurrency.py scripts\eval\golden_set.jsonl --base-url $RefactorBaseUrl --username $RefactorEvalUser --concurrency 1,5,10 --timeout 300 --trace-jsonl $RefactorTrace --report "reports\refactor\phase-4\candidate\rag-concurrency-run-$_.json"
+}
+```
+
+Trước lệnh trên, khởi động candidate process với `RAG_TRACE_LOG_FILE=logs\refactor-phase4-candidate-rag-trace.jsonl`; file trace là append-only input cho benchmark, không phải output do script benchmark tạo. Chạy cùng quy trình cho `baseline` trước Phase 4 với trace/report path riêng. Baseline SHA là parent trước extraction, candidate SHA chỉ thêm phase-refactor commit; ngoài source delta đó, data/config phải giống nhau. Raw trace nhạy cảm được giữ local/restricted; chỉ sanitized snapshot/hash và report vào evidence. Gate so median của ba run tại từng concurrency:
+
+- Không giảm success rate và không xuất hiện error/reason code mới.
+- P95 first-token và P95 complete của candidate không vượt `baseline * 1.10`.
+- P95 của từng stage không vượt `baseline * 1.10`; nếu nghi environment noise, chạy lại cả hai arm với cùng snapshot/config, không miễn gate bằng một run chọn lọc.
+- Budget, cost, retry, citation, RBAC và cancellation invariant không đổi.
+- Provider outage làm arm `inconclusive`; không dùng run đó trong so sánh và phase chưa được `Completed` cho đến khi đủ ba run hợp lệ mỗi arm.
+
+## 6. Quy tắc xử lý lỗi và rollback
+
+### Khi test đỏ ngoài dự kiến
+
+1. So với baseline/known issue trong ledger.
+2. Xác định lỗi ở contract, adapter, environment hay data fixture.
+3. Không sửa test nếu observable contract chưa đổi và test đúng.
+4. Không mở rộng phase sang feature/algorithm khác để “tiện sửa”.
+5. Nếu chưa khoanh vùng trong phase owner, revert phase commit và tái hiện lại từ RED test nhỏ nhất.
+
+### Khi integration/eval lỗi
+
+- `sql_document_missing` hoặc fixture absence là data/preflight blocker, không phải quality regression.
+- Provider unavailable/503/429 ngoài policy là `inconclusive`, không tự hạ threshold.
+- RBAC, leakage, publication/lifecycle/current-version failure luôn fail closed.
+- Không toggle feature flag trong process đang chạy để cứu test; baseline/candidate phải là process/config cô lập.
+
+### Commit/rollback discipline
+
+- Một vertical slice hoặc một private RAG phase trên mỗi commit logic.
+- Commit test RED có thể đứng riêng nếu cần review; GREEN phải tham chiếu test đó.
+- Không trộn unrelated dirty-worktree changes vào commit refactor.
+- Dùng conventional commit: `test:`, `refactor:`, `fix:`, `docs:`.
+- Không dùng `git reset --hard` hoặc checkout phá hủy thay đổi; rollback bằng revert của phase commit.
+- Không giữ hai implementation old/new, shadow execution hoặc runtime feature toggle chỉ để rollback refactor. Recovery path duy nhất của code là `git revert <phase-commit>` theo thứ tự ngược; data recovery tiếp tục dùng transaction/outbox/restore contract hiện có.
+
+## 7. Definition of Done toàn roadmap
+
+Roadmap chỉ hoàn tất khi tất cả điều kiện sau cùng đúng:
+
+1. FastAPI router và worker loop không sở hữu business orchestration, raw SQL hoặc provider client.
+2. Chat, document workflow và ingestion có interface command/result/event rõ ràng, test qua interface đó.
+3. `RagExecutor.run()` giữ nguyên contract và `execute_pipeline()` chỉ còn composition của private phases.
+4. Dependency graph không còn các cạnh ngược đã liệt kê.
+5. Import source không tạo DB/model/provider global ngoài explicit composition root.
+6. Pass-through `services` namespace không còn là đường gọi chính; internal shims không cần thiết đã được xóa.
+7. Public HTTP/SSE, schema, RBAC, trace, feature flags và rollout decisions không đổi.
+8. Architecture tests nằm trong default CI và không còn allowlist cho debt đã xử lý.
+9. Backend coverage đạt ít nhất 80%; unit, integration và critical browser/API flows có evidence.
+10. Full validation sạch, không có fatal native diagnostic; mọi skip/inconclusive được ghi đúng.
+11. Tài liệu này chứa commit/evidence/known-issue/rollback cho từng phase và đã được review độc lập.
+
+## 8. Thứ tự triển khai được khóa
+
+```text
+Phase 0 Architecture baseline
+    -> Phase 1 ChatTurnRunner
+    -> Phase 2 Document and file workflows
+    -> Phase 3 IngestionRunner
+    -> Phase 4 Private RAG phases
+    -> Phase 5 Composition and dependency inversion
+    -> Phase 6 Internal shim cleanup
+```
+
+Không chạy song song Phase 3–5 vì cùng chạm dependency/config và có nguy cơ conflict. Trong Phase 2, các vertical slice độc lập có thể làm tuần tự trên cùng branch; không merge một slice khi gate của slice trước chưa sạch.
+
+## 9. Execution ledger
+
+### 9.1. Phase 0 — Baseline tin cậy và architecture ratchet
+
+Trạng thái: **Validated / Blocked coverage**. Phase 1 chưa được phép bắt đầu theo
+gate tại mục 4.
+
+| Trường evidence | Kết quả thực tế |
+|---|---|
+| Baseline | SHA `c9a24ac03a022b1f3652dcf62696a57587dd962f`; branch nguồn `codex/p1-retrieval-intelligence`; branch thực hiện `codex/codebase-layer-refactor`; trước implementation chỉ có `docs/codebase-layer-refactor-plan.md` chưa được track. |
+| Contract được bảo vệ | Default test collection; dependency một chiều; HTTP/OpenAPI; thứ tự SSE success/busy; upload/review response; typed `RagExecutor`; native import health. Không thay đổi RAG algorithm, feature flag hoặc rollout decision. |
+| RED | Architecture test đỏ khi chưa có allowlist; native sentinel bắt `Windows fatal exception: access violation` dù subprocess trả `0`; coverage/evidence/capture module đỏ vì chưa tồn tại; regression OpenAPI đỏ khi sanitizer làm mất password route/schema. |
+| GREEN | Commit `3b663f423e90b9a5dc3aa1df9900d86e5cc1bf7d` thêm architecture ratchet, native sentinel/fix, coverage checker, canonical evidence và sanitized baseline artifacts. Commit review-fix `d6076b2` làm native preload fail-fast khi installation hỏng và tách các scanner/validator dài thành helper nhỏ. |
+| Validation | 58 Phase-0 gate tests pass; fast suite 1.051 pass, 1 SQL integration skip, 22 integration/eval deselected, 1 warning; default collect thấy 5 dependency tests và 3 layering tests; OpenAPI có 116 app path và 8 RAG path; `git diff --check` pass; không còn fatal native diagnostic. |
+| Coverage | 8.818/16.808 statement = **52,463113% line**; 2.085/5.120 branch = **40,722656% branch**. `check_coverage.py --min-line 80 --min-branch 80` trả exit `1` đúng thiết kế. |
+| Architecture delta | Chưa xóa debt trong Phase 0. Baseline ratchet có 264 identity và 392 occurrence; mọi occurrence tăng thêm hoặc allowance bị stale đều làm test fail. |
+| Known issues | Whole-backend coverage chưa đạt 80%; coverage CI và Vue coverage gate chưa được bật để tránh tạo workflow đỏ cố định; SSE files hiện là sanitized contract fixtures lấy từ behavior đã characterize, chưa phải transcript phát lại từ endpoint; SQL/Qdrant integration chưa được cấu hình; còn `StarletteDeprecationWarning` về `httpx`/`TestClient`; `chat_env` có dependency drift so với lock đã ghi ở baseline. |
+| Rollback | Revert theo thứ tự `git revert d6076b2` rồi `git revert 3b663f423e90b9a5dc3aa1df9900d86e5cc1bf7d`; hai commit chỉ chứa Phase-0 safety gate/evidence và workaround native import, không chứa Phase-1 application behavior. |
+
+Review hai trục: ba standards finding đã được sửa trong `d6076b2`. Spec review
+xác nhận không có scope creep, nhưng Phase 0 còn thiếu coverage/CI gate và
+endpoint-observed SSE transcript; các mục này được giữ fail-closed trong
+`Known issues`, không được diễn giải thành phase hoàn tất.
+
+Artifact chuẩn:
+
+- `reports/refactor/phase-0/baseline/manifest.json`, SHA-256
+  `aa3d74ba1a198b040cfcbe927cf71a18f120be0ed297d14d6819a490a7692283`.
+- `reports/refactor/phase-0/baseline/openapi-app.json` và
+  `openapi-rag.json` là OpenAPI đã canonicalize nhưng giữ nguyên route/schema.
+- `reports/refactor/phase-0/baseline/sse-success.jsonl` và
+  `sse-busy.jsonl` là contract fixtures đã sanitize, khóa event order hiện tại;
+  endpoint-observed transcript vẫn là việc còn mở của Phase 0.
+- `reports/refactor/phase-0/baseline/upload-review-samples.json` khóa shape
+  upload và pending-publication review.
+- `reports/refactor/phase-0/baseline/pytest-baseline.txt` ghi denominator và
+  trạng thái fast suite. Coverage JSON thô và provenance input nằm trong vùng
+  ignored; chỉ artifact đã sanitize được track.
+
+Điều kiện gỡ blocker trước Phase 1: bổ sung characterization test để toàn bộ
+`mech_chatbot` đạt tối thiểu 80% line và branch như kế hoạch hiện tại, hoặc có
+quyết định sửa chính sách gate thành coverage 80% cho package refactor-owned
+kèm global no-regression ratchet. Không được tự hạ threshold trong code hay CI.
