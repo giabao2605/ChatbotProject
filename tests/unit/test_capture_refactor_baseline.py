@@ -92,7 +92,24 @@ def _read_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_capture_writes_complete_deterministic_privacy_safe_bundle(tmp_path: Path):
+def _sample_sse_transcripts() -> dict[str, tuple[dict[str, object], ...]]:
+    return {
+        "success": (
+            {"event": "thinking", "data": {"message": "Đang suy nghĩ"}},
+            {"event": "delta", "data": {"text": "Câu trả lời "}},
+            {"event": "delta", "data": {"text": "mẫu."}},
+            {"event": "citation", "data": {"source_id": "D42P3"}},
+            {"event": "done", "data": {"chat_id": 123}},
+        ),
+        "busy": (
+            {"event": "thinking", "data": {"message": "Đang suy nghĩ"}},
+            {"event": "error", "data": {"status": 503}},
+        ),
+    }
+
+
+@pytest.fixture
+def captured_bundle(tmp_path: Path):
     first = tmp_path / "first"
     second = tmp_path / "second"
     calls: list[str] = []
@@ -107,19 +124,7 @@ def test_capture_writes_complete_deterministic_privacy_safe_bundle(tmp_path: Pat
 
     def sse_capture():
         calls.append("sse")
-        return {
-            "success": (
-                {"event": "thinking", "data": {"message": "Đang suy nghĩ"}},
-                {"event": "delta", "data": {"text": "Câu trả lời "}},
-                {"event": "delta", "data": {"text": "mẫu."}},
-                {"event": "citation", "data": {"source_id": "D42P3"}},
-                {"event": "done", "data": {"chat_id": 123}},
-            ),
-            "busy": (
-                {"event": "thinking", "data": {"message": "Đang suy nghĩ"}},
-                {"event": "error", "data": {"status": 503}},
-            ),
-        }
+        return _sample_sse_transcripts()
 
     first_manifest = capture_refactor_baseline(
         first,
@@ -135,12 +140,28 @@ def test_capture_writes_complete_deterministic_privacy_safe_bundle(tmp_path: Pat
         rag_app_factory=rag_factory,
         sse_capture=sse_capture,
     )
+    return SimpleNamespace(
+        first=first,
+        second=second,
+        calls=calls,
+        first_manifest=first_manifest,
+        second_manifest=second_manifest,
+    )
 
-    assert calls == ["sse", "app", "rag", "sse", "app", "rag"]
-    assert {path.name for path in first.iterdir()} == set(ARTIFACT_NAMES)
-    assert first_manifest == second_manifest
+
+def test_capture_writes_complete_deterministic_bundle(captured_bundle):
+    bundle = captured_bundle
+    assert bundle.calls == ["sse", "app", "rag", "sse", "app", "rag"]
+    assert {path.name for path in bundle.first.iterdir()} == set(ARTIFACT_NAMES)
+    assert bundle.first_manifest == bundle.second_manifest
     for name in ARTIFACT_NAMES:
-        assert (first / name).read_bytes() == (second / name).read_bytes()
+        assert (bundle.first / name).read_bytes() == (
+            bundle.second / name
+        ).read_bytes()
+
+
+def test_capture_redacts_sensitive_content_and_preserves_openapi(captured_bundle):
+    first = captured_bundle.first
 
     all_content = b"\n".join((first / name).read_bytes() for name in ARTIFACT_NAMES)
     assert b"sk-private" not in all_content
@@ -166,6 +187,9 @@ def test_capture_writes_complete_deterministic_privacy_safe_bundle(tmp_path: Pat
     assert properties["image_token"] == {"type": "string"}
     assert properties["session_id"] == {"type": "string"}
 
+
+def test_capture_records_sse_upload_and_pytest_contracts(captured_bundle):
+    first = captured_bundle.first
     success_events = [
         json.loads(line)
         for line in (first / "sse-success.jsonl").read_text(encoding="utf-8").splitlines()
@@ -195,8 +219,11 @@ def test_capture_writes_complete_deterministic_privacy_safe_bundle(tmp_path: Pat
     }
     assert "status=passed" in (first / "pytest-baseline.txt").read_text(encoding="utf-8")
 
+
+def test_capture_manifest_hashes_every_artifact(captured_bundle):
+    first = captured_bundle.first
     manifest = _read_json(first / "manifest.json")
-    assert manifest == first_manifest
+    assert manifest == captured_bundle.first_manifest
     assert set(manifest["artifact_sha256"]) == set(ARTIFACT_NAMES) - {"manifest.json"}
     for name, digest in manifest["artifact_sha256"].items():
         assert digest == hashlib.sha256((first / name).read_bytes()).hexdigest()
