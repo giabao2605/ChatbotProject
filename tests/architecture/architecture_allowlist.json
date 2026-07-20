@@ -1,0 +1,2118 @@
+{
+  "version": 1,
+  "policy": "Current count must equal the reviewed count; update debt and allowlist together.",
+  "entries": [
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/app_server.py",
+      "dependency": "mech_chatbot.db.engine",
+      "count": 1,
+      "removal_phase": "Phase 2",
+      "reason": "Existing FastAPI data-access debt"
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/app_server.py",
+      "dependency": "mech_chatbot.db.repositories.jobs",
+      "count": 2,
+      "removal_phase": "Phase 2",
+      "reason": "Existing FastAPI data-access debt"
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/app_server.py",
+      "dependency": "sqlalchemy",
+      "count": 1,
+      "removal_phase": "Phase 2",
+      "reason": "Existing FastAPI data-access debt"
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/file_access.py",
+      "dependency": "mech_chatbot.db.engine",
+      "count": 1,
+      "removal_phase": "Phase 2",
+      "reason": "Existing FastAPI data-access debt"
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/file_access.py",
+      "dependency": "sqlalchemy",
+      "count": 1,
+      "removal_phase": "Phase 2",
+      "reason": "Existing FastAPI data-access debt"
+    },
+    {
+      "rule": "api_engine_access",
+      "path": "api/app_server.py",
+      "dependency": "engine.connect",
+      "count": 5,
+      "removal_phase": "Phase 2",
+      "reason": "Existing FastAPI engine access debt"
+    },
+    {
+      "rule": "api_engine_access",
+      "path": "api/file_access.py",
+      "dependency": "engine.connect",
+      "count": 3,
+      "removal_phase": "Phase 2",
+      "reason": "Existing FastAPI engine access debt"
+    },
+    {
+      "rule": "api_raw_sql",
+      "path": "api/app_server.py",
+      "dependency": "sqlalchemy.text",
+      "count": 5,
+      "removal_phase": "Phase 2",
+      "reason": "Existing FastAPI raw SQL debt"
+    },
+    {
+      "rule": "api_raw_sql",
+      "path": "api/file_access.py",
+      "dependency": "sqlalchemy.text",
+      "count": 4,
+      "removal_phase": "Phase 2",
+      "reason": "Existing FastAPI raw SQL debt"
+    },
+    {
+      "rule": "db_upward_dependency",
+      "path": "db/repositories/community_summaries.py",
+      "dependency": "mech_chatbot.rag.community_summaries",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing reverse dependency from DB into an upper layer"
+    },
+    {
+      "rule": "db_upward_dependency",
+      "path": "db/repositories/community_summaries.py",
+      "dependency": "mech_chatbot.rag.graph_retrieval",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing reverse dependency from DB into an upper layer"
+    },
+    {
+      "rule": "db_upward_dependency",
+      "path": "db/repositories/graph.py",
+      "dependency": "mech_chatbot.rag.graph_ontology",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing reverse dependency from DB into an upper layer"
+    },
+    {
+      "rule": "db_upward_dependency",
+      "path": "db/repositories/graph.py",
+      "dependency": "mech_chatbot.rag.graph_retrieval",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing reverse dependency from DB into an upper layer"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "api/app_security.py",
+      "dependency": "os.getenv",
+      "count": 6,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "api/app_server.py",
+      "dependency": "os.getenv",
+      "count": 10,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "api/file_access.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "api/rag_server.py",
+      "dependency": "os.getenv",
+      "count": 14,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/engine.py",
+      "dependency": "os.getenv",
+      "count": 6,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/repositories/_shared.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/repositories/bom.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/repositories/catalog.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/repositories/chat.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/repositories/document.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/repositories/knowledge_governance.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/repositories/publication.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/repositories/qdrant.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "db/repositories/ui_queries.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "ingestion/pdf/pipeline.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "ingestion/pdf/vision.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "ingestion/vision_cache.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "llm/external_ai.py",
+      "dependency": "os.getenv",
+      "count": 8,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "llm/llm_client.py",
+      "dependency": "os.getenv",
+      "count": 6,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "llm/vision_client.py",
+      "dependency": "os.getenv",
+      "count": 13,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/claim_repair.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/community_summaries.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/context_builders.py",
+      "dependency": "os.getenv",
+      "count": 4,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/conversation_state.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/corrective.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/evidence_gate.py",
+      "dependency": "os.getenv",
+      "count": 3,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/execution.py",
+      "dependency": "os.getenv",
+      "count": 5,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/glossary_expand.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/graph_retrieval.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/intent.py",
+      "dependency": "os.getenv",
+      "count": 4,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/interaction_router.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/late_interaction.py",
+      "dependency": "os.getenv",
+      "count": 8,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/pipeline.py",
+      "dependency": "os.getenv",
+      "count": 13,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/pipeline_steps.py",
+      "dependency": "os.getenv",
+      "count": 8,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/rbac.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/rerank.py",
+      "dependency": "os.getenv",
+      "count": 3,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/route_llm.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/route_safety.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/semantic_cache.py",
+      "dependency": "os.getenv",
+      "count": 4,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "workers/ingestion_worker.py",
+      "dependency": "os.getenv",
+      "count": 3,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "evaluation_private_rag_dependency",
+      "path": "evaluation/grounded_math.py",
+      "dependency": "mech_chatbot.rag.number_normalization",
+      "count": 1,
+      "removal_phase": "Phase 4",
+      "reason": "Existing evaluation dependency on private RAG implementation"
+    },
+    {
+      "rule": "evaluation_private_rag_dependency",
+      "path": "evaluation/grounding.py",
+      "dependency": "mech_chatbot.rag.number_normalization",
+      "count": 1,
+      "removal_phase": "Phase 4",
+      "reason": "Existing evaluation dependency on private RAG implementation"
+    },
+    {
+      "rule": "evaluation_private_rag_dependency",
+      "path": "evaluation/integrated_hardening.py",
+      "dependency": "mech_chatbot.rag.feature_activation",
+      "count": 3,
+      "removal_phase": "Phase 4",
+      "reason": "Existing evaluation dependency on private RAG implementation"
+    },
+    {
+      "rule": "evaluation_private_rag_dependency",
+      "path": "evaluation/milestone_decisions.py",
+      "dependency": "mech_chatbot.rag.feature_activation",
+      "count": 2,
+      "removal_phase": "Phase 4",
+      "reason": "Existing evaluation dependency on private RAG implementation"
+    },
+    {
+      "rule": "evaluation_private_rag_dependency",
+      "path": "evaluation/schema.py",
+      "dependency": "mech_chatbot.rag.graph_ontology",
+      "count": 1,
+      "removal_phase": "Phase 4",
+      "reason": "Existing evaluation dependency on private RAG implementation"
+    },
+    {
+      "rule": "import_time_resource",
+      "path": "api/rag_server.py",
+      "dependency": "ThreadPoolExecutor",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "import_time_resource",
+      "path": "db/engine.py",
+      "dependency": "create_db_engine",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "import_time_resource",
+      "path": "ingestion/file_ingestor.py",
+      "dependency": "build_vision_model",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "import_time_resource",
+      "path": "rag/bootstrap.py",
+      "dependency": "build_vision_model",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "import_time_resource",
+      "path": "rag/intent.py",
+      "dependency": "ThreadPoolExecutor",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/__init__.py",
+      "dependency": "engine",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "count_pending_access_requests",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "create_access_request",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "get_grant_history",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "get_user_access_requests",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "list_access_requests",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "list_users_with_access",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "resolve_access_request",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "revoke_user_clearance",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "revoke_user_department",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/access_service.py",
+      "dependency": "set_user_clearance",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/analytics_service.py",
+      "dependency": "dashboard_by_department",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/analytics_service.py",
+      "dependency": "get_observability",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/analytics_service.py",
+      "dependency": "get_usage_analytics",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/analytics_service.py",
+      "dependency": "sc_clear_all",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/analytics_service.py",
+      "dependency": "sc_stats",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/audit_service.py",
+      "dependency": "write_audit_log",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/chat_service.py",
+      "dependency": "clear_chat_history",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/chat_service.py",
+      "dependency": "get_all_sessions",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/chat_service.py",
+      "dependency": "get_chat_history",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/chat_service.py",
+      "dependency": "save_answer_evidence",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/chat_service.py",
+      "dependency": "save_answer_sources",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/chat_service.py",
+      "dependency": "save_chat_history",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/chat_service.py",
+      "dependency": "update_chat_feedback",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "archive_document",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "delete_document_completely",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "publish_as_new_variant",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "publish_as_new_version",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "publish_as_standalone",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "publish_document",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "reconcile_serving_state",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "reject_document",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "update_document_common_metadata",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/document_service.py",
+      "dependency": "validate_publish_contract",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/external_ai_service.py",
+      "dependency": "get_external_ai_provider_profile",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/external_ai_service.py",
+      "dependency": "list_external_ai_provider_profiles",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/external_ai_service.py",
+      "dependency": "upsert_external_ai_provider_profile",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/feedback_service.py",
+      "dependency": "add_regression_question",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/feedback_service.py",
+      "dependency": "cleanup_dangling_records",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/feedback_service.py",
+      "dependency": "ensure_regression_question",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/feedback_service.py",
+      "dependency": "get_doc_quality_ranking",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/feedback_service.py",
+      "dependency": "get_regression_runs",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/feedback_service.py",
+      "dependency": "list_regression_questions",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/feedback_service.py",
+      "dependency": "recompute_doc_quality_scores",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/feedback_service.py",
+      "dependency": "set_regression_question_active",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/feedback_service.py",
+      "dependency": "upsert_golden_answer",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/glossary_service.py",
+      "dependency": "delete_glossary_term",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/glossary_service.py",
+      "dependency": "list_domain_glossary",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/glossary_service.py",
+      "dependency": "set_glossary_active",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/glossary_service.py",
+      "dependency": "upsert_glossary_term",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/graph_service.py",
+      "dependency": "list_community_summaries",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/graph_service.py",
+      "dependency": "list_graph_proposals",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/graph_service.py",
+      "dependency": "load_servable_community_summaries",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/graph_service.py",
+      "dependency": "propose_community_summary",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/graph_service.py",
+      "dependency": "propose_graph_edge",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/graph_service.py",
+      "dependency": "review_community_summary",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/graph_service.py",
+      "dependency": "review_graph_proposal",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/graph_service.py",
+      "dependency": "traverse_knowledge_graph",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/job_service.py",
+      "dependency": "cancel_job",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/job_service.py",
+      "dependency": "create_ingestion_job",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/job_service.py",
+      "dependency": "queue_eta_seconds",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/job_service.py",
+      "dependency": "requeue_job",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/job_service.py",
+      "dependency": "set_job_priority",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/knowledge_governance_service.py",
+      "dependency": "get_department_domain_profile",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/knowledge_governance_service.py",
+      "dependency": "get_department_knowledge_governance",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/knowledge_governance_service.py",
+      "dependency": "list_department_domain_profiles",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/knowledge_governance_service.py",
+      "dependency": "list_department_knowledge_governance",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/knowledge_governance_service.py",
+      "dependency": "list_missing_site_documents",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/knowledge_governance_service.py",
+      "dependency": "update_document_governance_metadata",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/knowledge_governance_service.py",
+      "dependency": "upsert_department_domain_profile",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/knowledge_governance_service.py",
+      "dependency": "upsert_department_knowledge_governance",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/knowledge_governance_service.py",
+      "dependency": "validate_document_metadata_actor",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/lifecycle_service.py",
+      "dependency": "get_lifecycle_overview",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/lifecycle_service.py",
+      "dependency": "mark_document_reviewed",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/lifecycle_service.py",
+      "dependency": "refresh_expired_status",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/lifecycle_service.py",
+      "dependency": "set_document_lifecycle",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/material_service.py",
+      "dependency": "add_material_synonym",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/material_service.py",
+      "dependency": "delete_material",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/material_service.py",
+      "dependency": "delete_material_synonym",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/material_service.py",
+      "dependency": "list_materials",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/material_service.py",
+      "dependency": "upsert_material",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "archive_department",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "get_department_summary",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "get_user_sites",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "list_known_departments",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "list_known_sites",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "reassign_department_data",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "set_department_status",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "set_user_departments",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "set_user_sites",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "upsert_department",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/org_service.py",
+      "dependency": "upsert_site",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/rollout_service.py",
+      "dependency": "get_department_rollout_readiness",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/rollout_service.py",
+      "dependency": "list_department_rollout_plans",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/rollout_service.py",
+      "dependency": "record_department_evaluation_gate",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/rollout_service.py",
+      "dependency": "upsert_department_rollout_plan",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/settings_service.py",
+      "dependency": "count_docs_by_department",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/settings_service.py",
+      "dependency": "get_all_app_settings",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/settings_service.py",
+      "dependency": "set_app_setting",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "bulk_delete_ingestion_jobs",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "classify_feedback_and_get_source",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "count_dept_pending_jobs",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "count_dept_users",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "create_user_with_roles",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "delete_feedback",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "delete_ingestion_job",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "delete_user_account",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "fetch_sources_meta_rows",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "get_dashboard_stats",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "get_document_lifecycle_counts",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "get_role_dashboard",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "get_user_clearance",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "get_user_departments",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "get_user_roles",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "is_engine_ready",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_audit_logs",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_bulk_action_jobs",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_bulk_meta_departments",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_docs_for_bulk_meta",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_documents",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_expiring_documents",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_feedbacks",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_ingestion_jobs",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_pending_review_docs",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_recent_documents",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_recent_failed_jobs",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "list_users_basic",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "mark_document_expired",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "mark_job_pending_review",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "mark_job_published",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "mark_job_rejected",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "ping_database",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "reject_ingestion_job",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "set_document_current",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "set_user_active_status",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "update_user_active_and_roles",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_flat_export",
+      "path": "services/ui_query_service.py",
+      "dependency": "update_user_password",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing flat services compatibility export"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "access_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "analytics_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "audit_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "chat_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "document_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "external_ai_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "feedback_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "glossary_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "graph_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "job_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "knowledge_governance_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "lifecycle_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "material_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "org_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "rollout_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "settings_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "service_root_module",
+      "path": "services/__init__.py",
+      "dependency": "ui_query_service",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing module in the flat services compatibility facade"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories._shared",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.access",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.analytics",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.audit",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.bom",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.catalog",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.chat",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.community_summaries",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.doc_metadata",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.document",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.document_pages",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.external_ai",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.feedback",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.glossary",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.graph",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.jobs",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.knowledge_governance",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.lifecycle",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.material",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.publication",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.qdrant",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.rollout",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.semantic_cache",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.settings",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repositories/__init__.py",
+      "dependency": "mech_chatbot.db.repositories.version",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.bom",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.chunking",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.config",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.metadata",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.pipeline",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.quality",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.readers",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.vision",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/pipeline.py",
+      "dependency": "mech_chatbot.rag.bootstrap",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/pipeline.py",
+      "dependency": "mech_chatbot.rag.evidence_gate",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/pipeline.py",
+      "dependency": "mech_chatbot.rag.intent",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/pipeline.py",
+      "dependency": "mech_chatbot.rag.prompt",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/pipeline.py",
+      "dependency": "mech_chatbot.rag.rerank",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/pipeline.py",
+      "dependency": "mech_chatbot.rag.retrieval",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.bootstrap",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.evidence_gate",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.intent",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.pipeline",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.prompt",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.rerank",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.retrieval",
+      "count": 1,
+      "removal_phase": "Phase 6",
+      "reason": "Existing wildcard compatibility import"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+{"data":{"message":"Đang suy nghĩ"},"event":"thinking"}
+{"data":{"text":"Câu trả lời mẫu."},"event":"delta"}
+{"data":{"doc_id":42,"file_name":"sample.pdf","page_no":3,"source_id":"D42P3"},"event":"citation"}
+{"data":{"chat_id":123,"citations":[{"doc_id":42,"file_name":"sample.pdf","page_no":3,"source_id":"D42P3"}],"conversation_context":{"topic":"sample"},"new_part_ids":["P123"]},"event":"done"}

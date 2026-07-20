@@ -1,0 +1,7 @@
+schema=pytest-baseline-v1
+scope=not integration and not eval
+status=passed
+passed=1045
+failed=0
+skipped=1
+warnings=1
