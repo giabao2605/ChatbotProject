@@ -1,35 +1,20 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from mech_chatbot.application.chat_turn import (
+    ChatCitation,
+    ChatDelta,
+    ChatDone,
+    ChatError,
+    ChatThinking,
+)
+
 pytestmark = pytest.mark.unit
 
 app_server = pytest.importorskip("mech_chatbot.api.app_server")
-
-
-class _FakeResponse:
-    def __init__(self, status_code=200, payload=None, text="", events=None):
-        self.status_code = status_code
-        self._payload = payload or {}
-        self.text = text
-        self.ok = 200 <= status_code < 400
-        self.events = events or []
-
-    def json(self):
-        return self._payload
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def iter_lines(self, decode_unicode=True):
-        for event, data in self.events:
-            yield f"event: {event}"
-            yield "data: " + json.dumps(data, ensure_ascii=False)
-            yield ""
 
 
 def _profile():
@@ -137,54 +122,40 @@ def client():
         app_server.app.dependency_overrides.clear()
 
 
-def test_chat_message_persists_sources_audit_and_streams_sse(monkeypatch, client):
-    posts = []
-    saved_sources = []
-    audit_actions = []
+def test_chat_message_serializes_typed_runner_events_without_transport_or_repository_patching(
+    monkeypatch, client
+):
+    citation = {
+        "doc_id": 42,
+        "page_no": 3,
+        "file_name": "bom.pdf",
+        "version_no": 1,
+        "score": 0.91,
+        "source_id": "D42P3",
+    }
+    calls = []
 
-    def fake_post(url, headers, json, timeout, stream):
-        posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout, "stream": stream})
-        return _FakeResponse(
-            events=[
-                ("accepted", {"ok": True}),
-                ("metadata", {
-                    "ref_text": "\nNguon: PDF",
-                    "new_part_ids": ["P123"],
-                    "debug_info": {
-                        "conversation_context": {"topic": "bom"},
-                        "retrieved_docs": [
-                            {
-                                "doc_id": 42,
-                                "trang": 3,
-                                "file_goc": "bom.pdf",
-                                "score": 0.91,
-                                "security_level": "confidential",
-                            }
-                        ],
-                        "citation_docs": [
-                            {
-                                "doc_id": 42,
-                                "trang": 3,
-                                "file_goc": "bom.pdf",
-                                "version_no": 1,
-                                "score": 0.91,
-                                "security_level": "confidential",
-                                "source_id": "D42P3",
-                            }
-                        ],
-                    },
-                }),
-                ("delta", {"text": "Tra loi dung "}),
-                ("delta", {"text": "[Nguồn: bom.pdf, Trang 3, Version 1, SourceID D42P3]"}),
-                ("done", {"ok": True, "elapsed_ms": 25}),
-            ]
-        )
+    class ScriptedRunner:
+        def stream(self, command, actor):
+            calls.append((command, actor))
+            yield ChatThinking("Đang suy nghĩ")
+            yield ChatDelta("Tra loi dung ")
+            yield ChatDelta("[Nguồn: bom.pdf, Trang 3, Version 1, SourceID D42P3]")
+            yield ChatCitation(citation)
+            yield ChatDone(
+                chat_id=123,
+                ref_text="\nNguon: PDF",
+                citations=(citation,),
+                new_part_ids=("P123",),
+                conversation_context={"topic": "bom"},
+                elapsed_ms=25,
+            )
 
-    monkeypatch.setattr(app_server.requests, "post", fake_post)
-    monkeypatch.setattr(app_server, "save_chat_history", lambda **_kwargs: 123)
-    monkeypatch.setattr(app_server, "save_answer_sources", lambda chat_id, docs: saved_sources.append((chat_id, docs)))
-    monkeypatch.setattr(app_server, "write_audit_log", lambda **kwargs: audit_actions.append(kwargs))
-    monkeypatch.setattr(app_server, "page_has_vision", lambda doc_id, page_no: (doc_id, page_no) == (42, 3))
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        SimpleNamespace(chat_turn_runner=ScriptedRunner()),
+    )
 
     response = client.post(
         "/api/chat/message",
@@ -198,27 +169,11 @@ def test_chat_message_persists_sources_audit_and_streams_sse(monkeypatch, client
     )
 
     assert response.status_code == 200
-    assert posts[0]["url"].endswith("/chat/stream")
-    assert posts[0]["stream"] is True
-    assert posts[0]["json"] == {
-        "user_id": 7,
-        "username": "alice",
-        "user_question": "cau hoi ve BOM",
-        "image_path": None,
-        "chat_history": [{"role": "user", "content": "prev"}],
-        "current_part_ids": ["OLD"],
-        "response_language": "vi",
-        "conversation_context": {"prev": True},
-    }
-    assert saved_sources == [(123, [{
-        "doc_id": 42,
-        "file_goc": "bom.pdf",
-        "version_no": 1,
-        "trang": 3,
-        "score": 0.91,
-        "source_id": "D42P3",
-    }])]
-    assert [item["action"] for item in audit_actions] == ["chat_query", "read_confidential"]
+    assert len(calls) == 1
+    assert calls[0][0].question == "cau hoi ve BOM"
+    assert calls[0][0].current_part_ids == ("OLD",)
+    assert calls[0][1].user_id == 7
+    assert calls[0][1].username == "alice"
 
     events = _events(response.text)
     assert [name for name, _data in events] == ["thinking", "delta", "delta", "citation", "done"]
@@ -226,19 +181,7 @@ def test_chat_message_persists_sources_audit_and_streams_sse(monkeypatch, client
     assert done["chat_id"] == 123
     assert done["new_part_ids"] == ["P123"]
     assert done["conversation_context"] == {"topic": "bom"}
-    assert done["citations"] == [
-        {
-            "doc_id": 42,
-            "page_no": 3,
-            "file_name": "bom.pdf",
-            "version_no": 1,
-            "score": 0.91,
-            "source_id": "D42P3",
-            "has_vision": True,
-            "page_url": "/api/files/documents/42/pages/3",
-            "original_url": "/api/files/documents/42/original",
-        }
-    ]
+    assert done["citations"] == [citation]
 
 
 def test_text_citation_has_download_without_preview(monkeypatch):
@@ -307,83 +250,32 @@ def test_bulk_publish_returns_pending_without_marking_job_published(monkeypatch)
     assert marked == []
 
 
-def test_chat_message_emits_busy_error_without_persisting(monkeypatch, client):
-    saved = []
+def test_chat_message_serializes_runner_error_without_persistence_seam_patching(
+    monkeypatch, client
+):
+    class ScriptedRunner:
+        def stream(self, _command, _actor):
+            yield ChatThinking("Đang suy nghĩ")
+            yield ChatError(
+                code="rag_stream_error",
+                message="RAG server busy",
+                http_status=503,
+                retryable=True,
+            )
 
     monkeypatch.setattr(
-        app_server.requests,
-        "post",
-        lambda *_args, **_kwargs: _FakeResponse(status_code=503, text="busy"),
+        app_server.app.state,
+        "runtime",
+        SimpleNamespace(chat_turn_runner=ScriptedRunner()),
     )
-    monkeypatch.setattr(app_server, "save_chat_history", lambda **kwargs: saved.append(kwargs))
 
     response = client.post("/api/chat/message", json={"session_id": "s1", "question": "hello"})
 
     assert response.status_code == 200
-    assert saved == []
     events = _events(response.text)
     assert [name for name, _data in events] == ["thinking", "error"]
     assert events[-1][1]["status"] == 503
     assert events[-1][1]["message"] == "RAG server busy"
-
-
-def test_crag_pilot_routes_by_identity_and_schedules_only_sampled_replay(
-    monkeypatch, client
-):
-    from mech_chatbot.evaluation.crag_pilot import assign_pilot_route, load_pilot_config
-
-    env = {
-        "CRAG_PILOT_ENABLED": "true",
-        "CRAG_PILOT_EXPERIMENT_ID": "exp-1",
-        "CRAG_PILOT_ASSIGNMENT_SALT": "pilot-test-salt",
-        "CRAG_PILOT_DEPARTMENT": "Technical",
-        "CRAG_PILOT_COHORT_SHA256": "cohort-v1",
-        "CRAG_PILOT_CONTROL_URL": "http://control:8100",
-        "CRAG_PILOT_CANDIDATE_URL": "http://candidate:8100",
-        "CRAG_PILOT_CONTROL_DEPLOYMENT_ID": "control-1",
-        "CRAG_PILOT_CANDIDATE_DEPLOYMENT_ID": "candidate-1",
-        "CRAG_PILOT_SNAPSHOT_FINGERPRINT": "snapshot-v1",
-    }
-    for name, value in env.items():
-        monkeypatch.setenv(name, value)
-    posts = []
-    scheduled = []
-
-    def fake_post(url, **kwargs):
-        posts.append((url, kwargs))
-        return _FakeResponse(events=[
-            ("metadata", {"debug_info": {"correction_count": 1}}),
-            ("delta", {"text": "safe answer"}),
-            ("done", {"ok": True, "trace_id": "rag-assigned", "elapsed_ms": 10}),
-        ])
-
-    monkeypatch.setattr(app_server.requests, "post", fake_post)
-    monkeypatch.setattr(app_server, "save_chat_history", lambda **_kwargs: 1)
-    monkeypatch.setattr(app_server, "save_answer_evidence", lambda *_args: None)
-    monkeypatch.setattr(app_server, "write_audit_log", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        app_server,
-        "_schedule_pilot_replay",
-        lambda route, payload, outcome, trace_id, profile: scheduled.append(
-            (route, payload, outcome, trace_id, profile)
-        ),
-    )
-
-    response = client.post(
-        "/api/chat/message", json={"session_id": "s1", "question": "same identity"}
-    )
-
-    config = load_pilot_config(env)
-    expected = assign_pilot_route(
-        config, user_id="7", department="Technical", request_id="irrelevant"
-    )
-    assert response.status_code == 200
-    assert posts[0][0] == f"{expected.deployment_url}/chat/stream"
-    assert len(scheduled) == 1
-    assert scheduled[0][0].arm == expected.arm
-    assert scheduled[0][2]["correction_count"] == 1
-    assert scheduled[0][3] == "rag-assigned"
-
 
 def test_crag_pilot_replay_queue_is_bounded_and_drops_without_submitting(monkeypatch):
     from mech_chatbot.evaluation.crag_pilot import PilotConfig, assign_pilot_route

@@ -1,6 +1,6 @@
 # Kế hoạch refactor codebase theo deep module và dependency một chiều
 
-Trạng thái: **In progress — Phase 0 validation gates đã đạt; Phase 1 chưa bắt đầu**
+Trạng thái: **In progress — Phase 0 đã hoàn tất; Phase 1 đã validated và chờ commit ledger**
 
 Ngày lập kế hoạch: **2026-07-20**
 
@@ -1110,3 +1110,26 @@ Phase 0 không thay đổi feature flag, rollout decision, RAG algorithm hay API
 runtime. Known issues còn lại: SQL/Qdrant integration thật chưa được cấu hình,
 warning Starlette/httpx và dependency drift trong `chat_env`; các mục này vẫn
 được ghi là skip/diagnostic, không trình bày như pass.
+
+### 9.2. Phase 1 — `ChatTurnRunner`
+
+Trạng thái: **Validated / ready to commit**. Phase 1 không thay đổi feature
+flag, rollout decision, RAG algorithm, database schema hay HTTP/OpenAPI/SSE
+wire contract.
+
+| Trường evidence | Kết quả thực tế |
+|---|---|
+| Baseline | Commit `9dd2576` (`test: close phase zero coverage gate`), branch `codex/codebase-layer-refactor`. Trước Phase 1, Phase 0 đã pass global backend gate; SQL/Qdrant/RAG server vẫn là opt-in skip. |
+| Contract được bảo vệ | `POST /api/chat/message` vẫn giữ Pydantic body, HTTP 200 streaming response, event order `thinking -> delta* -> citation* -> done` hoặc `thinking -> error`; RAG payload, server-resolved actor, CSRF/image ownership, service-token headers, citation URLs, persistence/audit semantics và pilot replay/drop behavior được giữ. OpenAPI app/RAG canonicalized bằng baseline Phase 0 đều bằng nhau. |
+| RED | `tests/unit/test_chat_turn_runner.py` khóa success aggregation, attribution, persistence/audit, busy, incomplete stream, persistence warning và pilot replay/drop. `tests/unit/test_chat_runtime_adapters.py` khóa HTTP/SSE mapping, transport error, non-2xx cleanup, repository/audit adapters. `tests/unit/test_app_runtime_composition.py` khóa frozen runtime. Các test endpoint ban đầu còn phụ thuộc monkeypatch global; review dùng seam đó làm blocker và đã chuyển sang scripted runner. |
+| GREEN | Thêm `application/chat_turn.py`, `application/chat_citations.py`, `adapters/chat_runtime.py`, `composition/app_runtime.py`; router chỉ tạo command/actor và serialize typed events. Production wiring nằm trong `build_default_app_runtime()`; `app.state.runtime` là frozen bundle, không có dual implementation hay runtime toggle. Lỗi persistence/transport được log server-side nhưng SSE chỉ nhận thông báo tổng quát; security-level thiếu/sai được audit fail-closed. |
+| Validation | Targeted Phase 1/API/architecture suite: pass. Full collection `1.930` tests; full run `1.908 passed, 22 skipped, 0 failed`, 1 `StarletteDeprecationWarning` đã biết. `git diff --check` pass. `scripts/quality/check_coverage.py reports/refactor/phase-1/coverage-backend.json --min-line 80 --min-branch 80` pass. |
+| Coverage | Full backend sau Phase 1: `15.317/17.144` statements = **89,343210% line**; `4.285/5.164` branches = **82,978311% branch**. Module-owned gate: adapters 93%, application citation 97% (full suite; targeted 93%), ChatTurnRunner 97%, composition 100%. |
+| Architecture delta | Xóa dependency `direct_getenv` mới khỏi adapter bằng cách để composition truyền config; API không còn import concrete adapter. Citation attribution nằm trong application module. Architecture suite `8 pass` và không thêm violation/allowlist. |
+| Test lifecycle | `test_app_chat_orchestration.py` đã bỏ test pilot endpoint phụ thuộc transport/repository monkeypatch vì runner/adapter contract đã thay thế; giữ queue-boundary test và thin endpoint SSE tests. Không xóa test contract nào nếu chưa có replacement; các suite runner/adapter/composition là durable cho đến khi seam tương ứng thay đổi. |
+| Known issues | SQL/Qdrant/RAG integration thật chưa chạy; 22 skip giữ nguyên opt-in. `StarletteDeprecationWarning` về `httpx`/`TestClient` còn mở. `chat_env` dependency drift so với lock vẫn là diagnostic. Full backend coverage pass nhưng một số module legacy riêng lẻ dưới 80%; đây là debt ngoài Phase 1 và không hạ global gate. |
+| Rollback | Revert commit Phase 1 logic sau khi commit được tạo; chỉ có một implementation chat. Nếu cần tách lịch sử, revert commit code/tests trước rồi revert commit ledger docs. Không cần data/schema rollback vì không có migration hoặc thay đổi persistence contract. |
+
+Review hai trục đã chạy sau GREEN. Các finding về audit fail-open, raw error
+leakage, response cleanup, composition placement, citation ownership và test
+seam đã được sửa; targeted suite và full suite chạy lại sau tất cả sửa đổi.

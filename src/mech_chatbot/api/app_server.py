@@ -28,6 +28,22 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from mech_chatbot.application.chat_turn import (
+    ChatActor,
+    ChatCitation,
+    ChatDelta,
+    ChatDone,
+    ChatError,
+    ChatThinking,
+    ChatTurnCommand,
+    ChatWarning,
+)
+from mech_chatbot.application.chat_citations import (
+    build_citation_list,
+    citation_ref_text,
+    filter_citations_by_answer,
+    resolve_chat_citations,
+)
 from mech_chatbot.api import app_security
 from mech_chatbot.api.file_access import (
     LEVEL_ORDER,
@@ -42,6 +58,8 @@ from mech_chatbot.api.file_access import (
 from mech_chatbot.auth.core import authenticate_user, load_user_profile, update_user_preferred_language
 from mech_chatbot.auth.authorization import role_allows
 from mech_chatbot.config.logging import logger, log_trace
+from mech_chatbot.config.settings import settings as application_settings
+from mech_chatbot.composition.app_runtime import build_default_app_runtime
 from mech_chatbot.db.engine import engine
 from mech_chatbot.llm.external_ai import invalidate_external_ai_provider_profiles
 from mech_chatbot.services import (
@@ -653,41 +671,7 @@ def _assert_any_role(profile: dict[str, Any], *roles: str) -> None:
 
 
 def _citation_list(retrieved_docs: list[Any]) -> list[dict[str, Any]]:
-    seen: set[tuple[int, int]] = set()
-    citations: list[dict[str, Any]] = []
-    for item in retrieved_docs:
-        if not isinstance(item, dict):
-            continue
-        doc_id = _safe_int(item.get("doc_id"))
-        page_no = _safe_int(item.get("trang") or item.get("trang_so"))
-        if doc_id is None or page_no is None:
-            continue
-        key = (doc_id, page_no)
-        if key in seen:
-            continue
-        seen.add(key)
-        has_vision = page_has_vision(doc_id, page_no)
-        citation = {
-            "doc_id": doc_id,
-            "page_no": page_no,
-            "file_name": item.get("file_goc"),
-            "score": item.get("score"),
-            "source_id": item.get("source_id") or f"D{doc_id}P{page_no}",
-            "has_vision": has_vision,
-            "page_url": (
-                f"/api/files/documents/{doc_id}/pages/{page_no}"
-                if has_vision
-                else None
-            ),
-            "original_url": f"/api/files/documents/{doc_id}/original",
-        }
-        version_no = item.get("version_no")
-        if version_no is None:
-            version_no = item.get("version")
-        if version_no not in (None, ""):
-            citation["version_no"] = version_no
-        citations.append(citation)
-    return citations
+    return build_citation_list(retrieved_docs, page_has_vision=page_has_vision)
 
 
 def _filter_citations_by_answer(
@@ -702,41 +686,11 @@ def _filter_citations_by_answer(
     filename or DocID alone can never silently resolve to the wrong page.
     Filename/DocID matching remains only for explicitly legacy history rows.
     """
-    text_answer = str(answer or "").lower().replace("\\", "/")
-    cited_source_ids = {
-        value.upper() for value in re.findall(
-            r"(?:source[_ ]?id\s*[:#]?\s*|\[SRC:)(D\d+P\d+)",
-            text_answer,
-            flags=re.IGNORECASE,
-        )
-    }
-    if cited_source_ids:
-        return [
-            citation
-            for citation in citations or []
-            if str(citation.get("source_id") or "").upper() in cited_source_ids
-        ]
-    if not allow_legacy_fallback:
-        return []
-
-    cited_doc_ids = {
-        int(value) for value in re.findall(r"\bdocid\s*[:#]?\s*(\d+)\b", text_answer, flags=re.IGNORECASE)
-    }
-    matched = []
-    for citation in citations or []:
-        file_name = str(citation.get("file_name") or "").strip().lower().replace("\\", "/")
-        base_name = os.path.basename(file_name)
-        doc_id = _safe_int(citation.get("doc_id"))
-        source_id = str(citation.get("source_id") or "").upper()
-        if ((base_name and base_name in text_answer)
-                or (file_name and file_name in text_answer)
-                or (doc_id is not None and doc_id in cited_doc_ids)):
-            matched.append(citation)
-    if matched:
-        return matched
-    # Fail closed: an unattributed answer must not display unrelated retrieval
-    # candidates as if they supported it.
-    return []
+    return filter_citations_by_answer(
+        citations,
+        answer,
+        allow_legacy_fallback=allow_legacy_fallback,
+    )
 
 
 def _answer_body_without_reference_appendix(value: str) -> str:
@@ -757,14 +711,7 @@ def _answer_body_without_reference_appendix(value: str) -> str:
 
 
 def _citation_ref_text(citations: list[dict[str, Any]]) -> str:
-    if not citations:
-        return ""
-    lines = []
-    for citation in citations:
-        name = citation.get("file_name") or f"Doc {citation.get('doc_id')}"
-        page = citation.get("page_no") or "?"
-        lines.append(f"- **{name}** (Trang {page})")
-    return "\n\n---\n**Nguồn tham chiếu:**\n" + "\n".join(lines)
+    return citation_ref_text(citations)
 
 
 def _chat_image_id_from_path(raw_path: Any) -> str | None:
@@ -1015,208 +962,91 @@ def upload_chat_image(
     }
 
 
+def _chat_actor(profile: dict[str, Any]) -> ChatActor:
+    return ChatActor(
+        user_id=int(profile["user_id"]),
+        username=str(profile.get("username") or ""),
+        roles=frozenset(str(role) for role in (profile.get("roles") or [])),
+        department=(
+            str(profile["department"])
+            if profile.get("department") is not None
+            else None
+        ),
+        allowed_departments=frozenset(
+            str(department)
+            for department in (profile.get("allowed_departments") or [])
+        ),
+        allowed_sites=frozenset(
+            str(site) for site in (profile.get("allowed_sites") or [])
+        ),
+        max_security_level=str(profile.get("max_security_level") or "public"),
+        response_language=str(profile.get("preferred_language") or "vi"),
+    )
+
+
+def _chat_event_sse(event: Any) -> str:
+    if isinstance(event, ChatThinking):
+        return _sse("thinking", {"message": event.message})
+    if isinstance(event, ChatDelta):
+        return _sse("delta", {"text": event.text})
+    if isinstance(event, ChatCitation):
+        return _sse("citation", dict(event.citation))
+    if isinstance(event, ChatWarning):
+        payload = {"message": event.message}
+        if event.detail is not None:
+            payload["detail"] = event.detail
+        return _sse("warning", payload)
+    if isinstance(event, ChatError):
+        if isinstance(event.detail, dict):
+            payload = dict(event.detail)
+            payload.setdefault("message", event.message)
+        else:
+            payload = {"message": event.message}
+            if event.detail is not None:
+                payload["detail"] = event.detail
+        if event.http_status is not None:
+            payload.setdefault("status", event.http_status)
+        if event.elapsed_ms is not None:
+            payload.setdefault("elapsed_ms", event.elapsed_ms)
+        return _sse("error", payload)
+    if isinstance(event, ChatDone):
+        return _sse(
+            "done",
+            {
+                "chat_id": event.chat_id,
+                "ref_text": event.ref_text,
+                "citations": event.citations,
+                "new_part_ids": event.new_part_ids,
+                "conversation_context": event.conversation_context,
+                "elapsed_ms": event.elapsed_ms,
+            },
+        )
+    raise TypeError(f"Unsupported chat event: {type(event).__name__}")
+
+
 @chat_router.post("/message")
-def chat_message(req: ChatMessageRequest, profile: dict[str, Any] = Depends(csrf_profile)):
+def chat_message(
+    request: Request,
+    req: ChatMessageRequest,
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
     image_path = _verify_image_upload(profile, req.image_token)
-    lang = profile.get("preferred_language") or "vi"
+    command = ChatTurnCommand(
+        request_id=f"{req.session_id}|{uuid4().hex}",
+        session_id=req.session_id,
+        question=req.question.strip(),
+        image_path=Path(image_path) if image_path else None,
+        history=tuple(dict(item) for item in req.chat_history),
+        current_part_ids=tuple(req.current_part_ids),
+        conversation_context=(
+            dict(req.conversation_context) if req.conversation_context else None
+        ),
+    )
+    runner = request.app.state.runtime.chat_turn_runner
 
     def generate():
-        yield _sse("thinking", {"message": "Đang suy nghĩ"})
-        rag_payload = {
-            "user_id": profile.get("user_id"),
-            "username": profile.get("username"),
-            "user_question": req.question.strip(),
-            "image_path": image_path,
-            "chat_history": req.chat_history,
-            "current_part_ids": req.current_part_ids,
-            "response_language": lang,
-            "conversation_context": req.conversation_context,
-        }
-        try:
-            pilot_route = _pilot_route(
-                profile, request_id=f"{req.session_id}|{uuid4().hex}"
-            )
-        except ValueError as exc:
-            logger.error("CRAG pilot configuration invalid: %s", exc)
-            yield _sse("error", {"message": "CRAG pilot configuration is invalid"})
-            return
-        rag_base_url = (
-            pilot_route.deployment_url if pilot_route is not None else _rag_base_url()
-        )
-        try:
-            answer_parts = []
-            stream_metadata = {}
-            stream_done = None
-            streamed_citations = []
-            with requests.post(
-                f"{rag_base_url}/chat/stream",
-                headers=_rag_headers(),
-                json=rag_payload,
-                timeout=(10, int(os.getenv("APP_RAG_CHAT_TIMEOUT_SECONDS", "300"))),
-                stream=True,
-            ) as resp:
-                if not resp.ok:
-                    if pilot_route is not None:
-                        _schedule_pilot_replay(
-                            pilot_route,
-                            rag_payload,
-                            _pilot_outcome("", {}, provider_error=True),
-                            pilot_route.matched_pair_id,
-                            profile,
-                        )
-                    yield _sse(
-                        "error",
-                        {
-                            "message": "RAG server busy" if resp.status_code == 503 else f"RAG server error HTTP {resp.status_code}",
-                            "detail": resp.text,
-                            "status": resp.status_code,
-                        },
-                    )
-                    return
-                for event, payload in _iter_sse_events(resp):
-                    if event == "metadata" and isinstance(payload, dict):
-                        stream_metadata = payload
-                    elif event in {"token", "delta"}:
-                        token = str((payload or {}).get("text") or "")
-                        answer_parts.append(token)
-                        # Browser builds deployed before the v3 patch only
-                        # understand the legacy `delta` event. Keep the
-                        # internal RAG contract on `token`, but translate it at
-                        # the browser-facing compatibility boundary so an old
-                        # web-ui/dist does not silently drop the answer text.
-                        yield _sse("delta", {"text": token})
-                    elif event == "citation":
-                        # Internal RAG may provide candidate metadata early;
-                        # hold it until final-answer attribution is resolved.
-                        streamed_citations.append(payload or {})
-                    elif event == "error":
-                        if pilot_route is not None:
-                            _schedule_pilot_replay(
-                                pilot_route,
-                                rag_payload,
-                                _pilot_outcome(
-                                    "",
-                                    stream_metadata.get("debug_info")
-                                    if isinstance(stream_metadata, dict)
-                                    and isinstance(
-                                        stream_metadata.get("debug_info"), dict
-                                    )
-                                    else {},
-                                    provider_error=True,
-                                ),
-                                str(
-                                    (payload or {}).get("trace_id")
-                                    or pilot_route.matched_pair_id
-                                ),
-                                profile,
-                            )
-                        yield _sse("error", payload)
-                        return
-                    elif event == "done":
-                        stream_done = payload
-
-            if stream_done is None:
-                yield _sse("error", {"message": "RAG stream ended without a done event"})
-                return
-
-            answer = "".join(answer_parts)
-            ref_text = stream_metadata.get("ref_text") or ""
-            ref_images = stream_metadata.get("ref_images") or []
-            debug = stream_metadata.get("debug_info") or {}
-            retrieved_docs = debug.get("retrieved_docs") if isinstance(debug, dict) else []
-            if not isinstance(retrieved_docs, list):
-                retrieved_docs = []
-            citation_docs = debug.get("citation_docs") if isinstance(debug, dict) else []
-            if not isinstance(citation_docs, list):
-                citation_docs = []
-            citations = _citation_list(citation_docs) or streamed_citations
-            citations = _filter_citations_by_answer(citations, answer)
-            # Keep the expandable text source list consistent with the visual
-            # citation cards; do not expose unrelated retrieval candidates.
-            ref_text = _citation_ref_text(citations)
-            if pilot_route is not None:
-                _schedule_pilot_replay(
-                    pilot_route,
-                    rag_payload,
-                    _pilot_outcome(answer, debug),
-                    str(stream_done.get("trace_id") or pilot_route.matched_pair_id),
-                    profile,
-                )
-            for citation in citations:
-                yield _sse("citation", citation)
-
-            chat_id = None
-            try:
-                chat_id = save_chat_history(
-                    session_id=req.session_id,
-                    user_msg=req.question.strip(),
-                    bot_msg=answer + ref_text,
-                    image_path=image_path,
-                    ref_images=ref_images,
-                    username=profile.get("username"),
-                )
-                # Persist all document evidence independently of the small
-                # answer-attributed citation set.  History replay will fail
-                # closed if this manifest cannot later be re-authorized.
-                if chat_id:
-                    save_answer_evidence(chat_id, retrieved_docs)
-                if chat_id and citations:
-                    # Persist only final, answer-attributed sources. Historical
-                    # views must reconstruct the exact same cards, not every
-                    # retrieval candidate considered during generation.
-                    persisted_sources = [
-                        {
-                            "doc_id": citation.get("doc_id"),
-                            "file_goc": citation.get("file_name"),
-                            "version_no": citation.get("version_no"),
-                            "trang": citation.get("page_no"),
-                            "score": citation.get("score"),
-                            "source_id": citation.get("source_id"),
-                        }
-                        for citation in citations
-                    ]
-                    save_answer_sources(chat_id, persisted_sources)
-                write_audit_log(
-                    username=profile.get("username"),
-                    action="chat_query",
-                    entity_type="LichSuChat",
-                    entity_id=chat_id,
-                    details={"prompt": req.question.strip(), "session_id": req.session_id},
-                )
-                confidential = [
-                    d for d in retrieved_docs
-                    if isinstance(d, dict) and normalize_security_level(d.get("security_level")) == "confidential"
-                ]
-                if confidential:
-                    write_audit_log(
-                        username=profile.get("username"),
-                        action="read_confidential",
-                        entity_type="LichSuChat",
-                        entity_id=chat_id,
-                        details={
-                            "session_id": req.session_id,
-                            "prompt": req.question.strip(),
-                            "so_tai_lieu_mat": len(confidential),
-                        },
-                    )
-            except Exception as exc:
-                logger.error("Could not persist chat turn: %s", exc, exc_info=True)
-                yield _sse("warning", {"message": "Không lưu được lịch sử chat", "detail": str(exc)})
-
-            yield _sse(
-                "done",
-                {
-                    "chat_id": chat_id,
-                    "ref_text": ref_text,
-                    "citations": citations,
-                    "new_part_ids": stream_metadata.get("new_part_ids") or [],
-                    "conversation_context": debug.get("conversation_context") if isinstance(debug, dict) else None,
-                    "elapsed_ms": stream_done.get("elapsed_ms") if isinstance(stream_done, dict) else None,
-                },
-            )
-        except Exception as exc:
-            logger.error("chat_message failed: %s", exc, exc_info=True)
-            yield _sse("error", {"message": str(exc)})
+        for event in runner.stream(command, _chat_actor(profile)):
+            yield _chat_event_sse(event)
 
     return StreamingResponse(
         generate(),
@@ -2699,6 +2529,74 @@ def _review_community_summary_endpoint(
         user_id=profile.get("user_id"),
     )
     return result
+
+
+def _resolve_chat_citations(
+    citation_docs: Any,
+    streamed_candidates: Any,
+    answer: str,
+) -> tuple[tuple[dict[str, Any], ...], str]:
+    return resolve_chat_citations(
+        citation_docs,
+        streamed_candidates,
+        answer,
+        page_has_vision=page_has_vision,
+    )
+
+
+def _chat_actor_profile(actor: ChatActor) -> dict[str, Any]:
+    return {
+        "user_id": actor.user_id,
+        "username": actor.username,
+        "department": actor.department,
+        "roles": sorted(actor.roles),
+        "allowed_departments": sorted(actor.allowed_departments),
+        "allowed_sites": sorted(actor.allowed_sites),
+        "max_security_level": actor.max_security_level,
+        "preferred_language": actor.response_language,
+    }
+
+
+def _build_default_app_runtime():
+    from mech_chatbot.evaluation.crag_pilot import (
+        assign_pilot_route,
+        load_pilot_config,
+    )
+
+    return build_default_app_runtime(
+        application_settings,
+        post=lambda *args, **kwargs: requests.post(*args, **kwargs),
+        base_url=lambda: _rag_base_url(),
+        headers=lambda: _rag_headers(),
+        timeout=lambda: (
+            10,
+            int(os.getenv("APP_RAG_CHAT_TIMEOUT_SECONDS", "300")),
+        ),
+        save_chat_history=lambda **kwargs: save_chat_history(**kwargs),
+        save_answer_evidence=lambda *args: save_answer_evidence(*args),
+        save_answer_sources=lambda *args: save_answer_sources(*args),
+        write_audit_log=lambda **kwargs: write_audit_log(**kwargs),
+        load_pilot_config=load_pilot_config,
+        assign_pilot_route=assign_pilot_route,
+        pilot_outcome=lambda answer, debug, **kwargs: _pilot_outcome(
+            answer,
+            debug,
+            **kwargs,
+        ),
+        schedule_pilot_replay=lambda route, payload, outcome, trace_id, actor: (
+            _schedule_pilot_replay(
+                route,
+                payload,
+                outcome,
+                trace_id,
+                _chat_actor_profile(actor),
+            )
+        ),
+        citation_resolver=_resolve_chat_citations,
+    )
+
+
+app.state.runtime = _build_default_app_runtime()
 
 
 @data_router.post("/admin/graph/community-summaries/{summary_id}/approve")
