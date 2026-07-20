@@ -993,6 +993,44 @@ Known issues không được đóng băng thành contract:
   shared test helper nếu chứng minh không làm mất fidelity hoặc che boundary
   mismatch. Không xóa suite chỉ để giảm số dòng.
 
+#### Coverage hardening Wave 3
+
+Wave 3 thêm 197 test behavior/contract ở `ui_queries`, document/chat,
+access/document-pages, RAG context/intent, PDF ingestion và `app_server`. Không
+sửa production. Các test mới pass cùng nhau; full suite tuần tự pass với 22
+skip đã biết.
+
+Test HTTP/SSE, RBAC, repository public result và ingestion public scenario là
+test giữ lâu dài. Test gọi `_get_or_create_doc`, `_reingest_snapshots`, table
+name/SQL row order và orchestration helper hiện tại là characterization tạm;
+phải xóa theo mapping khi repository/runner port mới bảo vệ cùng behavior.
+
+| Test cũ đã xóa | Replacement mạnh hơn | Contract |
+|---|---|---|
+| `test_common_metadata_context.py::test_common_metadata_context_renders_title_without_key_error` | `test_context_builders_contract.py::test_common_metadata_renders_all_supported_fields_and_expired_status_warning` và `::test_common_metadata_warns_for_past_expiry_but_tolerates_unparseable_dates` | Cùng public seam: test đầu khóa title/doc-number và toàn bộ supported fields; test thứ hai dùng metadata sparse để chứng minh optional field thiếu không gây `KeyError`. Full coverage không giảm vì cả hai replacement chạy trong cùng suite. |
+
+Review đã loại các assertion/case có thể đóng băng raw upstream error,
+malformed approval, unaudited privilege mutation, clearance fallback elevated
+và snapshot-then-delete khi snapshot đọc lỗi. Các behavior production tương
+ứng được giữ thành blocker, không được diễn giải là contract đã chấp nhận:
+
+- bulk publication và upstream SSE có thể trả chi tiết lỗi nội bộ;
+- reset document children có thể tiếp tục xóa sau khi một child snapshot đọc
+  lỗi, làm rollback thiếu dữ liệu;
+- access repository có thể trả raw DB error; wrapper HTTP có nguy cơ báo outer
+  success khi inner result lỗi;
+- malformed access request có thể được approve với `applied=None`; privilege
+  mutation có thể thành công dù audit persistence lỗi;
+- `get_user_clearance()` fallback `internal` khi DB outage thay vì least
+  privilege;
+- một số document lifecycle write nuốt lỗi và trả `None`, caller không phân
+  biệt success/no-op/failure; `_get_or_create_doc` là exported legacy seam nhưng
+  mang tên private.
+
+Coverage sau review Wave 3: 12.274/16.808 statement = **73,024750% line** và
+3.338/5.120 branch = **65,195312% branch**. Checker 80/80 vẫn exit `1`; còn
+thiếu 1.173 statement và 758 branch. Phase 1 tiếp tục bị chặn.
+
 Điều kiện gỡ blocker trước Phase 1: bổ sung characterization test để toàn bộ
 `mech_chatbot` đạt tối thiểu 80% line và branch như kế hoạch hiện tại, hoặc có
 quyết định sửa chính sách gate thành coverage 80% cho package refactor-owned
