@@ -169,43 +169,11 @@ def _canonicalize_openapi(
     """Canonicalize values without mistaking OpenAPI identifiers for secrets."""
 
     if isinstance(value, Mapping):
-        result: dict[str, Any] = {}
-        for raw_key, item in value.items():
-            if not isinstance(raw_key, str):
-                raise TypeError("OpenAPI mapping keys must be strings")
-            key = raw_key
-            if context == "paths":
-                result[key] = _canonicalize_openapi(item)
-            elif context == "properties":
-                result[key] = _canonicalize_openapi(
-                    item,
-                    secret_property=_is_sensitive_openapi_name(key),
-                )
-            elif context == "example" and _is_sensitive_openapi_name(key):
-                result[key] = REDACTED
-            elif key == "paths":
-                result[key] = _canonicalize_openapi(item, context="paths")
-            elif key == "properties":
-                result[key] = _canonicalize_openapi(item, context="properties")
-            elif secret_property and key in {"default", "example", "examples"}:
-                result[key] = REDACTED
-            elif key in {"example", "examples"}:
-                result[key] = _canonicalize_openapi(item, context="example")
-            elif key.casefold().startswith("x-") and _is_sensitive_openapi_name(key):
-                result[key] = REDACTED
-            elif isinstance(item, (Mapping, list, tuple)):
-                result[key] = _canonicalize_openapi(
-                    item,
-                    secret_property=secret_property,
-                )
-            else:
-                keyed = canonicalize_evidence({key: item})[key]
-                result[key] = (
-                    canonicalize_evidence({"value": item})["value"]
-                    if keyed == REDACTED
-                    else keyed
-                )
-        return result
+        return _canonicalize_openapi_mapping(
+            value,
+            context=context,
+            secret_property=secret_property,
+        )
     if isinstance(value, (list, tuple)):
         return tuple(
             _canonicalize_openapi(
@@ -216,6 +184,45 @@ def _canonicalize_openapi(
             for item in value
         )
     return canonicalize_evidence({"value": value})["value"]
+
+
+def _canonicalize_openapi_mapping(
+    value: Mapping[str, Any],
+    *,
+    context: str,
+    secret_property: bool,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise TypeError("OpenAPI mapping keys must be strings")
+        if context == "paths":
+            result[key] = _canonicalize_openapi(item)
+        elif context == "properties":
+            result[key] = _canonicalize_openapi(
+                item,
+                secret_property=_is_sensitive_openapi_name(key),
+            )
+        elif context == "example" and _is_sensitive_openapi_name(key):
+            result[key] = REDACTED
+        elif key in {"paths", "properties"}:
+            result[key] = _canonicalize_openapi(item, context=key)
+        elif secret_property and key in {"default", "example", "examples"}:
+            result[key] = REDACTED
+        elif key in {"example", "examples"}:
+            result[key] = _canonicalize_openapi(item, context="example")
+        elif key.casefold().startswith("x-") and _is_sensitive_openapi_name(key):
+            result[key] = REDACTED
+        elif isinstance(item, (Mapping, list, tuple)):
+            result[key] = _canonicalize_openapi(item, secret_property=secret_property)
+        else:
+            keyed = canonicalize_evidence({key: item})[key]
+            result[key] = (
+                canonicalize_evidence({"value": item})["value"]
+                if keyed == REDACTED
+                else keyed
+            )
+    return result
 
 
 def _write_openapi_json(path: Path, value: Any) -> bytes:
@@ -236,7 +243,7 @@ def _write_jsonl(path: Path, values: Sequence[Mapping[str, Any]]) -> bytes:
     return payload
 
 
-def _validate_provenance(provenance: Mapping[str, Any]) -> None:
+def _validate_provenance_keys(provenance: Mapping[str, Any]) -> None:
     supplied = frozenset(provenance)
     missing = sorted(_PROVENANCE_FIELDS - supplied)
     unknown = sorted(supplied - _PROVENANCE_FIELDS)
@@ -244,6 +251,9 @@ def _validate_provenance(provenance: Mapping[str, Any]) -> None:
         raise ValueError(f"missing provenance fields: {', '.join(missing)}")
     if unknown:
         raise ValueError(f"unknown provenance fields: {', '.join(unknown)}")
+
+
+def _validate_provenance_types(provenance: Mapping[str, Any]) -> None:
     for field in ("settings", "feature_flags", "data_snapshot", "provider_configuration"):
         if not isinstance(provenance[field], Mapping):
             raise ValueError(f"{field} must be a mapping")
@@ -267,7 +277,10 @@ def _validate_provenance(provenance: Mapping[str, Any]) -> None:
     concurrency = provenance["concurrency"]
     if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
         raise ValueError("concurrency must be a positive integer")
-    pytest_baseline = provenance["pytest_baseline"]
+
+
+def _validate_pytest_baseline(value: Any) -> None:
+    pytest_baseline = value
     if not isinstance(pytest_baseline, Mapping):
         raise ValueError("pytest_baseline must be a mapping")
     supplied_pytest = frozenset(pytest_baseline)
@@ -288,6 +301,12 @@ def _validate_provenance(provenance: Mapping[str, Any]) -> None:
         count = pytest_baseline[field]
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
             raise ValueError(f"pytest_baseline.{field} must be a non-negative integer")
+
+
+def _validate_provenance(provenance: Mapping[str, Any]) -> None:
+    _validate_provenance_keys(provenance)
+    _validate_provenance_types(provenance)
+    _validate_pytest_baseline(provenance["pytest_baseline"])
 
 
 def _render_pytest_baseline(value: Mapping[str, Any]) -> bytes:

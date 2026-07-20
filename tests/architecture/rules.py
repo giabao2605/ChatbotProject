@@ -23,6 +23,13 @@ class ArchitectureViolation:
     dependency: str
 
 
+@dataclass(frozen=True, slots=True)
+class _ImportRule:
+    name: str
+    blocked_prefixes: tuple[str, ...]
+    allowed_prefixes: tuple[str, ...] = ()
+
+
 _API_DATA_PREFIXES = (
     "sqlalchemy",
     "mech_chatbot.db.engine",
@@ -150,6 +157,136 @@ def _scan_service_exports(relative: Path, tree: ast.Module) -> list[Architecture
     return findings
 
 
+def _import_rules_for_package(package: str) -> tuple[_ImportRule, ...]:
+    rules: list[_ImportRule] = []
+    if package in _CORE_PACKAGES:
+        rules.append(_ImportRule("core_ui_dependency", ("streamlit", "mech_chatbot.ui")))
+    if package == "services":
+        rules.append(
+            _ImportRule("service_ui_dependency", ("streamlit", "mech_chatbot.ui"))
+        )
+    if package == "api":
+        rules.append(_ImportRule("api_direct_data_access", _API_DATA_PREFIXES))
+    if package == "application":
+        rules.append(
+            _ImportRule("application_external_dependency", _APPLICATION_EXTERNAL_PREFIXES)
+        )
+    if package == "db":
+        rules.append(_ImportRule("db_upward_dependency", _DB_UPWARD_PREFIXES))
+    if package == "rag":
+        rules.append(_ImportRule("rag_evaluation_dependency", ("mech_chatbot.evaluation",)))
+    if package == "evaluation":
+        rules.append(
+            _ImportRule(
+                "evaluation_private_rag_dependency",
+                ("mech_chatbot.rag",),
+                ("mech_chatbot.rag.execution",),
+            )
+        )
+    return tuple(rules)
+
+
+def _scan_import_rules(
+    relative: Path,
+    imports: Iterable[tuple[str, bool]],
+) -> list[ArchitectureViolation]:
+    package = relative.parts[0]
+    rules = _import_rules_for_package(package)
+    findings: list[ArchitectureViolation] = []
+    for dependency, wildcard in imports:
+        for rule in rules:
+            blocked = _matches_prefix(dependency, rule.blocked_prefixes)
+            allowed = _matches_prefix(dependency, rule.allowed_prefixes)
+            if blocked and not allowed:
+                findings.append(
+                    ArchitectureViolation(rule.name, relative.as_posix(), dependency)
+                )
+        if wildcard:
+            findings.append(
+                ArchitectureViolation("wildcard_import", relative.as_posix(), dependency)
+            )
+    return findings
+
+
+def _scan_direct_getenv(relative: Path, tree: ast.Module) -> list[ArchitectureViolation]:
+    if _is_config_or_bootstrap(relative):
+        return []
+    findings = []
+    for node in ast.walk(tree):
+        is_getenv = (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "os"
+            and node.func.attr == "getenv"
+        )
+        if is_getenv:
+            findings.append(
+                ArchitectureViolation("direct_getenv", relative.as_posix(), "os.getenv")
+            )
+    return findings
+
+
+def _scan_api_calls(relative: Path, tree: ast.Module) -> list[ArchitectureViolation]:
+    if relative.parts[0] != "api":
+        return []
+    findings = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _call_name(node) == "text":
+            findings.append(
+                ArchitectureViolation("api_raw_sql", relative.as_posix(), "sqlalchemy.text")
+            )
+        function = node.func
+        if (
+            isinstance(function, ast.Attribute)
+            and isinstance(function.value, ast.Name)
+            and function.value.id == "engine"
+            and function.attr in {"begin", "connect"}
+        ):
+            findings.append(
+                ArchitectureViolation(
+                    "api_engine_access", relative.as_posix(), f"engine.{function.attr}"
+                )
+            )
+    return findings
+
+
+def _scan_import_time_resources(
+    relative: Path,
+    tree: ast.Module,
+) -> list[ArchitectureViolation]:
+    findings = []
+    for node in tree.body:
+        value: ast.AST | None = None
+        if isinstance(node, ast.Assign):
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            value = node.value
+        if isinstance(value, ast.Call) and _call_name(value) in _RESOURCE_FACTORIES:
+            findings.append(
+                ArchitectureViolation(
+                    "import_time_resource", relative.as_posix(), _call_name(value)
+                )
+            )
+    return findings
+
+
+def _scan_python_file(source_root: Path, path: Path) -> list[ArchitectureViolation]:
+    relative = path.relative_to(source_root)
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    imports = _imports(_module_name(source_root, path), tree)
+    return [
+        *_scan_import_rules(relative, imports),
+        *_scan_direct_getenv(relative, tree),
+        *_scan_api_calls(relative, tree),
+        *_scan_import_time_resources(relative, tree),
+        *_scan_service_exports(relative, tree),
+    ]
+
+
 def scan_repository(
     source_root: Path,
     *,
@@ -165,113 +302,11 @@ def scan_repository(
             "Required architecture packages do not exist: " + ", ".join(sorted(missing))
         )
 
-    findings: list[ArchitectureViolation] = []
-    for path in _iter_python_files(source_root):
-        relative = path.relative_to(source_root)
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
-        module_name = _module_name(source_root, path)
-        imports = tuple(_imports(module_name, tree))
-
-        for dependency, wildcard in imports:
-            if relative.parts[0] in _CORE_PACKAGES and _matches_prefix(
-                dependency, ("streamlit", "mech_chatbot.ui")
-            ):
-                findings.append(
-                    ArchitectureViolation("core_ui_dependency", relative.as_posix(), dependency)
-                )
-            if relative.parts[0] == "services" and _matches_prefix(
-                dependency, ("streamlit", "mech_chatbot.ui")
-            ):
-                findings.append(
-                    ArchitectureViolation("service_ui_dependency", relative.as_posix(), dependency)
-                )
-            if relative.parts[0] == "api" and _matches_prefix(dependency, _API_DATA_PREFIXES):
-                findings.append(
-                    ArchitectureViolation("api_direct_data_access", relative.as_posix(), dependency)
-                )
-            if relative.parts[0] == "application" and _matches_prefix(
-                dependency, _APPLICATION_EXTERNAL_PREFIXES
-            ):
-                findings.append(
-                    ArchitectureViolation(
-                        "application_external_dependency", relative.as_posix(), dependency
-                    )
-                )
-            if relative.parts[0] == "db" and _matches_prefix(dependency, _DB_UPWARD_PREFIXES):
-                findings.append(
-                    ArchitectureViolation("db_upward_dependency", relative.as_posix(), dependency)
-                )
-            if relative.parts[0] == "rag" and _matches_prefix(
-                dependency, ("mech_chatbot.evaluation",)
-            ):
-                findings.append(
-                        ArchitectureViolation("rag_evaluation_dependency", relative.as_posix(), dependency)
-                )
-            if (
-                relative.parts[0] == "evaluation"
-                and _matches_prefix(dependency, ("mech_chatbot.rag",))
-                and not _matches_prefix(dependency, ("mech_chatbot.rag.execution",))
-            ):
-                findings.append(
-                    ArchitectureViolation(
-                        "evaluation_private_rag_dependency", relative.as_posix(), dependency
-                    )
-                )
-            if wildcard:
-                findings.append(
-                    ArchitectureViolation("wildcard_import", relative.as_posix(), dependency)
-                )
-
-        if not _is_config_or_bootstrap(relative):
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == "os"
-                    and node.func.attr == "getenv"
-                ):
-                    findings.append(
-                        ArchitectureViolation("direct_getenv", relative.as_posix(), "os.getenv")
-                    )
-
-        if relative.parts[0] == "api":
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
-                if _call_name(node) == "text":
-                    findings.append(
-                        ArchitectureViolation("api_raw_sql", relative.as_posix(), "sqlalchemy.text")
-                    )
-                if (
-                    isinstance(node.func, ast.Attribute)
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == "engine"
-                    and node.func.attr in {"begin", "connect"}
-                ):
-                    findings.append(
-                        ArchitectureViolation(
-                            "api_engine_access", relative.as_posix(), f"engine.{node.func.attr}"
-                        )
-                    )
-
-        for node in tree.body:
-            value: ast.AST | None = None
-            if isinstance(node, ast.Assign):
-                value = node.value
-            elif isinstance(node, ast.AnnAssign):
-                value = node.value
-            if isinstance(value, ast.Call) and _call_name(value) in _RESOURCE_FACTORIES:
-                findings.append(
-                    ArchitectureViolation(
-                        "import_time_resource", relative.as_posix(), _call_name(value)
-                    )
-                )
-
-        findings.extend(_scan_service_exports(relative, tree))
-
-    return sorted(findings)
+    return sorted(
+        finding
+        for path in _iter_python_files(source_root)
+        for finding in _scan_python_file(source_root, path)
+    )
 
 
 def load_allowlist(path: Path) -> list[ArchitectureViolation]:

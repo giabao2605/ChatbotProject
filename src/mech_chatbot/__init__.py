@@ -7,12 +7,20 @@
 # Dat o dau package `mech_chatbot` => chay TRUOC bat cu submodule nao
 # (worker ingest, rag worker, api server, app Streamlit...) nen bao ve toan bo
 # cac duong vao. Import that bai vi dependency tuy chon khong co => bo qua.
-try:
-    import pyarrow as _pyarrow  # noqa: F401
-except Exception:
-    pass
+import importlib
 
-try:
-    import onnxruntime as _onnxruntime  # noqa: F401
-except Exception:
-    pass
+
+def _preload_optional_native(module_name: str) -> bool:
+    """Preload an optional native module and fail fast when its install is broken."""
+
+    try:
+        importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == module_name:
+            return False
+        raise
+    return True
+
+
+_preload_optional_native("pyarrow")
+_preload_optional_native("onnxruntime")
