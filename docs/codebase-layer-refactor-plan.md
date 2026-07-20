@@ -845,12 +845,12 @@ gate tại mục 4.
 | Baseline | SHA `c9a24ac03a022b1f3652dcf62696a57587dd962f`; branch nguồn `codex/p1-retrieval-intelligence`; branch thực hiện `codex/codebase-layer-refactor`; trước implementation chỉ có `docs/codebase-layer-refactor-plan.md` chưa được track. |
 | Contract được bảo vệ | Default test collection; dependency một chiều; HTTP/OpenAPI; thứ tự SSE success/busy; upload/review response; typed `RagExecutor`; native import health. Không thay đổi RAG algorithm, feature flag hoặc rollout decision. |
 | RED | Architecture test đỏ khi chưa có allowlist; native sentinel bắt `Windows fatal exception: access violation` dù subprocess trả `0`; coverage/evidence/capture module đỏ vì chưa tồn tại; regression OpenAPI đỏ khi sanitizer làm mất password route/schema. |
-| GREEN | Commit `3b663f423e90b9a5dc3aa1df9900d86e5cc1bf7d` thêm architecture ratchet, native sentinel/fix, coverage checker, canonical evidence và sanitized baseline artifacts. Commit review-fix `d6076b2` làm native preload fail-fast khi installation hỏng và tách các scanner/validator dài thành helper nhỏ. Commit `55b7149` thay SSE fixture tĩnh bằng transcript quan sát qua endpoint thật với system-boundary fakes. |
-| Validation | 64 Phase-0 gate tests pass; fast suite 1.057 pass, 1 SQL integration skip, 22 integration/eval deselected, 1 warning; default collect thấy 5 dependency tests và 3 layering tests; OpenAPI có 116 app path và 8 RAG path; success/busy SSE được phát lại qua `/api/chat/message`; `git diff --check` pass; không còn fatal native diagnostic. |
+| GREEN | Commit `3b663f423e90b9a5dc3aa1df9900d86e5cc1bf7d` thêm architecture ratchet, native sentinel/fix, coverage checker, canonical evidence và sanitized baseline artifacts. Commit review-fix `d6076b2` làm native preload fail-fast khi installation hỏng và tách các scanner/validator dài thành helper nhỏ. Commit `55b7149` thay SSE fixture tĩnh bằng transcript quan sát qua endpoint thật với system-boundary fakes; `e67cc89` tách contract checks thành test nhỏ dưới 50 dòng. |
+| Validation | 67 Phase-0 gate tests pass; fast suite 1.060 pass, 1 SQL integration skip, 22 integration/eval deselected, 1 warning; default collect thấy 5 dependency tests và 3 layering tests; OpenAPI có 116 app path và 8 RAG path; success/busy SSE được phát lại qua `/api/chat/message`; `git diff --check` pass; không còn fatal native diagnostic. |
 | Coverage | 8.818/16.808 statement = **52,463113% line**; 2.085/5.120 branch = **40,722656% branch**. `check_coverage.py --min-line 80 --min-branch 80` trả exit `1` đúng thiết kế. |
 | Architecture delta | Chưa xóa debt trong Phase 0. Baseline ratchet có 264 identity và 392 occurrence; mọi occurrence tăng thêm hoặc allowance bị stale đều làm test fail. |
 | Known issues | Whole-backend coverage chưa đạt 80%; coverage CI và Vue coverage gate chưa được bật để tránh tạo workflow đỏ cố định; SQL/Qdrant integration chưa được cấu hình; còn `StarletteDeprecationWarning` về `httpx`/`TestClient`; `chat_env` có dependency drift so với lock đã ghi ở baseline. |
-| Rollback | Revert theo thứ tự `git revert 55b7149`, `git revert d6076b2` rồi `git revert 3b663f423e90b9a5dc3aa1df9900d86e5cc1bf7d`; các commit chỉ chứa Phase-0 safety gate/evidence và workaround native import, không chứa Phase-1 application behavior. |
+| Rollback | Behavior/evidence rollback theo thứ tự `git revert e67cc89`, `git revert 55b7149`, `git revert d6076b2` rồi `git revert 3b663f423e90b9a5dc3aa1df9900d86e5cc1bf7d`. Các docs-only commit `714821e`, `bfb922c` và ledger amendment về sau được chủ ý giữ làm audit trail; chúng không thay đổi runtime behavior. |
 
 Review hai trục: ba standards finding đã được sửa trong `d6076b2`. Spec review
 xác nhận không có scope creep; SSE transcript gap đã được đóng trong `55b7149`.
@@ -860,7 +860,7 @@ Phase 0 vẫn thiếu coverage/CI gate và mục này được giữ fail-closed
 Artifact chuẩn:
 
 - `reports/refactor/phase-0/baseline/manifest.json`, SHA-256
-  `de06819c176a2d1416769a0013a72a76d615b399ea2257cf7c32167c26fce648`.
+  `5492469f2a36852fa6454e2a4b6be9aa3cda61e087804504088797badf76e994`.
 - `reports/refactor/phase-0/baseline/openapi-app.json` và
   `openapi-rag.json` là OpenAPI đã canonicalize nhưng giữ nguyên route/schema.
 - `reports/refactor/phase-0/baseline/sse-success.jsonl` và
