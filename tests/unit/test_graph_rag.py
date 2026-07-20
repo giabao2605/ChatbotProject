@@ -262,6 +262,21 @@ def test_graph_traversal_hydrates_reviewed_proposal_source_quote():
     assert "JSON_VALUE(p.EvidenceJson, '$.source_quote')" in source
 
 
+def test_approved_llm_edge_persists_the_proposal_source_quote():
+    source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(
+        encoding="utf-8",
+    )
+    reviewer = source[
+        source.index("def review_graph_proposal"):
+        source.index("def traverse_knowledge_graph")
+    ]
+
+    assert "JSON_VALUE(p.EvidenceJson, '$.source_quote') AS SourceQuote" in reviewer
+    assert "SourceQuote=:source_quote" in reviewer
+    assert "Site, SecurityLevel, SourceQuote, ReviewedBy, ReviewedAt" in reviewer
+    assert "invalid_provenance" in reviewer
+
+
 def test_graph_deterministic_edges_have_a_persisted_provenance_contract():
     migration = Path("database/migrations/V0038__graph_edge_source_evidence.sql").read_text(encoding="utf-8")
     seed_source = Path("scripts/graph/seed_deterministic.py").read_text(encoding="utf-8")

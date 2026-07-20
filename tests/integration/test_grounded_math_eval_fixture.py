@@ -29,10 +29,10 @@ def test_grounded_math_fixture_ingest_preflight_calculate_and_cleanup():
         collect_rag_events,
     )
 
-    generate_fixture(DEFAULT_OUTPUT)
+    generated = generate_fixture(DEFAULT_OUTPUT)
     try:
         result = ingest_fixture(DEFAULT_OUTPUT)
-        assert result["completed"] + result["skipped"] == 3
+        assert result["completed"] + result["skipped"] == generated["documents"]
         cases = load_manifest_files([DEFAULT_OUTPUT / "eval_manifest.jsonl"])
         preflight = run_live_preflight(cases)
         assert preflight["passed"] is True

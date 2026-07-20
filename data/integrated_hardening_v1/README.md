@@ -18,12 +18,18 @@ Offline capability does not authorize provider calls or feature serving. A live
 matrix may start only when `integrated-hardening-readiness-v1` reports
 `ready_for_live_matrix=true` on a clean commit.
 
-`release_decisions.json` is intentionally incomplete. A final row needs an
+`release_decisions.json` remains incomplete until human review is finished;
+Late Interaction is already pinned to `rejected`. A final row needs an
 accepted or rejected decision plus a path, SHA-256 and schema for the matching
 immutable evidence artifact. The metadata composer and final gate fail closed
 when a row is missing or self-declares verification without a valid artifact.
 
-Live integrated evidence uses `integrated-matrix-evidence-v1`: exactly seven
+The preflight publishes `release_matrix.requested_flags` and
+`release_matrix.effective_flags`. Missing decisions and rejected features are
+always effective OFF. A rejected Late Interaction row therefore validates the
+local-reranker fallback instead of re-enabling the rejected encoder.
+
+Live integrated evidence uses `integrated-matrix-evidence-v1`: exactly eight
 rows, each binding baseline/candidate eval, trace, load and aggregated results
 by path, SHA-256 and schema. The final gate fails if any one row regresses.
 

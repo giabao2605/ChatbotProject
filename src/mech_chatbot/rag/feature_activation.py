@@ -1,0 +1,485 @@
+"""Canonical feature flags and fail-closed live activation validation."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+from typing import Mapping
+
+
+FEATURE_FLAGS = (
+    "RAG_CRAG_ENABLED",
+    "RAG_CLAIM_REPAIR_ENABLED",
+    "RAG_GROUNDED_MATH_ENABLED",
+    "RAG_LATE_INTERACTION_ENABLED",
+    "RAG_QUERY_DECOMPOSITION_ENABLED",
+    "RAG_GRAPH_RETRIEVAL_ENABLED",
+    "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
+)
+VERSION_FIELDS = (
+    "RAG_PLANNER_VERSION",
+    "RAG_LATE_INDEX_VERSION",
+    "RAG_GRAPH_SERVING_EPOCH",
+    "RAG_COMMUNITY_SERVING_EPOCH",
+)
+VERSION_DEFAULTS = {
+    "RAG_PLANNER_VERSION": "planner-v1",
+    "RAG_LATE_INDEX_VERSION": "late-v2",
+    "RAG_GRAPH_SERVING_EPOCH": "graph-v1",
+    "RAG_COMMUNITY_SERVING_EPOCH": "community-v1",
+}
+MILESTONE_FLAGS = {
+    "crag": ("RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"),
+    "grounded_math": ("RAG_GROUNDED_MATH_ENABLED",),
+    "late_interaction": ("RAG_LATE_INTERACTION_ENABLED",),
+    "query_decomposition": ("RAG_QUERY_DECOMPOSITION_ENABLED",),
+    "graph_retrieval": ("RAG_GRAPH_RETRIEVAL_ENABLED",),
+    "community_summaries": ("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",),
+}
+FEATURE_MILESTONES = {
+    flag: milestone
+    for milestone, flags in MILESTONE_FLAGS.items()
+    for flag in flags
+}
+ACTIVATION_PROFILES = {
+    "all_off": frozenset(),
+    "crag_claim": frozenset(MILESTONE_FLAGS["crag"]),
+    "grounded_math": frozenset(
+        (*MILESTONE_FLAGS["crag"], *MILESTONE_FLAGS["grounded_math"])
+    ),
+    "query_decomposition": frozenset(
+        (
+            *MILESTONE_FLAGS["crag"],
+            *MILESTONE_FLAGS["grounded_math"],
+            *MILESTONE_FLAGS["query_decomposition"],
+        )
+    ),
+    "graph_retrieval": frozenset(
+        (
+            *MILESTONE_FLAGS["crag"],
+            *MILESTONE_FLAGS["grounded_math"],
+            *MILESTONE_FLAGS["query_decomposition"],
+            *MILESTONE_FLAGS["graph_retrieval"],
+        )
+    ),
+    "community_summaries": frozenset(
+        flag
+        for milestone in (
+            "crag", "grounded_math", "query_decomposition",
+            "graph_retrieval", "community_summaries",
+        )
+        for flag in MILESTONE_FLAGS[milestone]
+    ),
+}
+ACTIVATION_SCOPES = {"evaluation", "controlled_demo", "default_rollout"}
+_TRUTHY = {"1", "true", "yes", "y", "on"}
+_RELEASE_SCHEMAS = {
+    "RAG_CRAG_ENABLED": "crag-production-pilot-v1",
+    "RAG_CLAIM_REPAIR_ENABLED": "crag-production-pilot-v1",
+    "RAG_GROUNDED_MATH_ENABLED": "grounded-math-rollout-run-v1",
+    "RAG_LATE_INTERACTION_ENABLED": "retrieval-intelligence-gate-v1",
+    "RAG_QUERY_DECOMPOSITION_ENABLED": "decomposition-rollout-run-v1",
+    "RAG_GRAPH_RETRIEVAL_ENABLED": "graph-rollout-run-v1",
+    "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "retrieval-intelligence-gate-v1",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ActivationStatus:
+    valid: bool
+    live_authorized: bool
+    scope: str
+    reason: str
+    enabled_flags: tuple[str, ...]
+    profile: str | None = None
+    review_mode: str = "multi_reviewer"
+    fallback_features: tuple[str, ...] = ()
+    decision_source_commit: str | None = None
+    bundle_sha256: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "valid": self.valid,
+            "live_authorized": self.live_authorized,
+            "scope": self.scope,
+            "reason": self.reason,
+            "enabled_flags": list(self.enabled_flags),
+            "profile": self.profile,
+            "review_mode": self.review_mode,
+            "fallback_features": list(self.fallback_features),
+            "decision_source_commit": self.decision_source_commit,
+            "bundle_sha256": self.bundle_sha256,
+        }
+
+
+def feature_flags(environ: Mapping[str, str] | None = None) -> dict[str, bool]:
+    env = os.environ if environ is None else environ
+    return {
+        name: str(env.get(name, "false")).strip().casefold() in _TRUTHY
+        for name in FEATURE_FLAGS
+    }
+
+
+def feature_versions(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    env = os.environ if environ is None else environ
+    return {
+        name: str(env.get(name, default) or default).strip()
+        for name, default in VERSION_DEFAULTS.items()
+    }
+
+
+def profile_environment(profile: str) -> dict[str, str]:
+    if profile not in ACTIVATION_PROFILES:
+        raise ValueError(f"unknown RAG activation profile: {profile}")
+    enabled = ACTIVATION_PROFILES[profile]
+    return {name: str(name in enabled).lower() for name in FEATURE_FLAGS}
+
+
+def current_git_commit(root: str | Path = ".") -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(root),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _resolve_path(value: object, root: Path) -> Path:
+    path = Path(str(value or ""))
+    return path if path.is_absolute() else root / path
+
+
+def _read_json(path: Path) -> tuple[dict, bytes] | tuple[None, None]:
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None, None
+    return (value, raw) if isinstance(value, dict) else (None, None)
+
+
+def _read_reference(reference: object, root: Path) -> dict | None:
+    if not isinstance(reference, dict):
+        return None
+    path = _resolve_path(reference.get("path"), root)
+    value, raw = _read_json(path)
+    if value is None or raw is None:
+        return None
+    if hashlib.sha256(raw).hexdigest() != str(reference.get("sha256") or ""):
+        return None
+    if value.get("schema") != reference.get("schema"):
+        return None
+    return value
+
+
+def _artifact_commit(artifact: dict) -> str:
+    metadata = artifact.get("run_metadata")
+    metadata_commit = metadata.get("commit_sha") if isinstance(metadata, dict) else None
+    return str(
+        artifact.get("git_sha")
+        or artifact.get("source_commit")
+        or artifact.get("commit_sha")
+        or metadata_commit
+        or ""
+    )
+
+
+def _accepted_release_evidence(flag: str, row: object, root: Path, source_commit: str) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if row.get("decision") != "accepted" or row.get("source_commit") != source_commit:
+        return False
+    artifact = _read_reference(row.get("evidence"), root)
+    if artifact is None or artifact.get("schema") != _RELEASE_SCHEMAS[flag]:
+        return False
+    if _artifact_commit(artifact) != source_commit:
+        return False
+    stage = FEATURE_MILESTONES[flag]
+    if artifact.get("schema") == "retrieval-intelligence-gate-v1":
+        if artifact.get("stage") != stage:
+            return False
+    return (
+        artifact.get("passed") is True
+        and artifact.get("production_eligible", True) is True
+        and artifact.get("decision", "accepted") == "accepted"
+    )
+
+
+def _verified_release_evidence(
+    flag: str, row: object, root: Path, source_commit: str,
+) -> bool:
+    if not isinstance(row, dict):
+        return False
+    decision = row.get("decision")
+    if decision not in {"accepted", "rejected"}:
+        return False
+    if row.get("source_commit") != source_commit:
+        return False
+    artifact = _read_reference(row.get("evidence"), root)
+    if artifact is None or artifact.get("schema") != _RELEASE_SCHEMAS[flag]:
+        return False
+    if _artifact_commit(artifact) != source_commit:
+        return False
+    stage = FEATURE_MILESTONES[flag]
+    if artifact.get("schema") == "retrieval-intelligence-gate-v1":
+        if artifact.get("stage") != stage:
+            return False
+    if decision == "accepted":
+        return _accepted_release_evidence(flag, row, root, source_commit)
+    return (
+        artifact.get("passed") is False
+        or artifact.get("production_eligible") is False
+        or artifact.get("decision") == "rejected"
+    )
+
+
+def validate_release_decision_ledger(
+    ledger: object,
+    *,
+    root: str | Path,
+    source_commit: str,
+    expected_enabled: set[str] | frozenset[str] | None = None,
+) -> bool:
+    if not isinstance(ledger, dict):
+        return False
+    rows = ledger.get("decisions")
+    if not (
+        ledger.get("schema") == "integrated-release-decisions-v1"
+        and ledger.get("status") == "complete"
+        and isinstance(rows, dict)
+        and set(rows) == set(FEATURE_FLAGS)
+        and all(
+            _verified_release_evidence(
+                flag, rows.get(flag), Path(root), source_commit,
+            )
+            for flag in FEATURE_FLAGS
+        )
+    ):
+        return False
+    if expected_enabled is None:
+        return True
+    accepted = {
+        flag for flag in FEATURE_FLAGS
+        if rows[flag].get("decision") == "accepted"
+    }
+    return accepted == set(expected_enabled)
+
+
+def _accepted_demo_decision(
+    milestone: str, reference: object, root: Path, source_commit: str,
+) -> bool:
+    decision = _read_reference(reference, root)
+    if decision is None or not all((
+        decision.get("schema") == "milestone-decision-v2",
+        decision.get("milestone") == milestone,
+        decision.get("scope") == "controlled_demo",
+        decision.get("decision") == "accepted",
+        decision.get("source_commit") == source_commit,
+    )):
+        return False
+    evidence = decision.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return False
+    for item in evidence:
+        artifact = _read_reference(item, root)
+        if artifact is None or _artifact_commit(artifact) != source_commit:
+            return False
+    signoff = decision.get("reviewer_signoff")
+    return isinstance(signoff, dict) and bool(
+        str(signoff.get("reviewer") or "").strip()
+        and str(signoff.get("signed_at") or "").strip()
+    )
+
+
+def _status(
+    valid: bool, live_authorized: bool, scope: str, reason: str,
+    enabled: tuple[str, ...], **kwargs,
+) -> ActivationStatus:
+    return ActivationStatus(
+        valid=valid,
+        live_authorized=live_authorized,
+        scope=scope,
+        reason=reason,
+        enabled_flags=enabled,
+        **kwargs,
+    )
+
+
+def activation_status(
+    environ: Mapping[str, str] | None = None,
+    *,
+    root: str | Path = ".",
+    current_commit: str | None = None,
+) -> ActivationStatus:
+    """Validate one process activation without trusting mutable env flags alone."""
+    env = os.environ if environ is None else environ
+    project_root = Path(root)
+    flags = feature_flags(env)
+    enabled = tuple(name for name in FEATURE_FLAGS if flags[name])
+    scope = str(env.get("RAG_ACTIVATION_SCOPE", "default_rollout")).strip().casefold()
+    execution_context = str(env.get("RAG_EXECUTION_CONTEXT", "production")).strip().casefold()
+    if scope not in ACTIVATION_SCOPES:
+        return _status(False, False, scope, "activation_scope_invalid", enabled)
+    if flags["RAG_CRAG_ENABLED"] != flags["RAG_CLAIM_REPAIR_ENABLED"] and scope != "evaluation":
+        return _status(False, False, scope, "crag_claim_repair_must_match", enabled)
+    if scope == "evaluation":
+        if execution_context not in {"evaluation", "test"}:
+            return _status(False, False, scope, "evaluation_scope_requires_non_live_context", enabled)
+        return _status(True, False, scope, "evaluation_override", enabled)
+    if not enabled:
+        return _status(
+            True, True, scope, "all_features_disabled", enabled,
+            profile="all_off",
+        )
+    if flags["RAG_LATE_INTERACTION_ENABLED"]:
+        return _status(False, False, scope, "late_interaction_rejected", enabled)
+    enabled_set = frozenset(enabled)
+    if enabled_set not in set(ACTIVATION_PROFILES.values()):
+        return _status(False, False, scope, "activation_profile_invalid", enabled)
+    profile = next(
+        name for name, profile_flags in ACTIVATION_PROFILES.items()
+        if profile_flags == enabled_set
+    )
+    if (
+        flags["RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"]
+        and not str(env.get("RAG_GRAPH_FINGERPRINT") or "").strip()
+    ):
+        return _status(
+            False, False, scope, "community_graph_fingerprint_missing", enabled
+        )
+
+    bundle_value = str(env.get("RAG_ACTIVATION_BUNDLE_PATH") or "").strip()
+    bundle_digest = str(env.get("RAG_ACTIVATION_BUNDLE_SHA256") or "").strip().lower()
+    if not bundle_value or len(bundle_digest) != 64:
+        return _status(False, False, scope, "activation_bundle_missing", enabled)
+    bundle_path = _resolve_path(bundle_value, project_root)
+    bundle, raw = _read_json(bundle_path)
+    if bundle is None or raw is None:
+        return _status(False, False, scope, "activation_bundle_unreadable", enabled)
+    actual_digest = hashlib.sha256(raw).hexdigest()
+    if actual_digest != bundle_digest:
+        return _status(False, False, scope, "activation_bundle_hash_mismatch", enabled)
+    source_commit = str(bundle.get("source_commit") or "")
+    deployment_commit = str(env.get("RAG_DEPLOYMENT_GIT_SHA") or "")
+    if not all((
+        bundle.get("schema") == "rag-activation-bundle-v1",
+        bundle.get("scope") == scope,
+        source_commit,
+        deployment_commit == source_commit,
+        current_commit == source_commit,
+    )):
+        return _status(
+            False, False, scope, "activation_bundle_contract_mismatch", enabled,
+            profile=profile,
+            decision_source_commit=source_commit or None,
+            bundle_sha256=actual_digest,
+        )
+    if (
+        bundle.get("activation_profile") != profile
+        or bundle.get("feature_flags") != flags
+        or bundle.get("versions") != feature_versions(env)
+        or (bundle.get("graph_fingerprint") or None)
+        != (str(env.get("RAG_GRAPH_FINGERPRINT") or "").strip() or None)
+    ):
+        return _status(
+            False, False, scope, "activation_bundle_runtime_mismatch", enabled,
+            profile=profile,
+            decision_source_commit=source_commit,
+            bundle_sha256=actual_digest,
+        )
+    ledger = _read_reference(bundle.get("decision_ledger"), project_root)
+    if ledger is None:
+        return _status(
+            False, False, scope, "decision_ledger_invalid", enabled,
+            profile=profile,
+            decision_source_commit=source_commit,
+            bundle_sha256=actual_digest,
+        )
+    review_mode = "multi_reviewer"
+    if bundle.get("review_governance") is not None:
+        from mech_chatbot.evaluation.review_governance import (
+            review_governance_status,
+        )
+
+        governance_artifact = _read_reference(
+            bundle.get("review_governance"), project_root,
+        )
+        governance = review_governance_status(
+            governance_artifact,
+            source_commit=source_commit,
+            scope=scope,
+        )
+        if governance_artifact is None or not governance.valid:
+            return _status(
+                False, False, scope, "review_governance_invalid", enabled,
+                profile=profile,
+                review_mode=governance.mode,
+                decision_source_commit=source_commit,
+                bundle_sha256=actual_digest,
+            )
+        review_mode = governance.mode
+
+    fallbacks: tuple[str, ...]
+    if scope == "default_rollout":
+        rows = ledger.get("decisions") if ledger.get("schema") == "integrated-release-decisions-v1" else None
+        if not validate_release_decision_ledger(
+            ledger,
+            root=project_root,
+            source_commit=source_commit,
+            expected_enabled=set(enabled),
+        ):
+            authorized = False
+            fallbacks = ()
+        else:
+            authorized = True
+            fallbacks = tuple(
+                flag for flag in FEATURE_FLAGS
+                if rows[flag].get("decision") == "rejected"
+            )
+    else:
+        rows = ledger.get("decisions") if ledger.get("schema") == "controlled-demo-decision-ledger-v2" else None
+        active_milestones = {
+            FEATURE_MILESTONES[flag] for flag in enabled
+        }
+        authorized = isinstance(rows, dict) and all(
+            _accepted_demo_decision(
+                milestone, rows.get(milestone), project_root, source_commit,
+            )
+            for milestone in active_milestones
+        )
+        fallbacks = ()
+    return _status(
+        authorized,
+        authorized,
+        scope,
+        "live_decisions_accepted" if authorized else "live_decision_not_accepted",
+        enabled,
+        profile=profile,
+        review_mode=review_mode,
+        fallback_features=fallbacks,
+        decision_source_commit=source_commit,
+        bundle_sha256=actual_digest,
+    )
+
+
+__all__ = [
+    "ACTIVATION_PROFILES",
+    "ActivationStatus",
+    "FEATURE_FLAGS",
+    "MILESTONE_FLAGS",
+    "VERSION_DEFAULTS",
+    "VERSION_FIELDS",
+    "activation_status",
+    "current_git_commit",
+    "feature_flags",
+    "feature_versions",
+    "profile_environment",
+    "validate_release_decision_ledger",
+]

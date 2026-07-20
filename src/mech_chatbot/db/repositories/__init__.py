@@ -252,6 +252,7 @@ __all__ = [
     'upsert_department_rollout_plan',
     'list_graph_proposals',
     'list_community_summaries',
+    'load_servable_community_summaries',
     'propose_graph_edge',
     'review_graph_proposal',
     'propose_community_summary',

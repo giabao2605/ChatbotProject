@@ -160,10 +160,14 @@ class Settings(BaseModel):
     RAG_QUERY_DECOMPOSITION_ENABLED: bool = False
     RAG_GRAPH_RETRIEVAL_ENABLED: bool = False
     RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED: bool = False
+    RAG_ACTIVATION_SCOPE: str = "default_rollout"
+    RAG_ACTIVATION_BUNDLE_PATH: Optional[str] = None
+    RAG_ACTIVATION_BUNDLE_SHA256: Optional[str] = None
     RAG_PLANNER_VERSION: str = "planner-v1"
     RAG_LATE_INDEX_VERSION: str = "late-v2"
     RAG_GRAPH_SERVING_EPOCH: str = "graph-v1"
     RAG_COMMUNITY_SERVING_EPOCH: str = "community-v1"
+    RAG_GRAPH_FINGERPRINT: Optional[str] = None
     GLOSSARY_CACHE_TTL: float = 60.0
     LLM_ROUTER_MIN_CONFIDENCE: float = 0.5
 
@@ -255,12 +259,16 @@ class Settings(BaseModel):
             RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED=_bool(
                 "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED", False, _TRUTHY_5
             ),
+            RAG_ACTIVATION_SCOPE=_str("RAG_ACTIVATION_SCOPE", "default_rollout"),
+            RAG_ACTIVATION_BUNDLE_PATH=_str("RAG_ACTIVATION_BUNDLE_PATH"),
+            RAG_ACTIVATION_BUNDLE_SHA256=_str("RAG_ACTIVATION_BUNDLE_SHA256"),
             RAG_PLANNER_VERSION=_str("RAG_PLANNER_VERSION", "planner-v1"),
             RAG_LATE_INDEX_VERSION=_str("RAG_LATE_INDEX_VERSION", "late-v2"),
             RAG_GRAPH_SERVING_EPOCH=_str("RAG_GRAPH_SERVING_EPOCH", "graph-v1"),
             RAG_COMMUNITY_SERVING_EPOCH=_str(
                 "RAG_COMMUNITY_SERVING_EPOCH", "community-v1"
             ),
+            RAG_GRAPH_FINGERPRINT=_str("RAG_GRAPH_FINGERPRINT"),
             GLOSSARY_CACHE_TTL=_float("GLOSSARY_CACHE_TTL", 60.0),
             LLM_ROUTER_MIN_CONFIDENCE=_float("LLM_ROUTER_MIN_CONFIDENCE", 0.5),
             # Ingestion

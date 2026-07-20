@@ -22,6 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 import traceback
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -65,7 +66,23 @@ _rag_ready = False
 async def lifespan(app: FastAPI):
     global _rag_ready
     from mech_chatbot.config.validate import assert_config_valid, safe_config_summary
+    from mech_chatbot.rag.feature_activation import activation_status, current_git_commit
     assert_config_valid(require_service_auth=RAG_REQUIRE_SERVICE_AUTH)
+    project_root = Path(__file__).resolve().parents[3]
+    activation = activation_status(
+        root=project_root,
+        current_commit=current_git_commit(project_root),
+    )
+    if not activation.valid:
+        logger.error(
+            "RAG activation rejected: scope=%s reason=%s enabled_flags=%s",
+            activation.scope,
+            activation.reason,
+            list(activation.enabled_flags),
+        )
+        _rag_ready = False
+        yield
+        return
     logger.info("Config OK: %s", safe_config_summary())
     logger.info("=" * 60)
     logger.info("RAG Server starting — loading models (one-time)...")
@@ -158,6 +175,16 @@ class HealthResponse(BaseModel):
     git_sha: Optional[str] = None
     snapshot_fingerprint: Optional[str] = None
     feature_flags: Dict[str, bool] = Field(default_factory=dict)
+    feature_versions: Dict[str, str] = Field(default_factory=dict)
+    activation_scope: str = "default_rollout"
+    activation_profile: Optional[str] = None
+    review_mode: str = "multi_reviewer"
+    activation_valid: bool = False
+    activation_reason: str = "not_evaluated"
+    live_authorized: bool = False
+    decision_source_commit: Optional[str] = None
+    fallback_features: List[str] = Field(default_factory=list)
+    graph_fingerprint: Optional[str] = None
     execution_context: str = "production"
     evaluation_force_ambiguous: bool = False
     request_deadline_seconds: float = 120.0
@@ -268,11 +295,22 @@ def _audit_admin_query(
 async def health_check():
     """Health check endpoint for monitoring/load balancer."""
     from mech_chatbot.rag.execution import RagRuntimeContract
+    from mech_chatbot.rag.feature_activation import (
+        activation_status,
+        current_git_commit,
+        feature_flags,
+        feature_versions,
+    )
 
     runtime_contract = RagRuntimeContract.from_environment()
+    project_root = Path(__file__).resolve().parents[3]
+    activation = activation_status(
+        root=project_root,
+        current_commit=current_git_commit(project_root),
+    )
 
     return HealthResponse(
-        status="ok" if _rag_ready else "degraded",
+        status="ok" if _rag_ready and activation.valid else "degraded",
         rag_loaded=_rag_ready,
         max_concurrent=MAX_CONCURRENT_RAG,
         # Semaphore._value gives remaining permits (CPython implementation detail)
@@ -280,14 +318,17 @@ async def health_check():
         deployment_id=os.getenv("RAG_DEPLOYMENT_ID"),
         git_sha=os.getenv("RAG_DEPLOYMENT_GIT_SHA"),
         snapshot_fingerprint=os.getenv("RAG_SNAPSHOT_FINGERPRINT"),
-        feature_flags={
-            "RAG_CRAG_ENABLED": os.getenv("RAG_CRAG_ENABLED", "false").strip().lower()
-            in {"1", "true", "yes", "on"},
-            "RAG_CLAIM_REPAIR_ENABLED": os.getenv(
-                "RAG_CLAIM_REPAIR_ENABLED", "false"
-            ).strip().lower()
-            in {"1", "true", "yes", "on"},
-        },
+        feature_flags=feature_flags(),
+        feature_versions=feature_versions(),
+        activation_scope=activation.scope,
+        activation_profile=activation.profile,
+        review_mode=activation.review_mode,
+        activation_valid=activation.valid,
+        activation_reason=activation.reason,
+        live_authorized=activation.live_authorized,
+        decision_source_commit=activation.decision_source_commit,
+        fallback_features=list(activation.fallback_features),
+        graph_fingerprint=os.getenv("RAG_GRAPH_FINGERPRINT"),
         **runtime_contract.to_dict(),
     )
 

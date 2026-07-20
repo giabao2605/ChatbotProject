@@ -20,7 +20,7 @@ from mech_chatbot.config.settings import Settings
 from scripts.integrated_eval.load_report import build_integrated_load_report
 from scripts.integrated_eval.preflight import build_preflight, _prerequisites
 from mech_chatbot.evaluation.milestone_decisions import (
-    build_demo_matrix,
+    build_demo_matrix, build_release_matrix,
     classify_provider_outcome,
     evaluate_demo_readiness,
     resolve_demo_flags,
@@ -53,6 +53,7 @@ def test_combination_matrix_covers_roadmap_and_declares_dependencies():
         "crag_repair", "crag_grounded_math", "crag_late_interaction",
         "crag_query_decomposition", "crag_graph_retrieval",
         "decomposition_graph", "decomposition_late_interaction",
+        "graph_community_summaries",
     }
     assert report["checks"]["all_flags_explicit"] is True
 
@@ -79,6 +80,58 @@ def test_every_combination_and_version_has_a_distinct_cache_namespace():
         **late["flags"], **late["versions"], "RAG_LATE_INDEX_VERSION": "late-next",
     })
     assert before != after
+
+
+def test_release_matrix_disables_rejected_features_without_erasing_requested_flags():
+    matrix = _json("data/integrated_hardening_v1/matrix.json")
+    decisions = {
+        name: {"decision": "accepted"}
+        for name in FEATURE_FLAGS
+    }
+    decisions["RAG_LATE_INTERACTION_ENABLED"] = {"decision": "rejected"}
+
+    resolved = build_release_matrix(matrix, decisions)
+    late = next(
+        row for row in resolved["combinations"]
+        if row["id"] == "crag_late_interaction"
+    )
+
+    assert late["requested_flags"]["RAG_LATE_INTERACTION_ENABLED"] is True
+    assert late["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
+    assert late["fallback_features"] == ["RAG_LATE_INTERACTION_ENABLED"]
+    assert late["unresolved_features"] == []
+    assert resolved["decisions_complete"] is True
+
+
+def test_release_matrix_fails_closed_for_missing_decisions():
+    matrix = _json("data/integrated_hardening_v1/matrix.json")
+    resolved = build_release_matrix(matrix, {})
+
+    crag = next(row for row in resolved["combinations"] if row["id"] == "crag_repair")
+    assert crag["effective_flags"]["RAG_CRAG_ENABLED"] is False
+    assert crag["effective_flags"]["RAG_CLAIM_REPAIR_ENABLED"] is False
+    assert crag["unresolved_features"] == [
+        "RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED",
+    ]
+    assert resolved["decisions_complete"] is False
+
+
+def test_repository_release_ledger_records_late_interaction_as_rejected():
+    ledger = _json("data/integrated_hardening_v1/release_decisions.json")
+    late = ledger["decisions"]["RAG_LATE_INTERACTION_ENABLED"]
+    evidence = Path(late["evidence"]["path"])
+
+    assert late["decision"] == "rejected"
+    assert late["source_commit"] == "757b9392275b22a826269959797c43d9d169bd8b"
+    assert hashlib.sha256(evidence.read_bytes()).hexdigest() == late["evidence"]["sha256"]
+    resolved = build_release_matrix(
+        _json("data/integrated_hardening_v1/matrix.json"),
+        ledger["decisions"],
+    )
+    assert all(
+        row["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
+        for row in resolved["combinations"]
+    )
 
 
 def test_all_integrated_feature_flags_default_disabled():
@@ -194,6 +247,7 @@ def test_integrated_readiness_distinguishes_offline_capability_from_live_gate():
         prerequisites={
             "crag": False, "grounded_math": False, "late_interaction": False,
             "query_decomposition": False, "graph_retrieval": False,
+            "community_summaries": False,
         },
     )
     assert blocked["capability_passed"] is True
@@ -206,7 +260,7 @@ def test_integrated_readiness_distinguishes_offline_capability_from_live_gate():
         rollback_passed=True,
         prerequisites={name: True for name in (
             "crag", "grounded_math", "late_interaction",
-            "query_decomposition", "graph_retrieval",
+            "query_decomposition", "graph_retrieval", "community_summaries",
         )},
     )
     assert ready["ready_for_live_matrix"] is True
@@ -224,7 +278,7 @@ def test_integrated_preflight_is_commit_pinned_and_fails_closed_on_current_depen
         security_cases=cases,
         prerequisites={name: False for name in (
             "crag", "grounded_math", "late_interaction",
-            "query_decomposition", "graph_retrieval",
+            "query_decomposition", "graph_retrieval", "community_summaries",
         )},
         offline_evidence={
             "schema": "integrated-offline-verification-v1",
@@ -238,6 +292,61 @@ def test_integrated_preflight_is_commit_pinned_and_fails_closed_on_current_depen
     assert artifact["capability_passed"] is True
     assert artifact["ready_for_live_matrix"] is False
     assert artifact["offline_evidence_commit_matches"] is True
+    assert artifact["release_decisions_complete"] is False
+    assert all(
+        not any(row["effective_flags"].values())
+        for row in artifact["release_matrix"]["combinations"]
+    )
+
+
+def test_integrated_preflight_uses_effective_release_flags_and_keeps_late_off():
+    matrix = _json("data/integrated_hardening_v1/matrix.json")
+    cases = [
+        json.loads(line)
+        for line in Path("data/integrated_hardening_v1/security_matrix.jsonl")
+        .read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    decisions = {
+        "schema": "integrated-release-decisions-v1",
+        "status": "complete",
+        "decisions": {
+            name: {"decision": "accepted"}
+            for name in FEATURE_FLAGS
+        },
+    }
+    decisions["decisions"]["RAG_LATE_INTERACTION_ENABLED"] = {
+        "decision": "rejected",
+    }
+    artifact = build_preflight(
+        matrix=matrix,
+        security_cases=cases,
+        prerequisites={name: True for name in (
+            "crag", "grounded_math", "late_interaction",
+            "query_decomposition", "graph_retrieval", "community_summaries",
+        )},
+        offline_evidence={
+            "schema": "integrated-offline-verification-v1",
+            "git_sha": "abc123", "passed": True,
+            "cache_isolation_passed": True,
+            "strict_stream_passed": True,
+            "rollback_passed": True,
+        },
+        git_sha="abc123",
+        release_decisions=decisions,
+    )
+
+    late_rows = [
+        row for row in artifact["release_matrix"]["combinations"]
+        if row["requested_flags"]["RAG_LATE_INTERACTION_ENABLED"]
+    ]
+    assert artifact["release_decisions_complete"] is True
+    assert artifact["ready_for_live_matrix"] is True
+    assert late_rows
+    assert all(
+        row["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
+        and row["fallback_features"] == ["RAG_LATE_INTERACTION_ENABLED"]
+        for row in late_rows
+    )
 
 
 def test_integrated_preflight_can_be_demo_ready_without_becoming_live_ready():
@@ -252,7 +361,7 @@ def test_integrated_preflight_can_be_demo_ready_without_becoming_live_ready():
         security_cases=cases,
         prerequisites={name: False for name in (
             "crag", "grounded_math", "late_interaction",
-            "query_decomposition", "graph_retrieval",
+            "query_decomposition", "graph_retrieval", "community_summaries",
         )},
         offline_evidence={
             "schema": "integrated-offline-verification-v1",
@@ -335,6 +444,7 @@ def test_prerequisite_completion_requires_hashed_decision_artifact(tmp_path):
         "late_interaction": "retrieval-intelligence-gate-v1",
         "query_decomposition": "decomposition-rollout-run-v1",
         "graph_retrieval": "graph-rollout-run-v1",
+        "community_summaries": "retrieval-intelligence-gate-v1",
     }
     stages = {}
     for name, schema in schemas.items():
@@ -346,6 +456,8 @@ def test_prerequisite_completion_requires_hashed_decision_artifact(tmp_path):
             payload["production_eligible"] = True
         if name == "late_interaction":
             payload["stage"] = "late_interaction"
+        if name == "community_summaries":
+            payload["stage"] = "community_summaries"
         raw = (json.dumps(payload) + "\n").encode()
         artifact.write_bytes(raw)
         stages[name] = {
@@ -507,7 +619,7 @@ def test_rejected_demo_feature_is_disabled_without_blocking_fallback_matrix():
     assert result["blocked"] is False
 
 
-def test_demo_matrix_keeps_seven_rows_and_pins_rejected_features_off():
+def test_demo_matrix_keeps_all_rows_and_pins_rejected_features_off():
     matrix = _json("data/integrated_hardening_v1/matrix.json")
     decisions = {
         "late_interaction": {"scope": "controlled_demo", "decision": "rejected"},
@@ -515,7 +627,7 @@ def test_demo_matrix_keeps_seven_rows_and_pins_rejected_features_off():
     }
     demo = build_demo_matrix(matrix, decisions)
     assert demo["schema"] == "integrated-demo-feature-matrix-v1"
-    assert len(demo["combinations"]) == 7
+    assert len(demo["combinations"]) == 8
     late = next(row for row in demo["combinations"] if row["id"] == "crag_late_interaction")
     assert late["requested_flags"]["RAG_LATE_INTERACTION_ENABLED"] is True
     assert late["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
@@ -667,7 +779,7 @@ def test_repository_demo_ledger_is_complete_and_defaults_every_unaccepted_featur
         _json("data/integrated_hardening_v1/matrix.json"),
         report["decisions"],
     )
-    assert len(matrix["combinations"]) == 7
+    assert len(matrix["combinations"]) == 8
     assert all(
         not any(row["effective_flags"].values())
         for row in matrix["combinations"]

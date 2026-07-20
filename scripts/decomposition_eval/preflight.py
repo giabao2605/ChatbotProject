@@ -44,6 +44,19 @@ def _resolve_citation(citation, documents):
     return value
 
 
+def validate_manifest_scope(cases, *, min_complex=10, min_simple=3):
+    groups = {"complex": 0, "simple": 0}
+    for case in cases:
+        group = str(case.get("evaluation_group") or "")
+        if group in groups:
+            groups[group] += 1
+    if groups["complex"] < min_complex:
+        raise ValueError(f"manifest requires at least {min_complex} complex cases")
+    if groups["simple"] < min_simple:
+        raise ValueError(f"manifest requires at least {min_simple} simple negative cases")
+    return groups
+
+
 def check_fixture_cases(cases, sql_documents, bom_rows, qdrant_points, *, collection):
     if collection != FIXTURE_COLLECTION:
         raise ValueError(f"collection must equal {FIXTURE_COLLECTION}")
@@ -141,6 +154,7 @@ def check_fixture_cases(cases, sql_documents, bom_rows, qdrant_points, *, collec
 
 
 def run_live_preflight(cases):
+    validate_manifest_scope(cases)
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 to access the decomposition fixture")
     from sqlalchemy import text

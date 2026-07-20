@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,6 +8,8 @@ from mech_chatbot.rag.community_summaries import (
     build_pending_summary,
     detect_communities,
     evaluate_summary_serving,
+    is_global_query,
+    load_community_context,
 )
 from scripts.community_eval.preflight import build_readiness, validate_manifest_groups
 
@@ -353,6 +356,136 @@ def test_community_summary_feature_flag_defaults_off(monkeypatch):
     assert enabled() is False
 
 
+def test_community_context_only_runs_for_global_queries_with_both_flags():
+    calls = []
+
+    def loader(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    disabled = load_community_context(
+        "Tổng hợp xu hướng giữa tất cả tài liệu",
+        graph_enabled=False,
+        community_enabled=True,
+        access_context={},
+        seed_keys=[],
+        serving_epoch="community-v1",
+        graph_fingerprint="graph-sha-1",
+        client=object(),
+        collection_name="test",
+        loader=loader,
+    )
+    local = load_community_context(
+        "Chi tiết của PART-A là gì?",
+        graph_enabled=True,
+        community_enabled=True,
+        access_context={},
+        seed_keys=["PART-A"],
+        serving_epoch="community-v1",
+        graph_fingerprint="graph-sha-1",
+        client=object(),
+        collection_name="test",
+        loader=loader,
+    )
+
+    assert disabled.reason == "graph_retrieval_disabled"
+    assert local.reason == "query_not_global"
+    assert calls == []
+    assert is_global_query("Tổng hợp xu hướng giữa tất cả tài liệu") is True
+    assert is_global_query("PART-A dùng vật liệu gì?") is False
+
+
+def test_community_context_hydrates_exact_source_pages_for_citations():
+    summary = {
+        "summary_id": 7,
+        "status": "approved",
+        "community_key": "community:0001",
+        "summary_text": "Các tài liệu cho thấy thép được dùng nhất quán.",
+        "summary_sha256": "s" * 64,
+        "source_provenance": [_source()],
+    }
+
+    class Client:
+        def scroll(self, **kwargs):
+            return ([SimpleNamespace(payload={
+                "page_content": "Nguồn kỹ thuật đã duyệt.",
+                "metadata": {
+                    "doc_id": 1,
+                    "trang_so": 1,
+                    "version_no": 2,
+                    "file_goc": "technical.pdf",
+                    "security_level": "internal",
+                },
+            })], None)
+
+    result = load_community_context(
+        "Cho tôi tổng quan trên toàn bộ tài liệu",
+        graph_enabled=True,
+        community_enabled=True,
+        access_context={
+            "roles": ["viewer"],
+            "allowed_departments": ["Technical"],
+            "allowed_sites": ["HQ"],
+            "max_security_level": "internal",
+        },
+        seed_keys=[],
+        serving_epoch="community-v1",
+        graph_fingerprint="graph-sha-1",
+        client=Client(),
+        collection_name="test",
+        loader=lambda **kwargs: [summary],
+    )
+
+    assert result.used is True
+    assert result.reason == "approved_summary_used"
+    assert result.summary_count == 1
+    assert len(result.documents) == 1
+    document = result.documents[0]
+    assert document.metadata["doc_id"] == 1
+    assert document.metadata["trang_so"] == 1
+    assert document.metadata["version_no"] == 2
+    assert document.metadata["file_goc"] == "technical.pdf"
+    assert document.metadata["community_summary_used"] is True
+    assert document.metadata["community_summary_id"] == 7
+    assert "Các tài liệu cho thấy" in document.page_content
+    assert "Nguồn kỹ thuật đã duyệt" in document.page_content
+
+
+def test_community_context_fails_closed_on_stale_qdrant_source_version():
+    summary = {
+        "summary_id": 7,
+        "status": "approved",
+        "community_key": "community:0001",
+        "summary_text": "Approved summary",
+        "summary_sha256": "s" * 64,
+        "source_provenance": [_source(version=2)],
+    }
+
+    class Client:
+        def scroll(self, **kwargs):
+            return ([SimpleNamespace(payload={
+                "page_content": "Old source",
+                "metadata": {"doc_id": 1, "trang_so": 1, "version_no": 1},
+            })], None)
+
+    result = load_community_context(
+        "Summarize across documents",
+        graph_enabled=True,
+        community_enabled=True,
+        access_context={},
+        seed_keys=[],
+        serving_epoch="community-v1",
+        graph_fingerprint="graph-sha-1",
+        client=Client(),
+        collection_name="test",
+        loader=lambda **kwargs: [summary],
+    )
+
+    assert result.used is False
+    assert result.documents == ()
+    assert result.reason == "summary_sources_not_hydrated"
+
+
 def test_community_flag_and_epoch_isolate_semantic_cache(monkeypatch):
     from mech_chatbot.rag.semantic_cache import pipeline_namespace
 
@@ -376,6 +509,9 @@ def test_readiness_requires_graph_gate_review_precision_and_all_eval_groups():
         if line.strip()
     ]
     groups = validate_manifest_groups(cases)
+    assert sum(groups.values()) == 10
+    with pytest.raises(ValueError, match="at least 10"):
+        validate_manifest_groups(cases[:6])
     readiness = build_readiness(
         graph_gate={"schema": "retrieval-intelligence-gate-v1", "passed": False},
         graph_readiness={

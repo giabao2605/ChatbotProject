@@ -43,6 +43,12 @@
       "prerequisites": ["query_decomposition","late_interaction"],
       "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"true","RAG_QUERY_DECOMPOSITION_ENABLED":"true","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
       "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "graph_community_summaries",
+      "prerequisites": ["graph_retrieval","community_summaries"],
+      "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"true","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"true"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
     }
   ]
 }

@@ -531,6 +531,70 @@ def test_pilot_artifact_accepts_qualified_matched_window():
     assert artifact["checks"]["sampled_pairs_complete"] is True
 
 
+def test_pilot_accepts_explicit_single_owner_reviews_without_calling_them_independent():
+    config, pairs, assignments, windows = _pilot_inputs()
+    config["review_governance"] = {
+        "schema": "rag-review-governance-v1",
+        "mode": "single_owner",
+        "owner": "bao.nguyen",
+        "scope": "default_rollout",
+        "source_commit": config["git_sha"],
+        "risk_accepted": True,
+        "accepted_at": "2026-07-20T10:00:00Z",
+        "role_signoffs": {
+            role: {
+                "owner": "bao.nguyen",
+                "signed": True,
+                "note": f"{role} checklist reviewed",
+            }
+            for role in ("rag", "security_qa", "operations")
+        },
+    }
+    config["owners"] = {role: "bao.nguyen" for role in config["owners"]}
+    for pair in pairs:
+        pair["adjudication"] = {
+            "schema": "evaluation-owner-review-v1",
+            "review_source": "owner_review",
+            "case_id": pair["matched_pair_id"],
+            "reviewer_id": "bao.nguyen",
+            "resolved_by": "bao.nguyen",
+            "outcome_label": "full_answer",
+            "answer_correct": True,
+            "citation_correct": True,
+            "reason_code": "evidence_supported",
+        }
+
+    artifact = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    assert artifact["decision"] == "accepted"
+    assert artifact["passed"] is True
+    assert artifact["review_governance"]["mode"] == "single_owner"
+    assert artifact["review_governance"]["review_source"] == "owner_review"
+
+
+def test_pilot_rejects_single_owner_review_without_risk_acceptance():
+    config, pairs, assignments, windows = _pilot_inputs()
+    config["review_governance"] = {
+        "schema": "rag-review-governance-v1",
+        "mode": "single_owner",
+        "owner": "bao.nguyen",
+        "scope": "default_rollout",
+        "source_commit": config["git_sha"],
+        "risk_accepted": False,
+        "accepted_at": "2026-07-20T10:00:00Z",
+        "role_signoffs": {},
+    }
+
+    artifact = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    assert artifact["passed"] is False
+    assert artifact["checks"]["review_governance_valid"] is False
+
+
 def test_latency_evidence_requires_both_execution_modes_for_every_arm_window():
     config, pairs, assignments, windows = _pilot_inputs()
     config["latency_breakdowns"]["candidate"][0]["artifact"]["filters"][

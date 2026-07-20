@@ -13,7 +13,9 @@ from pathlib import Path
 REQUIRED_GROUPS = ("global", "local", "relational")
 
 
-def validate_manifest_groups(cases, *, source=Path("<community-manifest>")) -> dict[str, int]:
+def validate_manifest_groups(
+    cases, *, source=Path("<community-manifest>"), minimum_cases=10,
+) -> dict[str, int]:
     from scripts.eval.run_eval import validate_live_case
 
     counts = {name: 0 for name in REQUIRED_GROUPS}
@@ -31,6 +33,10 @@ def validate_manifest_groups(cases, *, source=Path("<community-manifest>")) -> d
     missing = [name for name, count in counts.items() if count == 0]
     if missing:
         raise ValueError(f"manifest missing groups: {', '.join(missing)}")
+    if sum(counts.values()) < max(1, int(minimum_cases)):
+        raise ValueError(
+            f"community manifest requires at least {max(1, int(minimum_cases))} cases"
+        )
     return counts
 
 

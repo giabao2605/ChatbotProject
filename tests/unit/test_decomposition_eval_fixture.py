@@ -4,7 +4,7 @@ import pytest
 
 from scripts.decomposition_eval.constants import BOM_ROWS, FIXTURE_COLLECTION
 from scripts.decomposition_eval.generate_manifest import cases
-from scripts.decomposition_eval.preflight import check_fixture_cases
+from scripts.decomposition_eval.preflight import check_fixture_cases, validate_manifest_scope
 from scripts.decomposition_eval.run_rollout import build_evaluation_environment
 
 
@@ -48,10 +48,32 @@ def test_manifest_covers_every_roadmap_scenario_and_simple_has_no_branches():
     values = cases()
     ids = {case["id"] for case in values}
 
-    assert len(values) == 8
-    assert {"decomp-simple-factual", "decomp-two-intents", "decomp-three-intents", "decomp-sql-bom-doc", "decomp-version-candidate", "decomp-sufficient-missing", "decomp-access-denied", "decomp-code-boundary"} == ids
-    assert next(case for case in values if case["evaluation_group"] == "simple")["expected_branches"] == []
+    assert len(values) == 13
+    assert {
+        "decomp-simple-factual", "decomp-simple-alias", "decomp-simple-install",
+        "decomp-two-intents", "decomp-three-intents", "decomp-sql-bom-doc",
+        "decomp-version-candidate", "decomp-sufficient-missing",
+        "decomp-access-denied", "decomp-code-boundary",
+        "decomp-bom-alias", "decomp-install-version", "decomp-three-source-compare",
+    } == ids
+    complex_cases = [case for case in values if case["evaluation_group"] == "complex"]
+    simple_cases = [case for case in values if case["evaluation_group"] == "simple"]
+    assert len(complex_cases) >= 10
+    assert len(simple_cases) >= 3
+    assert all(case["expected_branches"] == [] for case in simple_cases)
     assert max(len(case["expected_branches"]) for case in values) == 3
+
+
+def test_manifest_scope_requires_ten_complex_and_three_simple_negative_cases():
+    report = validate_manifest_scope(cases())
+
+    assert report == {"complex": 10, "simple": 3}
+    with pytest.raises(ValueError, match="at least 10 complex"):
+        validate_manifest_scope(cases()[:-1])
+    with pytest.raises(ValueError, match="at least 3 simple"):
+        validate_manifest_scope([
+            case for case in cases() if case["id"] != "decomp-simple-install"
+        ])
 
 
 def test_preflight_resolves_dynamic_source_identity_and_checks_restricted_source():

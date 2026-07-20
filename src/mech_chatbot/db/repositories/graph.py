@@ -102,7 +102,8 @@ def review_graph_proposal(proposal_id, action, reviewer, note=None):
         proposal = conn.execute(text("""
             SELECT p.ProposalID, p.SourceNodeID, p.TargetNodeID, p.RelationType,
                    p.SourceDocID, p.SourcePage, p.SourceVersion, p.Confidence,
-                   p.Status, t.ThuMuc, t.Site, t.SecurityLevel
+                   p.Status, t.ThuMuc, t.Site, t.SecurityLevel,
+                   JSON_VALUE(p.EvidenceJson, '$.source_quote') AS SourceQuote
             FROM dbo.GraphExtractionProposal p WITH (UPDLOCK, ROWLOCK)
             JOIN dbo.TaiLieu t ON t.DocID = p.SourceDocID AND t.VersionNo = p.SourceVersion
             WHERE p.ProposalID = :proposal_id
@@ -116,6 +117,9 @@ def review_graph_proposal(proposal_id, action, reviewer, note=None):
         if proposal["Status"] != "pending":
             return {"ok": False, "reason": "already_reviewed", "status": proposal["Status"]}
         if action == "approve":
+            source_quote = str(proposal["SourceQuote"] or "").strip()[:2000]
+            if not source_quote:
+                return {"ok": False, "reason": "invalid_provenance"}
             conn.execute(text("""
                 MERGE dbo.KnowledgeGraphEdge AS target
                 USING (SELECT :source_node AS SourceNodeID, :target_node AS TargetNodeID,
@@ -128,21 +132,23 @@ def review_graph_proposal(proposal_id, action, reviewer, note=None):
                    AND target.SourcePage = source.SourcePage
                 WHEN MATCHED THEN UPDATE SET SourceVersion=:version, Confidence=:confidence,
                     Department=:department, Site=:site, SecurityLevel=:security,
-                    Origin='llm', ServingStatus='approved', ReviewedBy=:reviewer,
+                    SourceQuote=:source_quote, Origin='llm',
+                    ServingStatus='approved', ReviewedBy=:reviewer,
                     ReviewedAt=SYSUTCDATETIME()
                 WHEN NOT MATCHED THEN INSERT
                     (SourceNodeID, TargetNodeID, RelationType, Origin, ServingStatus,
                      Confidence, SourceDocID, SourcePage, SourceVersion, Department,
-                     Site, SecurityLevel, ReviewedBy, ReviewedAt)
+                     Site, SecurityLevel, SourceQuote, ReviewedBy, ReviewedAt)
                 VALUES (:source_node, :target_node, :relation, 'llm', 'approved',
                         :confidence, :doc_id, :page, :version, :department, :site,
-                        :security, :reviewer, SYSUTCDATETIME());
+                        :security, :source_quote, :reviewer, SYSUTCDATETIME());
             """), {
                 "source_node": proposal["SourceNodeID"], "target_node": proposal["TargetNodeID"],
                 "relation": proposal["RelationType"], "confidence": proposal["Confidence"],
                 "doc_id": proposal["SourceDocID"], "page": proposal["SourcePage"],
                 "version": proposal["SourceVersion"], "department": proposal["ThuMuc"],
                 "site": proposal["Site"], "security": proposal["SecurityLevel"] or "confidential",
+                "source_quote": source_quote,
                 "reviewer": str(reviewer or "System")[:255],
             })
         conn.execute(text("""

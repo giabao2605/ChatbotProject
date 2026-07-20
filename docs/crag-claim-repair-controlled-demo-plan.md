@@ -99,6 +99,21 @@ chat_env\Scripts\python.exe -m scripts.eval.crag_cohort_hash `
 Copy `actor_hashes` và `cohort_sha256` sang config run-specific. Không đưa file
 raw user ID vào repo hoặc artifact.
 
+Trước khi start, decision `controlled_demo` của CRAG phải là `accepted` trên
+đúng clean commit. Nếu decision vẫn là `inconclusive`, launcher sẽ fail-closed;
+không đổi flag thủ công để bỏ qua bước này. Tạo bundle bất biến rồi copy `path`
+và `sha256` được in ra vào trường `activation_bundle` của config run-specific:
+
+```powershell
+chat_env\Scripts\python.exe -m scripts.ops.build_activation_bundle `
+  --scope controlled_demo `
+  --profile crag_claim `
+  --source-commit (git rev-parse HEAD) `
+  --decision-ledger data\integrated_hardening_v1\demo_decisions.json `
+  --review-governance reports\controlled-demo\<run-id>\review-governance.json `
+  --output reports\controlled-demo\<run-id>\activation-bundle.json
+```
+
 Tạo config run-specific dưới `reports/controlled-demo/<run-id>/config.json`, sau
 đó đặt secret chỉ trong process PowerShell hiện tại. Chỉ dùng lệnh start khi
 staging series đã đạt. Lệnh đầu chỉ start control/candidate và tạo preflight:

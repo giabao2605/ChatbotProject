@@ -883,7 +883,16 @@ def execute_pipeline(state):
     graph_max_hops = 0
     graph_docs = []
     served_graph_docs = []
-    if not skip_retrieval and env_bool("RAG_GRAPH_RETRIEVAL_ENABLED", False):
+    graph_enabled = env_bool("RAG_GRAPH_RETRIEVAL_ENABLED", False)
+    community_enabled = env_bool("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED", False)
+    graph_seeds = []
+    graph_access = {
+        "roles": user_roles or [],
+        "allowed_departments": allowed_departments or [],
+        "allowed_sites": allowed_sites or [],
+        "max_security_level": max_security_level,
+    }
+    if not skip_retrieval and graph_enabled:
         state.checkpoint("graph")
         from mech_chatbot.rag.graph_retrieval import (
             filter_servable_edges, hydrate_graph_edges, select_graph_seeds,
@@ -891,12 +900,6 @@ def execute_pipeline(state):
         )
         graph_started = time.time()
         graph_seeds = select_graph_seeds(effective_question, new_part_ids)
-        graph_access = {
-            "roles": user_roles or [],
-            "allowed_departments": allowed_departments or [],
-            "allowed_sites": allowed_sites or [],
-            "max_security_level": max_security_level,
-        }
         try:
             graph_routed = should_attempt_graph(effective_question)
             if graph_routed:
@@ -930,6 +933,42 @@ def execute_pipeline(state):
             _raise_if_request_budget_exceeded(exc)
             logger.warning("Graph retrieval unavailable: %s", exc)
             log_trace("graph_retrieval", trace_id, error=type(exc).__name__, edge_count=0)
+
+    community_docs = []
+    community_summary_used = False
+    community_summary_count = 0
+    community_fallback_reason = "not_attempted"
+    if not skip_retrieval:
+        from mech_chatbot.rag.community_summaries import load_community_context
+
+        community_started = time.time()
+        community_result = load_community_context(
+            effective_question,
+            graph_enabled=graph_enabled,
+            community_enabled=community_enabled,
+            access_context=graph_access,
+            seed_keys=graph_seeds,
+            serving_epoch=os.getenv("RAG_COMMUNITY_SERVING_EPOCH", "community-v1"),
+            graph_fingerprint=os.getenv("RAG_GRAPH_FINGERPRINT", ""),
+            client=client,
+            collection_name=os.getenv("QDRANT_COLLECTION", "TaiLieuKyThuat_v2"),
+        )
+        community_docs = list(community_result.documents)
+        community_summary_used = community_result.used
+        community_summary_count = community_result.summary_count
+        community_fallback_reason = community_result.reason
+        if community_docs:
+            retrieved_docs = merge_corrected_documents(retrieved_docs, community_docs)
+        log_trace(
+            "community_summaries",
+            trace_id,
+            latency_ms=int((time.time() - community_started) * 1000),
+            used=community_summary_used,
+            summary_count=community_summary_count,
+            source_document_count=len(community_docs),
+            fallback_reason=community_fallback_reason,
+            serving_epoch=os.getenv("RAG_COMMUNITY_SERVING_EPOCH", "community-v1"),
+        )
 
     def _access_denied_terminal(access_reason):
         state.refuse("access_denied")
@@ -1483,6 +1522,8 @@ def execute_pipeline(state):
         if graph_docs:
             from mech_chatbot.rag.graph_retrieval import attach_served_graph_context
             real_docs, served_graph_docs = attach_served_graph_context(real_docs, graph_docs)
+        if community_docs:
+            real_docs = merge_corrected_documents(community_docs, real_docs)
         log_trace(
             "parent_context",
             trace_id,
@@ -1695,6 +1736,10 @@ def execute_pipeline(state):
     debug_info["graph_routed"] = graph_routed
     debug_info["graph_edge_count"] = graph_edge_count
     debug_info["graph_max_hops"] = graph_max_hops
+    debug_info["community_summary_used"] = community_summary_used
+    debug_info["community_summary_count"] = community_summary_count
+    debug_info["community_summary_source_count"] = len(community_docs)
+    debug_info["community_summary_fallback_reason"] = community_fallback_reason
     debug_info["late_interaction_hits"] = sum(
         1 for doc in retrieved_docs if doc.metadata.get("rerank_backend") == "late_interaction"
     )

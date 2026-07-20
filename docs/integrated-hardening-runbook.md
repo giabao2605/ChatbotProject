@@ -16,6 +16,7 @@ Run from the repository root on a clean commit:
   --matrix data/integrated_hardening_v1/matrix.json `
   --security-manifest data/integrated_hardening_v1/security_matrix.jsonl `
   --prerequisites data/integrated_hardening_v1/prerequisites.json `
+  --release-decisions data/integrated_hardening_v1/release_decisions.json `
   --offline-evidence reports/integrated-hardening/<run-id>/offline.json `
   --output reports/integrated-hardening/<run-id>/readiness.json
 ```
@@ -70,6 +71,13 @@ Rejected and inconclusive features are disabled in `demo_matrix.effective_flags`
 Run those rows to verify the fallback path; do not restore the requested flag
 just to make the matrix look complete.
 
+For a single-owner review, copy
+`docs/examples/rag-single-owner-governance.example.json`, replace every
+placeholder, set `risk_accepted=true`, and sign the RAG, Security/QA and
+Operations sections. The resulting immutable file is passed to
+`scripts.ops.build_activation_bundle --review-governance`. It is recorded as
+`owner_review`, never as an independent review.
+
 ## 2. Feature flags and isolation
 
 Each candidate process receives exactly one row from
@@ -93,6 +101,24 @@ RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED
 Pin `RAG_PLANNER_VERSION`, `RAG_LATE_INDEX_VERSION`,
 `RAG_GRAPH_SERVING_EPOCH` and `RAG_COMMUNITY_SERVING_EPOCH`. Semantic-cache
 reads and writes remain disabled during evaluation.
+
+To start any cumulative activation profile as isolated control/candidate
+processes, use the shared launcher. Evaluation scope may run an unaccepted
+candidate and health will explicitly report that it is not live-authorized:
+
+```powershell
+.\scripts\ops\start_rag_profile_pair.ps1 `
+  -Profile graph_retrieval `
+  -Scope evaluation `
+  -SnapshotFingerprint <snapshot-fingerprint>
+```
+
+For `controlled_demo` or `default_rollout`, also pass the exact bundle path and
+SHA-256 emitted by `scripts.ops.build_activation_bundle`. The launcher rejects
+a dirty worktree, source-commit mismatch, reused port, invalid bundle or
+degraded health. Stop both processes with
+`.\scripts\ops\stop_rag_profile_pair.ps1`. Never change a feature flag inside
+either running process.
 
 ## 3. Baseline, candidate and result aggregation
 
@@ -149,7 +175,7 @@ persisted.
 
 Create baseline and candidate load reports at the same selected concurrency.
 Create `matrix-evidence.json` with schema `integrated-matrix-evidence-v1`. It
-must contain exactly the seven IDs from the versioned matrix. Every row has
+must contain exactly the eight IDs from the versioned matrix. Every row has
 hashed/schema-pinned references named `baseline_eval`, `candidate_eval`,
 `baseline_trace`, `candidate_trace`, `baseline_load`, `candidate_load` and
 `results`, plus `baseline_benchmark`/`candidate_benchmark` and a hashed
@@ -170,7 +196,7 @@ generation count is enforced from labeled-eval request telemetry because repair
 can emit an additional `llm_generation` event and the raw event name alone does
 not distinguish the request's single final-generation budget.
 
-Then compose gate metadata from all seven evidence pairs. The composer rejects
+Then compose gate metadata from all eight evidence pairs. The composer rejects
 a different commit, manifest, snapshot, provider configuration, governance
 scope, collection or concurrency inside any pair. It also rejects an unrelated
 trace, load report or results artifact:
@@ -187,7 +213,7 @@ trace, load report or results artifact:
 
 Invoke the final gate with the baseline, candidate and trace files referenced
 by `primary_combination_id`. The gate recomputes their hashes and requires them
-to equal the primary row, then requires all seven per-combination quality,
+to equal the primary row, then requires all eight per-combination quality,
 security, budget and load results to pass.
 
 Every release-decision row must contain an evidence reference with path,

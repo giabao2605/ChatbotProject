@@ -710,8 +710,23 @@ def _balance_report(assignments: list[dict]) -> dict:
     return report
 
 
-def _valid_adjudication(pair: dict[str, Any]) -> bool:
+def _valid_adjudication(pair: dict[str, Any], governance=None) -> bool:
+    from mech_chatbot.evaluation.review_governance import ReviewGovernance
+
     record = pair.get("adjudication") or {}
+    if isinstance(governance, ReviewGovernance) and governance.mode == "single_owner":
+        return bool(
+            governance.valid
+            and record.get("schema") == "evaluation-owner-review-v1"
+            and record.get("review_source") == "owner_review"
+            and record.get("case_id") == pair.get("matched_pair_id")
+            and str(record.get("reviewer_id") or "").strip() == governance.owner
+            and record.get("resolved_by") == governance.owner
+            and record.get("outcome_label") in VALID_OUTCOMES
+            and isinstance(record.get("answer_correct"), bool)
+            and isinstance(record.get("citation_correct"), bool)
+            and bool(str(record.get("reason_code") or "").strip())
+        )
     reviewer_ids = [str(value).strip() for value in (record.get("reviewer_ids") or [])]
     reasons = [str(value).strip() for value in (record.get("reason_codes") or [])]
     disagreement = record.get("disagreement")
@@ -997,8 +1012,15 @@ def build_pilot_artifact(
     control = _arm_metrics(pairs, "control")
     candidate = _arm_metrics(pairs, "candidate")
     abort = _abort_report(pairs, monitoring_windows)
+    from mech_chatbot.evaluation.review_governance import review_governance_status
+
     owners = config.get("owners") or {}
     signoffs = config.get("reviewer_signoff") or {}
+    review_governance = review_governance_status(
+        config.get("review_governance"),
+        source_commit=str(config.get("git_sha") or ""),
+        scope="default_rollout",
+    )
     deployments = config.get("deployments") or {}
     control_flags = (deployments.get("control") or {}).get("flags") or {}
     candidate_flags = (deployments.get("candidate") or {}).get("flags") or {}
@@ -1172,7 +1194,7 @@ def build_pilot_artifact(
         "both_arms_observed": assigned_counts["control"] > 0
         and assigned_counts["candidate"] > 0,
         "all_pairs_adjudicated": bool(pairs)
-        and all(_valid_adjudication(pair) for pair in pairs),
+        and all(_valid_adjudication(pair, review_governance) for pair in pairs),
         "cohort_immutable": bool(expected_cohort)
         and bool(expected_department)
         and all(pair.get("cohort_sha256") == expected_cohort for pair in pairs)
@@ -1197,6 +1219,7 @@ def build_pilot_artifact(
             signoffs.get(role) is True
             for role in ("rag", "security_qa", "operations")
         ),
+        "review_governance_valid": review_governance.valid,
         "daily_sampling_complete": sampling["complete"],
         "sampled_pairs_complete": bool(sampled_assignment_ids)
         and sampled_assignment_ids == set(pair_ids),
@@ -1316,6 +1339,7 @@ def build_pilot_artifact(
         "deployment_preflight": deployment_preflight,
         "owners": owners,
         "reviewer_signoff": signoffs,
+        "review_governance": review_governance.to_dict(),
         "voyage_policy": config.get("voyage_policy"),
         "matched_pair_count": len(pairs),
         "matched_pair_ids": pair_ids,

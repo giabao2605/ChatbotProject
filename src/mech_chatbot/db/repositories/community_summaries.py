@@ -15,7 +15,8 @@ from ..engine import _ensure_engine, engine
 
 
 __all__ = [
-    "list_community_summaries", "propose_community_summary",
+    "list_community_summaries", "load_servable_community_summaries",
+    "propose_community_summary",
     "review_community_summary",
 ]
 
@@ -101,6 +102,136 @@ def list_community_summaries(status="pending", limit=100):
             "limit": max(1, min(int(limit), 500)), "status": status,
         }).mappings().all()
     return [dict(row) for row in rows]
+
+
+def _decode_json_list(value):
+    try:
+        decoded = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return decoded if isinstance(decoded, list) else None
+
+
+def load_servable_community_summaries(
+    *, node_keys, access_context, serving_epoch, graph_fingerprint, limit=5,
+):
+    """Return approved summaries only while every source remains servable."""
+    from mech_chatbot.rag.graph_retrieval import expand_seed_keys
+
+    seeds = expand_seed_keys(node_keys)
+    _ensure_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT TOP (:limit) s.SummaryID, s.CommunityVersionID,
+                   s.CommunityKey, s.SummaryText, s.SummarySha256,
+                   s.NodeKeysJson, s.EdgeIDsJson, s.SourceProvenanceJson,
+                   s.Status, v.Status AS VersionStatus, v.DetectionVersion,
+                   v.ServingEpoch, v.GraphFingerprint,
+                   v.PrerequisiteGraphGatePassed, v.StructuredCoverage,
+                   v.ReviewedEdgePrecision, v.MinGlobalAnswerGain
+            FROM dbo.GraphCommunitySummary s
+            JOIN dbo.GraphCommunityVersion v
+              ON v.CommunityVersionID=s.CommunityVersionID
+            WHERE s.Status='approved' AND v.Status='approved'
+              AND v.ServingEpoch=:serving_epoch
+              AND v.GraphFingerprint=:graph_fingerprint
+              AND (
+                    :has_seeds=0 OR EXISTS (
+                        SELECT 1
+                        FROM dbo.GraphCommunityMembership membership
+                        JOIN dbo.KnowledgeGraphNode node
+                          ON node.NodeID=membership.NodeID
+                        WHERE membership.CommunityVersionID=s.CommunityVersionID
+                          AND membership.CommunityKey=s.CommunityKey
+                          AND LOWER(node.CanonicalKey) IN (
+                              SELECT LOWER([value]) FROM OPENJSON(:node_keys)
+                          )
+                    )
+              )
+            ORDER BY s.ReviewedAt DESC, s.SummaryID DESC
+        """), {
+            "limit": max(1, min(int(limit), 20)),
+            "serving_epoch": str(serving_epoch or ""),
+            "graph_fingerprint": str(graph_fingerprint or ""),
+            "has_seeds": int(bool(seeds)),
+            "node_keys": json.dumps(seeds),
+        }).mappings().all()
+        accepted = []
+        for raw_row in rows:
+            row = dict(raw_row)
+            summary_nodes = _decode_json_list(row.get("NodeKeysJson"))
+            edge_ids = _decode_json_list(row.get("EdgeIDsJson"))
+            sources = _decode_json_list(row.get("SourceProvenanceJson"))
+            if summary_nodes is None or edge_ids is None or sources is None:
+                continue
+            membership = {
+                str(item[0]) for item in conn.execute(text("""
+                    SELECT node.CanonicalKey
+                    FROM dbo.GraphCommunityMembership membership
+                    JOIN dbo.KnowledgeGraphNode node
+                      ON node.NodeID=membership.NodeID
+                    WHERE membership.CommunityVersionID=:version_id
+                      AND membership.CommunityKey=:community_key
+                """), {
+                    "version_id": int(row["CommunityVersionID"]),
+                    "community_key": row["CommunityKey"],
+                }).all()
+            }
+            edges = [dict(item) for item in conn.execute(text("""
+                SELECT edge.EdgeID edge_id, source.CanonicalKey source_key,
+                       target.CanonicalKey target_key,
+                       edge.ServingStatus serving_status,
+                       edge.SourceDocID doc_id, edge.SourcePage page,
+                       edge.SourceVersion version, edge.Department department,
+                       edge.Site site, edge.SecurityLevel security_level
+                FROM dbo.KnowledgeGraphEdge edge
+                JOIN dbo.KnowledgeGraphNode source ON source.NodeID=edge.SourceNodeID
+                JOIN dbo.KnowledgeGraphNode target ON target.NodeID=edge.TargetNodeID
+                WHERE edge.EdgeID IN (
+                    SELECT TRY_CONVERT(BIGINT, [value]) FROM OPENJSON(:edge_ids)
+                )
+            """), {"edge_ids": json.dumps(edge_ids)}).mappings().all()]
+            documents = [dict(item) for item in conn.execute(text("""
+                SELECT document.DocID doc_id, source.page, source.version,
+                       document.ThuMuc department, document.Site site,
+                       document.SecurityLevel security_level,
+                       document.Servable servable, document.IsCurrent is_current,
+                       document.PublicationState publication_state,
+                       document.LifecycleStatus lifecycle_status,
+                       document.ReviewStatus review_status
+                FROM OPENJSON(:sources) WITH (
+                    doc_id INT '$.doc_id', page INT '$.page',
+                    version INT '$.version'
+                ) source
+                JOIN dbo.TaiLieu document
+                  ON document.DocID=source.doc_id
+                 AND document.VersionNo=source.version
+            """), {"sources": json.dumps(sources)}).mappings().all()]
+            summary = {
+                "summary_id": int(row["SummaryID"]),
+                "status": row["Status"],
+                "community_key": row["CommunityKey"],
+                "summary_text": row["SummaryText"],
+                "summary_sha256": row["SummarySha256"],
+                "node_keys": summary_nodes,
+                "edge_ids": edge_ids,
+                "source_provenance": sources,
+                "serving_epoch": row["ServingEpoch"],
+                "detection_version": row["DetectionVersion"],
+                "graph_fingerprint": row["GraphFingerprint"],
+            }
+            decision = evaluate_summary_serving(
+                summary,
+                serving_epoch=str(serving_epoch or ""),
+                graph_fingerprint=str(graph_fingerprint or ""),
+                access_context=dict(access_context or {}),
+                current_sources=documents,
+                current_edges=edges,
+                community_version=_serving_version(row, membership),
+            )
+            if decision.allowed:
+                accepted.append(summary)
+    return accepted
 
 
 def review_community_summary(summary_id, action, reviewer, note=None):

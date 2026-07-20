@@ -9,6 +9,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from mech_chatbot.evaluation.review_governance import review_governance_status
 from scripts.controlled_demo_eval.review_pack import (
     HUMAN_REVIEW_TEMPLATE,
     review_contract_sha256,
@@ -16,7 +17,9 @@ from scripts.controlled_demo_eval.review_pack import (
 
 
 CONTROLLED_DECISIONS = {"accepted", "rejected", "needs_discussion"}
-GRAPH_MUTABLE_FIELDS = {"reviewer", "expected_correct", "review_note"}
+GRAPH_MUTABLE_FIELDS = {
+    "reviewer", "review_source", "expected_correct", "review_note",
+}
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -133,8 +136,9 @@ def _graph_by_id(rows) -> tuple[dict, bool, bool]:
 
 def evaluate_graph_review(
     source_rows, reviewed_rows, *, anchor: dict, source_sha256: str,
-    minimum_sample=20, minimum_precision=0.95,
+    minimum_sample=20, minimum_precision=0.95, review_governance=None,
 ) -> dict:
+    governance = review_governance_status(review_governance)
     source, source_duplicates, source_blank = _graph_by_id(source_rows)
     reviewed, reviewed_duplicates, reviewed_blank = _graph_by_id(reviewed_rows)
     anchor_matches = all((
@@ -165,7 +169,8 @@ def evaluate_graph_review(
             immutable_matches,
             reviewer,
             review_note,
-            row.get("review_source") == "independent",
+            row.get("review_source") == governance.review_source,
+            governance.mode != "single_owner" or reviewer == governance.owner,
             isinstance(expected_correct, bool),
         ))
         if not row_valid:
@@ -178,7 +183,7 @@ def evaluate_graph_review(
     validation_passed = all((
         anchor_matches, bool(source), bool(reviewed), not source_duplicates,
         not reviewed_duplicates, not source_blank, not reviewed_blank,
-        not invalid_edge_ids,
+        not invalid_edge_ids, governance.valid,
     ))
     review_complete = validation_passed and sample_count >= int(minimum_sample)
     return {
@@ -189,6 +194,9 @@ def evaluate_graph_review(
         "review_sample_count": sample_count,
         "minimum_review_sample": int(minimum_sample),
         "reviewed_edge_precision": precision,
+        "review_mode": governance.mode,
+        "review_source": governance.review_source,
+        "review_governance_valid": governance.valid,
         "minimum_reviewed_edge_precision": float(minimum_precision),
         "ready_for_graph_quality_gate": (
             review_complete

@@ -26,6 +26,9 @@ def exercise_review(output: Path):
     from mech_chatbot.db.repositories.graph import propose_graph_edge, traverse_knowledge_graph
     _ensure_engine()
     with engine.connect() as connection:
+        started_at = connection.execute(
+            text("SELECT SYSUTCDATETIME()")
+        ).scalar_one()
         rows = {row["CanonicalKey"]: dict(row) for row in connection.execute(text("""
             SELECT n.NodeID, n.CanonicalKey, n.SourceDocID, n.SourcePage, n.SourceVersion
             FROM dbo.KnowledgeGraphNode n JOIN dbo.TaiLieu t ON t.DocID=n.SourceDocID
@@ -80,10 +83,14 @@ def exercise_review(output: Path):
     with engine.connect() as connection:
         audit_count = int(connection.execute(text("""
             SELECT COUNT(1) FROM dbo.AuditLog
-            WHERE EntityType='graph_proposal' AND EntityID IN (:approved_id,:rejected_id)
-              AND Action IN ('graph_proposal_approve','graph_proposal_reject')
+            WHERE EntityType='graph_proposal' AND CreatedAt >= :started_at
+              AND (
+                    (EntityID=:approved_id AND Action='graph_proposal_approve')
+                 OR (EntityID=:rejected_id AND Action='graph_proposal_reject')
+              )
         """), {
             "approved_id": int(correct["proposal_id"]), "rejected_id": int(wrong["proposal_id"]),
+            "started_at": started_at,
         }).scalar_one())
         statuses = [dict(row) for row in connection.execute(text("""
             SELECT ProposalID proposal_id, Status status, ReviewedBy reviewed_by,

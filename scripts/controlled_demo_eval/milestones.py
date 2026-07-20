@@ -4,16 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mech_chatbot.rag.feature_activation import FEATURE_FLAGS
 
-FEATURE_FLAGS = (
-    "RAG_CRAG_ENABLED",
-    "RAG_CLAIM_REPAIR_ENABLED",
-    "RAG_GROUNDED_MATH_ENABLED",
-    "RAG_LATE_INTERACTION_ENABLED",
-    "RAG_QUERY_DECOMPOSITION_ENABLED",
-    "RAG_GRAPH_RETRIEVAL_ENABLED",
-    "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
-)
 
 EXPECTED_GROUP_COUNTS = {
     "factual": 12,

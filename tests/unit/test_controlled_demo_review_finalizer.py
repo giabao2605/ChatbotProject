@@ -82,6 +82,26 @@ def _graph_row(edge_id):
     }
 
 
+def _single_owner_governance():
+    return {
+        "schema": "rag-review-governance-v1",
+        "mode": "single_owner",
+        "owner": "bao.nguyen",
+        "scope": "controlled_demo",
+        "source_commit": "a" * 40,
+        "risk_accepted": True,
+        "accepted_at": "2026-07-20T10:00:00Z",
+        "role_signoffs": {
+            role: {
+                "owner": "bao.nguyen",
+                "signed": True,
+                "note": f"{role} checklist reviewed",
+            }
+            for role in ("rag", "security_qa", "operations")
+        },
+    }
+
+
 def test_controlled_review_complete_is_metadata_only():
     rows = [_review_row("case-1"), _review_row("case-2")]
     pack = _pack(rows=rows)
@@ -205,6 +225,70 @@ def test_graph_review_under_minimum_sample_is_not_ready():
     assert report["validation_passed"] is True
     assert report["review_sample_count"] == 19
     assert report["ready_for_graph_quality_gate"] is False
+
+
+def test_graph_review_accepts_one_owner_only_when_risk_is_explicit():
+    source = [_graph_row(index) for index in range(1, 21)]
+    reviewed = [
+        {
+            **row,
+            "reviewer": "bao.nguyen",
+            "review_source": "owner_review",
+            "expected_correct": True,
+            "review_note": "source evidence checked by the named owner",
+        }
+        for row in source
+    ]
+    governance = _single_owner_governance()
+
+    report = evaluate_graph_review(
+        source,
+        reviewed,
+        anchor={"source_sha256": "q" * 64, "edge_count": 20},
+        source_sha256="q" * 64,
+        review_governance=governance,
+    )
+
+    assert report["validation_passed"] is True
+    assert report["review_mode"] == "single_owner"
+    assert report["review_source"] == "owner_review"
+    assert report["reviewer_count"] == 1
+    assert report["ready_for_graph_quality_gate"] is True
+
+    governance["risk_accepted"] = False
+    rejected = evaluate_graph_review(
+        source,
+        reviewed,
+        anchor={"source_sha256": "q" * 64, "edge_count": 20},
+        source_sha256="q" * 64,
+        review_governance=governance,
+    )
+    assert rejected["validation_passed"] is False
+    assert rejected["ready_for_graph_quality_gate"] is False
+
+
+def test_single_owner_graph_review_cannot_be_mislabeled_independent():
+    source = [_graph_row(index) for index in range(1, 21)]
+    reviewed = [
+        {
+            **row,
+            "reviewer": "bao.nguyen",
+            "expected_correct": True,
+            "review_note": "checked",
+        }
+        for row in source
+    ]
+
+    report = evaluate_graph_review(
+        source,
+        reviewed,
+        anchor={"source_sha256": "q" * 64, "edge_count": 20},
+        source_sha256="q" * 64,
+        review_governance=_single_owner_governance(),
+    )
+
+    assert report["validation_passed"] is False
+    assert report["invalid_edge_ids"] == list(range(1, 21))
 
 
 def test_combined_finalization_never_unlocks_community_before_graph_gate():

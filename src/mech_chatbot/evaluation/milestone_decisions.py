@@ -7,17 +7,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from mech_chatbot.rag.feature_activation import FEATURE_FLAGS, MILESTONE_FLAGS
 
 DECISION_SCOPES = {"controlled_demo", "default_rollout"}
 DECISIONS = {"accepted", "rejected", "inconclusive"}
-MILESTONE_FLAGS = {
-    "crag": ("RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"),
-    "grounded_math": ("RAG_GROUNDED_MATH_ENABLED",),
-    "late_interaction": ("RAG_LATE_INTERACTION_ENABLED",),
-    "query_decomposition": ("RAG_QUERY_DECOMPOSITION_ENABLED",),
-    "graph_retrieval": ("RAG_GRAPH_RETRIEVAL_ENABLED",),
-    "community_summaries": ("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",),
-}
 DEMO_MILESTONES = frozenset(MILESTONE_FLAGS)
 
 
@@ -291,6 +284,54 @@ def build_demo_matrix(feature_matrix: dict, decisions: dict) -> dict:
     }
 
 
+def build_release_matrix(feature_matrix: dict, decisions: dict) -> dict:
+    """Resolve requested matrix flags through per-feature release decisions."""
+    combinations = []
+    all_unresolved = set()
+    for row in feature_matrix.get("combinations") or []:
+        requested = {
+            name: (
+                value if isinstance(value, bool)
+                else str(value).strip().casefold() in {"1", "true", "yes", "on"}
+            )
+            for name, value in (row.get("flags") or {}).items()
+        }
+        effective = dict(requested)
+        fallbacks = []
+        unresolved = []
+        for flag, enabled in requested.items():
+            if not enabled:
+                continue
+            decision = (decisions.get(flag) or {}).get("decision")
+            if decision == "rejected":
+                effective[flag] = False
+                fallbacks.append(flag)
+            elif decision != "accepted":
+                effective[flag] = False
+                unresolved.append(flag)
+                all_unresolved.add(flag)
+        combinations.append({
+            "id": row.get("id"),
+            "prerequisites": list(row.get("prerequisites") or []),
+            "requested_flags": requested,
+            "effective_flags": effective,
+            "fallback_features": fallbacks,
+            "unresolved_features": unresolved,
+            "versions": dict(row.get("versions") or {}),
+        })
+    return {
+        "schema": "integrated-release-feature-matrix-v1",
+        "source_schema": feature_matrix.get("schema"),
+        "source_version": feature_matrix.get("version"),
+        "scope": "default_rollout",
+        "decisions_complete": not all_unresolved,
+        "unresolved_features": [
+            flag for flag in FEATURE_FLAGS if flag in all_unresolved
+        ],
+        "combinations": combinations,
+    }
+
+
 def evaluate_demo_readiness(*, capability_passed: bool, decision_reports: dict) -> dict:
     complete = (
         set(decision_reports or {}) == DEMO_MILESTONES
@@ -344,7 +385,7 @@ def classify_provider_outcome(errors) -> dict:
 
 
 __all__ = [
-    "build_demo_matrix", "classify_provider_outcome", "evaluate_demo_readiness",
+    "build_demo_matrix", "build_release_matrix", "classify_provider_outcome", "evaluate_demo_readiness",
     "resolve_demo_flags",
     "validate_milestone_decision", "verify_demo_decision_ledger",
     "verify_milestone_decision",

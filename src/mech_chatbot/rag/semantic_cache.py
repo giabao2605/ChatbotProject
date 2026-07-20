@@ -69,23 +69,20 @@ def _env_flag(name, environ=None):
 
 
 def pipeline_namespace(environ=None):
+    from mech_chatbot.rag.feature_activation import FEATURE_FLAGS, VERSION_FIELDS
+
     env = os.environ if environ is None else environ
-    flags = (
-        "RAG_CRAG_ENABLED",
-        "RAG_CLAIM_REPAIR_ENABLED",
-        "RAG_GROUNDED_MATH_ENABLED",
-        "RAG_LATE_INTERACTION_ENABLED",
-        "RAG_QUERY_DECOMPOSITION_ENABLED",
-        "RAG_GRAPH_RETRIEVAL_ENABLED",
-        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
+    defaults = {
+        "RAG_PLANNER_VERSION": "planner-v1",
+        "RAG_LATE_INDEX_VERSION": "late-v2",
+        "RAG_GRAPH_SERVING_EPOCH": "graph-v1",
+        "RAG_COMMUNITY_SERVING_EPOCH": "community-v1",
+    }
+    versions = tuple(env.get(name, defaults[name]) for name in VERSION_FIELDS)
+    raw = "|".join(
+        [f"{name}={_env_flag(name, env)}" for name in FEATURE_FLAGS]
+        + list(versions)
     )
-    versions = (
-        env.get("RAG_PLANNER_VERSION", "planner-v1"),
-        env.get("RAG_LATE_INDEX_VERSION", "late-v2"),
-        env.get("RAG_GRAPH_SERVING_EPOCH", "graph-v1"),
-        env.get("RAG_COMMUNITY_SERVING_EPOCH", "community-v1"),
-    )
-    raw = "|".join([f"{name}={_env_flag(name, env)}" for name in flags] + list(versions))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
 

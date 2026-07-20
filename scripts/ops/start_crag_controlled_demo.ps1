@@ -32,7 +32,9 @@ $required = @(
     $demoConfig.runtime_contract.execution_context,
     $demoConfig.runtime_contract.request_deadline_seconds,
     $demoConfig.deployments.control.id,
-    $demoConfig.deployments.candidate.id
+    $demoConfig.deployments.candidate.id,
+    $demoConfig.activation_bundle.path,
+    $demoConfig.activation_bundle.sha256
 )
 if ($required | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) -or [string]$_ -match "REPLACE_WITH" }) {
     throw "Config con thieu gia tri pinned hoac van chua placeholder."
@@ -43,6 +45,13 @@ if ([string]$demoConfig.runtime_contract.execution_context -ne "production") {
 if ($demoConfig.runtime_contract.evaluation_force_ambiguous -ne $false) {
     throw "runtime_contract.evaluation_force_ambiguous phai la false."
 }
+
+$bundlePathValue = [string]$demoConfig.activation_bundle.path
+if (![IO.Path]::IsPathRooted($bundlePathValue)) {
+    $bundlePathValue = Join-Path (Split-Path -Parent $configPath) $bundlePathValue
+}
+$bundlePath = (Resolve-Path -LiteralPath $bundlePathValue).Path
+$bundleSha256 = [string]$demoConfig.activation_bundle.sha256
 $requestDeadline = 0.0
 if (
     ![double]::TryParse(
@@ -77,6 +86,41 @@ foreach ($port in 8101, 8102) {
 
 New-Item -ItemType Directory -Force -Path $stateDir, $logsDir | Out-Null
 
+function ConvertTo-EnvironmentTable {
+    param([object]$Value)
+    $table = @{}
+    foreach ($property in $Value.PSObject.Properties) {
+        $table[$property.Name] = [string]$property.Value
+    }
+    return $table
+}
+
+function Render-ActivationProfile {
+    param([string]$Profile)
+    $arguments = @(
+        "-m", "scripts.ops.render_activation_profile",
+        "--profile", $Profile,
+        "--scope", "controlled_demo"
+    )
+    if ($Profile -ne "all_off") {
+        $arguments += @(
+            "--activation-bundle", $bundlePath,
+            "--activation-bundle-sha256", $bundleSha256
+        )
+    }
+    $output = & $pythonExe @arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Khong render duoc activation profile $Profile."
+    }
+    return ConvertTo-EnvironmentTable (($output -join [Environment]::NewLine) | ConvertFrom-Json)
+}
+
+$controlEnv = Render-ActivationProfile "all_off"
+$candidateEnv = Render-ActivationProfile "crag_claim"
+if ($candidateEnv.RAG_DEPLOYMENT_GIT_SHA -ne [string]$demoConfig.git_sha) {
+    throw "Activation bundle khong trung config.git_sha."
+}
+
 $common = @{
     RAG_DEPLOYMENT_GIT_SHA = [string]$demoConfig.git_sha
     RAG_SNAPSHOT_FINGERPRINT = [string]$demoConfig.snapshot_fingerprint
@@ -86,30 +130,23 @@ $common = @{
     RAG_REQUEST_DEADLINE_SECONDS = $requestDeadline.ToString(
         [Globalization.CultureInfo]::InvariantCulture
     )
-    RAG_GROUNDED_MATH_ENABLED = "false"
-    RAG_LATE_INTERACTION_ENABLED = "false"
-    RAG_QUERY_DECOMPOSITION_ENABLED = "false"
-    RAG_GRAPH_RETRIEVAL_ENABLED = "false"
-    RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED = "false"
     PARENT_CONTEXT_MAX_WORKERS = "4"
+}
+$common.Keys | ForEach-Object {
+    $controlEnv[$_] = $common[$_]
+    $candidateEnv[$_] = $common[$_]
 }
 $started = @()
 try {
-    $controlEnv = $common.Clone()
     $controlEnv.RAG_SERVER_PORT = "8101"
     $controlEnv.RAG_DEPLOYMENT_ID = [string]$demoConfig.deployments.control.id
-    $controlEnv.RAG_CRAG_ENABLED = "false"
-    $controlEnv.RAG_CLAIM_REPAIR_ENABLED = "false"
     $controlEnv.RAG_TRACE_LOG_FILE = Join-Path $logsDir "control-trace.jsonl"
     $started += Start-CragDemoProcess $pythonExe $projectRoot "control" $controlEnv `
         "mech_chatbot.api.rag_server" (Join-Path $logsDir "control.out.log") `
         (Join-Path $logsDir "control.err.log")
 
-    $candidateEnv = $common.Clone()
     $candidateEnv.RAG_SERVER_PORT = "8102"
     $candidateEnv.RAG_DEPLOYMENT_ID = [string]$demoConfig.deployments.candidate.id
-    $candidateEnv.RAG_CRAG_ENABLED = "true"
-    $candidateEnv.RAG_CLAIM_REPAIR_ENABLED = "true"
     $candidateEnv.RAG_TRACE_LOG_FILE = Join-Path $logsDir "candidate-trace.jsonl"
     $started += Start-CragDemoProcess $pythonExe $projectRoot "candidate" $candidateEnv `
         "mech_chatbot.api.rag_server" (Join-Path $logsDir "candidate.out.log") `
@@ -133,6 +170,8 @@ try {
         config_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $configPath).Hash.ToLowerInvariant()
         preflight = $preflightPath
         preflight_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $preflightPath).Hash.ToLowerInvariant()
+        activation_bundle = $bundlePath
+        activation_bundle_sha256 = $bundleSha256.ToLowerInvariant()
         gateway_enabled = $false
         processes = $started
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding utf8

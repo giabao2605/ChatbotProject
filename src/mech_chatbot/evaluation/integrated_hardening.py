@@ -4,22 +4,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+from mech_chatbot.rag.feature_activation import FEATURE_FLAGS, VERSION_FIELDS
 
-FEATURE_FLAGS = (
-    "RAG_CRAG_ENABLED",
-    "RAG_CLAIM_REPAIR_ENABLED",
-    "RAG_GROUNDED_MATH_ENABLED",
-    "RAG_LATE_INTERACTION_ENABLED",
-    "RAG_QUERY_DECOMPOSITION_ENABLED",
-    "RAG_GRAPH_RETRIEVAL_ENABLED",
-    "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
-)
-VERSION_FIELDS = (
-    "RAG_PLANNER_VERSION",
-    "RAG_LATE_INDEX_VERSION",
-    "RAG_GRAPH_SERVING_EPOCH",
-    "RAG_COMMUNITY_SERVING_EPOCH",
-)
 REQUIRED_COMBINATIONS = {
     "crag_repair": {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"},
     "crag_grounded_math": {"RAG_CRAG_ENABLED", "RAG_GROUNDED_MATH_ENABLED"},
@@ -33,6 +19,10 @@ REQUIRED_COMBINATIONS = {
     "decomposition_late_interaction": {
         "RAG_CRAG_ENABLED", "RAG_QUERY_DECOMPOSITION_ENABLED",
         "RAG_LATE_INTERACTION_ENABLED",
+    },
+    "graph_community_summaries": {
+        "RAG_CRAG_ENABLED", "RAG_GRAPH_RETRIEVAL_ENABLED",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
     },
 }
 REQUIRED_SECURITY_DIMENSIONS = {
@@ -51,7 +41,7 @@ REQUEST_LIMITS = {
 }
 REQUIRED_PREREQUISITES = {
     "crag", "grounded_math", "late_interaction", "query_decomposition",
-    "graph_retrieval",
+    "graph_retrieval", "community_summaries",
 }
 
 

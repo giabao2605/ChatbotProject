@@ -304,6 +304,17 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         graph = candidate.get("graph_evaluation") or {}
         baseline_graph = baseline.get("graph_evaluation") or {}
         domains = metadata.get("domain_coverage") or {}
+        review_source = metadata.get("review_sample_source")
+        review_mode = metadata.get("review_mode") or (
+            "multi_reviewer" if review_source == "independent" else None
+        )
+        review_governance_valid = (
+            review_mode == "multi_reviewer" and review_source == "independent"
+        ) or (
+            review_mode == "single_owner"
+            and review_source == "owner_review"
+            and metadata.get("review_governance_valid") is True
+        )
         checks = {
             **common,
             "relational_accuracy_gain": float(
@@ -313,7 +324,7 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             ) + 0.10,
             "reviewed_edge_precision": float(metadata.get("reviewed_edge_precision", 0.0)) >= 0.95,
             "review_workflow_fixture_passed": metadata.get("workflow_fixture_passed") is True,
-            "review_sample_is_independent": metadata.get("review_sample_source") == "independent",
+            "review_sample_governance_valid": review_governance_valid,
             "review_sample_size_sufficient": int(metadata.get("review_sample_count", 0)) >= 20,
             "approved_edge_pool_sufficient": int(metadata.get("approved_edge_count", 0)) >= 20,
             "structured_coverage": float(metadata.get("structured_coverage", 0.0)) >= 0.80,
@@ -329,7 +340,7 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         limits = {
             "min_accuracy_gain": 0.10, "min_structured_coverage": 0.80,
             "min_reviewed_edge_precision": 0.95, "max_latency_ratio": 1.5,
-            "min_independent_review_sample": 20,
+            "min_governed_review_sample": 20,
             "min_approved_edge_pool": 20,
             "max_hops": 2, "max_edges": 50,
         }

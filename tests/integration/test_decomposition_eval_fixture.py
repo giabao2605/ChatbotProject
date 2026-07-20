@@ -17,8 +17,9 @@ pytestmark = [
 
 
 def test_decomposition_fixture_is_published_current_and_governed():
-    report = run_live_preflight(cases())
+    manifest_cases = cases()
+    report = run_live_preflight(manifest_cases)
 
     assert report["passed"] is True, report["failures"]
-    assert report["checked_cases"] == 8
+    assert report["checked_cases"] == len(manifest_cases)
     assert report["case_resolutions"]["decomp-access-denied"]["expected_branches"][1]["expected_citations"] == []

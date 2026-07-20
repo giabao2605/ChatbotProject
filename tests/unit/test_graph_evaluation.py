@@ -136,6 +136,17 @@ def test_independent_review_samples_require_unique_identity_and_reviewer():
         }], require_independent=True, allowed_edge_ids={1})
 
 
+def test_graph_review_exercise_counts_only_audits_from_the_current_run():
+    source = __import__("pathlib").Path(
+        "scripts/graph_eval/exercise_review.py"
+    ).read_text(encoding="utf-8")
+
+    assert "SELECT SYSUTCDATETIME()" in source
+    assert "CreatedAt >= :started_at" in source
+    assert "EntityID=:approved_id AND Action='graph_proposal_approve'" in source
+    assert "EntityID=:rejected_id AND Action='graph_proposal_reject'" in source
+
+
 def test_graph_preflight_resolves_relations_and_fails_closed_on_pending_edge():
     case = {
         "id": "assembly-part", "expected_document": "assembly.md",

@@ -23,9 +23,10 @@ from mech_chatbot.evaluation.integrated_hardening import (
     validate_security_manifest,
 )
 from mech_chatbot.evaluation.milestone_decisions import (
-    build_demo_matrix,
+    build_demo_matrix, build_release_matrix,
     verify_demo_decision_ledger,
 )
+from mech_chatbot.rag.feature_activation import FEATURE_FLAGS
 from mech_chatbot.rag.semantic_cache import pipeline_namespace
 from scripts.integrated_eval.contracts import assert_clean_worktree
 
@@ -33,6 +34,7 @@ from scripts.integrated_eval.contracts import assert_clean_worktree
 def build_preflight(
     *, matrix, security_cases, prerequisites, offline_evidence, git_sha,
     prerequisite_verification=None, demo_decision_verification=None,
+    release_decisions=None,
 ) -> dict:
     matrix_report = validate_combination_matrix(matrix)
     security_report = validate_security_manifest(security_cases)
@@ -72,6 +74,26 @@ def build_preflight(
         ),
         prerequisites=prerequisites,
     )
+    release_payload = release_decisions or {}
+    release_rows = (
+        release_payload.get("decisions") or {}
+        if release_payload.get("schema") == "integrated-release-decisions-v1"
+        else {}
+    )
+    release_complete = (
+        set(release_rows) == set(FEATURE_FLAGS)
+        and all(
+            isinstance(row, dict)
+            and row.get("decision") in {"accepted", "rejected"}
+            for row in release_rows.values()
+        )
+    )
+    release_matrix = build_release_matrix(matrix, release_rows)
+    release_matrix["decisions_complete"] = release_complete
+    if not release_complete:
+        readiness["ready_for_live_matrix"] = False
+        if "release_decisions_incomplete" not in readiness["blockers"]:
+            readiness["blockers"].append("release_decisions_incomplete")
     readiness.update({
         "git_sha": git_sha,
         "offline_evidence_commit_matches": evidence_commit_matches,
@@ -92,6 +114,8 @@ def build_preflight(
             matrix,
             (demo_decision_verification or {}).get("decisions") or {},
         ),
+        "release_decisions_complete": release_complete,
+        "release_matrix": release_matrix,
     })
     return readiness
 
@@ -113,6 +137,7 @@ _PREREQUISITE_SCHEMAS = {
     "late_interaction": "retrieval-intelligence-gate-v1",
     "query_decomposition": "decomposition-rollout-run-v1",
     "graph_retrieval": "graph-rollout-run-v1",
+    "community_summaries": "retrieval-intelligence-gate-v1",
 }
 
 
@@ -123,6 +148,11 @@ def _milestone_outcome_valid(name, artifact, decision, git_sha):
     if git_sha and artifact_sha != git_sha:
         return False
     if name == "late_interaction" and artifact.get("stage") != "late_interaction":
+        return False
+    if (
+        name == "community_summaries"
+        and artifact.get("stage") != "community_summaries"
+    ):
         return False
     if decision == "accepted":
         if name == "crag":
@@ -143,7 +173,7 @@ def _prerequisites(payload, git_sha=None):
     stages = payload.get("stages") or {}
     required = {
         "crag", "grounded_math", "late_interaction", "query_decomposition",
-        "graph_retrieval",
+        "graph_retrieval", "community_summaries",
     }
     statuses = {}
     verification = {}
@@ -191,6 +221,7 @@ def main(argv=None):
     parser.add_argument("--prerequisites", type=Path, required=True)
     parser.add_argument("--offline-evidence", type=Path, required=True)
     parser.add_argument("--demo-decisions", type=Path)
+    parser.add_argument("--release-decisions", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     assert_clean_worktree(ROOT)
@@ -206,6 +237,9 @@ def main(argv=None):
         )
         if args.demo_decisions else None
     )
+    release_decisions = (
+        _read_json(args.release_decisions) if args.release_decisions else None
+    )
     artifact = build_preflight(
         matrix=_read_json(args.matrix),
         security_cases=_read_jsonl(args.security_manifest),
@@ -214,6 +248,7 @@ def main(argv=None):
         git_sha=git_sha,
         prerequisite_verification=prerequisite_verification,
         demo_decision_verification=demo_verification,
+        release_decisions=release_decisions,
     )
     artifact.update({
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -222,6 +257,7 @@ def main(argv=None):
             for path in (
                 args.matrix, args.security_manifest, args.prerequisites,
                 args.offline_evidence, args.demo_decisions,
+                args.release_decisions,
             )
             if path is not None
         },
