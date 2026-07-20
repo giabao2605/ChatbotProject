@@ -14,6 +14,7 @@ for candidate in (ROOT, SRC):
         sys.path.insert(0, str(candidate))
 
 from mech_chatbot.evaluation.rollout_guardrails import evaluate_rollout_series
+from mech_chatbot.governance.artifact_references import build_json_reference
 
 
 def _read(path: Path) -> dict:
@@ -36,11 +37,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     decisions = _read(args.decisions) if args.decisions else {}
+    pairs = [_read(path) for path in args.pair]
+    pair_references = [
+        build_json_reference(
+            path, root=ROOT, expected_schema="rollout-evidence-pair-v1",
+        )
+        for path in args.pair
+    ]
     report = evaluate_rollout_series(
         args.stage,
-        [_read(path) for path in args.pair],
+        pairs,
         prior_decisions=decisions,
         minimum_pairs=args.minimum_pairs,
+        pair_references=pair_references,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

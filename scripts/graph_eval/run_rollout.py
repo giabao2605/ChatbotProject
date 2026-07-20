@@ -114,7 +114,8 @@ def run_rollout(manifest, output, trace, *, rollback_test_artifact=None):
         "collection": FIXTURE_COLLECTION,
     }
     pair = {
-        "schema": "rollout-evidence-pair-v1", "run_id": output.name,
+        "schema": "rollout-evidence-pair-v1", "source_commit": git_sha,
+        "run_id": output.name,
         "stage": "graph_retrieval", "evidence_type": "staging_evaluation",
         "baseline": {**context, **_artifact_reference(output / "baseline" / "eval.json"), **baseline},
         "candidate": {**context, **_artifact_reference(output / "candidate" / "eval.json"), **candidate},

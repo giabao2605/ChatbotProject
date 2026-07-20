@@ -138,7 +138,8 @@ def run_rollout(manifest, output, trace, *, router_mode="offline", rollback_test
     }
     rollback_reference = _rollback_reference(rollback_test_artifact, git_sha)
     pair = {
-        "schema": "rollout-evidence-pair-v1", "run_id": Path(output).name,
+        "schema": "rollout-evidence-pair-v1", "source_commit": git_sha,
+        "run_id": Path(output).name,
         "stage": "grounded_math", "evidence_type": "staging_evaluation",
         "baseline": {
             **context, **_artifact_reference(Path(output) / "baseline" / "eval.json"),

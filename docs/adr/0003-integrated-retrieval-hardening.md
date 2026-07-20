@@ -3,8 +3,9 @@
 ## Status
 
 Accepted for the offline control plane; amended 2026-07-20 for cumulative
-activation profiles and Community Summaries. Live evaluation remains blocked
-until its prerequisite decisions and immutable evidence are complete.
+activation profiles, Community Summaries, and the CRAG pre-pilot authorization.
+Live evaluation remains blocked until its prerequisite decisions and immutable
+evidence are complete.
 
 ## Context
 
@@ -38,6 +39,15 @@ latency and cost.
 - A live matrix cannot start from offline tests alone. Every prerequisite
   milestone must have a verified completion/rejection decision, and the final
   integrated gate must bind its artifacts to one clean commit and snapshot.
+- Starting the CRAG controlled demo requires a
+  `crag-controlled-demo-authorization-v1`: exactly three independent passing
+  baseline/candidate pairs on one commit, plus a distinct passing provider
+  smoke completed before each pair. This artifact authorizes collection of
+  pilot evidence; it is not the `crag-production-pilot-v1` outcome.
+- Default rollout still requires the completed `crag-production-pilot-v1`
+  evidence. A rejected Late Interaction artifact may remain bound to its
+  historical tested commit; accepted milestones must be bound to the current
+  rollout commit.
 
 ## Consequences
 

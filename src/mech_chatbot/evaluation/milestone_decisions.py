@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
+from mech_chatbot.governance.artifact_references import json_reference_report
 from mech_chatbot.rag.feature_activation import FEATURE_FLAGS, MILESTONE_FLAGS
 
 DECISION_SCOPES = {"controlled_demo", "default_rollout"}
@@ -14,31 +13,9 @@ DECISIONS = {"accepted", "rejected", "inconclusive"}
 DEMO_MILESTONES = frozenset(MILESTONE_FLAGS)
 
 
-def _resolve_path(value: object, root: str | Path) -> Path:
-    path = Path(str(value or ""))
-    return path if path.is_absolute() else Path(root) / path
-
-
 def _load_json_reference(reference: dict, *, root: str | Path) -> tuple[dict, dict]:
-    path = _resolve_path(reference.get("path"), root)
-    try:
-        raw = path.read_bytes()
-        artifact = json.loads(raw.decode("utf-8"))
-        report = {
-            "path": str(path),
-            "exists": True,
-            "sha256_matches": hashlib.sha256(raw).hexdigest() == reference.get("sha256"),
-            "schema_matches": (
-                not reference.get("schema")
-                or artifact.get("schema") == reference.get("schema")
-            ),
-        }
-        return artifact, report
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}, {
-            "path": str(path), "exists": False, "sha256_matches": False,
-            "schema_matches": False,
-        }
+    artifact, _, path, checks = json_reference_report(reference, root=root)
+    return artifact, {"path": str(path), **checks}
 
 
 def _verify_artifact_reference(

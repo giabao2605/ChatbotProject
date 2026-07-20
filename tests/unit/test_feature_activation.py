@@ -10,6 +10,12 @@ from mech_chatbot.rag.feature_activation import (
     VERSION_DEFAULTS,
     activation_status,
 )
+from mech_chatbot.governance.crag_demo_authorization import (
+    build_crag_demo_authorization,
+    validate_crag_demo_authorization,
+)
+from mech_chatbot.governance.rollout_guardrails import evaluate_rollout_series
+from mech_chatbot.evaluation.milestone_decisions import verify_milestone_decision
 from scripts.ops.build_activation_bundle import build_activation_bundle
 from scripts.ops.render_activation_profile import build_profile_environment
 
@@ -21,6 +27,119 @@ def _write_json(path, payload):
     raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     path.write_bytes(raw)
     return hashlib.sha256(raw).hexdigest()
+
+
+def _artifact_reference(path, payload):
+    digest = _write_json(path, payload)
+    return {
+        "artifact_path": str(path),
+        "artifact_schema": payload["schema"],
+        "artifact_sha256": digest,
+    }
+
+
+def _crag_pair(tmp_path, index, *, source_commit, passed):
+    run_id = f"pair-{index}"
+    contexts = {}
+    for arm, minute in (("baseline", 0), ("candidate", 20)):
+        started_at = f"2026-07-20T0{index}:" + f"{minute:02d}:00Z"
+        completed_at = f"2026-07-20T0{index}:" + f"{minute + 10:02d}:00Z"
+        evaluation = _artifact_reference(
+            tmp_path / f"{run_id}-{arm}-eval.json",
+            {
+                "schema": "rag-labeled-eval-v4",
+                "run_id": run_id,
+                "run_label": arm,
+                "git_sha": source_commit,
+                "manifest_sha256s": ["manifest-v1"],
+                "snapshot_fingerprint": "snapshot-v1",
+                "provider_configuration_sha256": "provider-v1",
+                "governance_scope_sha256": "governance-v1",
+                "benchmark_concurrency": 1,
+                "collection": "MechChatbot_CRAG_Eval_v1",
+            },
+        )
+        trace = _artifact_reference(
+            tmp_path / f"{run_id}-{arm}-trace.json",
+            {
+                "schema": "rag-refusal-snapshot-v1",
+                "run_id": run_id,
+                "source": {"git_sha": source_commit},
+                "filters": {
+                    "start": started_at,
+                    "end": completed_at,
+                    "execution_contexts": ["evaluation"],
+                },
+            },
+        )
+        contexts[arm] = {
+            "git_sha": source_commit,
+            "manifest_sha256": "manifest-v1",
+            "snapshot_fingerprint": "snapshot-v1",
+            "provider_configuration_sha256": "provider-v1",
+            "concurrency": 1,
+            "governance_scope_sha256": "governance-v1",
+            "collection": "MechChatbot_CRAG_Eval_v1",
+            "started_at": started_at,
+            "completed_at": completed_at,
+            **evaluation,
+            "trace_path": trace["artifact_path"],
+            "trace_schema": trace["artifact_schema"],
+            "trace_sha256": trace["artifact_sha256"],
+        }
+    gate_checks = {
+        "wrong_answer_not_increased": True,
+        "leakage_zero": passed,
+    }
+    gate = _artifact_reference(
+        tmp_path / f"{run_id}-gate.json",
+        {
+            "schema": "crag-rollout-gate-v1",
+            "passed": all(gate_checks.values()),
+            "checks": gate_checks,
+            "inputs": {
+                "baseline_eval_sha256": contexts["baseline"]["artifact_sha256"],
+                "candidate_eval_sha256": contexts["candidate"]["artifact_sha256"],
+                "baseline_trace_sha256": contexts["baseline"]["trace_sha256"],
+                "candidate_trace_sha256": contexts["candidate"]["trace_sha256"],
+            },
+        },
+    )
+    rollback = _artifact_reference(
+        tmp_path / f"{run_id}-rollback.json",
+        {
+            "schema": "rollback-test-evidence-v1",
+            "git_sha": source_commit,
+            "passed": True,
+            "flags": ["RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"],
+        },
+    )
+    pair = {
+        "schema": "rollout-evidence-pair-v1",
+        "source_commit": source_commit,
+        "run_id": run_id,
+        "stage": "crag",
+        "evidence_type": "staging_evaluation",
+        "baseline": contexts["baseline"],
+        "candidate": contexts["candidate"],
+        "data_plane": {
+            "production_collection": "TaiLieuKyThuat_v2",
+            "mutation_mode": "staging",
+        },
+        "gate": gate,
+        "rollback": {
+            "flags": ["RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"],
+            "defaults_disabled": True,
+            **rollback,
+        },
+    }
+    pair_path = tmp_path / f"{run_id}.json"
+    pair_sha = _write_json(pair_path, pair)
+    return pair, {
+        "path": str(pair_path),
+        "sha256": pair_sha,
+        "schema": "rollout-evidence-pair-v1",
+    }
 
 
 def _environment(**overrides):
@@ -129,14 +248,53 @@ def _controlled_crag_bundle(
 ):
     source_commit = "a" * 40
     review_mode = "single_owner" if single_owner else "multi_reviewer"
-    evidence = {
-        "schema": "crag-production-pilot-v1",
-        "git_sha": source_commit,
-        "passed": evidence_passed,
-        "production_eligible": evidence_passed,
-        "decision": "accepted" if evidence_passed else "rejected",
-        "review_governance": {"mode": review_mode},
-    }
+    pair_values = [
+        _crag_pair(
+            tmp_path, index, source_commit=source_commit,
+            passed=evidence_passed,
+        )
+        for index in range(1, 4)
+    ]
+    foundation_path = tmp_path / "evaluation-foundation.json"
+    foundation_sha = _write_json(
+        foundation_path, {"schema": "evaluation-foundation-completion-v1"},
+    )
+    series = evaluate_rollout_series(
+        "crag",
+        [value[0] for value in pair_values],
+        prior_decisions={
+            "evaluation_foundation": {
+                "decision": "completed",
+                "artifact": str(foundation_path),
+                "artifact_schema": "evaluation-foundation-completion-v1",
+                "artifact_sha256": foundation_sha,
+            },
+        },
+        pair_references=[value[1] for value in pair_values],
+    )
+    series_path = tmp_path / "crag-series.json"
+    _write_json(series_path, series)
+    smoke_paths = []
+    for index in range(3):
+        smoke_path = tmp_path / f"provider-smoke-{index + 1}.json"
+        _write_json(smoke_path, {
+            "schema": "provider-smoke-v1",
+            "completed_at": f"2026-07-20T0{index}:59:00Z",
+            "request_count": 5,
+            "successful_requests": 5 if evidence_passed else 0,
+            "failed_requests": 0 if evidence_passed else 5,
+            "provider_retries": 0 if evidence_passed else 15,
+            "provider_configuration_sha256": "provider-v1",
+            "provider_outcome": {"provider_blocked": not evidence_passed},
+            "passed": evidence_passed,
+        })
+        smoke_paths.append(smoke_path)
+    evidence = build_crag_demo_authorization(
+        series_path=series_path,
+        provider_smoke_paths=smoke_paths,
+        root=tmp_path,
+        review_mode=review_mode,
+    )
     evidence_path = tmp_path / "controlled-crag-evidence.json"
     evidence_sha = _write_json(evidence_path, evidence)
     decision = {
@@ -148,8 +306,9 @@ def _controlled_crag_bundle(
         "evidence": [{
             "path": str(evidence_path),
             "sha256": evidence_sha,
-            "schema": "crag-production-pilot-v1",
+            "schema": "crag-controlled-demo-authorization-v1",
         }],
+        "reason": "Three independent CRAG pairs and provider smokes passed.",
         "reviewer_signoff": {
             "reviewer": "bao.nguyen",
             "signed_at": "2026-07-20T10:00:00Z",
@@ -164,7 +323,6 @@ def _controlled_crag_bundle(
             "crag": {
                 "path": str(decision_path),
                 "sha256": decision_sha,
-                "schema": "milestone-decision-v2",
             },
         },
     }
@@ -310,6 +468,38 @@ def test_default_rollout_rejects_incomplete_ledger_even_when_active_rows_pass(tm
     assert result.reason == "live_decision_not_accepted"
 
 
+def test_default_rollout_allows_historical_rejection_only_for_late_interaction(
+    tmp_path,
+):
+    bundle_path, _ = _default_bundle(tmp_path)
+    ledger_path = tmp_path / "release-decisions.json"
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    graph_row = ledger["decisions"]["RAG_GRAPH_RETRIEVAL_ENABLED"]
+    graph_path = Path(graph_row["evidence"]["path"])
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph["git_sha"] = "b" * 40
+    graph_row["source_commit"] = "b" * 40
+    graph_row["evidence"]["sha256"] = _write_json(graph_path, graph)
+    ledger_sha = _write_json(ledger_path, ledger)
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["decision_ledger"]["sha256"] = ledger_sha
+    bundle_sha = _write_json(bundle_path, bundle)
+
+    result = activation_status(
+        _environment(
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.reason == "live_decision_not_accepted"
+
+
 def test_controlled_demo_rejects_accepted_decision_when_gate_failed(tmp_path):
     bundle_path, bundle_sha = _controlled_crag_bundle(
         tmp_path, evidence_passed=False,
@@ -328,6 +518,158 @@ def test_controlled_demo_rejects_accepted_decision_when_gate_failed(tmp_path):
 
     assert result.valid is False
     assert result.reason == "live_decision_not_accepted"
+    evidence = json.loads(
+        (tmp_path / "controlled-crag-evidence.json").read_text(encoding="utf-8")
+    )
+    assert evidence["decision"] == "inconclusive"
+
+
+def test_controlled_demo_crag_uses_pre_pilot_authorization_not_pilot_outcome(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is True
+    assert result.live_authorized is True
+    decision = json.loads(
+        (tmp_path / "controlled-crag-decision.json").read_text(encoding="utf-8")
+    )
+    verification = verify_milestone_decision(
+        decision, root=tmp_path, current_commit="a" * 40,
+    )
+    assert verification["passed"] is True
+
+
+def test_controlled_demo_crag_rechecks_nested_provider_smoke_hashes(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    smoke_path = tmp_path / "provider-smoke-2.json"
+    smoke = json.loads(smoke_path.read_text(encoding="utf-8"))
+    smoke["provider_retries"] = 1
+    _write_json(smoke_path, smoke)
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.reason == "live_decision_not_accepted"
+
+
+def test_controlled_demo_crag_rechecks_pair_eval_trace_chain(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    eval_path = tmp_path / "pair-2-candidate-eval.json"
+    evaluation = json.loads(eval_path.read_text(encoding="utf-8"))
+    evaluation["snapshot_fingerprint"] = "tampered-snapshot"
+    _write_json(eval_path, evaluation)
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.reason == "live_decision_not_accepted"
+
+
+def test_controlled_demo_crag_rechecks_evaluation_foundation_reference(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    foundation_path = tmp_path / "evaluation-foundation.json"
+    _write_json(
+        foundation_path,
+        {"schema": "evaluation-foundation-completion-v1", "tampered": True},
+    )
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.reason == "live_decision_not_accepted"
+
+
+def test_crag_demo_authorization_rejects_smoke_run_after_pair_started(tmp_path):
+    _controlled_crag_bundle(tmp_path)
+    smoke_path = tmp_path / "provider-smoke-1.json"
+    smoke = json.loads(smoke_path.read_text(encoding="utf-8"))
+    smoke["completed_at"] = "2026-07-20T01:01:00Z"
+    _write_json(smoke_path, smoke)
+
+    artifact = build_crag_demo_authorization(
+        series_path=tmp_path / "crag-series.json",
+        provider_smoke_paths=[
+            tmp_path / f"provider-smoke-{index}.json"
+            for index in range(1, 4)
+        ],
+        root=tmp_path,
+    )
+
+    assert artifact["passed"] is False
+    assert artifact["checks"]["provider_smokes_precede_pairs"] is False
+    assert validate_crag_demo_authorization(artifact, root=tmp_path)["passed"] is False
+
+
+def test_crag_demo_authorization_rejects_fabricated_series_summary(tmp_path):
+    _controlled_crag_bundle(tmp_path)
+    fabricated_path = tmp_path / "fabricated-series.json"
+    _write_json(fabricated_path, {
+        "schema": "rollout-guardrail-series-v1",
+        "stage": "crag",
+        "source_commit": "a" * 40,
+        "provider_configuration_sha256": "provider-v1",
+        "pair_count": 3,
+        "run_ids": ["pair-1", "pair-2", "pair-3"],
+        "pair_windows": [
+            {"baseline_started_at": f"2026-07-20T0{index}:00:00Z"}
+            for index in range(1, 4)
+        ],
+        "passed": True,
+        "production_eligible": True,
+    })
+
+    artifact = build_crag_demo_authorization(
+        series_path=fabricated_path,
+        provider_smoke_paths=[
+            tmp_path / f"provider-smoke-{index}.json"
+            for index in range(1, 4)
+        ],
+        root=tmp_path,
+    )
+
+    assert artifact["passed"] is False
+    assert artifact["checks"]["series_pair_references_valid"] is False
 
 
 def test_single_owner_crag_requires_single_owner_governance_in_bundle(tmp_path):

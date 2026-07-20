@@ -142,7 +142,12 @@ def _milestone_outcome_valid(name, artifact, decision, git_sha):
     if artifact.get("schema") != _PREREQUISITE_SCHEMAS[name]:
         return False
     artifact_sha = artifact.get("git_sha")
-    if git_sha and artifact_sha != git_sha:
+    historical_late_rejection = (
+        name == "late_interaction" and decision == "rejected"
+    )
+    if not artifact_sha or (
+        git_sha and artifact_sha != git_sha and not historical_late_rejection
+    ):
         return False
     if name == "late_interaction" and artifact.get("stage") != "late_interaction":
         return False

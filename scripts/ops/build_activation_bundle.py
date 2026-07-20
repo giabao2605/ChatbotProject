@@ -7,7 +7,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from mech_chatbot.evaluation.review_governance import review_governance_status
+from mech_chatbot.governance.artifact_references import build_json_reference
+from mech_chatbot.governance.review_governance import review_governance_status
 from mech_chatbot.rag.feature_activation import (
     ACTIVATION_PROFILES,
     MILESTONE_FLAGS,
@@ -22,22 +23,6 @@ _LEDGER_SCHEMAS = {
     "controlled_demo": "controlled-demo-decision-ledger-v2",
     "default_rollout": "integrated-release-decisions-v1",
 }
-
-
-def _reference(path: Path, *, root: Path, expected_schema: str) -> dict:
-    raw = path.read_bytes()
-    value = json.loads(raw.decode("utf-8"))
-    if not isinstance(value, dict) or value.get("schema") != expected_schema:
-        raise ValueError(f"{path} must use schema {expected_schema}")
-    try:
-        stored_path = str(path.resolve().relative_to(root.resolve()))
-    except ValueError:
-        stored_path = str(path.resolve())
-    return {
-        "path": stored_path,
-        "sha256": hashlib.sha256(raw).hexdigest(),
-        "schema": expected_schema,
-    }
 
 
 def build_activation_bundle(
@@ -80,7 +65,7 @@ def build_activation_bundle(
         if not governance.valid:
             raise ValueError(f"review governance is invalid: {governance.reason}")
         review_mode = governance.mode
-        governance_reference = _reference(
+        governance_reference = build_json_reference(
             governance_path, root=project_root,
             expected_schema="rag-review-governance-v1",
         )
@@ -122,7 +107,7 @@ def build_activation_bundle(
         },
         "versions": resolved_versions,
         "graph_fingerprint": str(graph_fingerprint or "").strip() or None,
-        "decision_ledger": _reference(
+        "decision_ledger": build_json_reference(
             ledger_path, root=project_root,
             expected_schema=_LEDGER_SCHEMAS[scope],
         ),

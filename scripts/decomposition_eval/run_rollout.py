@@ -103,7 +103,8 @@ def run_rollout(manifest, output, trace, *, rollback_test_artifact=None):
             raise ValueError("rollback evidence must pass for this commit and decomposition flag")
         rollback = _artifact_reference(rollback_test_artifact)
     pair = {
-        "schema": "rollout-evidence-pair-v1", "run_id": output.name,
+        "schema": "rollout-evidence-pair-v1", "source_commit": git_sha,
+        "run_id": output.name,
         "stage": "query_decomposition", "evidence_type": "staging_evaluation",
         "baseline": {**context, **_artifact_reference(output / "baseline" / "eval.json"), **_artifact_reference(output / "baseline" / "trace.json", prefix="trace"), **baseline},
         "candidate": {**context, **_artifact_reference(output / "candidate" / "eval.json"), **_artifact_reference(output / "candidate" / "trace.json", prefix="trace"), **candidate},

@@ -104,6 +104,7 @@ def build_rollout_pair(
     }
     return {
         "schema": "rollout-evidence-pair-v1",
+        "source_commit": git_sha,
         "run_id": run_id,
         "stage": "crag",
         "evidence_type": "staging_evaluation",

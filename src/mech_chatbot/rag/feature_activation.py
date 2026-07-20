@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import json
 import os
 from pathlib import Path
 import subprocess
 from typing import Mapping
+
+from mech_chatbot.governance.artifact_references import (
+    load_json_reference,
+    read_json_object,
+    resolve_path,
+)
+from mech_chatbot.governance.crag_demo_authorization import (
+    validate_crag_demo_authorization,
+)
+from mech_chatbot.governance.review_governance import review_governance_status
 
 
 FEATURE_FLAGS = (
@@ -86,6 +95,13 @@ _RELEASE_SCHEMAS = {
     "RAG_GRAPH_RETRIEVAL_ENABLED": "graph-rollout-run-v1",
     "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "retrieval-intelligence-gate-v1",
 }
+_CONTROLLED_DEMO_SCHEMAS = {
+    **{
+        milestone: _RELEASE_SCHEMAS[flags[0]]
+        for milestone, flags in MILESTONE_FLAGS.items()
+    },
+    "crag": "crag-controlled-demo-authorization-v1",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,34 +167,6 @@ def current_git_commit(root: str | Path = ".") -> str | None:
         return None
 
 
-def _resolve_path(value: object, root: Path) -> Path:
-    path = Path(str(value or ""))
-    return path if path.is_absolute() else root / path
-
-
-def _read_json(path: Path) -> tuple[dict, bytes] | tuple[None, None]:
-    try:
-        raw = path.read_bytes()
-        value = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None, None
-    return (value, raw) if isinstance(value, dict) else (None, None)
-
-
-def _read_reference(reference: object, root: Path) -> dict | None:
-    if not isinstance(reference, dict):
-        return None
-    path = _resolve_path(reference.get("path"), root)
-    value, raw = _read_json(path)
-    if value is None or raw is None:
-        return None
-    if hashlib.sha256(raw).hexdigest() != str(reference.get("sha256") or ""):
-        return None
-    if value.get("schema") != reference.get("schema"):
-        return None
-    return value
-
-
 def _artifact_commit(artifact: dict) -> str:
     metadata = artifact.get("run_metadata")
     metadata_commit = metadata.get("commit_sha") if isinstance(metadata, dict) else None
@@ -207,11 +195,21 @@ def _milestone_artifact_valid(
     decision: str,
     source_commit: str,
     review_mode: str,
+    root: Path,
+    scope: str = "default_rollout",
 ) -> bool:
-    expected_schema = _RELEASE_SCHEMAS[MILESTONE_FLAGS[milestone][0]]
+    expected_schema = (
+        _CONTROLLED_DEMO_SCHEMAS[milestone]
+        if scope == "controlled_demo"
+        else _RELEASE_SCHEMAS[MILESTONE_FLAGS[milestone][0]]
+    )
     if (
         artifact.get("schema") != expected_schema
         or _artifact_commit(artifact) != source_commit
+    ):
+        return False
+    if expected_schema == "crag-controlled-demo-authorization-v1" and not (
+        validate_crag_demo_authorization(artifact, root=root).get("passed") is True
     ):
         return False
     if (
@@ -244,9 +242,14 @@ def _verified_release_evidence(
     if decision not in {"accepted", "rejected"}:
         return False
     row_commit = str(row.get("source_commit") or "")
-    if not row_commit or (decision == "accepted" and row_commit != source_commit):
+    historical_late_rejection = (
+        flag == "RAG_LATE_INTERACTION_ENABLED" and decision == "rejected"
+    )
+    if not row_commit or (
+        row_commit != source_commit and not historical_late_rejection
+    ):
         return False
-    artifact = _read_reference(row.get("evidence"), root)
+    artifact = load_json_reference(row.get("evidence"), root=root)
     if artifact is None or artifact.get("schema") != _RELEASE_SCHEMAS[flag]:
         return False
     return _milestone_artifact_valid(
@@ -255,6 +258,7 @@ def _verified_release_evidence(
         decision=decision,
         source_commit=row_commit,
         review_mode=review_mode,
+        root=root,
     )
 
 
@@ -296,13 +300,14 @@ def _accepted_demo_decision(
     milestone: str, reference: object, root: Path, source_commit: str,
     review_mode: str,
 ) -> bool:
-    decision = _read_reference(reference, root)
+    decision = load_json_reference(reference, root=root)
     if decision is None or not all((
         decision.get("schema") == "milestone-decision-v2",
         decision.get("milestone") == milestone,
         decision.get("scope") == "controlled_demo",
         decision.get("decision") == "accepted",
         decision.get("source_commit") == source_commit,
+        bool(str(decision.get("reason") or "").strip()),
     )):
         return False
     evidence = decision.get("evidence")
@@ -310,7 +315,7 @@ def _accepted_demo_decision(
         return False
     technical_gate_accepted = False
     for item in evidence:
-        artifact = _read_reference(item, root)
+        artifact = load_json_reference(item, root=root)
         if artifact is None or _artifact_commit(artifact) != source_commit:
             return False
         if _milestone_artifact_valid(
@@ -319,6 +324,8 @@ def _accepted_demo_decision(
             decision="accepted",
             source_commit=source_commit,
             review_mode=review_mode,
+            root=root,
+            scope="controlled_demo",
         ):
             technical_gate_accepted = True
     signoff = decision.get("reviewer_signoff")
@@ -417,8 +424,8 @@ def activation_status(
     bundle_digest = str(env.get("RAG_ACTIVATION_BUNDLE_SHA256") or "").strip().lower()
     if not bundle_value or len(bundle_digest) != 64:
         return _status(False, False, scope, "activation_bundle_missing", enabled)
-    bundle_path = _resolve_path(bundle_value, project_root)
-    bundle, raw = _read_json(bundle_path)
+    bundle_path = resolve_path(bundle_value, project_root)
+    bundle, raw = read_json_object(bundle_path)
     if bundle is None or raw is None:
         return _status(False, False, scope, "activation_bundle_unreadable", enabled)
     actual_digest = hashlib.sha256(raw).hexdigest()
@@ -452,7 +459,7 @@ def activation_status(
             decision_source_commit=source_commit,
             bundle_sha256=actual_digest,
         )
-    ledger = _read_reference(bundle.get("decision_ledger"), project_root)
+    ledger = load_json_reference(bundle.get("decision_ledger"), root=project_root)
     if ledger is None:
         return _status(
             False, False, scope, "decision_ledger_invalid", enabled,
@@ -462,12 +469,8 @@ def activation_status(
         )
     review_mode = "multi_reviewer"
     if bundle.get("review_governance") is not None:
-        from mech_chatbot.evaluation.review_governance import (
-            review_governance_status,
-        )
-
-        governance_artifact = _read_reference(
-            bundle.get("review_governance"), project_root,
+        governance_artifact = load_json_reference(
+            bundle.get("review_governance"), root=project_root,
         )
         governance = review_governance_status(
             governance_artifact,

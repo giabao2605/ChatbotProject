@@ -524,6 +524,73 @@ def test_prerequisite_completion_requires_hashed_decision_artifact(tmp_path):
     assert _prerequisites(payload, "abc")[0]["crag"] is False
 
 
+def test_rejected_late_interaction_prerequisite_keeps_historical_evidence(tmp_path):
+    schemas = {
+        "crag": "crag-production-pilot-v1",
+        "grounded_math": "grounded-math-rollout-run-v1",
+        "late_interaction": "retrieval-intelligence-gate-v1",
+        "query_decomposition": "decomposition-rollout-run-v1",
+        "graph_retrieval": "graph-rollout-run-v1",
+        "community_summaries": "retrieval-intelligence-gate-v1",
+    }
+    stages = {}
+    for name, schema in schemas.items():
+        source_commit = "historical-late" if name == "late_interaction" else "abc"
+        artifact = tmp_path / f"{name}.json"
+        artifact_payload = {
+            "schema": schema,
+            "git_sha": source_commit,
+            "passed": name != "late_interaction",
+        }
+        if name == "crag":
+            artifact_payload["decision"] = "accepted"
+        if name == "grounded_math":
+            artifact_payload["production_eligible"] = True
+        if name in {"late_interaction", "community_summaries"}:
+            artifact_payload["stage"] = name
+        if name == "late_interaction":
+            artifact_payload["decision"] = "rejected"
+        raw = (json.dumps(artifact_payload) + "\n").encode()
+        artifact.write_bytes(raw)
+        stages[name] = {
+            "complete": True,
+            "artifact_path": str(artifact),
+            "artifact_sha256": hashlib.sha256(raw).hexdigest(),
+            "artifact_schema": schema,
+            "decision": "rejected" if name == "late_interaction" else "accepted",
+        }
+
+    statuses, verification = _prerequisites(
+        {"schema": "integrated-prerequisites-v1", "stages": stages},
+        "abc",
+    )
+
+    assert all(statuses.values())
+    assert verification["late_interaction"]["artifact_verified"] is True
+
+    graph = tmp_path / "graph_retrieval.json"
+    graph_payload = {
+        "schema": "graph-rollout-run-v1",
+        "git_sha": "historical-graph",
+        "passed": False,
+        "decision": "rejected",
+    }
+    graph_raw = (json.dumps(graph_payload) + "\n").encode()
+    graph.write_bytes(graph_raw)
+    stages["graph_retrieval"].update({
+        "artifact_path": str(graph),
+        "artifact_sha256": hashlib.sha256(graph_raw).hexdigest(),
+        "decision": "rejected",
+    })
+
+    statuses, _ = _prerequisites(
+        {"schema": "integrated-prerequisites-v1", "stages": stages},
+        "abc",
+    )
+    assert statuses["late_interaction"] is True
+    assert statuses["graph_retrieval"] is False
+
+
 def test_controlled_demo_decision_does_not_complete_default_rollout(tmp_path):
     evidence = tmp_path / "crag-gate.json"
     raw = b'{"schema":"crag-production-pilot-v1","git_sha":"old","passed":true}\n'

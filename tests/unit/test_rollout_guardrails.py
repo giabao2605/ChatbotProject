@@ -113,6 +113,7 @@ def _pair(tmp_path, **overrides):
     )
     pair = {
         "schema": "rollout-evidence-pair-v1",
+        "source_commit": "abc123",
         "run_id": run_id,
         "stage": stage,
         "evidence_type": "staging_evaluation",
@@ -265,6 +266,11 @@ def test_rollout_series_requires_three_comparable_live_pairs(tmp_path):
 
     assert report["checks"]["minimum_independent_pairs"] is True
     assert report["checks"]["series_conditions_match"] is True
+    assert report["source_commit"] == "abc123"
+    assert report["provider_configuration_sha256"] == "provider-v1"
+    assert report["pair_count"] == 3
+    assert report["run_ids"] == ["run-1", "run-2", "run-3"]
+    assert len(report["pair_windows"]) == 3
     assert report["production_eligible"] is True
 
     too_small = evaluate_rollout_series(
@@ -398,3 +404,8 @@ def test_rollout_guardrail_cli_writes_reproducible_series_artifact(tmp_path):
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["schema"] == "rollout-guardrail-series-v1"
     assert report["production_eligible"] is True
+    assert len(report["source_artifacts"]) == 3
+    assert all(
+        reference["schema"] == "rollout-evidence-pair-v1"
+        for reference in report["source_artifacts"]
+    )
