@@ -29,7 +29,7 @@ jobs:
       - name: Clean install, test, and build frontend
         run: |
           npm ci
-          npm run test
+          npm run test:coverage
           npm run build
 
   unit:
@@ -52,4 +52,12 @@ jobs:
           pip install "qdrant-client>=1.7"
 
       - name: Run fast tests (unit + security)
-        run: pytest -m "not integration and not eval" -v
+        run: |
+          pytest -m "not integration and not eval" -v \
+            --cov=mech_chatbot \
+            --cov-branch \
+            --cov-report=json:reports/refactor/phase-0/coverage-backend-ci.json
+          python scripts/quality/check_coverage.py \
+            reports/refactor/phase-0/coverage-backend-ci.json \
+            --min-line 80 \
+            --min-branch 80

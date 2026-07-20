@@ -1,6 +1,6 @@
 # Kế hoạch refactor codebase theo deep module và dependency một chiều
 
-Trạng thái: **In progress — Phase 0 validated nhưng bị chặn bởi coverage**
+Trạng thái: **In progress — Phase 0 validation gates đã đạt; Phase 1 chưa bắt đầu**
 
 Ngày lập kế hoạch: **2026-07-20**
 
@@ -875,8 +875,9 @@ Không chạy song song Phase 3–5 vì cùng chạm dependency/config và có n
 
 ### 9.1. Phase 0 — Baseline tin cậy và architecture ratchet
 
-Trạng thái: **Validated / Blocked coverage**. Phase 1 chưa được phép bắt đầu theo
-gate tại mục 4.
+Trạng thái: **Validated / Coverage gate passed; Phase 1 chưa bắt đầu**. Phase 1
+chỉ được bắt đầu sau khi review/commit của Phase 0 giữ nguyên toàn bộ evidence
+dưới đây.
 
 | Trường evidence | Kết quả thực tế |
 |---|---|
@@ -884,10 +885,10 @@ gate tại mục 4.
 | Contract được bảo vệ | Default test collection; dependency một chiều; HTTP/OpenAPI; thứ tự SSE success/busy; upload/review response; typed `RagExecutor`; native import health. Không thay đổi RAG algorithm, feature flag hoặc rollout decision. |
 | RED | Architecture test đỏ khi chưa có allowlist; native sentinel bắt `Windows fatal exception: access violation` dù subprocess trả `0`; coverage/evidence/capture module đỏ vì chưa tồn tại; regression OpenAPI đỏ khi sanitizer làm mất password route/schema. |
 | GREEN | Commit `3b663f423e90b9a5dc3aa1df9900d86e5cc1bf7d` thêm architecture ratchet, native sentinel/fix, coverage checker, canonical evidence và sanitized baseline artifacts. Commit review-fix `d6076b2` làm native preload fail-fast khi installation hỏng và tách các scanner/validator dài thành helper nhỏ. Commit `55b7149` thay SSE fixture tĩnh bằng transcript quan sát qua endpoint thật với system-boundary fakes; `e67cc89` tách contract checks thành test nhỏ dưới 50 dòng. |
-| Validation | 67 Phase-0 gate tests pass; fast suite 1.060 pass, 1 SQL integration skip, 22 integration/eval deselected, 1 warning; default collect thấy 5 dependency tests và 3 layering tests; OpenAPI có 116 app path và 8 RAG path; success/busy SSE được phát lại qua `/api/chat/message`; `git diff --check` pass; không còn fatal native diagnostic. |
-| Coverage | 8.818/16.808 statement = **52,463113% line**; 2.085/5.120 branch = **40,722656% branch**. `check_coverage.py --min-line 80 --min-branch 80` trả exit `1` đúng thiết kế. |
+| Validation | Baseline gate và architecture tests pass; full suite sau Wave 6 có **1.891 passed, 22 skipped**, 1 Starlette/httpx warning; default collect 1.913 tests; architecture suite 8 pass; OpenAPI/SSE contract tests pass; `git diff --check` pass; không còn fatal native diagnostic. SQL/Qdrant/RAG server skips giữ nguyên điều kiện opt-in và được ghi rõ. |
+| Coverage | Sau Wave 6: 14.362/16.808 statement = **85,447406% line**; 4.108/5.120 branch = **80,234375% branch**. `check_coverage.py --min-line 80 --min-branch 80` pass. Wave 5 trước đó là 13.896/16.808 và 3.882/5.120; toàn bộ delta được ghi ở ledger Wave 5/6. |
 | Architecture delta | Chưa xóa debt trong Phase 0. Baseline ratchet có 264 identity và 392 occurrence; mọi occurrence tăng thêm hoặc allowance bị stale đều làm test fail. |
-| Known issues | Whole-backend coverage chưa đạt 80%; coverage CI và Vue coverage gate chưa được bật để tránh tạo workflow đỏ cố định; SQL/Qdrant integration chưa được cấu hình; còn `StarletteDeprecationWarning` về `httpx`/`TestClient`; `chat_env` có dependency drift so với lock đã ghi ở baseline. |
+| Known issues | SQL/Qdrant integration thật chưa được cấu hình; Vue coverage hiện chỉ là report baseline 21,94% line/14,66% branch, chưa có threshold 80%; còn `StarletteDeprecationWarning` về `httpx`/`TestClient`; `chat_env` có dependency drift so với lock đã ghi ở baseline. Backend coverage CI 80/80 đã được bật. |
 | Rollback | Behavior/evidence rollback theo thứ tự `git revert e67cc89`, `git revert 55b7149`, `git revert d6076b2` rồi `git revert 3b663f423e90b9a5dc3aa1df9900d86e5cc1bf7d`. Các docs-only commit `714821e`, `bfb922c` và ledger amendment về sau được chủ ý giữ làm audit trail; chúng không thay đổi runtime behavior. |
 
 Review hai trục: ba standards finding đã được sửa trong `d6076b2`. Spec review
@@ -1050,3 +1051,62 @@ vẫn là security decision cần fail-closed fix riêng.
 `mech_chatbot` đạt tối thiểu 80% line và branch như kế hoạch hiện tại, hoặc có
 quyết định sửa chính sách gate thành coverage 80% cho package refactor-owned
 kèm global no-regression ratchet. Không được tự hạ threshold trong code hay CI.
+
+#### Coverage hardening Wave 5
+
+Wave 5 thêm 135 test contract/characterization, không sửa production code. Các
+test mới chạy qua HTTP/SSE, `DefaultRagExecutor`, public RAG policy, ingestion
+extractor và system-boundary fakes. Full suite tuần tự pass với 22 skip đã biết.
+
+| Test group | Contract và vòng đời |
+|---|---|
+| `test_app_server_wave5_contracts.py` | HTTP auth/session, feedback, image ownership, history/citations, access administration và upload/health. Contract HTTP giữ lâu dài; fake database/provider chỉ là system boundary. |
+| `test_rag_pipeline_wave5_characterization.py` | Exact/semantic cache fallback và context-history bypass qua `DefaultRagExecutor.run`. Giữ đến khi cache/retrieval port mới thay thế cùng lifecycle contract. |
+| `test_wave5_rag_public_boundaries.py` và năm test pure RAG | Typed event/budget/SSE, context, grounded math, regression, intent/router/glossary/rerank. Public policy/HTTP cases giữ lâu dài; private policy helpers chỉ giữ đến khi deep seam mới bao phủ cùng failure mode. |
+| `test_wave5_document_classifier_characterization.py`, `test_wave5_material_registry_characterization.py`, `test_wave5_file_access_security.py`, `test_wave5_pdf_chunking_characterization.py` | Reader/classifier/registry/file-access/chunking behavior. Public extraction/security cases giữ; parser/tokenizer/private helper cases là characterization tạm và phải map sang ingestion port trước khi xóa. |
+| `test_pipeline_steps_remaining_branches.py` | Legacy orchestration characterization. Loader đã chuyển về module chuẩn `mech_chatbot.rag.pipeline_steps` để coverage đo đúng; history/retrieval/rewrite/stream/citation cases là tạm cho đến khi `RagExecutor.run` thay thế. |
+
+Không xóa test tracked nào trong Wave 5. Review đã sửa các case có nguy cơ
+đóng băng feedback false-success, raw provider error và replay expiry chưa
+được thực thi; không biến các behavior đó thành contract.
+
+Coverage sau Wave 5: 13.896/16.808 statement = **82,674917% line** và
+3.882/5.120 branch = **75,820312% branch**. Line gate đã đạt nhưng branch gate
+còn thiếu 214 nhánh, nên Phase 1 tiếp tục bị chặn.
+
+#### Coverage hardening Wave 6
+
+Wave 6 bổ sung 56 test branch-focused, không sửa production code. Ngoài ra
+Wave 5 legacy suite được chỉnh loader/fake để coverage đo đúng; không tính các
+case đó là test mới. Mục tiêu là
+các nhánh còn thiếu qua public seam; không giữ test cho raw error leakage,
+audit-failure success, malformed approval hoặc missing-policy elevated access.
+
+| Test group | Contract và vòng đời |
+|---|---|
+| `test_wave6_api_branch_contracts.py` | App/RAG HTTP và SSE branch contracts qua `TestClient`; giữ lâu dài cùng OpenAPI/SSE/RBAC surface. |
+| `test_wave6_pdf_ingestion_branches.py` | `extract_metadata_smart`, markdown/BOM và PDF pipeline public extraction; giữ durable; lazy/parser helper cases là tạm. |
+| `test_wave6_repository_branch_contracts.py` | Community summaries, graph, material, external AI, lifecycle và rollout qua repository public seams với SQL/Qdrant fakes; giữ đến khi repository port/integration thay thế cùng semantics. |
+| `test_wave6_rag_eval_branch_contracts.py` | Pure RAG/evaluation policy, schema, grounding, decomposition và failure-family branches; giữ như policy contract, không dùng để phê duyệt rollout live. |
+| `test_pipeline_steps_remaining_branches.py` (canonical loader) | Giữ 16 case legacy orchestration sau khi fake strict/broad retrieval được sửa để thực sự chạy fallback; xóa khi `RagExecutor.run` cover cùng lifecycle. |
+
+Wave 6 targeted suite pass; full suite pass với **1.891 passed, 22 skipped**
+(skip cần SQL/Qdrant/RAG server/late-interaction opt-in). Coverage thực tế sau
+full run: 14.362/16.808 statement = **85,447406% line** và 4.108/5.120 branch =
+**80,234375% branch**. `scripts/quality/check_coverage.py --min-line 80
+--min-branch 80` pass. So với Wave 5 tăng 466 statement và 226 branch; chênh
+lệch thấp hơn tổng delta đo riêng vì nhiều arc được các test khác bao phủ.
+
+#### Phase 0 gate enablement
+
+`.github/workflows/tests.yml` giờ chạy Python fast suite kèm `coverage.py`
+branch report và `check_coverage.py` 80/80; frontend chạy `vitest` coverage
+report và build. Local frontend evidence: 32 test pass, build pass, coverage
+report 21,94% line và 14,66% branch. Vue coverage hiện là baseline quan sát
+(chưa đặt threshold 80% trong plan); backend global line/branch gate mới là
+điều kiện chặn Phase 1.
+
+Phase 0 không thay đổi feature flag, rollout decision, RAG algorithm hay API
+runtime. Known issues còn lại: SQL/Qdrant integration thật chưa được cấu hình,
+warning Starlette/httpx và dependency drift trong `chat_env`; các mục này vẫn
+được ghi là skip/diagnostic, không trình bày như pass.
