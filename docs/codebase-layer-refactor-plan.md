@@ -731,7 +731,45 @@ git diff --check
 
 Nếu một package đích chưa tồn tại ở phase sớm thì bỏ đúng `--cov=<package>` đó khỏi lệnh intermediate và ghi denominator vào manifest; từ khi package được tạo, nó bắt buộc nằm trong denominator. Final gate luôn dùng toàn bộ `mech_chatbot` và yêu cầu cả line/branch coverage tối thiểu 80%. Integration/evaluation chỉ chạy với service và fixture được cấu hình; skip phải được ghi rõ, không được trình bày như pass. Phase chạm SQL/Qdrant không được `Completed` nếu integration bị skip.
 
-### 5.1. Artifact và provenance bắt buộc
+### 5.1. Quy tắc vòng đời và xóa test
+
+Mục tiêu là giữ bộ test đủ mạnh nhưng không tích lũy test trùng lặp theo từng
+lớp implementation. Test không bị xóa chỉ vì đã pass. Test chỉ được xóa khi
+không còn là hàng rào độc lập hoặc đã có test mạnh hơn thay thế qua seam đích.
+
+Luôn giữ:
+
+- Contract test cho HTTP, SSE, RBAC, schema, typed RAG event và compatibility
+  surface còn public/unknown.
+- Regression test tái hiện bug, security failure, budget/cancellation và
+  fail-closed behavior còn có thể quay lại.
+- Architecture ratchet, coverage checker và integration/evaluation gate theo
+  phase.
+- Characterization test tại interface của deep module nếu đó là bằng chứng duy
+  nhất bảo vệ observable behavior.
+
+Có thể xóa:
+
+- Test tạm chỉ phục vụ spike hoặc scaffolding và không bảo vệ behavior sau khi
+  slice kết thúc.
+- Test implementation-detail của shallow module sau khi test qua interface deep
+  module đã bao phủ cùng contract.
+- Test trùng lặp cùng seam, cùng input class và cùng failure mode mà không tăng
+  khả năng phát hiện regression.
+- Test của compatibility shim internal-only sau khi shim và mọi caller đã được
+  xóa theo inventory Phase 6.
+
+Gate bắt buộc trước khi xóa test:
+
+1. Ledger ghi mapping `old test -> replacement test` và contract được thay thế.
+2. Replacement test phải được chứng minh nhạy với regression tương ứng, không
+   chỉ pass trên implementation hiện tại.
+3. Targeted suite, architecture gate và full fast suite vẫn pass.
+4. Line/branch coverage không giảm; security/compatibility coverage không mất.
+5. Xóa test trong cùng commit với replacement hoặc shim removal để rollback độc
+   lập. Không dùng số lượng test ít hơn làm lý do duy nhất để xóa.
+
+### 5.2. Artifact và provenance bắt buộc
 
 Mỗi phase ghi evidence dưới cấu trúc sau; artifact là output đã sanitize/canonicalize, không chứa secret hoặc raw confidential content:
 
@@ -756,7 +794,7 @@ reports/refactor/phase-<n>/
 
 Chỉ tạo artifact phù hợp với phase, nhưng `manifest.json` luôn bắt buộc và phải ghi: commit SHA, parent/baseline SHA, working-tree status, OS/Python, dependency lock hash, sanitized settings fingerprint, feature-flag snapshot, SQL/Qdrant fixture/snapshot ID, collection, provider/model configuration, concurrency và lệnh đã chạy. Ledger ở đầu tài liệu link thẳng tới artifact và ghi exit code; không chấp nhận dòng mô tả “tests pass” thiếu output/path.
 
-### 5.2. Benchmark RAG Phase 4
+### 5.3. Benchmark RAG Phase 4
 
 Baseline và candidate dùng cùng `scripts/eval/golden_set.jsonl`, SQL/Qdrant snapshot, collection, provider/model config, feature flags, governance scope và concurrency. Khởi động process riêng cho từng arm; không toggle flag trong process đang chạy. Chạy ít nhất ba run hoàn chỉnh mỗi arm với concurrency `1,5,10`, timeout 300 giây:
 
@@ -871,6 +909,34 @@ Artifact chuẩn:
 - `reports/refactor/phase-0/baseline/pytest-baseline.txt` ghi denominator và
   trạng thái fast suite. Coverage JSON thô và provenance input nằm trong vùng
   ignored; chỉ artifact đã sanitize được track.
+
+#### Coverage hardening Wave 1
+
+Wave 1 chỉ thêm characterization test, không sửa production/backend code. Sáu
+suite mới được phân loại là **giữ lâu dài** cho đến khi seam mới tương ứng thay
+thế đầy đủ:
+
+| Test mới | Contract được khóa | Điều kiện xóa về sau |
+|---|---|---|
+| `test_supported_file_readers.py` | Public dispatch và fail-closed behavior của supported-file readers | Chỉ sau khi `IngestionRunner`/reader port có contract test thay thế cùng format và failure mode. |
+| `test_pdf_metadata.py` | `extract_metadata_smart` regex-first, LLM merge/fallback | Chỉ sau khi metadata extractor port mới thay thế đủ regex, merge và provider failure. |
+| `test_ingestion_worker.py` | Worker poll/reconcile/finalize/quality-gate qua system-boundary fakes | Chỉ sau khi `IngestionRunner` và worker adapter test thay thế cùng job-state transitions. |
+| `test_vision_client.py` | Vision provider boundary, image encoding, throttle, cache và error policy | Giữ như adapter contract; chỉ xóa case thật sự trùng khi adapter mới có cùng input/failure class. |
+| `test_publication_validation.py` | Publish contract/actor validation fail-closed | Giữ cùng SQL integration test; unit fake không thay thế transaction semantics. |
+| `test_rag_entity_conversation_characterization.py` | Entity resolution, continuation, dominant refs và history summary | Chỉ sau khi RAG phase/runner mới bảo vệ cùng observable behavior. |
+
+Review phát hiện các case mới về candidate selection/context/description trùng
+`tests/test_conversation_state.py`; các case trùng đã bị bỏ khỏi file mới trước
+commit, còn test cũ được giữ. Vì vậy Wave 1 không xóa test tracked nào và không
+cần mapping `old -> replacement`. Các suite cũng cố định environment liên quan
+để không phụ thuộc cấu hình deployment của máy chạy test.
+
+Evidence sau review fix: 108 test Wave 1 pass; hostile-environment run cho
+metadata/worker/vision/RAG pass; full suite tuần tự pass với 22 skip được ghi
+rõ. Coverage tăng từ 8.818/16.808 lên 9.535/16.808 statement và từ
+2.085/5.120 lên 2.429/5.120 branch. Tương ứng **56,728939% line** và
+**47,441406% branch**; checker 80/80 vẫn trả exit `1` đúng thiết kế. Còn thiếu
+3.912 statement và 1.667 branch để chạm threshold; Phase 1 tiếp tục bị chặn.
 
 Điều kiện gỡ blocker trước Phase 1: bổ sung characterization test để toàn bộ
 `mech_chatbot` đạt tối thiểu 80% line và branch như kế hoạch hiện tại, hoặc có
