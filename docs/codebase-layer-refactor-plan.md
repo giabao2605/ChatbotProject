@@ -1,6 +1,6 @@
 # Kế hoạch refactor codebase theo deep module và dependency một chiều
 
-Trạng thái: **In progress — Phase 0 và Phase 1 đã hoàn tất; Phase 2 core validated; router extraction còn pending**
+Trạng thái: **In progress — Phase 0 và Phase 1 đã hoàn tất; Phase 2 validated offline, còn chờ SQL integration**
 
 Ngày lập kế hoạch: **2026-07-20**
 
@@ -1136,24 +1136,34 @@ seam đã được sửa; targeted suite và full suite chạy lại sau tất c
 
 ### 9.3. Phase 2 — Document/file workflow owners
 
-Trạng thái: **Validated core / Router extraction pending**. Phase 2 đã tách
-logic document/file chính khỏi transport và xóa raw SQL khỏi `api/`, nhưng chưa
-đánh dấu `Completed` vì `api/app_server.py` chưa chỉ còn app factory, SPA wiring
-và compatibility export như mục 4.2 bước 10 yêu cầu.
+Trạng thái: **Validated offline / Blocked integration**. Toàn bộ code-side gate,
+router extraction, OpenAPI, coverage và frontend gate đã đạt. Chưa đánh dấu
+`Completed` vì SQL publication/outbox integration bắt buộc vẫn cần
+`RUN_DB_TESTS=1` và một SQL fixture đã cấu hình; môi trường hiện tại không có
+fixture đó.
 
 | Trường evidence | Kết quả thực tế |
 |---|---|
 | Baseline | Commit `2c413a5` (`docs: close phase one refactor ledger`), branch `codex/codebase-layer-refactor`. Trước Phase 2, full suite Phase 1 pass với `1.908 passed, 22 skipped`; working tree sạch. |
 | Contract được bảo vệ | Auth/CSRF/RBAC cho upload, review, publish và protected files; response shape upload `{ok, job_id, file_name}` và batch `{ok, jobs, errors, created, failed}`; bulk review `{ok, updated, pending, failed, failures}`; publication outbox mapping `published`/pending; protected file traversal/dot-file/chat-image ownership fail closed; no-idempotency upload behavior. |
-| RED | Thêm application/adapter/HTTP characterization mới: `tests/unit/test_protected_files_application.py`, `tests/unit/test_protected_files_adapters.py`, `tests/unit/test_document_operations_application.py`, `tests/unit/test_document_runtime_adapters.py`, cùng các endpoint contract mở rộng trong `test_app_server_endpoint_characterization.py`, `test_app_server_remaining_endpoint_contracts.py`, `test_app_server_wave5_contracts.py` và `test_wave6_api_branch_contracts.py`. Các test này khóa cleanup failure, per-file batch failure, missing job/doc id, pending publication, protected path checks và runtime-bound HTTP serialization trước khi bỏ logic cũ khỏi router. |
-| GREEN | Thêm `application/protected_files.py`, `application/document_upload.py`, `application/document_review.py`; thêm SQL/filesystem adapter `adapters/protected_files.py`, `adapters/document_runtime.py`; mở rộng `composition/app_runtime.py` để wire `ProtectedFileResolver`, `DocumentUpload`, `ReviewDocuments`, `PublicationCoordinator` và app support SQL queries. `api/file_access.py` trở thành compatibility facade; `api/app_server.py` gọi runtime owner mới thay vì import `db.engine`, `db.repositories.jobs`, `sqlalchemy` hoặc raw SQL. |
-| Validation | `.\chat_env\Scripts\python.exe -m pytest -q` exit 0. Targeted Phase 2/API/architecture suite exit 0. `tests/unit/test_app_chat_orchestration.py tests/unit/test_file_access_policy.py tests/unit/test_wave5_file_access_security.py` exit 0. Publication unit suite exit 0; SQL publication integration skip đúng opt-in `RUN_DB_TESTS=1`. `npm test` trong `web-ui` pass **11 files / 32 tests**. OpenAPI sanity check chứa các path Phase 2 và không còn duplicate operation warning. `git diff --check` exit 0. |
-| Architecture delta | Xóa toàn bộ Phase 2 allowlist cho `api/app_server.py` và `api/file_access.py`: direct `db.engine`, `db.repositories.jobs`, `sqlalchemy`, `engine.connect` và `sqlalchemy.text`. Raw SQL còn lại nằm trong adapter layer. Architecture suite pass. |
-| Known issues | Router extraction chưa hoàn tất: `api/routers/chat.py`, `api/routers/documents.py`, `api/routers/operations.py` đã tồn tại nhưng endpoint chính vẫn còn trong `app_server.py` để tránh duplicate route/partial split regression. Full SQL/Qdrant/RAG/eval integration thật vẫn là opt-in skip. Còn `StarletteDeprecationWarning` về `httpx`/`TestClient`. Security review còn một follow-up: batch upload đang đọc bytes trước khi department authorization ở application layer; muốn đóng triệt để cần đổi command sang reader/lazy content hoặc thêm preflight không đọc file. |
-| Rollback | Revert commit Phase 2 core sắp tạo sau boundary này. Không có schema/data migration. Publication outbox tiếp tục là recovery path; không có runtime toggle hoặc implementation cũ song song ngoài compatibility facade Phase 6. |
+| RED | Thêm application/adapter/HTTP characterization mới: `tests/unit/test_protected_files_application.py`, `tests/unit/test_protected_files_adapters.py`, `tests/unit/test_document_operations_application.py`, `tests/unit/test_document_runtime_adapters.py`, cùng endpoint contract mở rộng trong `test_app_server_endpoint_characterization.py`, `test_app_server_remaining_endpoint_contracts.py`, `test_app_server_wave5_contracts.py` và `test_wave6_api_branch_contracts.py`. RED cuối cùng tái hiện việc `knowledge_approver` qua HTTP reviewer gate nhưng bị application layer từ chối; implementation sau đó dùng chung `role_allows()` để giữ capability mapping cũ. |
+| GREEN | Commit `4e165b7` thêm ba application owner, protected-file/upload/publication adapters, runtime wiring và test đầu tiên. Commit `ccd6814` hoàn tất router split, đưa pilot replay sang process adapter, giữ compatibility wrapper/signature cũ, chuyển graph script/test sang owner mới, đưa authorization/publication orchestration lên application layer, dùng atomic upload và xóa `sys.modules` service locator. `api/app_server.py` giảm từ 2.661 còn 548 dòng và chỉ đăng ký health route; route nghiệp vụ nằm trong `api/routers/chat.py`, `documents.py`, `operations.py`. |
+| Validation | Candidate artifact: `reports/refactor/phase-2/candidate/manifest.json`; pytest evidence: `candidate/pytest-baseline.txt`; diff: `candidate/diff-summary.json`; coverage thô local: `reports/refactor/phase-2/coverage-backend.json`. Full backend exit `0`: **1.959 passed, 22 skipped, 0 failed**, 1 warning. Coverage checker exit `0`: **85,675812% line**, **80,088326% branch**. Targeted Phase 2/API/architecture exit `0`; architecture **8 passed**. OpenAPI candidate bằng chính xác Phase 1 baseline: **116 paths / 125 operations**; SSE app/RAG capture hashes không đổi. `npm test -- --run` exit `0`: **11 files / 32 tests**; `npm run build` exit `0`; `git diff --check` exit `0`. SQL publication integration không chạy và được ghi `not run` trong manifest. |
+| Architecture delta | Xóa toàn bộ Phase 2 allowlist cho direct data access ở `api/app_server.py`/`api/file_access.py`; app server và feature router không import `db.engine`, `db.repositories`, `sqlalchemy` hoặc raw SQL. Browser API không còn import function qua flat root `services` namespace; từng feature service module được import tường minh. Flat compatibility export còn lại trong `services/__init__.py` và caller `rag_server.py` thuộc debt Phase 6/phase khác, không mở rộng trong Phase 2. |
+| Known issues | SQL publication/outbox integration và các SQL/Qdrant/eval gate khác vẫn opt-in; Phase 2 vì vậy chưa `Completed`. Còn 1 `StarletteDeprecationWarning` về `httpx`/`TestClient`. Security review ghi nhận protected-file HTTP response vẫn phân biệt một số lý do từ chối (`security_denied`, `not_found`...); đây là observable contract đã được characterization khóa, nên không đổi trong structural refactor. Việc tổng quát hóa thông báo cần security behavior decision riêng. Không có schema/data migration hoặc rollout/feature-flag change. |
+| Rollback | Revert `ccd6814` rồi `4e165b7`; revert commit evidence/ledger sau cùng nếu muốn bỏ audit trail. Không có schema/data rollback. Publication outbox vẫn là recovery path; compatibility export chỉ giữ một implementation và sẽ xử lý ở Phase 6. |
 
 Test direct-call cũ `test_bulk_publish_returns_pending_without_marking_job_published`
-đã được xóa khỏi `tests/unit/test_app_chat_orchestration.py` vì behavior này hiện
-được khóa ở seam `ReviewDocuments`/`PublicationCoordinator` và HTTP contract.
-Việc xóa này tuân thủ điều kiện project không giữ test cũ khi test mới đã phủ
-cùng behavior qua interface đúng.
+đã được xóa khỏi `tests/unit/test_app_chat_orchestration.py`. Replacement là
+`test_bulk_publish_preserves_published_pending_and_failed_accounting`,
+`test_publication_adapter_resolves_job_document_and_marks_only_published` và
+`test_ingestion_publish_marks_job_only_after_published_transition`; ba test này
+khóa cùng behavior ở application, adapter và HTTP seam. Không xóa test contract
+nào khác trong Phase 2.
+
+Review cuối: standards PASS sau khi sửa capability role; spec không còn
+code-side blocker và xác nhận flat root service cleanup còn lại đúng Phase 6.
+Security review không có Critical/High, nhưng có một Medium follow-up về độ chi
+tiết response protected-file đã giữ nguyên theo compatibility policy. Evidence
+bundle được tạo từ candidate commit `ccd6814`, working tree sạch trước khi tạo
+artifact, settings/feature flags đã sanitize và không chứa secret.

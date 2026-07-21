@@ -1,0 +1,32 @@
+{
+  "schema": "refactor-diff-summary-v1",
+  "phase": 2,
+  "baseline_sha": "2c413a5b2d3e608ba7e6dd0a68d3f6ae84b3f427",
+  "candidate_sha": "ccd68140f4ca83ad8db8c5476b3d5b3545c87b47",
+  "files_changed": 30,
+  "insertions": 6035,
+  "deletions": 3402,
+  "app_server_lines": {
+    "baseline": 2661,
+    "candidate": 548
+  },
+  "transport": {
+    "app_server_registered_business_routes": 0,
+    "app_server_registered_health_routes": 1,
+    "feature_routers": [
+      "src/mech_chatbot/api/routers/chat.py",
+      "src/mech_chatbot/api/routers/documents.py",
+      "src/mech_chatbot/api/routers/operations.py"
+    ]
+  },
+  "openapi": {
+    "equal_to_phase_1_baseline": true,
+    "paths": 116,
+    "operations": 125,
+    "baseline_sha256": "eb8ddff4aad60aeda283c428078324a11702eef698f5d25a8ebf69c5253b1c87",
+    "candidate_sha256": "eb8ddff4aad60aeda283c428078324a11702eef698f5d25a8ebf69c5253b1c87"
+  },
+  "behavior_change_authorized": false,
+  "schema_or_data_migration": false,
+  "status": "validated_offline_blocked_sql_integration"
+}
