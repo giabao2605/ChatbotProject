@@ -8,6 +8,7 @@ import pytest
 
 from mech_chatbot.application import document_upload as upload_module
 from mech_chatbot.application.document_review import (
+    PublicationCommand,
     PublicationCoordinator,
     PublicationOutcome,
     ReviewDocuments,
@@ -90,6 +91,11 @@ class Jobs:
         return next(self.results)
 
 
+class FailingJobs:
+    def create_job(self, **_kwargs):
+        raise RuntimeError("database unavailable")
+
+
 def test_single_upload_validates_then_enqueues_normalized_departments() -> None:
     storage = Storage()
     jobs = Jobs()
@@ -167,7 +173,7 @@ def test_failed_enqueue_cleans_staged_file_and_reports_cleanup_outcome(cleanup, 
     assert storage.deleted == ["C:/staged/bom.pdf"]
 
 
-def test_cleanup_exception_is_reported_as_cleanup_failed() -> None:
+def test_cleanup_exception_is_reported_as_cleanup_failed(caplog) -> None:
     storage = Storage(cleanup_error=OSError("locked"))
     upload = DocumentUpload(storage=storage, job_store=Jobs(results=(None,)))
 
@@ -176,6 +182,27 @@ def test_cleanup_exception_is_reported_as_cleanup_failed() -> None:
 
     assert raised.value.failure.code == "cleanup_failed"
     assert raised.value.failure.detail == {"stored_path": "C:/staged/bom.pdf"}
+    assert "Upload cleanup failed after enqueue failure" in caplog.text
+
+
+def test_job_store_exception_is_typed_and_keeps_the_original_cause() -> None:
+    upload = DocumentUpload(storage=Storage(), job_store=FailingJobs())
+
+    with pytest.raises(UploadRejected) as raised:
+        upload.enqueue(_command(), _actor())
+
+    assert raised.value.failure.code == "enqueue_failed"
+    assert isinstance(raised.value.__cause__, RuntimeError)
+
+
+def test_batch_rejects_more_than_the_locked_file_limit() -> None:
+    upload = DocumentUpload(storage=Storage(), job_store=Jobs())
+
+    result = upload.enqueue_batch(tuple(_command() for _ in range(51)), _actor())
+
+    assert result.created == 0
+    assert result.failed == 1
+    assert result.errors[0].code == "invalid_batch"
 
 
 def test_storage_failure_is_typed_and_batch_keeps_earlier_success() -> None:
@@ -232,8 +259,14 @@ class Publication:
     def __init__(self, outcomes):
         self.outcomes = iter(outcomes)
 
-    def publish(self, command, actor):
+    def resolve_latest_doc_id(self, _job_id):
+        return 42
+
+    def publish_document(self, command, actor):
         return next(self.outcomes)
+
+    def mark_job_published(self, _job_id):
+        return None
 
 
 class ReviewStore:
@@ -283,7 +316,7 @@ def test_bulk_publish_preserves_published_pending_and_failed_accounting() -> Non
             reason="",
             items=(ReviewItem(1, 11), ReviewItem(2, 12), ReviewItem(3, 13)),
         ),
-        _actor(),
+        _actor(roles=("reviewer",)),
     )
 
     assert (result.updated, result.pending, result.failed) == (1, 1, 1)
@@ -297,12 +330,12 @@ def test_bulk_reject_preserves_fallback_and_delete_without_ids_is_updated() -> N
     reject, store = _review()
     rejected = reject.execute(
         ReviewDocumentsCommand("reject", "standalone", "duplicate", (ReviewItem(9, 42),)),
-        _actor(),
+        _actor(roles=("reviewer",)),
     )
     delete, _ = _review()
     deleted = delete.execute(
         ReviewDocumentsCommand("delete", "standalone", "", (ReviewItem(None, None),)),
-        _actor(),
+        _actor(roles=("reviewer",)),
     )
 
     assert rejected.updated == 1
@@ -312,6 +345,26 @@ def test_bulk_reject_preserves_fallback_and_delete_without_ids_is_updated() -> N
         ("reject_doc", 42, "alice"),
     ]
     assert deleted.updated == 1
+
+
+def test_bulk_reject_without_document_id_updates_only_the_job() -> None:
+    reject, store = _review()
+
+    result = reject.execute(
+        ReviewDocumentsCommand(
+            "reject",
+            "standalone",
+            "duplicate",
+            (ReviewItem(9, None),),
+        ),
+        _actor(roles=("reviewer",)),
+    )
+
+    assert result.updated == 1
+    assert store.calls == [
+        ("reject_job", 9, "duplicate"),
+        ("mark_rejected", 9),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -341,8 +394,111 @@ def test_bulk_review_uses_locked_error_codes_for_store_failures(action, expected
             reason="",
             items=(ReviewItem(9, 42),),
         ),
-        _actor(),
+        _actor(roles=("reviewer",)),
     )
 
     assert result.failed == 1
     assert result.outcomes[0].code == expected_code
+
+
+def test_bulk_publish_maps_unexpected_port_failure_to_locked_error_code() -> None:
+    class BrokenPublication:
+        def resolve_latest_doc_id(self, _job_id):
+            return 42
+
+        def publish_document(self, command, actor):
+            raise RuntimeError("provider unavailable")
+
+        def mark_job_published(self, _job_id):
+            return None
+
+    use_case = ReviewDocuments(
+        review_store=ReviewStore(),
+        publication=PublicationCoordinator(publication=BrokenPublication()),
+    )
+
+    result = use_case.execute(
+        ReviewDocumentsCommand(
+            action="publish",
+            publish_mode="standalone",
+            reason="",
+            items=(ReviewItem(9, 42),),
+        ),
+        _actor(roles=("reviewer",)),
+    )
+
+    assert result.failed == 1
+    assert result.outcomes[0].code == "publish_contract_failed"
+
+
+def test_application_rejects_actors_without_required_roles() -> None:
+    upload = DocumentUpload(storage=Storage(), job_store=Jobs())
+    upload_failure = upload.preflight(
+        file_name="bom.pdf",
+        owner_department="CoKhi",
+        actor=_actor(roles=("viewer",)),
+    )
+    review, _store = _review()
+    review_result = review.execute(
+        ReviewDocumentsCommand(
+            action="delete",
+            publish_mode="standalone",
+            reason="",
+            items=(ReviewItem(9, 42),),
+        ),
+        _actor(roles=("viewer",)),
+    )
+
+    assert upload_failure is not None and upload_failure.code == "unauthorized"
+    assert review_result.failed == 1
+    assert review_result.outcomes[0].code == "unauthorized"
+
+
+def test_application_accepts_knowledge_approver_as_reviewer_capability() -> None:
+    actor = _actor(roles=("knowledge_approver",))
+    upload = DocumentUpload(storage=Storage(), job_store=Jobs())
+    review, store = _review()
+    publication = PublicationCoordinator(
+        publication=Publication((PublicationOutcome(True, "published", {"ok": True}),))
+    )
+
+    upload_failure = upload.preflight(
+        file_name="bom.pdf",
+        owner_department="CoKhi",
+        actor=actor,
+    )
+    review_result = review.execute(
+        ReviewDocumentsCommand(
+            action="delete",
+            publish_mode="standalone",
+            reason="",
+            items=(ReviewItem(9, 42),),
+        ),
+        actor,
+    )
+    publication_result = publication.publish_job(
+        PublicationCommand(9, 42, "standalone"),
+        actor,
+    )
+
+    assert upload_failure is None
+    assert review_result.updated == 1
+    assert publication_result.ok is True
+    assert store.calls == [
+        ("delete_doc", 42, "alice"),
+        ("delete_job", 9),
+    ]
+
+
+def test_publication_coordinator_rejects_actor_without_review_role() -> None:
+    coordinator = PublicationCoordinator(
+        publication=Publication((PublicationOutcome(True, "published", {"ok": True}),))
+    )
+
+    outcome = coordinator.publish_job(
+        PublicationCommand(9, 42, "standalone"),
+        _actor(roles=("viewer",)),
+    )
+
+    assert outcome.ok is False
+    assert outcome.state == "unauthorized"

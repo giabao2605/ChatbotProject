@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,16 @@ class LocalUploadStorage:
         out_dir = self._raw_root() / "Uploads" / safe_dept
         out_dir.mkdir(parents=True, exist_ok=True)
         stored_path = out_dir / f"{uuid4().hex}{ext}"
-        stored_path.write_bytes(content)
+        temporary_path = out_dir / f".{stored_path.name}.{uuid4().hex}.tmp"
+        try:
+            with temporary_path.open("xb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, stored_path)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
         return StoredUpload(original_name=file_name, stored_path=str(stored_path))
 
     def delete(self, stored_path: str) -> bool:
@@ -124,26 +134,19 @@ class RepositoryPublicationPort:
         self._mark_job_published = mark_job_published
         self._resolve_latest_doc_id_for_job = resolve_latest_doc_id_for_job
 
-    def publish(self, command: PublicationCommand, actor) -> PublicationOutcome:
-        doc_id = command.doc_id
-        if doc_id is None:
-            doc_id = self._resolve_latest_doc_id_for_job(command.job_id)
-        if doc_id is None:
-            return PublicationOutcome(
-                ok=False,
-                state="not_found",
-                error="Không tìm thấy tài liệu của ingestion job",
-                payload={"ok": False, "state": "not_found", "error": "Không tìm thấy tài liệu của ingestion job"},
-            )
+    def resolve_latest_doc_id(self, job_id: int) -> int | None:
+        return self._resolve_latest_doc_id_for_job(job_id)
+
+    def publish_document(self, command: PublicationCommand, actor) -> PublicationOutcome:
+        if command.doc_id is None:
+            raise ValueError("Publication command must contain doc_id")
         result = self._publish_document(
-            int(doc_id),
+            int(command.doc_id),
             action=command.publish_mode,
             reviewer=actor.username or "System",
             reviewer_id=getattr(actor, "user_id", None),
             reviewer_roles=list(actor.roles),
         )
-        if command.job_id > 0 and result and result.state == "published":
-            self._mark_job_published(command.job_id)
         payload = result.to_dict() if hasattr(result, "to_dict") else {"ok": bool(result)}
         return PublicationOutcome(
             ok=bool(result),
@@ -151,6 +154,9 @@ class RepositoryPublicationPort:
             error=getattr(result, "error", None) or payload.get("error"),
             payload=payload,
         )
+
+    def mark_job_published(self, job_id: int) -> Any:
+        return self._mark_job_published(job_id)
 
 
 class SqlDocumentLookup:

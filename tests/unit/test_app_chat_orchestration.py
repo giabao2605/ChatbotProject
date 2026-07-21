@@ -4,6 +4,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from mech_chatbot.api import dependencies as api_dependencies
+from mech_chatbot.api.routers import chat as chat_routes
+from mech_chatbot.api.routers import documents as document_routes
+from mech_chatbot.api.routers import operations as operation_routes
 from mech_chatbot.application.chat_turn import (
     ChatCitation,
     ChatDelta,
@@ -54,12 +58,12 @@ def _events(body):
 
 def test_ingestion_eta_returns_flat_queue_metrics(monkeypatch):
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "queue_eta_seconds",
         lambda: {"pending": 2, "avg_seconds": 4.5, "eta_seconds": 9},
     )
 
-    assert app_server.ingestion_eta(profile={"roles": ["admin"]}) == {
+    assert document_routes.ingestion_eta(profile={"roles": ["admin"]}) == {
         "pending": 2,
         "avg_seconds": 4.5,
         "eta_seconds": 9,
@@ -67,19 +71,19 @@ def test_ingestion_eta_returns_flat_queue_metrics(monkeypatch):
 
 
 def test_dashboard_requires_admin_role():
-    with pytest.raises(app_server.HTTPException) as exc_info:
-        app_server.require_any_role("admin")({"roles": ["viewer"]})
+    with pytest.raises(api_dependencies.HTTPException) as exc_info:
+        api_dependencies.require_any_role("admin")({"roles": ["viewer"]})
 
     assert exc_info.value.status_code == 403
 
 
 def test_dashboard_endpoint_is_role_aware_for_viewer(monkeypatch):
     monkeypatch.setattr(
-        app_server,
+        operation_routes.ui_query_service,
         "get_role_dashboard",
         lambda profile: {"document_lifecycle": {"effective": 4}, "usage": {"today_questions": 1}},
     )
-    app_server.app.dependency_overrides[app_server.current_profile] = _profile
+    app_server.app.dependency_overrides[api_dependencies.current_profile] = _profile
     try:
         with TestClient(app_server.app) as client:
             response = client.get("/api/dashboard")
@@ -101,8 +105,12 @@ def test_external_ai_policy_endpoint_returns_metadata_only(monkeypatch):
         "allowed_surfaces": ["reranking"],
         "policy_version": "risk-accepted-v3",
     }]
-    monkeypatch.setattr(app_server, "list_external_ai_provider_profiles", lambda: profiles)
-    app_server.app.dependency_overrides[app_server.current_profile] = _admin_profile
+    monkeypatch.setattr(
+        operation_routes.external_ai_service,
+        "list_external_ai_provider_profiles",
+        lambda: profiles,
+    )
+    app_server.app.dependency_overrides[api_dependencies.current_profile] = _admin_profile
     try:
         with TestClient(app_server.app) as client:
             response = client.get("/api/settings/external-ai-policy")
@@ -115,7 +123,7 @@ def test_external_ai_policy_endpoint_returns_metadata_only(monkeypatch):
 
 @pytest.fixture
 def client():
-    app_server.app.dependency_overrides[app_server.csrf_profile] = _profile
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile] = _profile
     try:
         yield TestClient(app_server.app)
     finally:
@@ -185,8 +193,8 @@ def test_chat_message_serializes_typed_runner_events_without_transport_or_reposi
 
 
 def test_text_citation_has_download_without_preview(monkeypatch):
-    monkeypatch.setattr(app_server, "page_has_vision", lambda _doc_id, _page_no: False)
-    citations = app_server._citation_list([
+    monkeypatch.setattr(chat_routes, "page_has_vision", lambda _doc_id, _page_no: False)
+    citations = chat_routes._citation_list([
         {
             "doc_id": 9,
             "trang": 1,
@@ -213,8 +221,8 @@ def test_live_citation_filter_requires_exact_source_id():
         {"doc_id": 42, "page_no": 4, "file_name": "bom.pdf", "source_id": "D42P4"},
     ]
 
-    assert app_server._filter_citations_by_answer(citations, "Nguồn: bom.pdf, Trang 3") == []
-    assert app_server._filter_citations_by_answer(
+    assert chat_routes._filter_citations_by_answer(citations, "Nguồn: bom.pdf, Trang 3") == []
+    assert chat_routes._filter_citations_by_answer(
         citations,
         "Nguồn: bom.pdf, Trang 3, SourceID D42P3",
     ) == [citations[0]]
@@ -248,6 +256,7 @@ def test_chat_message_serializes_runner_error_without_persistence_seam_patching(
     assert events[-1][1]["message"] == "RAG server busy"
 
 def test_crag_pilot_replay_queue_is_bounded_and_drops_without_submitting(monkeypatch):
+    from mech_chatbot.adapters import pilot_replay
     from mech_chatbot.evaluation.crag_pilot import PilotConfig, assign_pilot_route
 
     class FullCapacity:
@@ -276,10 +285,10 @@ def test_crag_pilot_replay_queue_is_bounded_and_drops_without_submitting(monkeyp
         department="Technical",
         request_id="request-1",
     )
-    monkeypatch.setattr(app_server, "_PILOT_REPLAY_CAPACITY", FullCapacity())
-    monkeypatch.setattr(app_server, "_PILOT_REPLAY_EXECUTOR", NoSubmitExecutor())
+    monkeypatch.setattr(app_server._PILOT_REPLAYS, "capacity", FullCapacity())
+    monkeypatch.setattr(app_server._PILOT_REPLAYS, "executor", NoSubmitExecutor())
     monkeypatch.setattr(
-        app_server,
+        pilot_replay,
         "log_trace",
         lambda event, trace_id, **data: events.append((event, trace_id, data)),
     )

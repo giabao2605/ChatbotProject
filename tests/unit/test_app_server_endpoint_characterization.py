@@ -1,3 +1,4 @@
+import inspect
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -5,12 +6,26 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from mech_chatbot.application.protected_files import AuthorizedFile, ProtectedFileError
+from mech_chatbot.api import dependencies as api_dependencies
+from mech_chatbot.api.routers import documents as document_routes
+from mech_chatbot.application.chat_turn import (
+    ChatDelta,
+    ChatDone,
+    ChatError,
+    ChatThinking,
+    ChatWarning,
+)
+from mech_chatbot.application.document_review import (
+    PublicationCoordinator,
+    PublicationOutcome,
+    ReviewDocuments,
+)
 from mech_chatbot.application.document_upload import (
     UploadBatchResult,
     UploadFailure,
     UploadReceipt,
 )
+from mech_chatbot.application.protected_files import AuthorizedFile, ProtectedFileError
 
 
 pytestmark = pytest.mark.unit
@@ -18,25 +33,41 @@ pytestmark = pytest.mark.unit
 app_server = pytest.importorskip("mech_chatbot.api.app_server")
 
 
-class _StreamResponse:
-    def __init__(self, events):
-        self.status_code = 200
-        self.ok = True
-        self.text = ""
-        self._events = events
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def iter_lines(self, decode_unicode=True):
-        del decode_unicode
-        for event, payload in self._events:
-            yield f"event: {event}"
-            yield f"data: {json.dumps(payload, ensure_ascii=False)}"
-            yield ""
+@pytest.mark.parametrize(
+    ("name", "parameters"),
+    [
+        ("_sources_for_chat_ids", ["chat_ids"]),
+        ("_decorate_history_messages", ["messages"]),
+        ("history", ["body", "profile"]),
+        ("upload_chat_image", ["request", "file", "profile"]),
+        ("citation_page", ["doc_id", "page_no", "profile"]),
+        ("original_document", ["doc_id", "profile"]),
+        ("chat_image", ["image_id", "profile"]),
+        (
+            "documents_upload_batch",
+            [
+                "files",
+                "thu_muc",
+                "domain",
+                "security_level",
+                "cong_doan",
+                "site",
+                "meta_json",
+                "extra_departments_json",
+                "assignments_json",
+                "profile",
+            ],
+        ),
+        ("documents_review_bulk", ["body", "profile"]),
+        ("document_publish_new_version", ["doc_id", "response", "profile"]),
+        ("document_publish_new_variant", ["doc_id", "response", "profile"]),
+        ("document_publish_standalone", ["doc_id", "response", "profile"]),
+        ("ingestion_publish", ["job_id", "response", "profile"]),
+        ("feedback_classify", ["feedback_id", "body", "profile"]),
+    ],
+)
+def test_app_server_compatibility_wrappers_keep_legacy_call_shape(name, parameters):
+    assert list(inspect.signature(getattr(app_server, name)).parameters) == parameters
 
 
 def _profile(*roles):
@@ -72,8 +103,8 @@ def client_for():
     clients = []
 
     def build(profile):
-        app_server.app.dependency_overrides[app_server.current_profile] = lambda: profile
-        app_server.app.dependency_overrides[app_server.csrf_profile] = lambda: profile
+        app_server.app.dependency_overrides[api_dependencies.current_profile] = lambda: profile
+        app_server.app.dependency_overrides[api_dependencies.csrf_profile] = lambda: profile
         client = TestClient(app_server.app)
         clients.append(client)
         return client
@@ -92,6 +123,9 @@ def test_batch_upload_returns_created_jobs_and_per_file_authorization_errors(
     captured = []
 
     class Upload:
+        def preflight(self, **_kwargs):
+            return None
+
         def enqueue_batch(self, commands, actor):
             captured.append((commands, actor))
             return UploadBatchResult(
@@ -207,6 +241,9 @@ def test_batch_upload_removes_staged_file_when_job_creation_fails(
     monkeypatch, client_for, tmp_path
 ):
     class Upload:
+        def preflight(self, **_kwargs):
+            return None
+
         def enqueue_batch(self, _commands, _actor):
             return UploadBatchResult(
                 jobs=(),
@@ -288,8 +325,8 @@ def test_bulk_metadata_reports_mixed_results_without_leaking_internal_errors(
             return False
         return True
 
-    monkeypatch.setattr(app_server, "validate_document_metadata_actor", validate_actor)
-    monkeypatch.setattr(app_server, "update_document_common_metadata", update)
+    monkeypatch.setattr(document_routes, "validate_document_metadata_actor", validate_actor)
+    monkeypatch.setattr(document_routes, "update_document_common_metadata", update)
 
     response = client_for(_profile("reviewer")).patch(
         "/api/documents/bulk-metadata",
@@ -319,10 +356,14 @@ def test_bulk_metadata_reports_mixed_results_without_leaking_internal_errors(
 
 
 def test_bulk_review_rejects_unauthorized_actor_before_work(monkeypatch, client_for):
+    class Review:
+        def execute(self, *_args):
+            pytest.fail("viewer must not reach the review use case")
+
     monkeypatch.setattr(
-        app_server,
-        "publish_document",
-        lambda *_args, **_kwargs: pytest.fail("viewer must not publish"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, review_documents=Review()),
     )
 
     response = client_for(_profile("viewer")).post(
@@ -351,30 +392,38 @@ def test_bulk_review_rejects_invalid_request_contract(payload, client_for):
 def test_bulk_review_reports_valid_and_failed_items(
     monkeypatch, client_for
 ):
-    marked = []
+    published = []
 
-    class Result:
-        def __init__(self, ok, state, error=None):
-            self.ok = ok
-            self.state = state
-            self.error = error
+    class Publication:
+        def resolve_latest_doc_id(self, _job_id):
+            return 42
 
-        def __bool__(self):
-            return self.ok
+        def publish_document(self, command, actor):
+            published.append((command, actor))
+            if command.doc_id == 42:
+                return PublicationOutcome(True, "published", {"ok": True})
+            return PublicationOutcome(
+                False,
+                "failed",
+                {"ok": False, "error": "private publication detail"},
+                "private publication detail",
+            )
 
-        def to_dict(self):
-            return {"ok": self.ok, "state": self.state, "error": self.error}
+        def mark_job_published(self, _job_id):
+            return None
 
-    def publish(doc_id, **kwargs):
-        assert kwargs["reviewer"] == "alice"
-        return (
-            Result(True, "published")
-            if doc_id == 42
-            else Result(False, "failed", "private publication detail")
-        )
+    class ReviewStore:
+        pass
 
-    monkeypatch.setattr(app_server, "publish_document", publish)
-    monkeypatch.setattr(app_server, "mark_job_published", marked.append)
+    review = ReviewDocuments(
+        review_store=ReviewStore(),
+        publication=PublicationCoordinator(publication=Publication()),
+    )
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, review_documents=review),
+    )
 
     response = client_for(_profile("reviewer")).post(
         "/api/documents/review/bulk",
@@ -394,7 +443,10 @@ def test_bulk_review_reports_valid_and_failed_items(
     assert body["ok"] is False
     assert body["updated"] == 1
     assert body["failed"] == 2
-    assert marked == [9]
+    assert [(call.doc_id, actor.username) for call, actor in published] == [
+        (42, "alice"),
+        (43, "alice"),
+    ]
 
 
 @pytest.mark.parametrize("action", ["reject", "delete"])
@@ -402,30 +454,42 @@ def test_bulk_review_executes_reject_and_delete_boundaries(
     action, monkeypatch, client_for
 ):
     calls = []
-    monkeypatch.setattr(
-        app_server,
-        "reject_ingestion_job",
-        lambda job_id, reason: calls.append(("reject_job", job_id, reason)) or False,
+
+    class ReviewStore:
+        def reject_job(self, job_id, reason):
+            calls.append(("reject_job", job_id, reason))
+            return False
+
+        def mark_job_rejected(self, job_id):
+            calls.append(("mark_rejected", job_id))
+
+        def reject_document(self, doc_id, reviewer):
+            calls.append(("reject_doc", doc_id, reviewer))
+
+        def delete_document(self, doc_id, reviewer):
+            calls.append(("delete_doc", doc_id, reviewer))
+
+        def delete_job(self, job_id):
+            calls.append(("delete_job", job_id))
+
+    class Publication:
+        def resolve_latest_doc_id(self, _job_id):
+            return 42
+
+        def publish_document(self, *_args):
+            pytest.fail("reject/delete must not reach publication")
+
+        def mark_job_published(self, _job_id):
+            pytest.fail("reject/delete must not mark publication")
+
+    review = ReviewDocuments(
+        review_store=ReviewStore(),
+        publication=PublicationCoordinator(publication=Publication()),
     )
     monkeypatch.setattr(
-        app_server,
-        "mark_job_rejected",
-        lambda job_id: calls.append(("mark_rejected", job_id)),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "reject_document",
-        lambda doc_id, reviewer: calls.append(("reject_doc", doc_id, reviewer)),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "delete_document_completely",
-        lambda doc_id, reviewer: calls.append(("delete_doc", doc_id, reviewer)),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "delete_ingestion_job",
-        lambda job_id: calls.append(("delete_job", job_id)),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, review_documents=review),
     )
 
     response = client_for(_profile("reviewer")).post(
@@ -573,20 +637,22 @@ def test_original_document_denies_before_resolving_file(monkeypatch, client_for)
     assert response.json() == {"detail": "security_denied"}
 
 
-def test_chat_stream_without_done_event_emits_error_and_does_not_persist(
+def test_chat_stream_serializes_incomplete_runner_error_after_visible_delta(
     monkeypatch, client_for
 ):
+    class Runner:
+        def stream(self, _command, _actor):
+            yield ChatThinking("Đang suy nghĩ")
+            yield ChatDelta("partial")
+            yield ChatError(
+                code="rag_stream_incomplete",
+                message="RAG stream ended without a done event",
+            )
+
     monkeypatch.setattr(
-        app_server.requests,
-        "post",
-        lambda *_args, **_kwargs: _StreamResponse(
-            [("metadata", {"debug_info": {}}), ("token", {"text": "partial"})]
-        ),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "save_chat_history",
-        lambda **_kwargs: pytest.fail("incomplete answers must not be persisted"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, chat_turn_runner=Runner()),
     )
 
     response = client_for(_profile()).post(
@@ -599,18 +665,16 @@ def test_chat_stream_without_done_event_emits_error_and_does_not_persist(
     assert events[-1][1] == {"message": "RAG stream ended without a done event"}
 
 
-def test_chat_upstream_error_event_stops_without_persisting(monkeypatch, client_for):
+def test_chat_stream_serializes_upstream_runner_error(monkeypatch, client_for):
+    class Runner:
+        def stream(self, _command, _actor):
+            yield ChatThinking("Đang suy nghĩ")
+            yield ChatError(code="rag_stream_error", message="unavailable")
+
     monkeypatch.setattr(
-        app_server.requests,
-        "post",
-        lambda *_args, **_kwargs: _StreamResponse(
-            [("metadata", {"debug_info": {}}), ("error", {"message": "unavailable"})]
-        ),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "save_chat_history",
-        lambda **_kwargs: pytest.fail("failed answers must not be persisted"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, chat_turn_runner=Runner()),
     )
 
     response = client_for(_profile()).post(
@@ -626,17 +690,27 @@ def test_chat_upstream_error_event_stops_without_persisting(monkeypatch, client_
 def test_chat_persistence_failure_warns_but_completes_without_exception_detail_assertion(
     monkeypatch, client_for
 ):
+    class Runner:
+        def stream(self, _command, _actor):
+            yield ChatThinking("Đang suy nghĩ")
+            yield ChatDelta("safe answer")
+            yield ChatWarning(
+                code="chat_persistence_failed",
+                message="Không lưu được lịch sử chat",
+            )
+            yield ChatDone(
+                chat_id=None,
+                ref_text="",
+                citations=(),
+                new_part_ids=(),
+                conversation_context=None,
+                elapsed_ms=12,
+            )
+
     monkeypatch.setattr(
-        app_server.requests,
-        "post",
-        lambda *_args, **_kwargs: _StreamResponse(
-            [("token", {"text": "safe answer"}), ("done", {"elapsed_ms": 12})]
-        ),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "save_chat_history",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("internal coordinates")),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, chat_turn_runner=Runner()),
     )
 
     response = client_for(_profile()).post(

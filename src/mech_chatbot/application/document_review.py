@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol
 
 from mech_chatbot.application.document_upload import DocumentActor
+from mech_chatbot.auth.authorization import role_allows
 
 ReviewAction = Literal["publish", "reject", "delete"]
 PublishMode = Literal["standalone", "new_version", "new_variant"]
@@ -69,8 +70,18 @@ class PublicationOutcome:
 
 
 class PublicationPort(Protocol):
-    def publish(self, command: PublicationCommand, actor: DocumentActor) -> PublicationOutcome:
-        """Publish a document or publish the latest document for an ingestion job."""
+    def resolve_latest_doc_id(self, job_id: int) -> int | None:
+        """Resolve the latest document owned by an ingestion job."""
+
+    def publish_document(
+        self,
+        command: PublicationCommand,
+        actor: DocumentActor,
+    ) -> PublicationOutcome:
+        """Execute the existing durable publication contract for one document."""
+
+    def mark_job_published(self, job_id: int) -> Any:
+        """Mirror a completed document publication onto its ingestion job."""
 
 
 class ReviewStore(Protocol):
@@ -101,7 +112,34 @@ class PublicationCoordinator:
         self._publication = publication
 
     def publish_job(self, command: PublicationCommand, actor: DocumentActor) -> PublicationOutcome:
-        return self._publication.publish(command, actor)
+        if not _actor_has_any_role(actor, "reviewer", "admin"):
+            return PublicationOutcome(
+                ok=False,
+                state="unauthorized",
+                error="Forbidden",
+                payload={"ok": False, "state": "unauthorized", "error": "Forbidden"},
+            )
+        doc_id = command.doc_id
+        if doc_id is None:
+            doc_id = self._publication.resolve_latest_doc_id(command.job_id)
+        if doc_id is None:
+            return PublicationOutcome(
+                ok=False,
+                state="not_found",
+                error="Không tìm thấy tài liệu của ingestion job",
+                payload={
+                    "ok": False,
+                    "state": "not_found",
+                    "error": "Không tìm thấy tài liệu của ingestion job",
+                },
+            )
+        result = self._publication.publish_document(
+            replace(command, doc_id=int(doc_id)),
+            actor,
+        )
+        if command.job_id > 0 and result.ok and result.state == "published":
+            self._publication.mark_job_published(command.job_id)
+        return result
 
 
 class ReviewDocuments:
@@ -112,6 +150,23 @@ class ReviewDocuments:
         self._publication = publication
 
     def execute(self, command: ReviewDocumentsCommand, actor: DocumentActor) -> BatchReviewResult:
+        if not _actor_has_any_role(actor, "reviewer", "admin"):
+            outcomes = tuple(
+                ReviewItemOutcome(
+                    status="failed",
+                    job_id=item.job_id,
+                    doc_id=item.doc_id,
+                    code="unauthorized",
+                    message="Forbidden",
+                )
+                for item in command.items
+            )
+            return BatchReviewResult(
+                outcomes=outcomes,
+                updated=0,
+                pending=0,
+                failed=len(outcomes),
+            )
         outcomes = tuple(self._execute_item(command, actor, item) for item in command.items)
         return BatchReviewResult(
             outcomes=outcomes,
@@ -198,7 +253,6 @@ class ReviewDocuments:
         if item.doc_id:
             self._review_store.reject_document(item.doc_id, reviewer=actor.username or "System")
         return ReviewItemOutcome("updated", item.job_id, item.doc_id, None, None)
-
     def _delete_item(self, item: ReviewItem, actor: DocumentActor) -> ReviewItemOutcome:
         # Preserve the current odd contract: delete with neither id is a no-op
         # counted as an updated item.
@@ -207,3 +261,7 @@ class ReviewDocuments:
         if item.job_id:
             self._review_store.delete_job(item.job_id)
         return ReviewItemOutcome("updated", item.job_id, item.doc_id, None, None)
+
+
+def _actor_has_any_role(actor: DocumentActor, *required: str) -> bool:
+    return role_allows(actor.roles, *required)

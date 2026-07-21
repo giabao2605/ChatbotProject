@@ -338,25 +338,29 @@ def test_repository_serving_version_preserves_exact_membership():
 
 @pytest.mark.parametrize("role", ["knowledge_approver", "reviewer", "admin"])
 def test_summary_review_endpoint_is_role_gated_and_audited(monkeypatch, role):
-    from mech_chatbot.api import app_server
+    from mech_chatbot.api.routers import operations as operation_routes
 
-    with pytest.raises(app_server.HTTPException) as denied:
-        app_server.community_summary_approve(
+    with pytest.raises(operation_routes.HTTPException) as denied:
+        operation_routes.community_summary_approve(
             5, {}, {"roles": ["viewer"], "username": "alice"}
         )
     assert denied.value.status_code == 403
 
     audits = []
     monkeypatch.setattr(
-        app_server,
+        operation_routes.graph_service,
         "review_community_summary",
         lambda summary_id, action, reviewer, note=None: {
             "ok": True, "summary_id": summary_id, "status": "approved",
         },
     )
-    monkeypatch.setattr(app_server, "write_audit_log", lambda **kwargs: audits.append(kwargs))
+    monkeypatch.setattr(
+        operation_routes.audit_service,
+        "write_audit_log",
+        lambda **kwargs: audits.append(kwargs),
+    )
 
-    result = app_server.community_summary_approve(
+    result = operation_routes.community_summary_approve(
         5, {"note": "provenance checked"},
         {"roles": [role], "username": "bob", "user_id": 9},
     )

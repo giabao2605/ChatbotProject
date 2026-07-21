@@ -21,7 +21,7 @@ def exercise_review(output: Path):
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before graph reviewer exercise")
     from fastapi import HTTPException
-    from mech_chatbot.api import app_server
+    from mech_chatbot.api.routers import operations as operation_routes
     from mech_chatbot.db.engine import _ensure_engine, engine
     from mech_chatbot.db.repositories.graph import propose_graph_edge, traverse_knowledge_graph
     _ensure_engine()
@@ -38,7 +38,9 @@ def exercise_review(output: Path):
         part_a = rows["part:graph-eval-part-a"]
         material_aluminum = rows["material:aluminum"]
     try:
-        app_server.graph_proposals(profile={"roles": ["viewer"], "username": "graph-eval-viewer"})
+        operation_routes.graph_proposals(
+            profile={"roles": ["viewer"], "username": "graph-eval-viewer"}
+        )
         viewer_blocked = False
     except HTTPException as exc:
         viewer_blocked = exc.status_code == 403
@@ -72,11 +74,11 @@ def exercise_review(output: Path):
     }
     before = traverse_knowledge_graph(["GRAPH-EVAL-ASM-001"], access, max_hops=2, limit=50)
     pending_not_served = all(edge.get("relation_type") != "APPLIES_TO" for edge in before)
-    approved = app_server.graph_proposal_approve(
+    approved = operation_routes.graph_proposal_approve(
         int(correct["proposal_id"]), {"note": "fixture expected correct"},
         {"roles": ["knowledge_approver"], "username": "graph-eval-approver"},
     )
-    rejected = app_server.graph_proposal_reject(
+    rejected = operation_routes.graph_proposal_reject(
         int(wrong["proposal_id"]), {"note": "fixture expected incorrect"},
         {"roles": ["reviewer"], "username": "graph-eval-reviewer"},
     )

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from typing import Any
 
 from fastapi import Depends, HTTPException, Request, status
@@ -10,21 +9,6 @@ from fastapi import Depends, HTTPException, Request, status
 from mech_chatbot.api import app_security
 from mech_chatbot.auth.authorization import role_allows
 from mech_chatbot.auth.core import load_user_profile
-
-
-def _profile_loader():
-    app_server = sys.modules.get("mech_chatbot.api.app_server")
-    if app_server is not None and hasattr(app_server, "load_user_profile"):
-        return getattr(app_server, "load_user_profile")
-    return load_user_profile
-
-
-def _role_checker():
-    app_server = sys.modules.get("mech_chatbot.api.app_server")
-    if app_server is not None and hasattr(app_server, "role_allows"):
-        return getattr(app_server, "role_allows")
-    return role_allows
-
 
 def public_profile(profile: dict[str, Any], csrf: str | None = None) -> dict[str, Any]:
     out = {
@@ -51,7 +35,7 @@ def session_payload(request: Request) -> app_security.SessionPayload:
 
 def current_profile(request: Request) -> dict[str, Any]:
     payload = session_payload(request)
-    profile = _profile_loader()(user_id=payload.user_id, username=payload.username)
+    profile = load_user_profile(user_id=payload.user_id, username=payload.username)
     if not profile:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -63,7 +47,7 @@ def current_profile(request: Request) -> dict[str, Any]:
 def csrf_profile(request: Request) -> dict[str, Any]:
     payload = session_payload(request)
     app_security.require_csrf(request, payload)
-    profile = _profile_loader()(user_id=payload.user_id, username=payload.username)
+    profile = load_user_profile(user_id=payload.user_id, username=payload.username)
     if not profile:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -74,7 +58,7 @@ def csrf_profile(request: Request) -> dict[str, Any]:
 
 def require_any_role(*roles: str):
     def _dep(profile: dict[str, Any] = Depends(current_profile)) -> dict[str, Any]:
-        if not _role_checker()(profile.get("roles"), *roles):
+        if not role_allows(profile.get("roles"), *roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Forbidden",

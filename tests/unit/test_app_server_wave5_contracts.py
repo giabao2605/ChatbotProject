@@ -1,9 +1,15 @@
 from contextlib import nullcontext
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from mech_chatbot.api import dependencies
+from mech_chatbot.api.routers import chat as chat_routes
+from mech_chatbot.api.routers import documents as document_routes
+from mech_chatbot.api.routers import operations as operation_routes
+from mech_chatbot.application.document_upload import DocumentUpload, StoredUpload
 from mech_chatbot.application.protected_files import AuthorizedFile, ProtectedFileError
 
 
@@ -76,13 +82,13 @@ def test_auth_session_lifecycle_exposes_only_public_profile(
     monkeypatch.setenv("APP_SESSION_SECRET", "wave-five-secret")
     profile = _profile("viewer") | {"password_hash": "must-not-leak"}
     monkeypatch.setattr(
-        app_server,
+        operation_routes,
         "authenticate_user",
         lambda username, password: profile
         if (username, password) == ("alice", "correct-password")
         else None,
     )
-    monkeypatch.setattr(app_server, "load_user_profile", lambda **_kwargs: profile)
+    monkeypatch.setattr(operation_routes, "load_user_profile", lambda **_kwargs: profile)
 
     with TestClient(app_server.app) as client:
         denied = client.post(
@@ -123,7 +129,7 @@ def test_auth_profile_and_refresh_fail_closed_for_inactive_user(monkeypatch):
     token, payload = app_server.app_security.create_session_token(
         user_id=7, username="alice"
     )
-    monkeypatch.setattr(app_server, "load_user_profile", lambda **_kwargs: None)
+    monkeypatch.setattr(operation_routes, "load_user_profile", lambda **_kwargs: None)
 
     with TestClient(app_server.app) as client:
         client.cookies.set(app_server.app_security.SESSION_COOKIE_NAME, token)
@@ -141,14 +147,14 @@ def test_protected_dependencies_reject_inactive_session_before_storage(monkeypat
     token, payload = app_server.app_security.create_session_token(
         user_id=7, username="alice"
     )
-    monkeypatch.setattr(app_server, "load_user_profile", lambda **_kwargs: None)
+    monkeypatch.setattr(dependencies, "load_user_profile", lambda **_kwargs: None)
     monkeypatch.setattr(
-        app_server,
+        chat_routes,
         "get_all_sessions",
         lambda **_kwargs: pytest.fail("inactive session must not query chat storage"),
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes,
         "update_user_preferred_language",
         lambda *_args: pytest.fail("inactive session must not update preferences"),
     )
@@ -169,11 +175,11 @@ def test_protected_dependencies_reject_inactive_session_before_storage(monkeypat
 def test_preference_update_reports_storage_rejection(monkeypatch, client_for):
     client = client_for(_profile())
     monkeypatch.setattr(
-        app_server, "update_user_preferred_language", lambda *_args: False
+        operation_routes, "update_user_preferred_language", lambda *_args: False
     )
     rejected = client.patch("/api/auth/me/preferences", json={"language": "xx"})
     monkeypatch.setattr(
-        app_server, "update_user_preferred_language", lambda *_args: True
+        operation_routes, "update_user_preferred_language", lambda *_args: True
     )
     accepted = client.patch("/api/auth/me/preferences", json={"language": "en"})
 
@@ -185,7 +191,7 @@ def test_chat_image_upload_validates_content_and_returns_owner_token(
     monkeypatch, client_for, tmp_path
 ):
     monkeypatch.setenv("APP_SESSION_SECRET", "wave-five-secret")
-    monkeypatch.setattr(app_server, "data_raw_root", lambda: tmp_path)
+    monkeypatch.setattr(chat_routes, "data_raw_root", lambda: tmp_path)
     client = client_for(_profile())
 
     invalid_type = client.post(
@@ -217,10 +223,15 @@ def test_chat_message_rejects_untrusted_image_tokens_before_rag(
     monkeypatch, client_for
 ):
     monkeypatch.setenv("APP_SESSION_SECRET", "wave-five-secret")
+
+    class RejectingRunner:
+        def stream(self, *_args, **_kwargs):
+            pytest.fail("rejected image must not reach RAG")
+
     monkeypatch.setattr(
-        app_server.requests,
-        "post",
-        lambda *_args, **_kwargs: pytest.fail("rejected image must not reach RAG"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, chat_turn_runner=RejectingRunner()),
     )
     client = client_for(_profile())
     wrong_owner, _ = app_server.app_security.create_session_token(
@@ -232,7 +243,7 @@ def test_chat_message_rejects_untrusted_image_tokens_before_rag(
     missing, _ = app_server.app_security.create_session_token(
         user_id=7, username="image:missing.png"
     )
-    monkeypatch.setattr(app_server, "chat_image_path", lambda _image_id: None)
+    monkeypatch.setattr(chat_routes, "chat_image_path", lambda _image_id: None)
 
     def send(token):
         return client.post(
@@ -258,12 +269,12 @@ def test_chat_history_feedback_and_session_contracts(monkeypatch, client_for):
         replace(app_server.app.state.runtime, app_support_queries=Support()),
     )
     monkeypatch.setattr(
-        app_server,
+        chat_routes,
         "get_all_sessions",
         lambda **kwargs: calls.append(("sessions", kwargs)) or [{"session_id": "s1"}],
     )
     monkeypatch.setattr(
-        app_server,
+        chat_routes,
         "get_chat_history",
         lambda *_args, **kwargs: calls.append(("history", kwargs))
         or [
@@ -276,12 +287,12 @@ def test_chat_history_feedback_and_session_contracts(monkeypatch, client_for):
         ],
     )
     monkeypatch.setattr(
-        app_server,
+        chat_routes,
         "clear_chat_history",
         lambda session_id, **kwargs: calls.append(("delete", session_id, kwargs)) or 2,
     )
     monkeypatch.setattr(
-        app_server,
+        chat_routes,
         "update_chat_feedback",
         lambda *args, **kwargs: calls.append(("feedback", args, kwargs)) or True,
     )
@@ -336,12 +347,12 @@ def test_history_exposes_only_sources_attributed_by_each_answer(
         replace(app_server.app.state.runtime, app_support_queries=Support()),
     )
     monkeypatch.setattr(
-        app_server,
+        chat_routes,
         "page_has_vision",
         lambda doc_id, page_no: (doc_id, page_no) == (42, 7),
     )
     monkeypatch.setattr(
-        app_server,
+        chat_routes,
         "get_chat_history",
         lambda *_args, **_kwargs: [
             {"chat_id": 11, "content": "Verified [SRC:D42P7]"},
@@ -458,17 +469,17 @@ def test_access_administration_binds_identity_and_preserves_failure(
 ):
     calls = []
     monkeypatch.setattr(
-        app_server,
+        operation_routes.access_service,
         "resolve_access_request",
         lambda **kwargs: calls.append(("resolve", kwargs)) or None,
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.access_service,
         "revoke_user_clearance",
         lambda **kwargs: calls.append(("clearance", kwargs)) or {"changed": True},
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.access_service,
         "revoke_user_department",
         lambda **kwargs: calls.append(("department", kwargs)) or False,
     )
@@ -510,16 +521,24 @@ def test_security_admin_user_mutations_report_repository_outcomes(
 
         return fake
 
-    monkeypatch.setattr(app_server, "set_user_active_status", record("active", True))
     monkeypatch.setattr(
-        app_server, "update_user_active_and_roles", record("roles", False)
+        operation_routes.ui_query_service, "set_user_active_status", record("active", True)
     )
     monkeypatch.setattr(
-        app_server, "set_user_departments", record("departments", True)
+        operation_routes.ui_query_service,
+        "update_user_active_and_roles",
+        record("roles", False),
     )
-    monkeypatch.setattr(app_server, "set_user_sites", record("sites", False))
-    monkeypatch.setattr(app_server, "set_user_clearance", record("clearance", True))
-    monkeypatch.setattr(app_server, "delete_user_account", record("delete", False))
+    monkeypatch.setattr(
+        operation_routes.org_service, "set_user_departments", record("departments", True)
+    )
+    monkeypatch.setattr(operation_routes.org_service, "set_user_sites", record("sites", False))
+    monkeypatch.setattr(
+        operation_routes.access_service, "set_user_clearance", record("clearance", True)
+    )
+    monkeypatch.setattr(
+        operation_routes.ui_query_service, "delete_user_account", record("delete", False)
+    )
     client = client_for(_profile("security_admin"))
 
     responses = [
@@ -551,11 +570,13 @@ def test_bulk_metadata_selector_normalizes_status_suffixes(
 ):
     departments = []
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "list_docs_for_bulk_meta",
         lambda **kwargs: departments.append(kwargs["dept"]) or [],
     )
-    monkeypatch.setattr(app_server, "list_bulk_meta_departments", lambda: ["CoKhi"])
+    monkeypatch.setattr(
+        document_routes, "list_bulk_meta_departments", lambda: ["CoKhi"]
+    )
     client = client_for(_profile("reviewer"))
 
     disabled = client.get("/api/documents/bulk-meta?dept=CoKhi%20(disabled)")
@@ -570,7 +591,7 @@ def test_document_lifecycle_counts_hide_reviewer_only_buckets(
     monkeypatch, client_for
 ):
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "get_document_lifecycle_counts",
         lambda **_kwargs: {"effective": 4, "expired": 2, "needs_review": 1},
     )
@@ -635,11 +656,34 @@ def test_health_reports_database_probe_outcome(monkeypatch, client_for):
 def test_single_upload_validates_file_before_creating_job(
     monkeypatch, client_for, tmp_path
 ):
-    monkeypatch.setattr(app_server, "data_raw_root", lambda: tmp_path)
     created = []
+
+    class UploadStorage:
+        def store(self, *, file_name, content, owner_department):
+            directory = tmp_path / "Uploads" / owner_department
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / file_name
+            path.write_bytes(content)
+            return StoredUpload(original_name=file_name, stored_path=str(path))
+
+        def delete(self, stored_path):
+            path = Path(stored_path)
+            path.unlink(missing_ok=True)
+            return True
+
+    class UploadJobs:
+        def create_job(self, **kwargs):
+            created.append(kwargs)
+            return 41
+
+    upload_runtime = DocumentUpload(
+        storage=UploadStorage(),
+        job_store=UploadJobs(),
+    )
     monkeypatch.setattr(
-        "mech_chatbot.db.repositories.jobs.create_ingestion_job",
-        lambda **kwargs: created.append(kwargs) or 41,
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, document_upload=upload_runtime),
     )
     client = client_for(_profile("uploader"))
 
@@ -672,8 +716,8 @@ def test_single_upload_validates_file_before_creating_job(
     assert unsupported.status_code == 400
     assert empty.status_code == 400
     assert accepted.json() == {"ok": True, "job_id": 41, "file_name": "manual.pdf"}
-    assert created[0]["upload_meta"] == {"owner": "qa"}
-    assert created[0]["phong_ban"] == ["CoKhi", "Shared"]
+    assert created[0]["upload_metadata"] == {"owner": "qa"}
+    assert created[0]["shared_departments"] == ("CoKhi", "Shared")
     assert (tmp_path / "Uploads" / "CoKhi").exists()
 
 
@@ -686,10 +730,10 @@ def test_ingestion_rejection_never_reports_false_success(
 ):
     marked = []
     monkeypatch.setattr(
-        app_server, "reject_ingestion_job", lambda *_args: reject_result
+        document_routes, "reject_ingestion_job", lambda *_args: reject_result
     )
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "mark_job_rejected",
         lambda job_id: marked.append(job_id) or mark_result,
     )

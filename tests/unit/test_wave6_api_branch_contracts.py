@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from mech_chatbot.api import app_security, app_server, rag_server
+from mech_chatbot.api import dependencies
+from mech_chatbot.api.routers import documents as document_routes
+from mech_chatbot.api.routers import operations as operation_routes
+from mech_chatbot.application.chat_turn import ChatCitation, ChatDelta, ChatDone
+from mech_chatbot.application.document_review import PublicationCoordinator, ReviewDocuments
+from mech_chatbot.application.document_upload import DocumentUpload, StoredUpload
 from mech_chatbot.rag.execution import (
     RagCancelled,
     RagCitation,
@@ -50,7 +54,7 @@ def app_client(monkeypatch):
     monkeypatch.setenv("APP_SESSION_SECRET", "wave6-session-secret")
     monkeypatch.delenv("RAG_SERVICE_TOKEN", raising=False)
     monkeypatch.setattr(
-        app_server,
+        dependencies,
         "load_user_profile",
         lambda **_identity: dict(APP_PROFILE),
     )
@@ -96,49 +100,6 @@ def rag_client(monkeypatch):
         executor.shutdown(wait=True)
 
 
-class _ProviderStream:
-    ok = True
-    status_code = 200
-    text = ""
-
-    def __init__(self, lines):
-        self._lines = lines
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def iter_lines(self, decode_unicode=True):
-        del decode_unicode
-        return iter(self._lines)
-
-
-class _Result:
-    def __init__(self, row):
-        self._row = row
-
-    def fetchone(self):
-        return self._row
-
-
-class _Connection:
-    def __init__(self, row):
-        self._row = row
-
-    def execute(self, _statement, _params=None):
-        return _Result(self._row)
-
-
-class _Engine:
-    def __init__(self, row):
-        self._row = row
-
-    def connect(self):
-        return nullcontext(_Connection(self._row))
-
-
 class _MappedRow:
     _mapping = {"user_id": 1, "username": "mapped"}
 
@@ -168,51 +129,33 @@ def _stream_text(client, *, headers=None, payload=None):
         return response.status_code, "".join(response.iter_text())
 
 
-def test_browser_chat_normalizes_provider_sse_and_persists_only_attributed_sources(
+def test_browser_chat_serializes_only_attributed_sources_from_turn_runner(
     app_client, monkeypatch
 ):
-    from mech_chatbot.evaluation import crag_pilot
+    citation = {
+        "doc_id": 42,
+        "page_no": 3,
+        "file_name": "bom.pdf",
+        "source_id": "D42P3",
+    }
 
-    provider_lines = [
-        ": keepalive",
-        "event: metadata",
-        'data: {"ref_text":"legacy","ref_images":[],"debug_info":{"retrieved_docs":[],"citation_docs":[1,{"doc_id":42},{"doc_id":42,"trang":3,"file_goc":"bom.pdf"},{"doc_id":42,"trang":3,"file_goc":"bom.pdf"}]}}',
-        "",
-        "event: ignored",
-        "data: not-json",
-        "",
-        "event: citation",
-        'data: {"doc_id":99,"page_no":1,"file_name":"unused.pdf"}',
-        "",
-        "event: token",
-        'data: {"text":"See SourceID: D42P3"}',
-        "",
-        "event: done",
-        'data: {"trace_id":"wave6-trace"}',
-    ]
-    persisted = {"evidence": [], "sources": [], "audits": []}
-    monkeypatch.setattr(crag_pilot, "load_pilot_config", lambda: None)
+    class ScriptedRunner:
+        def stream(self, _command, _actor):
+            yield ChatDelta("See SourceID: D42P3")
+            yield ChatCitation(citation)
+            yield ChatDone(
+                chat_id=51,
+                ref_text="legacy",
+                citations=(citation,),
+                new_part_ids=(),
+                conversation_context=None,
+                elapsed_ms=1,
+            )
+
     monkeypatch.setattr(
-        app_server.requests,
-        "post",
-        lambda *_args, **_kwargs: _ProviderStream(provider_lines),
-    )
-    monkeypatch.setattr(app_server, "page_has_vision", lambda *_args: False)
-    monkeypatch.setattr(app_server, "save_chat_history", lambda **_kwargs: 51)
-    monkeypatch.setattr(
-        app_server,
-        "save_answer_evidence",
-        lambda chat_id, docs: persisted["evidence"].append((chat_id, docs)),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "save_answer_sources",
-        lambda chat_id, docs: persisted["sources"].append((chat_id, docs)),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "write_audit_log",
-        lambda **record: persisted["audits"].append(record),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, chat_turn_runner=ScriptedRunner()),
     )
 
     response = app_client.post(
@@ -224,23 +167,36 @@ def test_browser_chat_normalizes_provider_sse_and_persists_only_attributed_sourc
     assert "event: done" in response.text
     assert "event: error" not in response.text
     assert "D42P3" in response.text
-    assert persisted["evidence"] == [(51, [])]
-    assert persisted["sources"][0][0] == 51
-    assert [item["doc_id"] for item in persisted["sources"][0][1]] == [42]
-    assert persisted["audits"][0]["entity_id"] == 51
+    assert '"doc_id": 42' in response.text
+    assert '"chat_id": 51' in response.text
 
 
 def test_upload_contracts_reject_wrong_metadata_shape_and_report_missing_batch_department(
     app_client, monkeypatch, tmp_path
 ):
-    from mech_chatbot.db.repositories import jobs
-
     created = []
-    monkeypatch.setattr(app_server, "data_raw_root", lambda: tmp_path)
+    del tmp_path
+
+    class Storage:
+        def store(self, *, file_name, content, owner_department):
+            del content, owner_department
+            return StoredUpload(original_name=file_name, stored_path=f"staged/{file_name}")
+
+        def delete(self, _stored_path):
+            return True
+
+    class Jobs:
+        def create_job(self, **record):
+            created.append(record)
+            return 71
+
     monkeypatch.setattr(
-        jobs,
-        "create_ingestion_job",
-        lambda **record: created.append(record) or 71,
+        app_server.app.state,
+        "runtime",
+        replace(
+            app_server.app.state.runtime,
+            document_upload=DocumentUpload(storage=Storage(), job_store=Jobs()),
+        ),
     )
 
     wrong_shape = app_client.post(
@@ -264,7 +220,8 @@ def test_upload_contracts_reject_wrong_metadata_shape_and_report_missing_batch_d
 
     assert wrong_shape.status_code == 400
     assert accepted_csv.status_code == 200
-    assert created[0]["phong_ban"] == ["CoKhi", "QA", "Shared"]
+    assert created[0]["owner_department"] == "CoKhi"
+    assert created[0]["shared_departments"] == ("CoKhi", "QA", "Shared")
     assert missing_department.status_code == 200
     assert missing_department.json()["errors"][0]["error"] == "Thiếu phòng ban"
 
@@ -273,25 +230,44 @@ def test_bulk_review_reports_missing_identifiers_and_executes_scoped_delete_path
     app_client, monkeypatch
 ):
     calls = []
-    monkeypatch.setattr(
-        app_server,
-        "reject_ingestion_job",
-        lambda job_id, reason: calls.append(("reject-job", job_id, reason)) or True,
+
+    class ReviewStore:
+        def reject_job(self, job_id, reason):
+            calls.append(("reject-job", job_id, reason))
+            return True
+
+        def mark_job_rejected(self, _job_id):
+            raise AssertionError("successful reject must not use fallback")
+
+        def reject_document(self, doc_id, reviewer):
+            del reviewer
+            calls.append(("reject-doc", doc_id))
+
+        def delete_document(self, doc_id, reviewer):
+            del reviewer
+            calls.append(("delete-doc", doc_id))
+
+        def delete_job(self, job_id):
+            calls.append(("delete-job", job_id))
+
+    class Publication:
+        def resolve_latest_doc_id(self, _job_id):
+            return 42
+
+        def publish_document(self, _command, _actor):
+            raise AssertionError("missing identifiers must fail before publication")
+
+        def mark_job_published(self, _job_id):
+            raise AssertionError("missing identifiers must fail before publication")
+
+    review_documents = ReviewDocuments(
+        review_store=ReviewStore(),
+        publication=PublicationCoordinator(publication=Publication()),
     )
     monkeypatch.setattr(
-        app_server,
-        "reject_document",
-        lambda doc_id, **_kwargs: calls.append(("reject-doc", doc_id)) or True,
-    )
-    monkeypatch.setattr(
-        app_server,
-        "delete_document_completely",
-        lambda doc_id, **_kwargs: calls.append(("delete-doc", doc_id)) or True,
-    )
-    monkeypatch.setattr(
-        app_server,
-        "delete_ingestion_job",
-        lambda job_id: calls.append(("delete-job", job_id)) or True,
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, review_documents=review_documents),
     )
 
     missing_publish = app_client.post(
@@ -334,10 +310,10 @@ def test_bulk_review_reports_missing_identifiers_and_executes_scoped_delete_path
 def test_platform_metadata_reads_and_updates_fail_closed_on_missing_records(
     app_client, monkeypatch
 ):
-    monkeypatch.setattr(app_server, "get_department_knowledge_governance", lambda _code: None)
-    monkeypatch.setattr(app_server, "get_department_domain_profile", lambda _code: None)
-    monkeypatch.setattr(app_server, "update_document_governance_metadata", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(app_server, "update_document_common_metadata", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(operation_routes.knowledge_governance_service, "get_department_knowledge_governance", lambda _code: None)
+    monkeypatch.setattr(operation_routes.knowledge_governance_service, "get_department_domain_profile", lambda _code: None)
+    monkeypatch.setattr(document_routes, "update_document_governance_metadata", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(document_routes, "update_document_common_metadata", lambda *_args, **_kwargs: False)
 
     governance_read = app_client.get(
         "/api/catalog/departments/CoKhi/knowledge-governance"
@@ -365,21 +341,21 @@ def test_user_creation_and_password_contracts_preserve_repository_outcomes(
     site_calls = []
     clearance_calls = []
     monkeypatch.setattr(
-        app_server,
+        operation_routes.ui_query_service,
         "create_user_with_roles",
         lambda **_record: next(creation_results),
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.org_service,
         "set_user_sites",
         lambda *args: site_calls.append(args) or True,
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.access_service,
         "set_user_clearance",
         lambda *args: clearance_calls.append(args) or True,
     )
-    monkeypatch.setattr(app_server, "update_user_password", lambda *_args: False)
+    monkeypatch.setattr(operation_routes.ui_query_service, "update_user_password", lambda *_args: False)
 
     rejected = app_client.post(
         "/api/users", json={"username": "first", "password": "long-enough"}
@@ -414,21 +390,21 @@ def test_row_glossary_lifecycle_and_feedback_branches_remain_json_safe(
     glossary_results = iter([True, {"ok": True, "term": "BOM"}])
     lifecycle_buckets = []
     monkeypatch.setattr(
-        app_server,
+        operation_routes.ui_query_service,
         "list_users_basic",
         lambda: [_MappedRow(), {"username": "dict"}, (3, "tuple"), "scalar"],
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.glossary_service,
         "upsert_glossary_term",
         lambda **_record: next(glossary_results),
     )
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "list_documents",
         lambda **scope: lifecycle_buckets.append(scope["bucket"]) or [],
     )
-    monkeypatch.setattr(app_server, "classify_feedback_and_get_source", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr(operation_routes.ui_query_service, "classify_feedback_and_get_source", lambda *_args, **_kwargs: {"ok": True})
 
     class Support:
         def feedback_review_context(self, _feedback_id):

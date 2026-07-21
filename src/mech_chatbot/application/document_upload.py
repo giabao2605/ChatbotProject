@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+from mech_chatbot.auth.authorization import role_allows
 
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
@@ -32,6 +35,8 @@ ALLOWED_UPLOAD_EXTENSIONS = frozenset(
         ".tiff",
     }
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +150,8 @@ class DocumentUpload:
         actor: DocumentActor,
     ) -> UploadFailure | None:
         """Validate authorization and extension before transport reads bytes."""
+        if not role_allows(actor.roles, "uploader", "reviewer", "admin"):
+            return _failure("unauthorized", file_name, "Forbidden")
         if owner_department not in set(actor.allowed_departments):
             return _failure(
                 "unauthorized",
@@ -219,6 +226,10 @@ class DocumentUpload:
         message = "Không tạo được job (phòng ban có thể bị vô hiệu)"
         if not cleanup_ok:
             message = "Không tạo được job và không xóa được file đã lưu"
+            logger.error(
+                "Upload cleanup failed after enqueue failure",
+                extra={"stored_path": stored.stored_path},
+            )
         error = UploadRejected(_failure(code, stored.original_name, message, detail))
         if cause is not None:
             raise error from cause

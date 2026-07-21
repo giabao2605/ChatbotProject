@@ -84,8 +84,14 @@ class _NullReviewStore:
 
 
 class _NullPublicationPort:
-    def publish(self, command, actor):
+    def resolve_latest_doc_id(self, job_id: int) -> int | None:
+        return None
+
+    def publish_document(self, command, actor):
         raise RuntimeError("publication port is not configured")
+
+    def mark_job_published(self, job_id: int) -> None:
+        return None
 
 
 class _NullAppSupportQueries:
@@ -121,7 +127,7 @@ class AppRuntime:
     publication_coordinator: PublicationCoordinator
     review_documents: ReviewDocuments
     app_support_queries: Any
-    protected_file_resolver: ProtectedFileResolver
+    protected_file_resolver: ProtectedFileResolver | None
 
 
 def build_app_runtime(

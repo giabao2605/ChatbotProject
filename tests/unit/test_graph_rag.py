@@ -292,23 +292,27 @@ def test_graph_deterministic_edges_have_a_persisted_provenance_contract():
 
 @pytest.mark.parametrize("role", ["knowledge_approver", "reviewer", "admin"])
 def test_graph_review_endpoint_allows_governed_review_roles_and_audits_without_prompt(monkeypatch, role):
-    from mech_chatbot.api import app_server
+    from mech_chatbot.api.routers import operations as operation_routes
 
-    with pytest.raises(app_server.HTTPException) as denied:
-        app_server.graph_proposal_approve(7, {}, {"roles": ["viewer"], "username": "alice"})
+    with pytest.raises(operation_routes.HTTPException) as denied:
+        operation_routes.graph_proposal_approve(7, {}, {"roles": ["viewer"], "username": "alice"})
     assert denied.value.status_code == 403
 
     audits = []
     monkeypatch.setattr(
-        app_server,
+        operation_routes.graph_service,
         "review_graph_proposal",
         lambda proposal_id, action, reviewer, note=None: {
             "ok": True, "proposal_id": proposal_id, "status": "approved"
         },
     )
-    monkeypatch.setattr(app_server, "write_audit_log", lambda **kwargs: audits.append(kwargs))
+    monkeypatch.setattr(
+        operation_routes.audit_service,
+        "write_audit_log",
+        lambda **kwargs: audits.append(kwargs),
+    )
 
-    result = app_server.graph_proposal_approve(
+    result = operation_routes.graph_proposal_approve(
         7, {"note": "verified"}, {"roles": [role], "username": "bob", "user_id": 9}
     )
 
@@ -318,11 +322,15 @@ def test_graph_review_endpoint_allows_governed_review_roles_and_audits_without_p
 
 
 def test_graph_proposal_listing_rejects_viewer_even_when_called_directly(monkeypatch):
-    from mech_chatbot.api import app_server
+    from mech_chatbot.api.routers import operations as operation_routes
 
-    monkeypatch.setattr(app_server, "list_graph_proposals", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        operation_routes.graph_service,
+        "list_graph_proposals",
+        lambda **_kwargs: [],
+    )
 
-    with pytest.raises(app_server.HTTPException) as denied:
-        app_server.graph_proposals(profile={"roles": ["viewer"]})
+    with pytest.raises(operation_routes.HTTPException) as denied:
+        operation_routes.graph_proposals(profile={"roles": ["viewer"]})
 
     assert denied.value.status_code == 403

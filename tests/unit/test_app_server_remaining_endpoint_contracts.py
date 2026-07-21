@@ -1,10 +1,12 @@
-from contextlib import nullcontext
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from mech_chatbot.api import dependencies as api_dependencies
+from mech_chatbot.api.routers import documents as document_routes
+from mech_chatbot.api.routers import operations as operation_routes
 from mech_chatbot.application.document_review import PublicationOutcome
 from mech_chatbot.application.document_upload import (
     UploadFailure,
@@ -36,8 +38,12 @@ def client_for():
     clients = []
 
     def build(profile):
-        app_server.app.dependency_overrides[app_server.current_profile] = lambda: profile
-        app_server.app.dependency_overrides[app_server.csrf_profile] = lambda: profile
+        app_server.app.dependency_overrides[api_dependencies.current_profile] = (
+            lambda: profile
+        )
+        app_server.app.dependency_overrides[api_dependencies.csrf_profile] = (
+            lambda: profile
+        )
         client = TestClient(app_server.app)
         clients.append(client)
         return client
@@ -48,57 +54,20 @@ def client_for():
     app_server.app.dependency_overrides.clear()
 
 
-class _PublicationResult:
-    def __init__(self, *, ok=True, state="published", error=None):
-        self.ok = ok
-        self.state = state
-        self.error = error
-
-    def __bool__(self):
-        return self.ok
-
-    def to_dict(self):
-        return {"ok": self.ok, "state": self.state, "error": self.error}
-
-
-class _RowsResult:
-    def __init__(self, row=None):
-        self._row = row
-
-    def fetchone(self):
-        return self._row
-
-
-class _Connection:
-    def __init__(self, row=None):
-        self.row = row
-        self.calls = []
-
-    def execute(self, statement, params=None):
-        self.calls.append((str(statement), params))
-        return _RowsResult(self.row)
-
-
-class _Engine:
-    def __init__(self, row=None):
-        self.connection = _Connection(row)
-
-    def connect(self):
-        return nullcontext(self.connection)
-
-
 def test_documents_contract_filters_lifecycle_and_audits_global_admin(
     monkeypatch, client_for
 ):
     calls = []
     audits = []
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "list_documents",
         lambda **kwargs: calls.append(kwargs)
         or [SimpleNamespace(_mapping={"doc_id": 3, "site": "HN"})],
     )
-    monkeypatch.setattr(app_server, "write_audit_log", lambda *args: audits.append(args))
+    monkeypatch.setattr(
+        document_routes, "write_audit_log", lambda *args: audits.append(args)
+    )
 
     reviewer = client_for(_profile("reviewer"))
     response = reviewer.get("/api/documents?eff_mode=sap&soon_days=14&search=bom")
@@ -121,7 +90,7 @@ def test_documents_contract_rejects_invalid_or_unauthorized_lifecycle_bucket(
     monkeypatch, client_for
 ):
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "list_documents",
         lambda **_kwargs: pytest.fail("invalid filters must not reach storage"),
     )
@@ -137,6 +106,9 @@ def test_single_upload_creates_job_with_normalized_metadata(monkeypatch, client_
     captured = []
 
     class Upload:
+        def preflight(self, **_kwargs):
+            return None
+
         def enqueue(self, command, actor):
             captured.append((command, actor))
             return UploadReceipt(91, command.file_name, command.owner_department)
@@ -172,6 +144,9 @@ def test_single_upload_removes_staged_file_when_job_is_rejected(
     monkeypatch, client_for, tmp_path
 ):
     class Upload:
+        def preflight(self, **_kwargs):
+            return None
+
         def enqueue(self, _command, _actor):
             raise UploadRejected(
                 UploadFailure(
@@ -201,12 +176,12 @@ def test_access_request_and_self_history_forward_server_identity(
 ):
     calls = []
     monkeypatch.setattr(
-        app_server,
+        operation_routes.access_service,
         "create_access_request",
         lambda **kwargs: calls.append(kwargs) or {"request_id": 12},
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.access_service,
         "get_user_access_requests",
         lambda user_id, limit: [{"user_id": user_id, "limit": limit}],
     )
@@ -230,7 +205,9 @@ def test_access_request_and_self_history_forward_server_identity(
 
 
 def test_access_request_fails_closed_when_repository_rejects(monkeypatch, client_for):
-    monkeypatch.setattr(app_server, "create_access_request", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        operation_routes.access_service, "create_access_request", lambda **_kwargs: None
+    )
 
     response = client_for(_profile()).post(
         "/api/access/request", json={"request_type": "clearance"}
@@ -242,25 +219,27 @@ def test_access_request_fails_closed_when_repository_rejects(monkeypatch, client
 def test_document_metadata_lifecycle_and_state_contracts(monkeypatch, client_for):
     calls = []
     monkeypatch.setattr(
-        app_server, "validate_document_metadata_actor", lambda *_args: (True, "allowed")
+        document_routes,
+        "validate_document_metadata_actor",
+        lambda *_args: (True, "allowed"),
     )
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "update_document_common_metadata",
         lambda doc_id, **kwargs: calls.append(("metadata", doc_id, kwargs)) or {"id": doc_id},
     )
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "mark_document_expired",
         lambda doc_id, reviewer: calls.append(("expired", doc_id, reviewer)) or True,
     )
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "set_document_lifecycle",
         lambda doc_id, **kwargs: calls.append(("lifecycle", doc_id, kwargs)) or True,
     )
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "mark_document_reviewed",
         lambda doc_id, **kwargs: calls.append(("reviewed", doc_id, kwargs)) or True,
     )
@@ -290,12 +269,12 @@ def test_document_metadata_lifecycle_and_state_contracts(monkeypatch, client_for
 
 def test_document_metadata_denial_stops_mutation(monkeypatch, client_for):
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "validate_document_metadata_actor",
         lambda *_args: (False, "department_denied"),
     )
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "update_document_common_metadata",
         lambda *_args, **_kwargs: pytest.fail("denied metadata must not be written"),
     )
@@ -319,28 +298,36 @@ def test_document_publication_routes_bind_server_actor(
     path, action, monkeypatch, client_for
 ):
     calls = []
+
+    class Publication:
+        def publish_job(self, command, actor):
+            calls.append((command, actor))
+            return PublicationOutcome(
+                ok=True,
+                state="pending",
+                payload={"ok": True, "state": "pending"},
+            )
+
     monkeypatch.setattr(
-        app_server,
-        "publish_document",
-        lambda doc_id, **kwargs: calls.append((doc_id, kwargs))
-        or _PublicationResult(state="pending"),
+        app_server.app.state,
+        "runtime",
+        replace(
+            app_server.app.state.runtime,
+            publication_coordinator=Publication(),
+        ),
     )
 
     response = client_for(_profile("reviewer")).post(path)
 
     assert response.status_code == 202
     assert response.json()["state"] == "pending"
-    assert calls == [
-        (
-            42,
-            {
-                "action": action,
-                "reviewer": "alice",
-                "reviewer_id": 7,
-                "reviewer_roles": ["reviewer"],
-            },
-        )
-    ]
+    command, actor = calls[0]
+    assert command.job_id == 0
+    assert command.doc_id == 42
+    assert command.publish_mode == action
+    assert actor.username == "alice"
+    assert actor.user_id == 7
+    assert actor.roles == ("reviewer",)
 
 
 def test_governance_and_site_updates_validate_repository_outcomes(
@@ -348,12 +335,12 @@ def test_governance_and_site_updates_validate_repository_outcomes(
 ):
     governance_calls = []
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "update_document_governance_metadata",
         lambda doc_id, **kwargs: governance_calls.append((doc_id, kwargs)) or True,
     )
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "update_document_common_metadata",
         lambda *_args, **_kwargs: False,
     )
@@ -376,7 +363,7 @@ def test_governance_value_error_is_mapped_without_asserting_internal_text(
     monkeypatch, client_for
 ):
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "update_document_governance_metadata",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("private detail")),
     )
@@ -391,23 +378,25 @@ def test_governance_value_error_is_mapped_without_asserting_internal_text(
 def test_ingestion_listing_and_queue_controls(monkeypatch, client_for):
     calls = []
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "list_ingestion_jobs",
         lambda **kwargs: calls.append(("list", kwargs)) or [{"job_id": 8}],
     )
-    monkeypatch.setattr(app_server, "queue_eta_seconds", lambda: 37)
+    monkeypatch.setattr(document_routes, "queue_eta_seconds", lambda: 37)
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "set_job_priority",
         lambda job_id, priority: calls.append(("priority", job_id, priority)) or True,
     )
     monkeypatch.setattr(
-        app_server,
+        document_routes,
         "cancel_job",
         lambda job_id, **kwargs: calls.append(("cancel", job_id, kwargs)) or True,
     )
-    monkeypatch.setattr(app_server, "requeue_job", lambda job_id: job_id == 8)
-    monkeypatch.setattr(app_server, "mark_job_pending_review", lambda job_id: job_id == 8)
+    monkeypatch.setattr(document_routes, "requeue_job", lambda job_id: job_id == 8)
+    monkeypatch.setattr(
+        document_routes, "mark_job_pending_review", lambda job_id: job_id == 8
+    )
     client = client_for(_profile("reviewer"))
 
     listed = client.get("/api/ingestion/jobs?status_value=pending")
@@ -478,23 +467,23 @@ def test_user_creation_validates_password_and_applies_access_profile(
 ):
     calls = []
     monkeypatch.setattr(
-        app_server.bcrypt,
+        operation_routes.bcrypt,
         "hashpw",
         lambda raw, _salt: calls.append(("hash", raw)) or b"hashed-password",
     )
-    monkeypatch.setattr(app_server.bcrypt, "gensalt", lambda: b"salt")
+    monkeypatch.setattr(operation_routes.bcrypt, "gensalt", lambda: b"salt")
     monkeypatch.setattr(
-        app_server,
+        operation_routes.ui_query_service,
         "create_user_with_roles",
         lambda **kwargs: calls.append(("create", kwargs)) or {"user_id": 22},
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.org_service,
         "set_user_sites",
         lambda user_id, sites: calls.append(("sites", user_id, sites)) or True,
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.access_service,
         "set_user_clearance",
         lambda user_id, level: calls.append(("clearance", user_id, level)) or True,
     )
@@ -521,23 +510,23 @@ def test_user_creation_validates_password_and_applies_access_profile(
 def test_catalog_rollout_and_governance_contracts(monkeypatch, client_for):
     calls = []
     monkeypatch.setattr(
-        app_server,
+        operation_routes.rollout_service,
         "upsert_department_rollout_plan",
         lambda code, **kwargs: calls.append(("plan", code, kwargs)) or {"code": code},
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.rollout_service,
         "record_department_evaluation_gate",
         lambda code, **kwargs: calls.append(("gate", code, kwargs)) or {"passed": True},
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.knowledge_governance_service,
         "upsert_department_knowledge_governance",
         lambda code, **kwargs: calls.append(("governance", code, kwargs))
         or {"code": code},
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.knowledge_governance_service,
         "upsert_department_domain_profile",
         lambda code, **kwargs: calls.append(("domain", code, kwargs)) or {"code": code},
     )
@@ -587,8 +576,13 @@ def test_catalog_rollout_and_governance_contracts(monkeypatch, client_for):
 def test_catalog_value_errors_are_mapped_without_asserting_internal_text(
     path, target, monkeypatch, client_for
 ):
+    service_module = (
+        operation_routes.rollout_service
+        if target == "upsert_department_rollout_plan"
+        else operation_routes.knowledge_governance_service
+    )
     monkeypatch.setattr(
-        app_server,
+        service_module,
         target,
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("private detail")),
     )
@@ -601,8 +595,16 @@ def test_catalog_value_errors_are_mapped_without_asserting_internal_text(
 def test_missing_department_governance_and_domain_profile_return_not_found(
     monkeypatch, client_for
 ):
-    monkeypatch.setattr(app_server, "get_department_knowledge_governance", lambda _code: None)
-    monkeypatch.setattr(app_server, "get_department_domain_profile", lambda _code: None)
+    monkeypatch.setattr(
+        operation_routes.knowledge_governance_service,
+        "get_department_knowledge_governance",
+        lambda _code: None,
+    )
+    monkeypatch.setattr(
+        operation_routes.knowledge_governance_service,
+        "get_department_domain_profile",
+        lambda _code: None,
+    )
     client = client_for(_profile("platform_admin"))
 
     governance = client.get("/api/catalog/departments/CoKhi/knowledge-governance")
@@ -614,7 +616,7 @@ def test_missing_department_governance_and_domain_profile_return_not_found(
 
 def test_glossary_repository_rejection_becomes_safe_client_error(monkeypatch, client_for):
     monkeypatch.setattr(
-        app_server,
+        operation_routes.glossary_service,
         "upsert_glossary_term",
         lambda **_kwargs: {"ok": False, "message": "duplicate"},
     )
@@ -630,7 +632,7 @@ def test_feedback_without_correct_answer_does_not_query_golden_source(
     monkeypatch, client_for
 ):
     monkeypatch.setattr(
-        app_server,
+        operation_routes.ui_query_service,
         "classify_feedback_and_get_source",
         lambda *_args, **_kwargs: {"status": "classified"},
     )
@@ -672,17 +674,17 @@ def test_feedback_correction_creates_golden_and_regression_evidence(
         replace(app_server.app.state.runtime, app_support_queries=Support()),
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.ui_query_service,
         "classify_feedback_and_get_source",
         lambda *_args, **_kwargs: {"status": "classified"},
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.feedback_service,
         "upsert_golden_answer",
         lambda **kwargs: calls.append(("golden", kwargs)) or "hash-1",
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes.feedback_service,
         "ensure_regression_question",
         lambda **kwargs: calls.append(("regression", kwargs)) or 31,
     )
@@ -701,15 +703,21 @@ def test_feedback_correction_creates_golden_and_regression_evidence(
 
 def test_quality_and_external_policy_contracts(monkeypatch, client_for):
     calls = []
-    monkeypatch.setattr(app_server, "recompute_doc_quality_scores", lambda: 12)
-    monkeypatch.setattr(app_server, "cleanup_dangling_records", lambda: {"deleted": 2})
     monkeypatch.setattr(
-        app_server,
+        operation_routes.feedback_service, "recompute_doc_quality_scores", lambda: 12
+    )
+    monkeypatch.setattr(
+        operation_routes.feedback_service,
+        "cleanup_dangling_records",
+        lambda: {"deleted": 2},
+    )
+    monkeypatch.setattr(
+        operation_routes.external_ai_service,
         "upsert_external_ai_provider_profile",
         lambda provider, **kwargs: calls.append((provider, kwargs)) or {"provider": provider},
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes,
         "invalidate_external_ai_provider_profiles",
         lambda: calls.append(("invalidate", {})),
     )
@@ -733,12 +741,12 @@ def test_external_policy_validation_failure_does_not_invalidate_cache(
     monkeypatch, client_for
 ):
     monkeypatch.setattr(
-        app_server,
+        operation_routes.external_ai_service,
         "upsert_external_ai_provider_profile",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("private detail")),
     )
     monkeypatch.setattr(
-        app_server,
+        operation_routes,
         "invalidate_external_ai_provider_profiles",
         lambda: pytest.fail("failed policy must not invalidate cache"),
     )
@@ -767,9 +775,11 @@ def test_graph_reviews_map_repository_failures_without_audit(
         if kind == "proposal"
         else "/api/admin/graph/community-summaries/5/approve"
     )
-    monkeypatch.setattr(app_server, target, lambda *_args, **_kwargs: result)
     monkeypatch.setattr(
-        app_server,
+        operation_routes.graph_service, target, lambda *_args, **_kwargs: result
+    )
+    monkeypatch.setattr(
+        operation_routes.audit_service,
         "write_audit_log",
         lambda **_kwargs: pytest.fail("failed review must not be audited as success"),
     )
@@ -800,13 +810,15 @@ def test_graph_reviews_audit_successful_server_bound_actor(
     reviews = []
     audits = []
     monkeypatch.setattr(
-        app_server,
+        operation_routes.graph_service,
         target,
         lambda item_id, action, **kwargs: reviews.append((item_id, action, kwargs))
         or {"ok": True, "status": action},
     )
     monkeypatch.setattr(
-        app_server, "write_audit_log", lambda **kwargs: audits.append(kwargs)
+        operation_routes.audit_service,
+        "write_audit_log",
+        lambda **kwargs: audits.append(kwargs),
     )
 
     response = client_for(_profile("knowledge_approver")).post(

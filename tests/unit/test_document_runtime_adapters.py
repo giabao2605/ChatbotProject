@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from pathlib import Path
 
 import pytest
 
 from mech_chatbot.adapters.document_runtime import (
+    LocalUploadStorage,
     RepositoryPublicationPort,
     SqlAppSupportQueries,
     SqlDocumentLookup,
 )
-from mech_chatbot.application.document_review import PublicationCommand
+from mech_chatbot.application.document_review import PublicationCommand, PublicationCoordinator
 from mech_chatbot.application.document_upload import DocumentActor
 
 
@@ -62,6 +64,31 @@ def _actor():
     return DocumentActor(7, "alice", ("reviewer",), ("CoKhi",))
 
 
+def test_local_upload_storage_commits_bytes_with_atomic_replace(tmp_path, monkeypatch) -> None:
+    from mech_chatbot.adapters import document_runtime
+
+    replacements = []
+    real_replace = document_runtime.os.replace
+
+    def recording_replace(source, target):
+        replacements.append((source, target))
+        return real_replace(source, target)
+
+    monkeypatch.setattr(document_runtime.os, "replace", recording_replace)
+    storage = LocalUploadStorage(raw_root=lambda: tmp_path)
+
+    stored = storage.store(
+        file_name="bom.pdf",
+        content=b"pdf",
+        owner_department="Co Khi",
+    )
+
+    stored_path = Path(stored.stored_path)
+    assert stored_path.read_bytes() == b"pdf"
+    assert replacements and replacements[0][1] == stored_path
+    assert not list(stored_path.parent.glob("*.tmp"))
+
+
 def test_sql_adapters_resolve_engine_provider_at_call_time() -> None:
     holder = {"engine": Engine(Result(row=(42,)))}
     lookup = SqlDocumentLookup(engine=lambda: holder["engine"])
@@ -86,9 +113,28 @@ def test_publication_adapter_resolves_job_document_and_marks_only_published() ->
         resolve_latest_doc_id_for_job=lambda job_id: 42 if job_id == 8 else None,
     )
 
-    outcome = port.publish(PublicationCommand(8, None, "standalone"), _actor())
+    outcome = PublicationCoordinator(publication=port).publish_job(
+        PublicationCommand(8, None, "standalone"),
+        _actor(),
+    )
 
     assert outcome.state == "published"
     assert calls[0][0:2] == ("publish", 42)
     assert calls[0][2]["reviewer"] == "alice"
     assert calls[1] == ("mark", 8)
+
+
+def test_publication_adapter_fails_closed_when_job_has_no_document() -> None:
+    port = RepositoryPublicationPort(
+        publish_document=lambda *_args, **_kwargs: pytest.fail("must not publish"),
+        mark_job_published=lambda _job_id: pytest.fail("must not mark published"),
+        resolve_latest_doc_id_for_job=lambda _job_id: None,
+    )
+
+    outcome = PublicationCoordinator(publication=port).publish_job(
+        PublicationCommand(8, None, "standalone"),
+        _actor(),
+    )
+
+    assert outcome.ok is False
+    assert outcome.state == "not_found"

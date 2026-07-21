@@ -4,20 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from typing import Any
 
 from fastapi import HTTPException, status
 
 from mech_chatbot.auth.authorization import role_allows
-
-
-def _role_checker():
-    app_server = sys.modules.get("mech_chatbot.api.app_server")
-    if app_server is not None and hasattr(app_server, "role_allows"):
-        return getattr(app_server, "role_allows")
-    return role_allows
-
 
 def safe_int(value: Any) -> int | None:
     try:
@@ -90,7 +81,7 @@ def rows_to_json(rows: Any) -> list[Any]:
 
 
 def assert_any_role(profile: dict[str, Any], *roles: str) -> None:
-    if not _role_checker()(profile.get("roles"), *roles):
+    if not role_allows(profile.get("roles"), *roles):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
 
