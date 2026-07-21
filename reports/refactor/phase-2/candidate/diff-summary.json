@@ -28,5 +28,5 @@
   },
   "behavior_change_authorized": false,
   "schema_or_data_migration": false,
-  "status": "validated_offline_blocked_sql_integration"
+  "status": "completed_sql_publication_integration_validated"
 }

@@ -1,0 +1,11 @@
+schema=refactor-sql-integration-v1
+scope=tests/integration/test_publication_outbox_sql.py
+status=passed
+database_target_sha256=7032a8631145e1b2700a40a6ed9706184fe3a296194798bf09be092b52415670
+fixture=pytest:draft_doc:ephemeral
+passed=2
+failed=0
+cleanup_departments=0
+cleanup_users=0
+cleanup_documents=0
+command=RUN_DB_TESTS=1 .\chat_env\Scripts\python.exe -m pytest -q tests/integration/test_publication_outbox_sql.py
