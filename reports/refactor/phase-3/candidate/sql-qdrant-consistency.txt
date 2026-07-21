@@ -1,0 +1,20 @@
+Command:
+RUN_DB_TESTS=1 RUN_QDRANT_TESTS=1 CONSISTENCY_SAMPLE_LIMIT=50 CONSISTENCY_SOURCE_SYSTEM=upload CONSISTENCY_SNAPSHOT_PATH=reports/refactor/phase-3/candidate/sql-qdrant-snapshot.json .\chat_env\Scripts\python.exe -m pytest tests/integration/test_sql_qdrant_consistency.py -v -o addopts="--strict-markers"
+
+Environment:
+- Python 3.12.3
+- SQL target: user-authorized demo database (name omitted from artifact)
+- Qdrant collection: TaiLieuKyThuat_v2
+- Snapshot: phase3-ingestion-consistency-snapshot-v1, 18 upload documents
+- Operation mode: read-only
+
+Result:
+- collected: 2
+- passed: 2
+- failed: 0
+- exit code: 0
+- duration: 27.42s
+
+Validated contracts:
+- every pinned SQL document marked vectorized has Qdrant points
+- Qdrant file name, domain, security level and department metadata match SQL

@@ -1169,3 +1169,34 @@ candidate là `ccd6814`; SQL closure evidence được capture trên evidence ba
 manifest. Settings/feature flags đã sanitize và không chứa secret. SQL target
 chỉ được ghi dưới dạng SHA-256; fixture `draft_doc` là ephemeral, hai integration
 test pass và cleanup đã được xác nhận độc lập.
+
+### 9.4. Phase 3 — Ingestion lifecycle owner
+
+Trạng thái: **Implementation completed / Validated; strict closure held at one
+P2 coverage exception**. Toàn bộ behavior, security, integration và global
+backend gate đã pass. Chưa ghi `Completed / Validated` tuyệt đối vì hai legacy
+RAG monolith được chạm một dòng fail-closed vẫn dưới ngưỡng coverage từng module
+theo câu chữ acceptance gate; không hạ threshold và không che ngoại lệ này.
+
+| Trường evidence | Kết quả thực tế |
+|---|---|
+| Baseline | Commit `1447d3c` (`docs: close phase two integration gate`), branch `codex/codebase-layer-refactor`; working tree sạch trước Phase 3. Code candidate là `387ee9e` (`refactor: create ingestion lifecycle owner`). |
+| Contract được bảo vệ | Worker vẫn claim một job, reconcile publication/serving, giữ backoff 5/10 giây và các final status/report cũ. Public `learn_new_file`, `process_and_ingest_pdf` và `process_and_ingest_file` giữ explicit signature, return tuple/report schema và legacy progress adapter. Không có schema migration, endpoint/OpenAPI change, feature toggle hay thay đổi success-path có chủ ý. |
+| RED | Runner tests khóa success, pending review, quality blocked, report persistence fail-closed, quota từ report lẫn raised exception và unexpected failure. Adapter tests khóa PhongBan normalization, parameterized SQL, typed progress mapping và governed classifier. Pipeline tests khóa compatibility signature, typed progress, rollback sau vector/SQL/Qdrant failure, missing document identity/governance, non-PDF external context và quality-block rollback. Security regression khóa policy thiếu/NULL ở governance, publication, evidence verifier, claim repair, generation và rerank thành `internal_only`. |
+| GREEN | Thêm `application/ingestion_runner.py`, `adapters/ingestion_runtime.py`, `composition/worker_runtime.py`, `config/worker_settings.py` và `ingestion/progress.py`. Worker chỉ claim/reconcile/delegate/log/backoff; lifecycle outcome và transition thuộc runner/store. `ingestion/pdf/pipeline.py` trở thành compatibility wrapper, implementation duy nhất nằm ở `pipeline_implementation.py`; các phase source/report/finalize/rollback dùng immutable context helper. |
+| Typed protocol | `IngestionProgressEvent` dùng các phase `classifying`, `extracting`, `embedding`, `quality_check`, `completed`. Store adapter map về vocabulary SQL cũ; legacy callback map ngược về message/sentinel cũ nên không mở dual implementation. |
+| Security delta | Missing/inactive governance, lookup failure hoặc policy NULL đều fail closed thành `internal_only`; direct/CLI classifier mặc định không gọi external. Chỉ worker adapter sau khi đọc governance active và explicit `all_external` mới opt-in classifier external. Quality blocked, SQL classification sync failure hoặc Qdrant payload sync failure đều rollback và không clear snapshot. Đây là thay đổi error/missing-policy path có chủ ý; explicit `all_external` success path không đổi. Security reviewer final: PASS, không còn finding actionable. |
+| Validation | Artifact: `reports/refactor/phase-3/candidate/`. Full suite kèm branch coverage exit `0`: **2.008 passed, 22 skipped, 0 failed** trên **2.030 collected**, 1 `StarletteDeprecationWarning` đã biết. Architecture **8 passed**. Test-order reproduction `strict_stream_guard -> public RAG` **15 passed** sau khi restore module cache. `git diff --check` exit `0`. Standards reviewer final: PASS. |
+| Coverage | Full backend `coverage-backend.json`: **86,191868% line / 80,624286% branch**, checker 80/80 pass. Phase 3 owned + security-small `coverage-owned.json`: **93,223140% line / 87,537994% branch**, checker pass; từng core Phase 3 module đạt >=80 line/branch. `coverage-touched.json` cố ý giữ bằng chứng strict all-touched: **67,894103% / 61,896243%** do `rag/pipeline.py` và loader-driven `rag/pipeline_steps.py` là legacy monolith; các dòng policy thay đổi có regression trực tiếp nhưng literal per-touched-module gate chưa pass. |
+| SQL/Qdrant integration | Chạy read-only trên database demo chính theo phê duyệt người dùng, collection `TaiLieuKyThuat_v2`, snapshot `phase3-ingestion-consistency-snapshot-v1` ghim 18 upload document theo DocID/file name. Kết quả **2 passed**: mọi SQL document vectorized có Qdrant point và payload file/domain/security/department khớp SQL. Không tạo fixture, ingest, re-ingest hoặc xóa dữ liệu. |
+| Test lifecycle | Không giữ test đo lường tạm ngoài acceptance evidence. Các test runner/adapter/runtime/wrapper/security là durable contract tests. Test strict-stream được sửa isolation thay vì xóa vì nó bảo vệ fail-closed generation và từng tái hiện pollution theo thứ tự suite. |
+| Known issues / closure | P2 duy nhất: strict wording `changed module coverage >=80% line/branch` chưa đạt cho hai legacy RAG monolith bị chạm bởi security fail-closed. Global backend và Phase 3-owned gate đều pass; không hạ threshold. Còn 1 warning `httpx`/`TestClient`; 22 integration/eval skip giữ nguyên opt-in và không được tính là pass. |
+| Rollback | Revert code candidate `387ee9e`, rồi revert commit evidence/ledger. Không có schema/data rollback. Sau revert, cần lưu ý các missing-policy fallback `all_external` cũ sẽ quay lại; vì vậy rollback production chỉ nên thực hiện khi đồng thời có security mitigation tương đương. |
+
+Ownership review xác nhận production path là `worker -> IngestionRunner ->
+IngestionProcessor port -> single pipeline implementation`; compatibility
+entrypoint không tự tạo runner vì thiếu job/store identity nhưng chỉ forward,
+không chứa implementation thứ hai. Spec review không còn P0/P1 correctness hay
+security blocker; chỉ giữ P2 coverage exception nói trên. Phase 4 không được mở
+trên ledger như thể Phase 3 đã strict-close cho đến khi ngoại lệ này được chấp
+nhận rõ ràng hoặc hai legacy module đạt per-module 80/80.
