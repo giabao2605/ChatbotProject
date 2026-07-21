@@ -150,7 +150,7 @@ def _attempt_number_claim_repair(
                 metadata.get("security_level") for metadata in document_metadata
             ],
             policies=[
-                metadata.get("external_processing_policy") or "all_external"
+                metadata.get("external_processing_policy") or "internal_only"
                 for metadata in document_metadata
             ],
             retry_counter=retry_counter,
@@ -602,7 +602,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     _external_doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
     _external_security = [d.metadata.get("security_level") for d in retrieved_docs]
     _external_policies = [
-        d.metadata.get("external_processing_policy") or "all_external"
+        d.metadata.get("external_processing_policy") or "internal_only"
         for d in retrieved_docs
     ]
     _external_input_chars = len(context_text + user_question + chat_history_str)

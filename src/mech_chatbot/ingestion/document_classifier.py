@@ -175,7 +175,13 @@ def _validate_document_type(parsed, allowed_types, fallback_doc_type):
     return parsed
 
 
-def classify_document(file_path, original_filename=None, thu_muc=None, document_types=None):
+def classify_document(
+    file_path,
+    original_filename=None,
+    thu_muc=None,
+    document_types=None,
+    allow_external=False,
+):
     """Phan loai tai lieu 2 tang:
       Tang 1: xac dinh domain tu thu_muc (mechanical / tabular / generic, tra cuu Departments)
       Tang 2: phan loai chi tiet bang LLM theo domain
@@ -227,6 +233,14 @@ def classify_document(file_path, original_filename=None, thu_muc=None, document_
         "domain": domain,
         "security_level": resolve_security_by_department(thu_muc),
     }
+
+    if not allow_external:
+        return {
+            **default_res,
+            "classification_failed": True,
+            "document_type_validation": "policy_fallback",
+            "reason": "Classifier fallback: external processing policy blocked.",
+        }
     
     try:
         resp = cohere_invoke(

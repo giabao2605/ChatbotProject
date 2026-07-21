@@ -63,7 +63,7 @@ class RerankPolicy:
     def select_backend(self, candidates, user_context=None, data_policy=None) -> str:
         del user_context, data_policy
         policies = {
-            str((getattr(doc, "metadata", {}) or {}).get("external_processing_policy") or "all_external").strip().lower()
+            str((getattr(doc, "metadata", {}) or {}).get("external_processing_policy") or "internal_only").strip().lower()
             for doc in (candidates or [])
         }
         if policies and policies != {"all_external"}:
@@ -115,7 +115,7 @@ def voyage_rerank_documents(documents, query, top_n=10, trace_id=None):
     ]
     policies = [
         (getattr(doc, "metadata", {}) or {}).get("external_processing_policy")
-        or "all_external"
+        or "internal_only"
         for doc in docs
     ]
 

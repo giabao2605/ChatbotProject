@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mech_chatbot.ingestion.pdf import pipeline
+from mech_chatbot.ingestion.pdf import pipeline_implementation as pipeline
 
 
 pytestmark = pytest.mark.unit
@@ -105,6 +105,7 @@ def _captured_calls():
         "added_batches": [],
         "bom": [],
         "classifications": [],
+        "cleared": [],
         "deleted": [],
         "failed": [],
         "pages": [],
@@ -148,7 +149,11 @@ def _install_lifecycle_boundaries(monkeypatch, captured):
         "update_document_classification",
         lambda *args, **kwargs: captured["classifications"].append((args, kwargs)),
     )
-    monkeypatch.setattr(pipeline, "clear_reingest_snapshot", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        pipeline,
+        "clear_reingest_snapshot",
+        lambda doc_id: captured["cleared"].append(doc_id),
+    )
     monkeypatch.setattr(
         pipeline,
         "_delete_vectors_for_file",
@@ -253,6 +258,88 @@ def test_pdf_text_page_skips_vision_and_preserves_searchable_content(tmp_path, m
     assert qdrant.payloads[0]["payload"]["security_level"] == "internal"
 
 
+def test_quality_block_after_vector_index_restores_snapshot_and_never_finalizes(
+    tmp_path,
+    monkeypatch,
+):
+    text = "Quy trinh van hanh " * 120
+    pdf_document = _PdfDocument([text])
+    plumber_document = _PlumberDocument([[]])
+    captured, _qdrant = _install_common_boundaries(
+        monkeypatch,
+        tmp_path,
+        metadata=_metadata(loai_tai_lieu="Quy trinh", yckt="", hdcv=""),
+    )
+    monkeypatch.setattr(pipeline.fitz, "open", lambda _path: pdf_document)
+    monkeypatch.setattr(pipeline.pdfplumber, "open", lambda _path: plumber_document)
+    monkeypatch.setattr(pipeline, "calculate_quality_status", lambda *_args: (0.1, "blocked"))
+    monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", True)
+
+    report = pipeline.process_and_ingest_pdf(
+        str(tmp_path / "blocked.pdf"),
+        "blocked.pdf",
+        "Technical",
+        domain_override="generic",
+        security_override="internal",
+        site_override="HQ",
+    )
+
+    assert report["status"] == "error"
+    assert report["quality_status"] == "blocked"
+    assert captured["added_batches"]
+    assert captured["classifications"] == []
+    assert captured["cleared"] == []
+    assert captured["restored"] == [701]
+    assert captured["deleted"][-1] == (
+        ("blocked.pdf", "Technical"),
+        {"doc_id": 701},
+    )
+
+
+def test_final_qdrant_security_sync_failure_rolls_back_instead_of_failing_open(
+    tmp_path,
+    monkeypatch,
+):
+    text = "Quy trinh co thong tin nhay cam " * 80
+    pdf_document = _PdfDocument([text])
+    plumber_document = _PlumberDocument([[]])
+    captured, _qdrant = _install_common_boundaries(
+        monkeypatch,
+        tmp_path,
+        metadata=_metadata(loai_tai_lieu="Quy trinh", yckt="", hdcv=""),
+    )
+    monkeypatch.setattr(pipeline.fitz, "open", lambda _path: pdf_document)
+    monkeypatch.setattr(pipeline.pdfplumber, "open", lambda _path: plumber_document)
+    monkeypatch.setattr(
+        pipeline,
+        "client",
+        SimpleNamespace(
+            set_payload=lambda **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("qdrant unavailable")
+            )
+        ),
+    )
+    monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", True)
+
+    report = pipeline.process_and_ingest_pdf(
+        str(tmp_path / "sensitive.pdf"),
+        "sensitive.pdf",
+        "Technical",
+        domain_override="generic",
+        security_override="confidential",
+        site_override="HQ",
+    )
+
+    assert report["status"] == "error"
+    assert "qdrant unavailable" in report["message"]
+    assert captured["cleared"] == []
+    assert captured["restored"] == [701]
+    assert captured["deleted"][-1] == (
+        ("sensitive.pdf", "Technical"),
+        {"doc_id": 701},
+    )
+
+
 def test_pdf_vision_table_and_sensitive_scan_reach_manual_review(tmp_path, monkeypatch):
     pdf_document = _PdfDocument(["password: supersecretvalue"])
     plumber_document = _PlumberDocument(
@@ -324,7 +411,9 @@ def test_pdf_required_vision_failure_is_blocked_and_rolled_back(tmp_path, monkey
     assert report["vision_warnings"] == [{"page": 1, "detail": "vision_timeout"}]
     assert report["quality_status"] == "blocked"
     assert report["quality_hard_blocked"] is True
-    assert captured["failed"] == [("scan.pdf", "Technical", "")]
+    assert len(captured["failed"]) == 1
+    assert captured["failed"][0][:2] == ("scan.pdf", "Technical")
+    assert "vision_timeout" in captured["failed"][0][2]
     assert captured["restored"] == [701]
     assert captured["deleted"] == [(('scan.pdf', 'Technical'), {'doc_id': 701})]
     assert any("Da rollback vector/metadata" in warning for warning in report["warnings"])

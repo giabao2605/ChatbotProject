@@ -148,7 +148,7 @@
     },
     {
       "rule": "direct_getenv",
-      "path": "ingestion/pdf/pipeline.py",
+      "path": "ingestion/pdf/pipeline_implementation.py",
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
@@ -343,14 +343,6 @@
       "path": "rag/semantic_cache.py",
       "dependency": "os.getenv",
       "count": 4,
-      "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
-    },
-    {
-      "rule": "direct_getenv",
-      "path": "workers/ingestion_worker.py",
-      "dependency": "os.getenv",
-      "count": 3,
       "removal_phase": "Phase 5",
       "reason": "Existing configuration read outside a config/bootstrap module"
     },

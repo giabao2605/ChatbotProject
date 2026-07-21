@@ -1,21 +1,21 @@
 import os
 from mech_chatbot.llm.vision_client import build_vision_model
-from mech_chatbot.ingestion.pdf_processor import (
+from mech_chatbot.ingestion.pdf.config import (
     PDF_EXTENSIONS,
     SUPPORTED_LEARNING_EXTENSIONS,
-    process_and_ingest_pdf,
-    process_and_ingest_file,
 )
+from mech_chatbot.ingestion.pdf import pipeline_implementation
+from mech_chatbot.ingestion.progress import IngestionProgressEvent
 from mech_chatbot.config.logging import logger
 
 # Cau hinh ProxyLLM/GPT Vision.
 vision_model = build_vision_model()
 
 
-def learn_new_file(file_path, ten_file, thu_muc="Tu_Hoc", progress_callback=None,
-                   domain_override=None, security_override=None,
-                   cong_doan_override=None, site_override=None,
-                   scan_sensitive=False, phong_ban_override=None):
+def learn_new_file_typed(file_path, ten_file, thu_muc="Tu_Hoc", progress_callback=None,
+                         domain_override=None, security_override=None,
+                         cong_doan_override=None, site_override=None,
+                         scan_sensitive=False, phong_ban_override=None):
     """
     Doc file moi, trich xuat metadata, goi vision model khi can va nap vao Qdrant DB.
 
@@ -43,9 +43,23 @@ def learn_new_file(file_path, ten_file, thu_muc="Tu_Hoc", progress_callback=None
         phong_ban_override=phong_ban_override,
     )
     if ext in PDF_EXTENSIONS:
-        report = process_and_ingest_pdf(file_path, ten_file, thu_muc, vision_model, progress_callback, **_ov)
+        report = pipeline_implementation.process_and_ingest_pdf(
+            file_path,
+            ten_file,
+            thu_muc,
+            vision_model,
+            progress_callback,
+            **_ov,
+        )
     else:
-        report = process_and_ingest_file(file_path, ten_file, thu_muc, vision_model, progress_callback, **_ov)
+        report = pipeline_implementation.process_and_ingest_file(
+            file_path,
+            ten_file,
+            thu_muc,
+            vision_model,
+            progress_callback,
+            **_ov,
+        )
 
     if report["status"] == "success":
         logger.info(f"Hoc file thanh cong: {report['message']}")
@@ -53,3 +67,34 @@ def learn_new_file(file_path, ten_file, thu_muc="Tu_Hoc", progress_callback=None
     else:
         logger.error(f"Loi hoc file: {report['message']}")
         return False, report["message"], report
+
+
+def learn_new_file(file_path, ten_file, thu_muc="Tu_Hoc", progress_callback=None,
+                   domain_override=None, security_override=None,
+                   cong_doan_override=None, site_override=None,
+                   scan_sensitive=False, phong_ban_override=None):
+    """Compatibility wrapper retaining the historical string progress API."""
+
+    def legacy_progress(event: IngestionProgressEvent) -> None:
+        if progress_callback is None:
+            return
+        if event.phase == "embedding":
+            progress_callback("__STATUS__:embedding")
+        else:
+            progress_callback(event.message)
+
+    return learn_new_file_typed(
+        file_path=file_path,
+        ten_file=ten_file,
+        thu_muc=thu_muc,
+        progress_callback=legacy_progress if progress_callback else None,
+        domain_override=domain_override,
+        security_override=security_override,
+        cong_doan_override=cong_doan_override,
+        site_override=site_override,
+        scan_sensitive=scan_sensitive,
+        phong_ban_override=phong_ban_override,
+    )
+
+
+__all__ = ["learn_new_file", "learn_new_file_typed"]

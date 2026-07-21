@@ -227,7 +227,7 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
             trace_id=trace_id,
             doc_ids=[(getattr(doc, "metadata", {}) or {}).get("doc_id") for doc in evidence_docs],
             security_levels=[(getattr(doc, "metadata", {}) or {}).get("security_level") for doc in evidence_docs],
-            policies=[(getattr(doc, "metadata", {}) or {}).get("external_processing_policy") or "all_external" for doc in evidence_docs],
+            policies=[(getattr(doc, "metadata", {}) or {}).get("external_processing_policy") or "internal_only" for doc in evidence_docs],
         ).content
         data = _safe_json_loads(response)
         if not isinstance(data, dict):

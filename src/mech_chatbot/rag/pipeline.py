@@ -1227,7 +1227,7 @@ def execute_pipeline(state):
                                 "loai_du_lieu": "sql_bom",
                                 "doc_status": "published",
                                 "external_processing_policy": (
-                                    source["external_processing_policy"] or "all_external"
+                                    source["external_processing_policy"] or "internal_only"
                                 ),
                                 "calculation_provenance": calculation_provenance,
                             },

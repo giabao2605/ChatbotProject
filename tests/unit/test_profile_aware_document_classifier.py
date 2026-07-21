@@ -38,6 +38,10 @@ def test_base_code_normalization_strips_whitespace_before_file_suffix():
     assert normalize_base_code(" Technical Demo Process.md ") == "technical-demo-process"
 
 
+def test_missing_department_has_no_active_document_type_profile():
+    assert classifier._load_active_document_types(None) == []
+
+
 def test_handler_prompt_is_profile_aware_and_backward_compatible():
     handler = get_handler("mechanical")
     legacy_prompt, legacy_fallback = handler.build_classify_prompt("x.pdf", "", "X", "", 1, "mechanical")
@@ -74,7 +78,9 @@ def test_classify_document_accepts_profile_type(monkeypatch, department, domain,
         lambda *_args, **_kwargs: SimpleNamespace(content=json.dumps({"base_code": "DOC", "document_type": returned_type})),
     )
 
-    result = classifier.classify_document("unused.pdf", "doc.pdf", thu_muc=department)
+    result = classifier.classify_document(
+        "unused.pdf", "doc.pdf", thu_muc=department, allow_external=True,
+    )
 
     assert result["document_type"] == returned_type
     assert result["document_type_validation"] == "profile_valid"
@@ -92,7 +98,8 @@ def test_invalid_llm_type_falls_back_with_reason(monkeypatch):
     )
 
     result = classifier.classify_document(
-        "unused.pdf", "iso.pdf", thu_muc="ISO", document_types=["generic", "procedure"]
+        "unused.pdf", "iso.pdf", thu_muc="ISO", document_types=["generic", "procedure"],
+        allow_external=True,
     )
 
     assert result["document_type"] == "generic"
@@ -125,7 +132,9 @@ def test_profile_unavailable_preserves_legacy_classification(monkeypatch):
         lambda *_args, **_kwargs: SimpleNamespace(content='{"base_code":"DWG","document_type":"bom"}'),
     )
 
-    result = classifier.classify_document("unused.pdf", "dwg.pdf", thu_muc="Technical")
+    result = classifier.classify_document(
+        "unused.pdf", "dwg.pdf", thu_muc="Technical", allow_external=True,
+    )
 
     assert result["document_type"] == "bom"
     assert result["document_type_validation"] == "legacy_fallback"
@@ -138,10 +147,46 @@ def test_classifier_error_fallback_is_explicitly_marked(monkeypatch):
     monkeypatch.setattr("mech_chatbot.ingestion.domain_registry.resolve_domain_by_department", lambda _d: "generic")
     monkeypatch.setattr("mech_chatbot.ingestion.domain_registry.resolve_security_by_department", lambda _d: "internal")
 
-    result = classifier.classify_document("unused.pdf", "doc.pdf", thu_muc="HR")
+    result = classifier.classify_document(
+        "unused.pdf", "doc.pdf", thu_muc="HR", allow_external=True,
+    )
 
     assert result["classification_failed"] is True
     assert result["document_type_validation"] == "classifier_error_fallback"
+
+
+def test_internal_only_classification_uses_deterministic_fallback(monkeypatch):
+    monkeypatch.setattr(
+        classifier,
+        "extract_pages_for_classification",
+        lambda *_a, **_k: "confidential content",
+    )
+    monkeypatch.setattr(
+        classifier,
+        "cohere_invoke",
+        lambda *_a, **_k: pytest.fail("internal_only must not call an external model"),
+    )
+    monkeypatch.setattr(
+        classifier, "_load_active_document_types", lambda _code: ["generic"],
+    )
+    monkeypatch.setattr(
+        "mech_chatbot.ingestion.domain_registry.resolve_domain_by_department",
+        lambda _d: "generic",
+    )
+    monkeypatch.setattr(
+        "mech_chatbot.ingestion.domain_registry.resolve_security_by_department",
+        lambda _d: "internal",
+    )
+
+    result = classifier.classify_document(
+        "unused.pdf",
+        "doc.pdf",
+        thu_muc="HR",
+    )
+
+    assert result["classification_failed"] is True
+    assert result["document_type_validation"] == "policy_fallback"
+    assert result["reason"] == "Classifier fallback: external processing policy blocked."
 
 
 @pytest.mark.parametrize(
@@ -207,7 +252,9 @@ def test_classify_document_accepts_wave4_profile_type(
         ),
     )
 
-    result = classifier.classify_document("unused.pdf", "doc.pdf", thu_muc=department)
+    result = classifier.classify_document(
+        "unused.pdf", "doc.pdf", thu_muc=department, allow_external=True,
+    )
 
     assert result["document_type"] == returned_type
     assert result["document_type_validation"] == "profile_valid"

@@ -98,7 +98,7 @@ def _get_or_create_doc(conn, file_name, thu_muc):
     external_processing_policy = (
         (governance["ExternalProcessingPolicy"] if governance else None)
         or cls_data.get("external_processing_policy")
-        or "all_external"
+        or "internal_only"
     )
     resolved_site = (job[3] if job and len(job) > 3 else None) or _r_catalog._resolve_site(thu_muc)
     
@@ -214,7 +214,7 @@ def update_document_classification(doc_id, domain=None, security_level=None, pho
     TaiLieu lech voi payload Qdrant -> duong SQL BOM (t.SecurityLevel) co the lo tai lieu mat.
     """
     if doc_id is None:
-        return
+        return False
     _ensure_engine()
     try:
         sets = []
@@ -227,15 +227,17 @@ def update_document_classification(doc_id, domain=None, security_level=None, pho
             params["seclvl"] = security_level
         # E1: PhongBan da chuyen sang bang nhieu-nhieu dbo.PhongBanChiaSe (khong con cot CSV).
         if not sets and phong_ban is None:
-            return
+            return True
         with engine.begin() as conn:
             if sets:
                 conn.execute(text("UPDATE TaiLieu SET " + ", ".join(sets) + " WHERE DocID = :d"), params)
             if phong_ban is not None:
                 set_document_departments(conn, doc_id, phong_ban)
         _r_semantic_cache._invalidate_semantic_cache("doc.classification")
+        return True
     except Exception as e:
         logger.error(f"Loi update_document_classification doc_id={doc_id}: {e}", exc_info=True)
+        return False
 
 
 def mark_document_ingest_failed(file_name, thu_muc, error_message=None):
@@ -305,7 +307,7 @@ def get_document_info(doc_id):
                     "publication_version": row[13] or 1,
                     "owner_department": row[14] or "",
                     "source_system": row[15] or "upload",
-                    "external_processing_policy": row[16] or "all_external",
+                    "external_processing_policy": row[16] or "internal_only",
                     "knowledge_owner_user_id": row[17],
                     "knowledge_approver_user_id": row[18],
                     "taxonomy_version": row[19] or "v1",

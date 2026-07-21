@@ -33,6 +33,7 @@ pytestmark = pytest.mark.unit
 
 
 PIPELINE_STEPS = Path(__file__).resolve().parents[2] / "src" / "mech_chatbot" / "rag" / "pipeline_steps.py"
+_MISSING = object()
 
 
 def _load_pipeline_steps_without_rag_bootstrap(monkeypatch):
@@ -126,6 +127,20 @@ def _run_generation(
 
 
 def _run_through_executor(monkeypatch, module, **generation_kwargs):
+    rag_package = sys.modules["mech_chatbot.rag"]
+    module_names = (
+        "mech_chatbot.rag.pipeline",
+        "mech_chatbot.rag.pipeline_steps",
+    )
+    previous_modules = {
+        name: sys.modules.get(name, _MISSING) for name in module_names
+    }
+    previous_attributes = {
+        name.rsplit(".", 1)[-1]: getattr(
+            rag_package, name.rsplit(".", 1)[-1], _MISSING
+        )
+        for name in module_names
+    }
     from mech_chatbot.rag import pipeline
 
     outcome = module.GenerationOutcome()
@@ -135,13 +150,26 @@ def _run_through_executor(monkeypatch, module, **generation_kwargs):
         stream = _run_generation(module, outcome=outcome, **generation_kwargs)
         return state.prepared((stream, "", [], [], {}))
 
-    monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
-    return list(
-        DefaultRagExecutor().run(
-            RagRequest("generation contract", AccessScope()),
-            RagInvocation(trace_id="strict-generation-contract", mode="test"),
+    try:
+        monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
+        return list(
+            DefaultRagExecutor().run(
+                RagRequest("generation contract", AccessScope()),
+                RagInvocation(trace_id="strict-generation-contract", mode="test"),
+            )
         )
-    )
+    finally:
+        for name, previous in previous_modules.items():
+            if previous is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+        for attribute, previous in previous_attributes.items():
+            if previous is _MISSING:
+                if hasattr(rag_package, attribute):
+                    delattr(rag_package, attribute)
+            else:
+                setattr(rag_package, attribute, previous)
 
 
 def _prepare(module, monkeypatch, chain):
@@ -233,16 +261,19 @@ def test_explicit_negative_evidence_skips_provider_and_claim_repair(monkeypatch)
     assert events[-1].outcome == "answered"
 
 
-def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch):
+@pytest.mark.parametrize("policy", ["internal_only", None])
+def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch, policy):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    metadata = {
+        "doc_id": 7,
+        "trang_so": 3,
+        "version_no": 1,
+        "security_level": "confidential",
+    }
+    if policy is not None:
+        metadata["external_processing_policy"] = policy
     document = SimpleNamespace(
-        metadata={
-            "doc_id": 7,
-            "trang_so": 3,
-            "version_no": 1,
-            "security_level": "confidential",
-            "external_processing_policy": "internal_only",
-        }
+        metadata=metadata
     )
 
     with pytest.raises(ExternalProcessingDenied, match="internal_only"):

@@ -555,7 +555,7 @@ def test_catalog_rollout_and_governance_contracts(monkeypatch, client_for):
     assert domain.json()["ok"] is True
     assert calls[0][2]["evaluation_question_target"] == 75
     assert calls[1][2]["rbac_site_publication_leaks"] == 0
-    assert calls[2][2]["external_processing_policy"] == "all_external"
+    assert calls[2][2]["external_processing_policy"] == "internal_only"
     assert calls[3][2]["parent_context_enabled"] is True
 
 

@@ -643,7 +643,7 @@ def test_reconcile_serving_state_backfills_authoritative_metadata_and_audits(
             "PublicationVersion": 3,
             "ServingEpoch": 9,
             "TaxonomyVersion": "v2",
-            "ExternalProcessingPolicy": "internal_only",
+            "ExternalProcessingPolicy": None,
         },
         {
             "DocID": 2,

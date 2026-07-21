@@ -116,6 +116,14 @@ def test_get_and_list_governance_map_public_shape_and_empty_input(fake_db):
     assert listed[1]["knowledge_owner_user_id"] is None
 
 
+def test_missing_governance_policy_defaults_to_internal_only(fake_db):
+    fake_db(_Result(row=_governance_row(ExternalProcessingPolicy=None)))
+
+    result = governance.get_department_knowledge_governance("Technical")
+
+    assert result["external_processing_policy"] == "internal_only"
+
+
 def test_get_and_list_domain_profiles_normalize_json_and_defaults(fake_db):
     assert governance.get_department_domain_profile("") is None
 

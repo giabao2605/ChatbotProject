@@ -14,13 +14,27 @@ Bat bien can bao ve:
 Luu y an toan:
 - Test chi READ SQL/Qdrant, khong sua du lieu.
 - Mac dinh sample 50 doc moi nhat; co the doi bang CONSISTENCY_SAMPLE_LIMIT.
+- Mac dinh doi chieu SourceSystem=upload trong collection chinh; fixture eval
+  dung collection rieng va khong duoc tron vao snapshot nay.
 """
 import os
+import json
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
 
 pytestmark = [pytest.mark.integration, pytest.mark.security]
+
+
+def _pinned_snapshot():
+    raw_path = os.getenv("CONSISTENCY_SNAPSHOT_PATH", "").strip()
+    if not raw_path:
+        return None
+    payload = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+    if payload.get("schema") != "phase3-ingestion-consistency-snapshot-v1":
+        raise AssertionError("invalid ingestion consistency snapshot schema")
+    return payload
 
 
 @pytest.fixture(scope="module")
@@ -51,15 +65,26 @@ def qmodels():
 
 
 def _sample_vectorized_docs(engine):
-    limit = int(os.getenv("CONSISTENCY_SAMPLE_LIMIT", "50"))
+    snapshot = _pinned_snapshot()
+    expected_documents = (snapshot or {}).get("documents") or []
+    requested_limit = max(
+        int(os.getenv("CONSISTENCY_SAMPLE_LIMIT", "50")),
+        len(expected_documents),
+    )
+    limit = max(1, min(500, requested_limit))
+    source_system = str(
+        (snapshot or {}).get("source_system")
+        or os.getenv("CONSISTENCY_SOURCE_SYSTEM", "upload")
+    ).strip()
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                f"""
-                SELECT TOP ({limit})
+                """
+                SELECT TOP (:limit)
                     DocID,
                     TenFile,
                     ThuMuc,
+                    SourceSystem,
                     Domain,
                     SecurityLevel,
                     Site,
@@ -70,11 +95,29 @@ def _sample_vectorized_docs(engine):
                 FROM TaiLieu
                 WHERE TrangThaiVector = 1
                   AND (LifecycleStatus IS NULL OR LifecycleStatus <> 'deleting')
+                  AND COALESCE(SourceSystem, 'upload') = :source_system
                 ORDER BY DocID DESC
                 """
-            )
+            ),
+            {"limit": limit, "source_system": source_system},
         ).mappings().all()
+    if snapshot is not None:
+        expected = {
+            int(item["doc_id"]): str(item["file_name"])
+            for item in expected_documents
+        }
+        actual = {int(row["DocID"]): str(row["TenFile"]) for row in rows}
+        assert {
+            doc_id: actual.get(doc_id) for doc_id in expected
+        } == expected, "SQL document identity drifted from pinned Phase 3 snapshot"
+        rows = [row for row in rows if int(row["DocID"]) in expected]
     return rows
+
+
+def _assert_snapshot_collection(collection):
+    snapshot = _pinned_snapshot()
+    if snapshot is not None:
+        assert snapshot.get("collection") == collection
 
 
 def _document_departments(engine, doc_id, fallback_dept):
@@ -126,6 +169,7 @@ def _csv_tokens(value):
 def test_every_vectorized_doc_has_qdrant_points(engine, qdrant, qmodels):
     from mech_chatbot.config.settings import QDRANT_COLLECTION
 
+    _assert_snapshot_collection(QDRANT_COLLECTION)
     docs = _sample_vectorized_docs(engine)
     if not docs:
         pytest.skip("Khong co TaiLieu.TrangThaiVector=1 de doi chieu")
@@ -142,6 +186,7 @@ def test_every_vectorized_doc_has_qdrant_points(engine, qdrant, qmodels):
 def test_qdrant_payload_matches_sql_rbac_metadata(engine, qdrant, qmodels):
     from mech_chatbot.config.settings import QDRANT_COLLECTION
 
+    _assert_snapshot_collection(QDRANT_COLLECTION)
     docs = _sample_vectorized_docs(engine)
     if not docs:
         pytest.skip("Khong co TaiLieu.TrangThaiVector=1 de doi chieu")

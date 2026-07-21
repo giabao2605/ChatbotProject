@@ -65,7 +65,7 @@ def test_voyage_rerank_preserves_documents_and_order(monkeypatch):
     }
     assert audit["provider"] == "voyage"
     assert audit["surface"] == "reranking"
-    assert audit["policies"] == ["all_external", "all_external", "all_external"]
+    assert audit["policies"] == ["internal_only", "internal_only", "internal_only"]
 
 
 def test_voyage_rerank_requires_api_key(monkeypatch):

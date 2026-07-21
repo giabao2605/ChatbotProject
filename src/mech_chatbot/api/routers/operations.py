@@ -295,7 +295,7 @@ def catalog_department_governance(code: str, profile: dict[str, Any] = Depends(r
 def catalog_department_governance_set(code: str, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "platform_admin")
     try:
-        saved = knowledge_governance_service.upsert_department_knowledge_governance(code, knowledge_owner_user_id=body.get("knowledge_owner_user_id"), knowledge_approver_user_id=body.get("knowledge_approver_user_id"), taxonomy_version=body.get("taxonomy_version"), external_processing_policy=body.get("external_processing_policy") or "all_external", is_active=bool(body.get("is_active", True)), updated_by=profile.get("username") or "System")
+        saved = knowledge_governance_service.upsert_department_knowledge_governance(code, knowledge_owner_user_id=body.get("knowledge_owner_user_id"), knowledge_approver_user_id=body.get("knowledge_approver_user_id"), taxonomy_version=body.get("taxonomy_version"), external_processing_policy=body.get("external_processing_policy") or "internal_only", is_active=bool(body.get("is_active", True)), updated_by=profile.get("username") or "System")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"ok": True, "governance": saved}

@@ -120,7 +120,7 @@ def _governance_from_row(row: Any) -> dict[str, Any]:
         "taxonomy_owner_user_id": int(owner) if owner is not None else None,
         "taxonomy_approver_user_id": int(approver) if approver is not None else None,
         "taxonomy_version": _clean(row["TaxonomyVersion"]) or "v1",
-        "external_processing_policy": _clean(row["ExternalProcessingPolicy"]) or "all_external",
+        "external_processing_policy": _clean(row["ExternalProcessingPolicy"]) or "internal_only",
         "is_active": bool(row["IsActive"]),
         "updated_at": _iso(row["UpdatedAt"]),
         "updated_by": _clean(row["UpdatedBy"]),
@@ -200,7 +200,7 @@ def upsert_department_knowledge_governance(
     knowledge_owner_user_id: int | None,
     knowledge_approver_user_id: int | None,
     taxonomy_version: str,
-    external_processing_policy: str = "all_external",
+    external_processing_policy: str = "internal_only",
     is_active: bool = True,
     updated_by: str = "System",
 ) -> dict[str, Any]:

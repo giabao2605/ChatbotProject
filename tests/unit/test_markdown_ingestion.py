@@ -1,7 +1,8 @@
 from pathlib import Path
 import json
+from contextlib import contextmanager
 
-from mech_chatbot.ingestion.pdf import pipeline
+from mech_chatbot.ingestion.pdf import pipeline_implementation as pipeline
 from mech_chatbot.ingestion.pdf.bom import (
     extract_bom_records,
     extract_bom_records_from_markdown,
@@ -66,7 +67,10 @@ def _install_success_path_stubs(monkeypatch, saved_pages, saved_bom=None):
     monkeypatch.setattr(
         pipeline,
         "get_document_info",
-        lambda _doc_id: {"classification_failed": False},
+        lambda _doc_id: {
+            "classification_failed": False,
+            "external_processing_policy": "all_external",
+        },
     )
     monkeypatch.setattr(
         pipeline,
@@ -125,6 +129,61 @@ def test_markdown_upload_records_extracted_page_and_reaches_review(tmp_path, mon
             "image_path": None,
         }
     ]
+
+
+def test_non_pdf_external_calls_run_inside_governed_document_context(
+    tmp_path,
+    monkeypatch,
+):
+    markdown_path = tmp_path / "governed.md"
+    markdown_path.write_text("Governed content", encoding="utf-8")
+    saved_pages = []
+    _install_success_path_stubs(monkeypatch, saved_pages)
+    active_contexts = []
+    context_calls = []
+
+    @contextmanager
+    def governed_context(**kwargs):
+        context_calls.append(kwargs)
+        active_contexts.append(kwargs)
+        try:
+            yield
+        finally:
+            active_contexts.pop()
+
+    def extract(*_args, **_kwargs):
+        assert active_contexts[-1]["policies"] == ["no_external"]
+        return "Governed content", "van_ban"
+
+    def metadata(*_args, **_kwargs):
+        assert active_contexts[-1]["doc_ids"] == [101]
+        return _metadata_stub()
+
+    monkeypatch.setattr(pipeline, "external_document_context", governed_context)
+    monkeypatch.setattr(pipeline, "extract_text_from_supported_file", extract)
+    monkeypatch.setattr(pipeline, "extract_metadata_smart", metadata)
+    monkeypatch.setattr(
+        pipeline,
+        "get_document_info",
+        lambda _doc_id: {
+            "classification_failed": False,
+            "external_processing_policy": "no_external",
+        },
+    )
+
+    report = pipeline.process_and_ingest_file(
+        str(markdown_path),
+        markdown_path.name,
+        "Technical",
+        domain_override="generic",
+        security_override="internal",
+        site_override="HQ",
+    )
+
+    assert report["status"] == "success"
+    assert len(context_calls) == 2
+    assert all(call["doc_ids"] == [101] for call in context_calls)
+    assert all(call["policies"] == ["no_external"] for call in context_calls)
 
 
 def test_empty_markdown_upload_remains_blocked(tmp_path, monkeypatch):

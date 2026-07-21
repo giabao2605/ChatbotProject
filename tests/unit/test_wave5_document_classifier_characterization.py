@@ -156,6 +156,7 @@ def test_classification_uses_safe_profile_type_and_promotes_existing_family(monk
         str(path),
         thu_muc="Technical",
         document_types=["technical_drawing", " ", "bom"],
+        allow_external=True,
     )
 
     assert result["base_code"] == "valve"
@@ -179,7 +180,8 @@ def test_non_object_classifier_response_falls_back_without_leaking_provider_payl
     )
 
     result = classifier.classify_document(
-        "request.pdf", original_filename="request.pdf", thu_muc="HR", document_types=[]
+        "request.pdf", original_filename="request.pdf", thu_muc="HR", document_types=[],
+        allow_external=True,
     )
 
     assert result["classification_failed"] is True

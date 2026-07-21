@@ -3,11 +3,82 @@ from types import SimpleNamespace
 import pytest
 
 from mech_chatbot.ingestion import site_registry, vision_cache
-from mech_chatbot.ingestion.pdf import pipeline
+from mech_chatbot.ingestion.pdf import pipeline_implementation as pipeline
 from tests.unit import test_pdf_pipeline_characterization as characterization
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_pdf_governance_lookup_failure_blocks_external_processing(
+    tmp_path, monkeypatch,
+):
+    pdf_document = characterization._PdfDocument(["scan only"])
+    external_calls = []
+
+    monkeypatch.setattr(pipeline.fitz, "open", lambda _path: pdf_document)
+    monkeypatch.setattr(pipeline, "reset_document_metadata", lambda *_a, **_k: 701)
+    monkeypatch.setattr(pipeline, "get_document_info", lambda _doc_id: {})
+    monkeypatch.setattr(
+        pipeline,
+        "_prewarm_vision_cache",
+        lambda *_a, **_k: external_calls.append("vision"),
+    )
+    monkeypatch.setattr(pipeline, "_delete_vectors_for_file", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline, "mark_document_ingest_failed", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline, "restore_document_children", lambda *_a, **_k: None)
+
+    report = pipeline.process_and_ingest_pdf(
+        str(tmp_path / "missing-policy.pdf"),
+        "missing-policy.pdf",
+        "Technical",
+        vision_model=object(),
+        domain_override="generic",
+        security_override="internal",
+        site_override="HQ",
+    )
+
+    assert report["status"] == "error"
+    assert report["quality_status"] == "blocked"
+    assert "Khong tai duoc governance" in report["message"]
+    assert external_calls == []
+    assert pdf_document.closed is True
+
+
+def test_supported_file_missing_document_id_blocks_external_processing(monkeypatch):
+    external_calls = []
+
+    monkeypatch.setattr(
+        pipeline, "reset_document_metadata", lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "get_document_info",
+        lambda _doc_id: pytest.fail("must not load governance without a document id"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "extract_text_from_supported_file",
+        lambda *_a, **_k: external_calls.append("reader") or ("content", "text"),
+    )
+    monkeypatch.setattr(pipeline, "_delete_vectors_for_file", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline, "mark_document_ingest_failed", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline, "restore_document_children", lambda *_a, **_k: None)
+
+    report = pipeline.process_and_ingest_file(
+        "missing-id.txt",
+        "missing-id.txt",
+        "Technical",
+        vision_model=object(),
+        domain_override="generic",
+        security_override="internal",
+        site_override="HQ",
+    )
+
+    assert report["status"] == "error"
+    assert report["quality_status"] == "blocked"
+    assert "Khong tao duoc document identity" in report["message"]
+    assert external_calls == []
 
 
 def test_pdf_vision_cache_hit_avoids_provider_and_missing_site_requires_review(
@@ -61,10 +132,13 @@ def test_pdf_vision_cache_hit_avoids_provider_and_missing_site_requires_review(
     assert report["missing_metadata"] == ["site"]
     assert "missing_site" in report["quality_reason_codes"]
     assert captured["pages"][0]["extraction_status"] == "success"
-    assert any("dung lai ket qua Vision tu cache" in item for item in progress)
+    assert any(
+        "dung lai ket qua Vision tu cache" in event.message
+        for event in progress
+    )
 
 
-def test_pdf_without_optional_vision_provider_keeps_text_and_reports_degradation(
+def test_pdf_without_optional_vision_provider_blocks_and_restores_snapshot(
     tmp_path, monkeypatch,
 ):
     pdf_document = characterization._PdfDocument(["scan with a small text layer"])
@@ -95,12 +169,14 @@ def test_pdf_without_optional_vision_provider_keeps_text_and_reports_degradation
         site_override="HQ",
     )
 
-    assert report["status"] == "success"
+    assert report["status"] == "error"
+    assert report["quality_status"] == "blocked"
     assert report["vision_warnings"] == [{"page": 1, "detail": "no_vision_model"}]
     assert report["metadata_llm_failed_pages"] == [1]
     assert report["failed_pages"] == []
     assert captured["pages"][0]["text_extract"] == "scan with a small text layer"
     assert captured["pages"][0]["vision_summary"] == ""
+    assert captured["restored"] == [701]
     assert "metadata_provider_unavailable" in report["message"]
     assert pdf_document.closed is True
 
@@ -182,6 +258,16 @@ def test_empty_supported_file_rolls_back_and_preserves_failure_reason(monkeypatc
     monkeypatch.setattr(
         pipeline, "extract_text_from_supported_file", lambda *_args, **_kwargs: ("  ", "van_ban"),
     )
+    monkeypatch.setattr(
+        pipeline,
+        "reset_document_metadata",
+        lambda *_args, **_kwargs: 701,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "get_document_info",
+        lambda _doc_id: {"external_processing_policy": "all_external"},
+    )
     monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", True)
     monkeypatch.setattr(
         pipeline,
@@ -209,11 +295,11 @@ def test_empty_supported_file_rolls_back_and_preserves_failure_reason(monkeypatc
     assert report["status"] == "error"
     assert report["quality_status"] == "blocked"
     assert "Khong trich xuat duoc noi dung" in report["message"]
-    assert deleted == [(("empty.txt", "Technical"), {"doc_id": None})]
+    assert deleted == [(("empty.txt", "Technical"), {"doc_id": 701})]
     assert failed == [
         ("empty.txt", "Technical", "Khong trich xuat duoc noi dung co the tim kiem tu file nay."),
     ]
-    assert restored == [None]
+    assert restored == [701]
     assert any("Da rollback vector/metadata" in item for item in report["warnings"])
 
 

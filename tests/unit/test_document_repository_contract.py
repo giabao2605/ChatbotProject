@@ -234,7 +234,7 @@ def test_reingest_resets_a_draft_to_review_with_safe_classification_defaults(
     assert update_params["domain"] == "quality"
     assert update_params["seclvl"] == "internal"
     assert update_params["taxonomy_version"] == "v1"
-    assert update_params["external_processing_policy"] == "all_external"
+    assert update_params["external_processing_policy"] == "internal_only"
     assert metadata_applications == [(connection, 42, None, "quality")]
 
 
@@ -278,7 +278,7 @@ def test_classification_update_persists_fields_and_invalidates_cached_answers(
         invalidations.append,
     )
 
-    document.update_document_classification(
+    result = document.update_document_classification(
         21,
         domain="quality",
         security_level="confidential",
@@ -298,6 +298,7 @@ def test_classification_update_persists_fields_and_invalidates_cached_answers(
         {"d": 21, "c": "PROD"},
     ]
     assert invalidations == ["doc.classification"]
+    assert result is True
 
 
 def test_classification_update_is_a_noop_without_a_document_or_change(
@@ -311,11 +312,63 @@ def test_classification_update_is_a_noop_without_a_document_or_change(
         invalidations.append,
     )
 
-    document.update_document_classification(None, domain="quality")
-    document.update_document_classification(21)
+    assert document.update_document_classification(None, domain="quality") is False
+    assert document.update_document_classification(21) is True
 
     assert connection.calls == []
     assert invalidations == []
+
+
+def test_classification_update_can_change_only_shared_departments(
+    install_engine, monkeypatch,
+) -> None:
+    connection = install_engine(lambda _sql, _params: _Result())
+    invalidations = []
+    monkeypatch.setattr(
+        document._r_semantic_cache,
+        "_invalidate_semantic_cache",
+        invalidations.append,
+    )
+
+    assert document.update_document_classification(21, phong_ban=["QA"]) is True
+
+    assert not any("UPDATE TaiLieu SET" in sql for sql, _ in connection.calls)
+    assert any("INSERT INTO dbo.PhongBanChiaSe" in sql for sql, _ in connection.calls)
+    assert invalidations == ["doc.classification"]
+
+
+def test_classification_update_reports_storage_failure(install_engine) -> None:
+    def fail(_sql, _params):
+        raise RuntimeError("database unavailable")
+
+    install_engine(fail)
+
+    assert (
+        document.update_document_classification(
+            21,
+            security_level="confidential",
+            phong_ban=["QA"],
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw_codes", "expected_codes"),
+    [
+        ("ASM-01", ["ASM-01"]),
+        ("Khong ro", []),
+        (None, []),
+    ],
+)
+def test_metadata_params_normalize_scalar_document_codes(
+    raw_codes, expected_codes,
+) -> None:
+    params = document._prepare_metadata_params(
+        {"ma_doi_tuong": raw_codes, "loai_tai_lieu": "Khong ro"}
+    )
+
+    assert json.loads(params["ma_doi_tuong"]) == expected_codes
 
 
 def test_mark_ingest_failed_removes_partial_data_and_rejects_the_document(install_engine):
@@ -428,6 +481,7 @@ def test_document_info_returns_safe_defaults_for_missing_or_invalid_rows(
         assert info["classification_failed"] is False
         assert info["base_code"] == ""
         assert info["lifecycle_status"] == "draft"
+        assert info["external_processing_policy"] == "internal_only"
 
 
 def test_document_info_fails_closed_on_database_error(install_engine):
@@ -460,6 +514,19 @@ def test_document_lookup_maps_row_and_current_query_scope(install_engine):
     assert docs[0].BaseCode == "DOC-01"
     assert docs[0].IsCurrent is True
     assert docs[1].IsCurrent is False
+
+
+def test_document_lookup_without_variant_and_missing_document(install_engine):
+    def handle(sql, params):
+        if "SELECT DocID FROM TaiLieu" in sql:
+            assert "VariantCode = :v" not in sql
+            assert params == {"b": "DOC-01"}
+        return _Result()
+
+    install_engine(handle)
+
+    assert document.find_current_docs("DOC-01") == []
+    assert document.get_doc(404) is None
 
 
 def test_missing_document_cannot_be_deleted(install_engine):
@@ -501,6 +568,7 @@ def test_successful_delete_cleans_all_stores_and_audits(install_engine, monkeypa
     cleanup_calls = []
     cache_calls = []
     audit_calls = []
+    removed_images = []
     monkeypatch.setattr(
         document._r_qdrant,
         "_get_qdrant_client",
@@ -521,7 +589,8 @@ def test_successful_delete_cleans_all_stores_and_audits(install_engine, monkeypa
         "write_audit_log",
         lambda *args: audit_calls.append(args),
     )
-    monkeypatch.setattr(document.os.path, "exists", lambda _path: False)
+    monkeypatch.setattr(document.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(document.os, "remove", removed_images.append)
 
     assert document.delete_document_completely(10, reviewer="alice") is True
 
@@ -535,6 +604,7 @@ def test_successful_delete_cleans_all_stores_and_audits(install_engine, monkeypa
     assert len(qdrant_deletes) == 1
     assert cleanup_calls == [True]
     assert cache_calls == [True]
+    assert removed_images == ["missing-page.png"]
     assert audit_calls == [
         (
             "alice",

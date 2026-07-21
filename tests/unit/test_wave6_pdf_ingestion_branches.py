@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mech_chatbot.ingestion.pdf import bom, metadata, pipeline
+from mech_chatbot.ingestion.pdf import bom, metadata, pipeline_implementation as pipeline
 
 
 pytestmark = pytest.mark.unit

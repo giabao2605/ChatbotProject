@@ -1030,7 +1030,7 @@ def backfill_qdrant_servable(limit=None):
             "publication_version": int(row["PublicationVersion"] or 1),
             "serving_epoch": int(row["ServingEpoch"] or 0),
             "taxonomy_version": row["TaxonomyVersion"] or "v1",
-            "external_processing_policy": row["ExternalProcessingPolicy"] or "all_external",
+            "external_processing_policy": row["ExternalProcessingPolicy"] or "internal_only",
         }
         if _r_qdrant.update_qdrant_metadata(
             int(row["DocID"]), metadata, require_points=True

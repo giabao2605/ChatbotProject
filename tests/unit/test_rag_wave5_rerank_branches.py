@@ -54,8 +54,10 @@ def test_rerank_policy_respects_external_processing_policy_and_provider_state(
     policy = rerank.RerankPolicy()
     restricted = [_doc("internal", external_processing_policy="internal_only")]
     allowed = [_doc("public", external_processing_policy="all_external")]
+    missing = [_doc("missing-policy")]
 
     assert policy.select_backend(restricted) == "local_fusion"
+    assert policy.select_backend(missing) == "local_fusion"
 
     monkeypatch.setenv("USE_VOYAGE_RERANK", "true")
     monkeypatch.setattr(

@@ -67,15 +67,21 @@ def test_evaluator_reports_verifier_disabled(monkeypatch):
 
 def test_evaluator_accepts_ambiguous_state_from_verifier(monkeypatch):
     monkeypatch.setenv("LLM_EVIDENCE_VERIFIER_ENABLED", "true")
+    calls = []
     monkeypatch.setattr(
         evidence_gate,
         "cohere_invoke",
-        lambda *_args, **_kwargs: SimpleNamespace(
+        lambda *_args, **kwargs: calls.append(kwargs) or SimpleNamespace(
             content='{"state":"AMBIGUOUS","reason":"coverage gap","evidence_quotes":[]}'
         ),
     )
 
-    decision = evidence_gate.evaluate_answerability("Quy định gì?", "Có một phần quy định.")
+    decision = evidence_gate.evaluate_answerability(
+        "Quy định gì?",
+        "Có một phần quy định.",
+        docs=[SimpleNamespace(metadata={})],
+    )
 
     assert decision.state is evidence_gate.EvidenceState.AMBIGUOUS
     assert decision.telemetry_status == "verifier_block"
+    assert calls[0]["policies"] == ["internal_only"]
