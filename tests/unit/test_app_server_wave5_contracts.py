@@ -1,7 +1,10 @@
 from contextlib import nullcontext
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
+
+from mech_chatbot.application.protected_files import AuthorizedFile, ProtectedFileError
 
 
 pytestmark = pytest.mark.unit
@@ -244,7 +247,16 @@ def test_chat_message_rejects_untrusted_image_tokens_before_rag(
 
 def test_chat_history_feedback_and_session_contracts(monkeypatch, client_for):
     calls = []
-    monkeypatch.setattr(app_server, "engine", None)
+
+    class Support:
+        def answer_sources_for_chat_ids(self, _chat_ids):
+            return []
+
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, app_support_queries=Support()),
+    )
     monkeypatch.setattr(
         app_server,
         "get_all_sessions",
@@ -314,7 +326,15 @@ def test_history_exposes_only_sources_attributed_by_each_answer(
         (13, None, "invalid.pdf", None, "1", 0.5, 0),
         (13, 44, "invalid-page.pdf", None, "x", 0.5, 0),
     ]
-    monkeypatch.setattr(app_server, "engine", _Engine(rows))
+    class Support:
+        def answer_sources_for_chat_ids(self, _chat_ids):
+            return rows
+
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, app_support_queries=Support()),
+    )
     monkeypatch.setattr(
         app_server,
         "page_has_vision",
@@ -362,14 +382,49 @@ def test_chat_image_download_fails_closed_until_owner_is_proven(
 ):
     image = tmp_path / "owned.png"
     image.write_bytes(b"owned")
-    monkeypatch.setattr(app_server, "chat_image_path", lambda _image_id: image)
     client = client_for(_profile())
 
-    monkeypatch.setattr(app_server, "engine", None)
+    class Resolver:
+        def __init__(self, outcome):
+            self.outcome = outcome
+
+        def resolve(self, _reference, _actor):
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(
+            app_server.app.state.runtime,
+            protected_file_resolver=Resolver(
+                ProtectedFileError("storage_failed", "Database is not ready")
+            ),
+        ),
+    )
     unavailable = client.get("/api/files/chat-images/owned.png")
-    monkeypatch.setattr(app_server, "engine", _Engine(None))
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(
+            app_server.app.state.runtime,
+            protected_file_resolver=Resolver(
+                ProtectedFileError(
+                    "unauthorized", "Image is not visible to this user"
+                )
+            ),
+        ),
+    )
     forbidden = client.get("/api/files/chat-images/owned.png")
-    monkeypatch.setattr(app_server, "engine", _Engine((11,)))
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(
+            app_server.app.state.runtime,
+            protected_file_resolver=Resolver(AuthorizedFile(path=image)),
+        ),
+    )
     allowed = client.get("/api/files/chat-images/owned.png")
 
     assert unavailable.status_code == 503
@@ -380,8 +435,16 @@ def test_chat_image_download_fails_closed_until_owner_is_proven(
 
 def test_chat_image_download_rejects_disappeared_file(monkeypatch, client_for, tmp_path):
     missing = tmp_path / "disappeared.png"
-    monkeypatch.setattr(app_server, "chat_image_path", lambda _image_id: missing)
-    monkeypatch.setattr(app_server, "engine", _Engine((11,)))
+
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            return AuthorizedFile(path=missing)
+
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
+    )
 
     response = client_for(_profile()).get(
         "/api/files/chat-images/disappeared.png"
@@ -528,16 +591,36 @@ def test_document_lifecycle_counts_hide_reviewer_only_buckets(
 
 def test_health_reports_database_probe_outcome(monkeypatch, client_for):
     client = client_for(_profile())
-    monkeypatch.setattr(app_server, "engine", None)
+
+    class Support:
+        def __init__(self, outcome):
+            self.outcome = outcome
+
+        def database_ready(self):
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, app_support_queries=Support(False)),
+    )
     unavailable = client.get("/api/health")
-    monkeypatch.setattr(app_server, "engine", _Engine((1,)))
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, app_support_queries=Support(True)),
+    )
     available = client.get("/api/health")
-
-    class _FailingEngine:
-        def connect(self):
-            raise RuntimeError("private database detail")
-
-    monkeypatch.setattr(app_server, "engine", _FailingEngine())
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(
+            app_server.app.state.runtime,
+            app_support_queries=Support(RuntimeError("private database detail")),
+        ),
+    )
     failed = client.get("/api/health")
 
     assert unavailable.json() == {

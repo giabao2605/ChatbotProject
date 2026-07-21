@@ -9,13 +9,12 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import BoundedSemaphore
-from typing import Any
+from typing import Any, Mapping
 from uuid import uuid4
 
 import bcrypt
@@ -25,7 +24,6 @@ from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Requ
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from mech_chatbot.application.chat_turn import (
@@ -44,23 +42,63 @@ from mech_chatbot.application.chat_citations import (
     filter_citations_by_answer,
     resolve_chat_citations,
 )
+from mech_chatbot.application.document_review import (
+    PublicationCommand,
+    PublicationOutcome,
+    ReviewDocumentsCommand,
+    ReviewItem,
+    normalize_publish_mode,
+)
+from mech_chatbot.application.document_upload import (
+    DocumentActor,
+    UploadDocumentCommand,
+    UploadFailure,
+    UploadRejected,
+)
+from mech_chatbot.application.protected_files import (
+    ProtectedFileActor,
+    ProtectedFileError,
+    ProtectedFileReference,
+)
 from mech_chatbot.api import app_security
+from mech_chatbot.api.dependencies import (
+    csrf_profile,
+    current_profile,
+    public_profile as _public_profile,
+    require_any_role,
+    session_payload as _session_payload,
+)
+from mech_chatbot.api.routers import (
+    chat_router,
+    documents_router,
+    files_router,
+    operations_router as data_router,
+)
+from mech_chatbot.api.transport_utils import (
+    assert_any_role as _assert_any_role,
+    parse_json_list as _parse_json_list,
+    parse_json_obj as _parse_json_obj,
+    parse_json_or_csv_list as _parse_json_or_csv_list,
+    row_to_json as _row_to_json,
+    rows_to_json as _rows_to_json,
+    safe_int as _safe_int,
+    split_csv as _split_csv,
+)
 from mech_chatbot.api.file_access import (
-    LEVEL_ORDER,
-    can_access_document,
     chat_image_path,
     data_raw_root,
-    normalize_security_level,
-    original_file_path,
     page_has_vision,
-    page_image_path,
+    strict_site_filter_enabled,
 )
 from mech_chatbot.auth.core import authenticate_user, load_user_profile, update_user_preferred_language
 from mech_chatbot.auth.authorization import role_allows
 from mech_chatbot.config.logging import logger, log_trace
 from mech_chatbot.config.settings import settings as application_settings
-from mech_chatbot.composition.app_runtime import build_default_app_runtime
-from mech_chatbot.db.engine import engine
+from mech_chatbot.composition.app_runtime import (
+    build_default_app_runtime,
+    production_create_ingestion_job,
+    production_engine,
+)
 from mech_chatbot.llm.external_ai import invalidate_external_ai_provider_profiles
 from mech_chatbot.services import (
     add_material_synonym,
@@ -255,13 +293,11 @@ app = FastAPI(title="Mech Chatbot App API", version="0.1.0", lifespan=_lifespan)
 @app.get("/api/health", tags=["system"])
 def app_health():
     db_status = "unavailable"
-    if engine is not None:
-        try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
+    try:
+        if app.state.runtime.app_support_queries.database_ready():
             db_status = "ok"
-        except Exception as exc:
-            logger.warning("App health DB probe failed: %s", exc)
+    except Exception as exc:
+        logger.warning("App health DB probe failed: %s", exc)
     return {
         "status": "ok" if db_status == "ok" else "degraded",
         "app": "mech-chatbot-app-api",
@@ -288,12 +324,30 @@ def _publication_actor(profile: dict[str, Any]) -> dict[str, Any]:
 
 def _publication_payload(result, response: Response | None = None) -> dict[str, Any]:
     """Keep the HTTP result aligned with the durable serving transition."""
-    payload = result.to_dict()
+    payload = result.payload if isinstance(result, PublicationOutcome) else result.to_dict()
     if response is not None and result.ok and result.state != "published":
         # A concurrent worker owns the outbox row.  The document is still
         # unservable, so this is accepted/pending rather than publish success.
         response.status_code = status.HTTP_202_ACCEPTED
     return payload
+
+
+def _publish_document_command(
+    *,
+    runtime,
+    job_id: int,
+    doc_id: int | None,
+    publish_mode: str | None,
+    profile: dict[str, Any],
+) -> PublicationOutcome:
+    return runtime.publication_coordinator.publish_job(
+        PublicationCommand(
+            job_id=job_id,
+            doc_id=doc_id,
+            publish_mode=normalize_publish_mode(publish_mode),
+        ),
+        _document_actor(profile),
+    )
 
 
 def _assert_metadata_actor(doc_id: int, profile: dict[str, Any]) -> None:
@@ -304,53 +358,6 @@ def _assert_metadata_actor(doc_id: int, profile: dict[str, Any]) -> None:
     )
     if not allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
-
-
-def _public_profile(profile: dict[str, Any], csrf: str | None = None) -> dict[str, Any]:
-    out = {
-        "user_id": profile.get("user_id"),
-        "username": profile.get("username"),
-        "display_name": profile.get("display_name"),
-        "department": profile.get("department"),
-        "roles": profile.get("roles") or [],
-        "allowed_departments": profile.get("allowed_departments") or [],
-        "max_security_level": profile.get("max_security_level") or "public",
-        "allowed_sites": profile.get("allowed_sites") or [],
-        "preferred_language": profile.get("preferred_language") or "vi",
-    }
-    if csrf is not None:
-        out["csrf_token"] = csrf
-    return out
-
-
-def _session_payload(request: Request) -> app_security.SessionPayload:
-    return app_security.verify_session_token(request.cookies.get(app_security.SESSION_COOKIE_NAME))
-
-
-def current_profile(request: Request) -> dict[str, Any]:
-    payload = _session_payload(request)
-    profile = load_user_profile(user_id=payload.user_id, username=payload.username)
-    if not profile:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or invalid")
-    return profile
-
-
-def csrf_profile(request: Request) -> dict[str, Any]:
-    payload = _session_payload(request)
-    app_security.require_csrf(request, payload)
-    profile = load_user_profile(user_id=payload.user_id, username=payload.username)
-    if not profile:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or invalid")
-    return profile
-
-
-def require_any_role(*roles: str):
-    def _dep(profile: dict[str, Any] = Depends(current_profile)) -> dict[str, Any]:
-        if not role_allows(profile.get("roles"), *roles):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-        return profile
-
-    return _dep
 
 
 def _rag_base_url() -> str:
@@ -573,101 +580,48 @@ def _schedule_pilot_replay(route, payload, outcome, trace_id, profile) -> bool:
     return True
 
 
-def _safe_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+def _document_actor(profile: dict[str, Any]) -> DocumentActor:
+    return DocumentActor(
+        user_id=_safe_int(profile.get("user_id")),
+        username=profile.get("username"),
+        roles=tuple(str(role) for role in (profile.get("roles") or []) if role),
+        allowed_departments=tuple(
+            str(dept) for dept in (profile.get("allowed_departments") or []) if dept
+        ),
+    )
 
 
-def _parse_json_obj(raw: str | None, field_name: str) -> dict[str, Any] | None:
-    if not raw:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"{field_name} không hợp lệ (JSON)")
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=400, detail=f"{field_name} phải là object JSON")
-    return {k: v for k, v in parsed.items() if v not in (None, "")} or None
+def _read_upload_command(
+    file: UploadFile,
+    *,
+    owner_department: str,
+    shared_departments: tuple[str, ...],
+    domain: str | None,
+    security_level: str | None,
+    process_stage: str | None,
+    site: str | None,
+    upload_metadata: Mapping[str, Any],
+) -> UploadDocumentCommand:
+    return UploadDocumentCommand(
+        file_name=file.filename or "",
+        content=file.file.read(),
+        owner_department=owner_department,
+        shared_departments=shared_departments,
+        domain=domain,
+        security_level=security_level,
+        process_stage=process_stage,
+        site=site,
+        upload_metadata=upload_metadata,
+    )
 
 
-def _parse_json_list(raw: str | None, field_name: str) -> list[Any]:
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"{field_name} không hợp lệ (JSON)")
-    if not isinstance(parsed, list):
-        raise HTTPException(status_code=400, detail=f"{field_name} phải là array JSON")
-    return parsed
+def _raise_upload_failure(failure: UploadFailure) -> None:
+    status_code = 403 if failure.code == "unauthorized" else 400
+    raise HTTPException(status_code=status_code, detail=failure.message)
 
 
-def _split_csv(value: Any) -> list[str]:
-    if isinstance(value, list):
-        source = value
-    elif isinstance(value, str):
-        source = re.split(r"[\s,]+", value)
-    else:
-        source = []
-    return [str(x).strip() for x in source if str(x).strip()]
-
-
-def _parse_json_or_csv_list(raw: str | None, field_name: str) -> list[str]:
-    if not raw:
-        return []
-    stripped = raw.strip()
-    if stripped.startswith("["):
-        return _split_csv(_parse_json_list(stripped, field_name))
-    return _split_csv(stripped)
-
-
-def _assert_upload_department(profile: dict[str, Any], dept: str) -> None:
-    allowed = set(profile.get("allowed_departments") or [])
-    if dept not in allowed:
-        raise HTTPException(status_code=403, detail=f"Không có quyền upload vào phòng ban {dept}")
-
-
-def _store_upload_file(file: UploadFile, dept: str) -> tuple[str, str]:
-    allowed_ext = {
-        ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".csv", ".pptx",
-        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff",
-    }
-    original_name = file.filename or ""
-    ext = Path(original_name).suffix.lower()
-    if ext not in allowed_ext:
-        raise HTTPException(status_code=400, detail=f"Định dạng tệp không được hỗ trợ: {original_name}")
-    raw = file.file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail=f"Tệp rỗng: {original_name}")
-    if len(raw) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail=f"Tệp quá lớn (giới hạn 100MB): {original_name}")
-    safe_dept = re.sub(r"[^A-Za-z0-9_\-]", "_", (dept or "").strip()) or "CHUNG"
-    out_dir = data_raw_root() / "Uploads" / safe_dept
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stored_path = out_dir / f"{uuid4().hex}{ext}"
-    stored_path.write_bytes(raw)
-    return original_name, str(stored_path)
-
-
-def _row_to_json(row: Any) -> Any:
-    if hasattr(row, "_mapping"):
-        return dict(row._mapping)
-    if isinstance(row, dict):
-        return row
-    if isinstance(row, (list, tuple)):
-        return list(row)
-    return row
-
-
-def _rows_to_json(rows: Any) -> list[Any]:
-    return [_row_to_json(row) for row in (rows or [])]
-
-
-def _assert_any_role(profile: dict[str, Any], *roles: str) -> None:
-    if not role_allows(profile.get("roles"), *roles):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+def _upload_error_payload(failure: UploadFailure) -> dict[str, Any]:
+    return {"file_name": failure.file_name, "error": failure.message}
 
 
 def _citation_list(retrieved_docs: list[Any]) -> list[dict[str, Any]]:
@@ -727,32 +681,9 @@ def _chat_image_url_from_path(raw_path: Any) -> str | None:
 
 
 def _sources_for_chat_ids(chat_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
-    if not chat_ids or engine is None:
-        return {}
-    keys, params = [], {}
-    for i, chat_id in enumerate(chat_ids):
-        key = f"cid_{i}"
-        keys.append(f":{key}")
-        params[key] = chat_id
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text(
-                """
-                SELECT a.ChatID, a.DocID, a.FileName, a.VersionNo, a.ChunkRef, a.Score,
-                       CASE WHEN NULLIF(LTRIM(RTRIM(p.VisionSummary)), '') IS NOT NULL
-                                  AND p.ImagePath IS NOT NULL
-                            THEN 1 ELSE 0 END AS HasVision
-                FROM dbo.AnswerSource a
-                LEFT JOIN dbo.DocumentPages p
-                  ON p.DocID = a.DocID
-                 AND p.PageNo = TRY_CONVERT(INT, a.ChunkRef)
-                WHERE a.ChatID IN (
-                """
-                + ", ".join(keys)
-                + ") ORDER BY a.ChatID, a.RankNo"
-            ),
-            params,
-        ).fetchall()
+    rows = app.state.runtime.app_support_queries.answer_sources_for_chat_ids(
+        tuple(int(chat_id) for chat_id in chat_ids if chat_id)
+    )
     out: dict[int, list[dict[str, Any]]] = {}
     for chat_id, doc_id, file_name, version_no, chunk_ref, score, has_vision in rows:
         page_no = _safe_int(chunk_ref)
@@ -864,9 +795,6 @@ def refresh_session(request: Request, response: Response):
     )
     app_security.set_session_cookie(response, token)
     return {"ok": True, "user": _public_profile(profile, csrf=new_payload.csrf)}
-
-
-chat_router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 class ChatMessageRequest(BaseModel):
@@ -1065,9 +993,6 @@ def feedback(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profil
     return {"ok": True}
 
 
-files_router = APIRouter(prefix="/api/files", tags=["files"])
-
-
 def _file_response(path: Path, filename: str | None = None) -> FileResponse:
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
@@ -1075,26 +1000,38 @@ def _file_response(path: Path, filename: str | None = None) -> FileResponse:
     return FileResponse(path, media_type=media_type, filename=filename)
 
 
-@files_router.get("/documents/{doc_id}/pages/{page_no}")
-def citation_page(doc_id: int, page_no: int, profile: dict[str, Any] = Depends(current_profile)):
-    decision, record = can_access_document(profile, doc_id)
-    if not decision.allowed:
-        raise HTTPException(status_code=403, detail=decision.reason)
-    path = page_image_path(doc_id, page_no)
-    if _is_admin(profile) or normalize_security_level(decision.security_level) == "confidential":
-        write_audit_log(
-            profile.get("username"),
-            "admin_global_read_citation" if _is_admin(profile) else "view_citation_page",
-            "TaiLieu",
-            doc_id,
-            {
-                "page_no": page_no,
-                "security_level": decision.security_level,
-                "access_scope": decision.reason,
-                "source": "app-api",
-            },
+def _resolve_protected_file(
+    request: Request,
+    reference: ProtectedFileReference,
+    profile: dict[str, Any],
+):
+    try:
+        return request.app.state.runtime.protected_file_resolver.resolve(
+            reference,
+            ProtectedFileActor.from_profile(profile),
         )
-    if path is None:
+    except ProtectedFileError as exc:
+        status_code = {
+            "unauthorized": 403,
+            "not_found": 404,
+            "storage_failed": 503,
+        }.get(exc.code, 500)
+        raise HTTPException(status_code=status_code, detail=exc.detail) from exc
+
+
+@files_router.get("/documents/{doc_id}/pages/{page_no}")
+def citation_page(
+    doc_id: int,
+    page_no: int,
+    request: Request,
+    profile: dict[str, Any] = Depends(current_profile),
+):
+    authorized = _resolve_protected_file(
+        request,
+        ProtectedFileReference.page(doc_id, page_no),
+        profile,
+    )
+    if authorized.placeholder:
         # Word/Excel/CSV sources do not necessarily produce a rendered PNG.
         # Return a harmless image placeholder instead of a broken <img>; the
         # citation still links to the protected original document.
@@ -1110,57 +1047,35 @@ def citation_page(doc_id: int, page_no: int, profile: dict[str, Any] = Depends(c
             media_type="image/svg+xml",
             headers={"Cache-Control": "private, no-store"},
         )
-    return _file_response(path)
+    return _file_response(authorized.path)
 
 
 @files_router.get("/documents/{doc_id}/original")
-def original_document(doc_id: int, profile: dict[str, Any] = Depends(current_profile)):
-    decision, record = can_access_document(profile, doc_id)
-    if not decision.allowed or record is None:
-        raise HTTPException(status_code=403, detail=decision.reason)
-    path = original_file_path(record)
-    if path is None:
-        raise HTTPException(status_code=404, detail="Original file not found")
-    write_audit_log(
-        profile.get("username"),
-        "admin_global_read_original" if _is_admin(profile) else "download_original",
-        "TaiLieu",
-        doc_id,
-        {
-            "file": record.ten_file,
-            "security_level": decision.security_level,
-            "access_scope": decision.reason,
-            "source": "app-api",
-        },
+def original_document(
+    doc_id: int,
+    request: Request,
+    profile: dict[str, Any] = Depends(current_profile),
+):
+    authorized = _resolve_protected_file(
+        request,
+        ProtectedFileReference.original(doc_id),
+        profile,
     )
-    return _file_response(path, filename=record.ten_file or path.name)
+    return _file_response(authorized.path, filename=authorized.filename)
 
 
 @files_router.get("/chat-images/{image_id}")
-def chat_image(image_id: str, profile: dict[str, Any] = Depends(current_profile)):
-    path = chat_image_path(image_id)
-    if path is None:
-        raise HTTPException(status_code=404, detail="Image not found")
-    if engine is None:
-        raise HTTPException(status_code=503, detail="Database is not ready")
-    query = """
-        SELECT TOP 1 ChatID
-        FROM dbo.LichSuChat
-        WHERE HinhAnhUpload LIKE :suffix
-    """
-    params: dict[str, Any] = {
-        "suffix": f"%{image_id}",
-        "username": profile.get("username"),
-    }
-    query += " AND Username = :username"
-    with engine.connect() as conn:
-        row = conn.execute(text(query), params).fetchone()
-    if not row:
-        raise HTTPException(status_code=403, detail="Image is not visible to this user")
-    return _file_response(path)
-
-
-data_router = APIRouter(prefix="/api", tags=["operations"])
+def chat_image(
+    image_id: str,
+    request: Request,
+    profile: dict[str, Any] = Depends(current_profile),
+):
+    authorized = _resolve_protected_file(
+        request,
+        ProtectedFileReference.chat_image(image_id),
+        profile,
+    )
+    return _file_response(authorized.path)
 
 
 @data_router.get("/dashboard")
@@ -1168,7 +1083,7 @@ def dashboard(profile: dict[str, Any] = Depends(current_profile)):
     return get_role_dashboard(profile)
 
 
-@data_router.get("/documents")
+@documents_router.get("/documents")
 def documents(
     dept: str | None = None,
     domain: str | None = None,
@@ -1217,7 +1132,7 @@ def documents(
     return {"documents": [dict(row._mapping) if hasattr(row, "_mapping") else list(row) for row in rows]}
 
 
-@data_router.get("/documents/lifecycle-counts")
+@documents_router.get("/documents/lifecycle-counts")
 def document_lifecycle_counts(soon_days: int = 30, profile: dict[str, Any] = Depends(current_profile)):
     counts = get_document_lifecycle_counts(
         allowed_departments=profile.get("allowed_departments") or [],
@@ -1231,7 +1146,7 @@ def document_lifecycle_counts(soon_days: int = 30, profile: dict[str, Any] = Dep
     return {"counts": counts, "soon_days": max(0, min(int(soon_days), 365))}
 
 
-@data_router.post("/documents/upload")
+@documents_router.post("/documents/upload")
 def documents_upload(
     request: Request,
     file: UploadFile = File(...),
@@ -1249,35 +1164,31 @@ def documents_upload(
     + CSRF. Tra ve job_id de UI dieu huong sang trang tien trinh ingest."""
     _assert_any_role(profile, "uploader", "reviewer", "admin")
     dept = (thu_muc or "").strip()
-    _assert_upload_department(profile, dept)
-    original_name, stored_path = _store_upload_file(file, dept)
-    from mech_chatbot.db.repositories.jobs import create_ingestion_job
     upload_meta = _parse_json_obj(meta_json, "meta_json")
     extra_departments = _parse_json_or_csv_list(extra_departments_json, "extra_departments_json")
-    phong_ban = [dept] + [d for d in extra_departments if d != dept]
-    job_id = create_ingestion_job(
-        file_name=original_name,
-        file_path=stored_path,
-        thu_muc=dept,
-        uploaded_by=profile.get("username"),
+    command = _read_upload_command(
+        file,
+        owner_department=dept,
+        shared_departments=tuple(extra_departments),
         domain=domain,
         security_level=security_level,
-        cong_doan=cong_doan,
+        process_stage=cong_doan,
         site=site,
-        phong_ban=phong_ban,
-        upload_meta=upload_meta,
+        upload_metadata=upload_meta,
     )
-    if not job_id:
-        try:
-            Path(stored_path).unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail="Không tạo được job (phòng ban có thể bị vô hiệu)")
-    return {"ok": True, "job_id": job_id, "file_name": original_name}
+    try:
+        receipt = request.app.state.runtime.document_upload.enqueue(
+            command,
+            _document_actor(profile),
+        )
+    except UploadRejected as exc:
+        _raise_upload_failure(exc.failure)
+    return {"ok": True, "job_id": receipt.job_id, "file_name": receipt.file_name}
 
 
-@data_router.post("/documents/upload-batch")
+@documents_router.post("/documents/upload-batch")
 def documents_upload_batch(
+    request: Request,
     files: list[UploadFile] = File(...),
     thu_muc: str | None = Form(None),
     domain: str | None = Form(None),
@@ -1295,14 +1206,12 @@ def documents_upload_batch(
     if len(files) > 50:
         raise HTTPException(status_code=400, detail="Một lần upload tối đa 50 tệp")
 
-    from mech_chatbot.db.repositories.jobs import create_ingestion_job
-
     upload_meta = _parse_json_obj(meta_json, "meta_json")
     assignments = _parse_json_list(assignments_json, "assignments_json")
     default_dept = (thu_muc or "").strip()
     default_extra = _parse_json_or_csv_list(extra_departments_json, "extra_departments_json")
-    created: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    commands: list[UploadDocumentCommand] = []
 
     for index, upload in enumerate(files):
         assignment = assignments[index] if index < len(assignments) and isinstance(assignments[index], dict) else {}
@@ -1310,38 +1219,43 @@ def documents_upload_batch(
         if not dept:
             errors.append({"file_name": upload.filename, "error": "Thiếu phòng ban"})
             continue
-        try:
-            _assert_upload_department(profile, dept)
-            original_name, stored_path = _store_upload_file(upload, dept)
-            extra = _split_csv(assignment.get("extra_departments") or default_extra)
-            phong_ban = [dept] + [d for d in extra if d != dept]
-            job_id = create_ingestion_job(
-                file_name=original_name,
-                file_path=stored_path,
-                thu_muc=dept,
-                uploaded_by=profile.get("username"),
+        extra = _split_csv(assignment.get("extra_departments") or default_extra)
+        commands.append(
+            _read_upload_command(
+                upload,
+                owner_department=dept,
+                shared_departments=tuple(extra),
                 domain=assignment.get("domain") or domain,
                 security_level=assignment.get("security_level") or security_level,
-                cong_doan=assignment.get("cong_doan") or cong_doan,
+                process_stage=assignment.get("cong_doan") or cong_doan,
                 site=assignment.get("site") or site,
-                phong_ban=phong_ban,
-                upload_meta=upload_meta,
+                upload_metadata=upload_meta,
             )
-            if not job_id:
-                Path(stored_path).unlink(missing_ok=True)
-                errors.append({"file_name": original_name, "error": "Không tạo được job"})
-            else:
-                created.append({"job_id": job_id, "file_name": original_name, "thu_muc": dept})
-        except HTTPException as exc:
-            errors.append({"file_name": upload.filename, "error": exc.detail})
-        except Exception as exc:
-            logger.exception("upload batch failed for %s", upload.filename)
-            errors.append({"file_name": upload.filename, "error": str(exc)})
+        )
 
-    return {"ok": not errors, "jobs": created, "errors": errors, "created": len(created), "failed": len(errors)}
+    result = request.app.state.runtime.document_upload.enqueue_batch(
+        tuple(commands),
+        _document_actor(profile),
+    )
+    created = [
+        {
+            "job_id": receipt.job_id,
+            "file_name": receipt.file_name,
+            "thu_muc": receipt.owner_department,
+        }
+        for receipt in result.jobs
+    ]
+    errors.extend(_upload_error_payload(failure) for failure in result.errors)
+    return {
+        "ok": not errors,
+        "jobs": created,
+        "errors": errors,
+        "created": len(created),
+        "failed": len(errors),
+    }
 
 
-@data_router.get("/ingestion/jobs")
+@documents_router.get("/ingestion/jobs")
 def ingestion_jobs(status_value: str | None = None, profile: dict[str, Any] = Depends(current_profile)):
     rows = list_ingestion_jobs(
         status=status_value,
@@ -1450,12 +1364,12 @@ def access_revoke_department(user_id: int, body: dict[str, Any], profile: dict[s
     return {"ok": bool(result), "result": result}
 
 
-@data_router.get("/documents/pending-review")
+@documents_router.get("/documents/pending-review")
 def documents_pending_review(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
     return {"documents": _rows_to_json(list_pending_review_docs())}
 
 
-@data_router.post("/documents/reconcile-serving")
+@documents_router.post("/documents/reconcile-serving")
 def documents_reconcile_serving(
     body: dict[str, Any],
     profile: dict[str, Any] = Depends(csrf_profile),
@@ -1467,12 +1381,12 @@ def documents_reconcile_serving(
     )
 
 
-@data_router.get("/documents/expiring")
+@documents_router.get("/documents/expiring")
 def documents_expiring(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
     return {"documents": _rows_to_json(list_expiring_documents())}
 
 
-@data_router.get("/documents/bulk-meta")
+@documents_router.get("/documents/bulk-meta")
 def documents_bulk_meta(
     dept: str | None = None,
     domain: str | None = None,
@@ -1489,7 +1403,7 @@ def documents_bulk_meta(
     }
 
 
-@data_router.patch("/documents/bulk-metadata")
+@documents_router.patch("/documents/bulk-metadata")
 def documents_bulk_metadata(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     raw_ids = body.get("doc_ids") or []
     metadata = body.get("metadata") or {}
@@ -1525,72 +1439,62 @@ def documents_bulk_metadata(body: dict[str, Any], profile: dict[str, Any] = Depe
     return {"ok": fail == 0, "updated": ok, "failed": fail}
 
 
-@data_router.post("/documents/review/bulk")
-def documents_review_bulk(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
+def _documents_review_bulk_impl(
+    body: dict[str, Any],
+    profile: dict[str, Any],
+    runtime: Any,
+):
     _assert_any_role(profile, "reviewer", "admin")
     items = body.get("items") or []
     action = str(body.get("action") or "").strip()
-    publish_mode = str(body.get("publish_mode") or "standalone").strip()
+    publish_mode = normalize_publish_mode(str(body.get("publish_mode") or "standalone").strip())
     reason = str(body.get("reason") or "")
     if not isinstance(items, list) or not items:
         raise HTTPException(status_code=400, detail="items không hợp lệ")
     if action not in {"publish", "reject", "delete"}:
         raise HTTPException(status_code=400, detail="action không hợp lệ")
-    ok = 0
-    fail = 0
-    pending = 0
-    failures = []
-    reviewer = profile.get("username") or "System"
-    for item in items:
-        if not isinstance(item, dict):
-            fail += 1
-            continue
-        job_id = _safe_int(item.get("job_id"))
-        doc_id = _safe_int(item.get("doc_id"))
-        try:
-            if action == "publish":
-                if not doc_id or not job_id:
-                    raise RuntimeError("Thiếu DocID hoặc JobID")
-                mode = publish_mode if publish_mode in {"new_version", "new_variant"} else "standalone"
-                result = publish_document(
-                    doc_id,
-                    action=mode,
-                    **_publication_actor(profile),
-                )
-                if not result:
-                    failures.append(result.to_dict())
-                    raise RuntimeError(result.error or "Publish thất bại")
-                if result.state == "published":
-                    mark_job_published(job_id)
-                else:
-                    pending += 1
-                    failures.append(result.to_dict())
-                    continue
-            elif action == "reject":
-                if not job_id:
-                    raise RuntimeError("Thiếu JobID")
-                reject_ingestion_job(job_id, reason) or mark_job_rejected(job_id)
-                if doc_id:
-                    reject_document(doc_id, reviewer=reviewer)
-            elif action == "delete":
-                if doc_id:
-                    delete_document_completely(doc_id, reviewer=reviewer)
-                if job_id:
-                    delete_ingestion_job(job_id)
-            ok += 1
-        except Exception:
-            logger.exception("bulk review action failed: action=%s job_id=%s doc_id=%s", action, job_id, doc_id)
-            fail += 1
+    review_items = tuple(
+        ReviewItem(
+            job_id=_safe_int(item.get("job_id")) if isinstance(item, dict) else None,
+            doc_id=_safe_int(item.get("doc_id")) if isinstance(item, dict) else None,
+        )
+        for item in items
+    )
+    result = runtime.review_documents.execute(
+        ReviewDocumentsCommand(
+            action=action,
+            publish_mode=publish_mode,
+            reason=reason,
+            items=review_items,
+        ),
+        _document_actor(profile),
+    )
     return {
-        "ok": fail == 0,
-        "updated": ok,
-        "pending": pending,
-        "failed": fail,
-        "failures": failures,
+        "ok": result.ok,
+        "updated": result.updated,
+        "pending": result.pending,
+        "failed": result.failed,
+        "failures": list(result.failures),
     }
 
 
-@data_router.patch("/documents/{doc_id}/current")
+def documents_review_bulk(
+    body: dict[str, Any],
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    return _documents_review_bulk_impl(body, profile, app.state.runtime)
+
+
+@documents_router.post("/documents/review/bulk")
+def documents_review_bulk_route(
+    body: dict[str, Any],
+    request: Request,
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    return _documents_review_bulk_impl(body, profile, request.app.state.runtime)
+
+
+@documents_router.patch("/documents/{doc_id}/current")
 def document_set_current(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     # Directly flipping IsCurrent bypasses the publication contract and can
@@ -1602,14 +1506,14 @@ def document_set_current(doc_id: int, profile: dict[str, Any] = Depends(csrf_pro
     )
 
 
-@data_router.patch("/documents/{doc_id}/expired")
+@documents_router.patch("/documents/{doc_id}/expired")
 def document_mark_expired(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     _assert_metadata_actor(doc_id, profile)
     return {"ok": bool(mark_document_expired(doc_id, reviewer=profile.get("username") or "System"))}
 
 
-@data_router.patch("/documents/{doc_id}/metadata")
+@documents_router.patch("/documents/{doc_id}/metadata")
 def document_update_metadata(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_metadata_actor(doc_id, profile)
     fields = {k: v for k, v in body.items() if k not in {"attributes", "domain"}}
@@ -1623,7 +1527,7 @@ def document_update_metadata(doc_id: int, body: dict[str, Any], profile: dict[st
     return {"ok": bool(result), "result": result}
 
 
-@data_router.get("/documents/{doc_id}/publish-contract")
+@documents_router.get("/documents/{doc_id}/publish-contract")
 def document_publish_contract(
     doc_id: int,
     profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin")),
@@ -1631,7 +1535,7 @@ def document_publish_contract(
     return validate_publish_contract(doc_id).to_dict()
 
 
-@data_router.patch("/documents/{doc_id}/governance")
+@documents_router.patch("/documents/{doc_id}/governance")
 def document_update_governance(
     doc_id: int,
     body: dict[str, Any],
@@ -1658,7 +1562,7 @@ def document_update_governance(
     return {"ok": True}
 
 
-@data_router.patch("/documents/{doc_id}/site")
+@documents_router.patch("/documents/{doc_id}/site")
 def document_backfill_site(
     doc_id: int,
     body: dict[str, Any],
@@ -1679,43 +1583,76 @@ def document_backfill_site(
     return {"ok": True, "doc_id": doc_id, "site": site}
 
 
-@data_router.post("/documents/{doc_id}/publish-new-version")
-def document_publish_new_version(doc_id: int, response: Response, profile: dict[str, Any] = Depends(csrf_profile)):
-    result = publish_document(doc_id, action="new_version", **_publication_actor(profile))
+@documents_router.post("/documents/{doc_id}/publish-new-version")
+def document_publish_new_version(
+    doc_id: int,
+    request: Request,
+    response: Response,
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    result = _publish_document_command(
+        runtime=request.app.state.runtime,
+        job_id=0,
+        doc_id=doc_id,
+        publish_mode="new_version",
+        profile=profile,
+    )
     return _publication_payload(result, response)
 
 
-@data_router.post("/documents/{doc_id}/publish-new-variant")
-def document_publish_new_variant(doc_id: int, response: Response, profile: dict[str, Any] = Depends(csrf_profile)):
-    result = publish_document(doc_id, action="new_variant", **_publication_actor(profile))
+@documents_router.post("/documents/{doc_id}/publish-new-variant")
+def document_publish_new_variant(
+    doc_id: int,
+    request: Request,
+    response: Response,
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    result = _publish_document_command(
+        runtime=request.app.state.runtime,
+        job_id=0,
+        doc_id=doc_id,
+        publish_mode="new_variant",
+        profile=profile,
+    )
     return _publication_payload(result, response)
 
 
-@data_router.post("/documents/{doc_id}/publish-standalone")
-def document_publish_standalone(doc_id: int, response: Response, profile: dict[str, Any] = Depends(csrf_profile)):
-    result = publish_document(doc_id, action="standalone", **_publication_actor(profile))
+@documents_router.post("/documents/{doc_id}/publish-standalone")
+def document_publish_standalone(
+    doc_id: int,
+    request: Request,
+    response: Response,
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
+    result = _publish_document_command(
+        runtime=request.app.state.runtime,
+        job_id=0,
+        doc_id=doc_id,
+        publish_mode="standalone",
+        profile=profile,
+    )
     return _publication_payload(result, response)
 
 
-@data_router.post("/documents/{doc_id}/reject")
+@documents_router.post("/documents/{doc_id}/reject")
 def document_reject(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     return {"ok": bool(reject_document(doc_id, reviewer=profile.get("username") or "System"))}
 
 
-@data_router.post("/documents/{doc_id}/archive")
+@documents_router.post("/documents/{doc_id}/archive")
 def document_archive(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     return {"ok": bool(archive_document(doc_id, reviewer=profile.get("username") or "System"))}
 
 
-@data_router.delete("/documents/{doc_id}")
+@documents_router.delete("/documents/{doc_id}")
 def document_delete(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "admin")
     return {"ok": bool(delete_document_completely(doc_id, reviewer=profile.get("username") or "System"))}
 
 
-@data_router.get("/ingestion/eta")
+@documents_router.get("/ingestion/eta")
 def ingestion_eta(profile: dict[str, Any] = Depends(require_any_role("uploader", "reviewer", "admin"))):
     eta = queue_eta_seconds()
     if isinstance(eta, dict):
@@ -1723,69 +1660,70 @@ def ingestion_eta(profile: dict[str, Any] = Depends(require_any_role("uploader",
     return {"pending": 0, "avg_seconds": 0, "eta_seconds": eta}
 
 
-@data_router.get("/ingestion/bulk-action-jobs")
+@documents_router.get("/ingestion/bulk-action-jobs")
 def ingestion_bulk_jobs(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
     return {"jobs": _rows_to_json(list_bulk_action_jobs())}
 
 
-@data_router.post("/ingestion/jobs/bulk-delete")
+@documents_router.post("/ingestion/jobs/bulk-delete")
 def ingestion_bulk_delete(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "admin")
     return {"ok": bool(bulk_delete_ingestion_jobs(body.get("ids") or []))}
 
 
-@data_router.patch("/ingestion/jobs/{job_id}/priority")
+@documents_router.patch("/ingestion/jobs/{job_id}/priority")
 def ingestion_set_priority(job_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     return {"ok": bool(set_job_priority(job_id, _safe_int(body.get("priority")) or 0))}
 
 
-@data_router.post("/ingestion/jobs/{job_id}/cancel")
+@documents_router.post("/ingestion/jobs/{job_id}/cancel")
 def ingestion_cancel(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "uploader", "reviewer", "admin")
     return {"ok": bool(cancel_job(job_id, canceled_by=profile.get("username") or "System"))}
 
 
-@data_router.post("/ingestion/jobs/{job_id}/requeue")
+@documents_router.post("/ingestion/jobs/{job_id}/requeue")
 def ingestion_requeue(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     return {"ok": bool(requeue_job(job_id))}
 
 
-@data_router.post("/ingestion/jobs/{job_id}/pending-review")
+@documents_router.post("/ingestion/jobs/{job_id}/pending-review")
 def ingestion_pending_review(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     return {"ok": bool(mark_job_pending_review(job_id))}
 
 
-@data_router.post("/ingestion/jobs/{job_id}/publish")
-def ingestion_publish(job_id: int, response: Response, profile: dict[str, Any] = Depends(csrf_profile)):
+@documents_router.post("/ingestion/jobs/{job_id}/publish")
+def ingestion_publish(
+    job_id: int,
+    request: Request,
+    response: Response,
+    profile: dict[str, Any] = Depends(csrf_profile),
+):
     # Never let a queue row say "published" without passing the document
     # contract and Qdrant serving transition.
-    with engine.connect() as conn:
-        row = conn.execute(text("""
-            SELECT TOP 1 d.DocID
-            FROM dbo.IngestionJobs j
-            JOIN dbo.TaiLieu d ON d.TenFile = j.TenFile AND d.ThuMuc = j.ThuMuc
-            WHERE j.JobID = :job_id
-            ORDER BY d.DocID DESC
-        """), {"job_id": job_id}).fetchone()
-    if not row:
+    result = _publish_document_command(
+        runtime=request.app.state.runtime,
+        job_id=job_id,
+        doc_id=None,
+        publish_mode="standalone",
+        profile=profile,
+    )
+    if result.state == "not_found":
         raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu của ingestion job")
-    result = publish_document(int(row[0]), action="standalone", **_publication_actor(profile))
-    if result and result.state == "published":
-        mark_job_published(job_id)
     return _publication_payload(result, response)
 
 
-@data_router.post("/ingestion/jobs/{job_id}/reject")
+@documents_router.post("/ingestion/jobs/{job_id}/reject")
 def ingestion_reject(job_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     reason = str(body.get("reason") or "")
     return {"ok": bool(reject_ingestion_job(job_id, reason) or mark_job_rejected(job_id))}
 
 
-@data_router.delete("/ingestion/jobs/{job_id}")
+@documents_router.delete("/ingestion/jobs/{job_id}")
 def ingestion_delete(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "admin")
     return {"ok": bool(delete_ingestion_job(job_id))}
@@ -2214,7 +2152,7 @@ def material_synonym_delete(synonym_id: int, profile: dict[str, Any] = Depends(c
     return {"ok": bool(delete_material_synonym(synonym_id))}
 
 
-@data_router.get("/lifecycle")
+@documents_router.get("/lifecycle")
 def lifecycle_overview(soon_days: int = 30, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
     result = {"expired": [], "expiring_soon": [], "needs_review": [], "counts": {}}
     for bucket in ("expired", "expiring_soon", "needs_review"):
@@ -2229,13 +2167,13 @@ def lifecycle_overview(soon_days: int = 30, profile: dict[str, Any] = Depends(re
     return result
 
 
-@data_router.post("/lifecycle/refresh-expired")
+@documents_router.post("/lifecycle/refresh-expired")
 def lifecycle_refresh(profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "admin")
     return {"ok": bool(refresh_expired_status())}
 
 
-@data_router.patch("/lifecycle/documents/{doc_id}")
+@documents_router.patch("/lifecycle/documents/{doc_id}")
 def lifecycle_set_document(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     _assert_metadata_actor(doc_id, profile)
@@ -2252,7 +2190,7 @@ def lifecycle_set_document(doc_id: int, body: dict[str, Any], profile: dict[str,
     }
 
 
-@data_router.post("/lifecycle/documents/{doc_id}/reviewed")
+@documents_router.post("/lifecycle/documents/{doc_id}/reviewed")
 def lifecycle_mark_reviewed(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     _assert_metadata_actor(doc_id, profile)
@@ -2285,14 +2223,7 @@ def feedback_classify(feedback_id: int, body: dict[str, Any], profile: dict[str,
     golden_hash = None
     regression_qid = None
     if correct_answer and str(correct_answer).strip():
-        with engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT Question, SourceDocID, Department, Site "
-                    "FROM FeedbackReview WHERE FeedbackID = :fid"
-                ),
-                {"fid": feedback_id},
-            ).fetchone()
+        row = app.state.runtime.app_support_queries.feedback_review_context(feedback_id)
         if row:
             question, source_doc_id, department, site = row
             golden_hash = upsert_golden_answer(
@@ -2593,6 +2524,20 @@ def _build_default_app_runtime():
             )
         ),
         citation_resolver=_resolve_chat_citations,
+        raw_root=lambda: data_raw_root(),
+        create_ingestion_job=lambda **kwargs: production_create_ingestion_job(**kwargs),
+        reject_ingestion_job=lambda *args, **kwargs: reject_ingestion_job(*args, **kwargs),
+        mark_job_rejected=lambda *args, **kwargs: mark_job_rejected(*args, **kwargs),
+        reject_document=lambda *args, **kwargs: reject_document(*args, **kwargs),
+        delete_document_completely=lambda *args, **kwargs: delete_document_completely(
+            *args,
+            **kwargs,
+        ),
+        delete_ingestion_job=lambda *args, **kwargs: delete_ingestion_job(*args, **kwargs),
+        publish_document=lambda *args, **kwargs: publish_document(*args, **kwargs),
+        mark_job_published=lambda *args, **kwargs: mark_job_published(*args, **kwargs),
+        engine=production_engine,
+        strict_site_filter=strict_site_filter_enabled(),
     )
 
 
@@ -2620,6 +2565,7 @@ def community_summary_reject(
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(files_router)
+app.include_router(documents_router)
 app.include_router(data_router)
 
 

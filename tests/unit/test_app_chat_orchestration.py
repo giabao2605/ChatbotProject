@@ -220,36 +220,6 @@ def test_live_citation_filter_requires_exact_source_id():
     ) == [citations[0]]
 
 
-def test_bulk_publish_returns_pending_without_marking_job_published(monkeypatch):
-    class _PendingPublication:
-        ok = True
-        state = "processing"
-
-        def __bool__(self):
-            return True
-
-        def to_dict(self):
-            return {"ok": True, "doc_id": 42, "state": self.state}
-
-    marked = []
-    monkeypatch.setattr(app_server, "publish_document", lambda *_args, **_kwargs: _PendingPublication())
-    monkeypatch.setattr(app_server, "mark_job_published", lambda job_id: marked.append(job_id))
-
-    result = app_server.documents_review_bulk(
-        {"action": "publish", "items": [{"job_id": 9, "doc_id": 42}]},
-        profile={"roles": ["reviewer"], "username": "reviewer", "user_id": 7},
-    )
-
-    assert result == {
-        "ok": True,
-        "updated": 0,
-        "pending": 1,
-        "failed": 0,
-        "failures": [{"ok": True, "doc_id": 42, "state": "processing"}],
-    }
-    assert marked == []
-
-
 def test_chat_message_serializes_runner_error_without_persistence_seam_patching(
     monkeypatch, client
 ):

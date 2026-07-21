@@ -1,8 +1,16 @@
 from contextlib import nullcontext
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+
+from mech_chatbot.application.document_review import PublicationOutcome
+from mech_chatbot.application.document_upload import (
+    UploadFailure,
+    UploadReceipt,
+    UploadRejected,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -126,15 +134,17 @@ def test_documents_contract_rejects_invalid_or_unauthorized_lifecycle_bucket(
 
 
 def test_single_upload_creates_job_with_normalized_metadata(monkeypatch, client_for):
-    created = []
+    captured = []
+
+    class Upload:
+        def enqueue(self, command, actor):
+            captured.append((command, actor))
+            return UploadReceipt(91, command.file_name, command.owner_department)
+
     monkeypatch.setattr(
-        app_server,
-        "_store_upload_file",
-        lambda upload, dept: (upload.filename, f"C:/staged/{dept}/{upload.filename}"),
-    )
-    monkeypatch.setattr(
-        "mech_chatbot.db.repositories.jobs.create_ingestion_job",
-        lambda **kwargs: created.append(kwargs) or 91,
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, document_upload=Upload()),
     )
 
     response = client_for(_profile("uploader")).post(
@@ -151,35 +161,30 @@ def test_single_upload_creates_job_with_normalized_metadata(monkeypatch, client_
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "job_id": 91, "file_name": "bom.pdf"}
-    assert created == [
-        {
-            "file_name": "bom.pdf",
-            "file_path": "C:/staged/CoKhi/bom.pdf",
-            "thu_muc": "CoKhi",
-            "uploaded_by": "alice",
-            "domain": "Mechanical",
-            "security_level": None,
-            "cong_doan": None,
-            "site": "HN",
-            "phong_ban": ["CoKhi", "Shared"],
-            "upload_meta": {"owner": "qa"},
-        }
-    ]
+    command, actor = captured[0]
+    assert command.owner_department == "CoKhi"
+    assert command.shared_departments == ("Shared", "CoKhi")
+    assert command.upload_metadata == {"owner": "qa"}
+    assert actor.username == "alice"
 
 
 def test_single_upload_removes_staged_file_when_job_is_rejected(
     monkeypatch, client_for, tmp_path
 ):
-    staged = tmp_path / "staged.pdf"
-    staged.write_bytes(b"pdf")
+    class Upload:
+        def enqueue(self, _command, _actor):
+            raise UploadRejected(
+                UploadFailure(
+                    "enqueue_failed",
+                    "bom.pdf",
+                    "Không tạo được job (phòng ban có thể bị vô hiệu)",
+                )
+            )
+
     monkeypatch.setattr(
-        app_server,
-        "_store_upload_file",
-        lambda upload, _dept: (upload.filename, str(staged)),
-    )
-    monkeypatch.setattr(
-        "mech_chatbot.db.repositories.jobs.create_ingestion_job",
-        lambda **_kwargs: None,
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, document_upload=Upload()),
     )
 
     response = client_for(_profile("uploader")).post(
@@ -189,7 +194,6 @@ def test_single_upload_removes_staged_file_when_job_is_rejected(
     )
 
     assert response.status_code == 400
-    assert not staged.exists()
 
 
 def test_access_request_and_self_history_forward_server_identity(
@@ -424,11 +428,19 @@ def test_ingestion_listing_and_queue_controls(monkeypatch, client_for):
 
 
 def test_ingestion_publish_requires_matching_document(monkeypatch, client_for):
-    monkeypatch.setattr(app_server, "engine", _Engine(row=None))
+    class Publication:
+        def publish_job(self, _command, _actor):
+            return PublicationOutcome(
+                ok=False,
+                state="not_found",
+                error="Không tìm thấy tài liệu của ingestion job",
+                payload={"ok": False, "state": "not_found"},
+            )
+
     monkeypatch.setattr(
-        app_server,
-        "publish_document",
-        lambda *_args, **_kwargs: pytest.fail("missing document must not publish"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, publication_coordinator=Publication()),
     )
 
     response = client_for(_profile("reviewer")).post("/api/ingestion/jobs/8/publish")
@@ -439,22 +451,26 @@ def test_ingestion_publish_requires_matching_document(monkeypatch, client_for):
 def test_ingestion_publish_marks_job_only_after_published_transition(
     monkeypatch, client_for
 ):
-    marked = []
-    monkeypatch.setattr(app_server, "engine", _Engine(row=(42,)))
+    class Publication:
+        def publish_job(self, command, _actor):
+            assert command.job_id == 8
+            assert command.doc_id is None
+            return PublicationOutcome(
+                ok=True,
+                state="published",
+                payload={"ok": True, "state": "published"},
+            )
+
     monkeypatch.setattr(
-        app_server,
-        "publish_document",
-        lambda doc_id, **_kwargs: _PublicationResult(ok=True, state="published")
-        if doc_id == 42
-        else pytest.fail("wrong document"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, publication_coordinator=Publication()),
     )
-    monkeypatch.setattr(app_server, "mark_job_published", marked.append)
 
     response = client_for(_profile("reviewer")).post("/api/ingestion/jobs/8/publish")
 
     assert response.status_code == 200
     assert response.json()["state"] == "published"
-    assert marked == [8]
 
 
 def test_user_creation_validates_password_and_applies_access_profile(
@@ -618,12 +634,14 @@ def test_feedback_without_correct_answer_does_not_query_golden_source(
         "classify_feedback_and_get_source",
         lambda *_args, **_kwargs: {"status": "classified"},
     )
+    class Support:
+        def feedback_review_context(self, _feedback_id):
+            pytest.fail("empty correction must not query source")
+
     monkeypatch.setattr(
-        app_server,
-        "engine",
-        SimpleNamespace(
-            connect=lambda: pytest.fail("empty correction must not query source")
-        ),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, app_support_queries=Support()),
     )
 
     response = client_for(_profile("reviewer")).post(
@@ -643,7 +661,16 @@ def test_feedback_correction_creates_golden_and_regression_evidence(
     monkeypatch, client_for
 ):
     calls = []
-    monkeypatch.setattr(app_server, "engine", _Engine(row=("Question", 42, "CoKhi", "HN")))
+
+    class Support:
+        def feedback_review_context(self, _feedback_id):
+            return ("Question", 42, "CoKhi", "HN")
+
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, app_support_queries=Support()),
+    )
     monkeypatch.setattr(
         app_server,
         "classify_feedback_and_get_source",

@@ -1,8 +1,16 @@
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+
+from mech_chatbot.application.protected_files import AuthorizedFile, ProtectedFileError
+from mech_chatbot.application.document_upload import (
+    UploadBatchResult,
+    UploadFailure,
+    UploadReceipt,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -81,21 +89,28 @@ def test_batch_upload_returns_created_jobs_and_per_file_authorization_errors(
 ):
     profile = _profile("uploader")
     client = client_for(profile)
-    stored = []
-    created = []
+    captured = []
 
-    def fake_store(upload, dept):
-        path = f"C:/staged/{upload.filename}"
-        stored.append((upload.filename, dept, path))
-        return upload.filename, path
+    class Upload:
+        def enqueue_batch(self, commands, actor):
+            captured.append((commands, actor))
+            return UploadBatchResult(
+                jobs=(UploadReceipt(91, "bom.pdf", "CoKhi"),),
+                errors=(
+                    UploadFailure(
+                        "unauthorized",
+                        "secret.pdf",
+                        "Không có quyền upload vào phòng ban Finance",
+                    ),
+                ),
+                created=1,
+                failed=1,
+            )
 
-    def fake_create(**kwargs):
-        created.append(kwargs)
-        return 91
-
-    monkeypatch.setattr(app_server, "_store_upload_file", fake_store)
     monkeypatch.setattr(
-        "mech_chatbot.db.repositories.jobs.create_ingestion_job", fake_create
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, document_upload=Upload()),
     )
 
     response = client.post(
@@ -131,18 +146,25 @@ def test_batch_upload_returns_created_jobs_and_per_file_authorization_errors(
         "created": 1,
         "failed": 1,
     }
-    assert stored == [("bom.pdf", "CoKhi", "C:/staged/bom.pdf")]
-    assert created[0]["phong_ban"] == ["CoKhi", "Shared"]
-    assert created[0]["upload_meta"] == {"owner": "qa"}
-    assert created[0]["site"] == "HN"
+    commands, actor = captured[0]
+    assert [command.owner_department for command in commands] == ["CoKhi", "Finance"]
+    assert commands[0].shared_departments == ("Shared",)
+    assert commands[0].upload_metadata == {"owner": "qa"}
+    assert commands[0].site == "HN"
+    assert actor.username == "alice"
 
 
 def test_batch_upload_rejects_viewer_before_storing_files(monkeypatch, client_for):
     client = client_for(_profile("viewer"))
+
+    class Upload:
+        def enqueue_batch(self, *_args):
+            pytest.fail("unauthorized upload must not reach the use case")
+
     monkeypatch.setattr(
-        app_server,
-        "_store_upload_file",
-        lambda *_args: pytest.fail("unauthorized upload must not be stored"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, document_upload=Upload()),
     )
 
     response = client.post(
@@ -158,10 +180,15 @@ def test_batch_upload_rejects_viewer_before_storing_files(monkeypatch, client_fo
 def test_batch_upload_rejects_more_than_fifty_files_before_storing(
     monkeypatch, client_for
 ):
+
+    class Upload:
+        def enqueue_batch(self, *_args):
+            pytest.fail("oversized batch must not reach the use case")
+
     monkeypatch.setattr(
-        app_server,
-        "_store_upload_file",
-        lambda *_args: pytest.fail("oversized batch must not store files"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, document_upload=Upload()),
     )
     files = [
         ("files", (f"doc-{index}.pdf", b"pdf", "application/pdf"))
@@ -179,16 +206,21 @@ def test_batch_upload_rejects_more_than_fifty_files_before_storing(
 def test_batch_upload_removes_staged_file_when_job_creation_fails(
     monkeypatch, client_for, tmp_path
 ):
-    staged = tmp_path / "staged.pdf"
-    staged.write_bytes(b"pdf")
+    class Upload:
+        def enqueue_batch(self, _commands, _actor):
+            return UploadBatchResult(
+                jobs=(),
+                errors=(
+                    UploadFailure("enqueue_failed", "bom.pdf", "Không tạo được job"),
+                ),
+                created=0,
+                failed=1,
+            )
+
     monkeypatch.setattr(
-        app_server,
-        "_store_upload_file",
-        lambda upload, _dept: (upload.filename, str(staged)),
-    )
-    monkeypatch.setattr(
-        "mech_chatbot.db.repositories.jobs.create_ingestion_job",
-        lambda **_kwargs: None,
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, document_upload=Upload()),
     )
 
     response = client_for(_profile("uploader")).post(
@@ -200,7 +232,6 @@ def test_batch_upload_removes_staged_file_when_job_creation_fails(
     assert response.status_code == 200
     assert response.json()["created"] == 0
     assert response.json()["failed"] == 1
-    assert not staged.exists()
 
 
 @pytest.mark.parametrize(
@@ -425,22 +456,14 @@ def test_bulk_review_executes_reject_and_delete_boundaries(
 
 
 def test_citation_page_denies_before_resolving_any_file(monkeypatch, client_for):
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            raise ProtectedFileError("unauthorized", "department_denied")
+
     monkeypatch.setattr(
-        app_server,
-        "can_access_document",
-        lambda _profile, _doc_id: (
-            SimpleNamespace(
-                allowed=False,
-                reason="department_denied",
-                security_level="confidential",
-            ),
-            None,
-        ),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "page_image_path",
-        lambda *_args: pytest.fail("denied document must not resolve a file"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
     )
 
     response = client_for(_profile()).get("/api/files/documents/42/pages/3")
@@ -452,19 +475,15 @@ def test_citation_page_denies_before_resolving_any_file(monkeypatch, client_for)
 def test_citation_page_returns_safe_placeholder_and_audits_confidential_read(
     monkeypatch, client_for
 ):
-    audits = []
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            return AuthorizedFile(path=None, placeholder=True)
+
     monkeypatch.setattr(
-        app_server,
-        "can_access_document",
-        lambda _profile, _doc_id: (
-            SimpleNamespace(
-                allowed=True, reason="allowed", security_level="confidential"
-            ),
-            SimpleNamespace(ten_file="bom.docx"),
-        ),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
     )
-    monkeypatch.setattr(app_server, "page_image_path", lambda *_args: None)
-    monkeypatch.setattr(app_server, "write_audit_log", lambda *args: audits.append(args))
 
     response = client_for(_profile()).get("/api/files/documents/42/pages/3")
 
@@ -472,7 +491,6 @@ def test_citation_page_returns_safe_placeholder_and_audits_confidential_read(
     assert response.headers["content-type"].startswith("image/svg+xml")
     assert "Doc 42" in response.text
     assert response.headers["cache-control"] == "private, no-store"
-    assert audits[0][1] == "view_citation_page"
 
 
 def test_citation_page_serves_authorized_rendered_image(
@@ -480,15 +498,15 @@ def test_citation_page_serves_authorized_rendered_image(
 ):
     image = tmp_path / "page.png"
     image.write_bytes(b"trusted-image")
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            return AuthorizedFile(path=image)
+
     monkeypatch.setattr(
-        app_server,
-        "can_access_document",
-        lambda _profile, _doc_id: (
-            SimpleNamespace(allowed=True, reason="allowed", security_level="internal"),
-            SimpleNamespace(ten_file="bom.pdf"),
-        ),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
     )
-    monkeypatch.setattr(app_server, "page_image_path", lambda *_args: image)
 
     response = client_for(_profile()).get("/api/files/documents/42/pages/3")
 
@@ -502,39 +520,35 @@ def test_original_document_serves_only_authorized_resolved_file(
 ):
     source = tmp_path / "bom.pdf"
     source.write_bytes(b"trusted-pdf")
-    record = SimpleNamespace(ten_file="download-name.pdf")
-    audits = []
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            return AuthorizedFile(path=source, filename="download-name.pdf")
+
     monkeypatch.setattr(
-        app_server,
-        "can_access_document",
-        lambda _profile, _doc_id: (
-            SimpleNamespace(allowed=True, reason="allowed", security_level="internal"),
-            record,
-        ),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
     )
-    monkeypatch.setattr(app_server, "original_file_path", lambda _record: source)
-    monkeypatch.setattr(app_server, "write_audit_log", lambda *args: audits.append(args))
 
     response = client_for(_profile()).get("/api/files/documents/42/original")
 
     assert response.status_code == 200
     assert response.content == b"trusted-pdf"
     assert "download-name.pdf" in response.headers["content-disposition"]
-    assert audits[0][1] == "download_original"
 
 
 def test_original_document_fails_closed_when_resolved_file_is_missing(
     monkeypatch, client_for
 ):
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            raise ProtectedFileError("not_found", "Original file not found")
+
     monkeypatch.setattr(
-        app_server,
-        "can_access_document",
-        lambda _profile, _doc_id: (
-            SimpleNamespace(allowed=True, reason="allowed", security_level="internal"),
-            SimpleNamespace(ten_file="missing.pdf"),
-        ),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
     )
-    monkeypatch.setattr(app_server, "original_file_path", lambda _record: None)
 
     response = client_for(_profile()).get("/api/files/documents/42/original")
 
@@ -543,22 +557,14 @@ def test_original_document_fails_closed_when_resolved_file_is_missing(
 
 
 def test_original_document_denies_before_resolving_file(monkeypatch, client_for):
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            raise ProtectedFileError("unauthorized", "security_denied")
+
     monkeypatch.setattr(
-        app_server,
-        "can_access_document",
-        lambda _profile, _doc_id: (
-            SimpleNamespace(
-                allowed=False,
-                reason="security_denied",
-                security_level="confidential",
-            ),
-            SimpleNamespace(ten_file="secret.pdf"),
-        ),
-    )
-    monkeypatch.setattr(
-        app_server,
-        "original_file_path",
-        lambda *_args: pytest.fail("denied document must not resolve a file"),
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
     )
 
     response = client_for(_profile()).get("/api/files/documents/42/original")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -45,6 +46,7 @@ RAG_PROFILE = {
 
 @pytest.fixture
 def app_client(monkeypatch):
+    app_server.app.dependency_overrides.clear()
     monkeypatch.setenv("APP_SESSION_SECRET", "wave6-session-secret")
     monkeypatch.delenv("RAG_SERVICE_TOKEN", raising=False)
     monkeypatch.setattr(
@@ -427,7 +429,16 @@ def test_row_glossary_lifecycle_and_feedback_branches_remain_json_safe(
         lambda **scope: lifecycle_buckets.append(scope["bucket"]) or [],
     )
     monkeypatch.setattr(app_server, "classify_feedback_and_get_source", lambda *_args, **_kwargs: {"ok": True})
-    monkeypatch.setattr(app_server, "engine", _Engine(None))
+
+    class Support:
+        def feedback_review_context(self, _feedback_id):
+            return None
+
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(app_server.app.state.runtime, app_support_queries=Support()),
+    )
 
     users = app_client.get("/api/users")
     primitive = app_client.post("/api/glossary", json={"term": "BOM"})
