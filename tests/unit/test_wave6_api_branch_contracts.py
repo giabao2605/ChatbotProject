@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -113,10 +114,13 @@ class _BoundaryExecutor:
 
 
 def _install_rag_events(monkeypatch, events):
-    from mech_chatbot.rag import execution
-
     boundary = type("ConfiguredBoundaryExecutor", (_BoundaryExecutor,), {"events": tuple(events)})
-    monkeypatch.setattr(execution, "DefaultRagExecutor", boundary)
+    monkeypatch.setattr(
+        rag_server.app.state,
+        "rag_runtime",
+        SimpleNamespace(executor=boundary()),
+        raising=False,
+    )
 
 
 def _stream_text(client, *, headers=None, payload=None):

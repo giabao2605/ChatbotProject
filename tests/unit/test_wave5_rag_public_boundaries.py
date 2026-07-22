@@ -205,15 +205,18 @@ def test_legacy_event_collection_preserves_typed_cancellation(terminal):
 
 
 def test_chat_without_attributed_sources_clears_reference_material(rag_client, monkeypatch):
-    from mech_chatbot.rag import execution
-
     class SourceFreeExecutor:
         def run(self, _request, invocation, cancellation):
             yield RagPrepared("untrusted reference", ("unused.png",), (), {})
             yield RagToken("Answer without a source attribution")
             yield RagCompleted("answered", invocation.trace_id, {})
 
-    monkeypatch.setattr(execution, "DefaultRagExecutor", SourceFreeExecutor)
+    monkeypatch.setattr(
+        rag_server.app.state,
+        "rag_runtime",
+        SimpleNamespace(executor=SourceFreeExecutor()),
+        raising=False,
+    )
 
     response = rag_client.post(
         "/chat",
