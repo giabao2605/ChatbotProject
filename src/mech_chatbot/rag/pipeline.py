@@ -10,6 +10,7 @@ from mech_chatbot.rag.phases.citations import (
     select_citation_docs,
 )
 from mech_chatbot.rag.phases.diagnostics import make_debug_info
+from mech_chatbot.rag.phases.contracts import PhaseTerminal
 
 
 def execute_pipeline(state):
@@ -36,22 +37,19 @@ def execute_pipeline(state):
 
     primary_retrieval = retrieve_primary(route_decision, state)
 
-    from mech_chatbot.rag.phases.retrieval_enrichment import (
-        EnrichmentOutcome,
-        enrich_retrieval,
-    )
+    from mech_chatbot.rag.phases.retrieval_enrichment import enrich_retrieval
 
     enrichment = enrich_retrieval(route_decision, primary_retrieval, state)
-    if not isinstance(enrichment, EnrichmentOutcome):
-        return enrichment
+    if isinstance(enrichment, PhaseTerminal):
+        return enrichment.prepared
 
-    from mech_chatbot.rag.phases.retrieval_rerank import RerankOutcome, rerank_retrieval
+    from mech_chatbot.rag.phases.retrieval_rerank import rerank_retrieval
 
     reranked = rerank_retrieval(route_decision, enrichment, state)
-    if not isinstance(reranked, RerankOutcome):
-        return reranked
+    if isinstance(reranked, PhaseTerminal):
+        return reranked.prepared
 
-    from mech_chatbot.rag.phases.evidence import EvidenceOutcome, evaluate_evidence
+    from mech_chatbot.rag.phases.evidence import evaluate_evidence
 
     evidence = evaluate_evidence(
         route_decision,
@@ -60,8 +58,8 @@ def execute_pipeline(state):
         reranked,
         state,
     )
-    if not isinstance(evidence, EvidenceOutcome):
-        return evidence
+    if isinstance(evidence, PhaseTerminal):
+        return evidence.prepared
 
     from mech_chatbot.rag.phases.generation import generate
 

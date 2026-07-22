@@ -23,9 +23,10 @@ from mech_chatbot.rag.phases.citations import (
     build_source_citations,
     select_citation_docs,
 )
+from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.diagnostics import (
     make_debug_info,
-    serialize_debug_documents,
+    make_phase_diagnostics,
 )
 from mech_chatbot.rag.phases.retrieval import PrimaryRetrievalOutcome
 from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
@@ -43,6 +44,7 @@ class EvidenceOutcome:
     evidence_decision: Any
     evidence_quotes: tuple[str, ...]
     explicit_negative_answer: str
+    reason_code: str = "evidence_approved"
 
 
 def evaluate_evidence(
@@ -51,7 +53,7 @@ def evaluate_evidence(
     enrichment: EnrichmentOutcome,
     reranked: RerankOutcome,
     state: Any,
-) -> EvidenceOutcome | Any:
+) -> EvidenceOutcome | PhaseTerminal:
     """Apply citation and answerability policy to the retrieved evidence."""
 
     request = decision.request
@@ -187,7 +189,7 @@ def _prepare_refusal(
     evidence_quotes: tuple[str, ...],
     ref_text: str,
     ref_images: list[str],
-) -> Any:
+) -> PhaseTerminal:
     request = decision.request
     documents = list(reranked.documents)
     logger.warning("Evidence gate BLOCK cau hoi: %s", answer_policy.reason)
@@ -228,45 +230,36 @@ def _prepare_refusal(
     )
     debug = make_debug_info(documents)
     debug.update(
-        {
-            "citation_docs": make_debug_info(documents)["retrieved_docs"],
-            "evidence_state": answer_policy.evidence_state.value,
-            "answer_outcome": answer_policy.outcome.value,
-            "correction_allowed": bool(
-                state.budget.corrections > 0 or answer_policy.correction_allowed
-            ),
-            "evidence_stage": evidence_decision.stage,
-            "evidence_quotes": list(evidence_quotes),
-            "correction_count": state.budget.corrections,
-            "generation_metrics": {
-                "estimated_cost": (
-                    enrichment.correction_estimated_cost
-                    + primary.planner_estimated_cost
-                ),
-                "input_tokens": enrichment.auxiliary_input_tokens,
-                "output_tokens": enrichment.auxiliary_output_tokens,
-                "provider_retries": state.budget.provider_retries,
-                "repair_count": 0,
-            },
-            "planner_count": state.budget.planners,
-            "subquery_count": state.budget.subqueries,
-            "final_generation_count": state.budget.final_generations,
-            "deadline_exceeded": state.budget.deadline_exceeded,
-            "decomposition_branches": list(primary.decomposition_branches),
-            "decomposition_intent_count": len(primary.decomposition_intents),
-            "decomposition_intent_coverage": list(primary.decomposition_intent_coverage),
-            "decomposition_used_fallback": primary.decomposition_used_fallback,
-            "decomposition_intent_overflow": primary.decomposition_intent_overflow,
-            "graph_traversal_count": len(reranked.served_graph_documents),
-            "graph_evidence": serialize_debug_documents(
-                reranked.served_graph_documents
-            ),
-            "graph_routed": enrichment.graph_routed,
-            "graph_edge_count": enrichment.graph_edge_count,
-            "graph_max_hops": enrichment.graph_max_hops,
-        }
+        make_phase_diagnostics(
+            primary,
+            enrichment,
+            reranked,
+            state,
+            answer_policy,
+            evidence_decision,
+            evidence_quotes,
+        )
     )
+    debug["citation_docs"] = make_debug_info(documents)["retrieved_docs"]
+    debug["generation_metrics"] = {
+        "estimated_cost": (
+            enrichment.correction_estimated_cost + primary.planner_estimated_cost
+        ),
+        "input_tokens": enrichment.auxiliary_input_tokens,
+        "output_tokens": enrichment.auxiliary_output_tokens,
+        "provider_retries": state.budget.provider_retries,
+        "repair_count": 0,
+    }
     state.refuse("evidence_gate")
-    return state.prepared(
-        (refusal_stream(), ref_text, ref_images, list(enrichment.new_part_ids), debug)
+    return PhaseTerminal(
+        prepared=state.prepared(
+            (
+                refusal_stream(),
+                ref_text,
+                ref_images,
+                list(enrichment.new_part_ids),
+                debug,
+            )
+        ),
+        reason_code="evidence_gate",
     )

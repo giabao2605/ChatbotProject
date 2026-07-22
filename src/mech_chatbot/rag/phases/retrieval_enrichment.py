@@ -33,12 +33,13 @@ from mech_chatbot.rag.corrective import (
     should_attempt_correction,
 )
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState, evaluate_answerability
-from mech_chatbot.rag.execution import _raise_if_request_budget_exceeded, current_execution_context
+from mech_chatbot.rag.execution import RequestBudgetExceeded, current_execution_context
 from mech_chatbot.rag.intent import serialize_qdrant_filter
 from mech_chatbot.rag.phases.diagnostics import (
     make_debug_info,
     make_terminal_debug as _make_terminal_debug,
 )
+from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.retrieval import PrimaryRetrievalOutcome
 from mech_chatbot.rag.phases.routing import RouteDecision
 from mech_chatbot.rag.pipeline_steps import _assemble_context, _disambiguate, _retrieve
@@ -68,9 +69,14 @@ class EnrichmentOutcome:
     auxiliary_input_tokens: int
     auxiliary_output_tokens: int
     correction_estimated_cost: float
+    reason_code: str = "enriched"
 
 
-def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, state: Any):
+def enrich_retrieval(
+    decision: RouteDecision,
+    primary: PrimaryRetrievalOutcome,
+    state: Any,
+) -> EnrichmentOutcome | PhaseTerminal:
     request = decision.request
     trace_id = request.trace_id
     user_question = request.user_question
@@ -155,10 +161,9 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
                 seed_count=len(graph_seeds), edge_count=len(graph_edges),
                 hydrated_count=len(graph_docs), max_hops=2, edge_limit=50,
             )
-        except (ExternalAICallCancelled, TimeoutError):
+        except (ExternalAICallCancelled, RequestBudgetExceeded, TimeoutError):
             raise
         except Exception as exc:
-            _raise_if_request_budget_exceeded(exc)
             logger.warning("Graph retrieval unavailable: %s", exc)
             log_trace("graph_retrieval", trace_id, error=type(exc).__name__, edge_count=0)
 
@@ -232,7 +237,12 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
             refusal_reason="access_denied",
             access_reason=access_reason,
         )
-        return state.prepared((restricted_stream(), "", [], current_part_ids, debug))
+        return PhaseTerminal(
+            prepared=state.prepared(
+                (restricted_stream(), "", [], current_part_ids, debug)
+            ),
+            reason_code="access_denied",
+        )
 
     # Kiem tra ket qua tim kiem ma cu the (khong fallback semantic lung tung)
     if not skip_retrieval and not retrieved_docs and new_part_ids:
@@ -247,6 +257,8 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
                 active_filter = general_filter
                 retrieval_mode = "general_after_inherit_miss"
                 retrieved_docs = _retr_fb.invoke(query_to_search)
+            except (ExternalAICallCancelled, RequestBudgetExceeded):
+                raise
             except Exception as _e_fb:
                 logger.warning(f"Fallback general sau inherit-miss loi: {_e_fb}")
                 retrieved_docs = []
@@ -261,6 +273,8 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
                     allowed_sites=allowed_sites,
                     part_ids=new_part_ids,
                 )
+            except (ExternalAICallCancelled, RequestBudgetExceeded):
+                raise
             except Exception:
                 _blocked, _access_reason = False, None
             if _blocked and _access_reason:
@@ -279,10 +293,17 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
                 refusal_reason="no_docs_for_exact_code",
             )
             state.refuse("no_docs_for_exact_code")
-            return state.prepared(
-                (insufficient_evidence_stream(), "", [], current_part_ids, _make_terminal_debug(
-                    user_question, "no_docs_for_exact_code",
-                ))
+            return PhaseTerminal(
+                prepared=state.prepared(
+                    (
+                        insufficient_evidence_stream(),
+                        "",
+                        [],
+                        current_part_ids,
+                        _make_terminal_debug(user_question, "no_docs_for_exact_code"),
+                    )
+                ),
+                reason_code="no_docs_for_exact_code",
             )
 
     if not skip_retrieval:
@@ -301,7 +322,10 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
             lifecycle=state,
         )
         if _disambig_terminal is not None:
-            return state.prepared(_disambig_terminal)
+            return PhaseTerminal(
+                prepared=state.prepared(_disambig_terminal),
+                reason_code="disambiguation_required",
+            )
 
         log_trace("retrieval", trace_id,
                   latency_ms=int((time.time() - t_retrieval)*1000),
@@ -474,6 +498,8 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
                     latency_ms=int((time.time() - t_sql)*1000), rows=0,
                     part_ids=new_part_ids, document_ids=bom_document_ids,
                 )
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
+            raise
         except Exception as e:
             logger.error(f"Loi inject SQL BOM: {e}")
             log_trace(
@@ -504,6 +530,8 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
                 allowed_departments=allowed_departments,
                 max_security_level=max_security_level, allowed_sites=allowed_sites,
                 part_ids=new_part_ids)
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
+            raise
         except Exception:
             _blocked, _access_reason = False, None
         if _blocked and _access_reason:
@@ -529,10 +557,17 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
         )
 
         state.refuse("no_retrieved_docs")
-        return state.prepared(
-            (empty_stream(), "", [], current_part_ids, _make_terminal_debug(
-                user_question, "no_retrieved_docs",
-            ))
+        return PhaseTerminal(
+            prepared=state.prepared(
+                (
+                    empty_stream(),
+                    "",
+                    [],
+                    current_part_ids,
+                    _make_terminal_debug(user_question, "no_retrieved_docs"),
+                )
+            ),
+            reason_code="no_retrieved_docs",
         )
 
     # Optional CRAG pass.  It reuses the exact same strict/broad/RBAC filters;
@@ -623,10 +658,9 @@ def enrich_retrieval(decision: RouteDecision, primary: PrimaryRetrievalOutcome, 
                     evaluator_state=coverage_decision.state.value,
                     estimated_cost=correction_cost,
                 )
-            except (ExternalAICallCancelled, TimeoutError):
+            except (ExternalAICallCancelled, RequestBudgetExceeded, TimeoutError):
                 raise
             except Exception as exc:
-                _raise_if_request_budget_exceeded(exc)
                 logger.warning("Corrective retrieval failed: %s", exc)
                 log_trace(
                     "corrective_retrieval",

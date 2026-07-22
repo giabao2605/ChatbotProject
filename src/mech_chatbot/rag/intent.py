@@ -21,7 +21,7 @@ import atexit
 import concurrent.futures
 from contextvars import copy_context
 from concurrent.futures import ThreadPoolExecutor
-from mech_chatbot.rag.execution import _raise_if_request_budget_exceeded
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 
 # cross-module (owned) refs
 
@@ -269,8 +269,9 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         except concurrent.futures.TimeoutError:
             future.cancel()
             logger.warning(f"LLM Intent Extraction bi timeout. Fallback ve Regex.")
+        except RequestBudgetExceeded:
+            raise
         except Exception as e:
-            _raise_if_request_budget_exceeded(e)
             logger.warning(f"Loi LLM Intent Extraction: {e}. Fallback ve Regex.")
 
     det_policy, det_versions = deterministic_version_intent(question)
@@ -533,8 +534,9 @@ Quy tac:
             pass
         logger.warning("analyze_context bi timeout -> fallback continue + cau goc.")
         return fallback
+    except RequestBudgetExceeded:
+        raise
     except Exception as e:
-        _raise_if_request_budget_exceeded(e)
         logger.warning(f"Loi analyze_context: {e} -> fallback continue + cau goc.")
         return fallback
 

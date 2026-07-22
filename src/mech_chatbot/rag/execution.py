@@ -402,12 +402,6 @@ class RequestBudgetExceeded(RuntimeError):
     """Internal control-flow error for a request-wide budget violation."""
 
 
-def _raise_if_request_budget_exceeded(error: BaseException) -> None:
-    """Keep request budget control flow out of best-effort fallbacks."""
-    if isinstance(error, RequestBudgetExceeded):
-        raise error
-
-
 @dataclass(slots=True)
 class RequestBudgetLedger:
     limits: RequestBudgetLimits

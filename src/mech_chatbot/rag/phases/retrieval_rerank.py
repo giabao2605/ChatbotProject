@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from mech_chatbot.config.logging import log_trace, logger
-from mech_chatbot.rag.bootstrap import RERANK_PER_PART, RERANK_TOP_N_CAP, env_bool
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.rag.bootstrap import RERANK_PER_PART, RERANK_TOP_N_CAP, client, env_bool
 from mech_chatbot.rag.context_builders import hydrate_parent_context, parent_context_max_workers
 from mech_chatbot.rag.corrective import merge_corrected_documents
+from mech_chatbot.rag.execution import RequestBudgetExceeded
+from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.diagnostics import make_terminal_debug as _make_terminal_debug
 from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
 from mech_chatbot.rag.phases.routing import RouteDecision
@@ -30,9 +33,14 @@ from mech_chatbot.rag.rerank import (
 class RerankOutcome:
     documents: tuple[Any, ...]
     served_graph_documents: tuple[Any, ...]
+    reason_code: str = "reranked"
 
 
-def rerank_retrieval(decision: RouteDecision, enrichment: EnrichmentOutcome, state: Any):
+def rerank_retrieval(
+    decision: RouteDecision,
+    enrichment: EnrichmentOutcome,
+    state: Any,
+) -> RerankOutcome | PhaseTerminal:
     request = decision.request
     trace_id = request.trace_id
     user_question = request.user_question
@@ -97,6 +105,8 @@ def rerank_retrieval(decision: RouteDecision, enrichment: EnrichmentOutcome, sta
                     used_shadow=late_result.used_shadow,
                     fallback_reason=late_result.fallback_reason,
                 )
+            except (ExternalAICallCancelled, RequestBudgetExceeded):
+                raise
             except Exception as exc:
                 logger.warning("Late interaction unavailable, keeping existing reranker: %s", exc)
                 log_trace("late_interaction", trace_id, error=type(exc).__name__, fallback=True)
@@ -129,6 +139,8 @@ def rerank_retrieval(decision: RouteDecision, enrichment: EnrichmentOutcome, sta
                     scores=scores, backend="voyage", status="success",
                     fallback=False, retry_attempted=False,
                 )
+            except (ExternalAICallCancelled, RequestBudgetExceeded):
+                raise
             except Exception as e:
                 logger.error(f"Loi khi su dung Voyage Rerank: {e}. Fallback to manual rerank.")
                 real_docs = rerank_docs(real_docs)
@@ -150,10 +162,17 @@ def rerank_retrieval(decision: RouteDecision, enrichment: EnrichmentOutcome, sta
                 yield empty_msg
             log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="empty_context", docs_count=0, version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, user_department=user_department, user_roles=user_roles)
             state.refuse("empty_context")
-            return state.prepared(
-                (mock_stream(), "", [], new_part_ids, _make_terminal_debug(
-                    user_question, "empty_context",
-                ))
+            return PhaseTerminal(
+                prepared=state.prepared(
+                    (
+                        mock_stream(),
+                        "",
+                        [],
+                        new_part_ids,
+                        _make_terminal_debug(user_question, "empty_context"),
+                    )
+                ),
+                reason_code="empty_context",
             )
 
         t_parent_context = time.time()

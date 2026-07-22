@@ -117,8 +117,46 @@ def make_source_snapshot(docs=None) -> list[dict[str, Any]]:
     return snapshots
 
 
+def make_phase_diagnostics(
+    primary,
+    enrichment,
+    reranked,
+    state,
+    answer_policy,
+    evidence_decision,
+    evidence_quotes,
+) -> dict[str, Any]:
+    """Build fields shared by refusal and generated-answer diagnostics."""
+
+    return {
+        "evidence_state": answer_policy.evidence_state.value,
+        "answer_outcome": answer_policy.outcome.value,
+        "correction_allowed": bool(
+            state.budget.corrections > 0 or answer_policy.correction_allowed
+        ),
+        "evidence_stage": evidence_decision.stage,
+        "evidence_quotes": list(evidence_quotes),
+        "correction_count": state.budget.corrections,
+        "planner_count": state.budget.planners,
+        "subquery_count": state.budget.subqueries,
+        "final_generation_count": state.budget.final_generations,
+        "deadline_exceeded": state.budget.deadline_exceeded,
+        "decomposition_branches": list(primary.decomposition_branches),
+        "decomposition_intent_count": len(primary.decomposition_intents),
+        "decomposition_intent_coverage": list(primary.decomposition_intent_coverage),
+        "decomposition_used_fallback": primary.decomposition_used_fallback,
+        "decomposition_intent_overflow": primary.decomposition_intent_overflow,
+        "graph_traversal_count": len(reranked.served_graph_documents),
+        "graph_evidence": serialize_debug_documents(reranked.served_graph_documents),
+        "graph_routed": enrichment.graph_routed,
+        "graph_edge_count": enrichment.graph_edge_count,
+        "graph_max_hops": enrichment.graph_max_hops,
+    }
+
+
 __all__ = [
     "make_debug_info",
+    "make_phase_diagnostics",
     "make_source_snapshot",
     "make_terminal_debug",
     "serialize_debug_documents",

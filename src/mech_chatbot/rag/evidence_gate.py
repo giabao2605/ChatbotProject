@@ -30,6 +30,7 @@ from mech_chatbot.rag.number_normalization import (
     normalize_number_token as _normalize_number_token,
     normalized_number_values,
 )
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 STRICT_ANSWER_MODE = os.getenv("STRICT_ANSWER_MODE", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -254,10 +255,9 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
             evidence_quotes=tuple(quotes) if isinstance(quotes, list) else (),
             telemetry_status="verifier_pass" if state is EvidenceState.SUFFICIENT else "verifier_block",
         )
+    except RequestBudgetExceeded:
+        raise
     except Exception as e:
-        from mech_chatbot.rag.execution import _raise_if_request_budget_exceeded
-
-        _raise_if_request_budget_exceeded(e)
         logger.warning(f"Evidence gate loi ({e}). Fallback sang heuristic/prompt nghiem ngat.")
         return EvidenceDecision(
             EvidenceState.SUFFICIENT,

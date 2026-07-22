@@ -26,7 +26,7 @@ from mech_chatbot.rag.corrective import (
     run_corrected_retrieval,
 )
 from mech_chatbot.rag.evidence_gate import evaluate_answerability
-from mech_chatbot.rag.execution import _raise_if_request_budget_exceeded
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.phases.diagnostics import make_source_snapshot
 from mech_chatbot.rag.phases.routing import RouteDecision
 from mech_chatbot.rag.pipeline_steps import (
@@ -58,6 +58,7 @@ class PrimaryRetrievalOutcome:
     auxiliary_output_tokens: int
     planner_estimated_cost: float
     correction_estimated_cost: float
+    reason_code: str = "retrieved"
 
 
 def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOutcome:
@@ -276,10 +277,13 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
                                 evaluator_state=branch_decision.state.value,
                                 estimated_cost=correction_cost,
                             )
-                        except (ExternalAICallCancelled, TimeoutError):
+                        except (
+                            ExternalAICallCancelled,
+                            RequestBudgetExceeded,
+                            TimeoutError,
+                        ):
                             raise
                         except Exception as exc:
-                            _raise_if_request_budget_exceeded(exc)
                             logger.warning("Decomposed corrective retrieval failed: %s", exc)
                             log_trace(
                                 "corrective_retrieval", trace_id,
@@ -465,10 +469,9 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
                     hyde_chars=len(hyde_response),
                     fallback_docs=len(retrieved_docs),
                 )
-            except (ExternalAICallCancelled, TimeoutError):
+            except (ExternalAICallCancelled, RequestBudgetExceeded, TimeoutError):
                 raise
             except Exception as e:
-                _raise_if_request_budget_exceeded(e)
                 logger.warning(f"Loi HyDE fallback: {e}")
                 log_trace("hyde", trace_id, used=True, error=str(e))
 

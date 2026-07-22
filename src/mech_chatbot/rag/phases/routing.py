@@ -8,10 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from mech_chatbot.config.logging import log_trace, logger
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.answer_policy import PolicyEvidence, decide_answer_policy
 from mech_chatbot.rag.bootstrap import env_bool
 from mech_chatbot.rag.corrective import correction_enabled
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.glossary_expand import glossary_expansion_terms
 from mech_chatbot.rag.phases.diagnostics import make_debug_info
 from mech_chatbot.rag.phases.preparation import PreparedRequest, PreparedValues
@@ -43,6 +45,7 @@ class RouteDecision:
 class RoutingOutcome:
     decision: RouteDecision | None = None
     terminal: PreparedValues | None = None
+    reason_code: str = "routed"
 
     def __post_init__(self) -> None:
         if (self.decision is None) == (self.terminal is None):
@@ -67,7 +70,7 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
     )
     state.checkpoint("routing")
     if route_terminal is not None:
-        return RoutingOutcome(terminal=route_terminal)
+        return RoutingOutcome(terminal=route_terminal, reason_code="route_terminal")
 
     mock_stream = route_bundle["mock_stream"]
     embed_cached = route_bundle["_embed_cached"]
@@ -126,8 +129,11 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
                         hit.get("ref_images", []),
                         prepared.current_part_ids,
                         debug,
-                    )
+                    ),
+                    reason_code="semantic_cache_hit",
                 )
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception as cache_error:
         logger.warning("semantic cache lookup loi: %s", cache_error)
     if prepared.cache_eligible:
@@ -230,7 +236,8 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
                 (),
                 prepared.current_part_ids,
                 debug,
-            )
+            ),
+            reason_code="missing_compare_versions",
         )
 
     if intent_data.get("is_chitchat"):
@@ -256,7 +263,8 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
                 (),
                 prepared.current_part_ids,
                 make_debug_info([]),
-            )
+            ),
+            reason_code="chitchat",
         )
 
     tokenized_question = tokenize_cached(effective_question)
@@ -279,6 +287,8 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
                 prepared.trace_id,
                 added=glossary_terms[:200],
             )
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception as glossary_error:
         logger.warning("glossary expansion loi: %s", glossary_error)
 

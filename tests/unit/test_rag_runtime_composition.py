@@ -63,3 +63,39 @@ def test_rag_runtime_bundle_is_frozen():
 
     with pytest.raises(FrozenInstanceError):
         runtime.settings = object()
+
+
+def test_rag_server_opens_requests_through_composed_runtime(monkeypatch):
+    from mech_chatbot.api import rag_server
+
+    sentinel = object()
+    observed = []
+
+    class ScriptedExecutor:
+        def run(self, request, invocation, cancellation):
+            observed.append((request.question, invocation.trace_id, cancellation))
+            return sentinel
+
+    monkeypatch.setattr(
+        rag_server,
+        "_rag_runtime",
+        SimpleNamespace(executor=ScriptedExecutor()),
+        raising=False,
+    )
+    cancellation = object()
+    result = rag_server._open_rag_events(
+        rag_server.ChatRequest(user_question="runtime question"),
+        {
+            "department": "Technical",
+            "roles": ["viewer"],
+            "allowed_departments": ["Technical"],
+            "max_security_level": "internal",
+            "allowed_sites": ["HCM"],
+        },
+        "runtime-trace",
+        cancellation,
+        mode="test",
+    )
+
+    assert result is sentinel
+    assert observed == [("runtime question", "runtime-trace", cancellation)]

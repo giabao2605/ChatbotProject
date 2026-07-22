@@ -18,7 +18,7 @@ import json
 import os
 import re
 
-from mech_chatbot.rag.execution import _raise_if_request_budget_exceeded
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 
 # Phai khop ROUTE_* trong interaction_router.py.
 _VALID_ROUTES = (
@@ -133,8 +133,9 @@ def classify_llm(text, context=None, invoke=None, trace_id=None):
             resp = _default_invoke(messages, trace_id=trace_id)
         else:
             resp = invoke(messages)
-    except Exception as exc:
-        _raise_if_request_budget_exceeded(exc)
+    except RequestBudgetExceeded:
+        raise
+    except Exception:
         return None
     parsed = parse_response(_extract_text(resp))
     if parsed is None:

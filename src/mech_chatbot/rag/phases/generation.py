@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from mech_chatbot.config.logging import logger
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.llm.llm_client import get_llm_model_name
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.phases.diagnostics import (
     make_debug_info,
+    make_phase_diagnostics,
     make_source_snapshot,
-    serialize_debug_documents,
 )
 from mech_chatbot.rag.phases.evidence import EvidenceOutcome
 from mech_chatbot.rag.phases.retrieval import PrimaryRetrievalOutcome
@@ -31,6 +33,7 @@ from mech_chatbot.rag.query_decomposition import audit_decomposition_stream
 @dataclass(frozen=True, slots=True)
 class GenerationResult:
     prepared: Any
+    reason_code: str = "generated"
 
 
 def generate(
@@ -101,32 +104,18 @@ def generate(
 
     debug_info = make_debug_info(documents)
     debug_info.update(
+        make_phase_diagnostics(
+            primary,
+            enrichment,
+            reranked,
+            state,
+            evidence.answer_policy,
+            evidence.evidence_decision,
+            evidence.evidence_quotes,
+        )
+    )
+    debug_info.update(
         {
-            "evidence_state": evidence.answer_policy.evidence_state.value,
-            "answer_outcome": evidence.answer_policy.outcome.value,
-            "correction_allowed": bool(
-                state.budget.corrections > 0
-                or evidence.answer_policy.correction_allowed
-            ),
-            "evidence_stage": evidence.evidence_decision.stage,
-            "evidence_quotes": list(evidence.evidence_quotes),
-            "correction_count": state.budget.corrections,
-            "planner_count": state.budget.planners,
-            "subquery_count": state.budget.subqueries,
-            "final_generation_count": state.budget.final_generations,
-            "deadline_exceeded": state.budget.deadline_exceeded,
-            "decomposition_branches": decomposition_branches,
-            "decomposition_intent_count": len(primary.decomposition_intents),
-            "decomposition_intent_coverage": list(primary.decomposition_intent_coverage),
-            "decomposition_used_fallback": primary.decomposition_used_fallback,
-            "decomposition_intent_overflow": primary.decomposition_intent_overflow,
-            "graph_traversal_count": len(reranked.served_graph_documents),
-            "graph_evidence": serialize_debug_documents(
-                reranked.served_graph_documents
-            ),
-            "graph_routed": enrichment.graph_routed,
-            "graph_edge_count": enrichment.graph_edge_count,
-            "graph_max_hops": enrichment.graph_max_hops,
             "community_summary_used": enrichment.community_summary_used,
             "community_summary_count": enrichment.community_summary_count,
             "community_summary_source_count": len(enrichment.community_documents),
@@ -188,6 +177,8 @@ def _store_conversation_document_refs(
                 context["active_doc_refs"] = active_refs
                 context.setdefault("last_intent", "answered")
                 debug_info["conversation_context"] = context
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception as exc:
         logger.warning("[ConvState] luu active_doc_refs loi: %s", exc)
 
@@ -201,6 +192,8 @@ def _store_history_summary(debug_info: dict[str, Any], request: Any) -> None:
             if request.summary_covered is not None:
                 context["summary_covered"] = request.summary_covered
             debug_info["conversation_context"] = context
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception as exc:
         logger.warning("[KH-3] luu history_summary loi: %s", exc)
 
@@ -245,6 +238,8 @@ def _wrap_semantic_cache(
                 citation_snapshot=citation_snapshot,
                 evidence_snapshot=evidence_snapshot,
             )
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception as exc:
         logger.warning("semantic cache store loi: %s", exc)
     return stream

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mech_chatbot.rag.answer_checks import extract_source_ids
-from mech_chatbot.rag.execution import _raise_if_request_budget_exceeded
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 
 
 _COMPLEX_CUES = (" và ", " đồng thời ", " so sánh ", " đối chiếu ", " versus ", " vs ")
@@ -158,8 +158,9 @@ def compile_query_plan(
     if planner is not None:
         try:
             payload = planner(original) or {}
-        except Exception as exc:
-            _raise_if_request_budget_exceeded(exc)
+        except RequestBudgetExceeded:
+            raise
+        except Exception:
             payload = {}
     proposed = payload.get("subqueries", ()) if isinstance(payload, dict) else ()
     allowed_codes = {code.upper() for code in _CODE_RE.findall(original)}

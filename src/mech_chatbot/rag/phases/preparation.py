@@ -9,6 +9,8 @@ from typing import Any
 
 from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.llm.llm_client import get_llm_model_name
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.pipeline_steps import _analyze_image, _prepare_history
 
 
@@ -48,6 +50,7 @@ class PreparedRequest:
 class PreparationOutcome:
     prepared: PreparedRequest | None = None
     terminal: PreparedValues | None = None
+    reason_code: str = "prepared"
 
     def __post_init__(self) -> None:
         if (self.prepared is None) == (self.terminal is None):
@@ -104,6 +107,8 @@ def prepare(state: Any) -> PreparationOutcome:
         from mech_chatbot.rag import route_safety
 
         safety_reason = route_safety.detect(user_question) if route_safety.enabled() else None
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception as safety_error:
         logger.error(
             "Pre-cache safety check failed: %s",
@@ -139,7 +144,8 @@ def prepare(state: Any) -> PreparationOutcome:
             refusal_reason="safety_block",
         )
         return PreparationOutcome(
-            terminal=(safety_stream(), "", (), current_part_ids, _empty_debug())
+            terminal=(safety_stream(), "", (), current_part_ids, _empty_debug()),
+            reason_code="safety_block",
         )
 
     cache_scope = None
@@ -194,8 +200,11 @@ def prepare(state: Any) -> PreparationOutcome:
                             exact_hit.get("ref_images", []),
                             current_part_ids,
                             debug,
-                        )
+                        ),
+                        reason_code="exact_cache_hit",
                     )
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
+            raise
         except Exception as cache_error:
             logger.warning("exact cache lookup loi: %s", cache_error)
     if cache_eligible:
