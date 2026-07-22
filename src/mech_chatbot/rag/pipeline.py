@@ -93,110 +93,12 @@ from mech_chatbot.rag.execution import (
     current_execution_context,
 )
 from mech_chatbot.rag.pipeline_steps import GenerationControl, GenerationEvidence, GenerationOutcome, GenerationPlan, GenerationTurn, _prepare_history, _analyze_image, _assemble_context, generate_answer, _retrieve, _RETRIEVE_UNSET, _route, _rewrite_and_anchor, _disambiguate
-
-def make_debug_info(docs=None):
-    docs = docs or []
-    try:
-        from mech_chatbot.rag.semantic_cache import pipeline_namespace
-        namespace = pipeline_namespace()
-    except Exception:
-        namespace = "unknown"
-    return {
-        "pipeline_namespace": namespace,
-        "retrieved_docs": serialize_debug_documents(docs),
-    }
-
-
-def _make_terminal_debug(question, reason, docs=None, *, access_denied=False):
-    """Keep early refusal telemetry on the same policy contract as late gates."""
-    decision = decide_terminal_policy(
-        question,
-        reason=reason,
-        access_denied=access_denied,
-    )
-    debug = make_debug_info(docs)
-    debug.update({
-        "answer_outcome": decision.outcome.value,
-        "evidence_state": decision.evidence_state.value,
-        "evidence_stage": "terminal",
-        "correction_allowed": False,
-        "evidence_quotes": list(decision.evidence_quotes),
-    })
-    return debug
-
-
-def serialize_debug_documents(docs=None):
-    docs = docs or []
-    return [
-        {
-            "file_goc": d.metadata.get("file_goc"),
-            "doc_id": d.metadata.get("doc_id"),
-            "version_no": d.metadata.get("version_no"),
-            "variant_code": d.metadata.get("variant_code"),
-            "is_current": d.metadata.get("is_current"),
-            "lifecycle_status": d.metadata.get("lifecycle_status"),
-            "review_status": d.metadata.get("review_status"),
-            "trang": d.metadata.get("trang_so"),
-            "source_id": (
-                f"D{d.metadata.get('doc_id')}P{d.metadata.get('trang_so')}"
-                if d.metadata.get("doc_id") is not None and d.metadata.get("trang_so") is not None
-                else None
-            ),
-            "vision_used": bool(d.metadata.get("vision_used", False)),
-            "score": d.metadata.get("relevance_score"),
-            # GD5 muc 3: kem muc mat de tang audit doc tai lieu confidential o tang UI.
-            "security_level": d.metadata.get("security_level"),
-            "graph_edge_id": d.metadata.get("graph_edge_id"),
-            "graph_relation_type": d.metadata.get("graph_relation_type"),
-            "graph_source_key": d.metadata.get("graph_source_key"),
-            "graph_target_key": d.metadata.get("graph_target_key"),
-            "text": str(d.metadata.get("noi_dung_goc") or getattr(d, "page_content", "") or "")[:800],
-        }
-        for d in docs
-    ]
-
-
-def make_source_snapshot(docs=None):
-    """Return citation/evidence metadata without retaining document text.
-
-    This payload is safe to persist with a semantic-cache entry and is enough
-    for the browser to resolve final SourceIDs and for history to record the
-    complete authorization basis of the answer.
-    """
-    snapshots = []
-    for doc in docs or []:
-        metadata = getattr(doc, "metadata", {}) or {}
-        doc_id = metadata.get("doc_id")
-        page_no = metadata.get("trang_so")
-        try:
-            normalized_doc_id = int(doc_id) if doc_id is not None else None
-        except (TypeError, ValueError):
-            normalized_doc_id = None
-        try:
-            normalized_page_no = int(page_no) if page_no is not None else None
-        except (TypeError, ValueError):
-            normalized_page_no = None
-        if normalized_doc_id is None:
-            continue
-        snapshots.append(
-            {
-                "file_goc": metadata.get("file_goc"),
-                "doc_id": normalized_doc_id,
-                "version_no": metadata.get("version_no"),
-                "variant_code": metadata.get("variant_code"),
-                "is_current": metadata.get("is_current"),
-                "lifecycle_status": metadata.get("lifecycle_status"),
-                "review_status": metadata.get("review_status"),
-                "trang": normalized_page_no,
-                "source_id": (
-                    f"D{normalized_doc_id}P{normalized_page_no}"
-                    if normalized_page_no is not None else None
-                ),
-                "score": metadata.get("relevance_score"),
-                "security_level": metadata.get("security_level"),
-            }
-        )
-    return snapshots
+from mech_chatbot.rag.phases.diagnostics import (
+    make_debug_info,
+    make_source_snapshot,
+    make_terminal_debug as _make_terminal_debug,
+    serialize_debug_documents,
+)
 
 
 def execute_pipeline(state):
@@ -232,28 +134,29 @@ def execute_pipeline(state):
     _summary_covered_new = prepared.summary_covered
     image_analysis = prepared.image_analysis
  
-    # BUOC B: TIM KIEM THONG MINH KET HOP STATE MEMORY
-    state.transition("routing")
-    # P0 slice #4: dinh tuyen hoi thoai (interaction router + safety + meta + chitchat) tach sang pipeline_steps._route
-    _route_terminal, _route_bundle = _route(
-        user_question=user_question,
-        conversation_context=conversation_context,
-        response_language=response_language,
-        user_department=user_department,
-        allowed_departments=allowed_departments,
-        current_part_ids=current_part_ids,
-        trace_id=trace_id,
-        t_start=t_start,
-        make_debug_info=make_debug_info,
-        lifecycle=state,
-    )
-    state.checkpoint("routing")
-    if _route_terminal is not None:
-        return state.prepared(_route_terminal)
-    mock_stream = _route_bundle["mock_stream"]
-    _embed_cached = _route_bundle["_embed_cached"]
-    is_chitchat = _route_bundle["is_chitchat"]
+    from mech_chatbot.rag.phases.routing import route
 
+    routing = route(prepared, state)
+    if routing.terminal is not None:
+        return state.prepared(routing.terminal)
+    route_decision = routing.decision
+    if route_decision is None:  # pragma: no cover - guarded by RoutingOutcome
+        raise RuntimeError("routing returned no decision")
+
+    effective_question = route_decision.effective_question
+    new_part_ids = list(route_decision.new_part_ids)
+    is_inherited = route_decision.is_inherited
+    is_bom_query = route_decision.is_bom_query
+    intent_data = dict(route_decision.intent_data)
+    strict_filter = route_decision.strict_filter
+    broad_filter = route_decision.broad_filter
+    rbac_filter = route_decision.rbac_filter
+    _hyde_eligible = route_decision.hyde_eligible
+    query_to_search = route_decision.query_to_search
+    _sc_qemb = route_decision.cache_query_embedding
+    _sc_scope = route_decision.cache_scope
+    crag_enabled = route_decision.crag_enabled
+    is_chitchat = False
     retrieved_docs = []
     skip_retrieval = False
     decomposition_notice = ""
@@ -267,142 +170,9 @@ def execute_pipeline(state):
     auxiliary_output_tokens = 0
     planner_estimated_cost = 0.0
     correction_estimated_cost = 0.0
-    crag_enabled = correction_enabled()
-    query_to_search = user_question  # Mac dinh, cac nhanh ben duoi se override neu can
-    logger.info("Dang phan tich intent de tim kiem du lieu...")
-    t_intent = time.time()
-
-    # P2-9: Semantic cache LOOKUP (best-effort). Hit -> tra ngay, bo qua retrieval + LLM.
-    _semantic_cache_started = time.time()
-    try:
-        import mech_chatbot.rag.semantic_cache as _sc
-        if _sc.enabled() and _sc_cache_eligible:
-            _sc_qemb = _embed_cached(user_question)
-            if _sc_scope is None:
-                _sc_scope = _sc.scope_signature(user_department, allowed_departments, max_security_level, allowed_sites, user_roles)
-            _hit = _sc.lookup(user_question, _sc_qemb, _sc_scope)
-            if _hit:
-                logger.info("Semantic cache HIT -> tra loi tu cache.")
-                _dbg = {
-                    "retrieved_docs": _hit.get("evidence_snapshot") or [],
-                    "citation_docs": _hit.get("citation_snapshot") or [],
-                }
-                _dbg["cache_hit"] = True
-                def _cached_stream():
-                    yield _hit.get("answer", "")
-                log_trace("cache", trace_id, cache_type="semantic", hit=True,
-                          latency_ms=int((time.time() - _semantic_cache_started) * 1000))
-                log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start) * 1000), refusal=False, cache_hit=True)
-                return state.prepared(
-                    (_cached_stream(), _hit.get("ref_text", ""), _hit.get("ref_images", []), current_part_ids, _dbg)
-                )
-    except Exception as _sce:
-        logger.warning(f"semantic cache lookup loi: {_sce}")
-    if _sc_cache_eligible:
-        log_trace("cache", trace_id, cache_type="semantic", hit=False,
-                  latency_ms=int((time.time() - _semantic_cache_started) * 1000))
-
-    # === BUOC B0 (P0-1): PHAN DOAN NGU CANH + QUERY REWRITING + NEO STATE MEMORY ===
-    # P0 slice #5: tach sang pipeline_steps._rewrite_and_anchor (analyze_context + rewrite + anchor + intent)
-    state.checkpoint("rewrite_and_anchor")
-    (effective_question, new_part_ids, is_inherited, is_bom_query, intent_data,
-     strict_filter, broad_filter, rbac_filter, _skip_hyde_anchor) = _rewrite_and_anchor(
-        user_question=user_question,
-        chat_history=chat_history,
-        current_part_ids=current_part_ids,
-        conversation_context=conversation_context,
-        user_department=user_department,
-        user_roles=user_roles,
-        allowed_departments=allowed_departments,
-        max_security_level=max_security_level,
-        allowed_sites=allowed_sites,
-        trace_id=trace_id,
-        t_intent=t_intent,
-    )
-    state.checkpoint("rewrite_and_anchor")
-
-    if intent_data.get("version_policy") == "compare_versions" and not intent_data.get("detected_versions"):
-        logger.info("Nguoi dung muon so sanh nhung khong chi dinh version. Yeu cau xac minh.")
-        _ver_vi = ("Bạn muốn so sánh tài liệu này với phiên bản nào? (Ví dụ: v1 và v2, hoặc bản "
-                   "đang lưu hành và bản bị lưu trữ gần nhất). Vui lòng chỉ định rõ phiên bản để "
-                   "mình đối chiếu số liệu chính xác nhé.")
-        def ask_version_stream():
-            yield _t_rag(_ver_vi, response_language)
-        clarification_policy = decide_answer_policy(
-            user_question,
-            PolicyEvidence(
-                decision=EvidenceDecision(
-                    EvidenceState.AMBIGUOUS,
-                    reason="missing_compare_versions",
-                    stage="intent",
-                    telemetry_status="heuristic_block",
-                ),
-                has_retrieved_evidence=False,
-                clarification_required=True,
-            ),
-            {},
-        )
-        log_trace(
-            "evidence_gate", trace_id,
-            answerable=False,
-            state=clarification_policy.evidence_state.value,
-            outcome=clarification_policy.outcome.value,
-            correction_allowed=False,
-            stage="intent",
-            status="heuristic_block",
-            reason=clarification_policy.reason,
-        )
-        log_trace(
-            "rag_end", trace_id,
-            final_latency_ms=int((time.time() - t_start) * 1000),
-            refusal=True,
-            refusal_reason="missing_compare_versions",
-        )
-        clarification_debug = make_debug_info([])
-        clarification_debug.update({
-            "answer_outcome": clarification_policy.outcome.value,
-            "evidence_state": clarification_policy.evidence_state.value,
-            "evidence_stage": "intent",
-            "correction_allowed": False,
-            "correction_count": 0,
-        })
-        state.refuse("clarification_required")
-        return state.prepared(
-            (ask_version_stream(), "", [], current_part_ids, clarification_debug)
-        )
-
-    if intent_data.get("is_chitchat"):
-        logger.info("LLM xac nhan la cau hoi ngoai le/xa giao. Bo qua toan bo Retrieval va HyDE.")
-        log_trace("route", trace_id, route="chitchat", layer="L2_llm_intent", confidence=1.0)
-        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, is_chitchat=True)
-        return state.prepared(
-            (mock_stream(), "", [], current_part_ids, make_debug_info([]))
-        )
-    else:
-        # Tien xu ly cau hoi bang underthesea de match voi du lieu BM25
-        tokenized_question = tokenize_cached(effective_question)
-        query_to_search = tokenized_question
-
-        # Retrieval-first: HyDE is an expensive recall fallback, not a mandatory
-        # pre-retrieval call for every short question.
-        _hyde_eligible = (
-            env_bool("HYDE_ENABLED", True)
-            and len(tokenized_question.split()) < 25
-            and not new_part_ids
-            and not _skip_hyde_anchor
-        )
-
-        # P0-3: mo rong truy van bang glossary/synonym theo domain (tang recall cho phong phi co khi)
-        try:
-            _gloss_add = glossary_expansion_terms(effective_question, user_department)
-            if _gloss_add:
-                query_to_search = str(query_to_search) + " " + tokenize_cached(_gloss_add)
-                log_trace("glossary_expansion", trace_id, added=_gloss_add[:200])
-        except Exception as _ge:
-            logger.warning(f"glossary expansion loi: {_ge}")
-
-        state.transition("retrieval")
-        decomposition_enabled = env_bool("RAG_QUERY_DECOMPOSITION_ENABLED", False)
+    state.transition("retrieval")
+    decomposition_enabled = env_bool("RAG_QUERY_DECOMPOSITION_ENABLED", False)
+    if not intent_data.get("is_chitchat"):
         if decomposition_enabled:
             from mech_chatbot.rag.query_decomposition import (
                 compile_query_plan, build_partial_answer_instruction, codes_in_query,
