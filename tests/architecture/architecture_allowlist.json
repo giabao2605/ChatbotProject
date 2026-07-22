@@ -246,7 +246,15 @@
       "rule": "direct_getenv",
       "path": "rag/execution.py",
       "dependency": "os.getenv",
-      "count": 5,
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside a config/bootstrap module"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/execution_contracts.py",
+      "dependency": "os.getenv",
+      "count": 3,
       "removal_phase": "Phase 5",
       "reason": "Existing configuration read outside a config/bootstrap module"
     },

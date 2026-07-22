@@ -11,7 +11,6 @@ from contextlib import ExitStack
 from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass, field
 from datetime import datetime
-import math
 import os
 from pathlib import Path
 import re
@@ -21,10 +20,20 @@ import uuid
 from collections.abc import Mapping as MappingABC
 from typing import Any, Callable, Iterator, Literal, Mapping, Protocol
 
+from mech_chatbot.rag.execution_contracts import (
+    CONTROLLED_DEMO_REQUEST_DEADLINE_SECONDS,
+    ExecutionMode,
+    RagRuntimeContract,
+)
+from mech_chatbot.rag.execution_diagnostics import (
+    BudgetDiagnostics,
+    EvidenceDiagnostics,
+    GenerationDiagnostics,
+    RagDiagnostics,
+)
 
-ExecutionMode = Literal["production", "evaluation", "pilot_replay", "test"]
+
 CompletionOutcome = Literal["answered", "refused"]
-CONTROLLED_DEMO_REQUEST_DEADLINE_SECONDS = 120.0
 _EXECUTION_CONTEXT: ContextVar[str | None] = ContextVar(
     "rag_execution_context",
     default=None,
@@ -86,80 +95,6 @@ class RagInvocation:
             raise ValueError(f"Unsupported RAG execution mode: {self.mode}")
 
 
-@dataclass(frozen=True, slots=True)
-class RagRuntimeContract:
-    """Canonical process-level settings reported by health and pilot evidence."""
-
-    execution_context: ExecutionMode
-    evaluation_force_ambiguous: bool
-    request_deadline_seconds: float
-
-    @classmethod
-    def from_mapping(
-        cls,
-        value: Mapping[str, Any] | "RagRuntimeContract",
-    ) -> "RagRuntimeContract":
-        if isinstance(value, cls):
-            return value
-        if not isinstance(value, MappingABC):
-            raise ValueError("runtime contract must be a mapping")
-        context = str(value.get("execution_context") or "").strip().lower()
-        if context not in {"production", "evaluation", "pilot_replay", "test"}:
-            raise ValueError("runtime contract has an unsupported execution context")
-        force_ambiguous = value.get("evaluation_force_ambiguous")
-        if not isinstance(force_ambiguous, bool):
-            raise ValueError("runtime contract requires a boolean evaluation override")
-        raw_deadline = value.get("request_deadline_seconds")
-        if isinstance(raw_deadline, bool):
-            raise ValueError("runtime contract requires a numeric deadline")
-        try:
-            deadline = float(raw_deadline)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("runtime contract requires a numeric deadline") from exc
-        if not math.isfinite(deadline) or deadline <= 0:
-            raise ValueError("runtime contract deadline must be finite and positive")
-        return cls(
-            execution_context=context,
-            evaluation_force_ambiguous=force_ambiguous,
-            request_deadline_seconds=deadline,
-        )
-
-    @classmethod
-    def from_environment(cls) -> "RagRuntimeContract":
-        raw_override = os.getenv("RAG_EVAL_FORCE_AMBIGUOUS", "false").strip().lower()
-        if raw_override not in {
-            "1", "true", "yes", "y", "on",
-            "0", "false", "no", "n", "off",
-        }:
-            raise ValueError("RAG_EVAL_FORCE_AMBIGUOUS must be a boolean")
-        return cls.from_mapping(
-            {
-                "execution_context": os.getenv("RAG_EXECUTION_CONTEXT", "production"),
-                "evaluation_force_ambiguous": raw_override
-                in {"1", "true", "yes", "y", "on"},
-                "request_deadline_seconds": os.getenv(
-                    "RAG_REQUEST_DEADLINE_SECONDS", "120"
-                ),
-            }
-        )
-
-    @property
-    def is_controlled_demo(self) -> bool:
-        return (
-            self.execution_context == "production"
-            and self.evaluation_force_ambiguous is False
-            and self.request_deadline_seconds
-            == CONTROLLED_DEMO_REQUEST_DEADLINE_SECONDS
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "execution_context": self.execution_context,
-            "evaluation_force_ambiguous": self.evaluation_force_ambiguous,
-            "request_deadline_seconds": self.request_deadline_seconds,
-        }
-
-
 class CancellationSignal(Protocol):
     def is_set(self) -> bool: ...
 
@@ -179,135 +114,6 @@ class RagExecutor(Protocol):
         invocation: RagInvocation,
         cancellation: CancellationSignal = NEVER_CANCELLED,
     ) -> Iterator["RagEvent"]: ...
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceDiagnostics:
-    outcome: str | None = None
-    state: str | None = None
-    stage: str | None = None
-    quotes: tuple[str, ...] = ()
-    correction_allowed: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class BudgetDiagnostics:
-    planners: int = 0
-    subqueries: int = 0
-    corrections: int = 0
-    repairs: int = 0
-    calculations: int = 0
-    graph_edges: int = 0
-    provider_retries: int = 0
-    final_generations: int = 0
-    deadline_exceeded: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class GenerationDiagnostics:
-    input_tokens: int = 0
-    output_tokens: int = 0
-    estimated_cost: float = 0.0
-    repair_count: int = 0
-    provider_retries: int = 0
-
-
-@dataclass(frozen=True, slots=True, eq=False)
-class RagDiagnostics(MappingABC[str, Any]):
-    """Typed view over the legacy diagnostics payload.
-
-    ``extra`` preserves every unmodelled key, while the Mapping interface keeps
-    existing JSON/SSE and compatibility-adapter serialization byte-for-byte in
-    shape.
-    """
-
-    retrieved_documents: tuple[Mapping[str, Any], ...] = ()
-    citations: tuple[Mapping[str, Any], ...] = ()
-    evidence: EvidenceDiagnostics = EvidenceDiagnostics()
-    budget: BudgetDiagnostics = BudgetDiagnostics()
-    generation: GenerationDiagnostics = GenerationDiagnostics()
-    conversation_delta: Mapping[str, Any] | None = None
-    extra: Mapping[str, Any] = field(default_factory=dict)
-    _raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_mapping(
-        cls,
-        value: Mapping[str, Any] | "RagDiagnostics" | None,
-        *,
-        ledger: "RequestBudgetLedger | None" = None,
-    ) -> "RagDiagnostics":
-        if isinstance(value, cls) and ledger is None:
-            return value
-        raw = dict(value or {})
-        generation_raw = dict(raw.get("generation_metrics") or {})
-
-        def as_int(item: Any) -> int:
-            try:
-                return int(item or 0)
-            except (TypeError, ValueError):
-                return 0
-
-        def as_float(item: Any) -> float:
-            try:
-                return float(item or 0.0)
-            except (TypeError, ValueError):
-                return 0.0
-
-        budget = BudgetDiagnostics(
-            planners=as_int(raw.get("planner_count") or getattr(ledger, "planners", 0)),
-            subqueries=as_int(raw.get("subquery_count") or getattr(ledger, "subqueries", 0)),
-            corrections=as_int(raw.get("correction_count") or getattr(ledger, "corrections", 0)),
-            repairs=as_int(generation_raw.get("repair_count") or getattr(ledger, "repairs", 0)),
-            calculations=as_int(generation_raw.get("calculation_count") or getattr(ledger, "calculations", 0)),
-            graph_edges=as_int(raw.get("graph_edge_count") or getattr(ledger, "graph_edges", 0)),
-            provider_retries=as_int(generation_raw.get("provider_retries") or getattr(ledger, "provider_retries", 0)),
-            final_generations=as_int(raw.get("final_generation_count") or getattr(ledger, "final_generations", 0)),
-            deadline_exceeded=bool(raw.get("deadline_exceeded") or getattr(ledger, "deadline_exceeded", False)),
-        )
-        modeled = {
-            "retrieved_docs", "citation_docs", "answer_outcome", "evidence_state",
-            "evidence_stage", "evidence_quotes", "correction_allowed",
-            "generation_metrics", "conversation_context", "planner_count",
-            "subquery_count", "correction_count", "final_generation_count",
-            "deadline_exceeded", "graph_edge_count",
-        }
-        return cls(
-            retrieved_documents=tuple(raw.get("retrieved_docs") or ()),
-            citations=tuple(raw.get("citation_docs") or ()),
-            evidence=EvidenceDiagnostics(
-                outcome=raw.get("answer_outcome"),
-                state=raw.get("evidence_state"),
-                stage=raw.get("evidence_stage"),
-                quotes=tuple(raw.get("evidence_quotes") or ()),
-                correction_allowed=bool(raw.get("correction_allowed", False)),
-            ),
-            budget=budget,
-            generation=GenerationDiagnostics(
-                input_tokens=as_int(generation_raw.get("input_tokens")),
-                output_tokens=as_int(generation_raw.get("output_tokens")),
-                estimated_cost=as_float(generation_raw.get("estimated_cost")),
-                repair_count=as_int(generation_raw.get("repair_count")),
-                provider_retries=as_int(generation_raw.get("provider_retries")),
-            ),
-            conversation_delta=raw.get("conversation_context"),
-            extra={key: item for key, item in raw.items() if key not in modeled},
-            _raw=raw,
-        )
-
-    def __getitem__(self, key: str) -> Any:
-        return self._raw[key]
-
-    def __iter__(self):
-        return iter(self._raw)
-
-    def __len__(self) -> int:
-        return len(self._raw)
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, MappingABC):
-            return dict(self) == dict(other)
-        return NotImplemented
 
 
 class _NormalizesRagDiagnostics:
@@ -615,6 +421,25 @@ def _prepare_legacy_events(events: Iterator[RagEvent]) -> RagEvent | None:
     return next(events, None)
 
 
+def _collected_result(
+    prepared: RagPrepared,
+    completed: RagCompleted,
+    answer_parts: list[str],
+    citations: list[Mapping[str, Any]],
+) -> RagCollectedResult:
+    return RagCollectedResult(
+        answer="".join(answer_parts),
+        ref_text=prepared.ref_text,
+        ref_images=prepared.ref_images,
+        new_part_ids=prepared.new_part_ids,
+        citations=tuple(citations),
+        outcome=completed.outcome,
+        trace_id=completed.trace_id,
+        diagnostics=completed.diagnostics,
+        refusal_reason=completed.refusal_reason,
+    )
+
+
 def consume_rag_events(
     events: Iterator[RagEvent],
 ) -> RagCollectedResult | RagFailed | RagCancelled:
@@ -656,17 +481,7 @@ def consume_rag_events(
         raise RuntimeError("RAG executor ended without RagPrepared")
     if completed is None:
         raise RuntimeError("RAG executor ended without RagCompleted")
-    return RagCollectedResult(
-        answer="".join(answer_parts),
-        ref_text=prepared.ref_text,
-        ref_images=prepared.ref_images,
-        new_part_ids=prepared.new_part_ids,
-        citations=tuple(citations),
-        outcome=completed.outcome,
-        trace_id=completed.trace_id,
-        diagnostics=completed.diagnostics,
-        refusal_reason=completed.refusal_reason,
-    )
+    return _collected_result(prepared, completed, answer_parts, citations)
 
 
 def collect_rag_events(events: Iterator[RagEvent]) -> RagCollectedResult:
@@ -728,6 +543,75 @@ def attributed_citations(
             }
         )
     return tuple(result)
+
+
+def _successful_rag_events(
+    prepared: _PreparedExecution,
+    state: _ExecutionState,
+    trace_id: str,
+) -> Iterator[RagEvent]:
+    diagnostics = prepared.diagnostics
+    yield RagPrepared(
+        ref_text=prepared.ref_text,
+        ref_images=prepared.ref_images,
+        new_part_ids=prepared.new_part_ids,
+        diagnostics=RagDiagnostics.from_mapping(diagnostics, ledger=state.budget),
+    )
+    answer_parts: list[str] = []
+    for chunk in prepared.stream:
+        state.checkpoint("generation")
+        text = str(chunk)
+        answer_parts.append(text)
+        yield RagToken(text=text)
+
+    final_diagnostics = dict(diagnostics or {})
+    generation_metrics = final_diagnostics.get("generation_metrics")
+    if isinstance(generation_metrics, dict):
+        generation_metrics["provider_retries"] = state.budget.provider_retries
+    state.capture_budget(final_diagnostics)
+    state.checkpoint("completion")
+    for citation in attributed_citations(final_diagnostics, "".join(answer_parts)):
+        yield RagCitation(citation=citation)
+    outcome, refusal_reason = state.completion()
+    yield RagCompleted(
+        outcome=outcome,
+        trace_id=trace_id,
+        diagnostics=RagDiagnostics.from_mapping(
+            final_diagnostics, ledger=state.budget
+        ),
+        refusal_reason=refusal_reason,
+    )
+
+
+def _failed_rag_event(
+    exc: Exception,
+    diagnostics: Mapping[str, Any],
+    state: _ExecutionState,
+) -> RagFailed:
+    failure_diagnostics = dict(diagnostics or {})
+    generation_metrics = failure_diagnostics.get("generation_metrics")
+    if isinstance(generation_metrics, dict):
+        generation_metrics["provider_retries"] = state.budget.provider_retries
+    return RagFailed(
+        code=type(exc).__name__,
+        message=str(exc),
+        retryable=False,
+        cause=exc,
+        diagnostics=RagDiagnostics.from_mapping(
+            failure_diagnostics, ledger=state.budget
+        ),
+    )
+
+
+def _terminal_rag_events(
+    terminal: RagFailed | RagCancelled,
+    state: _ExecutionState,
+    owner: _ContextBoundRagIterator,
+) -> Iterator[RagEvent]:
+    if state.phase != "prepared":
+        owner.note_setup_terminal(terminal)
+        yield RagPrepared("", (), (), {})
+    yield terminal
 
 
 class DefaultRagExecutor:
@@ -814,67 +698,13 @@ class DefaultRagExecutor:
             prepared = execute_pipeline(state)
             stream = prepared.stream
             diagnostics = prepared.diagnostics
-            yield RagPrepared(
-                ref_text=prepared.ref_text,
-                ref_images=prepared.ref_images,
-                new_part_ids=prepared.new_part_ids,
-                diagnostics=RagDiagnostics.from_mapping(
-                    diagnostics,
-                    ledger=state.budget,
-                ),
-            )
-
-            answer_parts: list[str] = []
-            for chunk in stream:
-                state.checkpoint("generation")
-                text = str(chunk)
-                answer_parts.append(text)
-                yield RagToken(text=text)
-
-            final_diagnostics = dict(diagnostics or {})
-            generation_metrics = final_diagnostics.get("generation_metrics")
-            if isinstance(generation_metrics, dict):
-                generation_metrics["provider_retries"] = state.budget.provider_retries
-            state.capture_budget(final_diagnostics)
-            state.checkpoint("completion")
-            for citation in attributed_citations(final_diagnostics, "".join(answer_parts)):
-                yield RagCitation(citation=citation)
-
-            outcome, refusal_reason = state.completion()
-            yield RagCompleted(
-                outcome=outcome,
-                trace_id=trace_id,
-                diagnostics=RagDiagnostics.from_mapping(
-                    final_diagnostics,
-                    ledger=state.budget,
-                ),
-                refusal_reason=refusal_reason,
-            )
+            yield from _successful_rag_events(prepared, state, trace_id)
         except ExternalAICallCancelled as exc:
             terminal = RagCancelled(reason=str(exc), cause=exc)
-            if state.phase != "prepared":
-                owner.note_setup_terminal(terminal)
-                yield RagPrepared("", (), (), {})
-            yield terminal
+            yield from _terminal_rag_events(terminal, state, owner)
         except Exception as exc:
-            failure_diagnostics = dict(diagnostics or {})
-            generation_metrics = failure_diagnostics.get("generation_metrics")
-            if isinstance(generation_metrics, dict):
-                generation_metrics["provider_retries"] = state.budget.provider_retries
-            terminal = RagFailed(
-                code=type(exc).__name__,
-                message=str(exc),
-                retryable=False,
-                cause=exc,
-                diagnostics=RagDiagnostics.from_mapping(
-                    failure_diagnostics,
-                    ledger=state.budget,
-                ),
-            )
-            if state.phase != "prepared":
-                owner.note_setup_terminal(terminal)
-                yield RagPrepared("", (), (), {})
-            yield terminal
+            terminal = _failed_rag_event(exc, diagnostics, state)
+            yield from _terminal_rag_events(terminal, state, owner)
         finally:
             close = getattr(stream, "close", None)
             if callable(close):

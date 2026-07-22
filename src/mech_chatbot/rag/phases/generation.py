@@ -36,21 +36,12 @@ class GenerationResult:
     reason_code: str = "generated"
 
 
-def generate(
-    decision: RouteDecision,
+def _generation_metrics(
     primary: PrimaryRetrievalOutcome,
     enrichment: EnrichmentOutcome,
-    reranked: RerankOutcome,
-    evidence: EvidenceOutcome,
     state: Any,
-) -> GenerationResult:
-    """Create the response stream while preserving the legacy debug lifecycle."""
-
-    request = decision.request
-    documents = list(reranked.documents)
-    new_part_ids = list(enrichment.new_part_ids)
-    decomposition_branches = list(primary.decomposition_branches)
-    generation_metrics = {
+) -> dict[str, Any]:
+    return {
         "estimated_cost": (
             enrichment.correction_estimated_cost + primary.planner_estimated_cost
         ),
@@ -58,50 +49,59 @@ def generate(
         "output_tokens": enrichment.auxiliary_output_tokens,
         "provider_retries": state.budget.provider_retries,
     }
-    state.budget.record(
-        "final_generations",
-        0 if evidence.explicit_negative_answer else 1,
-    )
-    state.transition("generation")
-    generation_outcome = GenerationOutcome()
-    state.bind_generation(generation_outcome)
-    stream = generate_answer(
-        GenerationPlan(
-            turn=GenerationTurn(
-                user_question=request.user_question,
-                effective_question=decision.effective_question,
-                chat_history_str=request.history_text,
-                new_part_ids=new_part_ids,
-                response_language=request.response_language,
-                user_department=request.user_department,
-                user_roles=list(request.user_roles),
-            ),
-            evidence=GenerationEvidence(
-                context_text=evidence.context_text,
-                retrieved_docs=documents,
-                intent_data=dict(decision.intent_data),
-                base_k=enrichment.base_k,
-                retrieval_mode=enrichment.retrieval_mode,
-                has_active_filter=enrichment.has_active_filter,
-                active_filter=(
-                    enrichment.active_filter
-                    if enrichment.has_active_filter
-                    else None
-                ),
-            ),
-            control=GenerationControl(
-                trace_id=request.trace_id,
-                started_at=request.started_at,
-                deadline_monotonic=state.budget.deadline_monotonic,
-                budget=state.budget,
-                outcome=generation_outcome,
-            ),
-            explicit_negative_answer=evidence.explicit_negative_answer,
+
+
+def _generation_plan(
+    decision: RouteDecision,
+    enrichment: EnrichmentOutcome,
+    evidence: EvidenceOutcome,
+    state: Any,
+    documents: list[Any],
+    new_part_ids: list[Any],
+    outcome: GenerationOutcome,
+) -> GenerationPlan:
+    request = decision.request
+    return GenerationPlan(
+        turn=GenerationTurn(
+            user_question=request.user_question,
+            effective_question=decision.effective_question,
+            chat_history_str=request.history_text,
+            new_part_ids=new_part_ids,
+            response_language=request.response_language,
+            user_department=request.user_department,
+            user_roles=list(request.user_roles),
         ),
-        cancel_event=state.cancellation,
-        metrics=generation_metrics,
+        evidence=GenerationEvidence(
+            context_text=evidence.context_text,
+            retrieved_docs=documents,
+            intent_data=dict(decision.intent_data),
+            base_k=enrichment.base_k,
+            retrieval_mode=enrichment.retrieval_mode,
+            has_active_filter=enrichment.has_active_filter,
+            active_filter=(
+                enrichment.active_filter if enrichment.has_active_filter else None
+            ),
+        ),
+        control=GenerationControl(
+            trace_id=request.trace_id,
+            started_at=request.started_at,
+            deadline_monotonic=state.budget.deadline_monotonic,
+            budget=state.budget,
+            outcome=outcome,
+        ),
+        explicit_negative_answer=evidence.explicit_negative_answer,
     )
 
+
+def _generation_debug(
+    primary: PrimaryRetrievalOutcome,
+    enrichment: EnrichmentOutcome,
+    reranked: RerankOutcome,
+    evidence: EvidenceOutcome,
+    state: Any,
+    documents: list[Any],
+    generation_metrics: dict[str, Any],
+) -> dict[str, Any]:
     debug_info = make_debug_info(documents)
     debug_info.update(
         make_phase_diagnostics(
@@ -132,23 +132,105 @@ def generate(
             ],
         }
     )
-    # The generator updates these metrics as the caller consumes the stream.
     debug_info["generation_metrics"] = generation_metrics
+    return debug_info
+
+
+def _decorate_generated_stream(
+    stream: Any,
+    decision: RouteDecision,
+    evidence: EvidenceOutcome,
+    documents: list[Any],
+    decomposition_branches: list[Any],
+    debug_info: dict[str, Any],
+) -> Any:
     citation_snapshot = make_source_snapshot(documents)
     evidence_snapshot = make_source_snapshot(documents)
     debug_info["citation_docs"] = citation_snapshot
-
     if decomposition_branches:
         stream = audit_decomposition_stream(stream, decomposition_branches)
     _store_conversation_document_refs(debug_info, documents)
-    _store_history_summary(debug_info, request)
-    stream = _wrap_semantic_cache(
+    _store_history_summary(debug_info, decision.request)
+    return _wrap_semantic_cache(
         stream,
         decision,
         evidence,
         documents,
         citation_snapshot,
         evidence_snapshot,
+    )
+
+
+def _start_generation(
+    decision: RouteDecision,
+    primary: PrimaryRetrievalOutcome,
+    enrichment: EnrichmentOutcome,
+    evidence: EvidenceOutcome,
+    state: Any,
+    documents: list[Any],
+    new_part_ids: list[Any],
+) -> tuple[Any, dict[str, Any]]:
+    generation_metrics = _generation_metrics(primary, enrichment, state)
+    state.budget.record(
+        "final_generations", 0 if evidence.explicit_negative_answer else 1
+    )
+    state.transition("generation")
+    generation_outcome = GenerationOutcome()
+    state.bind_generation(generation_outcome)
+    stream = generate_answer(
+        _generation_plan(
+            decision,
+            enrichment,
+            evidence,
+            state,
+            documents,
+            new_part_ids,
+            generation_outcome,
+        ),
+        cancel_event=state.cancellation,
+        metrics=generation_metrics,
+    )
+    return stream, generation_metrics
+
+
+def generate(
+    decision: RouteDecision,
+    primary: PrimaryRetrievalOutcome,
+    enrichment: EnrichmentOutcome,
+    reranked: RerankOutcome,
+    evidence: EvidenceOutcome,
+    state: Any,
+) -> GenerationResult:
+    request = decision.request
+    documents = list(reranked.documents)
+    new_part_ids = list(enrichment.new_part_ids)
+    decomposition_branches = list(primary.decomposition_branches)
+    stream, generation_metrics = _start_generation(
+        decision,
+        primary,
+        enrichment,
+        evidence,
+        state,
+        documents,
+        new_part_ids,
+    )
+
+    debug_info = _generation_debug(
+        primary,
+        enrichment,
+        reranked,
+        evidence,
+        state,
+        documents,
+        generation_metrics,
+    )
+    stream = _decorate_generated_stream(
+        stream,
+        decision,
+        evidence,
+        documents,
+        decomposition_branches,
+        debug_info,
     )
     return GenerationResult(
         prepared=state.prepared(

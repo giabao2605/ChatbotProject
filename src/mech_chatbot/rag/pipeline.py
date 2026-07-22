@@ -5,19 +5,99 @@ New callers use :mod:`mech_chatbot.rag.execution`; this module keeps the
 existing retrieval/generation implementation and compatibility surface.
 """
 
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, TypeVar
+
+from mech_chatbot.config.logging import log_trace
 from mech_chatbot.rag.phases.citations import (
     build_source_citations,
     select_citation_docs,
 )
 from mech_chatbot.rag.phases.diagnostics import make_debug_info
-from mech_chatbot.rag.phases.contracts import PhaseTerminal
+from mech_chatbot.rag.phases.contracts import (
+    PhaseTerminal,
+    PrivatePhase,
+)
+
+if TYPE_CHECKING:
+    from mech_chatbot.rag.phases.retrieval import PrimaryRetrievalOutcome
+    from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
+    from mech_chatbot.rag.phases.retrieval_rerank import RerankOutcome
+    from mech_chatbot.rag.phases.routing import RouteDecision
+
+
+_T = TypeVar("_T")
+
+
+@dataclass(frozen=True, slots=True)
+class _RetrievalResult:
+    primary: "PrimaryRetrievalOutcome"
+    enrichment: "EnrichmentOutcome"
+    reranked: "RerankOutcome"
+
+
+def _run_traced_phase(
+    state: Any,
+    phase: PrivatePhase,
+    operation: Callable[[], _T],
+) -> _T:
+    """Record phase entry while leaving completion to the lazy executor stream."""
+
+    started = time.monotonic()
+    log_trace(
+        "rag_phase",
+        state.trace_id,
+        phase=phase,
+        boundary="start",
+        status="started",
+    )
+    try:
+        return operation()
+    except BaseException as exc:
+        log_trace(
+            "rag_phase",
+            state.trace_id,
+            phase=phase,
+            boundary="end",
+            status="failed",
+            reason_code="phase_failed",
+            error_type=type(exc).__name__,
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+        raise
+
+
+def _run_retrieval(
+    route_decision: "RouteDecision",
+    state: Any,
+) -> _RetrievalResult | PhaseTerminal:
+    from mech_chatbot.rag.phases.retrieval import retrieve_primary
+
+    primary = retrieve_primary(route_decision, state)
+    from mech_chatbot.rag.phases.retrieval_enrichment import enrich_retrieval
+
+    enrichment = enrich_retrieval(route_decision, primary, state)
+    if isinstance(enrichment, PhaseTerminal):
+        return enrichment
+    from mech_chatbot.rag.phases.retrieval_rerank import rerank_retrieval
+
+    reranked = rerank_retrieval(route_decision, enrichment, state)
+    if isinstance(reranked, PhaseTerminal):
+        return reranked
+    return _RetrievalResult(primary, enrichment, reranked)
 
 
 def execute_pipeline(state):
     """Execute all RAG stages through one request-owned execution state."""
     from mech_chatbot.rag.phases.preparation import prepare
 
-    preparation = prepare(state)
+    preparation = _run_traced_phase(
+        state,
+        "preparation",
+        lambda: prepare(state),
+    )
     if preparation.terminal is not None:
         return state.prepared(preparation.terminal)
     prepared = preparation.prepared
@@ -26,51 +106,56 @@ def execute_pipeline(state):
 
     from mech_chatbot.rag.phases.routing import route
 
-    routing = route(prepared, state)
+    routing = _run_traced_phase(
+        state,
+        "routing",
+        lambda: route(prepared, state),
+    )
     if routing.terminal is not None:
         return state.prepared(routing.terminal)
     route_decision = routing.decision
     if route_decision is None:  # pragma: no cover - guarded by RoutingOutcome
         raise RuntimeError("routing returned no decision")
 
-    from mech_chatbot.rag.phases.retrieval import retrieve_primary
-
-    primary_retrieval = retrieve_primary(route_decision, state)
-
-    from mech_chatbot.rag.phases.retrieval_enrichment import enrich_retrieval
-
-    enrichment = enrich_retrieval(route_decision, primary_retrieval, state)
-    if isinstance(enrichment, PhaseTerminal):
-        return enrichment.prepared
-
-    from mech_chatbot.rag.phases.retrieval_rerank import rerank_retrieval
-
-    reranked = rerank_retrieval(route_decision, enrichment, state)
-    if isinstance(reranked, PhaseTerminal):
-        return reranked.prepared
+    retrieval = _run_traced_phase(
+        state,
+        "retrieval",
+        lambda: _run_retrieval(route_decision, state),
+    )
+    if isinstance(retrieval, PhaseTerminal):
+        return retrieval.prepared
 
     from mech_chatbot.rag.phases.evidence import evaluate_evidence
 
-    evidence = evaluate_evidence(
-        route_decision,
-        primary_retrieval,
-        enrichment,
-        reranked,
+    evidence = _run_traced_phase(
         state,
+        "evidence",
+        lambda: evaluate_evidence(
+            route_decision,
+            retrieval.primary,
+            retrieval.enrichment,
+            retrieval.reranked,
+            state,
+        ),
     )
     if isinstance(evidence, PhaseTerminal):
         return evidence.prepared
 
     from mech_chatbot.rag.phases.generation import generate
 
-    return generate(
-        route_decision,
-        primary_retrieval,
-        enrichment,
-        reranked,
-        evidence,
+    generation = _run_traced_phase(
         state,
-    ).prepared
+        "generation",
+        lambda: generate(
+            route_decision,
+            retrieval.primary,
+            retrieval.enrichment,
+            retrieval.reranked,
+            evidence,
+            state,
+        ),
+    )
+    return generation.prepared
 
 
 def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None, trace_id=None, cancel_event=None):

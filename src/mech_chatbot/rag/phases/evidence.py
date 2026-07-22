@@ -47,26 +47,17 @@ class EvidenceOutcome:
     reason_code: str = "evidence_approved"
 
 
-def evaluate_evidence(
+def _select_citations(
     decision: RouteDecision,
     primary: PrimaryRetrievalOutcome,
     enrichment: EnrichmentOutcome,
-    reranked: RerankOutcome,
-    state: Any,
-) -> EvidenceOutcome | PhaseTerminal:
-    """Apply citation and answerability policy to the retrieved evidence."""
-
-    request = decision.request
-    documents = list(reranked.documents)
-    new_part_ids = list(enrichment.new_part_ids)
-    decomposition_branches = list(primary.decomposition_branches)
-    context_text = _assemble_context(documents, request.user_question) + primary.decomposition_notice
-
+    documents: list[Any],
+) -> tuple[str, list[str]]:
     citation_docs = select_citation_docs(
         documents,
-        question=request.user_question,
+        question=decision.request.user_question,
         is_bom_query=decision.is_bom_query,
-        part_ids=new_part_ids,
+        part_ids=list(enrichment.new_part_ids),
     )
     if enrichment.grounded_math_enabled:
         from mech_chatbot.rag.grounded_math import (
@@ -75,11 +66,14 @@ def evaluate_evidence(
 
         calculation_docs = select_grounded_answer_citation_documents(
             documents,
-            decomposition_branches,
+            list(primary.decomposition_branches),
         )
         if calculation_docs:
             citation_docs = calculation_docs
-    ref_text, ref_images = build_source_citations(citation_docs)
+    return build_source_citations(citation_docs)
+
+
+def _audit_confidential_access(request: Any, documents: list[Any]) -> None:
     confidential_docs = [
         doc.metadata.get("file_goc")
         for doc in documents
@@ -93,7 +87,15 @@ def evaluate_evidence(
             confidential_docs,
         )
 
-    state.transition("evidence")
+
+def _decide_evidence_policy(
+    decision: RouteDecision,
+    context_text: str,
+    documents: list[Any],
+    decomposition_branches: list[Any],
+    state: Any,
+) -> tuple[Any, Any, tuple[str, ...], bool, float]:
+    request = decision.request
     gate_started = time.time()
     evidence_decision = evaluate_answerability(
         request.user_question,
@@ -105,7 +107,6 @@ def evaluate_evidence(
         branch.get("outcome") == "full_answer" or branch.get("grounded_negative")
         for branch in decomposition_branches
     )
-    has_sufficient_branch = sufficient_branch_count > 0
     answer_policy = decide_answer_policy(
         request.user_question,
         PolicyEvidence(
@@ -116,19 +117,33 @@ def evaluate_evidence(
                 and state.budget.corrections < state.budget.limits.corrections
             ),
             negative_evidence=has_explicit_negative_evidence(
-                request.user_question,
-                context_text,
+                request.user_question, context_text
             ),
             negative_evidence_quote=explicit_negative_evidence_quote(
-                request.user_question,
-                context_text,
+                request.user_question, context_text
             ),
             sufficient_branch_count=sufficient_branch_count,
             total_branch_count=len(decomposition_branches),
         ),
         {},
     )
-    evidence_quotes = tuple(answer_policy.evidence_quotes)
+    return (
+        answer_policy,
+        evidence_decision,
+        tuple(answer_policy.evidence_quotes),
+        sufficient_branch_count > 0,
+        gate_started,
+    )
+
+
+def _trace_evidence_policy(
+    request: Any,
+    answer_policy: Any,
+    evidence_decision: Any,
+    state: Any,
+    gate_started: float,
+    has_sufficient_branch: bool,
+) -> None:
     log_trace(
         "evidence_gate",
         request.trace_id,
@@ -144,20 +159,17 @@ def evaluate_evidence(
         partial_serving=has_sufficient_branch and not evidence_decision.answerable,
     )
 
-    if not answer_policy.allows_answer_generation:
-        return _prepare_refusal(
-            decision,
-            primary,
-            enrichment,
-            reranked,
-            state,
-            answer_policy,
-            evidence_decision,
-            evidence_quotes,
-            ref_text,
-            ref_images,
-        )
 
+def _approved_evidence_outcome(
+    request: Any,
+    documents: list[Any],
+    context_text: str,
+    ref_text: str,
+    ref_images: list[str],
+    answer_policy: Any,
+    evidence_decision: Any,
+    evidence_quotes: tuple[str, ...],
+) -> EvidenceOutcome:
     explicit_negative_quote = (
         evidence_quotes[0]
         if answer_policy.reason == "explicit_negative_evidence" and evidence_quotes
@@ -178,30 +190,103 @@ def evaluate_evidence(
     )
 
 
-def _prepare_refusal(
+def _complete_evidence(
     decision: RouteDecision,
     primary: PrimaryRetrievalOutcome,
     enrichment: EnrichmentOutcome,
     reranked: RerankOutcome,
     state: Any,
+    documents: list[Any],
+    context_text: str,
+    ref_text: str,
+    ref_images: list[str],
     answer_policy: Any,
     evidence_decision: Any,
     evidence_quotes: tuple[str, ...],
-    ref_text: str,
-    ref_images: list[str],
-) -> PhaseTerminal:
-    request = decision.request
-    documents = list(reranked.documents)
-    logger.warning("Evidence gate BLOCK cau hoi: %s", answer_policy.reason)
-    safe_message = make_insufficient_evidence_message(
-        request.user_question,
-        answer_policy.reason,
-        lang=request.response_language,
+) -> EvidenceOutcome | PhaseTerminal:
+    if not answer_policy.allows_answer_generation:
+        return _prepare_refusal(
+            decision,
+            primary,
+            enrichment,
+            reranked,
+            state,
+            answer_policy,
+            evidence_decision,
+            evidence_quotes,
+            ref_text,
+            ref_images,
+        )
+    return _approved_evidence_outcome(
+        decision.request,
+        documents,
+        context_text,
+        ref_text,
+        ref_images,
+        answer_policy,
+        evidence_decision,
+        evidence_quotes,
     )
 
-    def refusal_stream():
-        yield safe_message
 
+def evaluate_evidence(
+    decision: RouteDecision,
+    primary: PrimaryRetrievalOutcome,
+    enrichment: EnrichmentOutcome,
+    reranked: RerankOutcome,
+    state: Any,
+) -> EvidenceOutcome | PhaseTerminal:
+    """Apply citation and answerability policy to the retrieved evidence."""
+    request = decision.request
+    documents = list(reranked.documents)
+    decomposition_branches = list(primary.decomposition_branches)
+    context_text = _assemble_context(documents, request.user_question) + primary.decomposition_notice
+    ref_text, ref_images = _select_citations(
+        decision, primary, enrichment, documents
+    )
+    _audit_confidential_access(request, documents)
+
+    state.transition("evidence")
+    (
+        answer_policy,
+        evidence_decision,
+        evidence_quotes,
+        has_sufficient_branch,
+        gate_started,
+    ) = _decide_evidence_policy(
+        decision, context_text, documents, decomposition_branches, state
+    )
+    _trace_evidence_policy(
+        request,
+        answer_policy,
+        evidence_decision,
+        state,
+        gate_started,
+        has_sufficient_branch,
+    )
+
+    return _complete_evidence(
+        decision,
+        primary,
+        enrichment,
+        reranked,
+        state,
+        documents,
+        context_text,
+        ref_text,
+        ref_images,
+        answer_policy,
+        evidence_decision,
+        evidence_quotes,
+    )
+
+
+def _trace_refusal(
+    decision: RouteDecision,
+    enrichment: EnrichmentOutcome,
+    documents: list[Any],
+) -> None:
+    request = decision.request
     log_trace(
         "rag_end",
         request.trace_id,
@@ -228,6 +313,18 @@ def _prepare_refusal(
         user_department=request.user_department,
         user_roles=list(request.user_roles),
     )
+
+
+def _make_refusal_debug(
+    primary: PrimaryRetrievalOutcome,
+    enrichment: EnrichmentOutcome,
+    reranked: RerankOutcome,
+    state: Any,
+    answer_policy: Any,
+    evidence_decision: Any,
+    evidence_quotes: tuple[str, ...],
+    documents: list[Any],
+) -> dict[str, Any]:
     debug = make_debug_info(documents)
     debug.update(
         make_phase_diagnostics(
@@ -250,6 +347,44 @@ def _prepare_refusal(
         "provider_retries": state.budget.provider_retries,
         "repair_count": 0,
     }
+    return debug
+
+
+def _prepare_refusal(
+    decision: RouteDecision,
+    primary: PrimaryRetrievalOutcome,
+    enrichment: EnrichmentOutcome,
+    reranked: RerankOutcome,
+    state: Any,
+    answer_policy: Any,
+    evidence_decision: Any,
+    evidence_quotes: tuple[str, ...],
+    ref_text: str,
+    ref_images: list[str],
+) -> PhaseTerminal:
+    request = decision.request
+    documents = list(reranked.documents)
+    logger.warning("Evidence gate BLOCK cau hoi: %s", answer_policy.reason)
+    safe_message = make_insufficient_evidence_message(
+        request.user_question,
+        answer_policy.reason,
+        lang=request.response_language,
+    )
+
+    def refusal_stream():
+        yield safe_message
+
+    _trace_refusal(decision, enrichment, documents)
+    debug = _make_refusal_debug(
+        primary,
+        enrichment,
+        reranked,
+        state,
+        answer_policy,
+        evidence_decision,
+        evidence_quotes,
+        documents,
+    )
     state.refuse("evidence_gate")
     return PhaseTerminal(
         prepared=state.prepared(
