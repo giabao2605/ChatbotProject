@@ -248,135 +248,16 @@ def execute_pipeline(state):
     evidence_quotes = list(evidence.evidence_quotes)
     explicit_negative_answer = evidence.explicit_negative_answer
 
-    generation_metrics = {
-        "estimated_cost": correction_estimated_cost + planner_estimated_cost,
-        "input_tokens": auxiliary_input_tokens,
-        "output_tokens": auxiliary_output_tokens,
-        "provider_retries": state.budget.provider_retries,
-    }
-    state.budget.record("final_generations", 0 if explicit_negative_answer else 1)
-    state.transition("generation")
-    generation_outcome = GenerationOutcome()
-    state.bind_generation(generation_outcome)
-    stream = generate_answer(
-        GenerationPlan(
-            turn=GenerationTurn(
-                user_question=user_question,
-                effective_question=effective_question,
-                chat_history_str=chat_history_str,
-                new_part_ids=new_part_ids,
-                response_language=response_language,
-                user_department=user_department,
-                user_roles=user_roles,
-            ),
-            evidence=GenerationEvidence(
-                context_text=context_text,
-                retrieved_docs=retrieved_docs,
-                intent_data=intent_data,
-                base_k=base_k,
-                retrieval_mode=retrieval_mode,
-                has_active_filter=("active_filter" in locals()),
-                active_filter=(active_filter if "active_filter" in locals() else None),
-            ),
-            control=GenerationControl(
-                trace_id=trace_id,
-                started_at=t_start,
-                deadline_monotonic=state.budget.deadline_monotonic,
-                budget=state.budget,
-                outcome=generation_outcome,
-            ),
-            explicit_negative_answer=explicit_negative_answer,
-        ),
-        cancel_event=cancel_event,
-        metrics=generation_metrics,
-    )
+    from mech_chatbot.rag.phases.generation import generate
 
-    # BUOC D: TU DONG TAO TRICH DAN NGUON VA HINH ANH (Tra ve cung stream)
-    debug_info = make_debug_info(retrieved_docs)
-    debug_info["evidence_state"] = answer_policy.evidence_state.value
-    debug_info["answer_outcome"] = answer_policy.outcome.value
-    debug_info["correction_allowed"] = bool(
-        state.budget.corrections > 0 or answer_policy.correction_allowed
-    )
-    debug_info["evidence_stage"] = evidence_decision.stage
-    debug_info["evidence_quotes"] = evidence_quotes
-    debug_info["correction_count"] = state.budget.corrections
-    debug_info["planner_count"] = state.budget.planners
-    debug_info["subquery_count"] = state.budget.subqueries
-    debug_info["final_generation_count"] = state.budget.final_generations
-    debug_info["deadline_exceeded"] = state.budget.deadline_exceeded
-    debug_info["decomposition_branches"] = decomposition_branches
-    debug_info["decomposition_intent_count"] = len(decomposition_intents)
-    debug_info["decomposition_intent_coverage"] = decomposition_intent_coverage
-    debug_info["decomposition_used_fallback"] = decomposition_used_fallback
-    debug_info["decomposition_intent_overflow"] = decomposition_intent_overflow
-    debug_info["graph_traversal_count"] = len(served_graph_docs)
-    debug_info["graph_evidence"] = serialize_debug_documents(served_graph_docs)
-    debug_info["graph_routed"] = graph_routed
-    debug_info["graph_edge_count"] = graph_edge_count
-    debug_info["graph_max_hops"] = graph_max_hops
-    debug_info["community_summary_used"] = community_summary_used
-    debug_info["community_summary_count"] = community_summary_count
-    debug_info["community_summary_source_count"] = len(community_docs)
-    debug_info["community_summary_fallback_reason"] = community_fallback_reason
-    debug_info["late_interaction_hits"] = sum(
-        1 for doc in retrieved_docs if doc.metadata.get("rerank_backend") == "late_interaction"
-    )
-    debug_info["calculation_provenance"] = [
-        doc.metadata.get("calculation_provenance")
-        for doc in retrieved_docs if doc.metadata.get("calculation_provenance")
-    ]
-    # The generator mutates this object after the caller consumes the stream.
-    debug_info["generation_metrics"] = generation_metrics
-    # Keep the full source registry. The browser-facing API will resolve the
-    # stable SourceIDs emitted in the final answer and expose only those cards.
-    _citation_snapshot = make_source_snapshot(retrieved_docs)
-    _evidence_snapshot = make_source_snapshot(retrieved_docs)
-    debug_info["citation_docs"] = _citation_snapshot
-
-    if decomposition_branches:
-        stream = audit_decomposition_stream(stream, decomposition_branches)
-    # KH-2 (sua V4): neo lai tai lieu vua dung de tra loi cho luot tiep theo.
-    try:
-        from mech_chatbot.rag import conversation_state as _cs3
-        if _cs3.is_enabled() and retrieved_docs:
-            _adr_out = _cs3.dominant_doc_refs(retrieved_docs)
-            if _adr_out:
-                _cc_out = debug_info.get("conversation_context") or {}
-                _cc_out["active_doc_refs"] = _adr_out
-                _cc_out.setdefault("last_intent", "answered")
-                debug_info["conversation_context"] = _cc_out
-    except Exception as _e_adr:
-        logger.warning(f"[ConvState] luu active_doc_refs loi: {_e_adr}")
-
-    # KH-3: luu tom tat luy tien vao conversation_context (chi ton tai trong cuoc tro chuyen nay).
-    try:
-        if _history_summary_new is not None or _summary_covered_new is not None:
-            _cc_sum_out = debug_info.get("conversation_context") or {}
-            if _history_summary_new:
-                _cc_sum_out["history_summary"] = _history_summary_new
-            if _summary_covered_new is not None:
-                _cc_sum_out["summary_covered"] = _summary_covered_new
-            debug_info["conversation_context"] = _cc_sum_out
-    except Exception as _e_sumout:
-        logger.warning(f"[KH-3] luu history_summary loi: {_e_sumout}")
-        
-    # P2-9: Semantic cache STORE (best-effort, khong lam gay pipeline)
-    try:
-        import mech_chatbot.rag.semantic_cache as _sc2
-        if _sc2.enabled() and _sc_qemb is not None and retrieved_docs:
-            _sc_doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs if d is not None and d.metadata.get("doc_id") is not None]
-            _in_len = len(context_text) + len(user_question) + len(chat_history_str)
-            stream = _sc2.teeing_store_stream(
-                stream, question=user_question, embedding=_sc_qemb, scope_sig=_sc_scope,
-                ref_text=ref_text, ref_images=ref_images, source_doc_ids=_sc_doc_ids,
-                model=get_llm_model_name(), input_char_len=_in_len,
-                citation_snapshot=_citation_snapshot,
-                evidence_snapshot=_evidence_snapshot,
-            )
-    except Exception as _sce2:
-        logger.warning(f"semantic cache store loi: {_sce2}")
-    return state.prepared((stream, ref_text, ref_images, new_part_ids, debug_info))
+    return generate(
+        route_decision,
+        primary_retrieval,
+        enrichment,
+        reranked,
+        evidence,
+        state,
+    ).prepared
 
 
 def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None, trace_id=None, cancel_event=None):
