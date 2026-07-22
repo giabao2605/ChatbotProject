@@ -201,134 +201,36 @@ def make_source_snapshot(docs=None):
 
 def execute_pipeline(state):
     """Execute all RAG stages through one request-owned execution state."""
-    request = state.request
-    trace_id = state.trace_id
+    from mech_chatbot.rag.phases.preparation import prepare
+
+    preparation = prepare(state)
+    if preparation.terminal is not None:
+        return state.prepared(preparation.terminal)
+    prepared = preparation.prepared
+    if prepared is None:  # pragma: no cover - guarded by PreparationOutcome
+        raise RuntimeError("preparation returned no request")
+
+    trace_id = prepared.trace_id
     cancel_event = state.cancellation
-    state.transition("preparing")
-    user_question = request.question
-    image_path = str(request.image_path) if request.image_path is not None else None
-    chat_history = list(request.history)
-    current_part_ids = list(request.current_part_ids)
-    user_department = request.access.department
-    user_roles = list(request.access.roles)
-    allowed_departments = list(request.access.allowed_departments)
-    max_security_level = request.access.max_security_level
-    allowed_sites = list(request.access.allowed_sites)
-    response_language = request.response_language
-    conversation_context = (
-        dict(request.conversation_context)
-        if request.conversation_context is not None
-        else None
-    )
-    if chat_history is None:
-        chat_history = []
-        
-    trace_id = trace_id or f"rag_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    t_start = time.time()
-    
-    log_trace("rag_start", trace_id,
-              question_length=len(user_question or ""),
-              has_image=bool(image_path),
-              history_count=len(chat_history),
-              current_part_ids=current_part_ids,
-              department=user_department,
-              role=",".join(user_roles) if user_roles else "",
-              model=get_llm_model_name(),
-              pipeline_namespace=make_debug_info([])["pipeline_namespace"])
-
-    # Deterministic safety must run before every cache lookup. Otherwise an
-    # entry produced under an older rule set could bypass a tightened policy.
-    try:
-        from mech_chatbot.rag import route_safety as _pre_cache_safety
-        _safety_reason = (_pre_cache_safety.detect(user_question)
-                          if _pre_cache_safety.enabled() else None)
-    except Exception as _safety_error:
-        logger.error("Pre-cache safety check failed: %s", _safety_error, exc_info=True)
-        _safety_reason = "safety_check_unavailable"
-    if _safety_reason:
-        state.refuse("safety_block")
-        from mech_chatbot.rag import route_responses as _route_responses_sb
-        _safety_text = _route_responses_sb.build_safety_response(
-            response_language, user_department, allowed_departments
-        )
-        def _pre_cache_safety_stream():
-            yield _safety_text
-        log_trace("safety", trace_id, reason=_safety_reason, blocked=True, layer="pre_cache")
-        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="safety_block")
-        return state.prepared(
-            (_pre_cache_safety_stream(), "", [], current_part_ids or [], make_debug_info([]))
-        )
-
+    user_question = prepared.user_question
+    image_path = prepared.image_path
+    chat_history = list(prepared.chat_history)
+    current_part_ids = list(prepared.current_part_ids)
+    user_department = prepared.user_department
+    user_roles = list(prepared.user_roles)
+    allowed_departments = list(prepared.allowed_departments)
+    max_security_level = prepared.max_security_level
+    allowed_sites = list(prepared.allowed_sites)
+    response_language = prepared.response_language
+    conversation_context = prepared.conversation_context
+    t_start = prepared.started_at
     _sc_qemb = None
-    _sc_scope = None
-    _sc_cache_eligible = not any(
-        [image_path, chat_history, current_part_ids, bool(conversation_context)]
-    )
-    _exact_cache_started = time.time()
-    if _sc_cache_eligible:
-        try:
-            import mech_chatbot.rag.semantic_cache as _sc_fast
-
-            if _sc_fast.enabled():
-                _sc_scope = _sc_fast.scope_signature(
-                    user_department,
-                    allowed_departments,
-                    max_security_level,
-                    allowed_sites,
-                    user_roles,
-                )
-                _exact_hit = _sc_fast.lookup_exact(user_question, _sc_scope)
-                if _exact_hit:
-                    logger.info("Exact cache HIT -> tra loi truoc router/embedding.")
-                    _dbg = {
-                        "retrieved_docs": _exact_hit.get("evidence_snapshot") or [],
-                        "citation_docs": _exact_hit.get("citation_snapshot") or [],
-                    }
-                    _dbg["cache_hit"] = True
-                    _dbg["cache_type"] = "exact"
-
-                    def _exact_cached_stream():
-                        yield _exact_hit.get("answer", "")
-
-                    log_trace("cache", trace_id, cache_type="exact", hit=True,
-                              latency_ms=int((time.time() - _exact_cache_started) * 1000))
-                    log_trace(
-                        "rag_end",
-                        trace_id,
-                        final_latency_ms=int((time.time() - t_start) * 1000),
-                        refusal=False,
-                        cache_hit=True,
-                        cache_type="exact",
-                    )
-                    return state.prepared((
-                        _exact_cached_stream(),
-                        _exact_hit.get("ref_text", ""),
-                        _exact_hit.get("ref_images", []),
-                        current_part_ids or [],
-                        _dbg,
-                    ))
-        except Exception as _sce_fast:
-            logger.warning(f"exact cache lookup loi: {_sce_fast}")
-    if _sc_cache_eligible:
-        log_trace("cache", trace_id, cache_type="exact", hit=False,
-                  latency_ms=int((time.time() - _exact_cache_started) * 1000))
-
-    # P0 slice #1: lich su hoi thoai tach sang pipeline_steps._prepare_history
-    state.checkpoint("history")
-    chat_history_str, _history_summary_new, _summary_covered_new = _prepare_history(
-        chat_history, conversation_context, response_language, trace_id=trace_id
-    )
-    state.checkpoint("history")
- 
-    # P0 slice #2: phan tich anh tach sang pipeline_steps._analyze_image
-    state.checkpoint("vision")
-    image_analysis = _analyze_image(
-        image_path,
-        user_question,
-        trace_id,
-        retry_budget=state.budget,
-    )
-    state.checkpoint("vision")
+    _sc_scope = prepared.cache_scope
+    _sc_cache_eligible = prepared.cache_eligible
+    chat_history_str = prepared.history_text
+    _history_summary_new = prepared.history_summary
+    _summary_covered_new = prepared.summary_covered
+    image_analysis = prepared.image_analysis
  
     # BUOC B: TIM KIEM THONG MINH KET HOP STATE MEMORY
     state.transition("routing")
