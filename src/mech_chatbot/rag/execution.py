@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from collections.abc import Mapping as MappingABC
-from typing import Any, Iterator, Literal, Mapping, Protocol
+from typing import Any, Callable, Iterator, Literal, Mapping, Protocol
 
 
 ExecutionMode = Literal["production", "evaluation", "pilot_replay", "test"]
@@ -719,6 +719,13 @@ def attributed_citations(
 class DefaultRagExecutor:
     """Own one RAG lifecycle and expose it as a typed event stream."""
 
+    def __init__(
+        self,
+        *,
+        execute_pipeline: Callable[["_ExecutionState"], "_PreparedExecution"] | None = None,
+    ) -> None:
+        self._execute_pipeline = execute_pipeline
+
     def run(
         self,
         request: RagRequest,
@@ -766,8 +773,6 @@ class DefaultRagExecutor:
         owner: _ContextBoundRagIterator,
     ) -> Iterator[RagEvent]:
         from mech_chatbot.llm.external_ai import ExternalAICallCancelled
-        from mech_chatbot.rag import pipeline
-
         trace_id = invocation.trace_id or (
             f"rag_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         )
@@ -776,7 +781,12 @@ class DefaultRagExecutor:
         state = _ExecutionState.create(request, invocation, cancellation, trace_id)
         budget_token = _REQUEST_BUDGET.set(state.budget)
         try:
-            prepared = pipeline.execute_pipeline(state)
+            execute_pipeline = self._execute_pipeline
+            if execute_pipeline is None:
+                from mech_chatbot.rag import pipeline
+
+                execute_pipeline = pipeline.execute_pipeline
+            prepared = execute_pipeline(state)
             stream = prepared.stream
             diagnostics = prepared.diagnostics
             yield RagPrepared(
