@@ -23,9 +23,10 @@
     "gate": "changed_module_coverage_80_line_and_branch",
     "rationale": "Both legacy monoliths received fail-closed policy changes with direct regression tests. Global backend and Phase 3 owned coverage pass 80/80; no threshold was lowered.",
     "severity": "P2",
-    "status": "requires_explicit_acceptance_or_additional_legacy_characterization"
+    "accepted_on": "2026-07-22",
+    "status": "accepted_by_user_without_lowering_threshold"
   },
-  "closure_status": "implementation_validated_strict_closure_held",
+  "closure_status": "completed_validated_with_accepted_p2_exception",
   "collection": "TaiLieuKyThuat_v2",
   "data_snapshot": {
     "document_count": 18,

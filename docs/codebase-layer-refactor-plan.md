@@ -1172,11 +1172,11 @@ test pass và cleanup đã được xác nhận độc lập.
 
 ### 9.4. Phase 3 — Ingestion lifecycle owner
 
-Trạng thái: **Implementation completed / Validated; strict closure held at one
-P2 coverage exception**. Toàn bộ behavior, security, integration và global
-backend gate đã pass. Chưa ghi `Completed / Validated` tuyệt đối vì hai legacy
-RAG monolith được chạm một dòng fail-closed vẫn dưới ngưỡng coverage từng module
-theo câu chữ acceptance gate; không hạ threshold và không che ngoại lệ này.
+Trạng thái: **Completed / Validated với ngoại lệ P2 được chấp nhận**. Toàn bộ
+behavior, security, integration và global backend gate đã pass. Ngày
+2026-07-22, người dùng chấp nhận ngoại lệ cho hai legacy RAG monolith được chạm
+một dòng fail-closed nhưng vẫn dưới ngưỡng coverage từng module. Threshold 80/80
+không bị hạ và bằng chứng strict all-touched vẫn được giữ trong artifact.
 
 | Trường evidence | Kết quả thực tế |
 |---|---|
@@ -1197,6 +1197,6 @@ Ownership review xác nhận production path là `worker -> IngestionRunner ->
 IngestionProcessor port -> single pipeline implementation`; compatibility
 entrypoint không tự tạo runner vì thiếu job/store identity nhưng chỉ forward,
 không chứa implementation thứ hai. Spec review không còn P0/P1 correctness hay
-security blocker; chỉ giữ P2 coverage exception nói trên. Phase 4 không được mở
-trên ledger như thể Phase 3 đã strict-close cho đến khi ngoại lệ này được chấp
-nhận rõ ràng hoặc hai legacy module đạt per-module 80/80.
+security blocker; chỉ giữ P2 coverage exception nói trên. Ngoại lệ được chấp
+nhận rõ ràng ngày 2026-07-22 nên Phase 4 được phép mở; đây không phải tuyên bố
+hai legacy module đã đạt per-module 80/80.
