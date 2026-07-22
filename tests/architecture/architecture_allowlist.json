@@ -1956,54 +1956,6 @@
     },
     {
       "rule": "wildcard_import",
-      "path": "rag/pipeline.py",
-      "dependency": "mech_chatbot.rag.bootstrap",
-      "count": 1,
-      "removal_phase": "Phase 6",
-      "reason": "Existing wildcard compatibility import"
-    },
-    {
-      "rule": "wildcard_import",
-      "path": "rag/pipeline.py",
-      "dependency": "mech_chatbot.rag.evidence_gate",
-      "count": 1,
-      "removal_phase": "Phase 6",
-      "reason": "Existing wildcard compatibility import"
-    },
-    {
-      "rule": "wildcard_import",
-      "path": "rag/pipeline.py",
-      "dependency": "mech_chatbot.rag.intent",
-      "count": 1,
-      "removal_phase": "Phase 6",
-      "reason": "Existing wildcard compatibility import"
-    },
-    {
-      "rule": "wildcard_import",
-      "path": "rag/pipeline.py",
-      "dependency": "mech_chatbot.rag.prompt",
-      "count": 1,
-      "removal_phase": "Phase 6",
-      "reason": "Existing wildcard compatibility import"
-    },
-    {
-      "rule": "wildcard_import",
-      "path": "rag/pipeline.py",
-      "dependency": "mech_chatbot.rag.rerank",
-      "count": 1,
-      "removal_phase": "Phase 6",
-      "reason": "Existing wildcard compatibility import"
-    },
-    {
-      "rule": "wildcard_import",
-      "path": "rag/pipeline.py",
-      "dependency": "mech_chatbot.rag.retrieval",
-      "count": 1,
-      "removal_phase": "Phase 6",
-      "reason": "Existing wildcard compatibility import"
-    },
-    {
-      "rule": "wildcard_import",
       "path": "rag/service.py",
       "dependency": "mech_chatbot.rag.bootstrap",
       "count": 1,

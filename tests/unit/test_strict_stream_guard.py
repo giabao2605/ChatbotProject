@@ -141,8 +141,6 @@ def _run_through_executor(monkeypatch, module, **generation_kwargs):
         )
         for name in module_names
     }
-    from mech_chatbot.rag import pipeline
-
     outcome = module.GenerationOutcome()
 
     def scripted_pipeline(state):
@@ -151,9 +149,8 @@ def _run_through_executor(monkeypatch, module, **generation_kwargs):
         return state.prepared((stream, "", [], [], {}))
 
     try:
-        monkeypatch.setattr(pipeline, "execute_pipeline", scripted_pipeline)
         return list(
-            DefaultRagExecutor().run(
+            DefaultRagExecutor(execute_pipeline=scripted_pipeline).run(
                 RagRequest("generation contract", AccessScope()),
                 RagInvocation(trace_id="strict-generation-contract", mode="test"),
             )
