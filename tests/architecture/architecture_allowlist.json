@@ -316,11 +316,11 @@
     },
     {
       "rule": "direct_getenv",
-      "path": "rag/pipeline.py",
+      "path": "rag/phases/citations.py",
       "dependency": "os.getenv",
       "count": 2,
-      "removal_phase": "Phase 4",
-      "reason": "Remaining evidence and generation reads move with their Phase 4 extraction"
+      "removal_phase": "Phase 5",
+      "reason": "Behavior-preserving extraction; configuration ownership moves in Phase 5"
     },
     {
       "rule": "direct_getenv",

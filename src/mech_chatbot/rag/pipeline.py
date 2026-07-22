@@ -5,8 +5,6 @@ New callers use :mod:`mech_chatbot.rag.execution`; this module keeps the
 existing retrieval/generation implementation and compatibility surface.
 """
 
-import os
-import re
 import time
 import uuid
 from datetime import datetime
@@ -93,6 +91,10 @@ from mech_chatbot.rag.execution import (
     current_execution_context,
 )
 from mech_chatbot.rag.pipeline_steps import GenerationControl, GenerationEvidence, GenerationOutcome, GenerationPlan, GenerationTurn, _prepare_history, _analyze_image, _assemble_context, generate_answer, _retrieve, _RETRIEVE_UNSET, _route, _rewrite_and_anchor, _disambiguate
+from mech_chatbot.rag.phases.citations import (
+    build_source_citations,
+    select_citation_docs,
+)
 from mech_chatbot.rag.phases.diagnostics import (
     make_debug_info,
     make_source_snapshot,
@@ -227,139 +229,24 @@ def execute_pipeline(state):
     retrieved_docs = list(reranked.documents)
     served_graph_docs = list(reranked.served_graph_documents)
 
-    # BUOC C: SINH CAU TRA LOI (STREAMING)
-    context_text = _assemble_context(retrieved_docs, user_question) + decomposition_notice
+    from mech_chatbot.rag.phases.evidence import EvidenceOutcome, evaluate_evidence
 
-    # Citations are evidence actually relevant to the answer, not every
-    # candidate that happened to survive retrieval/reranking. BOM questions in
-    # particular must not display unrelated HR/procedure thumbnails.
-    citation_docs = select_citation_docs(
-        retrieved_docs,
-        question=user_question,
-        is_bom_query=is_bom_query,
-        part_ids=new_part_ids,
+    evidence = evaluate_evidence(
+        route_decision,
+        primary_retrieval,
+        enrichment,
+        reranked,
+        state,
     )
-    if grounded_math_enabled:
-        from mech_chatbot.rag.grounded_math import select_grounded_answer_citation_documents
-        calculation_citation_docs = select_grounded_answer_citation_documents(
-            retrieved_docs, decomposition_branches,
-        )
-        if calculation_citation_docs:
-            citation_docs = calculation_citation_docs
-    ref_text, ref_images = build_source_citations(citation_docs)
-    _conf_docs = [d.metadata.get("file_goc") for d in retrieved_docs if d.metadata.get("security_level") == "confidential"]
-    if _conf_docs:
-        logger.warning(f"[audit][confidential] dept={user_department} roles={user_roles} truy cap tai lieu mat: {_conf_docs}")
-
-    # LOP PHONG THU 2: Evidence Gate cho cau hoi bay / cau hoi can so lieu
-    state.transition("evidence")
-    t_gate = time.time()
-    evidence_decision = evaluate_answerability(
-        user_question,
-        context_text,
-        docs=retrieved_docs,
-        trace_id=trace_id,
-    )
-    has_sufficient_decomposition_branch = any(
-        branch.get("outcome") == "full_answer" or branch.get("grounded_negative")
-        for branch in decomposition_branches
-    )
-    sufficient_branch_count = sum(
-        branch.get("outcome") == "full_answer" or branch.get("grounded_negative")
-        for branch in decomposition_branches
-    )
-    answer_policy = decide_answer_policy(
-        user_question,
-        PolicyEvidence(
-            decision=evidence_decision,
-            has_retrieved_evidence=bool(retrieved_docs),
-            retrieval_can_improve=bool(
-                crag_enabled and state.budget.corrections < state.budget.limits.corrections
-            ),
-            negative_evidence=has_explicit_negative_evidence(
-                user_question, context_text
-            ),
-            negative_evidence_quote=explicit_negative_evidence_quote(
-                user_question, context_text
-            ),
-            sufficient_branch_count=sufficient_branch_count,
-            total_branch_count=len(decomposition_branches),
-        ),
-        {},
-    )
-    answerable = answer_policy.allows_answer_generation
-    evidence_reason = answer_policy.reason
-    evidence_quotes = list(answer_policy.evidence_quotes)
-    log_trace(
-        "evidence_gate",
-        trace_id,
-        latency_ms=int((time.time() - t_gate)*1000),
-        answerable=answerable,
-        state=answer_policy.evidence_state.value,
-        outcome=answer_policy.outcome.value,
-        correction_allowed=answer_policy.correction_allowed,
-        stage=evidence_decision.stage,
-        status=evidence_decision.telemetry_status,
-        reason=evidence_reason,
-        correction_attempts=state.budget.corrections,
-        partial_serving=(
-            has_sufficient_decomposition_branch
-            and not evidence_decision.answerable
-        ),
-    )
-    
-    if not answerable:
-        logger.warning(f"Evidence gate BLOCK cau hoi: {evidence_reason}")
-        safe_msg = make_insufficient_evidence_message(user_question, evidence_reason, lang=response_language)
-        def refusal_stream():
-            yield safe_msg
-        log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="evidence_gate", docs_count=len(retrieved_docs), doc_ids=[d.metadata.get("doc_id") for d in retrieved_docs], retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=[d.metadata.get("relevance_score") for d in retrieved_docs], user_department=user_department, user_roles=user_roles)
-        _refusal_debug = make_debug_info(retrieved_docs)
-        _refusal_debug["citation_docs"] = make_debug_info(retrieved_docs)["retrieved_docs"]
-        _refusal_debug["evidence_state"] = answer_policy.evidence_state.value
-        _refusal_debug["answer_outcome"] = answer_policy.outcome.value
-        _refusal_debug["correction_allowed"] = bool(
-            state.budget.corrections > 0 or answer_policy.correction_allowed
-        )
-        _refusal_debug["evidence_stage"] = evidence_decision.stage
-        _refusal_debug["evidence_quotes"] = evidence_quotes
-        _refusal_debug["correction_count"] = state.budget.corrections
-        _refusal_debug["generation_metrics"] = {
-            "estimated_cost": correction_estimated_cost + planner_estimated_cost,
-            "input_tokens": auxiliary_input_tokens,
-            "output_tokens": auxiliary_output_tokens,
-            "provider_retries": state.budget.provider_retries,
-            "repair_count": 0,
-        }
-        _refusal_debug["planner_count"] = state.budget.planners
-        _refusal_debug["subquery_count"] = state.budget.subqueries
-        _refusal_debug["final_generation_count"] = state.budget.final_generations
-        _refusal_debug["deadline_exceeded"] = state.budget.deadline_exceeded
-        _refusal_debug["decomposition_branches"] = decomposition_branches
-        _refusal_debug["decomposition_intent_count"] = len(decomposition_intents)
-        _refusal_debug["decomposition_intent_coverage"] = decomposition_intent_coverage
-        _refusal_debug["decomposition_used_fallback"] = decomposition_used_fallback
-        _refusal_debug["decomposition_intent_overflow"] = decomposition_intent_overflow
-        _refusal_debug["graph_traversal_count"] = len(served_graph_docs)
-        _refusal_debug["graph_evidence"] = serialize_debug_documents(served_graph_docs)
-        _refusal_debug["graph_routed"] = graph_routed
-        _refusal_debug["graph_edge_count"] = graph_edge_count
-        _refusal_debug["graph_max_hops"] = graph_max_hops
-        state.refuse("evidence_gate")
-        return state.prepared(
-            (refusal_stream(), ref_text, ref_images, new_part_ids, _refusal_debug)
-        )
-
-    explicit_negative_quote = (
-        evidence_quotes[0]
-        if answer_policy.reason == "explicit_negative_evidence" and evidence_quotes
-        else ""
-    )
-    explicit_negative_answer = render_cited_explicit_negative_answer(
-        explicit_negative_quote,
-        retrieved_docs,
-        language=response_language,
-    )
+    if not isinstance(evidence, EvidenceOutcome):
+        return evidence
+    context_text = evidence.context_text
+    ref_text = evidence.ref_text
+    ref_images = list(evidence.ref_images)
+    answer_policy = evidence.answer_policy
+    evidence_decision = evidence.evidence_decision
+    evidence_quotes = list(evidence.evidence_quotes)
+    explicit_negative_answer = evidence.explicit_negative_answer
 
     generation_metrics = {
         "estimated_cost": correction_estimated_cost + planner_estimated_cost,
@@ -580,126 +467,6 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         legacy_debug,
     )
 
-
-def select_citation_docs(docs, question="", is_bom_query=False, part_ids=None, limit=None):
-    """Return a small, evidence-focused citation set.
-
-    Retrieval candidates remain available to generation and diagnostics, while
-    the UI only receives sources relevant to the requested answer type.
-    """
-    docs = list(docs or [])
-    if not docs:
-        return []
-    try:
-        from mech_chatbot.rag.text_utils import remove_accents
-        q_norm = remove_accents(str(question or "").lower())
-    except Exception:
-        q_norm = str(question or "").lower()
-    bom_mode = bool(is_bom_query) or any(
-        token in q_norm for token in ("bom", "bang ke vat tu", "vat tu", "bill of materials")
-    )
-    wanted_codes = {str(value).strip().lower() for value in (part_ids or []) if value}
-
-    def _values(md, *keys):
-        out = []
-        for key in keys:
-            value = md.get(key)
-            if isinstance(value, (list, tuple, set)):
-                out.extend(value)
-            elif value is not None:
-                out.append(value)
-        return {str(value).strip().lower() for value in out if str(value).strip()}
-
-    def _is_bom_evidence(doc):
-        md = getattr(doc, "metadata", {}) or {}
-        kind = str(md.get("loai_du_lieu") or "").lower()
-        source = str(md.get("file_goc") or "").lower()
-        if kind in {"sql_bom", "bang_ke_vat_tu", "bom"} or "bom" in source:
-            return True
-        if wanted_codes:
-            codes = _values(md, "base_code", "ma_chinh", "ma_doi_tuong", "ma_btp", "ma_vat_tu")
-            return bool(codes & wanted_codes)
-        return False
-
-    pool = [doc for doc in docs if _is_bom_evidence(doc)] if bom_mode else docs
-    if not pool:
-        pool = docs
-    max_sources = int(limit or os.getenv("CITATION_MAX_SOURCES", "5"))
-    if bom_mode:
-        max_sources = min(max_sources, int(os.getenv("BOM_CITATION_MAX_SOURCES", "3")))
-
-    selected = []
-    seen = set()
-    for doc in pool:
-        md = getattr(doc, "metadata", {}) or {}
-        key = (
-            md.get("doc_id") or md.get("file_goc"),
-            md.get("trang_so") or md.get("parent_page"),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        selected.append(doc)
-        if len(selected) >= max_sources:
-            break
-    return selected
-
-
-def build_source_citations(docs):
-    references = []
-    ref_images = []
-    for doc in docs:
-        source = doc.metadata.get('file_goc', 'Khong ro')
-        page = doc.metadata.get('trang_so', '?')
-        cong_doan = doc.metadata.get('cong_doan', 'Khong ro')
-        loai = doc.metadata.get('loai_du_lieu', '')
-        # Lay thu_muc de reconstruct ten file anh dung format (Fix Bug #7)
-        thu_muc = doc.metadata.get('phong_ban_quyen', '')
-        if isinstance(thu_muc, (list, tuple)):
-            thu_muc = thu_muc[0] if thu_muc else ''
-        # P1.3: bo sung dinh danh nguon de mo dung tai lieu goc
-        doc_id = doc.metadata.get('doc_id')
-        site = doc.metadata.get('site')
-        version_no = doc.metadata.get('version_no')
- 
-        cite = f"**{source}** (Trang {page}) - {cong_doan}"
-        # Hau to dinh danh: phong/khu + phien ban + ma tai lieu (de tra cuu trong Kho tai lieu)
-        tags = []
-        if thu_muc:
-            tags.append(str(thu_muc))
-        if site:
-            tags.append(f"khu {site}")
-        if version_no:
-            tags.append(f"v{version_no}")
-        if doc_id is not None:
-            tags.append(f"DocID {doc_id}")
-        if tags:
-            cite += "  \u00b7 _" + " | ".join(tags) + "_"
-        if loai == 'image_summary':
-            cite += " *(phan tich hinh anh)*"
-        if cite not in references:
-            references.append(cite)
- 
-        # Trich xuat duong dan anh tham chieu
-        # Format luu: {safe_thu_muc}_{ten_file_ko_ext}_page{N}.png
-        if source != 'Anh dinh kem tu nguoi dung':
-            safe_thu_muc = re.sub(r'[\\/*?:"<>|]', "", thu_muc) if thu_muc else ""
-            base_name = os.path.splitext(str(source))[0]
-            if safe_thu_muc:
-                img_name = f"{safe_thu_muc}_{base_name}_page{page}.png"
-            else:
-                img_name = f"{base_name}_page{page}.png"
- 
-            _proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-            img_path = os.path.join(_proj_root, "data", "processed", img_name)
-            if img_path not in ref_images and os.path.exists(img_path):
-                ref_images.append(img_path)
- 
-    if not references:
-        return "", []
- 
-    ref_text = "\n\n---\n**Nguon tham chieu:**\n" + "\n".join([f"- {r}" for r in references])
-    return ref_text, ref_images
 
 __all__ = [
     'make_debug_info',
