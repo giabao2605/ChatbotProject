@@ -18,6 +18,7 @@ import json
 import os
 import re
 
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 
 # Phai khop ROUTE_* trong interaction_router.py.
@@ -133,7 +134,7 @@ def classify_llm(text, context=None, invoke=None, trace_id=None):
             resp = _default_invoke(messages, trace_id=trace_id)
         else:
             resp = invoke(messages)
-    except RequestBudgetExceeded:
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise
     except Exception:
         return None

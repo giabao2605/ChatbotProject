@@ -14,7 +14,6 @@ from langchain_core.messages import HumanMessage
 from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.db.repository import search_bom_facts, traverse_knowledge_graph
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
-from mech_chatbot.llm.llm_client import cohere_invoke
 from mech_chatbot.rag.answer_policy import (
     PolicyEvidence,
     decide_answer_policy,
@@ -619,7 +618,7 @@ def enrich_retrieval(
                     "Keep every technical code and do not add facts. Return only the query.\n\n"
                     f"Question: {effective_question}\nMissing evidence: {coverage_decision.reason}"
                 )
-                rewritten = cohere_invoke(
+                rewritten = state.invoke_provider(
                     [HumanMessage(content=rewrite_prompt)],
                     surface="query_disambiguation",
                     trace_id=trace_id,

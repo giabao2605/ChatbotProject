@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mech_chatbot.rag.answer_checks import extract_source_ids
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 
 
@@ -158,7 +159,7 @@ def compile_query_plan(
     if planner is not None:
         try:
             payload = planner(original) or {}
-        except RequestBudgetExceeded:
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
             raise
         except Exception:
             payload = {}

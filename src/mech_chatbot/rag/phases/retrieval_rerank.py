@@ -17,6 +17,7 @@ from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.diagnostics import make_terminal_debug as _make_terminal_debug
 from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
 from mech_chatbot.rag.phases.routing import RouteDecision
+from mech_chatbot.rag.intent import serialize_qdrant_filter
 from mech_chatbot.rag.prompt import _t_rag
 from mech_chatbot.rag.rerank import (
     RerankPolicy,

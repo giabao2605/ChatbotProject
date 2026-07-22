@@ -61,11 +61,10 @@ RAG_CORS_ALLOW_ORIGINS = [
 # Lifespan: load RAG system once at startup, clean up at shutdown
 # ---------------------------------------------------------------------------
 _rag_ready = False
-_rag_runtime = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _rag_ready, _rag_runtime
+    global _rag_ready
     from mech_chatbot.config.validate import assert_config_valid, safe_config_summary
     from mech_chatbot.rag.feature_activation import activation_status, current_git_commit
     assert_config_valid(require_service_auth=RAG_REQUIRE_SERVICE_AUTH)
@@ -98,7 +97,7 @@ async def lifespan(app: FastAPI):
         from mech_chatbot.composition.rag_runtime import build_rag_runtime
         from mech_chatbot.config.settings import settings
 
-        _rag_runtime = build_rag_runtime(settings)
+        app.state.rag_runtime = build_rag_runtime(settings)
         # Nap tokenizer trong startup thay vi de request dau tien ganh cold load.
         from mech_chatbot.rag.rerank import tokenize_cached
         tokenize_cached("tai lieu noi bo")
@@ -107,7 +106,7 @@ async def lifespan(app: FastAPI):
         logger.info(f"RAG system loaded successfully in {elapsed:.1f}s")
     except Exception as e:
         logger.error(f"FATAL: Could not load RAG system: {e}", exc_info=True)
-        _rag_runtime = None
+        app.state.rag_runtime = None
         _rag_ready = False
 
     yield  # ← server is running
@@ -821,7 +820,6 @@ def _open_rag_events(
 ):
     from mech_chatbot.rag.execution import (
         AccessScope,
-        DefaultRagExecutor,
         NEVER_CANCELLED,
         RagInvocation,
         RagRequest,
@@ -842,11 +840,7 @@ def _open_rag_events(
         response_language=req.response_language or "vi",
         conversation_context=req.conversation_context,
     )
-    executor = (
-        _rag_runtime.executor
-        if _rag_runtime is not None
-        else DefaultRagExecutor()
-    )
+    executor = app.state.rag_runtime.executor
     return executor.run(
         request,
         RagInvocation(trace_id=trace_id, mode=mode),

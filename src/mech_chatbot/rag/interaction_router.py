@@ -27,6 +27,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from mech_chatbot.rag import chitchat
 from mech_chatbot.rag import route_config
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 
 ROUTE_CHITCHAT = "chitchat"
@@ -334,7 +335,7 @@ def classify(text, context=None, embedder=None, llm_classifier=None) -> RouteRes
     if llm_classifier is not None:
         try:
             res = llm_classifier(text, context)
-        except RequestBudgetExceeded:
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
             raise
         except Exception:
             res = None

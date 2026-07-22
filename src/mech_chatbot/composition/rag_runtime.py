@@ -78,7 +78,11 @@ def build_rag_runtime(
 
     return RagRuntime(
         settings=existing_settings,
-        executor=DefaultRagExecutor(execute_pipeline=resolved_execute),
+        executor=DefaultRagExecutor(
+            execute_pipeline=resolved_execute,
+            retrieval_adapter=resolved_retrieval,
+            provider_adapter=resolved_provider,
+        ),
         retrieval=resolved_retrieval,
         provider=resolved_provider,
     )

@@ -170,6 +170,7 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
         allowed_sites=list(prepared.allowed_sites),
         trace_id=prepared.trace_id,
         t_intent=intent_started,
+        invoke_provider=state.invoke_provider,
     )
     state.checkpoint("rewrite_and_anchor")
 

@@ -21,13 +21,21 @@ def test_build_rag_runtime_keeps_settings_and_executes_through_public_seam():
 
     settings = SimpleNamespace(profile="phase-4-test")
     observed = []
+    retrieval_calls = []
+    provider_calls = []
 
     def execute_pipeline(state):
         observed.append((state.request.question, state.trace_id))
+        state.retrieve(query="bearing")
+        state.invoke_provider("prompt", surface="phase-4-test")
         return state.prepared((iter(["answer"]), "refs", [], ["P-1"], {}))
 
-    retrieval = SimpleNamespace(retrieve=lambda **_kwargs: ())
-    provider = SimpleNamespace(invoke=lambda *_args, **_kwargs: None)
+    retrieval = SimpleNamespace(
+        retrieve=lambda **kwargs: retrieval_calls.append(kwargs) or (),
+    )
+    provider = SimpleNamespace(
+        invoke=lambda *args, **kwargs: provider_calls.append((args, kwargs)),
+    )
     runtime = build_rag_runtime(
         settings,
         execute_pipeline=execute_pipeline,
@@ -46,6 +54,8 @@ def test_build_rag_runtime_keeps_settings_and_executes_through_public_seam():
     assert runtime.retrieval is retrieval
     assert runtime.provider is provider
     assert observed == [("question", "phase-4-runtime")]
+    assert retrieval_calls == [{"query": "bearing"}]
+    assert provider_calls == [(("prompt",), {"surface": "phase-4-test"})]
     assert [type(event) for event in events] == [RagPrepared, RagToken, RagCompleted]
     assert events[0].ref_text == "refs"
     assert events[1].text == "answer"
@@ -77,8 +87,8 @@ def test_rag_server_opens_requests_through_composed_runtime(monkeypatch):
             return sentinel
 
     monkeypatch.setattr(
-        rag_server,
-        "_rag_runtime",
+        rag_server.app.state,
+        "rag_runtime",
         SimpleNamespace(executor=ScriptedExecutor()),
         raising=False,
     )

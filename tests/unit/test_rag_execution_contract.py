@@ -530,6 +530,34 @@ def test_budget_exhaustion_is_not_swallowed_by_router_fallback(monkeypatch):
     assert events[-1].code == "RequestBudgetExceeded"
 
 
+def test_provider_cancellation_in_planner_reaches_public_executor():
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    from mech_chatbot.rag.query_decomposition import compile_query_plan
+
+    cancellation = ExternalAICallCancelled("planner cancelled")
+
+    def scripted_pipeline(state):
+        def cancelled_planner(_question):
+            raise cancellation
+
+        compile_query_plan(
+            "So sánh MA-100 và MA-200",
+            {},
+            planner=cancelled_planner,
+        )
+        return state.prepared((iter(["unreachable"]), "", [], [], {}))
+
+    events = list(
+        DefaultRagExecutor(execute_pipeline=scripted_pipeline).run(
+            RagRequest("So sánh MA-100 và MA-200", AccessScope()),
+            RagInvocation(trace_id="cancelled-planner", mode="test"),
+        )
+    )
+
+    assert [type(event) for event in events] == [RagPrepared, RagCancelled]
+    assert events[-1].cause is cancellation
+
+
 def test_request_deadline_is_checked_before_emitting_answer_token(monkeypatch):
     from mech_chatbot.rag import execution
 

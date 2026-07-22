@@ -222,6 +222,7 @@ def prepare(state: Any) -> PreparationOutcome:
         conversation_context,
         response_language,
         trace_id=trace_id,
+        invoke_provider=state.invoke_provider,
     )
     state.checkpoint("history")
     state.checkpoint("vision")

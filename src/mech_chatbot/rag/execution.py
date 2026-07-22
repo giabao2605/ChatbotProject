@@ -454,6 +454,8 @@ class _ExecutionState:
     cancellation: CancellationSignal
     trace_id: str
     budget: RequestBudgetLedger
+    retrieval_adapter: Any | None = field(default=None, repr=False)
+    provider_adapter: Any | None = field(default=None, repr=False)
     refusal_reason: str | None = None
     generation_outcome: Any | None = field(default=None, repr=False)
     phase: str = "created"
@@ -465,6 +467,8 @@ class _ExecutionState:
         invocation: RagInvocation,
         cancellation: CancellationSignal,
         trace_id: str,
+        retrieval_adapter: Any | None = None,
+        provider_adapter: Any | None = None,
     ) -> "_ExecutionState":
         started = time.monotonic()
         return cls(
@@ -472,11 +476,27 @@ class _ExecutionState:
             invocation=invocation,
             cancellation=cancellation,
             trace_id=trace_id,
+            retrieval_adapter=retrieval_adapter,
+            provider_adapter=provider_adapter,
             budget=RequestBudgetLedger(
                 limits=RequestBudgetLimits.from_environment(),
                 started_monotonic=started,
             ),
         )
+
+    def retrieve(self, **kwargs: Any) -> Any:
+        if self.retrieval_adapter is not None:
+            return self.retrieval_adapter.retrieve(**kwargs)
+        from mech_chatbot.rag.pipeline_steps import _retrieve
+
+        return _retrieve(**kwargs)
+
+    def invoke_provider(self, *args: Any, **kwargs: Any) -> Any:
+        if self.provider_adapter is not None:
+            return self.provider_adapter.invoke(*args, **kwargs)
+        from mech_chatbot.llm.llm_client import cohere_invoke
+
+        return cohere_invoke(*args, **kwargs)
 
     def transition(self, phase: str) -> None:
         self.checkpoint(phase)
@@ -717,8 +737,12 @@ class DefaultRagExecutor:
         self,
         *,
         execute_pipeline: Callable[["_ExecutionState"], "_PreparedExecution"] | None = None,
+        retrieval_adapter: Any | None = None,
+        provider_adapter: Any | None = None,
     ) -> None:
         self._execute_pipeline = execute_pipeline
+        self._retrieval_adapter = retrieval_adapter
+        self._provider_adapter = provider_adapter
 
     def run(
         self,
@@ -772,7 +796,14 @@ class DefaultRagExecutor:
         )
         stream = None
         diagnostics: dict[str, Any] = {}
-        state = _ExecutionState.create(request, invocation, cancellation, trace_id)
+        state = _ExecutionState.create(
+            request,
+            invocation,
+            cancellation,
+            trace_id,
+            retrieval_adapter=self._retrieval_adapter,
+            provider_adapter=self._provider_adapter,
+        )
         budget_token = _REQUEST_BUDGET.set(state.budget)
         try:
             execute_pipeline = self._execute_pipeline

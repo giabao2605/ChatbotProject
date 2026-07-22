@@ -8,6 +8,7 @@ from enum import Enum
 from mech_chatbot.config.logging import logger, log_trace
 from langchain_core.messages import HumanMessage
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.answer_checks import (  # noqa: F401
     _safe_json_loads,
     _extract_numbers,
@@ -255,7 +256,7 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
             evidence_quotes=tuple(quotes) if isinstance(quotes, list) else (),
             telemetry_status="verifier_pass" if state is EvidenceState.SUFFICIENT else "verifier_block",
         )
-    except RequestBudgetExceeded:
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise
     except Exception as e:
         logger.warning(f"Evidence gate loi ({e}). Fallback sang heuristic/prompt nghiem ngat.")

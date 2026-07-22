@@ -12,7 +12,6 @@ from langchain_core.messages import HumanMessage
 
 from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
-from mech_chatbot.llm.llm_client import cohere_invoke
 from mech_chatbot.rag.answer_checks import _safe_json_loads
 from mech_chatbot.rag.answer_policy import (
     PolicyEvidence,
@@ -122,7 +121,7 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
                     "Khong them ma tai lieu, phien ban, phong ban hay site khong co trong cau goc. "
                     "Chi tra JSON theo schema {\"subqueries\":[\"...\"]}.\nCAU HOI:\n" + question
                 )
-                response = cohere_invoke(
+                response = state.invoke_provider(
                     [HumanMessage(content=prompt)],
                     surface="query_decomposition",
                     trace_id=trace_id,
@@ -177,7 +176,7 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
                     branch_strict, branch_broad = compose_retrieval_filters(
                         common_must, branch_part_ids
                     )
-                    result = _retrieve(
+                    result = state.retrieve(
                         new_part_ids=branch_part_ids,
                         strict_filter=branch_strict,
                         broad_filter=branch_broad,
@@ -242,7 +241,7 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
                                 "Keep every technical code and do not add facts. Return only the query.\n\n"
                                 f"Question: {subquery}\nMissing evidence: {branch_decision.reason}"
                             )
-                            rewritten = cohere_invoke(
+                            rewritten = state.invoke_provider(
                                 [HumanMessage(content=rewrite_prompt)],
                                 surface="query_disambiguation",
                                 trace_id=trace_id,
@@ -414,13 +413,13 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
                     output_tokens=auxiliary_output_tokens,
                 )
             else:
-                (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = _retrieve(
+                (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = state.retrieve(
                     new_part_ids=new_part_ids, strict_filter=strict_filter,
                     broad_filter=broad_filter, is_bom_query=is_bom_query,
                     query_to_search=query_to_search, rbac_filter=rbac_filter, trace_id=trace_id,
                 )
         else:
-            (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = _retrieve(
+            (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = state.retrieve(
                 new_part_ids=new_part_ids,
                 strict_filter=strict_filter,
                 broad_filter=broad_filter,
@@ -442,13 +441,13 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
                     f"dua tren tai lieu noi bo: '{effective_question}'"
                 )
                 t_hyde = time.time()
-                hyde_response = cohere_invoke(
+                hyde_response = state.invoke_provider(
                     [HumanMessage(content=hyde_prompt)], surface="hyde",
                     trace_id=trace_id, retry_counter=state.budget,
                 ).content
                 state.checkpoint("hyde")
                 hyde_query = tokenize_cached(hyde_response)
-                (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = _retrieve(
+                (retrieved_docs, base_k, retrieval_mode, t_retrieval, _af) = state.retrieve(
                     new_part_ids=new_part_ids,
                     strict_filter=strict_filter,
                     broad_filter=broad_filter,

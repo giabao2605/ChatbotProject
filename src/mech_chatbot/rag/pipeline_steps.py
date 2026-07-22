@@ -303,7 +303,13 @@ def _explicit_hybrid_rrf(
         return list(fallback or []), "hybrid_fallback"
 
 
-def _prepare_history(chat_history, conversation_context, response_language, trace_id=None):
+def _prepare_history(
+    chat_history,
+    conversation_context,
+    response_language,
+    trace_id=None,
+    invoke_provider=None,
+):
     """BUOC lich su hoi thoai: dung chat_history_str (token-budgeted windowing)
     + tom tat luy tien (KH-3). Tra ve (chat_history_str, history_summary_new,
     summary_covered_new). Tach nguyen van tu chat_with_rag (P0 slice #1).
@@ -367,13 +373,14 @@ def _prepare_history(chat_history, conversation_context, response_language, trac
                     "CAC LUOT MOI CAN GOP:\n" + "\n".join(_to_sum)
                 )
                 try:
-                    _history_summary_new = cohere_invoke(
+                    provider = invoke_provider or cohere_invoke
+                    _history_summary_new = provider(
                         [HumanMessage(content=_sum_prompt)],
                         surface="chat_history_summary",
                         trace_id=trace_id,
                     ).content.strip()
                     _summary_covered_new = len(_ov)
-                except RequestBudgetExceeded:
+                except (ExternalAICallCancelled, RequestBudgetExceeded):
                     raise
                 except Exception as _e_sum:
                     logger.warning(f"[KH-3] Tom tat hoi thoai loi: {_e_sum}")
@@ -387,7 +394,7 @@ def _prepare_history(chat_history, conversation_context, response_language, trac
                 _is_en = str(response_language or "").lower().startswith("en")
                 _summary_label = "=== EARLIER CONVERSATION SUMMARY ===" if _is_en else "=== TOM TAT HOI THOAI TRUOC DO ==="
                 chat_history_str = f"{_summary_label}\n{_eff_summary}\n\n{chat_history_str}"
-    except RequestBudgetExceeded:
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise
     except Exception as _e_sumwrap:
         logger.warning(f"[KH-3] Summary buffer loi: {_e_sumwrap}")
@@ -434,7 +441,7 @@ def _analyze_image(image_path, user_question, trace_id, retry_budget=None):
                           latency_ms=int((time.time() - t_img_start)*1000),
                           success=True,
                           analysis_chars=len(image_analysis))
-            except RequestBudgetExceeded:
+            except (ExternalAICallCancelled, RequestBudgetExceeded):
                 raise
             except Exception as e:
                 logger.error(f"Loi khi doc anh bang vision model: {e}", exc_info=True)
@@ -1093,7 +1100,7 @@ def _route(*, user_question, conversation_context, response_language,
         try:
             from mech_chatbot.rag import route_llm as _route_llm
             return _route_llm.classify_llm(_t, _ctx, trace_id=trace_id)
-        except RequestBudgetExceeded:
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
             raise
         except Exception:
             return None
@@ -1150,7 +1157,7 @@ def _route(*, user_question, conversation_context, response_language,
 def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
                         conversation_context, user_department, user_roles,
                         allowed_departments, max_security_level, allowed_sites,
-                        trace_id, t_intent):
+                        trace_id, t_intent, invoke_provider=None):
     """P0 slice #5: phan doan ngu canh + query rewriting + neo State Memory (ConvState)
     + tao RBAC filter + trich xuat intent. Tra ve cac gia tri dieu khien luong phia sau,
     kem _skip_hyde_anchor (tinh ngay tai day de giu _cs cuc bo, bao toan hanh vi HyDE anchor).
@@ -1172,6 +1179,7 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
         current_part_ids,
         active_doc_refs=_active_doc_refs_in,
         trace_id=trace_id,
+        invoke_provider=invoke_provider,
     )
     context_action = ctx_result["context_action"]
     _ctx_llm_resolved = bool(ctx_result.get("llm_resolved"))
@@ -1235,7 +1243,7 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
         logger.warning(f"[ConvState] resolve_selection loi: {_cse}")
     rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments, max_security_level=max_security_level, allowed_sites=allowed_sites)
     strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data = extract_search_intent(
-        effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel, trace_id=trace_id
+        effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel, trace_id=trace_id, invoke_provider=invoke_provider
     )
 
     log_trace("intent", trace_id,

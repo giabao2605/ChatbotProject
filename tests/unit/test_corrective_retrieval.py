@@ -91,23 +91,21 @@ def test_corrected_retrieval_reuses_governance_filters_unchanged():
 
 
 def test_corrective_query_rewrites_use_approved_disambiguation_surface():
-    pipeline_path = (
+    rag_root = (
         Path(__file__).resolve().parents[2]
         / "src"
         / "mech_chatbot"
         / "rag"
-        / "pipeline.py"
     )
-    tree = ast.parse(pipeline_path.read_text(encoding="utf-8"))
     surfaces = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name) or node.func.id != "cohere_invoke":
-            continue
-        for keyword in node.keywords:
-            if keyword.arg == "surface" and isinstance(keyword.value, ast.Constant):
-                surfaces.append(keyword.value.value)
+    for source_path in rag_root.rglob("*.py"):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg == "surface" and isinstance(keyword.value, ast.Constant):
+                    surfaces.append(keyword.value.value)
 
     assert "corrective_retrieval" not in surfaces
     assert surfaces.count("query_disambiguation") >= 2

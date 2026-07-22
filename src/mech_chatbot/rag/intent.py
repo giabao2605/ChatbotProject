@@ -9,6 +9,7 @@ from qdrant_client import QdrantClient, models
 from langchain_core.messages import HumanMessage
 import json
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.rbac import (
     compose_retrieval_filters,
     create_rbac_filter,
@@ -155,7 +156,7 @@ def deterministic_business_document_intent(question):
     }
 
 
-def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False, trace_id=None):
+def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False, trace_id=None, invoke_provider=None):
     """Phan tich cau hoi de lay danh sach ma doi tuong va intent versioning bang LLM (co timeout)."""
     if current_part_ids is None:
         current_part_ids = []
@@ -230,7 +231,8 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         logger.info("Fast intent: dung current_only/general_lookup, bo qua LLM intent.")
     else:
         def call_llm():
-            response = cohere_invoke(
+            provider = invoke_provider or cohere_invoke
+            response = provider(
                 [HumanMessage(content=prompt_intent)],
                 surface="intent_routing",
                 trace_id=trace_id,
@@ -269,7 +271,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         except concurrent.futures.TimeoutError:
             future.cancel()
             logger.warning(f"LLM Intent Extraction bi timeout. Fallback ve Regex.")
-        except RequestBudgetExceeded:
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
             raise
         except Exception as e:
             logger.warning(f"Loi LLM Intent Extraction: {e}. Fallback ve Regex.")
@@ -423,7 +425,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
 _CONTEXT_TIMEOUT = float(os.getenv("CONTEXT_TIMEOUT", "5.0"))
 
 
-def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None, trace_id=None):
+def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None, trace_id=None, invoke_provider=None):
     """P0-1: Phan doan ngu canh hoi thoai + query rewriting (1 LLM call, co timeout).
 
     Tra ve dict:
@@ -508,7 +510,8 @@ Quy tac:
               .replace("__QUESTION__", str(user_question)))
 
     def call_llm():
-        return cohere_invoke(
+        provider = invoke_provider or cohere_invoke
+        return provider(
             [HumanMessage(content=prompt)],
             surface="query_disambiguation",
             trace_id=trace_id,
@@ -534,7 +537,7 @@ Quy tac:
             pass
         logger.warning("analyze_context bi timeout -> fallback continue + cau goc.")
         return fallback
-    except RequestBudgetExceeded:
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise
     except Exception as e:
         logger.warning(f"Loi analyze_context: {e} -> fallback continue + cau goc.")
