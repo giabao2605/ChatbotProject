@@ -144,6 +144,31 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
     )
 
 
+def _run_benchmark_cli(
+    tmp_path,
+    monkeypatch,
+    *,
+    cases: list[dict],
+    build_measure_one,
+) -> dict:
+    questions_path = tmp_path / "questions.jsonl"
+    trace_path = tmp_path / "rag_trace.jsonl"
+    report_path = tmp_path / "report.json"
+    _write_jsonl(questions_path, cases)
+    trace_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(benchmark, "measure_one", build_measure_one(trace_path))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "benchmark_rag_concurrency.py", str(questions_path),
+            "--concurrency", "1", "--trace-jsonl", str(trace_path),
+            "--report", str(report_path),
+        ],
+    )
+    assert benchmark.main() == 0
+    return json.loads(report_path.read_text(encoding="utf-8"))
+
+
 def test_pilot_gate_accepts_complete_real_manifest_shape(tmp_path):
     departments = ["Technical", "Finance", "HR"]
     records = [
@@ -263,6 +288,218 @@ def test_benchmark_defaults_and_sse_trace_stage_summary():
     assert summary["complete_p95_ms"] == 500.0
     assert summary["stage_latency"]["sources"] == ["sse_trace_stages"]
     assert summary["stage_latency"]["stages"]["dense_retrieval"]["p95_ms"] == 22.0
+
+
+def test_benchmark_does_not_mix_sse_and_jsonl_stage_distributions():
+    samples = [
+        {
+            "ok": True,
+            "first_token_ms": 100,
+            "complete_ms": 300,
+            "stage_metrics": {"dense_retrieval": 12},
+        },
+        {
+            "ok": True,
+            "first_token_ms": 200,
+            "complete_ms": 500,
+            "stage_metrics": {"dense_retrieval": 22},
+        },
+    ]
+
+    summary = benchmark.summarize(
+        samples,
+        5,
+        trace_stage_metrics={
+            "dense_retrieval": [1200, 2200],
+            "bm25_retrieval": [40, 60],
+        },
+        trace_metadata={"correlation": "time_window_only"},
+    )
+    stage_latency = summary["stage_latency"]
+
+    assert stage_latency["stages"]["dense_retrieval"] == {
+        "source": "sse_trace_stages",
+        "samples": 2,
+        "p50_ms": 12.0,
+        "p95_ms": 22.0,
+    }
+    assert stage_latency["stages"]["bm25_retrieval"] == {
+        "source": "trace_jsonl_time_window",
+        "samples": 2,
+        "p50_ms": 40.0,
+        "p95_ms": 60.0,
+    }
+    assert stage_latency["source_summaries"]["trace_jsonl_time_window"][
+        "dense_retrieval"
+    ]["p95_ms"] == 2200.0
+
+
+def test_benchmark_trace_jsonl_matches_and_aggregates_each_request_once(tmp_path):
+    trace_path = tmp_path / "rag_trace.jsonl"
+    _write_jsonl(
+        trace_path,
+        [
+            {"ts": "2026-07-23T00:00:01Z", "trace_id": "t1", "event": "embed", "latency_ms": 4},
+            {"ts": "2026-07-23T00:00:02Z", "trace_id": "t1", "event": "embed", "latency_ms": 9},
+            {"ts": "2026-07-23T00:00:03Z", "trace_id": "t1", "event": "cache", "latency_ms": 3},
+            {"ts": "2026-07-23T00:00:04Z", "trace_id": "t1", "event": "cache", "latency_ms": 7},
+            {"ts": "2026-07-23T00:00:05Z", "trace_id": "t2", "event": "embed", "latency_ms": 5},
+            {"ts": "2026-07-23T00:00:06Z", "trace_id": "t2", "event": "embed", "latency_ms": 7},
+            {"ts": "2026-07-23T00:00:07Z", "trace_id": "other", "event": "embed", "latency_ms": 999},
+        ],
+    )
+
+    metrics, metadata = benchmark.read_trace_jsonl(
+        trace_path,
+        allowed_trace_ids={"t1", "t2"},
+    )
+
+    assert metrics == {"cache": [10.0], "embed": [9.0, 7.0]}
+    assert metadata["correlation"] == "exact_trace_id"
+    assert metadata["trace_count"] == 2
+    assert metadata["excluded_trace_events"] == 1
+    summary = benchmark.summarize(
+        [{"ok": True, "first_token_ms": 1, "complete_ms": 2}],
+        1,
+        trace_stage_metrics=metrics,
+        trace_metadata=metadata,
+    )
+    assert summary["stage_latency"]["sources"] == [
+        "trace_jsonl_exact_trace_id"
+    ]
+
+
+def test_benchmark_cli_uses_trace_id_for_correlation_but_redacts_report(
+    tmp_path, monkeypatch,
+):
+    raw_trace_id = "rag_private_trace_123"
+    def build_measure_one(trace_path):
+        def fake_measure_one(*_args, **_kwargs):
+            _write_jsonl(trace_path, [{
+                "ts": benchmark.datetime.now(benchmark.timezone.utc).isoformat(),
+                "trace_id": raw_trace_id,
+                "event": "dense_retrieval",
+                "latency_ms": 12,
+            }])
+            return {
+                "sample_id": "q0001-private", "ok": True,
+                "first_token_ms": 10, "complete_ms": 20,
+                "trace_id": raw_trace_id, "stage_metrics": {},
+            }
+        return fake_measure_one
+
+    report = _run_benchmark_cli(
+        tmp_path, monkeypatch,
+        cases=[{"question": "benchmark privacy", "username": "admin"}],
+        build_measure_one=build_measure_one,
+    )
+    assert raw_trace_id not in json.dumps(report)
+    assert report["results"][0]["samples"][0]["trace_id"] == "<redacted>"
+    stage_latency = report["results"][0]["summary"]["stage_latency"]
+    assert stage_latency["sources"] == ["trace_jsonl_exact_trace_id"]
+    assert stage_latency["trace_jsonl"]["source"] == "<trace-jsonl>"
+
+
+def test_benchmark_cli_does_not_use_time_window_when_trace_ids_are_missing(
+    tmp_path, monkeypatch,
+):
+    def build_measure_one(trace_path):
+        def fake_measure_one(*_args, **_kwargs):
+            _write_jsonl(trace_path, [{
+                "ts": benchmark.datetime.now(benchmark.timezone.utc).isoformat(),
+                "trace_id": "unrelated-request",
+                "event": "dense_retrieval",
+                "latency_ms": 999,
+            }])
+            return {
+                "sample_id": "q0001-no-trace", "ok": True,
+                "first_token_ms": 10, "complete_ms": 20,
+                "trace_id": None,
+                "stage_metrics": {"dense_retrieval": 12},
+            }
+        return fake_measure_one
+
+    report = _run_benchmark_cli(
+        tmp_path, monkeypatch,
+        cases=[{"question": "benchmark correlation", "username": "admin"}],
+        build_measure_one=build_measure_one,
+    )
+    stage_latency = report["results"][0]["summary"]["stage_latency"]
+    assert stage_latency["sources"] == ["sse_trace_stages"]
+    assert stage_latency["stages"]["dense_retrieval"]["p95_ms"] == 12.0
+    assert stage_latency["trace_jsonl"]["correlation"] == (
+        "unavailable_missing_trace_ids"
+    )
+    assert stage_latency["trace_jsonl"]["excluded_trace_events"] == 1
+
+
+def test_benchmark_cli_rejects_partial_trace_id_correlation(
+    tmp_path, monkeypatch,
+):
+    raw_trace_id = "rag_only_one_of_two"
+    def build_measure_one(trace_path):
+        def fake_measure_one(*_args, sample_index=0, **_kwargs):
+            if sample_index == 1:
+                _write_jsonl(trace_path, [{
+                    "ts": benchmark.datetime.now(benchmark.timezone.utc).isoformat(),
+                    "trace_id": raw_trace_id, "event": "dense_retrieval",
+                    "latency_ms": 12,
+                }])
+            return {
+                "sample_id": f"q{sample_index:04d}", "ok": True,
+                "first_token_ms": 10, "complete_ms": 20,
+                "trace_id": raw_trace_id if sample_index == 1 else None,
+                "stage_metrics": {},
+            }
+        return fake_measure_one
+
+    report = _run_benchmark_cli(
+        tmp_path, monkeypatch,
+        cases=[
+            {"question": "first", "username": "admin"},
+            {"question": "second", "username": "admin"},
+        ],
+        build_measure_one=build_measure_one,
+    )
+    trace_meta = report["results"][0]["summary"]["stage_latency"]["trace_jsonl"]
+    assert trace_meta["correlation"] == "unavailable_incomplete_trace_ids"
+    assert trace_meta["expected_trace_count"] == 2
+    assert trace_meta["provided_trace_count"] == 1
+
+
+def test_benchmark_cli_rejects_incomplete_trace_jsonl_events(
+    tmp_path, monkeypatch,
+):
+    def build_measure_one(trace_path):
+        def fake_measure_one(*_args, sample_index=0, **_kwargs):
+            trace_id = f"rag_trace_{sample_index}"
+            if sample_index == 1:
+                _write_jsonl(trace_path, [{
+                    "ts": benchmark.datetime.now(benchmark.timezone.utc).isoformat(),
+                    "trace_id": trace_id, "event": "dense_retrieval",
+                    "latency_ms": 12,
+                }])
+            return {
+                "sample_id": f"q{sample_index:04d}", "ok": True,
+                "first_token_ms": 10, "complete_ms": 20,
+                "trace_id": trace_id, "stage_metrics": {},
+            }
+        return fake_measure_one
+
+    report = _run_benchmark_cli(
+        tmp_path, monkeypatch,
+        cases=[
+            {"question": "first", "username": "admin"},
+            {"question": "second", "username": "admin"},
+        ],
+        build_measure_one=build_measure_one,
+    )
+    stage_latency = report["results"][0]["summary"]["stage_latency"]
+    trace_meta = stage_latency["trace_jsonl"]
+    assert stage_latency["sources"] == []
+    assert trace_meta["correlation"] == "unavailable_incomplete_trace_events"
+    assert trace_meta["expected_trace_count"] == 2
+    assert trace_meta["trace_count"] == 1
 
 
 def test_benchmark_preserves_server_identity_without_persisting_it_in_sample(tmp_path):
