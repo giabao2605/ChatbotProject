@@ -1200,3 +1200,27 @@ không chứa implementation thứ hai. Spec review không còn P0/P1 correctnes
 security blocker; chỉ giữ P2 coverage exception nói trên. Ngoại lệ được chấp
 nhận rõ ràng ngày 2026-07-22 nên Phase 4 được phép mở; đây không phải tuyên bố
 hai legacy module đã đạt per-module 80/80.
+
+### 9.5. Phase 4 — Private RAG phases behind `RagExecutor`
+
+Trạng thái: **Implementation completed, validation chưa được chấp nhận**. Code
+candidate đã giữ public facade và vượt các gate contract/coverage/security,
+nhưng strict concurrency stage gate còn đỏ ở concurrency 10. Theo mục 5.3,
+Phase 4 chưa được đánh dấu `Completed` và không có feature flag/release decision
+nào được bật để né gate.
+
+| Trường evidence | Kết quả thực tế |
+|---|---|
+| Baseline / candidate | Baseline runtime SHA `316b8fc`; candidate code SHA `eeb89f1` (`refactor: harden rag phase internals`), branch `codex/codebase-layer-refactor`. Chuỗi extraction giữ một phase/commit từ preparation, routing, retrieval, evidence đến generation; artifact nằm tại `reports/refactor/phase-4/{baseline,candidate}/`. |
+| Public contract | `RagExecutor.run()` vẫn là facade duy nhất; legacy five-tuple wrapper, call-time behavior và debug-dict lifecycle có characterization test. Hash `openapi-app.json`, `openapi-rag.json`, `sse-success.jsonl`, `sse-busy.jsonl` và `upload-review-samples.json` bằng baseline tuyệt đối. Không thêm public service để caller bypass executor. |
+| Private ownership | Pipeline compose theo preparation -> routing -> retrieval -> evidence -> generation. Phase handoff dùng typed contracts/reason code; `PhaseTerminal.prepared` không còn `Any`. `execution.py` dưới 800 dòng; các phase file dưới 800 dòng và các function refactor-owned không vượt 50 dòng. Trace ghi canonical phase start, giữ `rag_end` là event cuối và không đánh dấu lazy generation completed trước khi stream chạy. |
+| Validation | Full backend tại candidate: **2.032 passed, 23 skipped, 0 failed**, 1 `StarletteDeprecationWarning` đã biết. Architecture **8 passed**; `git diff --check` pass. Coverage `91,525424%` line / `85,064443%` branch, checker 80/80 pass. Final code/security review không còn P0-P2 correctness/security finding. |
+| SQL/Qdrant | Read-only consistency lần đầu phát hiện demo record `empty.md` draft/non-servable không có Qdrant point nhưng còn `TrangThaiVector=1`. Dùng repository lifecycle `mark_document_ingest_failed` đưa record về rejected/vector false; không tạo fixture. Rerun trên database demo chính: **2 passed**. Evidence: `candidate/sql-qdrant-consistency.txt`. |
+| Golden | Baseline và candidate cùng **1 passed, 2 failed** do database/Qdrant hiện không có hai mã `9.3.03951` và `9.3.03844`; cả hai arm trả cùng not-found fail-closed. Quality delta không regression nhưng gate được ghi `inconclusive_data_missing`; không sửa keyword, threshold hoặc golden expectation. Evidence: `candidate/golden-eval.txt`. |
+| Benchmark | Ba run hoàn chỉnh mỗi arm, mỗi run 137 câu tại concurrency `1,5,10`, timeout 300 giây, `MAX_CONCURRENT_RAG=6`, flags OFF và cùng SQL/Qdrant/provider config. Cả hai arm đạt 137/137 ở mọi run/concurrency. Median overall first-token/complete pass: c1 `19047/19053` so với `19035/19039`; c5 `61017/61028` so với `58558/58567`; c10 `83040/83047` so với `85840/85855`. Strict stage gate c10 fail: BM25 `470/239 = 1,9665x`, dense `1492/1352 = 1,1036x`, embed `1496/1250 = 1,1968x`. Không waive gate. Evidence: sáu `rag-concurrency-run-*.json` và `candidate/benchmark-summary.json`; raw trace giữ local/untracked. |
+| Performance diagnosis | Call/sample count giữa hai arm bằng nhau; BM25 implementation không đổi; matched-sample median ratio c10 gần 1 cho BM25 và không ổn định theo run ở dense/embed. Trace-phase logging microbenchmark chỉ khoảng 11,205 ms cho năm event tại P95, không giải thích tail stage. Bằng chứng nghiêng về Qdrant/CPU scheduling noise, nhưng plan yêu cầu artifact pass nên kết luận vẫn là **failed**, không phải accepted exception. |
+| Rollback | Revert `eeb89f1` rồi các phase extraction ngược thứ tự nếu cần. Không có schema migration hoặc flag rollback. Demo record `empty.md` có thể được re-ingest để phục hồi; raw trace không nằm trong commit. |
+
+Điểm đóng Phase 4 còn lại là một bộ benchmark baseline/candidate hợp lệ vượt
+toàn bộ per-stage gate và golden fixture/data đủ để quality run không còn
+`inconclusive`. Cho đến lúc đó Phase 5 không được mở chỉ dựa trên code/tests.

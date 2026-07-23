@@ -1,0 +1,53 @@
+{
+  "schema": "phase-4-rag-benchmark-summary-v1",
+  "baseline_sha": "316b8fc26d34e72f934416fdcb6dc76da5cbc69c",
+  "candidate_sha": "eeb89f139bcb32957c91e693599060800d814d65",
+  "runs_per_arm": 3,
+  "questions_per_concurrency": 137,
+  "concurrency_levels": [1, 5, 10],
+  "timeout_seconds": 300,
+  "max_concurrent_rag": 6,
+  "success_gate": "pass",
+  "overall_latency_gate": "pass",
+  "stage_latency_gate": "fail",
+  "overall_status": "failed",
+  "median_comparison": {
+    "1": {
+      "successful_requests": {"baseline": 137, "candidate": 137},
+      "first_token_p95_ms": {"baseline": 19035, "candidate": 19047, "ratio": 1.000630, "pass": true},
+      "complete_p95_ms": {"baseline": 19039, "candidate": 19053, "ratio": 1.000735, "pass": true}
+    },
+    "5": {
+      "successful_requests": {"baseline": 137, "candidate": 137},
+      "first_token_p95_ms": {"baseline": 58558, "candidate": 61017, "ratio": 1.041993, "pass": true},
+      "complete_p95_ms": {"baseline": 58567, "candidate": 61028, "ratio": 1.042020, "pass": true}
+    },
+    "10": {
+      "successful_requests": {"baseline": 137, "candidate": 137},
+      "first_token_p95_ms": {"baseline": 85840, "candidate": 83040, "ratio": 0.967381, "pass": true},
+      "complete_p95_ms": {"baseline": 85855, "candidate": 83047, "ratio": 0.967294, "pass": true}
+    }
+  },
+  "failed_stage_gates": [
+    {"concurrency": 10, "stage": "bm25_retrieval", "baseline_median_p95_ms": 239, "candidate_median_p95_ms": 470, "ratio": 1.966527},
+    {"concurrency": 10, "stage": "dense_retrieval", "baseline_median_p95_ms": 1352, "candidate_median_p95_ms": 1492, "ratio": 1.103550},
+    {"concurrency": 10, "stage": "embed", "baseline_median_p95_ms": 1250, "candidate_median_p95_ms": 1496, "ratio": 1.196800}
+  ],
+  "diagnosis": {
+    "source_call_counts_equal": true,
+    "bm25_implementation_changed": false,
+    "matched_sample_median_ratios_at_concurrency_10": {
+      "bm25_retrieval": [1.027, 1.004, 1.017],
+      "dense_retrieval": [1.148, 0.752, 1.036],
+      "embed": [1.261, 0.751, 0.863]
+    },
+    "phase_trace_logging_microbenchmark": {
+      "events": 1000,
+      "threads": 10,
+      "per_event_p95_ms": 2.241,
+      "five_event_p95_budget_ms": 11.205
+    },
+    "conclusion": "Tail outliers are consistent with external Qdrant and CPU scheduling noise, but the strict per-stage median gate remains failed and is not waived."
+  },
+  "raw_trace_policy": "Raw trace files remain local and untracked because they may contain sensitive operational context."
+}
