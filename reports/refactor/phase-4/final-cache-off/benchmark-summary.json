@@ -1,0 +1,213 @@
+{
+  "schema": "phase-4-rag-benchmark-summary-v1",
+  "status": "failed",
+  "validation_status": "validation_not_accepted",
+  "provenance": {
+    "baseline_sha": "316b8fc26d34e72f934416fdcb6dc76da5cbc69c",
+    "candidate_sha": "eeb89f139bcb32957c91e693599060800d814d65",
+    "benchmark_harness_sha": "5bc0956cff44e28e7845bfac7da2cbfec2aea70a"
+  },
+  "methodology": {
+    "semantic_cache_enabled": false,
+    "run_order": [
+      "baseline_run_1",
+      "candidate_run_1",
+      "baseline_run_2",
+      "candidate_run_2",
+      "baseline_run_3",
+      "candidate_run_3"
+    ],
+    "questions_per_concurrency": 137,
+    "concurrency_levels": [
+      1,
+      5,
+      10
+    ],
+    "timeout_seconds": 300,
+    "max_concurrent_rag": 6,
+    "process_isolation": "fresh_server_process_per_arm",
+    "trace_correlation": "exact_trace_id",
+    "stage_source_selection": "prefer_sse_per_stage_then_trace_jsonl_exact_trace_id",
+    "aggregation": "median_of_three_runs_per_arm",
+    "cache_on_evidence_status": "invalidated_by_shared_semantic_cache_sample_contamination"
+  },
+  "gate_thresholds": {
+    "success": "candidate_median_successful_requests_gte_baseline",
+    "overall_latency": "candidate_to_baseline_p95_ratio_lte_1.10",
+    "stage_latency": "candidate_to_baseline_p95_ratio_lte_1.10_for_every_common_nonzero_stage",
+    "errors": "no_new_error_type"
+  },
+  "concurrency_results": {
+    "1": {
+      "successful_requests": {
+        "baseline_runs": [
+          137,
+          137,
+          137
+        ],
+        "candidate_runs": [
+          137,
+          137,
+          137
+        ],
+        "baseline_median": 137,
+        "candidate_median": 137,
+        "pass": true
+      },
+      "overall_p95_ms": {
+        "first_token": {
+          "baseline_median": 21370,
+          "candidate_median": 22696,
+          "ratio": 1.06205,
+          "pass": true
+        },
+        "complete": {
+          "baseline_median": 21374,
+          "candidate_median": 22699,
+          "ratio": 1.061991,
+          "pass": true
+        },
+        "pass": true
+      },
+      "failed_stage_gates": [
+        {
+          "stage": "dense_retrieval",
+          "baseline_p95_median_ms": 681,
+          "candidate_p95_median_ms": 810,
+          "ratio": 1.189427
+        },
+        {
+          "stage": "parent_context",
+          "baseline_p95_median_ms": 1785,
+          "candidate_p95_median_ms": 1997,
+          "ratio": 1.118768
+        }
+      ],
+      "stage_latency_pass": false
+    },
+    "5": {
+      "successful_requests": {
+        "baseline_runs": [
+          137,
+          129,
+          137
+        ],
+        "candidate_runs": [
+          137,
+          133,
+          137
+        ],
+        "baseline_median": 137,
+        "candidate_median": 137,
+        "pass": true
+      },
+      "overall_p95_ms": {
+        "first_token": {
+          "baseline_median": 72211,
+          "candidate_median": 61027,
+          "ratio": 0.845121,
+          "pass": true
+        },
+        "complete": {
+          "baseline_median": 72215,
+          "candidate_median": 61039,
+          "ratio": 0.84524,
+          "pass": true
+        },
+        "pass": true
+      },
+      "failed_stage_gates": [
+        {
+          "stage": "bm25_retrieval",
+          "baseline_p95_median_ms": 263,
+          "candidate_p95_median_ms": 1486,
+          "ratio": 5.65019
+        },
+        {
+          "stage": "dense_retrieval",
+          "baseline_p95_median_ms": 1189,
+          "candidate_p95_median_ms": 1982,
+          "ratio": 1.666947
+        },
+        {
+          "stage": "retrieval",
+          "baseline_p95_median_ms": 3140,
+          "candidate_p95_median_ms": 8289,
+          "ratio": 2.639809
+        }
+      ],
+      "stage_latency_pass": false
+    },
+    "10": {
+      "successful_requests": {
+        "baseline_runs": [
+          137,
+          126,
+          137
+        ],
+        "candidate_runs": [
+          137,
+          136,
+          137
+        ],
+        "baseline_median": 137,
+        "candidate_median": 137,
+        "pass": true
+      },
+      "overall_p95_ms": {
+        "first_token": {
+          "baseline_median": 96618,
+          "candidate_median": 100484,
+          "ratio": 1.040013,
+          "pass": true
+        },
+        "complete": {
+          "baseline_median": 96627,
+          "candidate_median": 100494,
+          "ratio": 1.04002,
+          "pass": true
+        },
+        "pass": true
+      },
+      "failed_stage_gates": [
+        {
+          "stage": "external_ai_call",
+          "baseline_p95_median_ms": 4896,
+          "candidate_p95_median_ms": 8040,
+          "ratio": 1.642157
+        },
+        {
+          "stage": "llm_generation",
+          "baseline_p95_median_ms": 5781,
+          "candidate_p95_median_ms": 10171,
+          "ratio": 1.759384
+        }
+      ],
+      "stage_latency_pass": false
+    }
+  },
+  "error_comparison": {
+    "baseline": {
+      "RuntimeError": 19
+    },
+    "candidate": {
+      "RuntimeError": 5
+    },
+    "new_candidate_error_types": [],
+    "pass": true
+  },
+  "gate_results": {
+    "success_gate": "pass",
+    "overall_latency_gate": "pass",
+    "stage_latency_gate": "fail",
+    "error_type_gate": "pass",
+    "overall_status": "failed"
+  },
+  "decision": {
+    "waiver": false,
+    "phase_4_status": "validation_not_accepted",
+    "phase_5_may_start": false,
+    "reason": "Seven mandatory per-stage latency comparisons exceed the 1.10 candidate-to-baseline ratio.",
+    "rerun_policy": "Do not rerun to select more favorable samples; retain all three paired runs per arm."
+  }
+}

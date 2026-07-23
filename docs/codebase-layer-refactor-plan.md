@@ -1205,9 +1205,10 @@ hai legacy module đã đạt per-module 80/80.
 
 Trạng thái: **Implementation completed, validation chưa được chấp nhận**. Code
 candidate đã giữ public facade và vượt các gate contract/coverage/security,
-nhưng strict concurrency stage gate còn đỏ ở concurrency 10. Theo mục 5.3,
-Phase 4 chưa được đánh dấu `Completed` và không có feature flag/release decision
-nào được bật để né gate.
+nhưng strict concurrency stage gate còn đỏ ở cả concurrency `1`, `5` và `10`
+trên bộ benchmark cache-off chính thức. Theo mục 5.3, Phase 4 chưa được đánh dấu
+`Completed` và không có feature flag, waiver hoặc release decision nào được bật
+để né gate.
 
 | Trường evidence | Kết quả thực tế |
 |---|---|
@@ -1217,10 +1218,16 @@ nào được bật để né gate.
 | Validation | Full backend tại candidate: **2.032 passed, 23 skipped, 0 failed**, 1 `StarletteDeprecationWarning` đã biết. Architecture **8 passed**; `git diff --check` pass. Coverage `91,525424%` line / `85,064443%` branch, checker 80/80 pass. Final code/security review không còn P0-P2 correctness/security finding. |
 | SQL/Qdrant | Read-only consistency lần đầu phát hiện demo record `empty.md` draft/non-servable không có Qdrant point nhưng còn `TrangThaiVector=1`. Dùng repository lifecycle `mark_document_ingest_failed` đưa record về rejected/vector false; không tạo fixture. Rerun trên database demo chính: **2 passed**. Evidence: `candidate/sql-qdrant-consistency.txt`. |
 | Golden | Baseline và candidate cùng **1 passed, 2 failed** do database/Qdrant hiện không có hai mã `9.3.03951` và `9.3.03844`; cả hai arm trả cùng not-found fail-closed. Quality delta không regression nhưng gate được ghi `inconclusive_data_missing`; không sửa keyword, threshold hoặc golden expectation. Evidence: `candidate/golden-eval.txt`. |
-| Benchmark | Ba run hoàn chỉnh mỗi arm, mỗi run 137 câu tại concurrency `1,5,10`, timeout 300 giây, `MAX_CONCURRENT_RAG=6`, flags OFF và cùng SQL/Qdrant/provider config. Cả hai arm đạt 137/137 ở mọi run/concurrency. Median overall first-token/complete pass: c1 `19047/19053` so với `19035/19039`; c5 `61017/61028` so với `58558/58567`; c10 `83040/83047` so với `85840/85855`. Strict stage gate c10 fail: BM25 `470/239 = 1,9665x`, dense `1492/1352 = 1,1036x`, embed `1496/1250 = 1,1968x`. Không waive gate. Evidence: sáu `rag-concurrency-run-*.json` và `candidate/benchmark-summary.json`; raw trace giữ local/untracked. |
-| Performance diagnosis | Call/sample count giữa hai arm bằng nhau; BM25 implementation không đổi; matched-sample median ratio c10 gần 1 cho BM25 và không ổn định theo run ở dense/embed. Trace-phase logging microbenchmark chỉ khoảng 11,205 ms cho năm event tại P95, không giải thích tail stage. Bằng chứng nghiêng về Qdrant/CPU scheduling noise, nhưng plan yêu cầu artifact pass nên kết luận vẫn là **failed**, không phải accepted exception. |
+| Benchmark contract | Commit harness `5bc0956` tách distribution SSE/JSONL, ưu tiên SSE theo từng stage và chỉ dùng JSONL khi exact trace ID khớp; thiếu, thừa hoặc trùng trace đều fail closed. Bộ cache-on cũ bị loại khỏi quyết định vì baseline/candidate dùng chung semantic cache SQL làm sample set khác nhau. Bộ authoritative chạy với `SEMANTIC_CACHE_ENABLED=false`, ba run mỗi arm theo thứ tự xen kẽ `B1 -> C1 -> B2 -> C2 -> B3 -> C3`, 137 câu tại concurrency `1,5,10`, timeout 300 giây, `MAX_CONCURRENT_RAG=6`, process riêng cho từng arm và cùng SQL/Qdrant/provider config. |
+| Success / error gate | Median success của hai arm đều **137/137** tại cả ba mức concurrency. Run 2 có một số request `RuntimeError`: baseline success c5/c10 là `129/126`, candidate là `133/136`; hai run còn lại đều `137/137`. Candidate không thêm error type và giảm tổng `RuntimeError` từ `19` xuống `5`, nên success gate và error-type gate pass. Không loại run lỗi khỏi median hoặc diễn giải chúng thành provider outage khi artifact không chứng minh điều đó. |
+| Overall latency gate | Median p95 first-token/complete baseline -> candidate: c1 `21370/21374 -> 22696/22699` (`1,062050x/1,061991x`), c5 `72211/72215 -> 61027/61039` (`0,845121x/0,845240x`), c10 `96618/96627 -> 100484/100494` (`1,040013x/1,040020x`). Tất cả dưới ngưỡng `1,10x`, nên overall latency gate pass. |
+| Stage latency gate | Gate bắt buộc fail tại bảy comparison: c1 `dense_retrieval 810/681 = 1,189427x`, `parent_context 1997/1785 = 1,118768x`; c5 `bm25_retrieval 1486/263 = 5,650190x`, `dense_retrieval 1982/1189 = 1,666947x`, `retrieval 8289/3140 = 2,639809x`; c10 `external_ai_call 8040/4896 = 1,642157x`, `llm_generation 10171/5781 = 1,759384x`. Vì một stage fail là đủ làm toàn gate fail, benchmark có kết luận cuối **failed**, không waiver. |
+| Benchmark evidence | Authoritative artifact nằm tại `reports/refactor/phase-4/final-cache-off/`: sáu report baseline/candidate, `benchmark-summary.json` và `manifest.json`. Manifest khóa baseline/candidate/harness SHA, dependency lock, settings fingerprint, provider, data snapshot và SHA-256 của từng artifact. Raw trace chỉ giữ local/ignored tại `logs/refactor-phase4-cache-off/`; report đã redact trace ID và đường dẫn local. Các probe cache-on/cache-off c10 bị bộ full matrix thay thế đã được xóa để không tạo hai nguồn sự thật. |
+| Performance decision | Stage tail có biến động giữa các run và một số stage phụ thuộc external provider/scheduling, nhưng plan yêu cầu median artifact vượt **mọi** stage gate. Sau đủ ba paired run cache-off, không tiếp tục rerun để chọn sample thuận lợi và không diễn giải overall pass thành Phase 4 pass. |
 | Rollback | Revert `eeb89f1` rồi các phase extraction ngược thứ tự nếu cần. Không có schema migration hoặc flag rollback. Demo record `empty.md` có thể được re-ingest để phục hồi; raw trace không nằm trong commit. |
 
-Điểm đóng Phase 4 còn lại là một bộ benchmark baseline/candidate hợp lệ vượt
-toàn bộ per-stage gate và golden fixture/data đủ để quality run không còn
-`inconclusive`. Cho đến lúc đó Phase 5 không được mở chỉ dựa trên code/tests.
+Điểm đóng Phase 4 còn lại là xử lý regression/variance ở các stage nêu trên rồi
+chạy lại đúng full matrix theo plan, đồng thời bổ sung tài liệu nguồn hợp lệ chứa
+`9.3.03951` và `9.3.03844` để golden run không còn `inconclusive_data_missing`.
+Cho đến khi cả hai cổng này pass hoặc có ngoại lệ được người dùng chấp nhận rõ
+ràng, Phase 5 không được mở chỉ dựa trên code/tests.
