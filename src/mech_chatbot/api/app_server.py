@@ -8,15 +8,13 @@ without registering those handlers twice.
 """
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 import requests
-from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 
@@ -50,15 +48,13 @@ from mech_chatbot.composition.app_runtime import (
     production_engine,
 )
 from mech_chatbot.config.logging import logger
-from mech_chatbot.config.settings import settings as application_settings
+from mech_chatbot.config.settings import AppProcessSettings, Settings
 import mech_chatbot.services.audit_service as audit_service
 import mech_chatbot.services.chat_service as chat_service
 import mech_chatbot.services.document_service as document_service
 import mech_chatbot.services.lifecycle_service as lifecycle_service
 import mech_chatbot.services.ui_query_service as ui_query_service
 
-
-load_dotenv()
 
 # These service aliases are dependencies of the composition-time runtime
 # factory.  Keeping the names local also preserves the historical monkeypatch
@@ -77,43 +73,30 @@ publish_document = document_service.publish_document
 mark_job_published = ui_query_service.mark_job_published
 
 
-_APP_THREAD_LIMIT = int(os.getenv("APP_THREAD_LIMIT", "60"))
-_PILOT_REPLAYS = PilotReplayExecutor(
-    post=lambda *args, **kwargs: requests.post(*args, **kwargs),
-    headers=lambda: _rag_headers(),
-    workers=lambda: int(os.getenv("CRAG_PILOT_REPLAY_WORKERS", "2")),
-    queue_size=lambda: int(os.getenv("CRAG_PILOT_REPLAY_QUEUE_SIZE", "8")),
-    timeout_seconds=lambda: int(
-        os.getenv("CRAG_PILOT_REPLAY_TIMEOUT_SECONDS", "300")
-    ),
-)
-
-
-def _start_pilot_replay_executor() -> None:
-    _PILOT_REPLAYS.start()
-
-
-def _stop_pilot_replay_executor() -> None:
-    _PILOT_REPLAYS.stop()
-
 @asynccontextmanager
-async def _lifespan(app: FastAPI):
+async def _lifespan(application: FastAPI):
     import asyncio
 
     import anyio
 
-    anyio.to_thread.current_default_thread_limiter().total_tokens = _APP_THREAD_LIMIT
-    logger.info("App server anyio thread limiter raised to %d", _APP_THREAD_LIMIT)
-    _start_pilot_replay_executor()
+    process = application.state.process_settings
+    pilot_replays = application.state.pilot_replays
+    anyio.to_thread.current_default_thread_limiter().total_tokens = (
+        process.thread_limit
+    )
+    logger.info(
+        "App server anyio thread limiter raised to %d",
+        process.thread_limit,
+    )
+    pilot_replays.start()
 
     async def _reconcile_lifecycle_periodically() -> None:
-        interval = max(60, int(os.getenv("LIFECYCLE_RECONCILE_SECONDS", "300")))
         while True:
             try:
                 await anyio.to_thread.run_sync(refresh_expired_status)
             except Exception:
                 logger.exception("Lifecycle reconciliation failed")
-            await asyncio.sleep(interval)
+            await asyncio.sleep(process.lifecycle_reconcile_seconds)
 
     try:
         await anyio.to_thread.run_sync(refresh_expired_status)
@@ -123,7 +106,7 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
-        _stop_pilot_replay_executor()
+        pilot_replays.stop()
         lifecycle_task.cancel()
         try:
             await lifecycle_task
@@ -131,14 +114,10 @@ async def _lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="Mech Chatbot App API", version="0.1.0", lifespan=_lifespan)
-
-
-@app.get("/api/health", tags=["system"])
-def app_health():
+def app_health(request: Request):
     db_status = "unavailable"
     try:
-        if app.state.runtime.app_support_queries.database_ready():
+        if request.app.state.runtime.app_support_queries.database_ready():
             db_status = "ok"
     except Exception as exc:
         logger.warning("App health DB probe failed: %s", exc)
@@ -153,24 +132,12 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _rag_base_url() -> str:
-    return os.getenv("RAG_SERVER_URL", "http://127.0.0.1:8100").rstrip("/")
-
-
-def _rag_headers() -> dict[str, str]:
+def _rag_headers(process: AppProcessSettings) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    token = os.getenv("RAG_SERVICE_TOKEN", "").strip()
+    token = process.rag_service_token.strip()
     if token:
         headers["X-RAG-Service-Token"] = token
     return headers
-
-
-def _execute_pilot_replay(replay) -> None:
-    _PILOT_REPLAYS.execute(replay)
-
-
-def _schedule_pilot_replay(route, payload, outcome, trace_id, profile) -> bool:
-    return _PILOT_REPLAYS.schedule(route, payload, outcome, trace_id, profile)
 
 
 # The chat router owns these interfaces.  The explicit aliases keep the runtime
@@ -179,18 +146,20 @@ _resolve_chat_citations = _chat_routes._resolve_chat_citations
 _chat_actor_profile = _chat_routes._chat_actor_profile
 
 
-def _build_default_app_runtime():
+def _build_default_app_runtime(
+    process: AppProcessSettings,
+    pilot_replays: PilotReplayExecutor,
+    *,
+    post: Callable[..., Any],
+):
     from mech_chatbot.evaluation.crag_pilot import assign_pilot_route, load_pilot_config
 
     return build_default_app_runtime(
-        application_settings,
-        post=lambda *args, **kwargs: requests.post(*args, **kwargs),
-        base_url=_rag_base_url,
-        headers=_rag_headers,
-        timeout=lambda: (
-            10,
-            int(os.getenv("APP_RAG_CHAT_TIMEOUT_SECONDS", "300")),
-        ),
+        process,
+        post=post,
+        base_url=process.rag_base_url,
+        headers=_rag_headers(process),
+        timeout=(10, process.rag_chat_timeout_seconds),
         save_chat_history=lambda **kwargs: save_chat_history(**kwargs),
         save_answer_evidence=lambda *args: save_answer_evidence(*args),
         save_answer_sources=lambda *args: save_answer_sources(*args),
@@ -203,7 +172,7 @@ def _build_default_app_runtime():
             **kwargs,
         ),
         schedule_pilot_replay=lambda route, payload, outcome, trace_id, actor: (
-            _schedule_pilot_replay(
+            pilot_replays.schedule(
                 route,
                 payload,
                 outcome,
@@ -227,15 +196,6 @@ def _build_default_app_runtime():
         engine=production_engine,
         strict_site_filter=strict_site_filter_enabled(),
     )
-
-
-app.state.runtime = _build_default_app_runtime()
-
-app.include_router(auth_router)
-app.include_router(chat_router)
-app.include_router(files_router)
-app.include_router(documents_router)
-app.include_router(operations_router)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -265,9 +225,78 @@ class SPAStaticFiles(StaticFiles):
         return "." not in leaf
 
 
-static_dir = _project_root() / "web-ui" / "dist"
-if static_dir.exists():
-    app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="web")
+def _build_pilot_replays(
+    process: AppProcessSettings,
+    *,
+    post: Callable[..., Any],
+) -> PilotReplayExecutor:
+    return PilotReplayExecutor(
+        post=post,
+        headers=lambda: _rag_headers(process),
+        workers=lambda: process.pilot_replay_workers,
+        queue_size=lambda: process.pilot_replay_queue_size,
+        timeout_seconds=lambda: int(process.pilot_replay_timeout_seconds),
+    )
+
+
+def _install_http_surface(application: FastAPI) -> None:
+    application.add_api_route(
+        "/api/health",
+        app_health,
+        methods=["GET"],
+        tags=["system"],
+    )
+    application.include_router(auth_router)
+    application.include_router(chat_router)
+    application.include_router(files_router)
+    application.include_router(documents_router)
+    application.include_router(operations_router)
+
+    static_dir = _project_root() / "web-ui" / "dist"
+    if static_dir.exists():
+        application.mount(
+            "/",
+            SPAStaticFiles(directory=str(static_dir), html=True),
+            name="web",
+        )
+
+
+def create_app(
+    existing_settings: Settings | None = None,
+    *,
+    post: Callable[..., Any] = requests.post,
+) -> FastAPI:
+    """Build one browser API process from one immutable environment snapshot."""
+
+    process = AppProcessSettings.from_settings(
+        existing_settings or Settings.from_env()
+    )
+    pilot_replays = _build_pilot_replays(process, post=post)
+    application = FastAPI(
+        title="Mech Chatbot App API",
+        version="0.1.0",
+        lifespan=_lifespan,
+    )
+    application.state.process_settings = process
+    application.state.pilot_replays = pilot_replays
+    application.state.runtime = _build_default_app_runtime(
+        process,
+        pilot_replays,
+        post=post,
+    )
+
+    @application.middleware("http")
+    async def _bind_security_settings(request: Request, call_next):
+        with app_security.bind_security_settings(
+            request.app.state.process_settings
+        ):
+            return await call_next(request)
+
+    _install_http_surface(application)
+    return application
+
+
+app = create_app()
 
 
 # Compatibility export surface.  These are direct aliases to the feature
@@ -540,9 +569,10 @@ def feedback_classify(
 if __name__ == "__main__":
     import uvicorn
 
+    process = AppProcessSettings.from_settings(Settings.from_env())
     uvicorn.run(
         "mech_chatbot.api.app_server:app",
-        host=os.getenv("APP_SERVER_HOST", "0.0.0.0"),
-        port=int(os.getenv("APP_SERVER_PORT", "8080")),
+        host=process.server_host,
+        port=process.server_port,
         reload=False,
     )

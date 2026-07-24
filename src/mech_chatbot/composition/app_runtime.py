@@ -7,8 +7,8 @@ importing this module never creates external clients or process-wide state.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from mech_chatbot.adapters.chat_runtime import (
@@ -51,6 +51,9 @@ from mech_chatbot.application.document_upload import (
     UploadStorage,
 )
 from mech_chatbot.application.protected_files import ProtectedFileResolver
+from mech_chatbot.config.settings import AppProcessSettings
+
+Callback = Callable[..., Any]
 
 
 class _NullUploadStorage:
@@ -112,7 +115,7 @@ class _NullAppSupportQueries:
 class AppRuntime:
     """Immutable dependency bundle owned by one app-server process."""
 
-    settings: Any
+    settings: AppProcessSettings
     rag_stream: RagStreamPort
     chat_store: ChatStore
     audit_sink: AuditSink
@@ -130,8 +133,48 @@ class AppRuntime:
     protected_file_resolver: ProtectedFileResolver | None
 
 
+@dataclass(frozen=True, slots=True)
+class _DocumentRuntime:
+    upload_storage: UploadStorage
+    upload_job_store: UploadJobStore
+    document_upload: DocumentUpload
+    review_store: ReviewStore
+    publication_port: PublicationPort
+    publication_coordinator: PublicationCoordinator
+    review_documents: ReviewDocuments
+    app_support_queries: Any
+
+
+def _build_document_runtime(
+    *,
+    upload_storage: UploadStorage | None,
+    upload_job_store: UploadJobStore | None,
+    review_store: ReviewStore | None,
+    publication_port: PublicationPort | None,
+    app_support_queries: Any | None,
+) -> _DocumentRuntime:
+    storage = upload_storage or _NullUploadStorage()
+    jobs = upload_job_store or _NullUploadJobStore()
+    reviews = review_store or _NullReviewStore()
+    publication = publication_port or _NullPublicationPort()
+    coordinator = PublicationCoordinator(publication=publication)
+    return _DocumentRuntime(
+        upload_storage=storage,
+        upload_job_store=jobs,
+        document_upload=DocumentUpload(storage=storage, job_store=jobs),
+        review_store=reviews,
+        publication_port=publication,
+        publication_coordinator=coordinator,
+        review_documents=ReviewDocuments(
+            review_store=reviews,
+            publication=coordinator,
+        ),
+        app_support_queries=app_support_queries or _NullAppSupportQueries(),
+    )
+
+
 def build_app_runtime(
-    existing_settings: Any,
+    existing_settings: AppProcessSettings,
     *,
     rag_stream: RagStreamPort,
     chat_store: ChatStore,
@@ -145,14 +188,7 @@ def build_app_runtime(
     app_support_queries: Any | None = None,
     protected_file_resolver: ProtectedFileResolver | None = None,
 ) -> AppRuntime:
-    """Build an immutable app runtime from explicitly supplied adapters.
-
-    ``existing_settings`` is retained by identity. This factory deliberately
-    does not read environment variables, resolve globals, or instantiate
-    infrastructure: the process bootstrap owns those decisions and passes
-    already-configured ports here.
-    """
-
+    """Build an immutable app runtime from explicitly supplied adapters."""
     runner = ChatTurnRunner(
         rag_stream=rag_stream,
         chat_store=chat_store,
@@ -160,19 +196,12 @@ def build_app_runtime(
         pilot_experiments=pilot_experiments,
         citation_resolver=citation_resolver,
     )
-    resolved_upload_storage = upload_storage or _NullUploadStorage()
-    resolved_upload_job_store = upload_job_store or _NullUploadJobStore()
-    resolved_review_store = review_store or _NullReviewStore()
-    resolved_publication_port = publication_port or _NullPublicationPort()
-    resolved_app_support_queries = app_support_queries or _NullAppSupportQueries()
-    document_upload = DocumentUpload(
-        storage=resolved_upload_storage,
-        job_store=resolved_upload_job_store,
-    )
-    publication_coordinator = PublicationCoordinator(publication=resolved_publication_port)
-    review_documents = ReviewDocuments(
-        review_store=resolved_review_store,
-        publication=publication_coordinator,
+    documents = _build_document_runtime(
+        upload_storage=upload_storage,
+        upload_job_store=upload_job_store,
+        review_store=review_store,
+        publication_port=publication_port,
+        app_support_queries=app_support_queries,
     )
     return AppRuntime(
         settings=existing_settings,
@@ -182,20 +211,27 @@ def build_app_runtime(
         pilot_experiments=pilot_experiments,
         citation_resolver=citation_resolver,
         chat_turn_runner=runner,
-        upload_storage=resolved_upload_storage,
-        upload_job_store=resolved_upload_job_store,
-        document_upload=document_upload,
-        review_store=resolved_review_store,
-        publication_port=resolved_publication_port,
-        publication_coordinator=publication_coordinator,
-        review_documents=review_documents,
-        app_support_queries=resolved_app_support_queries,
+        upload_storage=documents.upload_storage,
+        upload_job_store=documents.upload_job_store,
+        document_upload=documents.document_upload,
+        review_store=documents.review_store,
+        publication_port=documents.publication_port,
+        publication_coordinator=documents.publication_coordinator,
+        review_documents=documents.review_documents,
+        app_support_queries=documents.app_support_queries,
         protected_file_resolver=protected_file_resolver,
     )
 
 
-def build_default_app_runtime(
-    existing_settings: Any,
+@dataclass(frozen=True, slots=True)
+class _DefaultChatAdapters:
+    rag_stream: RagStreamPort
+    chat_store: ChatStore
+    audit_sink: AuditSink
+    pilot_experiments: PilotExperimentPort
+
+
+def _build_default_chat_adapters(
     *,
     post: Callable[..., Any],
     base_url: str | Callable[[], str],
@@ -209,37 +245,8 @@ def build_default_app_runtime(
     assign_pilot_route: Callable[..., object],
     pilot_outcome: Callable[..., Mapping[str, Any]],
     schedule_pilot_replay: Callable[..., bool],
-    citation_resolver: CitationResolver,
-    raw_root: Callable[[], Any] | None = None,
-    create_ingestion_job: Callable[..., int | None] | None = None,
-    reject_ingestion_job: Callable[..., bool] | None = None,
-    mark_job_rejected: Callable[[int], Any] | None = None,
-    reject_document: Callable[..., Any] | None = None,
-    delete_document_completely: Callable[..., Any] | None = None,
-    delete_ingestion_job: Callable[[int], Any] | None = None,
-    publish_document: Callable[..., Any] | None = None,
-    mark_job_published: Callable[[int], Any] | None = None,
-    engine: Any = None,
-    strict_site_filter: bool = True,
-) -> AppRuntime:
-    """Compose production adapters without exposing them to the API router."""
-
-    document_lookup = SqlDocumentLookup(engine=engine)
-    protected_file_resolver = None
-    if raw_root is not None:
-        resolved_raw_root = raw_root()
-        protected_file_resolver = ProtectedFileResolver(
-            store=SqlProtectedFileStore(engine_provider=lambda: engine() if callable(engine) else engine),
-            storage=FilesystemProtectedFileStorage(
-                project_root=resolved_raw_root.parent.parent,
-                raw_root=resolved_raw_root,
-                processed_root=resolved_raw_root.parent / "processed",
-            ),
-            audit=RepositoryProtectedFileAuditSink(write_audit_log=write_audit_log),
-            strict_site_filter=strict_site_filter,
-        )
-    return build_app_runtime(
-        existing_settings,
+) -> _DefaultChatAdapters:
+    return _DefaultChatAdapters(
         rag_stream=HttpRagStreamAdapter(
             post=post,
             base_url=base_url,
@@ -258,33 +265,110 @@ def build_default_app_runtime(
             outcome=pilot_outcome,
             schedule_replay=schedule_pilot_replay,
         ),
+    )
+
+
+def _build_review_store(
+    *,
+    reject_ingestion_job: Callable[..., bool] | None,
+    mark_job_rejected: Callable[[int], Any] | None,
+    reject_document: Callable[..., Any] | None,
+    delete_document_completely: Callable[..., Any] | None,
+    delete_ingestion_job: Callable[[int], Any] | None,
+) -> ReviewStore | None:
+    callbacks = (
+        reject_ingestion_job,
+        mark_job_rejected,
+        reject_document,
+        delete_document_completely,
+        delete_ingestion_job,
+    )
+    if not all(callbacks):
+        return None
+    return RepositoryReviewStore(
+        reject_ingestion_job=reject_ingestion_job,
+        mark_job_rejected=mark_job_rejected,
+        reject_document=reject_document,
+        delete_document_completely=delete_document_completely,
+        delete_ingestion_job=delete_ingestion_job,
+    )
+
+
+def _build_protected_file_resolver(
+    *,
+    raw_root: Callable[[], Any] | None,
+    engine: Any,
+    write_audit_log: Callable[..., Any],
+    strict_site_filter: bool,
+) -> ProtectedFileResolver | None:
+    if raw_root is None:
+        return None
+    root = raw_root()
+    return ProtectedFileResolver(
+        store=SqlProtectedFileStore(
+            engine_provider=lambda: engine() if callable(engine) else engine
+        ),
+        storage=FilesystemProtectedFileStorage(
+            project_root=root.parent.parent,
+            raw_root=root,
+            processed_root=root.parent / "processed",
+        ),
+        audit=RepositoryProtectedFileAuditSink(
+            write_audit_log=write_audit_log
+        ),
+        strict_site_filter=strict_site_filter,
+    )
+
+
+def build_default_app_runtime(
+    existing_settings: AppProcessSettings, *,
+    post: Callback, base_url: str | Callable[[], str],
+    headers: Mapping[str, str] | Callable[[], Mapping[str, str]],
+    timeout: Any | Callable[[], Any], save_chat_history: Callback,
+    save_answer_evidence: Callback, save_answer_sources: Callback,
+    write_audit_log: Callback, load_pilot_config: Callable[[], object | None],
+    assign_pilot_route: Callback, pilot_outcome: Callback,
+    schedule_pilot_replay: Callback,
+    citation_resolver: CitationResolver, raw_root: Callable[[], Any] | None = None,
+    create_ingestion_job: Callback | None = None,
+    reject_ingestion_job: Callback | None = None,
+    mark_job_rejected: Callback | None = None, reject_document: Callback | None = None,
+    delete_document_completely: Callback | None = None,
+    delete_ingestion_job: Callback | None = None, publish_document: Callback | None = None,
+    mark_job_published: Callback | None = None,
+    engine: Any = None, strict_site_filter: bool = True,
+) -> AppRuntime:
+    """Compose production adapters without exposing them to the API router."""
+    chat = _build_default_chat_adapters(
+        post=post, base_url=base_url, headers=headers, timeout=timeout,
+        save_chat_history=save_chat_history, save_answer_evidence=save_answer_evidence,
+        save_answer_sources=save_answer_sources, write_audit_log=write_audit_log,
+        load_pilot_config=load_pilot_config, assign_pilot_route=assign_pilot_route,
+        pilot_outcome=pilot_outcome, schedule_pilot_replay=schedule_pilot_replay,
+    )
+    document_lookup = SqlDocumentLookup(engine=engine)
+    return build_app_runtime(
+        existing_settings,
+        rag_stream=chat.rag_stream, chat_store=chat.chat_store,
+        audit_sink=chat.audit_sink, pilot_experiments=chat.pilot_experiments,
         citation_resolver=citation_resolver,
         upload_storage=LocalUploadStorage(raw_root=raw_root) if raw_root else None,
-        upload_job_store=RepositoryUploadJobStore(
-            create_ingestion_job=create_ingestion_job,
-        ) if create_ingestion_job else None,
-        review_store=RepositoryReviewStore(
-            reject_ingestion_job=reject_ingestion_job,
-            mark_job_rejected=mark_job_rejected,
-            reject_document=reject_document,
-            delete_document_completely=delete_document_completely,
+        upload_job_store=RepositoryUploadJobStore(create_ingestion_job=create_ingestion_job)
+        if create_ingestion_job else None,
+        review_store=_build_review_store(
+            reject_ingestion_job=reject_ingestion_job, mark_job_rejected=mark_job_rejected,
+            reject_document=reject_document, delete_document_completely=delete_document_completely,
             delete_ingestion_job=delete_ingestion_job,
-        ) if all(
-            (
-                reject_ingestion_job,
-                mark_job_rejected,
-                reject_document,
-                delete_document_completely,
-                delete_ingestion_job,
-            )
-        ) else None,
+        ),
         publication_port=RepositoryPublicationPort(
-            publish_document=publish_document,
-            mark_job_published=mark_job_published,
+            publish_document=publish_document, mark_job_published=mark_job_published,
             resolve_latest_doc_id_for_job=document_lookup.latest_doc_id_for_job,
         ) if publish_document and mark_job_published else None,
         app_support_queries=SqlAppSupportQueries(engine=engine),
-        protected_file_resolver=protected_file_resolver,
+        protected_file_resolver=_build_protected_file_resolver(
+            raw_root=raw_root, engine=engine, write_audit_log=write_audit_log,
+            strict_site_filter=strict_site_filter,
+        ),
     )
 
 

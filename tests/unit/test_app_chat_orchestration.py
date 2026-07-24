@@ -285,15 +285,16 @@ def test_crag_pilot_replay_queue_is_bounded_and_drops_without_submitting(monkeyp
         department="Technical",
         request_id="request-1",
     )
-    monkeypatch.setattr(app_server._PILOT_REPLAYS, "capacity", FullCapacity())
-    monkeypatch.setattr(app_server._PILOT_REPLAYS, "executor", NoSubmitExecutor())
+    pilot_replays = app_server.app.state.pilot_replays
+    monkeypatch.setattr(pilot_replays, "capacity", FullCapacity())
+    monkeypatch.setattr(pilot_replays, "executor", NoSubmitExecutor())
     monkeypatch.setattr(
         pilot_replay,
         "log_trace",
         lambda event, trace_id, **data: events.append((event, trace_id, data)),
     )
 
-    submitted = app_server._schedule_pilot_replay(
+    submitted = pilot_replays.schedule(
         route,
         {"user_question": "sensitive", "user_id": 7},
         {"refusal": True, "query_type": "technical"},

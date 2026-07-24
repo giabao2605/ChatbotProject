@@ -18,6 +18,18 @@ pytestmark = pytest.mark.unit
 app_server = pytest.importorskip("mech_chatbot.api.app_server")
 
 
+@pytest.fixture(autouse=True)
+def _bind_test_security_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        app_server.app.state,
+        "process_settings",
+        replace(
+            app_server.app.state.process_settings,
+            session_secret="wave-five-secret",
+        ),
+    )
+
+
 def _profile(*roles):
     return {
         "user_id": 7,
@@ -79,7 +91,6 @@ class _Engine:
 def test_auth_session_lifecycle_exposes_only_public_profile(
     monkeypatch,
 ):
-    monkeypatch.setenv("APP_SESSION_SECRET", "wave-five-secret")
     profile = _profile("viewer") | {"password_hash": "must-not-leak"}
     monkeypatch.setattr(
         operation_routes,
@@ -125,9 +136,10 @@ def test_auth_session_lifecycle_exposes_only_public_profile(
 
 
 def test_auth_profile_and_refresh_fail_closed_for_inactive_user(monkeypatch):
-    monkeypatch.setenv("APP_SESSION_SECRET", "wave-five-secret")
     token, payload = app_server.app_security.create_session_token(
-        user_id=7, username="alice"
+        user_id=7,
+        username="alice",
+        settings=app_server.app.state.process_settings,
     )
     monkeypatch.setattr(operation_routes, "load_user_profile", lambda **_kwargs: None)
 
@@ -143,9 +155,10 @@ def test_auth_profile_and_refresh_fail_closed_for_inactive_user(monkeypatch):
 
 
 def test_protected_dependencies_reject_inactive_session_before_storage(monkeypatch):
-    monkeypatch.setenv("APP_SESSION_SECRET", "wave-five-secret")
     token, payload = app_server.app_security.create_session_token(
-        user_id=7, username="alice"
+        user_id=7,
+        username="alice",
+        settings=app_server.app.state.process_settings,
     )
     monkeypatch.setattr(dependencies, "load_user_profile", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -190,7 +203,6 @@ def test_preference_update_reports_storage_rejection(monkeypatch, client_for):
 def test_chat_image_upload_validates_content_and_returns_owner_token(
     monkeypatch, client_for, tmp_path
 ):
-    monkeypatch.setenv("APP_SESSION_SECRET", "wave-five-secret")
     monkeypatch.setattr(chat_routes, "data_raw_root", lambda: tmp_path)
     client = client_for(_profile())
 
@@ -211,7 +223,10 @@ def test_chat_image_upload_validates_content_and_returns_owner_token(
     assert oversized.status_code == 400
     assert uploaded.status_code == 200
     body = uploaded.json()
-    token_payload = app_server.app_security.verify_session_token(body["image_token"])
+    token_payload = app_server.app_security.verify_session_token(
+        body["image_token"],
+        settings=app_server.app.state.process_settings,
+    )
     assert body["ok"] is True
     assert body["file_name"] == "evidence.png"
     assert token_payload.user_id == 7
@@ -222,8 +237,6 @@ def test_chat_image_upload_validates_content_and_returns_owner_token(
 def test_chat_message_rejects_untrusted_image_tokens_before_rag(
     monkeypatch, client_for
 ):
-    monkeypatch.setenv("APP_SESSION_SECRET", "wave-five-secret")
-
     class RejectingRunner:
         def stream(self, *_args, **_kwargs):
             pytest.fail("rejected image must not reach RAG")
@@ -235,13 +248,19 @@ def test_chat_message_rejects_untrusted_image_tokens_before_rag(
     )
     client = client_for(_profile())
     wrong_owner, _ = app_server.app_security.create_session_token(
-        user_id=8, username="image:evidence.png"
+        user_id=8,
+        username="image:evidence.png",
+        settings=app_server.app.state.process_settings,
     )
     wrong_kind, _ = app_server.app_security.create_session_token(
-        user_id=7, username="alice"
+        user_id=7,
+        username="alice",
+        settings=app_server.app.state.process_settings,
     )
     missing, _ = app_server.app_security.create_session_token(
-        user_id=7, username="image:missing.png"
+        user_id=7,
+        username="image:missing.png",
+        settings=app_server.app.state.process_settings,
     )
     monkeypatch.setattr(chat_routes, "chat_image_path", lambda _image_id: None)
 

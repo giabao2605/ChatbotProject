@@ -52,15 +52,24 @@ RAG_PROFILE = {
 @pytest.fixture
 def app_client(monkeypatch):
     app_server.app.dependency_overrides.clear()
-    monkeypatch.setenv("APP_SESSION_SECRET", "wave6-session-secret")
     monkeypatch.delenv("RAG_SERVICE_TOKEN", raising=False)
+    monkeypatch.setattr(
+        app_server.app.state,
+        "process_settings",
+        replace(
+            app_server.app.state.process_settings,
+            session_secret="wave6-session-secret",
+        ),
+    )
     monkeypatch.setattr(
         dependencies,
         "load_user_profile",
         lambda **_identity: dict(APP_PROFILE),
     )
     token, payload = app_security.create_session_token(
-        user_id=APP_PROFILE["user_id"], username=APP_PROFILE["username"]
+        user_id=APP_PROFILE["user_id"],
+        username=APP_PROFILE["username"],
+        settings=app_server.app.state.process_settings,
     )
     client = TestClient(app_server.app)
     client.cookies.set(app_security.SESSION_COOKIE_NAME, token)

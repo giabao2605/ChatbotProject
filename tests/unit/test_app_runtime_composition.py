@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +19,7 @@ from mech_chatbot.composition.app_runtime import (
     build_app_runtime,
     build_default_app_runtime,
 )
+from mech_chatbot.config.settings import AppProcessSettings, Settings
 
 
 pytestmark = pytest.mark.unit
@@ -93,8 +93,12 @@ def _actor() -> ChatActor:
     )
 
 
+def _settings() -> AppProcessSettings:
+    return AppProcessSettings.from_settings(Settings.from_env({}))
+
+
 def test_build_app_runtime_keeps_explicit_dependencies_and_streams_with_runner() -> None:
-    settings = SimpleNamespace(name="test-settings")
+    settings = _settings()
     rag_stream = ScriptedRag()
     chat_store = Store()
     audit_sink = Audit()
@@ -125,7 +129,7 @@ def test_build_app_runtime_keeps_explicit_dependencies_and_streams_with_runner()
 
 def test_app_runtime_is_frozen() -> None:
     runtime = build_app_runtime(
-        object(),
+        _settings(),
         rag_stream=ScriptedRag(),
         chat_store=Store(),
         audit_sink=Audit(),
@@ -138,7 +142,7 @@ def test_app_runtime_is_frozen() -> None:
 
 
 def test_build_default_app_runtime_owns_production_adapter_wiring() -> None:
-    settings = SimpleNamespace(name="production-settings")
+    settings = _settings()
 
     runtime = build_default_app_runtime(
         settings,
