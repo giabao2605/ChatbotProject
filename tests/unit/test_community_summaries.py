@@ -4,10 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from mech_chatbot.rag.community_summaries import (
+from mech_chatbot.domain.community_policy import (
     build_pending_summary,
     detect_communities,
     evaluate_summary_serving,
+)
+from mech_chatbot.rag import community_summaries as legacy_community_summaries
+from mech_chatbot.rag.community_summaries import (
     is_global_query,
     load_community_context,
 )
@@ -15,6 +18,15 @@ from scripts.community_eval.preflight import build_readiness, validate_manifest_
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_community_compatibility_surface_delegates_to_domain_policy():
+    assert legacy_community_summaries.build_pending_summary is build_pending_summary
+    assert legacy_community_summaries.detect_communities is detect_communities
+    assert (
+        legacy_community_summaries.evaluate_summary_serving
+        is evaluate_summary_serving
+    )
 
 
 def _edge(edge_id, source, target, status="approved"):

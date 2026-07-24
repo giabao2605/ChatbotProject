@@ -48,7 +48,7 @@ from mech_chatbot.ingestion.pdf.bom import (
 )
 from mech_chatbot.ingestion.pdf.readers import extract_text_from_supported_file
 from mech_chatbot.ingestion.pdf.metadata import extract_metadata_smart
-from mech_chatbot.ingestion.progress import IngestionProgressEvent
+from mech_chatbot.domain.ingestion_progress import IngestionProgressEvent
 
 
 @dataclass(frozen=True, slots=True)

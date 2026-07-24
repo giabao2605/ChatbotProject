@@ -2,15 +2,23 @@ from pathlib import Path
 
 import pytest
 
+from mech_chatbot.domain.graph_policy import (
+    expand_seed_keys,
+    validate_graph_proposal,
+)
+from mech_chatbot.rag import graph_ontology as legacy_graph_ontology
 from mech_chatbot.rag.graph_retrieval import (
-    attach_served_graph_context, expand_seed_keys, filter_servable_edges,
+    attach_served_graph_context, filter_servable_edges,
     hydrate_graph_edges,
     select_graph_seeds, should_attempt_graph,
 )
-from mech_chatbot.rag.graph_ontology import validate_graph_proposal
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_graph_ontology_compatibility_surface_delegates_to_domain_policy():
+    assert legacy_graph_ontology.validate_graph_proposal is validate_graph_proposal
 
 
 def test_graph_proposal_ontology_rejects_historical_ambiguous_relation_seed():

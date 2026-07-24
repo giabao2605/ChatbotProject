@@ -1,24 +1,9 @@
-"""Typed progress contract shared by ingestion implementations and adapters."""
+"""Compatibility imports for the domain-neutral ingestion progress contract."""
 
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Literal
-
-
-IngestionPhase = Literal[
-    "classifying",
-    "extracting",
-    "embedding",
-    "quality_check",
-    "completed",
-]
-
-
-@dataclass(frozen=True, slots=True)
-class IngestionProgressEvent:
-    phase: IngestionPhase
-    message: str
+from mech_chatbot.domain.ingestion_progress import (
+    IngestionPhase,
+    IngestionProgressEvent,
+)
 
 
 __all__ = ["IngestionPhase", "IngestionProgressEvent"]

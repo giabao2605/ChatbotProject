@@ -8,6 +8,8 @@ import re
 from langchain_core.documents import Document
 from qdrant_client import models
 
+from mech_chatbot.domain.graph_policy import expand_seed_keys
+
 
 _LEVELS = {"public": 0, "internal": 1, "confidential": 2}
 _RELATIONAL_TERMS = (
@@ -37,17 +39,6 @@ def select_graph_seeds(question: str, candidate_ids=()):
         str(question or ""), flags=re.IGNORECASE,
     ))
     return sorted(values, key=str.casefold)
-
-
-def expand_seed_keys(seed_keys):
-    """Expand user-visible identifiers to deterministic canonical graph keys."""
-    expanded = set()
-    for item in seed_keys or ():
-        value = str(item or "").strip().lower()
-        if not value:
-            continue
-        expanded.update((value, f"part:{value}", f"material:{value}"))
-    return sorted(expanded)
 
 
 def filter_servable_edges(edges, access_context):

@@ -6,7 +6,10 @@ import json
 
 from sqlalchemy import text
 
-from mech_chatbot.rag.graph_ontology import validate_graph_proposal
+from mech_chatbot.domain.graph_policy import (
+    expand_seed_keys,
+    validate_graph_proposal,
+)
 
 from ..engine import _ensure_engine, engine
 
@@ -165,8 +168,6 @@ def review_graph_proposal(proposal_id, action, reviewer, note=None):
 
 def traverse_knowledge_graph(seed_keys, access_context, max_hops=2, limit=50):
     """Traverse approved edges both ways while preserving their stored direction."""
-    from mech_chatbot.rag.graph_retrieval import expand_seed_keys
-
     keys = expand_seed_keys(seed_keys)
     if not keys:
         return []

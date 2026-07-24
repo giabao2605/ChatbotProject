@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from mech_chatbot.rag.feature_activation import (
+from mech_chatbot.governance.feature_activation import (
     FEATURE_FLAGS,
     VERSION_DEFAULTS,
     activation_status,

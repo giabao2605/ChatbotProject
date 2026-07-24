@@ -14,7 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from mech_chatbot.ingestion.progress import IngestionPhase, IngestionProgressEvent
+from mech_chatbot.domain.ingestion_progress import (
+    IngestionPhase,
+    IngestionProgressEvent,
+)
 
 
 logger = logging.getLogger(__name__)

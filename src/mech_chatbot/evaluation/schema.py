@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from mech_chatbot.domain.graph_policy import RELATION_ONTOLOGY
+
 CURRENT_MANIFEST_SCHEMA = "rag-eval-manifest-v2"
 LEGACY_MANIFEST_SCHEMA = "rag-eval-manifest-v1-legacy"
 SUPPORTED_MANIFEST_SCHEMAS = {CURRENT_MANIFEST_SCHEMA, LEGACY_MANIFEST_SCHEMA}
@@ -17,8 +19,6 @@ EVALUATOR_MODELS = {
 
 def is_valid_relation_contract(value: object) -> bool:
     """Return whether a graph relation has the complete canonical identity."""
-    from mech_chatbot.rag.graph_ontology import RELATION_ONTOLOGY
-
     return isinstance(value, dict) and all(
         isinstance(value.get(field), str) and value[field].strip()
         for field in ("source_key", "relation_type", "target_key")

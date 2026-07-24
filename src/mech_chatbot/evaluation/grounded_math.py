@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from mech_chatbot.rag.number_normalization import normalized_number_values
+from mech_chatbot.domain.number_normalization import normalized_number_values
 
 
 def _decimal(value: Any) -> Decimal | None:

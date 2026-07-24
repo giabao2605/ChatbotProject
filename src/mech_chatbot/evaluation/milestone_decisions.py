@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from mech_chatbot.governance.artifact_references import json_reference_report
-from mech_chatbot.rag.feature_activation import FEATURE_FLAGS, MILESTONE_FLAGS
+from mech_chatbot.governance.feature_activation import FEATURE_FLAGS, MILESTONE_FLAGS
 
 DECISION_SCOPES = {"controlled_demo", "default_rollout"}
 DECISIONS = {"accepted", "rejected", "inconclusive"}

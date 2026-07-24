@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Any, Literal, Mapping, Protocol
 
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
-from mech_chatbot.rag.serving_state import is_currently_servable
+from mech_chatbot.domain.serving_state import is_currently_servable
 
 
 LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}

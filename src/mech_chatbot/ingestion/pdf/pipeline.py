@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from mech_chatbot.domain.ingestion_progress import IngestionProgressEvent
 from mech_chatbot.ingestion.pdf import pipeline_implementation as _implementation
-from mech_chatbot.ingestion.progress import IngestionProgressEvent
 
 
 def _legacy_callback(callback: Any) -> Any:

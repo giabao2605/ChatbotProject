@@ -6,10 +6,11 @@ import json
 
 from sqlalchemy import text
 
-from mech_chatbot.rag.community_summaries import (
+from mech_chatbot.domain.community_policy import (
     build_pending_summary,
     evaluate_summary_serving,
 )
+from mech_chatbot.domain.graph_policy import expand_seed_keys
 
 from ..engine import _ensure_engine, engine
 
@@ -116,8 +117,6 @@ def load_servable_community_summaries(
     *, node_keys, access_context, serving_epoch, graph_fingerprint, limit=5,
 ):
     """Return approved summaries only while every source remains servable."""
-    from mech_chatbot.rag.graph_retrieval import expand_seed_keys
-
     seeds = expand_seed_keys(node_keys)
     _ensure_engine()
     with engine.connect() as conn:

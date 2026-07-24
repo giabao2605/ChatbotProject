@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from mech_chatbot.rag.number_normalization import normalize_numbers_in_text
+from mech_chatbot.domain.number_normalization import normalize_numbers_in_text
 
 
 _CITATION_PATTERN = re.compile(r"\[(?:Nguồn|Source)\s*:[^\]]+\]", re.IGNORECASE)

@@ -178,7 +178,8 @@ def test_community_propose_and_list_contracts(monkeypatch):
 
 def test_load_servable_community_summaries_skips_bad_json_and_accepts_current_source(monkeypatch):
     monkeypatch.setattr(
-        "mech_chatbot.rag.graph_retrieval.expand_seed_keys",
+        community_summaries,
+        "expand_seed_keys",
         lambda keys: [str(item).lower() for item in keys],
     )
     raw = _community_row()
@@ -327,7 +328,7 @@ def test_graph_list_review_and_traverse_public_contracts(monkeypatch):
     assert conn.calls[-1][1]["reviewer"] == "System"
 
     assert graph.traverse_knowledge_graph([], {}, 0, 0) == []
-    monkeypatch.setattr("mech_chatbot.rag.graph_retrieval.expand_seed_keys", lambda keys: ["n1"])
+    monkeypatch.setattr(graph, "expand_seed_keys", lambda keys: ["n1"])
     conn = _install(monkeypatch, graph, _Result(rows=[{"edge_id": 3, "source_key": "n1"}]))
     rows = graph.traverse_knowledge_graph(
         ["N1"], {"roles": ["admin"], "max_security_level": "confidential"}, max_hops=99, limit=99,

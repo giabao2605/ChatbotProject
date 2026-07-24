@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from mech_chatbot.rag.feature_activation import (
+from mech_chatbot.governance.feature_activation import (
     ACTIVATION_PROFILES,
     FEATURE_FLAGS,
     VERSION_FIELDS,

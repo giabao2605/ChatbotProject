@@ -5,7 +5,7 @@ from mech_chatbot.ingestion.pdf.config import (
     SUPPORTED_LEARNING_EXTENSIONS,
 )
 from mech_chatbot.ingestion.pdf import pipeline_implementation
-from mech_chatbot.ingestion.progress import IngestionProgressEvent
+from mech_chatbot.domain.ingestion_progress import IngestionProgressEvent
 from mech_chatbot.config.logging import logger
 
 # Cau hinh ProxyLLM/GPT Vision.

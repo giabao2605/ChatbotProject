@@ -1052,7 +1052,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
     # the complete serving predicate after every retrieval branch so a document
     # that crossed its expiry date cannot reach reranking or generation while
     # lifecycle reconciliation is still catching up.
-    from mech_chatbot.rag.serving_state import filter_currently_servable
+    from mech_chatbot.domain.serving_state import filter_currently_servable
     retrieved_docs = filter_currently_servable(retrieved_docs)
     return retrieved_docs, base_k, retrieval_mode, t_retrieval, (active_filter if "active_filter" in locals() else _RETRIEVE_UNSET)
 

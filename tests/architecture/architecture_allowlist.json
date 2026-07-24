@@ -3,22 +3,6 @@
   "policy": "Current count must equal the reviewed count; update debt and allowlist together.",
   "entries": [
     {
-      "rule": "application_external_dependency",
-      "path": "application/ingestion_runner.py",
-      "dependency": "mech_chatbot.ingestion.progress",
-      "count": 2,
-      "removal_phase": "Phase 5",
-      "reason": "Existing application dependency on an upper or adapter layer"
-    },
-    {
-      "rule": "application_external_dependency",
-      "path": "application/protected_files.py",
-      "dependency": "mech_chatbot.rag.serving_state",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing application dependency on an upper or adapter layer"
-    },
-    {
       "rule": "config_upward_dependency",
       "path": "config/logging.py",
       "dependency": "mech_chatbot.db.repository",
@@ -41,38 +25,6 @@
       "count": 1,
       "removal_phase": "Phase 5",
       "reason": "Existing dynamic DB callback into an upper layer"
-    },
-    {
-      "rule": "db_upward_dependency",
-      "path": "db/repositories/community_summaries.py",
-      "dependency": "mech_chatbot.rag.community_summaries",
-      "count": 2,
-      "removal_phase": "Phase 5",
-      "reason": "Existing reverse dependency from DB into an upper layer"
-    },
-    {
-      "rule": "db_upward_dependency",
-      "path": "db/repositories/community_summaries.py",
-      "dependency": "mech_chatbot.rag.graph_retrieval",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing reverse dependency from DB into an upper layer"
-    },
-    {
-      "rule": "db_upward_dependency",
-      "path": "db/repositories/graph.py",
-      "dependency": "mech_chatbot.rag.graph_ontology",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing reverse dependency from DB into an upper layer"
-    },
-    {
-      "rule": "db_upward_dependency",
-      "path": "db/repositories/graph.py",
-      "dependency": "mech_chatbot.rag.graph_retrieval",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing reverse dependency from DB into an upper layer"
     },
     {
       "rule": "direct_getenv",
@@ -457,46 +409,6 @@
       "count": 4,
       "removal_phase": "Phase 5",
       "reason": "Existing configuration read outside canonical settings"
-    },
-    {
-      "rule": "evaluation_private_rag_dependency",
-      "path": "evaluation/grounded_math.py",
-      "dependency": "mech_chatbot.rag.number_normalization",
-      "count": 1,
-      "removal_phase": "Phase 4",
-      "reason": "Existing evaluation dependency on private RAG implementation"
-    },
-    {
-      "rule": "evaluation_private_rag_dependency",
-      "path": "evaluation/grounding.py",
-      "dependency": "mech_chatbot.rag.number_normalization",
-      "count": 1,
-      "removal_phase": "Phase 4",
-      "reason": "Existing evaluation dependency on private RAG implementation"
-    },
-    {
-      "rule": "evaluation_private_rag_dependency",
-      "path": "evaluation/integrated_hardening.py",
-      "dependency": "mech_chatbot.rag.feature_activation",
-      "count": 3,
-      "removal_phase": "Phase 4",
-      "reason": "Existing evaluation dependency on private RAG implementation"
-    },
-    {
-      "rule": "evaluation_private_rag_dependency",
-      "path": "evaluation/milestone_decisions.py",
-      "dependency": "mech_chatbot.rag.feature_activation",
-      "count": 2,
-      "removal_phase": "Phase 4",
-      "reason": "Existing evaluation dependency on private RAG implementation"
-    },
-    {
-      "rule": "evaluation_private_rag_dependency",
-      "path": "evaluation/schema.py",
-      "dependency": "mech_chatbot.rag.graph_ontology",
-      "count": 1,
-      "removal_phase": "Phase 4",
-      "reason": "Existing evaluation dependency on private RAG implementation"
     },
     {
       "rule": "import_time_environment_mutation",
