@@ -170,6 +170,10 @@ class Settings(BaseModel):
     RAG_GRAPH_SERVING_EPOCH: str = "graph-v1"
     RAG_COMMUNITY_SERVING_EPOCH: str = "community-v1"
     RAG_GRAPH_FINGERPRINT: Optional[str] = None
+    RAG_DEPLOYMENT_ID: Optional[str] = None
+    RAG_DEPLOYMENT_GIT_SHA: Optional[str] = None
+    RAG_SNAPSHOT_FINGERPRINT: Optional[str] = None
+    CRAG_PILOT_ASSIGNMENT_SALT: str = ""
     GLOSSARY_CACHE_TTL: float = 60.0
     LLM_ROUTER_MIN_CONFIDENCE: float = 0.5
 
@@ -338,6 +342,13 @@ class Settings(BaseModel):
                 "RAG_COMMUNITY_SERVING_EPOCH", "community-v1"
             ),
             RAG_GRAPH_FINGERPRINT=_str("RAG_GRAPH_FINGERPRINT"),
+            RAG_DEPLOYMENT_ID=_str("RAG_DEPLOYMENT_ID"),
+            RAG_DEPLOYMENT_GIT_SHA=_str("RAG_DEPLOYMENT_GIT_SHA"),
+            RAG_SNAPSHOT_FINGERPRINT=_str("RAG_SNAPSHOT_FINGERPRINT"),
+            CRAG_PILOT_ASSIGNMENT_SALT=_str(
+                "CRAG_PILOT_ASSIGNMENT_SALT",
+                "",
+            ),
             GLOSSARY_CACHE_TTL=_float("GLOSSARY_CACHE_TTL", 60.0),
             LLM_ROUTER_MIN_CONFIDENCE=_float("LLM_ROUTER_MIN_CONFIDENCE", 0.5),
             # Ingestion
@@ -565,6 +576,11 @@ class RagProcessSettings:
     require_service_auth: bool
     service_token: str
     cors_allow_origins: tuple[str, ...]
+    deployment_id: str | None
+    deployment_git_sha: str | None
+    snapshot_fingerprint: str | None
+    graph_fingerprint: str | None
+    pilot_assignment_salt: str
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RagProcessSettings":
@@ -575,6 +591,11 @@ class RagProcessSettings:
             require_service_auth=settings.RAG_REQUIRE_SERVICE_AUTH,
             service_token=settings.RAG_SERVICE_TOKEN,
             cors_allow_origins=settings.RAG_CORS_ALLOW_ORIGINS,
+            deployment_id=settings.RAG_DEPLOYMENT_ID,
+            deployment_git_sha=settings.RAG_DEPLOYMENT_GIT_SHA,
+            snapshot_fingerprint=settings.RAG_SNAPSHOT_FINGERPRINT,
+            graph_fingerprint=settings.RAG_GRAPH_FINGERPRINT,
+            pilot_assignment_salt=settings.CRAG_PILOT_ASSIGNMENT_SALT,
         )
 
 
