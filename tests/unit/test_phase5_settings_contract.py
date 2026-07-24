@@ -8,6 +8,7 @@ from mech_chatbot.config.settings import (
     LlmSettings,
     QdrantSettings,
     RagProcessSettings,
+    RepositoryPolicySettings,
     Settings,
     SqlSettings,
     VisionSettings,
@@ -66,6 +67,10 @@ def test_process_projections_are_frozen_and_keep_existing_defaults():
     assert rag.require_service_auth is True
     assert rag.hyde_enabled is True
     assert rag.query_rewrite_enabled is True
+    assert rag.late_interaction_enabled is False
+    assert rag.late_encoder_ready is False
+    assert settings.RERANK_PER_PART == 8
+    assert settings.RERANK_TOP_N_CAP == 20
     assert worker.publication_reconcile_interval_seconds == 15
     assert worker.serving_reconcile_interval_seconds == 600
     assert worker.serving_reconcile_batch_size == 500
@@ -152,6 +157,7 @@ def test_adapter_projections_expose_only_their_required_configuration():
     qdrant = QdrantSettings.from_settings(settings)
     llm = LlmSettings.from_settings(settings)
     vision = VisionSettings.from_settings(settings)
+    repository_policy = RepositoryPolicySettings.from_settings(settings)
 
     assert sql.server == "sql-host"
     assert sql.trusted_connection is False
@@ -160,8 +166,28 @@ def test_adapter_projections_expose_only_their_required_configuration():
     assert llm.model_name == "gpt-test"
     assert vision.model_name == "vision-test"
     assert vision.min_interval_seconds == 0.0
+    assert repository_policy.strict_site_filter is True
+    assert repository_policy.publication_max_attempts == 5
     assert not hasattr(qdrant, "SQL_PASSWORD")
     assert not hasattr(sql, "QDRANT_API_KEY")
+
+
+def test_repository_policy_projection_snapshots_governance_overrides():
+    settings = Settings.from_env(
+        {
+            "RBAC_STRICT_SITE_FILTER": "false",
+            "KNOWLEDGE_ALLOW_ADMIN_METADATA_OVERRIDE": "true",
+            "KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE": "1",
+            "PUBLICATION_MAX_ATTEMPTS": "7",
+        }
+    )
+
+    policy = RepositoryPolicySettings.from_settings(settings)
+
+    assert policy.strict_site_filter is False
+    assert policy.allow_admin_metadata_override is True
+    assert policy.allow_admin_approval_override is True
+    assert policy.publication_max_attempts == 7
 
 
 def test_external_ai_projection_snapshots_local_policy_without_secrets():

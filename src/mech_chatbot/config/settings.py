@@ -141,8 +141,8 @@ class Settings(BaseModel):
     INGEST_VISION_PREWARM_WORKERS: int = 1
 
     # --- RAG core (rag/*) -------------------------------------------------
-    RERANK_PER_PART: int = 10
-    RERANK_TOP_N_CAP: int = 40
+    RERANK_PER_PART: int = 8
+    RERANK_TOP_N_CAP: int = 20
     VOYAGE_API_KEY: Optional[str] = None
     VOYAGE_RERANK_MODEL: str = "rerank-2.5-lite"
     VOYAGE_RERANK_TIMEOUT_SECONDS: float = 15.0
@@ -192,6 +192,9 @@ class Settings(BaseModel):
     RAG_REQUEST_DEADLINE_SECONDS: float = 120.0
     EVALUATION_FORCE_AMBIGUOUS: bool = False
     RBAC_STRICT_SITE_FILTER: bool = True
+    KNOWLEDGE_ALLOW_ADMIN_METADATA_OVERRIDE: bool = False
+    KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE: bool = False
+    PUBLICATION_MAX_ATTEMPTS: int = 5
     RAG_TRACE_LOG_FILE: Optional[str] = None
 
     # --- Ingestion (ingestion/*) -----------------------------------------
@@ -332,8 +335,8 @@ class Settings(BaseModel):
             GPT_VISION_MAX_OUTPUT_TOKENS=_int("GPT_VISION_MAX_OUTPUT_TOKENS", 4096),
             INGEST_VISION_PREWARM_WORKERS=_int("INGEST_VISION_PREWARM_WORKERS", 1),
             # RAG core
-            RERANK_PER_PART=_int("RERANK_PER_PART", 10),
-            RERANK_TOP_N_CAP=_int("RERANK_TOP_N_CAP", 40),
+            RERANK_PER_PART=_int("RERANK_PER_PART", 8),
+            RERANK_TOP_N_CAP=_int("RERANK_TOP_N_CAP", 20),
             VOYAGE_API_KEY=_str("VOYAGE_API_KEY"),
             VOYAGE_RERANK_MODEL=_str("VOYAGE_RERANK_MODEL", "rerank-2.5-lite"),
             VOYAGE_RERANK_TIMEOUT_SECONDS=_float("VOYAGE_RERANK_TIMEOUT_SECONDS", 15.0),
@@ -415,6 +418,17 @@ class Settings(BaseModel):
                 True,
                 _TRUTHY_5,
             ),
+            KNOWLEDGE_ALLOW_ADMIN_METADATA_OVERRIDE=_bool(
+                "KNOWLEDGE_ALLOW_ADMIN_METADATA_OVERRIDE",
+                False,
+                _TRUTHY_5,
+            ),
+            KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE=_bool(
+                "KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE",
+                False,
+                _TRUTHY_5,
+            ),
+            PUBLICATION_MAX_ATTEMPTS=_int("PUBLICATION_MAX_ATTEMPTS", 5),
             RAG_TRACE_LOG_FILE=_str("RAG_TRACE_LOG_FILE"),
             # Ingestion
             LLM_METADATA_MODE=_str("LLM_METADATA_MODE", "missing_only").strip().lower(),
@@ -513,6 +527,27 @@ class SqlSettings:
             username=settings.SQL_USERNAME,
             password=settings.SQL_PASSWORD,
             trusted_connection=settings.SQL_TRUSTED_CONNECTION,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryPolicySettings:
+    strict_site_filter: bool
+    allow_admin_metadata_override: bool
+    allow_admin_approval_override: bool
+    publication_max_attempts: int
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "RepositoryPolicySettings":
+        return cls(
+            strict_site_filter=settings.RBAC_STRICT_SITE_FILTER,
+            allow_admin_metadata_override=(
+                settings.KNOWLEDGE_ALLOW_ADMIN_METADATA_OVERRIDE
+            ),
+            allow_admin_approval_override=(
+                settings.KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE
+            ),
+            publication_max_attempts=max(1, settings.PUBLICATION_MAX_ATTEMPTS),
         )
 
 
@@ -670,6 +705,8 @@ class RagProcessSettings:
     pilot_assignment_salt: str
     hyde_enabled: bool
     query_rewrite_enabled: bool
+    late_interaction_enabled: bool
+    late_encoder_ready: bool
     execution_context: str
     request_deadline_seconds: float
     evaluation_force_ambiguous: bool
@@ -700,6 +737,8 @@ class RagProcessSettings:
             pilot_assignment_salt=settings.CRAG_PILOT_ASSIGNMENT_SALT,
             hyde_enabled=settings.HYDE_ENABLED,
             query_rewrite_enabled=settings.ENABLE_QUERY_REWRITE,
+            late_interaction_enabled=settings.RAG_LATE_INTERACTION_ENABLED,
+            late_encoder_ready=settings.RAG_LATE_ENCODER_READY,
             execution_context=settings.RAG_EXECUTION_CONTEXT,
             request_deadline_seconds=settings.RAG_REQUEST_DEADLINE_SECONDS,
             evaluation_force_ambiguous=settings.EVALUATION_FORCE_AMBIGUOUS,
