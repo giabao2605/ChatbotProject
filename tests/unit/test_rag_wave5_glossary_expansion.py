@@ -1,7 +1,7 @@
 import pytest
 
 from mech_chatbot.db import repository
-from mech_chatbot.ingestion import domain_registry
+from mech_chatbot.db import registry_ports
 from mech_chatbot.rag import glossary_expand
 
 
@@ -12,7 +12,7 @@ def test_glossary_expansion_adds_only_terms_missing_from_the_question(monkeypatc
     calls = []
     monkeypatch.setattr(glossary_expand.time, "time", lambda: 1_000_000_000_000.0)
     monkeypatch.setattr(
-        domain_registry,
+        registry_ports,
         "resolve_domain_by_department",
         lambda department: "wave5-mechanical" if department == "WAVE5" else None,
     )
@@ -43,7 +43,7 @@ def test_glossary_expansion_is_empty_for_empty_input_or_repository_failure(monke
 
     monkeypatch.setattr(glossary_expand.time, "time", lambda: 2_000_000_000_000.0)
     monkeypatch.setattr(
-        domain_registry,
+        registry_ports,
         "resolve_domain_by_department",
         lambda department: "wave5-failure",
     )
@@ -67,7 +67,7 @@ def test_glossary_expansion_falls_back_to_generic_when_domain_resolution_fails(
         del department
         raise RuntimeError("domain registry unavailable")
 
-    monkeypatch.setattr(domain_registry, "resolve_domain_by_department", fail_domain)
+    monkeypatch.setattr(registry_ports, "resolve_domain_by_department", fail_domain)
     monkeypatch.setattr(
         repository,
         "get_active_glossary",

@@ -3,6 +3,7 @@ import re
 import pytest
 
 from mech_chatbot.db import repository
+from mech_chatbot.db import registry_ports
 from mech_chatbot.ingestion import material_registry
 
 
@@ -46,7 +47,11 @@ class _Engine:
 
 @pytest.fixture(autouse=True)
 def isolated_material_cache(monkeypatch):
-    monkeypatch.setattr(material_registry, "_cache", {"ts": 0.0, "materials": None})
+    monkeypatch.setattr(
+        registry_ports,
+        "_material_cache",
+        {"ts": 0.0, "materials": None},
+    )
 
 
 def test_public_material_registry_reads_active_database_dictionary(monkeypatch):

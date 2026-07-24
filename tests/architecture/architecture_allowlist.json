@@ -19,14 +19,6 @@
       "reason": "Existing config callback into a runtime layer"
     },
     {
-      "rule": "db_dynamic_import",
-      "path": "db/registry_ports.py",
-      "dependency": "importlib.import_module",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing dynamic DB callback into an upper layer"
-    },
-    {
       "rule": "direct_getenv",
       "path": "api/app_security.py",
       "dependency": "os.getenv",
@@ -505,22 +497,6 @@
       "count": 1,
       "removal_phase": "Phase 5",
       "reason": "Existing ingestion dependency on RAG implementation"
-    },
-    {
-      "rule": "rag_ingestion_dependency",
-      "path": "rag/answer_checks.py",
-      "dependency": "mech_chatbot.ingestion.material_registry",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing RAG dependency on ingestion implementation"
-    },
-    {
-      "rule": "rag_ingestion_dependency",
-      "path": "rag/glossary_expand.py",
-      "dependency": "mech_chatbot.ingestion.domain_registry",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing RAG dependency on ingestion implementation"
     },
     {
       "rule": "service_flat_export",

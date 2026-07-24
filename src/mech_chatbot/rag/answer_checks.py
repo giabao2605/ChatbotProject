@@ -2,7 +2,7 @@
 tach khoi rag/service.py de giam kich thuoc file + de unit test rieng.
 
 NGUYEN TAC: COPY NGUYEN VAN (byte-for-byte, trich bang ast) tu service.py -> KHONG doi logic.
-Chi phu thuoc stdlib (re, json) + lazy import material_registry -> KHONG the gay circular import.
+Chi phu thuoc stdlib (re, json) + explicit DB registry adapter.
 service.py re-import cac ten nay nen moi cho goi cu + tests van chay.
 """
 import json
@@ -69,7 +69,7 @@ KNOWN_MATERIALS = [
 
 def _known_materials():
     try:
-        from mech_chatbot.ingestion.material_registry import get_known_materials
+        from mech_chatbot.db.registry_ports import get_known_materials
         mats = get_known_materials()
         if mats:
             return mats

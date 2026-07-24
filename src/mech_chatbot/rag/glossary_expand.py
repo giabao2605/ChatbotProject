@@ -1,7 +1,7 @@
 """Refactor (GD4 - lat cat 2): cum GLOSSARY EXPANSION tach khoi rag/service.py.
 
 NGUYEN TAC: trich NGUYEN VAN (byte-for-byte, bang ast) tu service.py -> KHONG doi logic.
-Chi phu thuoc stdlib (re, time) + logger, va cac lazy import (domain_registry, repository,
+Chi phu thuoc stdlib (re, time) + logger, va cac lazy import (DB registry, repository,
 text_utils) BEN TRONG ham -> KHONG the gay circular import voi service.py.
 service.py re-import cac ten nay nen moi cho goi cu + tests van chay.
 """
@@ -23,7 +23,7 @@ def _glossary_domains_for_department(user_department):
     domains = ["generic"]
     try:
         if user_department:
-            from mech_chatbot.ingestion.domain_registry import resolve_domain_by_department
+            from mech_chatbot.db.registry_ports import resolve_domain_by_department
             d = resolve_domain_by_department(user_department)
             if d and d not in domains:
                 domains.append(d)
