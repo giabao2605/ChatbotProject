@@ -135,6 +135,16 @@ class Settings(BaseModel):
     CITATION_MAX_SOURCES: int = 5
     BOM_CITATION_MAX_SOURCES: int = 3
     RAG_EVAL_FORCE_AMBIGUOUS: bool = False
+    LLM_EVIDENCE_VERIFIER_ENABLED: bool = False
+    ENABLE_HISTORY_SUMMARY: bool = False
+    ENABLE_CONV_STATE: bool = False
+    LLM_ROUTER_ENABLED: bool = True
+    SEMANTIC_ROUTER_ENABLED: bool = True
+    SEMANTIC_ROUTER_SIM_THRESHOLD: float = 0.62
+    SEMANTIC_ROUTER_MARGIN: float = 0.04
+    SAFETY_BLOCK_ENABLED: bool = True
+    SAFETY_EXTRA_INJECTION: tuple[str, ...] = ()
+    SAFETY_EXTRA_ABUSE: tuple[str, ...] = ()
     RAG_GRAPH_SERVING_EPOCH: str = "graph-v1"
     RAG_COMMUNITY_SERVING_EPOCH: str = "community-v1"
     RAG_GRAPH_FINGERPRINT: Optional[str] = None
@@ -373,6 +383,35 @@ class Settings(BaseModel):
                 False,
                 _TRUTHY_5,
             ),
+            LLM_EVIDENCE_VERIFIER_ENABLED=_bool(
+                "LLM_EVIDENCE_VERIFIER_ENABLED",
+                False,
+                _TRUTHY_5,
+            ),
+            ENABLE_HISTORY_SUMMARY=_bool(
+                "ENABLE_HISTORY_SUMMARY",
+                False,
+                _TRUTHY_5,
+            ),
+            ENABLE_CONV_STATE=_bool("ENABLE_CONV_STATE", False, _TRUTHY_5),
+            LLM_ROUTER_ENABLED=_bool("LLM_ROUTER_ENABLED", True, _TRUTHY_5),
+            SEMANTIC_ROUTER_ENABLED=_bool(
+                "SEMANTIC_ROUTER_ENABLED",
+                True,
+                _TRUTHY_5,
+            ),
+            SEMANTIC_ROUTER_SIM_THRESHOLD=_float(
+                "SEMANTIC_ROUTER_SIM_THRESHOLD",
+                0.62,
+            ),
+            SEMANTIC_ROUTER_MARGIN=_float("SEMANTIC_ROUTER_MARGIN", 0.04),
+            SAFETY_BLOCK_ENABLED=_bool(
+                "SAFETY_BLOCK_ENABLED",
+                True,
+                _TRUTHY_5,
+            ),
+            SAFETY_EXTRA_INJECTION=_csv("SAFETY_EXTRA_INJECTION"),
+            SAFETY_EXTRA_ABUSE=_csv("SAFETY_EXTRA_ABUSE"),
             RAG_GRAPH_SERVING_EPOCH=_str("RAG_GRAPH_SERVING_EPOCH", "graph-v1"),
             RAG_COMMUNITY_SERVING_EPOCH=_str(
                 "RAG_COMMUNITY_SERVING_EPOCH", "community-v1"
@@ -734,6 +773,16 @@ class RagProcessSettings:
     citation_max_sources: int
     bom_citation_max_sources: int
     eval_force_ambiguous: bool
+    evidence_verifier_enabled: bool
+    history_summary_enabled: bool
+    conversation_state_enabled: bool
+    llm_router_enabled: bool
+    semantic_router_enabled: bool
+    semantic_router_threshold: float
+    semantic_router_margin: float
+    safety_block_enabled: bool
+    safety_extra_injection: tuple[str, ...]
+    safety_extra_abuse: tuple[str, ...]
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RagProcessSettings":
@@ -792,6 +841,18 @@ class RagProcessSettings:
                 settings.BOM_CITATION_MAX_SOURCES,
             ),
             eval_force_ambiguous=settings.RAG_EVAL_FORCE_AMBIGUOUS,
+            evidence_verifier_enabled=(
+                settings.LLM_EVIDENCE_VERIFIER_ENABLED
+            ),
+            history_summary_enabled=settings.ENABLE_HISTORY_SUMMARY,
+            conversation_state_enabled=settings.ENABLE_CONV_STATE,
+            llm_router_enabled=settings.LLM_ROUTER_ENABLED,
+            semantic_router_enabled=settings.SEMANTIC_ROUTER_ENABLED,
+            semantic_router_threshold=settings.SEMANTIC_ROUTER_SIM_THRESHOLD,
+            semantic_router_margin=settings.SEMANTIC_ROUTER_MARGIN,
+            safety_block_enabled=settings.SAFETY_BLOCK_ENABLED,
+            safety_extra_injection=settings.SAFETY_EXTRA_INJECTION,
+            safety_extra_abuse=settings.SAFETY_EXTRA_ABUSE,
         )
 
 

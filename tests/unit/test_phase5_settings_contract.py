@@ -123,6 +123,16 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
             "CITATION_MAX_SOURCES": "6",
             "BOM_CITATION_MAX_SOURCES": "4",
             "RAG_EVAL_FORCE_AMBIGUOUS": "true",
+            "LLM_EVIDENCE_VERIFIER_ENABLED": "true",
+            "ENABLE_HISTORY_SUMMARY": "true",
+            "ENABLE_CONV_STATE": "true",
+            "LLM_ROUTER_ENABLED": "false",
+            "SEMANTIC_ROUTER_ENABLED": "false",
+            "SEMANTIC_ROUTER_SIM_THRESHOLD": "0.7",
+            "SEMANTIC_ROUTER_MARGIN": "0.08",
+            "SAFETY_BLOCK_ENABLED": "false",
+            "SAFETY_EXTRA_INJECTION": "custom injection",
+            "SAFETY_EXTRA_ABUSE": "custom abuse",
         }
     )
 
@@ -151,6 +161,16 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
     assert rag.citation_max_sources == 6
     assert rag.bom_citation_max_sources == 4
     assert rag.eval_force_ambiguous is True
+    assert rag.evidence_verifier_enabled is True
+    assert rag.history_summary_enabled is True
+    assert rag.conversation_state_enabled is True
+    assert rag.llm_router_enabled is False
+    assert rag.semantic_router_enabled is False
+    assert rag.semantic_router_threshold == 0.7
+    assert rag.semantic_router_margin == 0.08
+    assert rag.safety_block_enabled is False
+    assert rag.safety_extra_injection == ("custom injection",)
+    assert rag.safety_extra_abuse == ("custom abuse",)
 
 
 def test_app_security_projection_preserves_secret_fallback_and_clamps_values():
