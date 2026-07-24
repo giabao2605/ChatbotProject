@@ -1203,12 +1203,13 @@ hai legacy module đã đạt per-module 80/80.
 
 ### 9.5. Phase 4 — Private RAG phases behind `RagExecutor`
 
-Trạng thái: **Implementation completed, validation chưa được chấp nhận**. Code
-candidate đã giữ public facade và vượt các gate contract/coverage/security,
-nhưng strict concurrency stage gate còn đỏ ở cả concurrency `1`, `5` và `10`
-trên bộ benchmark cache-off chính thức. Theo mục 5.3, Phase 4 chưa được đánh dấu
-`Completed` và không có feature flag, waiver hoặc release decision nào được bật
-để né gate.
+Trạng thái: **Completed / Validated với ngoại lệ benchmark được chấp nhận**.
+Code candidate đã giữ public facade và vượt các gate contract/coverage/security.
+Strict concurrency stage gate vẫn đỏ ở concurrency `1`, `5` và `10` trên bộ
+benchmark cache-off chính thức; kết quả này không được đổi thành pass. Ngày
+2026-07-24, người dùng chấp nhận ngoại lệ có phạm vi chỉ để đóng Phase 4 và mở
+Phase 5. Ngoại lệ không phải phê duyệt production/release, không cho phép bật
+feature flag và không xóa khoản nợ stage-latency.
 
 | Trường evidence | Kết quả thực tế |
 |---|---|
@@ -1222,15 +1223,16 @@ trên bộ benchmark cache-off chính thức. Theo mục 5.3, Phase 4 chưa đư
 | Benchmark contract | Commit harness `5bc0956` tách distribution SSE/JSONL, ưu tiên SSE theo từng stage và chỉ dùng JSONL khi exact trace ID khớp; thiếu, thừa hoặc trùng trace đều fail closed. Bộ cache-on cũ bị loại khỏi quyết định vì baseline/candidate dùng chung semantic cache SQL làm sample set khác nhau. Bộ authoritative chạy với `SEMANTIC_CACHE_ENABLED=false`, ba run mỗi arm theo thứ tự xen kẽ `B1 -> C1 -> B2 -> C2 -> B3 -> C3`, 137 câu tại concurrency `1,5,10`, timeout 300 giây, `MAX_CONCURRENT_RAG=6`, process riêng cho từng arm và cùng SQL/Qdrant/provider config. |
 | Success / error gate | Median success của hai arm đều **137/137** tại cả ba mức concurrency. Run 2 có một số request `RuntimeError`: baseline success c5/c10 là `129/126`, candidate là `133/136`; hai run còn lại đều `137/137`. Candidate không thêm error type và giảm tổng `RuntimeError` từ `19` xuống `5`, nên success gate và error-type gate pass. Không loại run lỗi khỏi median hoặc diễn giải chúng thành provider outage khi artifact không chứng minh điều đó. |
 | Overall latency gate | Median p95 first-token/complete baseline -> candidate: c1 `21370/21374 -> 22696/22699` (`1,062050x/1,061991x`), c5 `72211/72215 -> 61027/61039` (`0,845121x/0,845240x`), c10 `96618/96627 -> 100484/100494` (`1,040013x/1,040020x`). Tất cả dưới ngưỡng `1,10x`, nên overall latency gate pass. |
-| Stage latency gate | Gate bắt buộc fail tại bảy comparison: c1 `dense_retrieval 810/681 = 1,189427x`, `parent_context 1997/1785 = 1,118768x`; c5 `bm25_retrieval 1486/263 = 5,650190x`, `dense_retrieval 1982/1189 = 1,666947x`, `retrieval 8289/3140 = 2,639809x`; c10 `external_ai_call 8040/4896 = 1,642157x`, `llm_generation 10171/5781 = 1,759384x`. Vì một stage fail là đủ làm toàn gate fail, benchmark có kết luận cuối **failed**, không waiver. |
+| Stage latency gate | Gate bắt buộc fail tại bảy comparison: c1 `dense_retrieval 810/681 = 1,189427x`, `parent_context 1997/1785 = 1,118768x`; c5 `bm25_retrieval 1486/263 = 5,650190x`, `dense_retrieval 1982/1189 = 1,666947x`, `retrieval 8289/3140 = 2,639809x`; c10 `external_ai_call 8040/4896 = 1,642157x`, `llm_generation 10171/5781 = 1,759384x`. Vì một stage fail là đủ làm toàn gate fail, benchmark có kết luận cuối **failed**. Ngoại lệ được chấp nhận sau đó không thay đổi artifact hoặc biến gate này thành pass. |
 | Benchmark evidence | Authoritative artifact nằm tại `reports/refactor/phase-4/final-cache-off/`: sáu report baseline/candidate, `benchmark-summary.json` và `manifest.json`. Manifest khóa baseline/candidate/harness SHA, dependency lock, settings fingerprint, provider, data snapshot và SHA-256 của từng artifact. Raw trace chỉ giữ local/ignored tại `logs/refactor-phase4-cache-off/`; report đã redact trace ID và đường dẫn local. Các probe cache-on/cache-off c10 bị bộ full matrix thay thế đã được xóa để không tạo hai nguồn sự thật. |
 | Performance decision | Stage tail có biến động giữa các run và một số stage phụ thuộc external provider/scheduling, nhưng plan yêu cầu median artifact vượt **mọi** stage gate. Sau đủ ba paired run cache-off, không tiếp tục rerun để chọn sample thuận lợi và không diễn giải overall pass thành Phase 4 pass. |
 | Stage diagnosis hậu benchmark | Đối chiếu baseline/candidate xác nhận `_explicit_hybrid_rrf`, `_retrieve`, `hydrate_parent_context`, worker count và external-provider timer không đổi; không có retrieval/provider call trùng. Dense/BM25 có đủ population nhưng chênh lệch nằm ở p95 tail giữa các run; `parent_context` chỉ 12-15 sample/run, `retrieval` 11-16 và `llm_generation` 2-4. Không xác nhận được code regression để sửa hợp lệ. Vì vậy không chạy lại full matrix chỉ để lấy sample thuận lợi; stage gate vẫn **fail** và kết luận này không phải waiver. |
+| Ngoại lệ được chấp nhận | Ngày `2026-07-24`, người dùng chấp nhận stage-latency exception chỉ cho **phase progression**. Phase 4 được đóng và Phase 5 được phép mở. Benchmark authoritative vẫn `failed`; ngoại lệ không chứng minh performance pass, không phê duyệt production/live rollout, không bật feature flag, không hạ ngưỡng benchmark và không cho phép các phase sau bỏ qua validation riêng. Bảy comparison đỏ tiếp tục được giữ làm performance debt/evidence cho lần tối ưu hoặc benchmark có thay đổi hợp lệ sau này. |
 | Rollback | Revert `eeb89f1` rồi các phase extraction ngược thứ tự nếu cần. Không có schema migration hoặc flag rollback. Demo record `empty.md` có thể được re-ingest để phục hồi; raw trace không nằm trong commit. |
 
-Blocker corpus/golden đã đóng. Điểm đóng Phase 4 duy nhất còn lại là có một thay
-đổi hiệu năng hợp lệ, được chứng minh bằng feedback loop nhỏ, rồi chạy lại đúng
-full matrix để stage latency gate pass; hoặc có ngoại lệ benchmark được người
-dùng chấp nhận rõ ràng. Chẩn đoán variance hiện tại không phải waiver. Cho đến
-khi một trong hai điều kiện đó xảy ra, Phase 5 không được mở chỉ dựa trên
-code/tests, golden pass hay overall latency pass.
+Blocker corpus/golden đã đóng. Ngoại lệ benchmark có phạm vi hẹp đã được người
+dùng chấp nhận rõ ràng, vì vậy Phase 4 được đóng và Phase 5 được phép mở. Bảy
+stage comparison đỏ vẫn là performance debt; khi có thay đổi hiệu năng hợp lệ,
+feedback loop nhỏ phải chứng minh hướng sửa trước khi chạy lại đúng full matrix.
+Không được dùng ngoại lệ này làm release decision hoặc tiền lệ để bỏ qua gate
+riêng của Phase 5 và các phase sau.
