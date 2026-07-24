@@ -322,6 +322,46 @@ def _scan_import_time_resources(
     return findings
 
 
+def _is_os_environ(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+        and node.attr == "environ"
+    )
+
+
+def _scan_import_time_environment_mutations(
+    relative: Path,
+    tree: ast.Module,
+) -> list[ArchitectureViolation]:
+    findings: list[ArchitectureViolation] = []
+    for node in tree.body:
+        mutated = False
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+            mutated = any(
+                isinstance(target, ast.Subscript) and _is_os_environ(target.value)
+                for target in targets
+            )
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            function = node.value.func
+            mutated = (
+                isinstance(function, ast.Attribute)
+                and _is_os_environ(function.value)
+                and function.attr in {"clear", "pop", "setdefault", "update"}
+            )
+        if mutated:
+            findings.append(
+                ArchitectureViolation(
+                    "import_time_environment_mutation",
+                    relative.as_posix(),
+                    "os.environ",
+                )
+            )
+    return findings
+
+
 def _scan_python_file(source_root: Path, path: Path) -> list[ArchitectureViolation]:
     relative = path.relative_to(source_root)
     source = path.read_text(encoding="utf-8")
@@ -333,6 +373,7 @@ def _scan_python_file(source_root: Path, path: Path) -> list[ArchitectureViolati
         *_scan_dynamic_imports(relative, tree),
         *_scan_api_calls(relative, tree),
         *_scan_import_time_resources(relative, tree),
+        *_scan_import_time_environment_mutations(relative, tree),
         *_scan_service_exports(relative, tree),
     ]
 
@@ -421,6 +462,7 @@ def write_allowlist(path: Path, violations: Iterable[ArchitectureViolation]) -> 
         "db_upward_dependency": "Phase 5",
         "direct_getenv": "Phase 5",
         "evaluation_private_rag_dependency": "Phase 4",
+        "import_time_environment_mutation": "Phase 5",
         "import_time_resource": "Phase 5",
         "ingestion_rag_dependency": "Phase 5",
         "rag_ingestion_dependency": "Phase 5",
@@ -438,6 +480,7 @@ def write_allowlist(path: Path, violations: Iterable[ArchitectureViolation]) -> 
         "db_upward_dependency": "Existing reverse dependency from DB into an upper layer",
         "direct_getenv": "Existing configuration read outside canonical settings",
         "evaluation_private_rag_dependency": "Existing evaluation dependency on private RAG implementation",
+        "import_time_environment_mutation": "Existing process environment mutation at module import time",
         "import_time_resource": "Existing resource constructed at module import time",
         "ingestion_rag_dependency": "Existing ingestion dependency on RAG implementation",
         "rag_ingestion_dependency": "Existing RAG dependency on ingestion implementation",

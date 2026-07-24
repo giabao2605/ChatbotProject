@@ -195,6 +195,40 @@ def test_only_canonical_settings_module_may_read_environment(tmp_path):
     }
 
 
+def test_guard_detects_import_time_environment_mutation(tmp_path):
+    source_root = tmp_path / "mech_chatbot"
+    bootstrap = source_root / "rag" / "bootstrap.py"
+    bootstrap.parent.mkdir(parents=True)
+    bootstrap.write_text(
+        "import os\n"
+        "os.environ['TRANSFORMERS_VERBOSITY'] = 'error'\n"
+        "os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')\n"
+        "def request_scope():\n"
+        "    os.environ.setdefault('NOT_IMPORT_TIME', '1')\n",
+        encoding="utf-8",
+    )
+
+    violations = scan_repository(source_root)
+    mutations = [
+        item
+        for item in violations
+        if item.rule == "import_time_environment_mutation"
+    ]
+
+    assert mutations == [
+        ArchitectureViolation(
+            "import_time_environment_mutation",
+            "rag/bootstrap.py",
+            "os.environ",
+        ),
+        ArchitectureViolation(
+            "import_time_environment_mutation",
+            "rag/bootstrap.py",
+            "os.environ",
+        ),
+    ]
+
+
 def test_ratchet_distinguishes_removed_debt_from_new_occurrences():
     violation = ArchitectureViolation("direct_getenv", "rag/example.py", "os.getenv")
 
