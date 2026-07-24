@@ -27,7 +27,7 @@ def build_compatibility_ingestion_resources(
     settings_factory: Callable[[], Any] | None = None,
     qdrant_runtime_factory: Callable[[Any], IngestionPipelineDependencies]
     | None = None,
-    vision_model_factory: Callable[[str | None], Any] | None = None,
+    vision_model_factory: Callable[[Any], Any] | None = None,
 ) -> CompatibilityIngestionResources:
     """Build missing legacy resources once for this call, without caching them."""
 
@@ -57,7 +57,7 @@ def build_compatibility_ingestion_resources(
 
             vision_model_factory = build_vision_model
         vision_settings = VisionSettings.from_settings(settings)
-        vision_model = vision_model_factory(vision_settings.model_name)
+        vision_model = vision_model_factory(vision_settings)
 
     return CompatibilityIngestionResources(dependencies, vision_model)
 

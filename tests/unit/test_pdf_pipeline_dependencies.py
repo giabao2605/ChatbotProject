@@ -184,6 +184,7 @@ def test_compatibility_factory_builds_fresh_resources_from_one_settings_snapshot
         GPT_VISION_TEMPERATURE=0.0,
         GPT_VISION_MAX_OUTPUT_TOKENS=4096,
         GPT_TIMEOUT_SECONDS=180.0,
+        GPT_MIN_INTERVAL_SECONDS=0.0,
     )
     settings_calls = []
     qdrant_settings = []
@@ -193,8 +194,8 @@ def test_compatibility_factory_builds_fresh_resources_from_one_settings_snapshot
         qdrant_settings.append(projection)
         return _dependencies()
 
-    def build_vision(model_name):
-        vision_models.append(model_name)
+    def build_vision(projection):
+        vision_models.append(projection)
         return object()
 
     for _ in range(2):
@@ -213,4 +214,8 @@ def test_compatibility_factory_builds_fresh_resources_from_one_settings_snapshot
         "technical-documents",
         "technical-documents",
     ]
-    assert vision_models == ["vision-model", "vision-model"]
+    assert [item.model_name for item in vision_models] == [
+        "vision-model",
+        "vision-model",
+    ]
+    assert all(item.timeout_seconds == 180.0 for item in vision_models)
