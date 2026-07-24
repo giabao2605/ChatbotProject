@@ -10,7 +10,6 @@ from typing import Any
 from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.answer_policy import PolicyEvidence, decide_answer_policy
-from mech_chatbot.rag.bootstrap import env_bool
 from mech_chatbot.rag.corrective import correction_enabled
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
 from mech_chatbot.rag.execution import RequestBudgetExceeded
@@ -98,6 +97,8 @@ def _enter_route(prepared: PreparedRequest, state: Any) -> RoutingOutcome | _Rou
         t_start=prepared.started_at,
         make_debug_info=make_debug_info,
         lifecycle=state,
+        runtime=state.retrieval_adapter,
+        invoke_provider=state.invoke_provider,
     )
     state.checkpoint("routing")
     if route_terminal is not None:
@@ -152,6 +153,7 @@ def _semantic_cache_terminal(
 def _lookup_semantic_cache(
     prepared: PreparedRequest,
     embed_cached: Callable[[str], Any],
+    state: Any,
 ) -> _SemanticCacheLookup:
     query_embedding = None
     cache_scope = prepared.cache_scope
@@ -159,7 +161,11 @@ def _lookup_semantic_cache(
     try:
         import mech_chatbot.rag.semantic_cache as semantic_cache
 
-        if semantic_cache.enabled() and prepared.cache_eligible:
+        runtime = state.retrieval_adapter
+        if semantic_cache.enabled(
+            getattr(runtime, "semantic_cache_enabled", True),
+            state.invocation.mode,
+        ) and prepared.cache_eligible:
             query_embedding = embed_cached(prepared.user_question)
             if cache_scope is None:
                 cache_scope = semantic_cache.scope_signature(
@@ -168,11 +174,22 @@ def _lookup_semantic_cache(
                     prepared.max_security_level,
                     prepared.allowed_sites,
                     prepared.user_roles,
+                    pipeline_environment=getattr(
+                        runtime,
+                        "semantic_cache_environment",
+                        None,
+                    ),
                 )
             hit = semantic_cache.lookup(
                 prepared.user_question,
                 query_embedding,
                 cache_scope,
+                ttl=getattr(runtime, "semantic_cache_ttl_hours", 24.0),
+                threshold=getattr(
+                    runtime,
+                    "semantic_cache_sim_threshold",
+                    0.93,
+                ),
             )
             if hit:
                 terminal = _semantic_cache_terminal(prepared, hit, lookup_started)
@@ -209,6 +226,7 @@ def _rewrite_request(prepared: PreparedRequest, state: Any) -> _RewriteDecision:
         trace_id=prepared.trace_id,
         t_intent=intent_started,
         invoke_provider=state.invoke_provider,
+        runtime=state.retrieval_adapter,
     )
     state.checkpoint("rewrite_and_anchor")
     return _RewriteDecision(
@@ -328,11 +346,13 @@ def _chitchat_terminal(
 def _build_search_query(
     prepared: PreparedRequest,
     rewrite: _RewriteDecision,
+    state: Any,
 ) -> _SearchQuery:
+    runtime = state.retrieval_adapter
     tokenized_question = tokenize_cached(rewrite.effective_question)
     query_to_search = tokenized_question
     hyde_eligible = (
-        env_bool("HYDE_ENABLED", True)
+        bool(getattr(runtime, "hyde_enabled", True))
         and len(tokenized_question.split()) < 25
         and not rewrite.new_part_ids
         and not rewrite.skip_hyde_anchor
@@ -341,6 +361,7 @@ def _build_search_query(
         glossary_terms = glossary_expansion_terms(
             rewrite.effective_question,
             prepared.user_department,
+            ttl_seconds=getattr(runtime, "glossary_cache_ttl", 60.0),
         )
         if glossary_terms:
             query_to_search += " " + tokenize_cached(glossary_terms)
@@ -361,6 +382,7 @@ def _build_route_decision(
     rewrite: _RewriteDecision,
     search: _SearchQuery,
     cache: _SemanticCacheLookup,
+    state: Any,
 ) -> RouteDecision:
     return RouteDecision(
         request=prepared,
@@ -377,7 +399,9 @@ def _build_route_decision(
         query_to_search=search.text,
         cache_query_embedding=cache.query_embedding,
         cache_scope=cache.scope,
-        crag_enabled=correction_enabled(),
+        crag_enabled=correction_enabled(
+            bool(getattr(state.retrieval_adapter, "crag_enabled", False))
+        ),
     )
 
 
@@ -387,7 +411,7 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
     setup = _enter_route(prepared, state)
     if isinstance(setup, RoutingOutcome):
         return setup
-    cache = _lookup_semantic_cache(prepared, setup.embed_cached)
+    cache = _lookup_semantic_cache(prepared, setup.embed_cached, state)
     if cache.terminal is not None:
         return cache.terminal
     rewrite = _rewrite_request(prepared, state)
@@ -395,9 +419,9 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
         return _missing_version_terminal(prepared, state)
     if rewrite.intent_data.get("is_chitchat"):
         return _chitchat_terminal(prepared, setup.mock_stream)
-    search = _build_search_query(prepared, rewrite)
+    search = _build_search_query(prepared, rewrite, state)
     return RoutingOutcome(
-        decision=_build_route_decision(prepared, rewrite, search, cache)
+        decision=_build_route_decision(prepared, rewrite, search, cache, state)
     )
 
 

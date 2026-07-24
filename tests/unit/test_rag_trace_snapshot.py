@@ -23,7 +23,6 @@ def _load_snapshot_module():
 
 def test_log_trace_adds_execution_context_and_normalizes_rag_end_reason(monkeypatch):
     emitted: list[dict] = []
-    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "evaluation")
     monkeypatch.setattr(
         trace_logging.trace_logger,
         "info",
@@ -36,6 +35,7 @@ def test_log_trace_adds_execution_context_and_normalizes_rag_end_reason(monkeypa
         "trace-eval",
         refusal=True,
         reason="no_confident_candidate",
+        execution_context="evaluation",
     )
 
     assert emitted == [

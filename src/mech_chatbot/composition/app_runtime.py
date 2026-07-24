@@ -131,6 +131,7 @@ class AppRuntime:
     review_documents: ReviewDocuments
     app_support_queries: Any
     protected_file_resolver: ProtectedFileResolver | None
+    strict_site_filter: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +188,7 @@ def build_app_runtime(
     publication_port: PublicationPort | None = None,
     app_support_queries: Any | None = None,
     protected_file_resolver: ProtectedFileResolver | None = None,
+    strict_site_filter: bool = True,
 ) -> AppRuntime:
     """Build an immutable app runtime from explicitly supplied adapters."""
     runner = ChatTurnRunner(
@@ -220,6 +222,7 @@ def build_app_runtime(
         review_documents=documents.review_documents,
         app_support_queries=documents.app_support_queries,
         protected_file_resolver=protected_file_resolver,
+        strict_site_filter=bool(strict_site_filter),
     )
 
 
@@ -369,13 +372,13 @@ def build_default_app_runtime(
             raw_root=raw_root, engine=engine, write_audit_log=write_audit_log,
             strict_site_filter=strict_site_filter,
         ),
+        strict_site_filter=strict_site_filter,
     )
 
 
-def production_engine() -> Any:
-    from mech_chatbot.db.engine import engine
-
-    return engine
+def production_engine(explicit_engine: Any = None) -> Any:
+    """Compatibility shim; production composition passes its owned engine."""
+    return explicit_engine
 
 
 def production_create_ingestion_job(**kwargs: Any) -> int | None:

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
-from mech_chatbot.rag.bootstrap import RERANK_PER_PART, RERANK_TOP_N_CAP, client, env_bool
 from mech_chatbot.rag.context_builders import hydrate_parent_context, parent_context_max_workers
 from mech_chatbot.rag.corrective import merge_corrected_documents
 from mech_chatbot.rag.execution import RequestBudgetExceeded
@@ -38,7 +36,9 @@ class RerankOutcome:
 
 
 def _prepare_candidates(
-    retrieved_docs: list[Any], intent_data: dict[str, Any]
+    retrieved_docs: list[Any],
+    intent_data: dict[str, Any],
+    runtime: Any,
 ) -> tuple[list[Any], list[Any]]:
     fake_docs = [
         doc
@@ -52,9 +52,13 @@ def _prepare_candidates(
     )
     return fake_docs, diversify_candidates(
         real_docs,
-        max_per_document=int(os.getenv("RERANK_MAX_CHUNKS_PER_DOCUMENT", "4")),
-        max_per_section=int(os.getenv("RERANK_MAX_CHUNKS_PER_SECTION", "1")),
-        cap=int(os.getenv("RERANK_CANDIDATE_CAP", "20")),
+        max_per_document=int(
+            getattr(runtime, "rerank_max_chunks_per_document", 4)
+        ),
+        max_per_section=int(
+            getattr(runtime, "rerank_max_chunks_per_section", 1)
+        ),
+        cap=int(getattr(runtime, "rerank_candidate_cap", 20)),
     )
 
 
@@ -63,8 +67,10 @@ def _late_interaction_rerank(
     effective_question: str,
     trace_id: str,
     new_part_ids: list[Any],
+    runtime: Any,
 ) -> tuple[list[Any], bool]:
-    if not real_docs or not env_bool("RAG_LATE_INTERACTION_ENABLED", False):
+    late_config = getattr(runtime, "late_interaction_config", None)
+    if not real_docs or not getattr(late_config, "interaction_enabled", False):
         return real_docs, False
     try:
         from mech_chatbot.rag.late_interaction import (
@@ -72,14 +78,23 @@ def _late_interaction_rerank(
             enabled as late_enabled,
         )
 
-        if not late_enabled():
+        if not late_enabled(late_config):
             raise RuntimeError("late interaction encoder has not passed smoke preflight")
         late_top_n = min(
-            RERANK_TOP_N_CAP,
-            max(1, RERANK_PER_PART * max(1, len(new_part_ids) or 1)),
+            int(getattr(runtime, "rerank_top_n_cap", 20)),
+            max(
+                1,
+                int(getattr(runtime, "rerank_per_part", 8))
+                * max(1, len(new_part_ids) or 1),
+            ),
         )
         late_result = attempt_shadow_rerank(
-            real_docs, effective_question, client, top_n=late_top_n
+            real_docs,
+            effective_question,
+            getattr(runtime, "client", None),
+            top_n=late_top_n,
+            query_encoder=getattr(runtime, "late_query_encoder", None),
+            config=late_config,
         )
         log_trace(
             "late_interaction",
@@ -90,7 +105,7 @@ def _late_interaction_rerank(
             candidate_count=late_result.candidate_count,
             shadow_hits=late_result.shadow_hits,
             coverage=late_result.coverage,
-            index_version=os.getenv("RAG_LATE_INDEX_VERSION", "late-v2"),
+            index_version=getattr(late_config, "index_version", "late-v2"),
             used_shadow=late_result.used_shadow,
             fallback_reason=late_result.fallback_reason,
         )
@@ -107,8 +122,14 @@ def _late_interaction_rerank(
         return real_docs, False
 
 
-def _voyage_top_n(user_question: str, new_part_ids: list[Any]) -> int:
-    target_top_n = RERANK_PER_PART * max(1, len(new_part_ids) or 1)
+def _voyage_top_n(
+    user_question: str,
+    new_part_ids: list[Any],
+    *,
+    per_part=8,
+    cap=20,
+) -> int:
+    target_top_n = int(per_part) * max(1, len(new_part_ids) or 1)
     from mech_chatbot.rag.text_utils import remove_accents
 
     q_norm = remove_accents(user_question.lower())
@@ -117,7 +138,7 @@ def _voyage_top_n(user_question: str, new_part_ids: list[Any]) -> int:
         logger.info(
             "Phat hien tu khoa liet ke, mo rong target_top_n len %s", target_top_n
         )
-    return min(RERANK_TOP_N_CAP, target_top_n)
+    return min(int(cap), target_top_n)
 
 
 def _voyage_rerank(
@@ -127,9 +148,15 @@ def _voyage_rerank(
     trace_id: str,
     new_part_ids: list[Any],
     input_count: int,
+    runtime: Any,
 ) -> list[Any]:
     try:
-        top_n = _voyage_top_n(user_question, new_part_ids)
+        top_n = _voyage_top_n(
+            user_question,
+            new_part_ids,
+            per_part=getattr(runtime, "rerank_per_part", 8),
+            cap=getattr(runtime, "rerank_top_n_cap", 20),
+        )
         logger.info(
             "Dang su dung Voyage Rerank de filter %s tai lieu (top_n=%s)...",
             len(real_docs),
@@ -137,7 +164,12 @@ def _voyage_rerank(
         )
         started = time.time()
         result = voyage_rerank_documents(
-            real_docs, effective_question, top_n=top_n, trace_id=trace_id
+            real_docs,
+            effective_question,
+            top_n=top_n,
+            trace_id=trace_id,
+            runtime=getattr(runtime, "voyage_runtime", None),
+            timeout_seconds=getattr(runtime, "voyage_timeout_seconds", 15.0),
         )
         scores = [
             {
@@ -177,8 +209,16 @@ def _apply_rerank_backend(
     trace_id: str,
     new_part_ids: list[Any],
     input_count: int,
+    runtime: Any,
 ) -> list[Any]:
-    backend = "late_interaction" if late_used else RerankPolicy().select_backend(real_docs)
+    backend = (
+        "late_interaction"
+        if late_used
+        else RerankPolicy(
+            enabled=bool(getattr(runtime, "voyage_enabled", True)),
+            runtime=getattr(runtime, "voyage_runtime", None),
+        ).select_backend(real_docs)
+    )
     if real_docs and backend == "voyage":
         return _voyage_rerank(
             real_docs,
@@ -187,6 +227,7 @@ def _apply_rerank_backend(
             trace_id,
             new_part_ids,
             input_count,
+            runtime,
         )
     if backend == "late_interaction":
         logger.info("Dung late_interaction cho rerank candidate set")
@@ -250,10 +291,25 @@ def _hydrate_reranked_context(
     community_docs: list[Any],
     served_graph_docs: list[Any],
     trace_id: str,
+    runtime: Any,
 ) -> tuple[list[Any], list[Any]]:
     started = time.time()
-    parent_workers = parent_context_max_workers()
-    real_docs = hydrate_parent_context(real_docs, max_workers=parent_workers)
+    parent_workers = parent_context_max_workers(
+        getattr(runtime, "parent_context_max_workers", 4)
+    )
+    real_docs = hydrate_parent_context(
+        real_docs,
+        max_workers=parent_workers,
+        max_sections=getattr(runtime, "parent_context_max_sections", 8),
+        max_chunks_per_section=getattr(
+            runtime,
+            "parent_context_max_chunks",
+            6,
+        ),
+        enabled=bool(getattr(runtime, "parent_context_enabled", True)),
+        client=getattr(runtime, "client", None),
+        collection_name=getattr(runtime, "collection_name", None),
+    )
     if graph_docs:
         from mech_chatbot.rag.graph_retrieval import attach_served_graph_context
 
@@ -287,11 +343,20 @@ def rerank_retrieval(
     graph_docs = list(enrichment.graph_documents)
     served_graph_docs = list(enrichment.served_graph_documents)
     community_docs = list(enrichment.community_documents)
+    runtime = state.retrieval_adapter
 
     if retrieved_docs:
-        fake_docs, real_docs = _prepare_candidates(retrieved_docs, intent_data)
+        fake_docs, real_docs = _prepare_candidates(
+            retrieved_docs,
+            intent_data,
+            runtime,
+        )
         real_docs, late_used = _late_interaction_rerank(
-            real_docs, effective_question, trace_id, new_part_ids
+            real_docs,
+            effective_question,
+            trace_id,
+            new_part_ids,
+            runtime,
         )
         real_docs = _apply_rerank_backend(
             real_docs,
@@ -301,6 +366,7 @@ def rerank_retrieval(
             trace_id,
             new_part_ids,
             len(retrieved_docs),
+            runtime,
         )
 
         if not real_docs and not fake_docs:
@@ -314,6 +380,7 @@ def rerank_retrieval(
             community_docs,
             served_graph_docs,
             trace_id,
+            runtime,
         )
         retrieved_docs = fake_docs + real_docs
         retrieved_docs = long_context_reorder(retrieved_docs)

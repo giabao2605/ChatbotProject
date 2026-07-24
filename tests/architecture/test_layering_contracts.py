@@ -33,14 +33,15 @@ def test_core_and_service_layers_do_not_import_legacy_ui():
     assert ui_violations == []
 
 
-def test_engine_contract_remains_in_extracted_module_and_legacy_shim():
+def test_engine_contract_is_composition_owned_and_legacy_shim_stays_import_safe():
     engine_path = SOURCE_ROOT / "db" / "engine.py"
     repository_path = SOURCE_ROOT / "db" / "repository.py"
 
     engine_source = engine_path.read_text(encoding="utf-8")
     repository_imports = _imported_modules(repository_path)
 
-    assert "engine = create_db_engine()" in engine_source
+    assert "engine = create_db_engine()" not in engine_source
+    assert "def build_database_runtime" in engine_source
     assert "def _ensure_engine" in engine_source
     assert "mech_chatbot.db.engine" in repository_imports
 

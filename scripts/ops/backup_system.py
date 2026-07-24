@@ -42,9 +42,10 @@ if _SRC not in sys.path:
 
 from sqlalchemy import text  # noqa: E402
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime  # noqa: E402
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime  # noqa: E402
+from mech_chatbot.config.settings import load_settings  # noqa: E402
 from mech_chatbot.db import repository as repo  # noqa: E402
-
-COLLECTION = "TaiLieuKyThuat_v2"
 
 
 def _timestamp():
@@ -54,7 +55,7 @@ def _timestamp():
 def backup_sql(sql_dir=None):
     """BACKUP DATABASE (full) + BACKUP LOG (neu FULL recovery). Tra ve list file da tao."""
     repo._ensure_engine()
-    db = repo.SQL_DATABASE
+    db = load_settings().SQL_DATABASE
     ts = _timestamp()
     created = []
 
@@ -97,10 +98,10 @@ def backup_sql(sql_dir=None):
 
 def backup_qdrant():
     """Tao snapshot collection tren server Qdrant. Tra ve ten snapshot."""
-    client = repo._get_qdrant_client()
-    snap = client.create_snapshot(collection_name=COLLECTION, wait=True)
+    client, collection = current_qdrant_runtime()
+    snap = client.create_snapshot(collection_name=collection, wait=True)
     name = getattr(snap, "name", None) or str(snap)
-    print(f"[Qdrant] snapshot OK -> collection={COLLECTION} snapshot={name}")
+    print(f"[Qdrant] snapshot OK -> collection={collection} snapshot={name}")
     return name
 
 
@@ -121,6 +122,7 @@ def cleanup_old(sql_dir, keep_days):
             print(f"[cleanup] bo qua {fp}: {e}")
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def main():
     parser = argparse.ArgumentParser(description="Backup SQL + Qdrant (P1.8)")
     parser.add_argument("--sql-dir", default=None, help="Thu muc backup tren MAY CHU SQL (vd D:\\Backups).")

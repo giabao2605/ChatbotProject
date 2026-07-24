@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -19,7 +18,6 @@ from mech_chatbot.rag.answer_policy import (
     explicit_negative_evidence_quote,
     has_explicit_negative_evidence,
 )
-from mech_chatbot.rag.bootstrap import client, env_bool, vectorstore
 from mech_chatbot.rag.context_builders import _context_is_mechanical
 from mech_chatbot.rag.corrective import (
     merge_corrected_documents,
@@ -84,6 +82,7 @@ class _EnrichmentContext:
     user_roles: tuple[str, ...]
     allowed_departments: tuple[str, ...]
     allowed_sites: tuple[str, ...]
+    runtime: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +125,7 @@ class _CorrectionResult:
     estimated_cost: float = 0.0
 
 
-def _make_context(decision: RouteDecision) -> _EnrichmentContext:
+def _make_context(decision: RouteDecision, state: Any) -> _EnrichmentContext:
     request = decision.request
     return _EnrichmentContext(
         decision=decision,
@@ -137,6 +136,7 @@ def _make_context(decision: RouteDecision) -> _EnrichmentContext:
         user_roles=tuple(request.user_roles),
         allowed_departments=tuple(request.allowed_departments),
         allowed_sites=tuple(request.allowed_sites),
+        runtime=state.retrieval_adapter,
     )
 
 
@@ -154,8 +154,11 @@ def _enrich_graph(
     documents: Sequence[Any],
     state: Any,
 ) -> _GraphResult:
-    graph_enabled = env_bool("RAG_GRAPH_RETRIEVAL_ENABLED", False)
-    community_enabled = env_bool("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED", False)
+    runtime = state.retrieval_adapter
+    graph_enabled = bool(getattr(runtime, "graph_retrieval_enabled", False))
+    community_enabled = bool(
+        getattr(runtime, "community_summaries_enabled", False)
+    )
     access = _graph_access(context)
     if not graph_enabled:
         return _graph_disabled_result(
@@ -179,7 +182,9 @@ def _enrich_graph(
                 traverse_knowledge_graph(seeds, access, max_hops=2, limit=50), access
             )
             graph_documents = hydrate_graph_edges(
-                edges, client, os.getenv("QDRANT_COLLECTION", "TaiLieuKyThuat_v2")
+                edges,
+                getattr(runtime, "client", None),
+                getattr(runtime, "collection_name", "TaiLieuKyThuat_v2"),
             )
         else:
             edges = []
@@ -266,20 +271,31 @@ def _log_graph(
 def _enrich_community(
     context: _EnrichmentContext,
     graph: _GraphResult,
+    state: Any,
 ) -> _CommunityResult:
     from mech_chatbot.rag.community_summaries import load_community_context
 
     started_at = time.time()
+    runtime = state.retrieval_adapter
+    serving_epoch = getattr(
+        runtime,
+        "community_serving_epoch",
+        "community-v1",
+    )
     result = load_community_context(
         context.decision.effective_question,
         graph_enabled=graph.graph_enabled,
         community_enabled=graph.community_enabled,
         access_context=graph.access,
         seed_keys=list(graph.seeds),
-        serving_epoch=os.getenv("RAG_COMMUNITY_SERVING_EPOCH", "community-v1"),
-        graph_fingerprint=os.getenv("RAG_GRAPH_FINGERPRINT", ""),
-        client=client,
-        collection_name=os.getenv("QDRANT_COLLECTION", "TaiLieuKyThuat_v2"),
+        serving_epoch=serving_epoch,
+        graph_fingerprint=getattr(runtime, "graph_fingerprint", "") or "",
+        client=getattr(runtime, "client", None),
+        collection_name=getattr(
+            runtime,
+            "collection_name",
+            "TaiLieuKyThuat_v2",
+        ),
     )
     community_documents = list(result.documents)
     documents = list(graph.documents)
@@ -291,7 +307,7 @@ def _enrich_community(
         summary_count=result.summary_count,
         source_document_count=len(community_documents),
         fallback_reason=result.reason,
-        serving_epoch=os.getenv("RAG_COMMUNITY_SERVING_EPOCH", "community-v1"),
+        serving_epoch=serving_epoch,
     )
     return _CommunityResult(
         tuple(documents), tuple(community_documents), result.used,
@@ -359,6 +375,8 @@ def _probe_exact_code_access(
             max_security_level=request.max_security_level,
             allowed_sites=list(context.allowed_sites),
             part_ids=list(part_ids),
+            client=getattr(context.runtime, "client", None),
+            collection_name=getattr(context.runtime, "collection_name", None),
         )
     except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise
@@ -429,7 +447,7 @@ def _handle_exact_code_miss(
     )
     try:
         general_filter = current_published_filter(context.decision.rbac_filter)
-        general_retriever = vectorstore.as_retriever(
+        general_retriever = state.retrieval_adapter.vectorstore.as_retriever(
             search_type="similarity", search_kwargs={"k": 30, "filter": general_filter}
         )
         fallback_documents = general_retriever.invoke(context.decision.query_to_search)
@@ -500,10 +518,18 @@ def _inject_bom(
     context: _EnrichmentContext,
     documents: Sequence[Any],
     part_ids: Sequence[str],
+    state: Any,
 ) -> tuple[tuple[Any, ...], bool]:
+    grounded_math_enabled = bool(
+        getattr(
+            state.retrieval_adapter,
+            "grounded_math_enabled",
+            False,
+        )
+    )
     return inject_bom(
         context, documents, part_ids,
-        env_bool=env_bool,
+        env_bool=lambda _name, _default: grounded_math_enabled,
         context_is_mechanical=_context_is_mechanical,
         search_bom_facts=search_bom_facts,
     )
@@ -546,17 +572,26 @@ def _empty_documents_terminal(
 
 
 def _coverage_policy(
-    context: _EnrichmentContext, documents: Sequence[Any]
+    context: _EnrichmentContext,
+    documents: Sequence[Any],
+    state: Any,
 ) -> tuple[Any, Any]:
+    runtime = state.retrieval_adapter
     preliminary_context = _assemble_context(documents, context.user_question)
     decision = evaluate_answerability(
         context.user_question, preliminary_context,
         docs=documents, trace_id=context.trace_id,
+        strict_answer_mode=bool(
+            getattr(runtime, "strict_answer_mode", True)
+        ),
+        crag_enabled=bool(getattr(runtime, "crag_enabled", False)),
+        verifier_enabled=bool(
+            getattr(runtime, "evidence_verifier_enabled", False)
+        ),
     )
     if (
         current_execution_context() == "evaluation"
-        and os.getenv("RAG_EVAL_FORCE_AMBIGUOUS", "false").strip().lower()
-        in {"1", "true", "yes", "on"}
+        and bool(getattr(runtime, "evaluation_force_ambiguous", False))
     ):
         decision = EvidenceDecision(
             EvidenceState.AMBIGUOUS,
@@ -714,7 +749,7 @@ def _apply_crag(
 ) -> _CorrectionResult:
     if not documents or not context.decision.crag_enabled:
         return _CorrectionResult(tuple(documents))
-    decision, policy = _coverage_policy(context, documents)
+    decision, policy = _coverage_policy(context, documents, state)
     if not should_attempt_correction(
         policy, attempts=state.budget.corrections,
         enabled=context.decision.crag_enabled,
@@ -728,9 +763,9 @@ def enrich_retrieval(
     primary: PrimaryRetrievalOutcome,
     state: Any,
 ) -> EnrichmentOutcome | PhaseTerminal:
-    context = _make_context(decision)
+    context = _make_context(decision, state)
     graph = _enrich_graph(context, primary.documents, state)
-    community = _enrich_community(context, graph)
+    community = _enrich_community(context, graph, state)
     code_result = _handle_exact_code_miss(
         context, state, community.documents, primary.retrieval_mode,
         primary.active_filter, primary.has_active_filter,
@@ -745,7 +780,7 @@ def enrich_retrieval(
     if terminal is not None:
         return terminal
     documents, grounded_math_enabled = _inject_bom(
-        context, documents, code_result.part_ids
+        context, documents, code_result.part_ids, state
     )
     documents = _prepend_image(documents, decision.request.image_analysis)
     if not documents:

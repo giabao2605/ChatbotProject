@@ -11,7 +11,6 @@ from contextlib import ExitStack
 from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass, field
 from datetime import datetime
-import os
 from pathlib import Path
 import re
 import threading
@@ -47,14 +46,12 @@ _REQUEST_BUDGET: ContextVar["RequestBudgetLedger | None"] = ContextVar(
 def current_execution_context() -> str:
     """Return the request-local trace/evaluation context.
 
-    The environment remains the compatibility fallback for scripts that have
-    not migrated to :class:`RagInvocation`.  A ContextVar keeps concurrent
-    production and evaluation requests from changing each other's mode.
+    A ContextVar keeps concurrent production and evaluation requests isolated.
     """
 
     value = _EXECUTION_CONTEXT.get()
     if value is None:
-        value = os.getenv("RAG_EXECUTION_CONTEXT", "production")
+        value = "production"
     normalized = str(value).strip().lower()
     return normalized if normalized in {
         "production", "evaluation", "pilot_replay", "test",
@@ -195,15 +192,6 @@ class RequestBudgetLimits:
     final_generations: int = 1
     deadline_seconds: float = 120.0
 
-    @classmethod
-    def from_environment(cls) -> "RequestBudgetLimits":
-        try:
-            deadline = max(0.1, float(os.getenv("RAG_REQUEST_DEADLINE_SECONDS", "120")))
-        except (TypeError, ValueError):
-            deadline = 120.0
-        return cls(deadline_seconds=deadline)
-
-
 class RequestBudgetExceeded(RuntimeError):
     """Internal control-flow error for a request-wide budget violation."""
 
@@ -275,6 +263,7 @@ class _ExecutionState:
         trace_id: str,
         retrieval_adapter: Any | None = None,
         provider_adapter: Any | None = None,
+        budget_limits: RequestBudgetLimits | None = None,
     ) -> "_ExecutionState":
         started = time.monotonic()
         return cls(
@@ -285,7 +274,7 @@ class _ExecutionState:
             retrieval_adapter=retrieval_adapter,
             provider_adapter=provider_adapter,
             budget=RequestBudgetLedger(
-                limits=RequestBudgetLimits.from_environment(),
+                limits=budget_limits or RequestBudgetLimits(),
                 started_monotonic=started,
             ),
         )
@@ -623,10 +612,12 @@ class DefaultRagExecutor:
         execute_pipeline: Callable[["_ExecutionState"], "_PreparedExecution"] | None = None,
         retrieval_adapter: Any | None = None,
         provider_adapter: Any | None = None,
+        budget_limits: RequestBudgetLimits | None = None,
     ) -> None:
         self._execute_pipeline = execute_pipeline
         self._retrieval_adapter = retrieval_adapter
         self._provider_adapter = provider_adapter
+        self._budget_limits = budget_limits or RequestBudgetLimits()
 
     def run(
         self,
@@ -687,6 +678,7 @@ class DefaultRagExecutor:
             trace_id,
             retrieval_adapter=self._retrieval_adapter,
             provider_adapter=self._provider_adapter,
+            budget_limits=self._budget_limits,
         )
         budget_token = _REQUEST_BUDGET.set(state.budget)
         try:

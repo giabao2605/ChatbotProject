@@ -11,15 +11,19 @@ def test_rerank_phase_passes_bootstrap_client_to_late_interaction(monkeypatch):
     document = Document(page_content="bearing", metadata={"doc_id": 7})
     observed = []
 
-    monkeypatch.setattr(retrieval_rerank, "client", client)
-    monkeypatch.setattr(
-        retrieval_rerank,
-        "env_bool",
-        lambda name, default=False: name == "RAG_LATE_INTERACTION_ENABLED",
-    )
-    monkeypatch.setattr(late_interaction, "enabled", lambda: True)
+    monkeypatch.setattr(late_interaction, "enabled", lambda _config: True)
 
-    def attempt(documents, query, received_client, *, top_n):
+    def attempt(
+        documents,
+        query,
+        received_client,
+        *,
+        top_n,
+        query_encoder,
+        config,
+    ):
+        assert query_encoder is None
+        assert config.index_version == "late-test"
         observed.append((documents, query, received_client, top_n))
         return SimpleNamespace(
             documents=tuple(documents),
@@ -35,7 +39,11 @@ def test_rerank_phase_passes_bootstrap_client_to_late_interaction(monkeypatch):
 
     monkeypatch.setattr(late_interaction, "attempt_shadow_rerank", attempt)
     monkeypatch.setattr(retrieval_rerank, "hydrate_parent_context", lambda docs, **_kwargs: docs)
-    monkeypatch.setattr(retrieval_rerank, "parent_context_max_workers", lambda: 1)
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "parent_context_max_workers",
+        lambda configured: configured,
+    )
     monkeypatch.setattr(retrieval_rerank, "long_context_reorder", lambda docs: docs)
 
     request = SimpleNamespace(
@@ -62,7 +70,24 @@ def test_rerank_phase_passes_bootstrap_client_to_late_interaction(monkeypatch):
         has_active_filter=False,
     )
 
-    result = retrieval_rerank.rerank_retrieval(decision, enrichment, object())
+    state = SimpleNamespace(
+        retrieval_adapter=SimpleNamespace(
+            client=client,
+            collection_name="test-knowledge",
+            late_interaction_config=SimpleNamespace(
+                interaction_enabled=True,
+                index_version="late-test",
+            ),
+            late_query_encoder=None,
+            rerank_per_part=8,
+            rerank_top_n_cap=20,
+            voyage_enabled=False,
+            parent_context_enabled=False,
+            parent_context_max_workers=1,
+        )
+    )
+
+    result = retrieval_rerank.rerank_retrieval(decision, enrichment, state)
 
     assert result.documents == (document,)
     assert result.reason_code == "reranked"
@@ -74,11 +99,10 @@ def test_rerank_empty_context_keeps_typed_terminal_with_active_filter(monkeypatc
     from mech_chatbot.rag.phases.contracts import PhaseTerminal
 
     document = Document(page_content="bearing", metadata={"doc_id": 7})
-    monkeypatch.setattr(retrieval_rerank, "env_bool", lambda *_args: False)
     monkeypatch.setattr(
         retrieval_rerank,
         "RerankPolicy",
-        lambda: SimpleNamespace(select_backend=lambda _docs: "local"),
+        lambda **_kwargs: SimpleNamespace(select_backend=lambda _docs: "local"),
     )
     monkeypatch.setattr(retrieval_rerank, "rerank_docs", lambda _docs: [])
     monkeypatch.setattr(retrieval_rerank, "serialize_qdrant_filter", lambda value: value)
@@ -111,6 +135,11 @@ def test_rerank_empty_context_keeps_typed_terminal_with_active_filter(monkeypatc
     state = SimpleNamespace(
         refuse=refused.append,
         prepared=lambda values: values,
+        retrieval_adapter=SimpleNamespace(
+            late_interaction_config=None,
+            voyage_enabled=False,
+            parent_context_enabled=False,
+        ),
     )
 
     result = retrieval_rerank.rerank_retrieval(decision, enrichment, state)

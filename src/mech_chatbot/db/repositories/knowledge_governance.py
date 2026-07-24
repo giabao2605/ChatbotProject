@@ -9,16 +9,19 @@ departmental approver.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
 
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from . import audit as _r_audit
 from . import qdrant as _r_qdrant
 from . import semantic_cache as _r_semantic_cache
+
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
 
 
 __all__ = [
@@ -67,13 +70,6 @@ def _to_int_or_none(value: Any, field_name: str) -> int | None:
     if parsed <= 0:
         raise ValueError(f"{field_name} phai la UserID hop le")
     return parsed
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return _clean(raw).lower() in {"1", "true", "yes", "on"}
 
 
 def _validate_governance_principal(conn, department_code: str, user_id: int | None, field_name: str):
@@ -154,12 +150,16 @@ _DOMAIN_PROFILE_SELECT = """
 """
 
 
-def get_department_knowledge_governance(department_code: str) -> dict[str, Any] | None:
+def get_department_knowledge_governance(
+    department_code: str,
+    *,
+    db_engine=None,
+) -> dict[str, Any] | None:
     code = _clean(department_code)
     if not code:
         return None
-    _ensure_engine()
-    with engine.connect() as conn:
+    selected_engine = resolve_engine(db_engine)
+    with selected_engine.connect() as conn:
         row = conn.execute(
             text(_GOVERNANCE_SELECT + " WHERE DeptCode = :code"),
             {"code": code},
@@ -483,7 +483,13 @@ def update_document_governance_metadata(
     return True
 
 
-def validate_document_metadata_actor(doc_id: int, actor_id: int | None, actor_roles=None) -> tuple[bool, str]:
+def validate_document_metadata_actor(
+    doc_id: int,
+    actor_id: int | None,
+    actor_roles=None,
+    *,
+    policy=None,
+) -> tuple[bool, str]:
     """Allow only the configured owner/approver to edit reviewed metadata."""
     try:
         normalized_doc_id = int(doc_id)
@@ -511,7 +517,13 @@ def validate_document_metadata_actor(doc_id: int, actor_id: int | None, actor_ro
     }
     if normalized_actor_id in allowed_ids:
         return True, ""
-    if "admin" in roles and _env_bool("KNOWLEDGE_ALLOW_ADMIN_METADATA_OVERRIDE", False):
+    if policy is None:
+        from mech_chatbot.config.repository_runtime import (
+            current_repository_policy,
+        )
+
+        policy = current_repository_policy()
+    if "admin" in roles and policy.allow_admin_metadata_override:
         return True, ""
     return False, "Chi Knowledge Owner hoac Knowledge Approver cua tai lieu duoc sua metadata"
 

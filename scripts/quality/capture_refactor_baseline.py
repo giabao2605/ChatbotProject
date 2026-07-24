@@ -220,7 +220,11 @@ def _isolated_app_client(
         client = TestClient(app_server.app)
         with ExitStack() as stack:
             stack.enter_context(
-                patch.object(app_server.requests, "post", return_value=rag_response)
+                patch.object(
+                    app_server.app.state,
+                    "post",
+                    return_value=rag_response,
+                )
             )
             stack.enter_context(patch.object(app_server, "_pilot_route", return_value=None))
             stack.enter_context(
@@ -232,6 +236,7 @@ def _isolated_app_client(
             for name in ("save_answer_evidence", "save_answer_sources", "write_audit_log"):
                 stack.enter_context(patch.object(app_server, name, return_value=None))
             stack.enter_context(patch.object(app_server, "page_has_vision", return_value=False))
+            stack.enter_context(client)
             yield client
     finally:
         if client is not None:

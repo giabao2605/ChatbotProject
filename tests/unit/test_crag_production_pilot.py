@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from mech_chatbot.config.settings import Settings
 from mech_chatbot.evaluation.crag_pilot import (
     PilotConfig,
     assign_pilot_route,
@@ -985,7 +986,10 @@ def test_health_reports_runtime_contract_used_by_requests(monkeypatch):
     monkeypatch.setenv("RAG_EVAL_FORCE_AMBIGUOUS", "false")
     monkeypatch.setenv("RAG_REQUEST_DEADLINE_SECONDS", "90")
 
-    health = asyncio.run(rag_server.health_check())
+    application = rag_server.create_rag_app(Settings.from_env())
+    health = asyncio.run(
+        rag_server.health_check(server_state=application.state.rag_server)
+    )
 
     assert health.execution_context == "production"
     assert health.evaluation_force_ambiguous is False

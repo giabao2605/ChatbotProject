@@ -121,6 +121,29 @@ def _state():
     )
     return SimpleNamespace(
         budget=budget,
+        retrieval_adapter=SimpleNamespace(
+            semantic_cache_enabled=True,
+            semantic_cache_ttl_hours=24.0,
+            semantic_cache_sim_threshold=0.93,
+            semantic_cache_environment={},
+            conversation_state_enabled=True,
+            citation_max_sources=5,
+            bom_citation_max_sources=3,
+            strict_answer_mode=True,
+            crag_enabled=False,
+            evidence_verifier_enabled=False,
+            hyde_enabled=True,
+            glossary_cache_ttl=60.0,
+            voyage_enabled=False,
+            voyage_runtime=None,
+            parent_context_enabled=False,
+            late_interaction_config=None,
+        ),
+        provider_adapter=SimpleNamespace(
+            client=object(),
+            settings=SimpleNamespace(model_name="test-model", base_url="test"),
+        ),
+        invocation=SimpleNamespace(mode="test"),
         cancellation=object(),
         transition=lambda _phase: None,
         checkpoint=lambda _phase: None,
@@ -207,6 +230,16 @@ def test_diagnostic_builders_tolerate_invalid_identifiers_and_namespace_failure(
 class _RoutingState:
     def __init__(self):
         self.refusal_reason = None
+        self.retrieval_adapter = SimpleNamespace(
+            semantic_cache_enabled=True,
+            semantic_cache_ttl_hours=24.0,
+            semantic_cache_sim_threshold=0.93,
+            semantic_cache_environment={},
+            hyde_enabled=True,
+            glossary_cache_ttl=60.0,
+            crag_enabled=False,
+        )
+        self.invocation = SimpleNamespace(mode="test")
 
     def transition(self, _phase):
         return None
@@ -237,12 +270,16 @@ def test_routing_returns_semantic_cache_hit(monkeypatch):
     from mech_chatbot.rag.phases import routing
 
     _install_route_entry(monkeypatch, routing)
-    monkeypatch.setattr(semantic_cache, "enabled", lambda: True)
-    monkeypatch.setattr(semantic_cache, "scope_signature", lambda *_args: "scope")
+    monkeypatch.setattr(semantic_cache, "enabled", lambda *_args: True)
+    monkeypatch.setattr(
+        semantic_cache,
+        "scope_signature",
+        lambda *_args, **_kwargs: "scope",
+    )
     monkeypatch.setattr(
         semantic_cache,
         "lookup",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "answer": "cached", "ref_text": "refs", "ref_images": ["img"],
             "evidence_snapshot": [{"doc_id": 1}], "citation_snapshot": [{"doc_id": 1}],
         },
@@ -267,7 +304,7 @@ def test_routing_returns_typed_intent_terminals(monkeypatch, intent, reason):
     from mech_chatbot.rag.phases import routing
 
     _install_route_entry(monkeypatch, routing)
-    monkeypatch.setattr(semantic_cache, "enabled", lambda: False)
+    monkeypatch.setattr(semantic_cache, "enabled", lambda *_args: False)
     monkeypatch.setattr(
         routing,
         "_rewrite_and_anchor",
@@ -289,7 +326,7 @@ def test_routing_adds_glossary_and_recovers_glossary_failure(monkeypatch):
     from mech_chatbot.rag.phases import routing
 
     _install_route_entry(monkeypatch, routing)
-    monkeypatch.setattr(semantic_cache, "enabled", lambda: False)
+    monkeypatch.setattr(semantic_cache, "enabled", lambda *_args: False)
     monkeypatch.setattr(
         routing,
         "_rewrite_and_anchor",
@@ -298,7 +335,11 @@ def test_routing_adds_glossary_and_recovers_glossary_failure(monkeypatch):
         ),
     )
     monkeypatch.setattr(routing, "tokenize_cached", lambda value: str(value))
-    monkeypatch.setattr(routing, "glossary_expansion_terms", lambda *_args: "ổ bi")
+    monkeypatch.setattr(
+        routing,
+        "glossary_expansion_terms",
+        lambda *_args, **_kwargs: "ổ bi",
+    )
 
     expanded = routing.route(_request(), _RoutingState())
     monkeypatch.setattr(
@@ -363,18 +404,21 @@ def test_rerank_voyage_path_keeps_image_graph_and_community_context(monkeypatch)
     )
     monkeypatch.setattr(retrieval_rerank, "prioritize_document_types", lambda docs, _hints: docs)
     monkeypatch.setattr(retrieval_rerank, "diversify_candidates", lambda docs, **_kwargs: docs)
-    monkeypatch.setattr(retrieval_rerank, "env_bool", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         retrieval_rerank,
         "RerankPolicy",
-        lambda: SimpleNamespace(select_backend=lambda _docs: "voyage"),
+        lambda **_kwargs: SimpleNamespace(select_backend=lambda _docs: "voyage"),
     )
     monkeypatch.setattr(
         retrieval_rerank,
         "voyage_rerank_documents",
         lambda docs, *_args, **_kwargs: docs,
     )
-    monkeypatch.setattr(retrieval_rerank, "parent_context_max_workers", lambda: 1)
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "parent_context_max_workers",
+        lambda *_args: 1,
+    )
     monkeypatch.setattr(retrieval_rerank, "hydrate_parent_context", lambda docs, **_kwargs: docs)
     monkeypatch.setattr(
         "mech_chatbot.rag.graph_retrieval.attach_served_graph_context",
@@ -430,15 +474,19 @@ def test_generation_updates_context_and_wraps_semantic_cache(monkeypatch):
     )
     cache_calls = []
     monkeypatch.setattr(generation, "generate_answer", lambda *_args, **_kwargs: iter(("answer [SRC:D7P2]",)))
-    monkeypatch.setattr(conversation_state, "is_enabled", lambda: True)
+    monkeypatch.setattr(conversation_state, "is_enabled", lambda *_args: True)
     monkeypatch.setattr(conversation_state, "dominant_doc_refs", lambda _docs: ["P-1"])
-    monkeypatch.setattr(semantic_cache, "enabled", lambda: True)
+    monkeypatch.setattr(semantic_cache, "enabled", lambda *_args: True)
     monkeypatch.setattr(
         semantic_cache,
         "teeing_store_stream",
         lambda stream, **kwargs: cache_calls.append(kwargs) or stream,
     )
-    monkeypatch.setattr(generation, "get_llm_model_name", lambda: "test-model")
+    monkeypatch.setattr(
+        generation,
+        "get_llm_model_name",
+        lambda *_args: "test-model",
+    )
 
     state = _state()
     result = generation.generate(

@@ -70,22 +70,29 @@ def test_format_vision_data_preserves_all_supported_fields():
     assert vision.format_vision_data({"materials": []}) == ""
 
 
-@pytest.mark.parametrize("workers", [None, "bad", "1", "0"])
-def test_prewarm_is_noop_when_worker_setting_is_disabled(monkeypatch, workers):
-    if workers is None:
-        monkeypatch.delenv("INGEST_VISION_PREWARM_WORKERS", raising=False)
-    else:
-        monkeypatch.setenv("INGEST_VISION_PREWARM_WORKERS", workers)
+@pytest.mark.parametrize("workers", [0, 1])
+def test_prewarm_is_noop_when_worker_setting_is_disabled(workers):
     doc = SimpleNamespace(__len__=lambda: 1)
 
-    assert vision._prewarm_vision_cache(doc, "a.pdf", "QA", "generic", object()) is None
+    assert vision._prewarm_vision_cache(
+        doc,
+        "a.pdf",
+        "QA",
+        "generic",
+        object(),
+        config=vision.PdfIngestionConfig(vision_prewarm_workers=workers),
+    ) is None
 
 
-def test_prewarm_is_noop_without_model_or_document(monkeypatch):
-    monkeypatch.setenv("INGEST_VISION_PREWARM_WORKERS", "2")
+def test_prewarm_is_noop_without_model_or_document():
+    config = vision.PdfIngestionConfig(vision_prewarm_workers=2)
 
-    assert vision._prewarm_vision_cache(None, "a.pdf", "QA", "generic", object()) is None
-    assert vision._prewarm_vision_cache([], "a.pdf", "QA", "generic", None) is None
+    assert vision._prewarm_vision_cache(
+        None, "a.pdf", "QA", "generic", object(), config=config
+    ) is None
+    assert vision._prewarm_vision_cache(
+        [], "a.pdf", "QA", "generic", None, config=config
+    ) is None
 
 
 class _Pixmap:
@@ -130,17 +137,28 @@ def test_prewarm_renders_only_needed_pages_and_populates_cache(tmp_path, monkeyp
     cached = {}
     progress = []
     model = _Model('{"materials": ["steel"]}')
-    monkeypatch.setenv("INGEST_VISION_PREWARM_WORKERS", "2")
-    monkeypatch.setenv("PDF_RENDER_DPI", "144")
-    monkeypatch.setattr(vision, "IMAGE_DIR", str(tmp_path))
+    config = vision.PdfIngestionConfig(
+        image_dir=tmp_path,
+        vision_cache_dir=tmp_path / "cache",
+        vision_prewarm_workers=2,
+        pdf_render_dpi=144,
+    )
     monkeypatch.setattr(
         domain_handlers,
         "get_handler",
         lambda domain: SimpleNamespace(vision_always=False),
     )
     monkeypatch.setattr(vision_cache, "hash_image_file", lambda path: f"hash:{path}")
-    monkeypatch.setattr(vision_cache, "get", lambda key: cached.get(key))
-    monkeypatch.setattr(vision_cache, "put", lambda key, value: cached.update({key: value}))
+    monkeypatch.setattr(
+        vision_cache,
+        "get",
+        lambda key, **_kwargs: cached.get(key),
+    )
+    monkeypatch.setattr(
+        vision_cache,
+        "put",
+        lambda key, value, **_kwargs: cached.update({key: value}),
+    )
     monkeypatch.setattr(vision.Image, "open", lambda path: f"image:{path}")
 
     vision._prewarm_vision_cache(
@@ -150,6 +168,7 @@ def test_prewarm_renders_only_needed_pages_and_populates_cache(tmp_path, monkeyp
         "generic",
         model,
         progress.append,
+        config=config,
     )
 
     assert len(saved_paths) == 1
@@ -164,18 +183,29 @@ def test_prewarm_renders_only_needed_pages_and_populates_cache(tmp_path, monkeyp
 def test_prewarm_skips_cached_image_without_calling_provider(tmp_path, monkeypatch):
     page = _Page("short", [])
     model = _Model()
-    monkeypatch.setenv("INGEST_VISION_PREWARM_WORKERS", "2")
-    monkeypatch.setattr(vision, "IMAGE_DIR", str(tmp_path))
+    config = vision.PdfIngestionConfig(
+        image_dir=tmp_path,
+        vision_prewarm_workers=2,
+    )
     monkeypatch.setattr(
         domain_handlers,
         "get_handler",
         lambda _domain: SimpleNamespace(vision_always=True),
     )
     monkeypatch.setattr(vision_cache, "hash_image_file", lambda _path: "cached")
-    monkeypatch.setattr(vision_cache, "get", lambda _key: {"materials": ["steel"]})
+    monkeypatch.setattr(
+        vision_cache,
+        "get",
+        lambda _key, **_kwargs: {"materials": ["steel"]},
+    )
 
     vision._prewarm_vision_cache(
-        _Document([page]), "drawing.pdf", "", "mechanical", model
+        _Document([page]),
+        "drawing.pdf",
+        "",
+        "mechanical",
+        model,
+        config=config,
     )
 
     assert model.calls == []
@@ -189,14 +219,19 @@ def test_prewarm_is_best_effort_for_page_and_setup_failures(monkeypatch):
         def load_page(self, _index):
             raise RuntimeError("render failed")
 
-    monkeypatch.setenv("INGEST_VISION_PREWARM_WORKERS", "2")
+    config = vision.PdfIngestionConfig(vision_prewarm_workers=2)
     monkeypatch.setattr(
         domain_handlers,
         "get_handler",
         lambda _domain: SimpleNamespace(vision_always=True),
     )
     assert vision._prewarm_vision_cache(
-        BrokenDocument(), "a.pdf", "QA", "mechanical", object()
+        BrokenDocument(),
+        "a.pdf",
+        "QA",
+        "mechanical",
+        object(),
+        config=config,
     ) is None
 
     monkeypatch.setattr(
@@ -205,5 +240,10 @@ def test_prewarm_is_best_effort_for_page_and_setup_failures(monkeypatch):
         lambda _domain: (_ for _ in ()).throw(RuntimeError("handler failed")),
     )
     assert vision._prewarm_vision_cache(
-        _Document([]), "a.pdf", "QA", "mechanical", object()
+        _Document([]),
+        "a.pdf",
+        "QA",
+        "mechanical",
+        object(),
+        config=config,
     ) is None

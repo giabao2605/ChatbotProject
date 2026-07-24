@@ -31,20 +31,16 @@ def _audit_boundary(**kwargs):
 
 
 def _configure_voyage(monkeypatch, payload):
-    monkeypatch.setattr(
-        rerank,
-        "get_provider_runtime",
-        lambda *args, **kwargs: SimpleNamespace(
-            api_key="wave5-key",
-            model="rerank-2.5-lite",
-            endpoint="https://rerank.example/v1",
-        ),
-    )
     monkeypatch.setattr(rerank, "audited_external_call", _audit_boundary)
     monkeypatch.setattr(
         rerank.requests,
         "post",
         lambda *args, **kwargs: _Response(payload),
+    )
+    return SimpleNamespace(
+        api_key="wave5-key",
+        model="rerank-2.5-lite",
+        endpoint="https://rerank.example/v1",
     )
 
 
@@ -59,31 +55,27 @@ def test_rerank_policy_respects_external_processing_policy_and_provider_state(
     assert policy.select_backend(restricted) == "local_fusion"
     assert policy.select_backend(missing) == "local_fusion"
 
-    monkeypatch.setenv("USE_VOYAGE_RERANK", "true")
-    monkeypatch.setattr(
-        rerank,
-        "get_provider_runtime",
-        lambda *args, **kwargs: SimpleNamespace(api_key="configured"),
+    configured = rerank.RerankPolicy(
+        runtime=SimpleNamespace(api_key="configured"),
     )
-    assert policy.select_backend(allowed) == "voyage"
-
-    monkeypatch.setattr(
-        rerank,
-        "get_provider_runtime",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("unavailable")),
-    )
-    assert policy.select_backend(allowed) == "local_fusion"
-
-    monkeypatch.setenv("USE_VOYAGE_RERANK", "false")
-    assert policy.select_backend(allowed) == "local_fusion"
+    assert configured.select_backend(allowed) == "voyage"
+    assert rerank.RerankPolicy(runtime=None).select_backend(allowed) == "local_fusion"
+    assert rerank.RerankPolicy(
+        enabled=False,
+        runtime=SimpleNamespace(api_key="configured"),
+    ).select_backend(allowed) == "local_fusion"
 
 
 def test_voyage_rerank_returns_empty_without_calling_the_provider():
-    assert rerank.voyage_rerank_documents([], "query") == []
+    assert rerank.voyage_rerank_documents(
+        [],
+        "query",
+        runtime=None,
+    ) == []
 
 
 def test_voyage_rerank_rejects_a_response_without_any_valid_document(monkeypatch):
-    _configure_voyage(
+    runtime = _configure_voyage(
         monkeypatch,
         {
             "data": [
@@ -96,13 +88,17 @@ def test_voyage_rerank_rejects_a_response_without_any_valid_document(monkeypatch
     )
 
     with pytest.raises(ValueError, match="khong co index document hop le"):
-        rerank.voyage_rerank_documents([_doc("one")], "query")
+        rerank.voyage_rerank_documents(
+            [_doc("one")],
+            "query",
+            runtime=runtime,
+        )
 
 
 def test_voyage_rerank_skips_duplicate_indexes_and_tolerates_metadata_without_mapping(
     monkeypatch,
 ):
-    _configure_voyage(
+    runtime = _configure_voyage(
         monkeypatch,
         {
             "data": [
@@ -115,7 +111,12 @@ def test_voyage_rerank_skips_duplicate_indexes_and_tolerates_metadata_without_ma
     first = SimpleNamespace(page_content="one", metadata=None)
     second = _doc("two")
 
-    assert rerank.voyage_rerank_documents([first, second], "query", top_n=2) == [
+    assert rerank.voyage_rerank_documents(
+        [first, second],
+        "query",
+        top_n=2,
+        runtime=runtime,
+    ) == [
         first,
         second,
     ]

@@ -18,6 +18,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+
 
 def _fixture_qdrant_metadata(record):
     code = str(record["doc_number"]).strip().lower()
@@ -38,12 +40,14 @@ def _fixture_qdrant_metadata(record):
     }
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def ingest_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before writing the CRAG staging fixture")
     # Settings are imported only after the environment guard.
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
-    if QDRANT_COLLECTION != FIXTURE_COLLECTION:
+    from mech_chatbot.config.repository_runtime import current_qdrant_runtime
+    qdrant_client, collection = current_qdrant_runtime()
+    if collection != FIXTURE_COLLECTION:
         raise RuntimeError(f"QDRANT_COLLECTION must equal {FIXTURE_COLLECTION}")
     from mech_chatbot.db.engine import _ensure_engine, engine
     from mech_chatbot.db.repositories.document import delete_document_completely
@@ -54,8 +58,6 @@ def ingest_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
 
     # A new Qdrant Cloud collection requires payload indexes before any
     # filter-based publication/update/delete operation can run.
-    from mech_chatbot.db.repositories.qdrant import _get_qdrant_client
-    qdrant_client = _get_qdrant_client()
     if not qdrant_client.collection_exists(FIXTURE_COLLECTION):
         from mech_chatbot.rag.bootstrap import client as _initialized_client  # noqa: F401
     from scripts.create_qdrant_indexes import create_indexes

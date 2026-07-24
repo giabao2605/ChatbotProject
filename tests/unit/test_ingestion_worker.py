@@ -281,7 +281,7 @@ def test_run_worker_parses_one_settings_snapshot_at_process_start(monkeypatch) -
     clock = FakeClock()
     runtime = _runtime(FakeStore([None]), FakeRunner(), clock)
 
-    def from_env():
+    def load_snapshot():
         parse_calls.append(True)
         return parsed
 
@@ -289,7 +289,7 @@ def test_run_worker_parses_one_settings_snapshot_at_process_start(monkeypatch) -
         build_calls.append(settings)
         return runtime
 
-    monkeypatch.setattr(ingestion_worker.Settings, "from_env", from_env)
+    monkeypatch.setattr(ingestion_worker, "load_settings", load_snapshot)
     monkeypatch.setattr(ingestion_worker, "build_worker_runtime", build)
 
     with pytest.raises(_StopWorker):

@@ -1,11 +1,19 @@
 import os
 import uuid
+from functools import partial
 
 import pytest
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 
-from mech_chatbot.rag.late_interaction import attempt_shadow_rerank, candidate_key
+from mech_chatbot.config.settings import Settings
+from mech_chatbot.rag.late_interaction import (
+    LateInteractionConfig,
+    attempt_shadow_rerank,
+    build_encoder,
+    candidate_key,
+    encode_query,
+)
 from scripts.late_interaction.backfill_shadow import _document, backfill
 
 
@@ -16,8 +24,9 @@ pytestmark = pytest.mark.integration
     os.getenv("RUN_LATE_INTERACTION_TESTS") != "1",
     reason="set RUN_LATE_INTERACTION_TESTS=1 in the isolated encoder environment",
 )
-def test_qdrant_shadow_backfill_maxsim_is_idempotent_and_preserves_governance(monkeypatch):
+def test_qdrant_shadow_backfill_maxsim_is_idempotent_and_preserves_governance():
     load_dotenv()
+    settings = Settings.from_env()
     client = QdrantClient(
         url=os.environ["QDRANT_URL"],
         api_key=os.environ.get("QDRANT_API_KEY"),
@@ -26,7 +35,17 @@ def test_qdrant_shadow_backfill_maxsim_is_idempotent_and_preserves_governance(mo
     source = os.getenv("QDRANT_COLLECTION", "TaiLieuKyThuat_v2")
     shadow = f"MechChatbot_LateInteraction_Test_{uuid.uuid4().hex[:12]}"
     index_version = "late-test-v1"
-    monkeypatch.setenv("RAG_LATE_INDEX_VERSION", index_version)
+    late_config = LateInteractionConfig(
+        interaction_enabled=True,
+        encoder_ready=True,
+        model_name=settings.RAG_LATE_MODEL,
+        use_fp16=settings.EMBEDDING_DEVICE.lower().startswith("cuda"),
+        query_max_length=settings.RAG_LATE_QUERY_MAX_LENGTH,
+        document_max_length=settings.RAG_LATE_DOCUMENT_MAX_LENGTH,
+        collection_name=shadow,
+        index_version=index_version,
+    )
+    encoder = build_encoder(late_config)
     try:
         first = backfill(client, source, shadow, batch_size=32, index_version=index_version)
         shadow_candidates, _ = client.scroll(
@@ -47,6 +66,12 @@ def test_qdrant_shadow_backfill_maxsim_is_idempotent_and_preserves_governance(mo
             candidates[0].page_content,
             client,
             collection_name=shadow,
+            query_encoder=partial(
+                encode_query,
+                encoder=encoder,
+                max_length=late_config.query_max_length,
+            ),
+            config=late_config,
         )
         second = backfill(client, source, shadow, batch_size=32, index_version=index_version)
 

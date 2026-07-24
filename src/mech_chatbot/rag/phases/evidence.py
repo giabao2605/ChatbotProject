@@ -52,12 +52,16 @@ def _select_citations(
     primary: PrimaryRetrievalOutcome,
     enrichment: EnrichmentOutcome,
     documents: list[Any],
+    state: Any,
 ) -> tuple[str, list[str]]:
+    runtime = state.retrieval_adapter
     citation_docs = select_citation_docs(
         documents,
         question=decision.request.user_question,
         is_bom_query=decision.is_bom_query,
         part_ids=list(enrichment.new_part_ids),
+        limit=getattr(runtime, "citation_max_sources", 5),
+        bom_limit=getattr(runtime, "bom_citation_max_sources", 3),
     )
     if enrichment.grounded_math_enabled:
         from mech_chatbot.rag.grounded_math import (
@@ -97,11 +101,19 @@ def _decide_evidence_policy(
 ) -> tuple[Any, Any, tuple[str, ...], bool, float]:
     request = decision.request
     gate_started = time.time()
+    runtime = state.retrieval_adapter
     evidence_decision = evaluate_answerability(
         request.user_question,
         context_text,
         docs=documents,
         trace_id=request.trace_id,
+        strict_answer_mode=bool(
+            getattr(runtime, "strict_answer_mode", True)
+        ),
+        crag_enabled=bool(getattr(runtime, "crag_enabled", False)),
+        verifier_enabled=bool(
+            getattr(runtime, "evidence_verifier_enabled", False)
+        ),
     )
     sufficient_branch_count = sum(
         branch.get("outcome") == "full_answer" or branch.get("grounded_negative")
@@ -242,7 +254,7 @@ def evaluate_evidence(
     decomposition_branches = list(primary.decomposition_branches)
     context_text = _assemble_context(documents, request.user_question) + primary.decomposition_notice
     ref_text, ref_images = _select_citations(
-        decision, primary, enrichment, documents
+        decision, primary, enrichment, documents, state
     )
     _audit_confidential_access(request, documents)
 

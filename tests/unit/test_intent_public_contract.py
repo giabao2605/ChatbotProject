@@ -43,6 +43,15 @@ class _ImmediateExecutor:
         return self.future
 
 
+def _runtime(executor=None, *, rewrite_enabled=True):
+    return intent.IntentRuntime(
+        executor=executor if executor is not None else _ImmediateExecutor(),
+        intent_timeout=6.0,
+        context_timeout=5.0,
+        query_rewrite_enabled=rewrite_enabled,
+    )
+
+
 @pytest.mark.parametrize(
     ("question", "expected_policy", "expected_versions"),
     [
@@ -124,11 +133,11 @@ def test_search_intent_success_merges_llm_fields_and_deterministic_version(monke
     )
     monkeypatch.setattr(intent, "cohere_invoke", lambda *_args, **_kwargs: response)
     executor = _ImmediateExecutor()
-    monkeypatch.setattr(intent, "_INTENT_EXECUTOR", executor)
 
     _, _, part_ids, inherited, is_bom, data = intent.extract_search_intent(
         "so sánh version 2 và v3 của model B",
         trace_id="trace-intent-contract",
+        runtime=_runtime(executor),
     )
 
     assert part_ids == ["ab-120"]
@@ -152,11 +161,11 @@ def test_search_intent_success_merges_llm_fields_and_deterministic_version(monke
 )
 def test_search_intent_provider_failure_falls_back_to_current_state(monkeypatch, error):
     executor = _ImmediateExecutor(error=error)
-    monkeypatch.setattr(intent, "_INTENT_EXECUTOR", executor)
 
     strict_filter, broad_filter, part_ids, inherited, is_bom, data = intent.extract_search_intent(
         "model Zeta mới nhất",
         current_part_ids=["OLD-01"],
+        runtime=_runtime(executor),
     )
 
     assert strict_filter is not None
@@ -208,28 +217,31 @@ def test_search_intent_records_business_document_preference_alongside_reference_
 
 
 @pytest.mark.parametrize(
-    ("env_value", "history", "question"),
+    ("rewrite_enabled", "history", "question"),
     [
-        ("false", [{"role": "user", "content": "x"}], "còn nó?"),
-        ("true", None, "còn nó?"),
+        (False, [{"role": "user", "content": "x"}], "còn nó?"),
+        (True, None, "còn nó?"),
         (
-            "true",
+            True,
             [{"role": "user", "content": "x"}],
             "Quy trình nghỉ phép áp dụng cho nhân viên thử việc tại chi nhánh nào",
         ),
     ],
 )
 def test_context_analysis_skips_llm_when_rewrite_is_disabled_or_unnecessary(
-    monkeypatch, env_value, history, question
+    monkeypatch, rewrite_enabled, history, question
 ):
-    monkeypatch.setenv("ENABLE_QUERY_REWRITE", env_value)
     monkeypatch.setattr(
         intent,
         "cohere_invoke",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LLM called")),
     )
 
-    assert intent.analyze_context(question, chat_history=history) == {
+    assert intent.analyze_context(
+        question,
+        chat_history=history,
+        runtime=_runtime(rewrite_enabled=rewrite_enabled),
+    ) == {
         "context_action": "continue",
         "standalone_question": question,
         "llm_resolved": False,
@@ -246,13 +258,13 @@ def test_context_analysis_returns_clean_standalone_question_and_trace(monkeypatc
         )
 
     monkeypatch.setattr(intent, "cohere_invoke", fake_invoke)
-    monkeypatch.setattr(intent, "_INTENT_EXECUTOR", _ImmediateExecutor())
 
     result = intent.analyze_context(
         "còn quy trình B?",
         chat_history=[{"role": "assistant", "content": "Quy trinh A"}],
         active_doc_refs=["DOC-A"],
         trace_id="trace-context-contract",
+        runtime=_runtime(),
     )
 
     assert result == {
@@ -280,12 +292,12 @@ def test_context_analysis_normalizes_invalid_provider_fields(monkeypatch, payloa
         "cohere_invoke",
         lambda *_args, **_kwargs: SimpleNamespace(content=payload),
     )
-    monkeypatch.setattr(intent, "_INTENT_EXECUTOR", _ImmediateExecutor())
 
     result = intent.analyze_context(
         "còn nó?",
         chat_history=[{"role": "user", "content": "xem quy trinh"}],
         current_part_ids=["DOC-1"],
+        runtime=_runtime(),
     )
 
     expected_action = "broaden" if '"broaden"' in payload else "continue"
@@ -302,12 +314,12 @@ def test_context_analysis_normalizes_invalid_provider_fields(monkeypatch, payloa
 )
 def test_context_analysis_provider_failure_returns_safe_fallback(monkeypatch, error):
     executor = _ImmediateExecutor(error=error)
-    monkeypatch.setattr(intent, "_INTENT_EXECUTOR", executor)
 
     result = intent.analyze_context(
         "còn nó?",
         chat_history=[{"role": "user", "content": "xem quy trinh"}],
         current_part_ids=["DOC-1"],
+        runtime=_runtime(executor),
     )
 
     assert result == {
@@ -317,3 +329,31 @@ def test_context_analysis_provider_failure_returns_safe_fallback(monkeypatch, er
     }
     if isinstance(error, concurrent.futures.TimeoutError):
         assert executor.future.cancelled is True
+
+
+def test_runtime_factory_owns_executor_lifecycle(monkeypatch):
+    created = []
+
+    class Executor:
+        def __init__(self, max_workers):
+            created.append(max_workers)
+            self.closed = None
+
+        def shutdown(self, *, wait, cancel_futures):
+            self.closed = (wait, cancel_futures)
+
+    monkeypatch.setattr(intent, "ThreadPoolExecutor", Executor)
+
+    runtime = intent.build_intent_runtime(
+        max_workers=3,
+        intent_timeout=1.5,
+        context_timeout=2.5,
+        query_rewrite_enabled=False,
+    )
+    runtime.close()
+
+    assert created == [3]
+    assert runtime.intent_timeout == 1.5
+    assert runtime.context_timeout == 2.5
+    assert runtime.query_rewrite_enabled is False
+    assert runtime.executor.closed == (False, True)

@@ -268,15 +268,17 @@ def test_pilot_replay_branches_inherit_cache_and_trace_controls(monkeypatch):
         return state.prepared((iter(["answer"]), "", [], [], {}))
 
     trace_id = "pilot-replay-context"
-    try:
+    with trace_logging.bind_trace_runtime(
+        trace_logging.TraceRuntime(
+            execution_context=current_execution_context,
+        )
+    ):
         events = list(
             DefaultRagExecutor(execute_pipeline=scripted_pipeline).run(
                 RagRequest("compare", AccessScope()),
                 RagInvocation(trace_id=trace_id, mode="pilot_replay"),
             )
         )
-    finally:
-        trace_logging._TRACE_ACC.pop(trace_id, None)
 
     assert isinstance(events[-1], RagCompleted)
     assert sorted(observed) == [
@@ -442,8 +444,6 @@ def test_parallel_decomposition_retries_share_atomic_request_budget(monkeypatch)
 def test_budget_exhaustion_is_not_swallowed_by_evidence_fallback(monkeypatch):
     from mech_chatbot.rag import evidence_gate
 
-    monkeypatch.setenv("LLM_EVIDENCE_VERIFIER_ENABLED", "true")
-    monkeypatch.setattr(evidence_gate, "STRICT_ANSWER_MODE", True)
     monkeypatch.setattr(
         evidence_gate,
         "heuristic_missing_evidence_reason",
@@ -461,6 +461,8 @@ def test_budget_exhaustion_is_not_swallowed_by_evidence_fallback(monkeypatch):
             "Chi phí là bao nhiêu?",
             "Tài liệu có bằng chứng trực tiếp.",
             trace_id=state.trace_id,
+            strict_answer_mode=True,
+            verifier_enabled=True,
         )
         return state.prepared((iter(["unreachable"]), "", [], [], {}))
 
@@ -599,7 +601,7 @@ def test_typed_diagnostics_preserve_legacy_mapping_shape():
     assert dict(prepared.diagnostics)["custom_key"] == "kept"
 
 
-def test_legacy_adapter_preserves_ambient_evaluation_context(monkeypatch):
+def test_legacy_adapter_accepts_explicit_evaluation_context(monkeypatch):
     from mech_chatbot.rag import execution
     from mech_chatbot.rag.pipeline import chat_with_rag
 
@@ -611,10 +613,9 @@ def test_legacy_adapter_preserves_ambient_evaluation_context(monkeypatch):
             yield RagPrepared("", (), (), {})
             yield RagCompleted("answered", "trace-legacy-eval", {})
 
-    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "evaluation")
     monkeypatch.setattr(execution, "DefaultRagExecutor", ScriptedExecutor)
 
-    stream, *_rest = chat_with_rag("question")
+    stream, *_rest = chat_with_rag("question", execution_context="evaluation")
     assert "".join(stream) == ""
     assert observed_modes == ["evaluation"]
 

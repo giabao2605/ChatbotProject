@@ -7,6 +7,7 @@ and audit persistence boundaries are replaced with deterministic fakes.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import importlib
 import sys
 import threading
@@ -31,8 +32,6 @@ def load_steps(monkeypatch):
     original_package_attribute = getattr(rag_package, "pipeline_steps", _MISSING)
 
     def load(*, strict=True):
-        monkeypatch.setenv("APP_ENV", "development")
-        monkeypatch.setenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", "true")
         bootstrap = ModuleType("mech_chatbot.rag.bootstrap")
         bootstrap.STRICT_ANSWER_MODE = strict
         bootstrap.client = object()
@@ -41,6 +40,7 @@ def load_steps(monkeypatch):
         sys.modules.pop(PIPELINE_STEPS_MODULE, None)
         module = importlib.import_module(PIPELINE_STEPS_MODULE)
         assert module.__name__ == PIPELINE_STEPS_MODULE
+        module._test_strict_answer_mode = strict
         return module
 
     yield load
@@ -130,8 +130,29 @@ class _Lifecycle:
         self.refusal_reason = reason
 
 
-def _plan(steps, *, docs=None, answer="", outcome=None, budget=None):
+def _plan(
+    steps,
+    *,
+    docs=None,
+    answer="",
+    outcome=None,
+    budget=None,
+    provider=None,
+    runtime_overrides=None,
+):
     documents = list(docs or [_doc()])
+    provider = provider or _Provider([["unused provider response"]])
+    retrieval_config = {
+        "strict_answer_mode": bool(
+            getattr(steps, "_test_strict_answer_mode", True)
+        ),
+        "strict_realtime_streaming": False,
+        "claim_repair_enabled": False,
+        "grounded_math_enabled": False,
+        "stream_max_attempts": 3,
+        "auto_source_cards": True,
+    }
+    retrieval_config.update(runtime_overrides or {})
     return steps.GenerationPlan(
         turn=steps.GenerationTurn(
             user_question="Quy định hiện hành là gì?",
@@ -156,15 +177,30 @@ def _plan(steps, *, docs=None, answer="", outcome=None, budget=None):
             budget=budget,
         ),
         explicit_negative_answer=answer,
+        runtime=SimpleNamespace(
+            retrieval_adapter=SimpleNamespace(**retrieval_config),
+            provider_adapter=SimpleNamespace(
+                client=provider,
+                settings=SimpleNamespace(
+                    model_name="test-model",
+                    base_url="https://example.invalid/v1",
+                ),
+                invoke=lambda messages, **kwargs: SimpleNamespace(
+                    content=provider.invoke(messages, **kwargs)
+                ),
+            ),
+        ),
     )
 
 
-def _prepare_provider(steps, monkeypatch, scripts):
-    from mech_chatbot.llm import external_ai
+@contextmanager
+def _allow_external_call(**_kwargs):
+    yield None
 
+
+def _prepare_provider(steps, monkeypatch, scripts):
     provider = _Provider(scripts)
-    monkeypatch.setattr(steps, "get_cohere_llm", lambda: provider)
-    monkeypatch.setattr(external_ai, "_record_external_call", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(steps, "audited_external_call", _allow_external_call)
     monkeypatch.setattr(steps.time, "sleep", lambda _seconds: None)
     return provider
 
@@ -188,8 +224,6 @@ def _disambiguate(steps, docs, question, *, intent=None):
 
 def test_history_uses_default_budget_and_truncates_long_roles(load_steps, monkeypatch):
     steps = load_steps()
-    monkeypatch.setenv("HISTORY_BUDGET", "invalid")
-    monkeypatch.setenv("ENABLE_HISTORY_SUMMARY", "false")
     bot = "Sentence. " * 70
     user = "x" * 1300
 
@@ -197,6 +231,8 @@ def test_history_uses_default_budget_and_truncates_long_roles(load_steps, monkey
         [{"role": "assistant", "content": bot}, {"role": "user", "content": user}],
         {},
         "vi",
+        history_budget=4000,
+        history_summary_enabled=False,
     )
 
     assert rendered.startswith("Bot: ")
@@ -208,12 +244,12 @@ def test_history_uses_default_budget_and_truncates_long_roles(load_steps, monkey
 
 def test_history_reuses_previous_summary_when_refresh_is_not_due(load_steps, monkeypatch):
     steps = load_steps()
-    monkeypatch.setenv("ENABLE_HISTORY_SUMMARY", "true")
 
     rendered, summary, covered = steps._prepare_history(
         [{"role": "user", "content": f"turn {index}"} for index in range(13)],
         {"history_summary": "- Approved earlier decision", "summary_covered": 99},
         "en-US",
+        history_summary_enabled=True,
     )
 
     assert rendered.startswith(
@@ -229,8 +265,7 @@ def test_general_retrieval_recovers_invalid_top_k_through_vectorstore_fallback(
 ):
     steps = load_steps()
     document = _doc("General policy fallback")
-    steps.vectorstore = _FallbackVectorStore([document])
-    monkeypatch.setenv("RAG_GENERAL_TOP_K", "invalid")
+    vectorstore = _FallbackVectorStore([document])
 
     docs, top_k, mode, _started, active_filter = steps._retrieve(
         new_part_ids=[],
@@ -240,6 +275,9 @@ def test_general_retrieval_recovers_invalid_top_k_through_vectorstore_fallback(
         query_to_search="leave policy",
         rbac_filter=None,
         trace_id="general-fallback",
+        vectorstore=vectorstore,
+        client=object(),
+        collection_name="test",
     )
 
     assert docs == [document]
@@ -254,7 +292,7 @@ def test_empty_exact_retrieval_broadens_without_exposing_unservable_documents(
     steps = load_steps()
     published = _doc("Broad published match", doc_id=81)
     expired = _doc("Broad expired match", doc_id=82, effective_status="expired")
-    steps.vectorstore = _FallbackVectorStore(
+    vectorstore = _FallbackVectorStore(
         [],
         documents_by_filter={
             "strict": [],
@@ -270,6 +308,9 @@ def test_empty_exact_retrieval_broadens_without_exposing_unservable_documents(
         query_to_search="PART-81",
         rbac_filter=None,
         trace_id=None,
+        vectorstore=vectorstore,
+        client=object(),
+        collection_name="test",
     )
 
     assert docs == [published]
@@ -283,15 +324,14 @@ def test_pending_description_selection_rewrites_query_without_forcing_part_id(
     monkeypatch,
 ):
     steps = load_steps()
-    from mech_chatbot.rag import intent
-
-    monkeypatch.setenv("ENABLE_CONV_STATE", "true")
     monkeypatch.setattr(
-        intent,
-        "cohere_invoke",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            content='{"context_action":"continue","standalone_question":null}'
-        ),
+        steps,
+        "analyze_context",
+        lambda *_args, **_kwargs: {
+            "context_action": "continue",
+            "standalone_question": None,
+            "llm_resolved": True,
+        },
     )
     pending = [
         {"index": 1, "key": "policy-A", "product_name": "Leave policy 2026"}
@@ -309,6 +349,11 @@ def test_pending_description_selection_rewrites_query_without_forcing_part_id(
         allowed_sites=[],
         trace_id="description-selection",
         t_intent=time.time(),
+        runtime=SimpleNamespace(
+            conversation_state_enabled=True,
+            strict_site_filter=True,
+            intent_runtime=None,
+        ),
     )
 
     assert result[0] == "Leave policy 2026"
@@ -318,15 +363,14 @@ def test_pending_description_selection_rewrites_query_without_forcing_part_id(
 
 def test_continuation_anchors_the_active_document(load_steps, monkeypatch):
     steps = load_steps()
-    from mech_chatbot.rag import intent
-
-    monkeypatch.setenv("ENABLE_CONV_STATE", "true")
     monkeypatch.setattr(
-        intent,
-        "cohere_invoke",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            content='{"context_action":"continue","standalone_question":null}'
-        ),
+        steps,
+        "analyze_context",
+        lambda *_args, **_kwargs: {
+            "context_action": "continue",
+            "standalone_question": None,
+            "llm_resolved": True,
+        },
     )
 
     result = steps._rewrite_and_anchor(
@@ -341,6 +385,11 @@ def test_continuation_anchors_the_active_document(load_steps, monkeypatch):
         allowed_sites=[],
         trace_id="continuation-anchor",
         t_intent=time.time(),
+        runtime=SimpleNamespace(
+            conversation_state_enabled=True,
+            strict_site_filter=True,
+            intent_runtime=None,
+        ),
     )
 
     assert result[1] == ["PART-9"]
@@ -433,16 +482,20 @@ def test_grounded_math_malformed_provenance_fails_closed_without_provider(
     monkeypatch,
 ):
     steps = load_steps()
-    monkeypatch.setenv("RAG_GROUNDED_MATH_ENABLED", "true")
-    monkeypatch.setattr(
-        steps,
-        "get_cohere_llm",
-        lambda: pytest.fail("malformed grounded math must not call the provider"),
-    )
     outcome = steps.GenerationOutcome()
     document = _doc(calculation_provenance={"operation": "sum", "references": [{}]})
 
-    answer = "".join(steps.generate_answer(_plan(steps, docs=[document], outcome=outcome)))
+    answer = "".join(
+        steps.generate_answer(
+            _plan(
+                steps,
+                docs=[document],
+                outcome=outcome,
+                provider=pytest.fail,
+                runtime_overrides={"grounded_math_enabled": True},
+            )
+        )
+    )
 
     assert "thông tin đủ để trả lời" in answer.lower()
     assert outcome.refusal_reason == "grounded_math_post_check"
@@ -453,23 +506,25 @@ def test_normal_streaming_returns_provider_chunks_when_strict_mode_is_disabled(
     monkeypatch,
 ):
     steps = load_steps(strict=False)
-    _prepare_provider(steps, monkeypatch, [["Approved ", "policy."]])
+    provider = _prepare_provider(steps, monkeypatch, [["Approved ", "policy."]])
 
-    answer = list(steps.generate_answer(_plan(steps)))
+    answer = list(steps.generate_answer(_plan(steps, provider=provider)))
 
     assert answer == ["Approved ", "policy."]
 
 
 def test_normal_streaming_retries_rate_limit_before_emitting(load_steps, monkeypatch):
     steps = load_steps(strict=False)
-    _prepare_provider(
+    provider = _prepare_provider(
         steps,
         monkeypatch,
         [RuntimeError("rate limit"), ["Recovered answer."]],
     )
     metrics = {}
 
-    answer = list(steps.generate_answer(_plan(steps), metrics=metrics))
+    answer = list(
+        steps.generate_answer(_plan(steps, provider=provider), metrics=metrics)
+    )
 
     assert answer == ["Recovered answer."]
     assert metrics["provider_retries"] == 1
@@ -487,7 +542,7 @@ def test_normal_streaming_does_not_retry_non_retryable_provider_failure(
     )
 
     with pytest.raises(RuntimeError):
-        list(steps.generate_answer(_plan(steps)))
+        list(steps.generate_answer(_plan(steps, provider=provider)))
     assert provider.scripts == [["unexpected retry"]]
 
 
@@ -500,7 +555,12 @@ def test_normal_streaming_honors_cancellation_before_provider_call(load_steps, m
     cancelled.set()
 
     with pytest.raises(ExternalAICallCancelled):
-        list(steps.generate_answer(_plan(steps), cancel_event=cancelled))
+        list(
+            steps.generate_answer(
+                _plan(steps, provider=provider),
+                cancel_event=cancelled,
+            )
+        )
     assert provider.scripts == [["must not escape"]]
 
 
@@ -509,11 +569,19 @@ def test_guarded_generation_requires_inline_citation_when_source_cards_are_disab
     monkeypatch,
 ):
     steps = load_steps()
-    monkeypatch.setenv("RAG_AUTO_SOURCE_CARDS", "false")
-    _prepare_provider(steps, monkeypatch, [["Nhân viên nộp đề nghị."]])
+    provider = _prepare_provider(steps, monkeypatch, [["Nhân viên nộp đề nghị."]])
     outcome = steps.GenerationOutcome()
 
-    answer = "".join(steps.generate_answer(_plan(steps, outcome=outcome)))
+    answer = "".join(
+        steps.generate_answer(
+            _plan(
+                steps,
+                outcome=outcome,
+                provider=provider,
+                runtime_overrides={"auto_source_cards": False},
+            )
+        )
+    )
 
     assert answer != "Nhân viên nộp đề nghị."
     assert outcome.refusal_reason == "missing_source_page_version"
@@ -521,14 +589,16 @@ def test_guarded_generation_requires_inline_citation_when_source_cards_are_disab
 
 def test_claim_repair_releases_only_the_grounded_rewrite(load_steps, monkeypatch):
     steps = load_steps()
-    monkeypatch.setenv("RAG_CLAIM_REPAIR_ENABLED", "true")
-    _prepare_provider(steps, monkeypatch, [["Chi phí là 999 USD."]])
-    monkeypatch.setattr(
+    provider = _prepare_provider(
         steps,
-        "cohere_invoke",
-        lambda *_args, **_kwargs: SimpleNamespace(content="Chi phí là 10 USD."),
+        monkeypatch,
+        [["Chi phí là 999 USD."], ["Chi phí là 10 USD."]],
     )
-    plan = _plan(steps)
+    plan = _plan(
+        steps,
+        provider=provider,
+        runtime_overrides={"claim_repair_enabled": True},
+    )
     plan = steps.GenerationPlan(
         turn=steps.GenerationTurn(
             user_question="Chi phí là bao nhiêu?",
@@ -547,6 +617,7 @@ def test_claim_repair_releases_only_the_grounded_rewrite(load_steps, monkeypatch
             retrieval_mode=plan.evidence.retrieval_mode,
         ),
         control=plan.control,
+        runtime=plan.runtime,
     )
     metrics = {}
 

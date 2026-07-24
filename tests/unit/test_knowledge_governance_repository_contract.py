@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -344,7 +345,10 @@ def test_update_document_metadata_fails_when_sql_updates_no_rows(fake_db, monkey
     assert governance.update_document_governance_metadata(5, parent_section="new") is False
 
 
-def test_validate_metadata_actor_is_fail_closed_and_override_requires_env(fake_db, monkeypatch):
+def test_validate_metadata_actor_is_fail_closed_and_override_requires_policy(
+    fake_db,
+    monkeypatch,
+):
     assert governance.validate_document_metadata_actor(1, None) == (
         False,
         "Metadata update phai co user da xac thuc",
@@ -359,9 +363,14 @@ def test_validate_metadata_actor_is_fail_closed_and_override_requires_env(fake_d
     fake_db(_Result(row={"KnowledgeOwnerUserID": 2, "KnowledgeApproverUserID": 3}))
     assert governance.validate_document_metadata_actor(1, 4, actor_roles=["admin"])[0] is False
 
-    monkeypatch.setenv("KNOWLEDGE_ALLOW_ADMIN_METADATA_OVERRIDE", "true")
     fake_db(_Result(row={"KnowledgeOwnerUserID": 2, "KnowledgeApproverUserID": 3}))
-    assert governance.validate_document_metadata_actor(1, 4, actor_roles=[" ADMIN "]) == (True, "")
+    policy = SimpleNamespace(allow_admin_metadata_override=True)
+    assert governance.validate_document_metadata_actor(
+        1,
+        4,
+        actor_roles=[" ADMIN "],
+        policy=policy,
+    ) == (True, "")
 
 
 def test_list_missing_site_documents_clamps_limit_and_maps_rows(fake_db):

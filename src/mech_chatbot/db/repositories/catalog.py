@@ -2,7 +2,6 @@
 Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
-import os
 from sqlalchemy import text
 from ..engine import _ensure_engine, engine
 from mech_chatbot.config.logging import logger
@@ -110,13 +109,16 @@ def _replace_department_token_list(value, old_code, new_code=None):
 # invalidate tuong minh khi CRUD danh muc de tranh du lieu "ma".
 # ==========================================================================
 _catalog_cache = {}
-_CATALOG_CACHE_TTL = float(os.getenv("CATALOG_CACHE_TTL", "60"))
+_CATALOG_CACHE_TTL = 60.0
 
 
 def _catalog_cache_get(key):
     import time
+    from mech_chatbot.config.repository_runtime import current_repository_policy
+
     ent = _catalog_cache.get(key)
-    if ent is not None and (time.time() - ent[1]) < _CATALOG_CACHE_TTL:
+    ttl = current_repository_policy().catalog_cache_ttl
+    if ent is not None and (time.time() - ent[1]) < ttl:
         return ent[0]
     return None
 

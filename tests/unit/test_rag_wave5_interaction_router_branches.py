@@ -7,11 +7,8 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture(autouse=True)
-def _reset_router(monkeypatch):
-    monkeypatch.setenv("SEMANTIC_ROUTER_ENABLED", "true")
-    router.set_embedder(None)
+def _reset_router():
     yield
-    router.set_embedder(None)
 
 
 @pytest.mark.parametrize(
@@ -116,11 +113,10 @@ def test_semantic_router_handles_one_route_and_reuses_prototype_vectors():
     assert calls.count("capability") == 1
 
 
-def test_global_embedder_is_reused_and_malformed_llm_results_fail_closed():
-    router.set_embedder(lambda text: [1.0, 0.0])
-
-    first = router.classify("ambiguous public question")
-    second = router.classify("another ambiguous public question")
+def test_explicit_embedder_is_request_scoped_and_malformed_llm_results_fail_closed():
+    embedder = lambda text: [1.0, 0.0]
+    first = router.classify("ambiguous public question", embedder=embedder)
+    second = router.classify("another ambiguous public question", embedder=embedder)
     malformed = router.classify(
         "still ambiguous",
         embedder=lambda text: None,

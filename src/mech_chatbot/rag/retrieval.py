@@ -3,7 +3,6 @@
 
 from mech_chatbot.config.logging import logger, log_trace
 from qdrant_client import models
-from mech_chatbot.config.settings import QDRANT_COLLECTION
 from mech_chatbot.rag.rbac import (
     PART_ID_KEYS_BROAD,
     compose_retrieval_filters,
@@ -51,7 +50,8 @@ def current_published_filter(rbac_filter=None):
 
 
 def probe_restricted_access(query_text, user_department=None, allowed_departments=None,
-                            max_security_level="public", allowed_sites=None, part_ids=None):
+                            max_security_level="public", allowed_sites=None, part_ids=None,
+                            *, client=None, collection_name=None):
     """Detect an exact-code document blocked by security or site policy.
 
     The probe reads only security/site payload fields and never returns evidence.
@@ -59,12 +59,11 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
     on operational errors so it cannot break the primary RAG path.
     """
     try:
-        # Lazy import de module filter van thuan va unit test khong tai model.
-        from mech_chatbot.rag.bootstrap import client
-
         exact_ids = [str(value).strip().lower() for value in (part_ids or []) if str(value).strip()]
         if not exact_ids:
             return False, None
+        if client is None or not str(collection_name or "").strip():
+            raise RuntimeError("Restricted-access probe runtime is not configured")
 
         user_order = LEVEL_ORDER.get((max_security_level or "public"), 0)
         allowed = list(allowed_departments) if allowed_departments else []
@@ -86,7 +85,7 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
         ]
         probe_filter = models.Filter(must=must, must_not=governance.must_not)
         points, _ = client.scroll(
-            collection_name=QDRANT_COLLECTION,
+            collection_name=collection_name,
             scroll_filter=probe_filter,
             limit=10,
             with_payload=["metadata.security_level", "metadata.site"],

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Auto-split tu rag/service.py (P1.2 refactor). Giu nguyen logic goc; chi tach file + import."""
 
-import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -32,11 +31,6 @@ from mech_chatbot.rag.number_normalization import (
     normalized_number_values,
 )
 from mech_chatbot.rag.execution import RequestBudgetExceeded
-STRICT_ANSWER_MODE = os.getenv("STRICT_ANSWER_MODE", "true").strip().lower() in {
-    "1", "true", "yes", "on"
-}
-
-
 class EvidenceState(str, Enum):
     SUFFICIENT = "SUFFICIENT"
     AMBIGUOUS = "AMBIGUOUS"
@@ -167,16 +161,22 @@ def make_insufficient_evidence_message(question, reason, lang="vi"):
     )
 
 
-def evaluate_answerability(question, context_text, docs=None, trace_id=None):
+def evaluate_answerability(
+    question,
+    context_text,
+    docs=None,
+    trace_id=None,
+    *,
+    strict_answer_mode=True,
+    crag_enabled=False,
+    verifier_enabled=False,
+):
     """Return a structured evidence decision for generation or correction."""
-    if not STRICT_ANSWER_MODE and not is_high_risk_question(question):
+    if not strict_answer_mode and not is_high_risk_question(question):
         return EvidenceDecision(EvidenceState.SUFFICIENT, telemetry_status="heuristic_pass")
 
     quick_reason = heuristic_missing_evidence_reason(question, context_text)
     if quick_reason:
-        crag_enabled = os.getenv("RAG_CRAG_ENABLED", "false").strip().lower() in {
-            "1", "true", "yes", "on"
-        }
         state = EvidenceState.AMBIGUOUS if crag_enabled and str(context_text).strip() else EvidenceState.INSUFFICIENT
         return EvidenceDecision(
             state,
@@ -188,9 +188,7 @@ def evaluate_answerability(question, context_text, docs=None, trace_id=None):
     # Final prompt, source-citation gate and deterministic post-check already
     # validate the generated answer. A second GPT call here doubles latency and
     # can exhaust provider capacity; keep it as an explicit opt-in for audits.
-    if os.getenv("LLM_EVIDENCE_VERIFIER_ENABLED", "false").strip().lower() not in {
-        "1", "true", "yes", "on"
-    }:
+    if not verifier_enabled:
         return EvidenceDecision(
             EvidenceState.SUFFICIENT,
             reason="deterministic_evidence_gate_passed",

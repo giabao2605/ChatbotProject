@@ -2,7 +2,6 @@
 Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
-import os
 import re
 import unicodedata
 from datetime import datetime
@@ -25,8 +24,8 @@ _DOCUMENT_SUFFIX_RE = re.compile(
 )
 
 # FIX C6: gioi han kich thuoc input chat (chong payload GB lam sap DB). Co the chinh qua env.
-MAX_USER_MSG_LEN = int(os.getenv("MAX_USER_MSG_LEN", "20000"))
-MAX_BOT_MSG_LEN = int(os.getenv("MAX_BOT_MSG_LEN", "200000"))
+MAX_USER_MSG_LEN = 20000
+MAX_BOT_MSG_LEN = 200000
 
 
 def _cap_len(val, max_len):

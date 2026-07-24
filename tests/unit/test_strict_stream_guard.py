@@ -64,6 +64,36 @@ class _FakeChain:
             yield chunk
 
 
+def _runtime(*, client=None, invoke_provider=None, **retrieval_overrides):
+    retrieval_fields = {
+        "strict_answer_mode": True,
+        "strict_realtime_streaming": False,
+        "claim_repair_enabled": False,
+        "grounded_math_enabled": False,
+        "auto_source_cards": True,
+        "stream_max_attempts": 3,
+    }
+    retrieval_fields.update(retrieval_overrides)
+    provider = SimpleNamespace(
+        client=client if client is not None else object(),
+        settings=SimpleNamespace(
+            model_name="test-model",
+            base_url="https://example.invalid/v1",
+        ),
+        invoke=(
+            invoke_provider
+            if invoke_provider is not None
+            else lambda *_args, **_kwargs: pytest.fail(
+                "provider invoke was not expected"
+            )
+        ),
+    )
+    return SimpleNamespace(
+        retrieval_adapter=SimpleNamespace(**retrieval_fields),
+        provider_adapter=provider,
+    )
+
+
 @contextmanager
 def _no_network_audit(**_kwargs):
     yield None
@@ -93,6 +123,7 @@ def _run_generation(
         "intent_data": {},
         "base_k": 5,
         "retrieval_mode": "general:explicit_dense_bm25_rrf",
+        "runtime": _runtime(),
     }
     plan_fields.update(overrides)
     return module.generate_answer(
@@ -121,6 +152,7 @@ def _run_generation(
                 outcome=plan_fields.get("outcome", module.GenerationOutcome()),
             ),
             explicit_negative_answer=plan_fields.get("explicit_negative_answer", ""),
+            runtime=plan_fields["runtime"],
         ),
         cancel_event=cancel_event,
     )
@@ -169,23 +201,20 @@ def _run_through_executor(monkeypatch, module, **generation_kwargs):
                 setattr(rag_package, attribute, previous)
 
 
-def _prepare(module, monkeypatch, chain):
+def _prepare(module, monkeypatch, chain, **retrieval_overrides):
     monkeypatch.setattr(module, "_build_prompt_template", lambda *_args, **_kwargs: chain)
-    monkeypatch.setattr(module, "get_cohere_llm", lambda: object())
     monkeypatch.setattr(module, "StrOutputParser", lambda: object())
     monkeypatch.setattr(module, "audited_external_call", _no_network_audit)
-    monkeypatch.setattr(module, "get_llm_model_name", lambda: "test-model")
-    monkeypatch.setattr(module, "get_llm_endpoint", lambda: "https://example.invalid/v1")
     monkeypatch.setattr(module, "_context_is_mechanical", lambda *_args: False)
-    monkeypatch.setattr(module, "strict_realtime_streaming_enabled", lambda *_args: False)
     monkeypatch.setattr(module, "has_unsupported_numbers", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(module, "make_insufficient_evidence_message", lambda *_args, **_kwargs: "REFUSAL")
+    return _runtime(client=chain, **retrieval_overrides)
 
 
 def test_strict_buffered_stream_never_yields_unsupported_factual_token(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
-    _prepare(module, monkeypatch, _FakeChain(["Gia tri la 999."]))
-    events = _run_through_executor(monkeypatch, module)
+    runtime = _prepare(module, monkeypatch, _FakeChain(["Gia tri la 999."]))
+    events = _run_through_executor(monkeypatch, module, runtime=runtime)
     emitted = [event.text for event in events if isinstance(event, RagToken)]
 
     assert emitted == ["REFUSAL"]
@@ -198,23 +227,33 @@ def test_strict_buffered_stream_never_yields_unsupported_factual_token(monkeypat
 def test_cancelled_stream_raises_before_any_provider_chunk_is_emitted(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     cancelled = threading.Event()
-    _prepare(module, monkeypatch, _FakeChain(["Gia tri la 999."], before_yield=cancelled.set))
+    runtime = _prepare(
+        module,
+        monkeypatch,
+        _FakeChain(["Gia tri la 999."], before_yield=cancelled.set),
+    )
 
     with pytest.raises(ExternalAICallCancelled):
-        list(_run_generation(module, cancel_event=cancelled))
+        list(_run_generation(module, cancel_event=cancelled, runtime=runtime))
 
 
 def test_normal_policy_question_does_not_apply_global_numeric_holdback(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     seen_strict_values = []
-    _prepare(module, monkeypatch, _FakeChain(["Quy định là 20."]))
+    runtime = _prepare(module, monkeypatch, _FakeChain(["Quy định là 20."]))
     monkeypatch.setattr(
         module,
         "has_unsupported_numbers",
         lambda *_args, **kwargs: seen_strict_values.append(kwargs.get("strict_mode")) or False,
     )
 
-    assert list(_run_generation(module, question="Quy định hiện hành là gì?")) == ["Quy định là 20."]
+    assert list(
+        _run_generation(
+            module,
+            question="Quy định hiện hành là gì?",
+            runtime=runtime,
+        )
+    ) == ["Quy định là 20."]
     assert seen_strict_values == [False]
 
 
@@ -273,6 +312,10 @@ def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch, pol
         metadata=metadata
     )
 
+    def deny_internal_policy(_messages, **kwargs):
+        assert kwargs["policies"] == ["internal_only"]
+        raise ExternalProcessingDenied("internal_only")
+
     with pytest.raises(ExternalProcessingDenied, match="internal_only"):
         module._attempt_number_claim_repair(
             "Chi phí 2500 USD.",
@@ -281,17 +324,13 @@ def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch, pol
             retrieved_docs=[document],
             trace_id="claim-repair-policy-test",
             enabled=True,
+            invoke_provider=deny_internal_policy,
         )
 
 
 def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
-    monkeypatch.setenv("RAG_GROUNDED_MATH_ENABLED", "true")
-    monkeypatch.setattr(
-        module,
-        "get_cohere_llm",
-        lambda: (_ for _ in ()).throw(AssertionError("grounded math must not initialize LLM")),
-    )
+    runtime = _runtime(grounded_math_enabled=True)
     plan = CalculationPlan(
         "add",
         (
@@ -322,6 +361,7 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
         module,
         question="Cộng PART-A và PART-B",
         docs=docs,
+        runtime=runtime,
     )
     emitted = [event.text for event in events if isinstance(event, RagToken)]
 
@@ -340,18 +380,17 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
             question="Cộng PART-A và PART-B",
             docs=docs,
             cancel_event=cancelled,
+            runtime=runtime,
         ))
 
 
-def test_grounded_math_flag_defaults_to_normal_generation_path(monkeypatch):
+def test_grounded_math_disabled_uses_normal_generation_path(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
-    monkeypatch.delenv("RAG_GROUNDED_MATH_ENABLED", raising=False)
-    initialized = []
-    _prepare(module, monkeypatch, _FakeChain(["Normal generation path."]))
-    monkeypatch.setattr(
+    runtime = _prepare(
         module,
-        "get_cohere_llm",
-        lambda: initialized.append(True) or object(),
+        monkeypatch,
+        _FakeChain(["Normal generation path."]),
+        grounded_math_enabled=False,
     )
     monkeypatch.setattr(
         module,
@@ -371,16 +410,18 @@ def test_grounded_math_flag_defaults_to_normal_generation_path(monkeypatch):
         "calculation_provenance": make_calculation_provenance(plan, derive_claim(plan)),
     })]
 
-    emitted = list(_run_generation(module, question="Tổng BOM là bao nhiêu?", docs=docs))
+    emitted = list(_run_generation(
+        module,
+        question="Tổng BOM là bao nhiêu?",
+        docs=docs,
+        runtime=runtime,
+    ))
 
     assert emitted == ["Normal generation path."]
-    assert initialized == [True]
 
 
 def test_vision_retries_share_the_request_wide_provider_budget(monkeypatch):
     from tenacity import wait_none
-
-    from mech_chatbot.llm import vision_client
 
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     attempts = []
@@ -391,7 +432,6 @@ def test_vision_retries_share_the_request_wide_provider_budget(monkeypatch):
             raise RuntimeError("temporary vision failure")
 
     budget = RequestBudgetLedger(RequestBudgetLimits(), started_monotonic=0.0)
-    monkeypatch.setattr(vision_client, "build_vision_model", lambda: FailingVision())
     monkeypatch.setattr(module.Image, "open", lambda _path: object())
     monkeypatch.setattr(module, "is_retryable_error", lambda _error: True)
     monkeypatch.setattr(module, "wait_exponential", lambda **_kwargs: wait_none())
@@ -402,6 +442,7 @@ def test_vision_retries_share_the_request_wide_provider_budget(monkeypatch):
             "what is this?",
             "vision-budget-test",
             retry_budget=budget,
+            vision_model=FailingVision(),
         )
     assert len(attempts) == 3
     assert budget.provider_retries == 2

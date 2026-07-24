@@ -3,16 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import time
 from dataclasses import dataclass
-from functools import lru_cache
-
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-os.environ.setdefault("ONEDNN_MAX_CPU_ISA", "AVX2")
+from typing import Any, Callable, Protocol
 
 from qdrant_client import models
 
@@ -20,7 +14,25 @@ from qdrant_client import models
 DEFAULT_COLLECTION = "MechChatbot_LateInteraction_v1"
 
 
-@dataclass(frozen=True)
+class LateInteractionEncoder(Protocol):
+    def encode(self, texts: list[str], **kwargs: Any) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class LateInteractionConfig:
+    """Narrow, immutable settings used by the late-interaction adapter."""
+
+    interaction_enabled: bool = False
+    encoder_ready: bool = False
+    model_name: str = "BAAI/bge-m3"
+    use_fp16: bool = False
+    query_max_length: int = 64
+    document_max_length: int = 48
+    collection_name: str = DEFAULT_COLLECTION
+    index_version: str = "late-v2"
+
+
+@dataclass(frozen=True, slots=True)
 class LateInteractionResult:
     documents: tuple
     candidate_count: int
@@ -33,11 +45,9 @@ class LateInteractionResult:
     total_latency_ms: float
 
 
-def enabled() -> bool:
-    truthy = {"1", "true", "yes", "y", "on"}
-    return os.getenv("RAG_LATE_INTERACTION_ENABLED", "false").strip().lower() in truthy and os.getenv(
-        "RAG_LATE_ENCODER_READY", "false"
-    ).strip().lower() in truthy
+def enabled(config: LateInteractionConfig | None = None) -> bool:
+    active = config or LateInteractionConfig()
+    return active.interaction_enabled and active.encoder_ready
 
 
 def candidate_key(document) -> str:
@@ -56,22 +66,32 @@ def candidate_key(document) -> str:
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
-@lru_cache(maxsize=1)
-def _encoder():
+def _load_encoder_type():
     try:
         from FlagEmbedding import BGEM3FlagModel
     except ImportError as exc:
         raise RuntimeError("FlagEmbedding is required for BGE-M3 ColBERT vectors") from exc
-    return BGEM3FlagModel(
-        os.getenv("RAG_LATE_MODEL", "BAAI/bge-m3"),
-        use_fp16=os.getenv("EMBEDDING_DEVICE", "cpu").lower().startswith("cuda"),
+    return BGEM3FlagModel
+
+
+def build_encoder(config: LateInteractionConfig) -> LateInteractionEncoder:
+    """Create the model at a composition/lifecycle seam, never during import."""
+    encoder_type = _load_encoder_type()
+    return encoder_type(config.model_name, use_fp16=config.use_fp16)
+
+
+def encode_query(
+    text: str,
+    *,
+    encoder: LateInteractionEncoder | None = None,
+    max_length: int = 64,
+):
+    active_encoder = (
+        encoder if encoder is not None else build_encoder(LateInteractionConfig())
     )
-
-
-def encode_query(text: str):
-    encoded = _encoder().encode(
+    encoded = active_encoder.encode(
         [str(text or "")],
-        max_length=int(os.getenv("RAG_LATE_QUERY_MAX_LENGTH", "64")),
+        max_length=int(max_length),
         return_dense=False,
         return_sparse=False,
         return_colbert_vecs=True,
@@ -80,10 +100,18 @@ def encode_query(text: str):
     return vectors.tolist() if hasattr(vectors, "tolist") else vectors
 
 
-def encode_documents(texts):
-    encoded = _encoder().encode(
+def encode_documents(
+    texts,
+    *,
+    encoder: LateInteractionEncoder | None = None,
+    max_length: int = 48,
+):
+    active_encoder = (
+        encoder if encoder is not None else build_encoder(LateInteractionConfig())
+    )
+    encoded = active_encoder.encode(
         [str(text or "") for text in texts],
-        max_length=int(os.getenv("RAG_LATE_DOCUMENT_MAX_LENGTH", "48")),
+        max_length=int(max_length),
         return_dense=False,
         return_sparse=False,
         return_colbert_vecs=True,
@@ -98,7 +126,8 @@ def attempt_shadow_rerank(
     *,
     top_n: int | None = None,
     collection_name: str | None = None,
-    query_encoder=None,
+    query_encoder: Callable[[str], Any] | None = None,
+    config: LateInteractionConfig | None = None,
 ) -> LateInteractionResult:
     """Use MaxSim only when every authorized input candidate has a shadow point."""
     started = time.perf_counter()
@@ -112,7 +141,8 @@ def attempt_shadow_rerank(
         return LateInteractionResult(
             tuple(docs), candidate_count, 0, 0.0, False, "duplicate_candidate_key", 0.0, 0.0, total_ms,
         )
-    index_version = os.getenv("RAG_LATE_INDEX_VERSION", "late-v2")
+    active_config = config or LateInteractionConfig()
+    index_version = active_config.index_version
     try:
         encode_started = time.perf_counter()
         query_vectors = (query_encoder or encode_query)(query)
@@ -126,7 +156,7 @@ def attempt_shadow_rerank(
     try:
         query_started = time.perf_counter()
         response = client.query_points(
-            collection_name=collection_name or os.getenv("RAG_LATE_COLLECTION", DEFAULT_COLLECTION),
+            collection_name=collection_name or active_config.collection_name,
             query=query_vectors,
             using="late",
             query_filter=models.Filter(

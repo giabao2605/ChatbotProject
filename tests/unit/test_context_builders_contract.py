@@ -177,18 +177,15 @@ def test_format_docs_uses_object_code_then_generic_fallback_and_page_content():
     ("raw", "expected"),
     [(None, 4), ("0", 1), ("17", 16), ("invalid", 4), (object(), 4)],
 )
-def test_parent_context_worker_count_is_bounded(raw, expected, monkeypatch):
-    if raw is None:
-        monkeypatch.delenv("PARENT_CONTEXT_MAX_WORKERS", raising=False)
+def test_parent_context_worker_count_is_bounded(raw, expected):
     assert parent_context_max_workers(raw) == expected
 
 
 def test_parent_hydration_can_be_disabled_without_loading_parent_chunks(monkeypatch):
     selected = _doc("selected", doc_id=7, parent_section="A")
-    monkeypatch.setenv("PARENT_CONTEXT_ENABLED", "false")
     monkeypatch.setattr(
         "mech_chatbot.rag.context_builders._load_parent_section_chunks",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("parent loader called")),
     )
 
-    assert hydrate_parent_context([selected]) == [selected]
+    assert hydrate_parent_context([selected], enabled=False) == [selected]

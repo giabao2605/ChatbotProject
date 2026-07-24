@@ -3,7 +3,7 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 from sqlalchemy import text
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
 from ._shared import normalize_base_code
 from . import audit as _r_audit
@@ -12,6 +12,10 @@ from . import feedback as _r_feedback
 from . import qdrant as _r_qdrant
 from . import publication as _r_publication
 from . import semantic_cache as _r_semantic_cache
+
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
 
 __all__ = [
     'archive_document',
@@ -109,7 +113,22 @@ def publish_as_standalone(doc_id, reviewer="System", reviewer_id=None, reviewer_
         )
     )
 
-def reject_document(doc_id, reviewer="System"):
+def reject_document(
+    doc_id,
+    reviewer="System",
+    *,
+    db_engine=None,
+    qdrant_client=None,
+    collection_name=None,
+):
+    qdrant_kwargs = (
+        {
+            "qdrant_client": qdrant_client,
+            "collection_name": collection_name,
+        }
+        if qdrant_client is not None and str(collection_name or "").strip()
+        else {}
+    )
     if not _r_qdrant.update_qdrant_metadata(
         doc_id,
         {
@@ -118,10 +137,11 @@ def reject_document(doc_id, reviewer="System"):
             "lifecycle_status": "rejected",
             "review_status": "rejected",
         },
+        **qdrant_kwargs,
     ):
         logger.error("reject_document: khong disable duoc Qdrant cho DocID %s", doc_id)
         return False
-    with engine.begin() as conn:
+    with resolve_engine(db_engine).begin() as conn:
         conn.execute(text("""
             UPDATE TaiLieu SET LifecycleStatus = 'rejected', ReviewStatus = 'rejected',
                 NguoiDuyet = :rev, ReviewedBy = :rev, Servable = 0,
@@ -129,7 +149,15 @@ def reject_document(doc_id, reviewer="System"):
             WHERE DocID = :id
         """), {"id": doc_id, "rev": reviewer})
 
-    _r_audit.write_audit_log(reviewer, "reject_document", "TaiLieu", doc_id, {})
+    audit_kwargs = {"db_engine": db_engine} if db_engine is not None else {}
+    _r_audit.write_audit_log(
+        reviewer,
+        "reject_document",
+        "TaiLieu",
+        doc_id,
+        {},
+        **audit_kwargs,
+    )
     _r_semantic_cache._invalidate_semantic_cache("doc.reject")
     return True
 

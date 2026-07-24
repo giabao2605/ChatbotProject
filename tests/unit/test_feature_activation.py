@@ -1,9 +1,11 @@
 import hashlib
 import json
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from mech_chatbot.config.settings import Settings
 
 from mech_chatbot.governance.feature_activation import (
     FEATURE_FLAGS,
@@ -924,9 +926,10 @@ def test_health_reports_complete_activation_contract(monkeypatch):
         monkeypatch.setenv(name, "false")
     monkeypatch.setenv("RAG_ACTIVATION_SCOPE", "default_rollout")
     monkeypatch.setenv("RAG_PLANNER_VERSION", "planner-health-test")
-    monkeypatch.setattr(rag_server, "_rag_ready", True)
+    application = rag_server.create_rag_app(Settings.from_env())
+    state = replace(application.state.rag_server, ready=True)
 
-    health = asyncio.run(rag_server.health_check())
+    health = asyncio.run(rag_server.health_check(server_state=state))
 
     assert set(health.feature_flags) == set(FEATURE_FLAGS)
     assert health.feature_versions["RAG_PLANNER_VERSION"] == "planner-health-test"
@@ -948,9 +951,10 @@ def test_health_is_degraded_when_live_flags_lack_an_accepted_bundle(monkeypatch)
     monkeypatch.setenv("RAG_ACTIVATION_SCOPE", "default_rollout")
     monkeypatch.delenv("RAG_ACTIVATION_BUNDLE_PATH", raising=False)
     monkeypatch.delenv("RAG_ACTIVATION_BUNDLE_SHA256", raising=False)
-    monkeypatch.setattr(rag_server, "_rag_ready", True)
+    application = rag_server.create_rag_app(Settings.from_env())
+    state = replace(application.state.rag_server, ready=True)
 
-    health = asyncio.run(rag_server.health_check())
+    health = asyncio.run(rag_server.health_check(server_state=state))
 
     assert health.status == "degraded"
     assert health.rag_loaded is True

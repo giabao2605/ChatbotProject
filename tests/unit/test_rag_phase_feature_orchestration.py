@@ -22,6 +22,25 @@ from mech_chatbot.rag.phases.routing import RouteDecision
 pytestmark = pytest.mark.unit
 
 
+def _retrieval_adapter(*, retrieve=lambda **_kwargs: (), **overrides):
+    values = {
+        "retrieve": retrieve,
+        "query_decomposition_enabled": False,
+        "hyde_enabled": False,
+        "graph_retrieval_enabled": False,
+        "community_summaries_enabled": False,
+        "grounded_math_enabled": False,
+        "strict_answer_mode": True,
+        "evidence_verifier_enabled": False,
+        "evaluation_force_ambiguous": False,
+        "client": None,
+        "collection_name": "test-knowledge",
+        "vectorstore": SimpleNamespace(),
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 def _prepared_request(*, question: str, image_analysis: str | None = None) -> PreparedRequest:
     return PreparedRequest(
         user_question=question,
@@ -129,11 +148,6 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
             content='{"subqueries":["So sánh P-1","P-2"]}'
         )
 
-    monkeypatch.setattr(
-        retrieval_phase,
-        "env_bool",
-        lambda name, default=False: name == "RAG_QUERY_DECOMPOSITION_ENABLED",
-    )
     monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
     monkeypatch.setattr(
         retrieval_phase,
@@ -151,7 +165,10 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
 
     outcome = _run_phase(
         lambda state: retrieval_phase.retrieve_primary(decision, state),
-        retrieval=SimpleNamespace(retrieve=retrieve),
+        retrieval=_retrieval_adapter(
+            retrieve=retrieve,
+            query_decomposition_enabled=True,
+        ),
         provider=SimpleNamespace(invoke=invoke),
     )
 
@@ -215,16 +232,6 @@ def test_executor_runs_graph_bom_image_and_corrective_enrichment(monkeypatch):
         correction_estimated_cost=0.0,
     )
 
-    monkeypatch.setattr(
-        enrichment_phase,
-        "env_bool",
-        lambda name, default=False: name
-        in {
-            "RAG_GRAPH_RETRIEVAL_ENABLED",
-            "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
-            "RAG_GROUNDED_MATH_ENABLED",
-        },
-    )
     monkeypatch.setattr(graph_retrieval, "select_graph_seeds", lambda *_args: ["P-1"])
     monkeypatch.setattr(graph_retrieval, "should_attempt_graph", lambda *_args: True)
     monkeypatch.setattr(enrichment_phase, "traverse_knowledge_graph", lambda *_args, **_kwargs: [object()])
@@ -331,7 +338,11 @@ def test_executor_runs_graph_bom_image_and_corrective_enrichment(monkeypatch):
 
     outcome = _run_phase(
         lambda state: enrichment_phase.enrich_retrieval(decision, primary, state),
-        retrieval=SimpleNamespace(retrieve=lambda **_kwargs: ()),
+        retrieval=_retrieval_adapter(
+            graph_retrieval_enabled=True,
+            community_summaries_enabled=True,
+            grounded_math_enabled=True,
+        ),
         provider=SimpleNamespace(
             invoke=lambda *_args, **_kwargs: SimpleNamespace(content="P-1 quantity")
         ),
@@ -361,11 +372,6 @@ def test_executor_runs_one_governed_correction_across_decomposition_branches(mon
     )
     correction_calls = []
 
-    monkeypatch.setattr(
-        retrieval_phase,
-        "env_bool",
-        lambda name, default=False: name == "RAG_QUERY_DECOMPOSITION_ENABLED",
-    )
     monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
     monkeypatch.setattr(retrieval_phase, "_assemble_context", lambda *_args: "")
     monkeypatch.setattr(
@@ -417,8 +423,9 @@ def test_executor_runs_one_governed_correction_across_decomposition_branches(mon
 
     outcome = _run_phase(
         lambda state: retrieval_phase.retrieve_primary(decision, state),
-        retrieval=SimpleNamespace(
-            retrieve=lambda **_kwargs: ([], 5, "hybrid", time.time(), object())
+        retrieval=_retrieval_adapter(
+            retrieve=lambda **_kwargs: ([], 5, "hybrid", time.time(), object()),
+            query_decomposition_enabled=True,
         ),
         provider=SimpleNamespace(invoke=invoke),
     )
@@ -445,7 +452,6 @@ def test_executor_runs_hyde_once_after_empty_primary_retrieval(monkeypatch):
     )
     calls = []
 
-    monkeypatch.setattr(retrieval_phase, "env_bool", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
 
     def retrieve(**kwargs):
@@ -455,7 +461,7 @@ def test_executor_runs_hyde_once_after_empty_primary_retrieval(monkeypatch):
 
     outcome = _run_phase(
         lambda state: retrieval_phase.retrieve_primary(decision, state),
-        retrieval=SimpleNamespace(retrieve=retrieve),
+        retrieval=_retrieval_adapter(retrieve=retrieve, hyde_enabled=True),
         provider=SimpleNamespace(
             invoke=lambda *_args, **_kwargs: SimpleNamespace(
                 content="hypothetical bearing specification"
@@ -499,7 +505,6 @@ def test_exact_code_miss_returns_a_typed_terminal(monkeypatch, blocked, expected
         correction_estimated_cost=0.0,
     )
 
-    monkeypatch.setattr(enrichment_phase, "env_bool", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         "mech_chatbot.rag.community_summaries.load_community_context",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -514,7 +519,7 @@ def test_exact_code_miss_returns_a_typed_terminal(monkeypatch, blocked, expected
 
     outcome = _run_phase(
         lambda state: enrichment_phase.enrich_retrieval(decision, primary, state),
-        retrieval=SimpleNamespace(retrieve=lambda **_kwargs: ()),
+        retrieval=_retrieval_adapter(),
         provider=SimpleNamespace(invoke=lambda *_args, **_kwargs: None),
     )
 
@@ -541,17 +546,16 @@ def test_inherited_code_miss_falls_back_to_general_retrieval(monkeypatch):
         correction_estimated_cost=0.0,
     )
 
-    monkeypatch.setattr(enrichment_phase, "env_bool", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         "mech_chatbot.rag.community_summaries.load_community_context",
         lambda *_args, **_kwargs: SimpleNamespace(
             documents=(), used=False, summary_count=0, reason="disabled"
         ),
     )
-    monkeypatch.setattr(
-        enrichment_phase.vectorstore,
-        "as_retriever",
-        lambda **_kwargs: SimpleNamespace(invoke=lambda _query: [fallback_document]),
+    vectorstore = SimpleNamespace(
+        as_retriever=lambda **_kwargs: SimpleNamespace(
+            invoke=lambda _query: [fallback_document]
+        )
     )
     monkeypatch.setattr(
         enrichment_phase,
@@ -566,7 +570,7 @@ def test_inherited_code_miss_falls_back_to_general_retrieval(monkeypatch):
 
     outcome = _run_phase(
         lambda state: enrichment_phase.enrich_retrieval(decision, primary, state),
-        retrieval=SimpleNamespace(retrieve=lambda **_kwargs: ()),
+        retrieval=_retrieval_adapter(vectorstore=vectorstore),
         provider=SimpleNamespace(invoke=lambda *_args, **_kwargs: None),
     )
 

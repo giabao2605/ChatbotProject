@@ -256,7 +256,7 @@ def test_sessions_fail_closed_on_database_error(install_engine):
 def test_history_returns_owner_messages_when_complete_evidence_is_readable(
     install_engine, monkeypatch
 ):
-    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "true")
+    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "false")
 
     def handle(sql, params):
         if "FROM LichSuChat" in sql:
@@ -278,6 +278,7 @@ def test_history_returns_owner_messages_when_complete_evidence_is_readable(
         user_clearance="internal",
         allowed_departments=["QA"],
         allowed_sites=["HCM"],
+        strict_site_filter=True,
     )
 
     assert history == [
@@ -295,7 +296,7 @@ def test_history_returns_owner_messages_when_complete_evidence_is_readable(
 
 
 def test_history_redacts_answer_after_permissions_are_revoked(install_engine, monkeypatch):
-    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "true")
+    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "false")
 
     def handle(sql, _params):
         if "FROM LichSuChat" in sql:
@@ -316,6 +317,7 @@ def test_history_redacts_answer_after_permissions_are_revoked(install_engine, mo
         user_clearance="public",
         allowed_departments=["QA"],
         allowed_sites=["HCM"],
+        strict_site_filter=True,
     )
 
     assert "không còn quyền xem" in history[1]["content"]

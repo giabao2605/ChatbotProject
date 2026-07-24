@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from mech_chatbot.application.vector_ingestion import (
@@ -23,6 +24,39 @@ def _validate(settings: QdrantSettings) -> None:
         raise ValueError(
             "Missing required Qdrant configuration: " + ", ".join(missing)
         )
+
+
+@dataclass(frozen=True, slots=True)
+class QdrantAdminRuntime:
+    """Lightweight Qdrant client for metadata and lifecycle operations."""
+
+    client: Any
+    collection_name: str
+
+    def close(self) -> None:
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()
+
+
+def build_qdrant_admin_runtime(
+    settings: QdrantSettings,
+    *,
+    client_factory: Callable[..., Any] | None = None,
+) -> QdrantAdminRuntime:
+    _validate(settings)
+    if client_factory is None:
+        from qdrant_client import QdrantClient
+
+        client_factory = QdrantClient
+    return QdrantAdminRuntime(
+        client=client_factory(
+            url=settings.url,
+            api_key=settings.api_key,
+            timeout=120,
+        ),
+        collection_name=settings.collection,
+    )
 
 
 def _default_factories() -> tuple[Callable[..., Any], ...]:
@@ -139,4 +173,8 @@ def build_qdrant_runtime(
     )
 
 
-__all__ = ["build_qdrant_runtime"]
+__all__ = [
+    "QdrantAdminRuntime",
+    "build_qdrant_admin_runtime",
+    "build_qdrant_runtime",
+]

@@ -12,14 +12,6 @@ from mech_chatbot.rag import semantic_cache
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def deterministic_cache_environment(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SEMANTIC_CACHE_ENABLED", "true")
-    monkeypatch.setenv("SEMANTIC_CACHE_SIM_THRESHOLD", "0.90")
-    monkeypatch.setenv("SEMANTIC_CACHE_TTL_HOURS", "12")
-    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "test")
-
-
 @pytest.fixture
 def cache_repository(monkeypatch: pytest.MonkeyPatch):
     boundary = SimpleNamespace(
@@ -205,10 +197,8 @@ def test_store_rejects_incomplete_or_invalid_cache_entries(cache_repository, ove
     assert put.call_count == 0
 
 
-def test_store_respects_disabled_cache(cache_repository, monkeypatch):
-    monkeypatch.setenv("SEMANTIC_CACHE_ENABLED", "false")
-
-    put = _store(cache_repository)
+def test_store_respects_disabled_cache(cache_repository):
+    put = _store(cache_repository, cache_enabled=False)
 
     assert put.call_count == 0
 

@@ -1,4 +1,6 @@
 import json
+from functools import partial
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,11 +19,53 @@ from mech_chatbot.rag.execution import (
 pytestmark = pytest.mark.unit
 
 
+def _offline_executor(*, semantic_cache_enabled=False):
+    from mech_chatbot.rag.pipeline_steps import _retrieve
+
+    vectorstore = SimpleNamespace(
+        embeddings=SimpleNamespace(embed_query=lambda _question: [1.0, 0.0]),
+        sparse_embeddings=object(),
+    )
+    runtime = SimpleNamespace(
+        client=object(),
+        vectorstore=vectorstore,
+        collection_name="test-knowledge",
+        semantic_cache_enabled=semantic_cache_enabled,
+        semantic_cache_sim_threshold=0.93,
+        semantic_cache_ttl_hours=24.0,
+        semantic_cache_environment={},
+        semantic_router_enabled=False,
+        hyde_enabled=False,
+        query_decomposition_enabled=False,
+        graph_retrieval_enabled=False,
+        community_summaries_enabled=False,
+        crag_enabled=False,
+        grounded_math_enabled=False,
+        evidence_verifier_enabled=False,
+        voyage_enabled=False,
+        parent_context_enabled=False,
+        late_interaction_config=None,
+        strict_answer_mode=True,
+    )
+    runtime.retrieve = partial(
+        _retrieve,
+        vectorstore=vectorstore,
+        client=runtime.client,
+        collection_name=runtime.collection_name,
+    )
+    provider = SimpleNamespace(
+        invoke=lambda *_args, **_kwargs: SimpleNamespace(content="")
+    )
+    return DefaultRagExecutor(
+        retrieval_adapter=runtime,
+        provider_adapter=provider,
+    ), runtime
+
+
 @pytest.fixture
 def offline_boundaries(monkeypatch):
     """Run the real executor while replacing SQL, Qdrant, and provider boundaries."""
     from mech_chatbot.db import repository
-    from mech_chatbot.rag import pipeline_steps
 
     documents = []
     qdrant_calls = []
@@ -34,30 +78,14 @@ def offline_boundaries(monkeypatch):
             return list(documents)
 
     monkeypatch.setattr("langchain_qdrant.QdrantVectorStore", OfflineQdrantVectorStore)
-    monkeypatch.setattr(
-        type(pipeline_steps.vectorstore.embeddings),
-        "embed_query",
-        lambda _self, _question: [1.0, 0.0],
-    )
     monkeypatch.setattr(repository, "get_app_setting_int", lambda *_args: 5)
     monkeypatch.setattr(repository, "get_active_glossary", lambda *_args: [])
     monkeypatch.setattr(repository, "get_common_metadata_for_rag", lambda *_args: {})
     monkeypatch.setattr(repository, "get_technical_attributes_for_rag", lambda *_args: [])
     monkeypatch.setattr(repository, "find_golden_answer", lambda *_args: None)
 
-    monkeypatch.setenv("SEMANTIC_CACHE_ENABLED", "false")
-    monkeypatch.setenv("SEMANTIC_ROUTER_ENABLED", "false")
-    monkeypatch.setenv("HYDE_ENABLED", "false")
-    monkeypatch.setenv("RAG_QUERY_DECOMPOSITION_ENABLED", "false")
-    monkeypatch.setenv("RAG_GRAPH_RETRIEVAL_ENABLED", "false")
-    monkeypatch.setenv("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED", "false")
-    monkeypatch.setenv("RAG_CRAG_ENABLED", "false")
-    monkeypatch.setenv("RAG_GROUNDED_MATH_ENABLED", "false")
-    monkeypatch.setenv("LLM_EVIDENCE_VERIFIER_ENABLED", "false")
-    monkeypatch.setenv("USE_VOYAGE_RERANK", "false")
-    monkeypatch.setenv("PARENT_CONTEXT_ENABLED", "false")
-
-    return documents, qdrant_calls
+    executor, runtime = _offline_executor()
+    return documents, qdrant_calls, executor, runtime
 
 
 def _run(
@@ -66,9 +94,12 @@ def _run(
     trace_id,
     history=(),
     max_security_level="internal",
+    executor=None,
 ):
+    if executor is None:
+        executor, _runtime = _offline_executor()
     return list(
-        DefaultRagExecutor().run(
+        executor.run(
             RagRequest(
                 question,
                 AccessScope(
@@ -95,8 +126,8 @@ def test_exact_cache_outage_falls_back_to_a_fail_closed_retrieval(
 ):
     from mech_chatbot.db import repository
 
-    _documents, qdrant_calls = offline_boundaries
-    monkeypatch.setenv("SEMANTIC_CACHE_ENABLED", "true")
+    _documents, qdrant_calls, executor, runtime = offline_boundaries
+    runtime.semantic_cache_enabled = True
     monkeypatch.setattr(
         repository,
         "sc_get_exact",
@@ -108,6 +139,7 @@ def test_exact_cache_outage_falls_back_to_a_fail_closed_retrieval(
     events = _run(
         "Quy trình phê duyệt nội bộ hiện hành là gì?",
         trace_id="wave5-exact-cache-outage",
+        executor=executor,
     )
 
     assert len(qdrant_calls) == 2
@@ -122,7 +154,7 @@ def test_semantic_cache_hit_preserves_attribution_and_skips_qdrant(
 ):
     from mech_chatbot.db import repository
 
-    _documents, qdrant_calls = offline_boundaries
+    _documents, qdrant_calls, executor, runtime = offline_boundaries
     source = {
         "file_goc": "approved-procedure.pdf",
         "doc_id": 31,
@@ -143,8 +175,8 @@ def test_semantic_cache_hit_preserves_attribution_and_skips_qdrant(
         "est_cost": "0.003",
     }
 
-    monkeypatch.setenv("SEMANTIC_CACHE_ENABLED", "true")
-    monkeypatch.setenv("SEMANTIC_CACHE_SIM_THRESHOLD", "0.90")
+    runtime.semantic_cache_enabled = True
+    runtime.semantic_cache_sim_threshold = 0.90
     monkeypatch.setattr(repository, "sc_get_exact", lambda *_args: None)
     monkeypatch.setattr(repository, "sc_get_candidates", lambda *_args: [cache_row])
     monkeypatch.setattr(repository, "sc_docs_all_current", lambda _ids: True)
@@ -155,6 +187,7 @@ def test_semantic_cache_hit_preserves_attribution_and_skips_qdrant(
     events = _run(
         "Hãy nhắc lại quy trình phê duyệt nội bộ.",
         trace_id="wave5-semantic-cache-hit",
+        executor=executor,
     )
 
     assert qdrant_calls == []
@@ -177,8 +210,8 @@ def test_conversation_history_bypasses_cache_entries_from_an_unrelated_turn(
 ):
     from mech_chatbot.db import repository
 
-    _documents, qdrant_calls = offline_boundaries
-    monkeypatch.setenv("SEMANTIC_CACHE_ENABLED", "true")
+    _documents, qdrant_calls, executor, runtime = offline_boundaries
+    runtime.semantic_cache_enabled = True
 
     def unexpected_cache_read(*_args, **_kwargs):
         pytest.fail("a contextual turn must not reuse a context-free cache entry")
@@ -190,6 +223,7 @@ def test_conversation_history_bypasses_cache_entries_from_an_unrelated_turn(
         "Trình bày quy trình phê duyệt nội bộ hiện hành của phòng nhân sự.",
         history=({"role": "user", "content": "Cho tôi xem quy trình phê duyệt."},),
         trace_id="wave5-context-bypasses-cache",
+        executor=executor,
     )
 
     assert len(qdrant_calls) == 2

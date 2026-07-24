@@ -56,8 +56,6 @@ import os
 import shutil
 import sys
 
-from dotenv import load_dotenv
-
 # ----------------------------------------------------------------------------------
 # Thiet lap duong dan de import duoc package mech_chatbot. Script nam o
 # scripts/danger_ops/ -> goc du an la 3 cap tren, va package nam trong src/
@@ -69,7 +67,8 @@ for _p in (SRC_DIR, BASE_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-load_dotenv()
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime
 
 # ----------------------------------------------------------------------------------
 # Danh sach bang, sap theo thu tu CON -> CHA de DELETE khong vuong khoa ngoai.
@@ -169,15 +168,10 @@ def get_engine():
 
 def get_qdrant():
     """Tao client Qdrant + lay ten collection tu cau hinh (KHONG hardcode)."""
-    from qdrant_client import QdrantClient, models  # noqa: F401
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
-
-    qdrant_url = os.getenv("QDRANT_URL", "")
-    qdrant_api_key = os.getenv("QDRANT_API_KEY", "")
-    if not qdrant_url or not qdrant_api_key:
-        raise ValueError("Thieu QDRANT_URL hoac QDRANT_API_KEY trong file .env")
-    client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=120)
-    return client, QDRANT_COLLECTION
+    client, collection = current_qdrant_runtime()
+    if client is None or not collection:
+        raise RuntimeError("Qdrant runtime chua duoc khoi tao.")
+    return client, collection
 
 
 def qdrant_count(client, collection):
@@ -393,6 +387,7 @@ def build_parser():
     return p
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def main():
     args = build_parser().parse_args()
 

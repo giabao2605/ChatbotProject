@@ -10,10 +10,8 @@ def _doc():
     )
 
 
-def test_claim_repair_rollback_flag_disables_runtime(monkeypatch):
-    monkeypatch.setenv("RAG_CLAIM_REPAIR_ENABLED", "false")
-
-    assert claim_repair_enabled() is False
+def test_claim_repair_rollback_flag_disables_runtime():
+    assert claim_repair_enabled(False) is False
 
 
 def test_claim_repair_accepts_one_grounded_rewrite():

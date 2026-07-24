@@ -6,31 +6,28 @@ import time
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
-from dotenv import load_dotenv
-from qdrant_client import QdrantClient
 from qdrant_client.http import models
+from mech_chatbot.adapters.qdrant_runtime import build_qdrant_admin_runtime
 from mech_chatbot.config.logging import logger
-from mech_chatbot.config.settings import QDRANT_COLLECTION
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime
+from mech_chatbot.config.settings import QdrantSettings, load_settings
 
 def create_indexes():
     """
     Tạo Payload Index cho Qdrant để tăng tốc độ filter/tìm kiếm
     khi dữ liệu quy mô lớn (scale up).
     """
-    load_dotenv()
-
-    qdrant_url = os.getenv("QDRANT_URL", "")
-    qdrant_api_key = os.getenv("QDRANT_API_KEY", "")
-
-    if not qdrant_url or not qdrant_api_key:
-        logger.error("Thiếu thiết lập QDRANT_URL hoặc QDRANT_API_KEY trong file .env")
-        return False
-
-    logger.info(f"Đang kết nối tới Qdrant tại: {qdrant_url} ...")
+    client, collection_name = current_qdrant_runtime()
+    owned_runtime = None
     try:
-        client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=120)
-
-        collection_name = QDRANT_COLLECTION
+        if client is None or not collection_name:
+            settings = load_settings()
+            owned_runtime = build_qdrant_admin_runtime(
+                QdrantSettings.from_settings(settings)
+            )
+            client = owned_runtime.client
+            collection_name = owned_runtime.collection_name
+        logger.info(f"Đang kết nối tới Qdrant collection: {collection_name} ...")
 
         if not client.collection_exists(collection_name):
             logger.error(f"Collection '{collection_name}' không tồn tại. Vui lòng chạy ứng dụng chính trước để khởi tạo.")
@@ -102,6 +99,9 @@ def create_indexes():
     except Exception as e:
         logger.error(f"Có lỗi xảy ra khi kết nối/tạo index Qdrant: {e}")
         return False
+    finally:
+        if owned_runtime is not None:
+            owned_runtime.close()
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding='utf-8')

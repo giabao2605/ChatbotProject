@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Callable
 
@@ -42,10 +41,8 @@ _GLOBAL_QUERY_TERMS = (
 )
 
 
-def enabled() -> bool:
-    return os.getenv(
-        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED", "false",
-    ).strip().lower() in {"1", "true", "yes", "y", "on"}
+def enabled(value: bool = False) -> bool:
+    return bool(value)
 
 
 def is_global_query(question: str) -> bool:

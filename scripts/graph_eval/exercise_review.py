@@ -16,6 +16,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+
 
 def exercise_review(output: Path):
     if os.getenv(LIVE_OPT_IN) != "1":
@@ -118,6 +120,7 @@ def exercise_review(output: Path):
     return artifact
 
 
+@with_configured_repository_runtime(include_qdrant=False)
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)

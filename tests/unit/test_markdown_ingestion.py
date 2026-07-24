@@ -211,7 +211,6 @@ def test_non_pdf_external_calls_run_inside_governed_document_context(
 def test_empty_markdown_upload_remains_blocked(tmp_path, monkeypatch):
     markdown_path = tmp_path / "empty.md"
     markdown_path.write_text("   \n", encoding="utf-8")
-    monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", False)
 
     report = pipeline.process_and_ingest_file(
         file_path=str(markdown_path),
@@ -221,6 +220,7 @@ def test_empty_markdown_upload_remains_blocked(tmp_path, monkeypatch):
         security_override="internal",
         site_override="DEMO-HQ",
         dependencies=_dependencies(),
+        config=pipeline.PdfIngestionConfig(rollback_on_error=False),
     )
 
     assert report["status"] == "error"
@@ -234,7 +234,6 @@ def test_binary_content_renamed_to_markdown_is_blocked(tmp_path, monkeypatch):
     markdown_path.write_bytes(b"\xff\xd8\xff\xe0JFIF" + (b"\x80" * 100))
     saved_pages = []
     _install_success_path_stubs(monkeypatch, saved_pages)
-    monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", False)
 
     report = pipeline.process_and_ingest_file(
         file_path=str(markdown_path),
@@ -244,6 +243,7 @@ def test_binary_content_renamed_to_markdown_is_blocked(tmp_path, monkeypatch):
         security_override="internal",
         site_override="DEMO-HQ",
         dependencies=_dependencies(),
+        config=pipeline.PdfIngestionConfig(rollback_on_error=False),
     )
 
     assert report["status"] == "error"

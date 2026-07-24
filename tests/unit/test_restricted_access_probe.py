@@ -1,10 +1,9 @@
 from types import SimpleNamespace
-import sys
 
 import pytest
 
 from mech_chatbot.rag.retrieval import probe_restricted_access
-from mech_chatbot.config.settings import QDRANT_COLLECTION
+QDRANT_COLLECTION = "test-knowledge"
 
 
 pytestmark = pytest.mark.unit
@@ -25,8 +24,6 @@ def _probe(
     monkeypatch, metadata, *, allowed_sites=("HQ",), clearance="internal", client=None,
 ):
     client = client or FakeQdrantClient([metadata])
-    bootstrap = SimpleNamespace(client=client)
-    monkeypatch.setitem(sys.modules, "mech_chatbot.rag.bootstrap", bootstrap)
     return probe_restricted_access(
         "restricted fixture",
         user_department="Technical",
@@ -34,6 +31,8 @@ def _probe(
         max_security_level=clearance,
         allowed_sites=list(allowed_sites),
         part_ids=["restricted-fixture"],
+        client=client,
+        collection_name=QDRANT_COLLECTION,
     )
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 import math
-import os
 from typing import Any, Literal, Mapping
 
 
@@ -49,25 +48,6 @@ class RagRuntimeContract:
             execution_context=context,
             evaluation_force_ambiguous=force_ambiguous,
             request_deadline_seconds=deadline,
-        )
-
-    @classmethod
-    def from_environment(cls) -> RagRuntimeContract:
-        raw_override = os.getenv("RAG_EVAL_FORCE_AMBIGUOUS", "false").strip().lower()
-        if raw_override not in {
-            "1", "true", "yes", "y", "on",
-            "0", "false", "no", "n", "off",
-        }:
-            raise ValueError("RAG_EVAL_FORCE_AMBIGUOUS must be a boolean")
-        return cls.from_mapping(
-            {
-                "execution_context": os.getenv("RAG_EXECUTION_CONTEXT", "production"),
-                "evaluation_force_ambiguous": raw_override
-                in {"1", "true", "yes", "y", "on"},
-                "request_deadline_seconds": os.getenv(
-                    "RAG_REQUEST_DEADLINE_SECONDS", "120"
-                ),
-            }
         )
 
     @property

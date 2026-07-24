@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -316,13 +317,9 @@ def test_publish_actor_requires_authenticated_actor_and_configured_approver(
     }
 
 
-@pytest.mark.parametrize("override", ["1", "true", "YES", "on"])
 def test_publish_actor_allows_explicit_admin_emergency_override(
-    monkeypatch,
     install_database_row,
-    override,
 ):
-    monkeypatch.setenv("KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE", override)
     install_database_row(
         {
             "KnowledgeApproverUserID": 11,
@@ -332,16 +329,22 @@ def test_publish_actor_allows_explicit_admin_emergency_override(
         }
     )
 
-    result = publication.validate_publish_actor(42, reviewer_id=99, reviewer_roles=["admin"])
+    result = publication.validate_publish_actor(
+        42,
+        reviewer_id=99,
+        reviewer_roles=["admin"],
+        policy=replace(
+            publication._default_policy(),
+            allow_admin_approval_override=True,
+        ),
+    )
 
     assert result
 
 
 def test_publish_actor_denies_admin_override_unless_deployment_opts_in(
-    monkeypatch,
     install_database_row,
 ):
-    monkeypatch.delenv("KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE", raising=False)
     install_database_row(
         {
             "KnowledgeApproverUserID": 11,

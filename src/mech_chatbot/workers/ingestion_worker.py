@@ -6,8 +6,8 @@ import sys
 
 from mech_chatbot.application.ingestion_runner import IngestionJob
 from mech_chatbot.composition.worker_runtime import WorkerRuntime, build_worker_runtime
-from mech_chatbot.config.logging import logger
-from mech_chatbot.config.settings import Settings
+from mech_chatbot.config.logging import LoggingConfig, configure_logging, logger
+from mech_chatbot.config.settings import Settings, load_settings
 
 
 def _reconcile(runtime: WorkerRuntime, last_publication: float, last_serving: float) -> tuple[float, float]:
@@ -39,41 +39,51 @@ def _reconcile(runtime: WorkerRuntime, last_publication: float, last_serving: fl
 def run_worker(runtime: WorkerRuntime | None = None) -> None:
     """Poll, claim, and delegate jobs; business decisions stay in the runner."""
 
-    resolved_runtime = runtime or build_worker_runtime(Settings.from_env())
+    owns_runtime = runtime is None
+    if owns_runtime:
+        settings_snapshot = load_settings()
+        configure_logging(LoggingConfig.from_settings(settings_snapshot))
+        resolved_runtime = build_worker_runtime(settings_snapshot)
+    else:
+        resolved_runtime = runtime
     logger.info("Khởi động Ingestion Worker chạy ngầm...")
     print("Ingestion Worker đã sẵn sàng. Đang chờ file mới...")
     last_publication_reconcile = 0.0
     last_serving_reconcile = 0.0
 
-    while True:
-        job: IngestionJob | None = None
-        try:
-            last_publication_reconcile, last_serving_reconcile = _reconcile(
-                resolved_runtime,
-                last_publication_reconcile,
-                last_serving_reconcile,
-            )
-            job = resolved_runtime.job_store.claim_next(resolved_runtime.worker_id)
-            if job is None:
-                resolved_runtime.clock.sleep(
-                    resolved_runtime.settings.idle_sleep_seconds
+    try:
+        while True:
+            job: IngestionJob | None = None
+            try:
+                last_publication_reconcile, last_serving_reconcile = _reconcile(
+                    resolved_runtime,
+                    last_publication_reconcile,
+                    last_serving_reconcile,
                 )
-                continue
-            logger.info("Worker bắt đầu xử lý JobID %s: %s", job.job_id, job.file_name)
-            result = resolved_runtime.runner.run(job)
-            logger.info(
-                "Job %s kết thúc với outcome=%s reason=%s",
-                job.job_id,
-                result.outcome,
-                result.reason_code,
-            )
-        except Exception as exc:  # noqa: BLE001 - process loop must reconcile a claimed job
-            logger.error("Lỗi không xác định trong Ingestion Worker: %s", exc, exc_info=True)
-            if job is not None:
-                resolved_runtime.reconcile_job_failure(job, exc)
-            resolved_runtime.clock.sleep(
-                resolved_runtime.settings.error_sleep_seconds
-            )
+                job = resolved_runtime.job_store.claim_next(resolved_runtime.worker_id)
+                if job is None:
+                    resolved_runtime.clock.sleep(
+                        resolved_runtime.settings.idle_sleep_seconds
+                    )
+                    continue
+                logger.info("Worker bắt đầu xử lý JobID %s: %s", job.job_id, job.file_name)
+                result = resolved_runtime.runner.run(job)
+                logger.info(
+                    "Job %s kết thúc với outcome=%s reason=%s",
+                    job.job_id,
+                    result.outcome,
+                    result.reason_code,
+                )
+            except Exception as exc:  # noqa: BLE001 - process loop must reconcile a claimed job
+                logger.error("Lỗi không xác định trong Ingestion Worker: %s", exc, exc_info=True)
+                if job is not None:
+                    resolved_runtime.reconcile_job_failure(job, exc)
+                resolved_runtime.clock.sleep(
+                    resolved_runtime.settings.error_sleep_seconds
+                )
+    finally:
+        if owns_runtime:
+            resolved_runtime.close()
 
 
 if __name__ == "__main__":

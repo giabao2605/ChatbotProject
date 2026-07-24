@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import os
-
 from mech_chatbot.rag.answer_policy import AnswerDecision
 
 
 MAX_CORRECTION_PASSES = 1
 
 
-def correction_enabled() -> bool:
-    """Return the runtime CRAG switch; false is the rollback-safe default."""
-    return os.getenv("RAG_CRAG_ENABLED", "false").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+def correction_enabled(enabled: bool = False) -> bool:
+    """Return the process-provided CRAG switch."""
+    return bool(enabled)
 
 
 def should_attempt_correction(

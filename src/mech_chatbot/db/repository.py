@@ -2,9 +2,9 @@
 File nay giu lai lam SHIM re-export de moi import cu van hoat dong:
   from mech_chatbot.db.repository import <bat_ky_ham_nao>
   from mech_chatbot.db import repository as repo; repo.<ham>()
-Engine van duoc re-export tu db/engine.py (tuong thich nguoc tu P0).
+Engine compatibility name van duoc re-export tu db/engine.py. Phase 5 khong
+con tao engine hay doc environment khi import facade nay.
 """
-from dotenv import load_dotenv
 from mech_chatbot.db.engine import (
     engine,
     _ensure_engine,
@@ -15,8 +15,6 @@ from mech_chatbot.db.engine import (
     SQL_PASSWORD,
     SQL_TRUSTED_CONNECTION,
 )
-
-load_dotenv()
 
 from mech_chatbot.db.repositories import *  # noqa: F401,F403 re-export toan bo
 from mech_chatbot.db.repositories import __all__ as _repos_all

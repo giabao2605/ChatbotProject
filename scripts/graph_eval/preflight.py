@@ -16,6 +16,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+
 
 def _relation_identity(value):
     return (
@@ -230,15 +232,16 @@ def check_graph_fixture(
     }
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def run_live_preflight(cases):
     if os.getenv("RUN_GRAPH_EVAL_FIXTURE") != "1":
         raise RuntimeError("set RUN_GRAPH_EVAL_FIXTURE=1 to access graph-eval-v1")
     from sqlalchemy import text
     from qdrant_client import models
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
+    from mech_chatbot.config.repository_runtime import current_qdrant_runtime
     from mech_chatbot.db.engine import _ensure_engine, engine
-    from mech_chatbot.db.repositories.qdrant import _get_qdrant_client
-    if QDRANT_COLLECTION != FIXTURE_COLLECTION:
+    client, collection = current_qdrant_runtime()
+    if collection != FIXTURE_COLLECTION:
         raise RuntimeError(f"QDRANT_COLLECTION must equal {FIXTURE_COLLECTION}")
     _ensure_engine()
     with engine.connect() as connection:
@@ -294,7 +297,6 @@ def run_live_preflight(cases):
                     "expected_correct": bool(evidence["expected_correct"]),
                     "decision": proposal.get("status"),
                 })
-    client = _get_qdrant_client()
     points = []
     for document in documents:
         found, _ = client.scroll(
@@ -323,7 +325,7 @@ def run_live_preflight(cases):
     )
     return check_graph_fixture(
         cases, documents, edges, points, applied_versions=versions,
-        pending_serving_edge_count=pending, collection=QDRANT_COLLECTION,
+        pending_serving_edge_count=pending, collection=collection,
         graph_nodes=nodes, proposals=proposals, review_samples=review_samples,
         review_sample_source=review_sample_source,
         workflow_fixture_passed=workflow_fixture_passed,

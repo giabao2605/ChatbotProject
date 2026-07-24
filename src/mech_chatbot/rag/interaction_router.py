@@ -20,7 +20,6 @@ unit-test offline duoc bang embedder/classifier gia dinh, khong can model/mang.
 from __future__ import annotations
 
 import math
-import os
 import re
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence, Tuple
@@ -78,12 +77,6 @@ _SYSTEM_CONFIGURATION_CUES = (
 )
 
 
-def _crag_fast_routes_enabled() -> bool:
-    return os.getenv("RAG_CRAG_ENABLED", "false").strip().lower() in {
-        "1", "true", "yes", "y", "on",
-    }
-
-
 def _department_router_pattern_match(text: str, department_codes) -> str | None:
     """Apply active department profile patterns as an additive L0 rule."""
     normalized = chitchat.normalize(text)
@@ -113,7 +106,12 @@ def _department_router_pattern_match(text: str, department_codes) -> str | None:
     return None
 
 
-def _fast_technical_route(text, department_codes=None) -> Optional[RouteResult]:
+def _fast_technical_route(
+    text,
+    department_codes=None,
+    *,
+    crag_fast_routes_enabled=False,
+) -> Optional[RouteResult]:
     """Skip embedding/LLM for clear internal-document questions."""
     q = chitchat.normalize(text)
     if any(cue in q for cue in _HOW_TO_META_CUES):
@@ -126,7 +124,7 @@ def _fast_technical_route(text, department_codes=None) -> Optional[RouteResult]:
             reason="internal_keyword",
         )
     if (
-        _crag_fast_routes_enabled()
+        crag_fast_routes_enabled
         and "ma cau hinh" in q
         and not any(cue in q for cue in _SYSTEM_CONFIGURATION_CUES)
         and re.search(
@@ -259,45 +257,34 @@ class SemanticRouter:
             return (None, 0.0, 0.0)
         top_route, top_score = scores[0]
         second = scores[1][1] if len(scores) > 1 else 0.0
-        thr = self._threshold if self._threshold is not None else route_config.semantic_threshold()
-        mgn = self._margin if self._margin is not None else route_config.semantic_margin()
+        thr = self._threshold if self._threshold is not None else 0.62
+        mgn = self._margin if self._margin is not None else 0.04
         if top_score >= thr and (top_score - second) >= mgn:
             return (top_route, top_score, second)
         return (None, top_score, second)
 
 
-_GLOBAL_EMBEDDER = None
-_GLOBAL_ROUTER = None
-
-
-def set_embedder(embedder) -> None:
-    global _GLOBAL_EMBEDDER, _GLOBAL_ROUTER
-    _GLOBAL_EMBEDDER = embedder
-    _GLOBAL_ROUTER = None
-
-
 def _get_router(embedder):
-    global _GLOBAL_ROUTER
-    if embedder is not None:
-        if embedder is _GLOBAL_EMBEDDER:
-            if _GLOBAL_ROUTER is None:
-                _GLOBAL_ROUTER = SemanticRouter(_GLOBAL_EMBEDDER)
-            return _GLOBAL_ROUTER
-        return SemanticRouter(embedder)
-    if _GLOBAL_EMBEDDER is not None:
-        if _GLOBAL_ROUTER is None:
-            _GLOBAL_ROUTER = SemanticRouter(_GLOBAL_EMBEDDER)
-        return _GLOBAL_ROUTER
-    return None
+    return SemanticRouter(embedder) if embedder is not None else None
 
 
-def _safety_route(text) -> Optional[RouteResult]:
+def _safety_route(
+    text,
+    *,
+    enabled=True,
+    extra_injection=(),
+    extra_abuse=(),
+) -> Optional[RouteResult]:
     """L-1: chan noi dung khong an toan truoc moi tang. Loi -> bo qua (fail-open safety)."""
     try:
         from mech_chatbot.rag import route_safety
-        if not route_safety.enabled():
+        if not enabled:
             return None
-        reason = route_safety.detect(text)
+        reason = route_safety.detect(
+            text,
+            extra_injection=extra_injection,
+            extra_abuse=extra_abuse,
+        )
         if reason:
             return RouteResult(ROUTE_SAFETY_BLOCK, LAYER_SAFETY, confidence=1.0, reason=reason)
     except Exception:
@@ -305,10 +292,28 @@ def _safety_route(text) -> Optional[RouteResult]:
     return None
 
 
-def classify(text, context=None, embedder=None, llm_classifier=None) -> RouteResult:
+def classify(
+    text,
+    context=None,
+    embedder=None,
+    llm_classifier=None,
+    *,
+    safety_enabled=True,
+    safety_extra_injection=(),
+    safety_extra_abuse=(),
+    semantic_enabled=True,
+    semantic_threshold=0.62,
+    semantic_margin=0.04,
+    crag_fast_routes_enabled=False,
+) -> RouteResult:
     """L-1 safety -> L0 (luat) -> L1 (semantic) -> L2 (LLM fallback) -> fallback technical."""
     # L-1: safety guard chay TRUOC tien.
-    sb = _safety_route(text)
+    sb = _safety_route(
+        text,
+        enabled=safety_enabled,
+        extra_injection=safety_extra_injection,
+        extra_abuse=safety_extra_abuse,
+    )
     if sb is not None:
         return sb
 
@@ -319,13 +324,25 @@ def classify(text, context=None, embedder=None, llm_classifier=None) -> RouteRes
     context_departments = None
     if isinstance(context, dict):
         context_departments = context.get("allowed_departments") or context.get("department_codes")
-    fast_technical = _fast_technical_route(text, context_departments)
+    fast_technical = _fast_technical_route(
+        text,
+        context_departments,
+        crag_fast_routes_enabled=crag_fast_routes_enabled,
+    )
     if fast_technical is not None:
         return fast_technical
 
     # L1: semantic router (neu bat + co embedder).
-    if route_config.semantic_enabled():
-        router = _get_router(embedder)
+    if semantic_enabled:
+        router = (
+            SemanticRouter(
+                embedder,
+                threshold=semantic_threshold,
+                margin=semantic_margin,
+            )
+            if embedder is not None
+            else None
+        )
         if router is not None:
             route, score, _second = router.classify(text)
             if route in ALL_ROUTES:

@@ -21,6 +21,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+
 
 def _metadata(record):
     code = str(record["doc_number"]).strip().lower()
@@ -74,22 +76,23 @@ def _seed_bom_rows(connection, doc_id: int, rows: list[dict]) -> None:
         raise RuntimeError(f"BOM seed count mismatch for DocID {doc_id}: {count}/{len(rows)}")
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def ingest_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before writing the grounded-math fixture")
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
-    if QDRANT_COLLECTION != FIXTURE_COLLECTION:
+    from mech_chatbot.config.repository_runtime import current_qdrant_runtime
+    client, collection = current_qdrant_runtime()
+    if collection != FIXTURE_COLLECTION:
         raise RuntimeError(f"QDRANT_COLLECTION must equal {FIXTURE_COLLECTION}")
     from mech_chatbot.db.engine import _ensure_engine, engine
     from mech_chatbot.db.repositories.document import delete_document_completely
     from mech_chatbot.db.repositories.jobs import create_ingestion_job, update_ingestion_job
     from mech_chatbot.db.repositories.publication import publish_document
     from mech_chatbot.db.repositories.qdrant import (
-        _get_qdrant_client, update_qdrant_metadata,
+        update_qdrant_metadata,
     )
     from mech_chatbot.ingestion.file_ingestor import learn_new_file
 
-    client = _get_qdrant_client()
     if not client.collection_exists(FIXTURE_COLLECTION):
         from mech_chatbot.rag.bootstrap import client as _initialized_client  # noqa: F401
     from scripts.create_qdrant_indexes import create_indexes

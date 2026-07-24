@@ -74,8 +74,6 @@ def _point(metadata, content):
 
 
 def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(monkeypatch):
-    from mech_chatbot.db import repository
-
     selected = _metadata()
     client = _ScrollClient(
         [
@@ -88,9 +86,13 @@ def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(
             _point(_metadata(security_level="confidential"), "wrong security"),
         ]
     )
-    monkeypatch.setattr(repository, "_get_qdrant_client", lambda: client)
-
-    docs = context_builders._load_parent_section_chunks(PARENT_KEY, 12, selected)
+    docs = context_builders._load_parent_section_chunks(
+        PARENT_KEY,
+        12,
+        selected,
+        client=client,
+        collection_name="test-knowledge",
+    )
 
     assert [doc.page_content for doc in docs] == ["safe parent evidence"]
     assert len(client.calls) == 1

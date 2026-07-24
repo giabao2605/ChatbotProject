@@ -522,13 +522,21 @@ def test_community_context_fails_closed_on_stale_qdrant_source_version():
 def test_community_flag_and_epoch_isolate_semantic_cache(monkeypatch):
     from mech_chatbot.rag.semantic_cache import pipeline_namespace
 
-    monkeypatch.delenv("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED", raising=False)
-    monkeypatch.setenv("RAG_COMMUNITY_SERVING_EPOCH", "community-v1")
-    baseline = pipeline_namespace()
-    monkeypatch.setenv("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED", "true")
-    enabled_namespace = pipeline_namespace()
-    monkeypatch.setenv("RAG_COMMUNITY_SERVING_EPOCH", "community-v2")
-    next_epoch = pipeline_namespace()
+    baseline = pipeline_namespace(
+        {"RAG_COMMUNITY_SERVING_EPOCH": "community-v1"}
+    )
+    enabled_namespace = pipeline_namespace(
+        {
+            "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "true",
+            "RAG_COMMUNITY_SERVING_EPOCH": "community-v1",
+        }
+    )
+    next_epoch = pipeline_namespace(
+        {
+            "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "true",
+            "RAG_COMMUNITY_SERVING_EPOCH": "community-v2",
+        }
+    )
 
     assert baseline != enabled_namespace
     assert enabled_namespace != next_epoch

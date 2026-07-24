@@ -364,7 +364,7 @@ def test_feedback_list_can_include_already_reviewed_rows(monkeypatch):
 def test_list_documents_applies_normalized_rbac_and_filters(monkeypatch):
     expected = [(8, "public.pdf")]
     connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=expected))
-    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "true")
+    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "false")
 
     rows = ui_queries.list_documents(
         allowed_departments=["B", "A", "A", ""],
@@ -376,6 +376,7 @@ def test_list_documents_applies_normalized_rbac_and_filters(monkeypatch):
         eff_mode="sap",
         search_kw="pump",
         soon_days=999,
+        strict_site_filter=True,
     )
 
     assert rows == expected
@@ -399,13 +400,14 @@ def test_list_documents_applies_normalized_rbac_and_filters(monkeypatch):
 
 def test_list_documents_fail_closed_without_scope_and_rejects_unknown_bucket(monkeypatch):
     connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=[]))
-    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "false")
+    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "true")
 
     ui_queries.list_documents(
         allowed_departments=[],
         allowed_sites=[],
         bucket="needs-review",
         soon_days=-4,
+        strict_site_filter=False,
     )
 
     sql, params = connection.calls[-1]

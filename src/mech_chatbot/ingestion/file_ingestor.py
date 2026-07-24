@@ -1,12 +1,15 @@
 import os
 from mech_chatbot.ingestion.pdf.config import (
     PDF_EXTENSIONS,
+    PdfIngestionConfig,
     SUPPORTED_LEARNING_EXTENSIONS,
+    default_pdf_ingestion_config,
 )
 from mech_chatbot.ingestion.pdf import pipeline_implementation
 from mech_chatbot.domain.ingestion_progress import IngestionProgressEvent
 from mech_chatbot.config.logging import logger
 from mech_chatbot.application.vector_ingestion import (
+    IngestionPersistence,
     IngestionPipelineDependencies,
 )
 from mech_chatbot.ingestion.pdf.pipeline_dependencies import (
@@ -22,7 +25,9 @@ def learn_new_file_typed(file_path, ten_file, thu_muc="Tu_Hoc", progress_callbac
                          cong_doan_override=None, site_override=None,
                          scan_sensitive=False, phong_ban_override=None, *,
                          dependencies: IngestionPipelineDependencies | None = None,
-                         vision_model=_VISION_NOT_PROVIDED):
+                         persistence: IngestionPersistence | None = None,
+                         vision_model=_VISION_NOT_PROVIDED,
+                         config: PdfIngestionConfig | None = None):
     """
     Doc file moi, trich xuat metadata, goi vision model khi can va nap vao Qdrant DB.
 
@@ -43,15 +48,24 @@ def learn_new_file_typed(file_path, ten_file, thu_muc="Tu_Hoc", progress_callbac
 
     needs_dependencies = dependencies is None
     needs_vision = vision_model is _VISION_NOT_PROVIDED
+    needs_config = config is None
     if needs_dependencies or needs_vision:
+        from mech_chatbot.config.settings import load_settings
+
+        settings_snapshot = load_settings()
         resources = _build_compatibility_resources(
             include_dependencies=needs_dependencies,
             include_vision=needs_vision,
+            settings_factory=lambda: settings_snapshot,
         )
         if needs_dependencies:
             dependencies = resources.dependencies
         if needs_vision:
             vision_model = resources.vision_model
+        if needs_config:
+            config = PdfIngestionConfig.from_settings(settings_snapshot)
+    elif needs_config:
+        config = default_pdf_ingestion_config()
 
     _ov = dict(
         domain_override=domain_override,
@@ -63,6 +77,10 @@ def learn_new_file_typed(file_path, ten_file, thu_muc="Tu_Hoc", progress_callbac
     )
     if dependencies is not None:
         _ov["dependencies"] = dependencies
+    if persistence is not None:
+        _ov["persistence"] = persistence
+    if config is not None:
+        _ov["config"] = config
     if ext in PDF_EXTENSIONS:
         report = pipeline_implementation.process_and_ingest_pdf(
             file_path,
@@ -95,7 +113,9 @@ def learn_new_file(file_path, ten_file, thu_muc="Tu_Hoc", progress_callback=None
                    cong_doan_override=None, site_override=None,
                    scan_sensitive=False, phong_ban_override=None, *,
                    dependencies: IngestionPipelineDependencies | None = None,
-                   vision_model=_VISION_NOT_PROVIDED):
+                   persistence: IngestionPersistence | None = None,
+                   vision_model=_VISION_NOT_PROVIDED,
+                   config: PdfIngestionConfig | None = None):
     """Compatibility wrapper retaining the historical string progress API."""
 
     def legacy_progress(event: IngestionProgressEvent) -> None:
@@ -118,7 +138,9 @@ def learn_new_file(file_path, ten_file, thu_muc="Tu_Hoc", progress_callback=None
         scan_sensitive=scan_sensitive,
         phong_ban_override=phong_ban_override,
         dependencies=dependencies,
+        persistence=persistence,
         vision_model=vision_model,
+        config=config,
     )
 
 

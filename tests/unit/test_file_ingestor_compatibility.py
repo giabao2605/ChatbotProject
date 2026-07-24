@@ -69,7 +69,12 @@ def test_typed_entrypoint_dispatches_pdf_and_preserves_overrides(
     assert report["status"] == "success"
     assert events == [IngestionProgressEvent("embedding", "Embedding")]
     assert calls[0][0][3] is compatibility_resources[1]
-    assert calls[0][1] == {
+    forwarded = dict(calls[0][1])
+    assert isinstance(
+        forwarded.pop("config"),
+        file_ingestor.PdfIngestionConfig,
+    )
+    assert forwarded == {
         "domain_override": "mechanical",
         "security_override": "internal",
         "cong_doan_override": "assembly",

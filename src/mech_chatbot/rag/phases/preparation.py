@@ -232,22 +232,38 @@ def _exact_cache_terminal(
     )
 
 
-def _lookup_exact_cache(context: _PreparationContext) -> _CacheLookup:
+def _lookup_exact_cache(
+    context: _PreparationContext,
+    state: Any,
+) -> _CacheLookup:
     cache_scope = None
     lookup_started = time.time()
     if context.cache_eligible:
         try:
             import mech_chatbot.rag.semantic_cache as semantic_cache
 
-            if semantic_cache.enabled():
+            runtime = state.retrieval_adapter
+            if semantic_cache.enabled(
+                getattr(runtime, "semantic_cache_enabled", True),
+                state.invocation.mode,
+            ):
                 cache_scope = semantic_cache.scope_signature(
                     context.user_department,
                     context.allowed_departments,
                     context.max_security_level,
                     context.allowed_sites,
                     context.user_roles,
+                    pipeline_environment=getattr(
+                        runtime,
+                        "semantic_cache_environment",
+                        None,
+                    ),
                 )
-                hit = semantic_cache.lookup_exact(context.user_question, cache_scope)
+                hit = semantic_cache.lookup_exact(
+                    context.user_question,
+                    cache_scope,
+                    ttl=getattr(runtime, "semantic_cache_ttl_hours", 24.0),
+                )
                 if hit:
                     return _CacheLookup(
                         _exact_cache_terminal(context, hit, lookup_started),
@@ -279,6 +295,18 @@ def _complete_preparation(
         context.response_language,
         trace_id=context.trace_id,
         invoke_provider=state.invoke_provider,
+        history_budget=getattr(
+            state.retrieval_adapter,
+            "history_budget",
+            4000,
+        ),
+        history_summary_enabled=bool(
+            getattr(
+                state.retrieval_adapter,
+                "history_summary_enabled",
+                False,
+            )
+        ),
     )
     state.checkpoint("history")
     state.checkpoint("vision")
@@ -287,6 +315,11 @@ def _complete_preparation(
         context.user_question,
         context.trace_id,
         retry_budget=state.budget,
+        vision_model=getattr(
+            state.retrieval_adapter,
+            "vision_model",
+            None,
+        ),
     )
     state.checkpoint("vision")
     return PreparedRequest(
@@ -321,7 +354,7 @@ def prepare(state: Any) -> PreparationOutcome:
     safety_terminal = _safety_terminal(context, state)
     if safety_terminal is not None:
         return safety_terminal
-    cache_lookup = _lookup_exact_cache(context)
+    cache_lookup = _lookup_exact_cache(context, state)
     if cache_lookup.terminal is not None:
         return cache_lookup.terminal
     return PreparationOutcome(

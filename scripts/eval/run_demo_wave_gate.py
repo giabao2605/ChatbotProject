@@ -21,6 +21,7 @@ for candidate in (ROOT, ROOT / "src"):
         sys.path.insert(0, str(candidate))
 
 from scripts.demo_wave.generate_demo_assets import DEFAULT_OUTPUT, DEMO_BATCH, DEPARTMENTS, generate_eval
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
 from mech_chatbot.db.engine import _ensure_engine, engine
 from mech_chatbot.db.repositories.rollout import record_department_evaluation_gate
 
@@ -262,6 +263,7 @@ def _recompute_saved_batch(run_batch_id: str) -> list[dict]:
     return results
 
 
+@with_configured_repository_runtime(include_qdrant=False)
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, default=DEFAULT_OUTPUT / "eval_manifest.jsonl")

@@ -1,139 +1,52 @@
-# -*- coding: utf-8 -*-
-"""Auto-split tu rag/service.py (P1.2 refactor). Giu nguyen logic goc; chi tach file + import."""
+"""Legacy RAG bootstrap names without import-time infrastructure.
 
-import os
-import warnings
-from mech_chatbot.config.settings import QDRANT_COLLECTION
-from dotenv import load_dotenv
-from mech_chatbot.config.logging import logger, log_trace
-from qdrant_client import QdrantClient, models
-from langchain_qdrant import QdrantVectorStore, FastEmbedSparse, RetrievalMode
-from langchain_huggingface import HuggingFaceEmbeddings
-from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
-import threading
-from mech_chatbot.llm.vision_client import build_vision_model, is_retryable_error
+Production Qdrant, embedding, text-generation, and vision dependencies are
+constructed by :mod:`mech_chatbot.composition.rag_runtime`.  The names below
+remain only while Phase 5 migrates internal compatibility imports; importing
+this module is deliberately side-effect free.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
 
 
-os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+def env_bool(
+    name: str,
+    default: bool = False,
+    *,
+    values: Mapping[str, Any] | None = None,
+) -> bool:
+    """Parse an explicitly supplied compatibility flag.
+
+    Ambient environment access is intentionally unsupported here. New callers
+    receive typed policy values through the request's composed dependencies.
+    """
+
+    if values is None or name not in values:
+        return bool(default)
+    return str(values[name]).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-warnings.filterwarnings("ignore", category=FutureWarning)
-
-
-load_dotenv()
-
-
-logger.info("Dang khoi dong he thong RAG AI...")
-
-
-_VISION_MODEL = build_vision_model()
-
-
-def env_bool(name, default=False):
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-STRICT_ANSWER_MODE = env_bool("STRICT_ANSWER_MODE", True)
-
-
-RERANK_PER_PART = int(os.getenv("RERANK_PER_PART", "8"))
-
-
-RERANK_TOP_N_CAP = int(os.getenv("RERANK_TOP_N_CAP", "20"))
-
-
-class RAGSystem:
-    _instance = None
-    _lock = threading.Lock()
- 
-    @classmethod
-    def get_instance(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls._init_components()
-        return cls._instance
- 
-    @staticmethod
-    def _init_components():
-        # Ket noi Qdrant Cloud
-        qdrant_url = os.getenv("QDRANT_URL", "")
-        qdrant_api_key = os.getenv("QDRANT_API_KEY", "")
-        
-        if not qdrant_url or not qdrant_api_key:
-            raise ValueError("Thieu thiet lap QDRANT_URL hoac QDRANT_API_KEY trong file .env")
-            
-        logger.info(f"   -> Ket noi Qdrant Cloud tai: {qdrant_url}")
-        client = QdrantClient(
-            url=qdrant_url,
-            api_key=qdrant_api_key,
-            timeout=120,
-        )
- 
-        embed_model = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
-        embed_device = os.getenv("EMBEDDING_DEVICE", "cpu").strip() or "cpu"
-        logger.info(f"   -> Dang tai model Embedding: {embed_model} tren {embed_device}")
-
-        embeddings = HuggingFaceEmbeddings(
-            model_name=embed_model,
-            model_kwargs={"device": embed_device},
-            encode_kwargs={"normalize_embeddings": True}
-        )
- 
-        logger.info("   -> Dang khoi tao mo hinh BM25 (Qdrant/bm25)...")
-        sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
- 
-        if not client.collection_exists(QDRANT_COLLECTION):
-            logger.info(f"   -> Collection '{QDRANT_COLLECTION}' khong ton tai. Dang tao moi...")
-            embedding_dim = int(os.getenv("EMBEDDING_DIM", "1024"))
-            client.create_collection(
-                collection_name=QDRANT_COLLECTION,
-                vectors_config=models.VectorParams(
-                    size=embedding_dim,
-                    distance=models.Distance.COSINE
-                ),
-                sparse_vectors_config={
-                    "sparse": models.SparseVectorParams(
-                        index=models.SparseIndexParams(
-                            on_disk=False,
-                        )
-                    )
-                }
-            )
-
-        # NOTE: Payload indexes are managed by scripts/create_qdrant_indexes.py
-        # Run that script once during initial setup or after schema changes.
-        # Removed from here to speed up cold-start time.
- 
-        vectorstore = QdrantVectorStore(
-            client=client,
-            collection_name=QDRANT_COLLECTION,
-            embedding=embeddings,
-            sparse_embedding=sparse_embeddings,
-            sparse_vector_name="sparse",
-            retrieval_mode=RetrievalMode.HYBRID
-        )
- 
-        logger.info(f"   -> Dang ket noi GPT model: {get_llm_model_name()}...")
-        llm = get_cohere_llm()
- 
-        return client, vectorstore, llm
-
-
-client, vectorstore, llm = RAGSystem.get_instance()
+# Temporary compatibility exports for the Phase 5 internal-import migration.
+# They are inert values, not lazy locators and never construct infrastructure.
+_VISION_MODEL = None
+STRICT_ANSWER_MODE = True
+RERANK_PER_PART = 8
+RERANK_TOP_N_CAP = 20
+client = None
+vectorstore = None
+llm = None
 
 
 __all__ = [
-    '_VISION_MODEL',
-    'env_bool',
-    'STRICT_ANSWER_MODE',
-    'RERANK_PER_PART',
-    'RERANK_TOP_N_CAP',
-    'RAGSystem',
-    'client',
-    'vectorstore',
-    'llm',
+    "_VISION_MODEL",
+    "RERANK_PER_PART",
+    "RERANK_TOP_N_CAP",
+    "STRICT_ANSWER_MODE",
+    "client",
+    "env_bool",
+    "llm",
+    "vectorstore",
 ]

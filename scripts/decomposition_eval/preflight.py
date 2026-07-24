@@ -18,6 +18,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+
 
 def _row_key(row):
     try:
@@ -153,16 +155,17 @@ def check_fixture_cases(cases, sql_documents, bom_rows, qdrant_points, *, collec
     }
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def run_live_preflight(cases):
     validate_manifest_scope(cases)
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 to access the decomposition fixture")
     from sqlalchemy import text
     from qdrant_client import models
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
+    from mech_chatbot.config.repository_runtime import current_qdrant_runtime
     from mech_chatbot.db.engine import _ensure_engine, engine
-    from mech_chatbot.db.repositories.qdrant import _get_qdrant_client
-    if QDRANT_COLLECTION != FIXTURE_COLLECTION:
+    client, collection = current_qdrant_runtime()
+    if collection != FIXTURE_COLLECTION:
         raise RuntimeError(f"QDRANT_COLLECTION must equal {FIXTURE_COLLECTION}")
     _ensure_engine()
     with engine.connect() as connection:
@@ -177,12 +180,11 @@ def run_live_preflight(cases):
             FROM dbo.BangKeVatTu b JOIN dbo.TaiLieu t ON t.DocID=b.DocID
             WHERE t.SourceSystem=:batch
         """), {"batch": FIXTURE_BATCH}).mappings().all()]
-    client = _get_qdrant_client()
     points = []
     for document in documents:
         found, _ = client.scroll(collection_name=FIXTURE_COLLECTION, scroll_filter=models.Filter(must=[models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=int(document["DocID"]))) ]), limit=100, with_payload=True, with_vectors=False)
         points.extend(dict((point.payload or {}).get("metadata") or {}) for point in found)
-    return check_fixture_cases(cases, documents, bom_rows, points, collection=QDRANT_COLLECTION)
+    return check_fixture_cases(cases, documents, bom_rows, points, collection=collection)
 
 
 def main():

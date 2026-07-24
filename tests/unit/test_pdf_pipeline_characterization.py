@@ -414,13 +414,10 @@ def test_pdf_required_vision_failure_is_blocked_and_rolled_back(tmp_path, monkey
     monkeypatch.setattr(pipeline.pdfplumber, "open", lambda _path: plumber_document)
     monkeypatch.setattr(pipeline, "call_vision_model", lambda *_a, **_k: (_ for _ in ()).throw(TimeoutError()))
     monkeypatch.setattr(pipeline, "describe_vision_error", lambda _error: "vision_timeout")
-    monkeypatch.setattr(pipeline, "STRICT_INGEST_REQUIRE_VISION", True)
-    monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", True)
-
     from mech_chatbot.ingestion import vision_cache
 
     monkeypatch.setattr(vision_cache, "hash_image_file", lambda _path: "page-hash")
-    monkeypatch.setattr(vision_cache, "get", lambda _key: None)
+    monkeypatch.setattr(vision_cache, "get", lambda _key, **_kwargs: None)
 
     report = pipeline.process_and_ingest_pdf(
         str(tmp_path / "scan.pdf"),
@@ -431,6 +428,11 @@ def test_pdf_required_vision_failure_is_blocked_and_rolled_back(tmp_path, monkey
         security_override="internal",
         site_override="HQ",
         dependencies=captured["dependencies"],
+        config=pipeline.PdfIngestionConfig(
+            image_dir=tmp_path,
+            strict_require_vision=True,
+            rollback_on_error=True,
+        ),
     )
 
     assert report["status"] == "error"

@@ -24,7 +24,6 @@ from mech_chatbot.api.file_access import (
     chat_image_path,
     data_raw_root,
     page_has_vision,
-    strict_site_filter_enabled,
 )
 from mech_chatbot.api.routers import (
     auth_router,
@@ -42,13 +41,25 @@ from mech_chatbot.adapters.pilot_replay import (
     pilot_outcome as _pilot_outcome,
     pilot_route as _pilot_route,
 )
+from mech_chatbot.adapters.qdrant_runtime import (
+    QdrantAdminRuntime,
+    build_qdrant_admin_runtime,
+)
 from mech_chatbot.composition.app_runtime import (
     build_default_app_runtime,
     production_create_ingestion_job,
-    production_engine,
 )
-from mech_chatbot.config.logging import logger
-from mech_chatbot.config.settings import AppProcessSettings, Settings
+from mech_chatbot.config.logging import LoggingConfig, configure_logging, logger
+from mech_chatbot.config.repository_runtime import bind_repository_runtime
+from mech_chatbot.config.settings import (
+    AppProcessSettings,
+    QdrantSettings,
+    RepositoryPolicySettings,
+    Settings,
+    SqlSettings,
+    load_settings,
+)
+from mech_chatbot.db.engine import DatabaseRuntime, build_database_runtime
 import mech_chatbot.services.audit_service as audit_service
 import mech_chatbot.services.chat_service as chat_service
 import mech_chatbot.services.document_service as document_service
@@ -79,39 +90,78 @@ async def _lifespan(application: FastAPI):
 
     import anyio
 
+    settings_snapshot = application.state.settings_snapshot
     process = application.state.process_settings
     pilot_replays = application.state.pilot_replays
-    anyio.to_thread.current_default_thread_limiter().total_tokens = (
-        process.thread_limit
+    configure_logging(LoggingConfig.from_settings(settings_snapshot))
+    database_runtime = application.state.database_builder(
+        SqlSettings.from_settings(settings_snapshot)
     )
-    logger.info(
-        "App server anyio thread limiter raised to %d",
-        process.thread_limit,
-    )
-    pilot_replays.start()
-
-    async def _reconcile_lifecycle_periodically() -> None:
-        while True:
-            try:
-                await anyio.to_thread.run_sync(refresh_expired_status)
-            except Exception:
-                logger.exception("Lifecycle reconciliation failed")
-            await asyncio.sleep(process.lifecycle_reconcile_seconds)
-
+    qdrant_runtime = None
+    lifecycle_task = None
+    pilot_started = False
     try:
-        await anyio.to_thread.run_sync(refresh_expired_status)
-    except Exception:
-        logger.exception("Initial lifecycle reconciliation failed")
-    lifecycle_task = asyncio.create_task(_reconcile_lifecycle_periodically())
-    try:
+        qdrant_runtime = application.state.qdrant_builder(
+            QdrantSettings.from_settings(settings_snapshot)
+        )
+        application.state.database_runtime = database_runtime
+        application.state.qdrant_runtime = qdrant_runtime
+        application.state.runtime = _build_default_app_runtime(
+            process,
+            pilot_replays,
+            post=application.state.post,
+            engine=database_runtime.engine,
+            strict_site_filter=RepositoryPolicySettings.from_settings(
+                settings_snapshot
+            ).strict_site_filter,
+            qdrant_client=qdrant_runtime.client,
+            collection_name=qdrant_runtime.collection_name,
+        )
+        refresh_lifecycle = lambda: refresh_expired_status(
+            db_engine=database_runtime.engine,
+            qdrant_client=qdrant_runtime.client,
+            collection_name=qdrant_runtime.collection_name,
+        )
+        anyio.to_thread.current_default_thread_limiter().total_tokens = (
+            process.thread_limit
+        )
+        logger.info(
+            "App server anyio thread limiter raised to %d",
+            process.thread_limit,
+        )
+        pilot_replays.start()
+        pilot_started = True
+
+        async def _reconcile_lifecycle_periodically() -> None:
+            while True:
+                try:
+                    await anyio.to_thread.run_sync(refresh_lifecycle)
+                except Exception:
+                    logger.exception("Lifecycle reconciliation failed")
+                await asyncio.sleep(process.lifecycle_reconcile_seconds)
+
+        try:
+            await anyio.to_thread.run_sync(refresh_lifecycle)
+        except Exception:
+            logger.exception("Initial lifecycle reconciliation failed")
+        lifecycle_task = asyncio.create_task(
+            _reconcile_lifecycle_periodically()
+        )
         yield
     finally:
-        pilot_replays.stop()
-        lifecycle_task.cancel()
-        try:
-            await lifecycle_task
-        except asyncio.CancelledError:
-            pass
+        if pilot_started:
+            pilot_replays.stop()
+        if lifecycle_task is not None:
+            lifecycle_task.cancel()
+            try:
+                await lifecycle_task
+            except asyncio.CancelledError:
+                pass
+        if qdrant_runtime is not None:
+            qdrant_runtime.close()
+        database_runtime.close()
+        application.state.database_runtime = None
+        application.state.qdrant_runtime = None
 
 
 def app_health(request: Request):
@@ -151,6 +201,10 @@ def _build_default_app_runtime(
     pilot_replays: PilotReplayExecutor,
     *,
     post: Callable[..., Any],
+    engine: Any = None,
+    strict_site_filter: bool = True,
+    qdrant_client: Any = None,
+    collection_name: str | None = None,
 ):
     from mech_chatbot.evaluation.crag_pilot import assign_pilot_route, load_pilot_config
 
@@ -160,10 +214,23 @@ def _build_default_app_runtime(
         base_url=process.rag_base_url,
         headers=_rag_headers(process),
         timeout=(10, process.rag_chat_timeout_seconds),
-        save_chat_history=lambda **kwargs: save_chat_history(**kwargs),
-        save_answer_evidence=lambda *args: save_answer_evidence(*args),
-        save_answer_sources=lambda *args: save_answer_sources(*args),
-        write_audit_log=lambda **kwargs: write_audit_log(**kwargs),
+        save_chat_history=lambda **kwargs: save_chat_history(
+            **kwargs,
+            db_engine=engine,
+        ),
+        save_answer_evidence=lambda *args: save_answer_evidence(
+            *args,
+            db_engine=engine,
+        ),
+        save_answer_sources=lambda *args: save_answer_sources(
+            *args,
+            db_engine=engine,
+        ),
+        write_audit_log=lambda *args, **kwargs: write_audit_log(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
         load_pilot_config=load_pilot_config,
         assign_pilot_route=assign_pilot_route,
         pilot_outcome=lambda answer, debug, **kwargs: _pilot_outcome(
@@ -182,19 +249,53 @@ def _build_default_app_runtime(
         ),
         citation_resolver=_resolve_chat_citations,
         raw_root=data_raw_root,
-        create_ingestion_job=lambda **kwargs: production_create_ingestion_job(**kwargs),
-        reject_ingestion_job=lambda *args, **kwargs: reject_ingestion_job(*args, **kwargs),
-        mark_job_rejected=lambda *args, **kwargs: mark_job_rejected(*args, **kwargs),
-        reject_document=lambda *args, **kwargs: reject_document(*args, **kwargs),
+        create_ingestion_job=lambda **kwargs: production_create_ingestion_job(
+            **kwargs,
+            db_engine=engine,
+        ),
+        reject_ingestion_job=lambda *args, **kwargs: reject_ingestion_job(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
+        mark_job_rejected=lambda *args, **kwargs: mark_job_rejected(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
+        reject_document=lambda *args, **kwargs: reject_document(
+            *args,
+            **kwargs,
+            db_engine=engine,
+            qdrant_client=qdrant_client,
+            collection_name=collection_name,
+        ),
         delete_document_completely=lambda *args, **kwargs: delete_document_completely(
             *args,
             **kwargs,
+            db_engine=engine,
+            qdrant_client=qdrant_client,
+            collection_name=collection_name,
         ),
-        delete_ingestion_job=lambda *args, **kwargs: delete_ingestion_job(*args, **kwargs),
-        publish_document=lambda *args, **kwargs: publish_document(*args, **kwargs),
-        mark_job_published=lambda *args, **kwargs: mark_job_published(*args, **kwargs),
-        engine=production_engine,
-        strict_site_filter=strict_site_filter_enabled(),
+        delete_ingestion_job=lambda *args, **kwargs: delete_ingestion_job(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
+        publish_document=lambda *args, **kwargs: publish_document(
+            *args,
+            **kwargs,
+            db_engine=engine,
+            qdrant_client=qdrant_client,
+            collection_name=collection_name,
+        ),
+        mark_job_published=lambda *args, **kwargs: mark_job_published(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
+        engine=engine,
+        strict_site_filter=strict_site_filter,
     )
 
 
@@ -265,12 +366,17 @@ def create_app(
     existing_settings: Settings | None = None,
     *,
     post: Callable[..., Any] = requests.post,
+    database_builder: Callable[[SqlSettings], DatabaseRuntime] = (
+        build_database_runtime
+    ),
+    qdrant_builder: Callable[[QdrantSettings], QdrantAdminRuntime] = (
+        build_qdrant_admin_runtime
+    ),
 ) -> FastAPI:
     """Build one browser API process from one immutable environment snapshot."""
 
-    process = AppProcessSettings.from_settings(
-        existing_settings or Settings.from_env()
-    )
+    settings_snapshot = existing_settings or load_settings()
+    process = AppProcessSettings.from_settings(settings_snapshot)
     pilot_replays = _build_pilot_replays(process, post=post)
     application = FastAPI(
         title="Mech Chatbot App API",
@@ -278,17 +384,42 @@ def create_app(
         lifespan=_lifespan,
     )
     application.state.process_settings = process
+    application.state.settings_snapshot = settings_snapshot
     application.state.pilot_replays = pilot_replays
+    application.state.post = post
+    application.state.database_builder = database_builder
+    application.state.qdrant_builder = qdrant_builder
+    application.state.database_runtime = None
+    application.state.qdrant_runtime = None
     application.state.runtime = _build_default_app_runtime(
         process,
         pilot_replays,
         post=post,
+        strict_site_filter=RepositoryPolicySettings.from_settings(
+            settings_snapshot
+        ).strict_site_filter,
     )
 
     @application.middleware("http")
     async def _bind_security_settings(request: Request, call_next):
-        with app_security.bind_security_settings(
-            request.app.state.process_settings
+        database_runtime = request.app.state.database_runtime
+        qdrant_runtime = request.app.state.qdrant_runtime
+        with (
+            app_security.bind_security_settings(
+                request.app.state.process_settings
+            ),
+            bind_repository_runtime(
+                policy=RepositoryPolicySettings.from_settings(
+                    request.app.state.settings_snapshot
+                ),
+                db_engine=getattr(database_runtime, "engine", None),
+                qdrant_client=getattr(qdrant_runtime, "client", None),
+                qdrant_collection=getattr(
+                    qdrant_runtime,
+                    "collection_name",
+                    None,
+                ),
+            ),
         ):
             return await call_next(request)
 
@@ -569,7 +700,7 @@ def feedback_classify(
 if __name__ == "__main__":
     import uvicorn
 
-    process = AppProcessSettings.from_settings(Settings.from_env())
+    process = AppProcessSettings.from_settings(load_settings())
     uvicorn.run(
         "mech_chatbot.api.app_server:app",
         host=process.server_host,

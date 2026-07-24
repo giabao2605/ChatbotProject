@@ -63,9 +63,15 @@ def _storage() -> FilesystemProtectedFileStorage:
     )
 
 
-def strict_site_filter_enabled() -> bool:
-    raw = os.getenv("RBAC_STRICT_SITE_FILTER", "true")
-    return str(raw).strip().lower() in {"true", "1", "yes", "on"}
+def strict_site_filter_enabled(configured: bool = True) -> bool:
+    """Return the composition-selected strict site policy.
+
+    Environment parsing is deliberately excluded from this compatibility
+    facade.  Process startup supplies the parsed value; the default preserves
+    the historical fail-closed behavior.
+    """
+
+    return bool(configured)
 
 
 def _strict_site_enabled() -> bool:

@@ -30,8 +30,6 @@ PIPELINE_STEPS = (
 @pytest.fixture
 def steps(monkeypatch):
     """Load the steps without initializing the real vector database bootstrap."""
-    monkeypatch.setenv("APP_ENV", "development")
-    monkeypatch.setenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", "true")
     bootstrap = ModuleType("mech_chatbot.rag.bootstrap")
     bootstrap.STRICT_ANSWER_MODE = True
     bootstrap.vectorstore = SimpleNamespace()
@@ -71,7 +69,19 @@ def _debug(docs):
     return {"document_count": len(docs)}
 
 
-def _route(steps, question, lifecycle):
+def _route_runtime(*, embed_query=lambda _text: [0.0, 0.0]):
+    return SimpleNamespace(
+        vectorstore=SimpleNamespace(
+            embeddings=SimpleNamespace(embed_query=embed_query),
+        ),
+        llm_router_enabled=False,
+        semantic_router_enabled=False,
+        safety_block_enabled=True,
+        crag_enabled=False,
+    )
+
+
+def _route(steps, question, lifecycle, *, runtime=None):
     return steps._route(
         user_question=question,
         conversation_context={},
@@ -83,6 +93,8 @@ def _route(steps, question, lifecycle):
         t_start=time.time(),
         make_debug_info=_debug,
         lifecycle=lifecycle,
+        runtime=runtime or _route_runtime(),
+        invoke_provider=lambda *_args, **_kwargs: None,
     )
 
 
@@ -90,15 +102,19 @@ def test_history_window_keeps_recent_turns_within_the_configured_budget(
     steps,
     monkeypatch,
 ):
-    monkeypatch.setenv("HISTORY_BUDGET", "20")
-    monkeypatch.setenv("ENABLE_HISTORY_SUMMARY", "false")
     history = [
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer"},
         {"role": "user", "content": "latest"},
     ]
 
-    rendered, summary, covered = steps._prepare_history(history, {}, "vi")
+    rendered, summary, covered = steps._prepare_history(
+        history,
+        {},
+        "vi",
+        history_budget=20,
+        history_summary_enabled=False,
+    )
 
     assert rendered == "Khach: latest\n"
     assert summary is None
@@ -109,22 +125,19 @@ def test_history_summary_is_prepended_and_reports_the_covered_window(
     steps,
     monkeypatch,
 ):
-    monkeypatch.setenv("ENABLE_HISTORY_SUMMARY", "true")
     history = [
         {"role": "user" if index % 2 == 0 else "assistant", "content": f"turn {index}"}
         for index in range(16)
     ]
-    monkeypatch.setattr(
-        steps,
-        "cohere_invoke",
-        lambda *_args, **_kwargs: SimpleNamespace(content="- Approved drawing 9.3.03844"),
-    )
-
     rendered, summary, covered = steps._prepare_history(
         history,
         {"history_summary": "- Earlier topic", "summary_covered": 0},
         "en",
         trace_id="history-contract",
+        history_summary_enabled=True,
+        invoke_provider=lambda *_args, **_kwargs: SimpleNamespace(
+            content="- Approved drawing 9.3.03844"
+        ),
     )
 
     assert rendered.startswith(
@@ -138,7 +151,6 @@ def test_history_summary_provider_failure_preserves_the_previous_summary(
     steps,
     monkeypatch,
 ):
-    monkeypatch.setenv("ENABLE_HISTORY_SUMMARY", "true")
     history = [
         {"role": "user" if index % 2 == 0 else "assistant", "content": f"turn {index}"}
         for index in range(16)
@@ -147,12 +159,12 @@ def test_history_summary_provider_failure_preserves_the_previous_summary(
     def unavailable(*_args, **_kwargs):
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(steps, "cohere_invoke", unavailable)
-
     rendered, summary, covered = steps._prepare_history(
         history,
         {"history_summary": "- Stable prior summary", "summary_covered": 0},
         "vi",
+        history_summary_enabled=True,
+        invoke_provider=unavailable,
     )
 
     assert rendered.startswith(
@@ -183,6 +195,9 @@ def test_strict_retrieval_returns_exact_documents_without_broadening(
         query_to_search="drawing 9.3.03844",
         rbac_filter=None,
         trace_id="retrieve-contract",
+        vectorstore=object(),
+        client=object(),
+        collection_name="test",
     )
 
     assert docs == [exact]
@@ -213,6 +228,9 @@ def test_bom_retrieval_merges_strict_and_broad_results_without_duplicate_content
         is_bom_query=True,
         query_to_search="BOM 9.3.03844",
         rbac_filter=None,
+        vectorstore=object(),
+        client=object(),
+        collection_name="test",
     )
 
     assert [doc.page_content for doc in docs] == ["shared content", "additional BOM row"]
@@ -241,6 +259,9 @@ def test_retrieval_falls_back_to_broad_results_when_exact_search_is_unavailable(
         is_bom_query=False,
         query_to_search="PART-21",
         rbac_filter=None,
+        vectorstore=object(),
+        client=object(),
+        collection_name="test",
     )
 
     assert docs == [broad]
@@ -267,6 +288,9 @@ def test_retrieval_rechecks_serving_state_before_exposing_documents(
         is_bom_query=False,
         query_to_search="company policy",
         rbac_filter=None,
+        vectorstore=object(),
+        client=object(),
+        collection_name="test",
     )
 
     assert docs == [published]
@@ -306,17 +330,13 @@ def test_technical_route_exposes_one_request_local_embedding_cache(
 ):
     lifecycle = _Lifecycle()
     calls = []
-    steps.vectorstore = SimpleNamespace(
-        embeddings=SimpleNamespace(
-            embed_query=lambda text: calls.append(text) or [0.25, 0.75]
-        )
-    )
-    monkeypatch.setenv("SEMANTIC_ROUTER_ENABLED", "false")
-
     terminal, bundle = _route(
         steps,
         "quy trình bảo trì máy",
         lifecycle,
+        runtime=_route_runtime(
+            embed_query=lambda text: calls.append(text) or [0.25, 0.75]
+        ),
     )
 
     assert terminal is None
@@ -330,18 +350,14 @@ def test_rewrite_switches_topic_and_drops_the_previous_document_anchor(
     steps,
     monkeypatch,
 ):
-    from mech_chatbot.rag import intent
-
-    monkeypatch.setenv("ENABLE_CONV_STATE", "true")
     monkeypatch.setattr(
-        intent,
-        "cohere_invoke",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            content=(
-                '{"context_action":"switch_topic",'
-                '"standalone_question":"Quy trình nghỉ phép là gì?"}'
-            )
-        ),
+        steps,
+        "analyze_context",
+        lambda *_args, **_kwargs: {
+            "context_action": "switch_topic",
+            "standalone_question": "Quy trình nghỉ phép là gì?",
+            "llm_resolved": True,
+        },
     )
 
     result = steps._rewrite_and_anchor(
@@ -356,6 +372,11 @@ def test_rewrite_switches_topic_and_drops_the_previous_document_anchor(
         allowed_sites=[],
         trace_id="rewrite-contract",
         t_intent=time.time(),
+        runtime=SimpleNamespace(
+            conversation_state_enabled=True,
+            strict_site_filter=True,
+            intent_runtime=None,
+        ),
     )
 
     effective_question, new_part_ids, *_rest = result
@@ -367,7 +388,15 @@ def test_rewrite_resolves_a_pending_candidate_selection_without_an_llm_call(
     steps,
     monkeypatch,
 ):
-    monkeypatch.setenv("ENABLE_CONV_STATE", "true")
+    monkeypatch.setattr(
+        steps,
+        "analyze_context",
+        lambda *_args, **_kwargs: {
+            "context_action": "continue",
+            "standalone_question": None,
+            "llm_resolved": False,
+        },
+    )
     pending = [
         {"index": 1, "base_code": "PART-A", "key": "PART-A"},
         {"index": 2, "base_code": "PART-B", "key": "PART-B"},
@@ -385,6 +414,11 @@ def test_rewrite_resolves_a_pending_candidate_selection_without_an_llm_call(
         allowed_sites=[],
         trace_id="selection-contract",
         t_intent=time.time(),
+        runtime=SimpleNamespace(
+            conversation_state_enabled=True,
+            strict_site_filter=True,
+            intent_runtime=None,
+        ),
     )
 
     assert result[1] == ["PART-B"]
@@ -494,19 +528,34 @@ def _generation_plan(steps, *, outcome=None, deadline=None):
             deadline_monotonic=deadline,
             outcome=outcome or steps.GenerationOutcome(),
         ),
+        runtime=SimpleNamespace(
+            retrieval_adapter=SimpleNamespace(
+                strict_answer_mode=True,
+                strict_realtime_streaming=False,
+                claim_repair_enabled=False,
+                grounded_math_enabled=False,
+                stream_max_attempts=3,
+                auto_source_cards=True,
+            ),
+            provider_adapter=SimpleNamespace(
+                client=object(),
+                invoke=lambda *_args, **_kwargs: SimpleNamespace(content=""),
+            ),
+        ),
     )
 
 
 def _prepare_generation(steps, monkeypatch, chain):
     monkeypatch.setattr(steps, "_build_prompt_template", lambda *_args: chain)
-    monkeypatch.setattr(steps, "get_cohere_llm", lambda: object())
     monkeypatch.setattr(steps, "StrOutputParser", lambda: object())
     monkeypatch.setattr(steps, "audited_external_call", _allow_external_call)
-    monkeypatch.setattr(steps, "get_llm_model_name", lambda: "test-model")
-    monkeypatch.setattr(steps, "get_llm_endpoint", lambda: "https://example.invalid")
+    monkeypatch.setattr(steps, "get_llm_model_name", lambda _adapter: "test-model")
+    monkeypatch.setattr(
+        steps,
+        "get_llm_endpoint",
+        lambda _adapter: "https://example.invalid",
+    )
     monkeypatch.setattr(steps, "_context_is_mechanical", lambda *_args: False)
-    monkeypatch.setattr(steps, "strict_realtime_streaming_enabled", lambda *_args: False)
-    monkeypatch.setattr(steps, "claim_repair_enabled", lambda: False)
     monkeypatch.setattr(steps, "has_unsupported_numbers", lambda *_args, **_kwargs: False)
 
 

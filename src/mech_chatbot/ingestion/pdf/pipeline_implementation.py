@@ -6,7 +6,9 @@ import fitz
 import re
 import time
 import json
+import inspect
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Mapping
 
 from PIL import Image
@@ -20,8 +22,22 @@ from mech_chatbot.llm.vision_client import describe_vision_error, is_retryable_e
 from mech_chatbot.llm.external_ai import external_document_context
 
 # cross-module (owned) imports
-from mech_chatbot.ingestion.pdf.config import IMAGE_DIR, IMAGE_EXTENSIONS, MARKDOWN_EXTENSIONS, ROLLBACK_ON_INGEST_ERROR, STRICT_INGEST_REQUIRE_VISION
-from mech_chatbot.ingestion.pdf.chunking import _build_chunk_context_prefix, _contextual_chunk_enabled, token_splitter, tokenize_cached
+from mech_chatbot.ingestion.pdf.config import (
+    IMAGE_DIR,
+    IMAGE_EXTENSIONS,
+    MARKDOWN_EXTENSIONS,
+    PdfIngestionConfig,
+    ROLLBACK_ON_INGEST_ERROR,
+    STRICT_INGEST_REQUIRE_VISION,
+)
+from mech_chatbot.ingestion.vision_cache import VisionCacheConfig
+from mech_chatbot.ingestion.pdf.chunking import (
+    _build_chunk_context_prefix,
+    _contextual_chunk_enabled,
+    get_token_splitter,
+    token_splitter,
+    tokenize_cached,
+)
 from mech_chatbot.ingestion.pdf.vision import _prewarm_vision_cache, call_vision_model, format_vision_data, parse_vision_json
 from mech_chatbot.ingestion.pdf.quality import _normalize_phong_ban_quyen, calculate_quality_status
 from mech_chatbot.ingestion.pdf.bom import (
@@ -32,6 +48,7 @@ from mech_chatbot.ingestion.pdf.readers import extract_text_from_supported_file
 from mech_chatbot.ingestion.pdf.metadata import extract_metadata_smart
 from mech_chatbot.domain.ingestion_progress import IngestionProgressEvent
 from mech_chatbot.application.vector_ingestion import (
+    IngestionPersistence,
     IngestionPipelineDependencies,
     require_pipeline_dependencies,
 )
@@ -62,14 +79,56 @@ class _GovernedDocument:
     external_policy: str
 
 
-def _load_governed_document(ten_file, thu_muc):
-    doc_id = reset_document_metadata(ten_file, thu_muc)
+def _legacy_ingestion_persistence() -> IngestionPersistence:
+    """Keep direct test/legacy calls working without hiding production wiring."""
+
+    reingest_snapshots = {}
+
+    def bind_optional(callback, **kwargs):
+        signature = inspect.signature(callback)
+        accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        supported = {
+            key: value
+            for key, value in kwargs.items()
+            if accepts_kwargs or key in signature.parameters
+        }
+        return partial(callback, **supported) if supported else callback
+
+    return IngestionPersistence(
+        reset_document_metadata=bind_optional(
+            reset_document_metadata,
+            snapshot_store=reingest_snapshots,
+        ),
+        get_document_info=get_document_info,
+        update_document_classification=update_document_classification,
+        clear_reingest_snapshot=bind_optional(
+            clear_reingest_snapshot,
+            snapshot_store=reingest_snapshots,
+        ),
+        mark_document_ingest_failed=mark_document_ingest_failed,
+        restore_document_children=bind_optional(
+            restore_document_children,
+            snapshot_store=reingest_snapshots,
+        ),
+        save_bom_records=save_bom_records,
+        save_technical_attributes=save_technical_attributes,
+        save_document_attributes=save_document_attributes,
+        save_document_page=save_document_page,
+        save_page_metadata=save_page_metadata,
+    )
+
+
+def _load_governed_document(ten_file, thu_muc, *, persistence):
+    doc_id = persistence.reset_document_metadata(ten_file, thu_muc)
     if not doc_id:
         raise RuntimeError(
             "Khong tao duoc document identity; dung ingest truoc khi goi dich vu ngoai."
         )
 
-    raw_info = get_document_info(doc_id)
+    raw_info = persistence.get_document_info(doc_id)
     if not isinstance(raw_info, Mapping) or not raw_info:
         raise RuntimeError(
             "Khong tai duoc governance cua tai lieu; dung ingest truoc khi goi dich vu ngoai."
@@ -163,12 +222,13 @@ def _finalize_successful_persistence(
     thu_muc,
     phong_ban_override,
     source_context,
+    persistence,
 ):
     if report["status"] != "success" or not doc_id:
         return
 
     phong_ban = _normalize_phong_ban_quyen(thu_muc, phong_ban_override)
-    classification_updated = update_document_classification(
+    classification_updated = persistence.update_document_classification(
         doc_id,
         domain=source_context.domain,
         security_level=source_context.security_level,
@@ -197,7 +257,7 @@ def _finalize_successful_persistence(
         raise RuntimeError(
             f"Khong dong bo duoc payload Qdrant cho doc_id={doc_id}: {error}"
         ) from error
-    clear_reingest_snapshot(doc_id)
+    persistence.clear_reingest_snapshot(doc_id)
 
 
 def _rollback_failed_ingestion(
@@ -207,8 +267,10 @@ def _rollback_failed_ingestion(
     doc_id,
     ten_file,
     thu_muc,
+    rollback_on_error,
+    persistence,
 ):
-    if report["status"] != "error" or not ROLLBACK_ON_INGEST_ERROR:
+    if report["status"] != "error" or not rollback_on_error:
         return
 
     try:
@@ -218,8 +280,12 @@ def _rollback_failed_ingestion(
             doc_id=doc_id,
             dependencies=dependencies,
         )
-        mark_document_ingest_failed(ten_file, thu_muc, report.get("message"))
-        restore_document_children(doc_id)
+        persistence.mark_document_ingest_failed(
+            ten_file,
+            thu_muc,
+            report.get("message"),
+        )
+        persistence.restore_document_children(doc_id)
         report["total_chunks"] = 0
         report["warnings"].append(
             "Da rollback vector/metadata cua file nay vi ingest khong dat quality gate."
@@ -302,6 +368,8 @@ def _finalize_pipeline_transaction(
     thu_muc,
     phong_ban_override,
     context,
+    rollback_on_error,
+    persistence,
 ):
     _finalize_quality_report(report, context)
     if report.get("quality_status") == "blocked":
@@ -317,6 +385,7 @@ def _finalize_pipeline_transaction(
                 thu_muc=thu_muc,
                 phong_ban_override=phong_ban_override,
                 source_context=context.source,
+                persistence=persistence,
             )
         except Exception as error:
             report["status"] = "error"
@@ -328,6 +397,8 @@ def _finalize_pipeline_transaction(
         doc_id=doc_id,
         ten_file=ten_file,
         thu_muc=thu_muc,
+        rollback_on_error=rollback_on_error,
+        persistence=persistence,
     )
     report["message"] = _build_final_report_message(report, context)
     return report
@@ -336,6 +407,18 @@ def _finalize_pipeline_transaction(
 def _emit_progress(progress_callback, phase, message):
     if progress_callback:
         progress_callback(IngestionProgressEvent(phase=phase, message=message))
+
+
+def _vision_cache_get(cache_module, key, *, config, explicit_config):
+    if explicit_config:
+        return cache_module.get(key, config=config)
+    return cache_module.get(key)
+
+
+def _vision_cache_put(cache_module, key, value, *, config, explicit_config):
+    if explicit_config:
+        return cache_module.put(key, value, config=config)
+    return cache_module.put(key, value)
 
 
 @retry(
@@ -398,8 +481,32 @@ def process_and_ingest_pdf(
     phong_ban_override=None,
     *,
     dependencies: IngestionPipelineDependencies | None = None,
+    persistence: IngestionPersistence | None = None,
+    config: PdfIngestionConfig | None = None,
 ):
     dependencies = require_pipeline_dependencies(dependencies)
+    persistence = persistence or _legacy_ingestion_persistence()
+    explicit_config = config is not None
+    runtime_config = config or PdfIngestionConfig(
+        image_dir=IMAGE_DIR,
+        strict_require_vision=STRICT_INGEST_REQUIRE_VISION,
+        rollback_on_error=ROLLBACK_ON_INGEST_ERROR,
+    )
+    runtime_config.image_dir.mkdir(parents=True, exist_ok=True)
+    cache_config = VisionCacheConfig(
+        enabled=runtime_config.vision_cache_enabled,
+        directory=runtime_config.vision_cache_dir,
+    )
+    splitter = (
+        get_token_splitter(runtime_config)
+        if explicit_config
+        else token_splitter
+    )
+    contextual_chunks = (
+        runtime_config.contextual_chunk_enabled
+        if explicit_config
+        else _contextual_chunk_enabled()
+    )
     source_context = _initialize_source_context(
         thu_muc,
         domain_override=domain_override,
@@ -428,7 +535,11 @@ def process_and_ingest_pdf(
         report["total_pages"] = len(doc)
 
         # FIX #1: Reset metadata MOT LAN cho ca file, lay doc_id dung chung cho moi trang
-        governed_document = _load_governed_document(ten_file, thu_muc)
+        governed_document = _load_governed_document(
+            ten_file,
+            thu_muc,
+            persistence=persistence,
+        )
         doc_id = governed_document.doc_id
         doc_info = governed_document.info
         external_policy = governed_document.external_policy
@@ -450,7 +561,7 @@ def process_and_ingest_pdf(
             security_levels=[security_level],
             policies=[external_policy],
         ):
-            _prewarm_vision_cache(
+            prewarm_args = (
                 doc,
                 ten_file,
                 thu_muc,
@@ -464,6 +575,13 @@ def process_and_ingest_pdf(
                     )
                 ),
             )
+            if explicit_config:
+                _prewarm_vision_cache(
+                    *prewarm_args,
+                    config=runtime_config,
+                )
+            else:
+                _prewarm_vision_cache(*prewarm_args)
 
         for page_num in range(len(doc)):
             _emit_progress(
@@ -476,13 +594,13 @@ def process_and_ingest_pdf(
                 text = page.get_text("text")
 
                 # Render image truoc de kip phan tich
-                pix = page.get_pixmap(dpi=int(os.getenv("PDF_RENDER_DPI", "300")))
+                pix = page.get_pixmap(dpi=runtime_config.pdf_render_dpi)
                 safe_thu_muc = re.sub(r'[\\/*?:"<>|]', "", thu_muc) if thu_muc else ""
                 if safe_thu_muc:
                     img_name = f"{safe_thu_muc}_{base_name}_page{page_num+1}.png"
                 else:
                     img_name = f"{base_name}_page{page_num+1}.png"
-                img_path = os.path.join(IMAGE_DIR, img_name)
+                img_path = os.path.join(runtime_config.image_dir, img_name)
                 pix.save(img_path)
 
                 image_summary = ""
@@ -534,7 +652,12 @@ def process_and_ingest_pdf(
                         # P2-5: cache ket qua Vision theo hash anh trang (tiet kiem chi phi)
                         from mech_chatbot.ingestion import vision_cache as _vc
                         _page_key = _vc.hash_image_file(img_path)
-                        _cached = _vc.get(_page_key)
+                        _cached = _vision_cache_get(
+                            _vc,
+                            _page_key,
+                            config=cache_config,
+                            explicit_config=explicit_config,
+                        )
                         if _cached is not None:
                             vision_data = _cached
                             report.setdefault("pages_vision_cache_hit", []).append(page_num + 1)
@@ -552,7 +675,13 @@ def process_and_ingest_pdf(
                                 response = call_vision_model(vision_model, prompt, img_to_analyze)
                             vision_data = parse_vision_json(response.text)
                             if vision_data:
-                                _vc.put(_page_key, vision_data)
+                                _vision_cache_put(
+                                    _vc,
+                                    _page_key,
+                                    vision_data,
+                                    config=cache_config,
+                                    explicit_config=explicit_config,
+                                )
 
                         if vision_data:
                             image_summary = format_vision_data(vision_data)
@@ -584,7 +713,11 @@ def process_and_ingest_pdf(
                                             "source_table_index": 0
                                         })
                                 if structured_bom:
-                                    save_bom_records(doc_id, page_num + 1, structured_bom)
+                                    persistence.save_bom_records(
+                                        doc_id,
+                                        page_num + 1,
+                                        structured_bom,
+                                    )
                         else:
                             image_summary = response.text
                     except Exception as e:
@@ -601,7 +734,7 @@ def process_and_ingest_pdf(
                     report["warnings"].append(warn)
                     logger.error(warn)
 
-                if vision_failed and STRICT_INGEST_REQUIRE_VISION:
+                if vision_failed and runtime_config.strict_require_vision:
                     report["failed_pages"].append(page_num+1)
                     logger.error(
                         f"Bo qua nap trang {page_num+1} cua {ten_file} de tranh nap thieu du lieu hinh anh/OCR."
@@ -615,12 +748,19 @@ def process_and_ingest_pdf(
                     security_levels=[security_level],
                     policies=[external_policy],
                 ):
+                    metadata_kwargs = {
+                        "quality_warnings": report["warnings"],
+                    }
+                    if explicit_config:
+                        metadata_kwargs["metadata_mode"] = (
+                            runtime_config.llm_metadata_mode
+                        )
                     info = extract_metadata_smart(
                         combined_text_for_metadata,
                         ten_file,
                         thu_muc,
                         vision_model,
-                        quality_warnings=report["warnings"],
+                        **metadata_kwargs,
                     )
                 if len(report["warnings"]) > warning_count_before_metadata:
                     report["metadata_llm_failed_pages"].append(page_num+1)
@@ -679,10 +819,22 @@ def process_and_ingest_pdf(
                     })
 
                 if _handler_attr.attribute_strategy == 'technical':
-                    save_technical_attributes(doc_id, ten_file, page_num + 1, tech_attrs)
+                    persistence.save_technical_attributes(
+                        doc_id,
+                        ten_file,
+                        page_num + 1,
+                        tech_attrs,
+                    )
                 else:
                     from mech_chatbot.ingestion.generic_extractors import extract_generic_attributes
-                    save_document_attributes(doc_id, domain, extract_generic_attributes(combined_text_for_metadata, domain))
+                    persistence.save_document_attributes(
+                        doc_id,
+                        domain,
+                        extract_generic_attributes(
+                            combined_text_for_metadata,
+                            domain,
+                        ),
+                    )
 
                 # GD4: duong nap hang loat khong tin folder tuyet doi -> quet noi dung nhay cam
                 if scan_sensitive:
@@ -770,7 +922,7 @@ def process_and_ingest_pdf(
                 }
                 info['trang_so'] = page_num + 1
 
-                save_document_page(
+                persistence.save_document_page(
                     doc_id=doc_id,
                     file_name=ten_file,
                     page_no=page_num + 1,
@@ -781,7 +933,12 @@ def process_and_ingest_pdf(
                 )
 
                 # FIX #1: CHI insert metadata trang nay (khong xoa metadata cac trang khac)
-                save_page_metadata(ten_file, thu_muc, info, doc_id=doc_id)
+                persistence.save_page_metadata(
+                    ten_file,
+                    thu_muc,
+                    info,
+                    doc_id=doc_id,
+                )
 
                 all_chunks = []
                 title_block = (
@@ -817,7 +974,11 @@ def process_and_ingest_pdf(
                             # Parse BOM records and save to SQL
                             bom_records = extract_bom_records(table, table_idx=table_idx)
                             if bom_records:
-                                persisted = save_bom_records(doc_id, page_num + 1, bom_records)
+                                persisted = persistence.save_bom_records(
+                                    doc_id,
+                                    page_num + 1,
+                                    bom_records,
+                                )
                                 report["bom_rows_count"] += persisted
                                 if not persisted:
                                     report["warnings"].append(
@@ -833,19 +994,19 @@ def process_and_ingest_pdf(
 
                 if markdown_tables.strip():
                     table_content = f"Bang bieu tai lieu {ten_file} (Ma: {info['ma_doi_tuong']}):\n{markdown_tables}"
-                    table_chunks = token_splitter.split_text(table_content)
+                    table_chunks = splitter.split_text(table_content)
                     for i, c in enumerate(table_chunks):
                         all_chunks.append(Document(page_content=c, metadata={**metadata, "loai_du_lieu": "bang_ke_vat_tu", "chunk_index": i}))
 
                 if info['yckt']:
                     yckt_content = f"Yeu cau ky thuat tai lieu {ten_file} (Ma: {info['ma_doi_tuong']}):\n{info['yckt']}"
-                    yckt_chunks = token_splitter.split_text(yckt_content)
+                    yckt_chunks = splitter.split_text(yckt_content)
                     for i, c in enumerate(yckt_chunks):
                         all_chunks.append(Document(page_content=c, metadata={**metadata, "loai_du_lieu": "yckt", "chunk_index": i}))
 
                 if info['hdcv']:
                     hdcv_content = f"Huong dan cong viec tai lieu {ten_file} (Ma: {info['ma_doi_tuong']}):\n{info['hdcv']}"
-                    hdcv_chunks = token_splitter.split_text(hdcv_content)
+                    hdcv_chunks = splitter.split_text(hdcv_content)
                     for i, c in enumerate(hdcv_chunks):
                         all_chunks.append(Document(page_content=c, metadata={**metadata, "loai_du_lieu": "hdcv", "chunk_index": i}))
 
@@ -853,7 +1014,7 @@ def process_and_ingest_pdf(
                 # (kich thuoc, goc, ban kinh, ghi chu) ma regex khong cover duoc
                 if text.strip():
                     raw_content = f"Noi dung chi tiet trang {page_num+1} tai lieu {ten_file} (Ma: {info['ma_doi_tuong']}):\n{text.strip()}"
-                    raw_chunks = token_splitter.split_text(raw_content)
+                    raw_chunks = splitter.split_text(raw_content)
                     for i, c in enumerate(raw_chunks):
                         all_chunks.append(Document(page_content=c, metadata={**metadata, "loai_du_lieu": "text", "chunk_index": i}))
 
@@ -865,7 +1026,7 @@ def process_and_ingest_pdf(
                 for chunk in all_chunks:
                     chunk.metadata["noi_dung_goc"] = chunk.page_content
                     _embed_src = chunk.page_content
-                    if _contextual_chunk_enabled():
+                    if contextual_chunks:
                         _cpref = _build_chunk_context_prefix(chunk.metadata)
                         if _cpref:
                             _embed_src = _cpref + "\n" + chunk.page_content
@@ -931,6 +1092,8 @@ def process_and_ingest_pdf(
             started_at=start_time,
             source_kind="pdf",
         ),
+        rollback_on_error=runtime_config.rollback_on_error,
+        persistence=persistence,
     )
 
 
@@ -948,8 +1111,22 @@ def process_and_ingest_file(
     phong_ban_override=None,
     *,
     dependencies: IngestionPipelineDependencies | None = None,
+    persistence: IngestionPersistence | None = None,
+    config: PdfIngestionConfig | None = None,
 ):
     dependencies = require_pipeline_dependencies(dependencies)
+    persistence = persistence or _legacy_ingestion_persistence()
+    runtime_config = config or PdfIngestionConfig(
+        image_dir=IMAGE_DIR,
+        strict_require_vision=STRICT_INGEST_REQUIRE_VISION,
+        rollback_on_error=ROLLBACK_ON_INGEST_ERROR,
+    )
+    splitter = get_token_splitter(runtime_config) if config is not None else token_splitter
+    contextual_chunks = (
+        runtime_config.contextual_chunk_enabled
+        if config is not None
+        else _contextual_chunk_enabled()
+    )
     source_context = _initialize_source_context(
         thu_muc,
         domain_override=domain_override,
@@ -977,7 +1154,11 @@ def process_and_ingest_file(
         # Create/load the governed document before any reader or metadata path
         # can call an external model. This gives the policy context a stable
         # document identity and ensures an early failure can restore snapshot.
-        governed_document = _load_governed_document(ten_file, thu_muc)
+        governed_document = _load_governed_document(
+            ten_file,
+            thu_muc,
+            persistence=persistence,
+        )
         doc_id = governed_document.doc_id
         doc_info = governed_document.info
         report["classification_failed"] = bool(
@@ -1004,18 +1185,23 @@ def process_and_ingest_file(
             raise ValueError("Khong trich xuat duoc noi dung co the tim kiem tu file nay.")
 
         warning_count_before_metadata = len(report["warnings"])
-        _meta_limit = int(os.getenv("METADATA_TEXT_LIMIT", "20000"))
+        _meta_limit = runtime_config.metadata_text_limit
         with external_document_context(
             doc_ids=[doc_id],
             security_levels=[security_level],
             policies=[external_policy],
         ):
+            metadata_kwargs = {"quality_warnings": report["warnings"]}
+            if config is not None:
+                metadata_kwargs["metadata_mode"] = (
+                    runtime_config.llm_metadata_mode
+                )
             info = extract_metadata_smart(
                 text_content[:_meta_limit],
                 ten_file,
                 thu_muc,
                 vision_model,
-                quality_warnings=report["warnings"],
+                **metadata_kwargs,
             )
         if len(report["warnings"]) > warning_count_before_metadata:
             report["metadata_llm_failed_pages"].append(1)
@@ -1031,7 +1217,8 @@ def process_and_ingest_file(
                 img_name = f"{safe_thu_muc}_{base_name}_page1.png"
             else:
                 img_name = f"{base_name}_page1.png"
-            img_path = os.path.join(IMAGE_DIR, img_name)
+            runtime_config.image_dir.mkdir(parents=True, exist_ok=True)
+            img_path = os.path.join(runtime_config.image_dir, img_name)
             rendered_image_path = img_path
             # Convert sang PNG va luu
             try:
@@ -1054,11 +1241,16 @@ def process_and_ingest_file(
             info["loai_tai_lieu"] = type_map.get(data_type, "Tai lieu tong hop")
 
         # File 1 trang: persist metadata against the governed snapshot.
-        save_page_metadata(ten_file, thu_muc, info, doc_id=doc_id)
+        persistence.save_page_metadata(
+            ten_file,
+            thu_muc,
+            info,
+            doc_id=doc_id,
+        )
         vision_used = bool(data_type == "image_summary" and text_content.strip())
         if vision_used:
             report["pages_vision_success"].append(1)
-            save_document_page(
+            persistence.save_document_page(
                 doc_id=doc_id,
                 file_name=ten_file,
                 page_no=1,
@@ -1069,7 +1261,7 @@ def process_and_ingest_file(
             )
         elif ext in MARKDOWN_EXTENSIONS:
             report["pages_text_extracted"].append(1)
-            save_document_page(
+            persistence.save_document_page(
                 doc_id=doc_id,
                 file_name=ten_file,
                 page_no=1,
@@ -1080,7 +1272,11 @@ def process_and_ingest_file(
             )
             markdown_bom_records = extract_bom_records_from_markdown(text_content)
             if markdown_bom_records:
-                persisted = save_bom_records(doc_id, 1, markdown_bom_records)
+                persisted = persistence.save_bom_records(
+                    doc_id,
+                    1,
+                    markdown_bom_records,
+                )
                 report["bom_rows_count"] += persisted
                 report["pages_table_extracted"].append(1)
                 if not persisted:
@@ -1189,7 +1385,7 @@ def process_and_ingest_file(
         all_chunks.append(Document(page_content=title_block, metadata={**metadata, "loai_du_lieu": "title_block"}))
 
         # Dung chung token_splitter da dinh nghia theo gioi han embedding.
-        chunks = token_splitter.split_text(text_content)
+        chunks = splitter.split_text(text_content)
         for i, chunk in enumerate(chunks):
             if chunk.strip():
                 all_chunks.append(Document(
@@ -1201,7 +1397,7 @@ def process_and_ingest_file(
         for chunk in all_chunks:
             chunk.metadata["noi_dung_goc"] = chunk.page_content
             _embed_src = chunk.page_content
-            if _contextual_chunk_enabled():
+            if contextual_chunks:
                 _cpref = _build_chunk_context_prefix(chunk.metadata)
                 if _cpref:
                     _embed_src = _cpref + "\n" + chunk.page_content
@@ -1250,6 +1446,8 @@ def process_and_ingest_file(
             source_kind="file",
             file_extension=ext,
         ),
+        rollback_on_error=runtime_config.rollback_on_error,
+        persistence=persistence,
     )
 
 __all__ = [

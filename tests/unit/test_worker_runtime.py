@@ -119,6 +119,19 @@ def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
             "external_processing_policy": "all_external",
             "is_active": True,
         },
+        reset_document_metadata=lambda *args, **kwargs: 1,
+        get_document_info=lambda *args, **kwargs: {
+            "external_processing_policy": "internal_only",
+        },
+        update_document_classification=lambda *args, **kwargs: True,
+        clear_reingest_snapshot=lambda *args, **kwargs: None,
+        mark_document_ingest_failed=lambda *args, **kwargs: None,
+        restore_document_children=lambda *args, **kwargs: False,
+        save_bom_records=lambda *args, **kwargs: 0,
+        save_technical_attributes=lambda *args, **kwargs: None,
+        save_document_attributes=lambda *args, **kwargs: None,
+        save_document_page=lambda *args, **kwargs: None,
+        save_page_metadata=lambda *args, **kwargs: 1,
         engine=object(),
         reconcile_publications=lambda **kwargs: {},
         reconcile_serving_state=lambda **kwargs: {},
@@ -185,6 +198,7 @@ def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
     assert vision_settings_seen == [VisionSettings.from_settings(settings)]
     assert captured["dependencies"] is dependencies
     assert captured["vision_model"] is vision_model
+    assert captured["persistence"] is not None
 
 
 def test_system_clock_delegates_to_time_module(monkeypatch) -> None:
@@ -205,11 +219,13 @@ def test_default_vision_builder_uses_explicit_snapshot(monkeypatch) -> None:
     monkeypatch.setenv("PROXYLLM_BASE_URL", "https://ambient.test/v1")
     monkeypatch.setenv("GPT_VISION_MODEL_NAME", "ambient-vision")
 
-    class FakeVisionModel:
-        def __init__(self, api_key, model_name, endpoint):
-            created.append((api_key, model_name, endpoint))
+    model = object()
 
-    vision_module.GPTVisionModel = FakeVisionModel  # type: ignore[attr-defined]
+    def build_vision_model(snapshot):
+        created.append(snapshot)
+        return model
+
+    vision_module.build_vision_model = build_vision_model  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, vision_module.__name__, vision_module)
     settings = VisionSettings(
         **{
@@ -222,16 +238,71 @@ def test_default_vision_builder_uses_explicit_snapshot(monkeypatch) -> None:
             "temperature": 0.0,
             "max_output_tokens": 4096,
             "timeout_seconds": 120.0,
+            "min_interval_seconds": 0.25,
         }
     )
 
-    model = worker_runtime._build_vision(settings)
+    result = worker_runtime._build_vision(settings)
 
-    assert isinstance(model, FakeVisionModel)
-    assert created == [
-        (
-            "configured-test-value",
-            "snapshot-vision",
-            "https://snapshot.test/v1",
-        )
-    ]
+    assert result is model
+    assert created == [settings]
+
+
+def test_worker_runtime_closes_only_composition_owned_resources(monkeypatch) -> None:
+    class Closable:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    class Database:
+        def __init__(self):
+            self.engine = object()
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    qdrant_client = Closable()
+    database = Database()
+    dependencies = IngestionPipelineDependencies(
+        vector_store=object(),
+        qdrant_client=qdrant_client,
+        collection_name="KnowledgeBase",
+    )
+    store = FakeStore()
+
+    runtime = build_worker_runtime(
+        _settings(QDRANT_COLLECTION="KnowledgeBase"),
+        job_store=store,
+        runner=FakeRunner(),
+        clock=FakeClock(),
+        reconcile_publications=lambda **_: {},
+        reconcile_serving_state=lambda **_: {},
+        reconcile_job_failure=store.reconcile_unexpected_failure,
+        database_runtime=database,
+        qdrant_builder=lambda _settings: dependencies,
+    )
+
+    runtime.close()
+
+    assert database.close_calls == 1
+    assert qdrant_client.close_calls == 0
+
+    owned = WorkerRuntime(
+        settings=runtime.settings,
+        worker_id="worker-owned",
+        job_store=store,
+        runner=FakeRunner(),
+        clock=FakeClock(),
+        reconcile_publications=lambda **_: {},
+        reconcile_serving_state=lambda **_: {},
+        reconcile_job_failure=store.reconcile_unexpected_failure,
+        pipeline_dependencies=dependencies,
+        owns_pipeline_dependencies=True,
+    )
+
+    owned.close()
+
+    assert qdrant_client.close_calls == 1

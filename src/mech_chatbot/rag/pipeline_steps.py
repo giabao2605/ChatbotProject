@@ -3,11 +3,10 @@
 Moi ham la mot lat cat mechanical extraction tu rag/pipeline.py:chat_with_rag.
 KHONG doi logic — chi di chuyen nguyen van + truyen state qua tham so/return.
 """
-import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 from mech_chatbot.config.logging import logger
-from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_gpt_rate_limit
+from mech_chatbot.llm.llm_client import _is_gpt_rate_limit
 from langchain_core.messages import HumanMessage
 import time
 from mech_chatbot.config.logging import log_trace
@@ -41,14 +40,11 @@ from mech_chatbot.rag.grounded_math import (
     render_grounded_calculation_answer,
     validate_grounded_calculation_answer,
 )
-from mech_chatbot.rag.bootstrap import STRICT_ANSWER_MODE
-from mech_chatbot.rag.streaming_policy import strict_realtime_streaming_enabled
 from mech_chatbot.rag.prompt import _build_prompt_template
 from mech_chatbot.rag.intent import serialize_qdrant_filter
 from mech_chatbot.rag.context_builders import _context_is_mechanical, _context_domain
 
 
-from mech_chatbot.rag.bootstrap import vectorstore
 from mech_chatbot.rag.retrieval import current_published_filter
 
 # P0 slices #4/#5/#7: cac helper _route / _rewrite_and_anchor / _disambiguate
@@ -114,13 +110,7 @@ class GenerationPlan:
     evidence: GenerationEvidence
     control: GenerationControl
     explicit_negative_answer: str = ""
-
-
-def _env_int(name, default):
-    try:
-        return max(1, int(os.getenv(name, str(default))))
-    except (TypeError, ValueError):
-        return max(1, int(default))
+    runtime: Any = None
 
 
 def _attempt_number_claim_repair(
@@ -132,6 +122,8 @@ def _attempt_number_claim_repair(
     trace_id,
     enabled,
     retry_counter=None,
+    auto_source_cards=True,
+    invoke_provider=None,
 ):
     document_metadata = [
         getattr(document, "metadata", {}) or {} for document in (retrieved_docs or [])
@@ -141,7 +133,7 @@ def _attempt_number_claim_repair(
         context_text=context_text,
         question=user_question,
         documents=retrieved_docs,
-        invoke=lambda prompt: cohere_invoke(
+        invoke=lambda prompt: invoke_provider(
             [HumanMessage(content=prompt)],
             surface="claim_repair",
             trace_id=trace_id,
@@ -157,8 +149,7 @@ def _attempt_number_claim_repair(
         ).content,
         require_citation=(
             requires_source_citation(user_question)
-            and not os.getenv("RAG_AUTO_SOURCE_CARDS", "true").strip().lower()
-            in {"1", "true", "yes", "on"}
+            and not auto_source_cards
         ),
         enabled=enabled,
     )
@@ -206,6 +197,9 @@ def _explicit_hybrid_rrf(
     *,
     trace_id=None,
     phase="general",
+    vectorstore,
+    client,
+    collection_name,
 ):
     """Run dense and BM25 independently, then fuse their ranks explicitly.
 
@@ -219,22 +213,19 @@ def _explicit_hybrid_rrf(
     result_cap = max(1, int(result_cap))
     try:
         from langchain_qdrant import QdrantVectorStore, RetrievalMode
-        from mech_chatbot.rag.bootstrap import client
-        from mech_chatbot.config.settings import QDRANT_COLLECTION
-
         dense_embedding = getattr(vectorstore, "embeddings", None)
         sparse_embedding = getattr(vectorstore, "sparse_embeddings", None)
         if dense_embedding is None or sparse_embedding is None:
             raise RuntimeError("Qdrant vectorstore khong expose dense/sparse embeddings")
         dense_store = QdrantVectorStore(
             client=client,
-            collection_name=QDRANT_COLLECTION,
+            collection_name=collection_name,
             embedding=dense_embedding,
             retrieval_mode=RetrievalMode.DENSE,
         )
         sparse_store = QdrantVectorStore(
             client=client,
-            collection_name=QDRANT_COLLECTION,
+            collection_name=collection_name,
             embedding=dense_embedding,
             sparse_embedding=sparse_embedding,
             sparse_vector_name="sparse",
@@ -309,6 +300,8 @@ def _prepare_history(
     response_language,
     trace_id=None,
     invoke_provider=None,
+    history_budget=4000,
+    history_summary_enabled=False,
 ):
     """BUOC lich su hoi thoai: dung chat_history_str (token-budgeted windowing)
     + tom tat luy tien (KH-3). Tra ve (chat_history_str, history_summary_new,
@@ -318,10 +311,7 @@ def _prepare_history(
     # FIX HOI THOAI DAI: Thay vi co dinh 4 message (bot response dai chiem hang ngan token,
     # lan at context tai lieu khien LLM tra loi kem), dung budget ky tu co dinh.
     chat_history_str = ""
-    try:
-        HISTORY_BUDGET = int(os.getenv("HISTORY_BUDGET", "4000"))
-    except Exception:
-        HISTORY_BUDGET = 4000
+    HISTORY_BUDGET = max(1, int(history_budget))
     try:
         from mech_chatbot.rag import conversation_state as _cs_h
         _overflow_msgs, recent_history = _cs_h.split_history_for_summary(chat_history or [])
@@ -351,7 +341,7 @@ def _prepare_history(
     _summary_covered_new = None
     try:
         from mech_chatbot.rag import conversation_state as _cs_sum
-        if _cs_sum.history_summary_enabled():
+        if _cs_sum.history_summary_enabled(history_summary_enabled):
             _cc_prev = conversation_context or {}
             _prev_summary = (_cc_prev.get("history_summary") or "").strip()
             _prev_covered = int(_cc_prev.get("summary_covered") or 0)
@@ -373,8 +363,7 @@ def _prepare_history(
                     "CAC LUOT MOI CAN GOP:\n" + "\n".join(_to_sum)
                 )
                 try:
-                    provider = invoke_provider or cohere_invoke
-                    _history_summary_new = provider(
+                    _history_summary_new = invoke_provider(
                         [HumanMessage(content=_sum_prompt)],
                         surface="chat_history_summary",
                         trace_id=trace_id,
@@ -401,15 +390,18 @@ def _prepare_history(
     return chat_history_str, _history_summary_new, _summary_covered_new
 
 
-def _analyze_image(image_path, user_question, trace_id, retry_budget=None):
+def _analyze_image(
+    image_path,
+    user_question,
+    trace_id,
+    retry_budget=None,
+    *,
+    vision_model=None,
+):
     """BUOC A: phan tich anh nguoi dung tai len (Vision). Tra ve image_analysis (str).
     Tach nguyen van tu chat_with_rag (P0 slice #2).
     """
-    # Resolve the cached adapter through the managed provider profile on each
-    # image request, so an approved endpoint/model change takes effect without
-    # changing retrieval code or retaining a stale provider client forever.
-    from mech_chatbot.llm.vision_client import build_vision_model
-    _VISION_MODEL = build_vision_model()
+    _VISION_MODEL = vision_model
     # BUOC A: XU LY ANH BANG VISION MODEL
     image_analysis = ""
     if image_path:
@@ -513,6 +505,13 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     explicit_negative_answer = plan.explicit_negative_answer
     outcome = plan.control.outcome
     budget = plan.control.budget
+    request_runtime = plan.runtime
+    retrieval_runtime = getattr(request_runtime, "retrieval_adapter", None)
+    provider_adapter = getattr(request_runtime, "provider_adapter", None)
+    provider_model = getattr(provider_adapter, "client", None)
+    strict_answer_mode = bool(
+        getattr(retrieval_runtime, "strict_answer_mode", True)
+    )
     if plan.evidence.has_active_filter:
         active_filter = plan.evidence.active_filter
     metrics = metrics if metrics is not None else {}
@@ -552,9 +551,9 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         document for document in retrieved_docs
         if isinstance((getattr(document, "metadata", {}) or {}).get("calculation_provenance"), dict)
     ]
-    grounded_math_enabled = os.getenv("RAG_GROUNDED_MATH_ENABLED", "false").strip().lower() in {
-        "1", "true", "yes", "y", "on",
-    }
+    grounded_math_enabled = bool(
+        getattr(retrieval_runtime, "grounded_math_enabled", False)
+    )
     if grounded_math_enabled and calculation_docs:
         if budget is not None:
             budget.record("calculations", 1, cumulative=True)
@@ -601,7 +600,13 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     # GD3: chon prompt + gate guard co khi theo ngu canh truy hoi
     _ctx_is_mech = _context_is_mechanical(retrieved_docs, new_part_ids)
     _ctx_domain = _context_domain(retrieved_docs, new_part_ids)
-    chain = _build_prompt_template(_ctx_domain, response_language) | get_cohere_llm() | StrOutputParser()
+    if provider_model is None:
+        raise RuntimeError("RAG generation provider is not configured")
+    chain = (
+        _build_prompt_template(_ctx_domain, response_language)
+        | provider_model
+        | StrOutputParser()
+    )
 
     stream_input = {
         "context": context_text,
@@ -619,8 +624,8 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     _external_input_bytes = len((context_text + user_question + chat_history_str).encode("utf-8"))
     _external_call_args = {
         "provider": "proxyllm",
-        "model": get_llm_model_name(),
-        "endpoint": get_llm_endpoint(),
+        "model": get_llm_model_name(provider_adapter),
+        "endpoint": get_llm_endpoint(provider_adapter),
         "surface": "generation",
         "trace_id": trace_id,
         "doc_ids": _external_doc_ids,
@@ -629,9 +634,17 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         "input_chars": _external_input_chars,
         "input_bytes": _external_input_bytes,
     }
-    _stream_attempts = max(1, int(os.getenv("GPT_STREAM_MAX_ATTEMPTS", "3")))
-    _strict_realtime = strict_realtime_streaming_enabled(STRICT_ANSWER_MODE)
-    _claim_repair_enabled = claim_repair_enabled()
+    _stream_attempts = max(
+        1,
+        int(getattr(retrieval_runtime, "stream_max_attempts", 3)),
+    )
+    _strict_realtime = bool(
+        strict_answer_mode
+        and getattr(retrieval_runtime, "strict_realtime_streaming", False)
+    )
+    _claim_repair_enabled = claim_repair_enabled(
+        bool(getattr(retrieval_runtime, "claim_repair_enabled", False))
+    )
     if _claim_repair_enabled:
         # Repair requires full-answer holdback; never release a violating draft.
         _strict_realtime = False
@@ -644,14 +657,12 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
             and time.monotonic() >= plan.control.deadline_monotonic
         ):
             raise TimeoutError("RAG request deadline exceeded during generation")
-    try:
-        _strict_holdback_chars = max(
-            64, int(os.getenv("STRICT_STREAMING_HOLDBACK_CHARS", "160"))
-        )
-    except (TypeError, ValueError):
-        _strict_holdback_chars = 160
+    _strict_holdback_chars = max(
+        64,
+        int(getattr(retrieval_runtime, "strict_streaming_holdback_chars", 160)),
+    )
 
-    if (STRICT_ANSWER_MODE or is_high_risk_question(user_question)) and not _strict_realtime:
+    if (strict_answer_mode or is_high_risk_question(user_question)) and not _strict_realtime:
         # LOP PHONG THU 3: Post-check so lieu. Voi cau hoi rui ro, tam hoan streaming de kiem tra
         # LLM co tu tao so lieu moi (vd 24 gio) khong co trong context/user question hay khong.
         def guarded_stream():
@@ -697,7 +708,11 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 _raise_if_cancelled()
                 answer = "".join(chunks)
                 if current_execution_context() == "evaluation":
-                    draft_override = os.getenv("RAG_EVAL_DRAFT_OVERRIDE")
+                    draft_override = getattr(
+                        retrieval_runtime,
+                        "eval_draft_override",
+                        None,
+                    )
                     if draft_override:
                         answer = draft_override
                         log_trace("evaluation_override", trace_id, override="draft")
@@ -729,7 +744,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         lang=response_language,
                     )
                     yield ans
-                    log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
+                    log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_materials_codes", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                 elif bad_units:
                     outcome.refusal_reason = "post_check_units"
@@ -739,7 +754,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         lang=response_language,
                     )
                     yield ans
-                    log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
+                    log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_units", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                 # Source cards are constructed by the backend from retrieved
                 # documents.  Keep number holdback for high-risk questions,
@@ -763,6 +778,14 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         trace_id=trace_id,
                         enabled=_claim_repair_enabled,
                         retry_counter=budget,
+                        auto_source_cards=bool(
+                            getattr(
+                                retrieval_runtime,
+                                "auto_source_cards",
+                                True,
+                            )
+                        ),
+                        invoke_provider=provider_adapter.invoke,
                     )
                     log_trace(
                         "claim_repair",
@@ -779,7 +802,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     if repair_result.accepted:
                         answer = repair_result.answer
                         yield answer
-                        log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), repaired=True, input_tokens=input_tokens, output_tokens=len(answer)//4, estimated_cost=estimated_cost)
+                        log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), repaired=True, input_tokens=input_tokens, output_tokens=len(answer)//4, estimated_cost=estimated_cost)
                         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                         return
                     ans = make_insufficient_evidence_message(
@@ -789,15 +812,21 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     )
                     outcome.refusal_reason = "post_check_numbers"
                     yield ans
-                    log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
+                    log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_numbers", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                 elif (
-                    STRICT_ANSWER_MODE
+                    strict_answer_mode
                     and requires_source_citation(user_question)
                     # The API always attaches source cards from retrieved_docs.
                     # Do not reject a grounded answer just because it does not
                     # repeat the card's file/page/version syntax in prose.
-                    and not os.getenv("RAG_AUTO_SOURCE_CARDS", "true").strip().lower() in {"1", "true", "yes", "on"}
+                    and not bool(
+                        getattr(
+                            retrieval_runtime,
+                            "auto_source_cards",
+                            True,
+                        )
+                    )
                     and not has_valid_source_citation(answer, retrieved_docs, require_version=True)
                 ):
                     outcome.refusal_reason = "missing_source_page_version"
@@ -817,7 +846,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     return
                 else:
                     yield answer
-                    log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
+                    log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
             except ExternalAICallCancelled:
                 raise
@@ -952,14 +981,15 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         if pending:
                             yield pending
                     
-                    log_trace("llm_generation", trace_id, model=get_llm_model_name(), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
+                    log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=retrieved_file_goc, version_no=version_no, variant_code=variant_code, is_current=is_current, lifecycle_status=lifecycle_status, review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
         stream = normal_stream()
     return stream
 
 
 def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
-              query_to_search, rbac_filter, trace_id=None):
+              query_to_search, rbac_filter, trace_id=None, vectorstore,
+              client, collection_name, dense_top_k=None, sparse_top_k=None):
     """BUOC: truy xuat tai lieu (strict_exact / broad_fallback / general).
     Tra ve (retrieved_docs, base_k, retrieval_mode, t_retrieval, active_filter_or_sentinel).
     active_filter tra _RETRIEVE_UNSET neu chua set (duong hiem) de caller bind co dieu kien,
@@ -977,11 +1007,14 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
             strict_docs, strict_mode = _explicit_hybrid_rrf(
                 query_to_search,
                 strict_filter,
-                dense_top_k=_env_int("RAG_DENSE_TOP_K", base_k),
-                sparse_top_k=_env_int("RAG_BM25_TOP_K", base_k),
+                dense_top_k=dense_top_k or base_k,
+                sparse_top_k=sparse_top_k or base_k,
                 result_cap=base_k,
                 trace_id=trace_id,
                 phase="strict_exact",
+                vectorstore=vectorstore,
+                client=client,
+                collection_name=collection_name,
             )
             retrieval_mode = f"strict_exact:{strict_mode}"
             active_filter = strict_filter
@@ -999,11 +1032,14 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                 broad_docs, broad_mode = _explicit_hybrid_rrf(
                     query_to_search,
                     broad_filter,
-                dense_top_k=_env_int("RAG_DENSE_TOP_K", base_k * 2),
-                sparse_top_k=_env_int("RAG_BM25_TOP_K", base_k * 2),
+                dense_top_k=dense_top_k or base_k * 2,
+                sparse_top_k=sparse_top_k or base_k * 2,
                 result_cap=base_k * 2,
                 trace_id=trace_id,
                 phase="broad_fallback",
+                vectorstore=vectorstore,
+                client=client,
+                collection_name=collection_name,
                 )
                 retrieval_mode = f"broad_fallback:{broad_mode}"
                 active_filter = broad_filter
@@ -1040,11 +1076,14 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
         retrieved_docs, general_mode = _explicit_hybrid_rrf(
             query_to_search,
             general_filter,
-            dense_top_k=_env_int("RAG_DENSE_TOP_K", base_k),
-            sparse_top_k=_env_int("RAG_BM25_TOP_K", base_k),
+            dense_top_k=dense_top_k or base_k,
+            sparse_top_k=sparse_top_k or base_k,
             result_cap=base_k,
             trace_id=trace_id,
             phase="general",
+            vectorstore=vectorstore,
+            client=client,
+            collection_name=collection_name,
         )
         retrieval_mode = f"general:{general_mode}"
         active_filter = general_filter
@@ -1059,7 +1098,8 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
 
 def _route(*, user_question, conversation_context, response_language,
            user_department, allowed_departments, current_part_ids,
-           trace_id, t_start, make_debug_info, lifecycle):
+           trace_id, t_start, make_debug_info, lifecycle, runtime,
+           invoke_provider):
     """P0 slice #4: dinh tuyen hoi thoai (Interaction Router L0/L1/L2 + safety_block + meta + chitchat).
     Tra ve (terminal_or_None, bundle). terminal la 5-tuple return som (safety/meta/chitchat).
     bundle chua closure dung chung (mock_stream, _embed_cached) + is_chitchat de caller dung tiep.
@@ -1079,7 +1119,7 @@ def _route(*, user_question, conversation_context, response_language,
             return _qemb_cache[_k]
         _embed_started = time.time()
         try:
-            _v = vectorstore.embeddings.embed_query(_k)
+            _v = runtime.vectorstore.embeddings.embed_query(_k)
         except Exception:
             _v = None
         _embed_latency_ms += int((time.time() - _embed_started) * 1000)
@@ -1099,7 +1139,20 @@ def _route(*, user_question, conversation_context, response_language,
     def _llm_classifier(_t, _ctx=None):
         try:
             from mech_chatbot.rag import route_llm as _route_llm
-            return _route_llm.classify_llm(_t, _ctx, trace_id=trace_id)
+            return _route_llm.classify_llm(
+                _t,
+                _ctx,
+                invoke=lambda messages: invoke_provider(
+                    messages,
+                    surface="interaction_routing",
+                    trace_id=trace_id,
+                ),
+                trace_id=trace_id,
+                enabled=bool(getattr(runtime, "llm_router_enabled", True)),
+                minimum_confidence=float(
+                    getattr(runtime, "llm_router_min_confidence", 0.5)
+                ),
+            )
         except (ExternalAICallCancelled, RequestBudgetExceeded):
             raise
         except Exception:
@@ -1107,7 +1160,31 @@ def _route(*, user_question, conversation_context, response_language,
     _route_started = time.time()
     _router_context = dict(conversation_context or {})
     _router_context["allowed_departments"] = list(allowed_departments or [])
-    _route_result = _interaction_router.classify(user_question, context=_router_context, embedder=_router_embedder, llm_classifier=_llm_classifier)
+    _route_result = _interaction_router.classify(
+        user_question,
+        context=_router_context,
+        embedder=_router_embedder,
+        llm_classifier=_llm_classifier,
+        safety_enabled=bool(getattr(runtime, "safety_block_enabled", True)),
+        safety_extra_injection=getattr(
+            runtime,
+            "safety_extra_injection",
+            (),
+        ),
+        safety_extra_abuse=getattr(runtime, "safety_extra_abuse", ()),
+        semantic_enabled=bool(
+            getattr(runtime, "semantic_router_enabled", True)
+        ),
+        semantic_threshold=float(
+            getattr(runtime, "semantic_router_threshold", 0.62)
+        ),
+        semantic_margin=float(
+            getattr(runtime, "semantic_router_margin", 0.04)
+        ),
+        crag_fast_routes_enabled=bool(
+            getattr(runtime, "crag_enabled", False)
+        ),
+    )
     is_chitchat = _route_result.is_chitchat()
     log_trace("route", trace_id, route=_route_result.route, layer=_route_result.layer,
               confidence=_route_result.confidence,
@@ -1157,7 +1234,8 @@ def _route(*, user_question, conversation_context, response_language,
 def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
                         conversation_context, user_department, user_roles,
                         allowed_departments, max_security_level, allowed_sites,
-                        trace_id, t_intent, invoke_provider=None):
+                        trace_id, t_intent, invoke_provider=None,
+                        runtime=None):
     """P0 slice #5: phan doan ngu canh + query rewriting + neo State Memory (ConvState)
     + tao RBAC filter + trich xuat intent. Tra ve cac gia tri dieu khien luong phia sau,
     kem _skip_hyde_anchor (tinh ngay tai day de giu _cs cuc bo, bao toan hanh vi HyDE anchor).
@@ -1180,6 +1258,7 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
         active_doc_refs=_active_doc_refs_in,
         trace_id=trace_id,
         invoke_provider=invoke_provider,
+        runtime=getattr(runtime, "intent_runtime", None),
     )
     context_action = ctx_result["context_action"]
     _ctx_llm_resolved = bool(ctx_result.get("llm_resolved"))
@@ -1208,7 +1287,10 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
         from mech_chatbot.rag import conversation_state as _cs
         _cc_in = conversation_context or {}
         _cs_pending = _cc_in.get("pending_candidates") if _cc_in else None
-        if _cs_pending and _cs.is_enabled():
+        conversation_state_enabled = bool(
+            getattr(runtime, "conversation_state_enabled", False)
+        )
+        if _cs_pending and _cs.is_enabled(conversation_state_enabled):
             _sel_res = _cs.resolve_selection(user_question, _cs_pending)
             if _sel_res.get("matched"):
                 _cand = _sel_res["candidate"] or {}
@@ -1231,7 +1313,7 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
             context_action not in ("switch_topic", "broaden")
             and (_cs.is_continuation(user_question) or _llm_says_continue)
         )
-        if (not _forced_sel and _cs.is_enabled() and not effective_part_ids
+        if (not _forced_sel and _cs.is_enabled(conversation_state_enabled) and not effective_part_ids
                 and not _cs.has_explicit_code(user_question)
                 and _should_anchor):
             _adr = _active_doc_refs_in
@@ -1241,9 +1323,19 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
                 logger.info(f"[ConvState] Neo lai tai lieu {effective_part_ids} (is_cont={_cs.is_continuation(user_question)}, llm_continue={_llm_says_continue})")
     except Exception as _cse:
         logger.warning(f"[ConvState] resolve_selection loi: {_cse}")
-    rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments, max_security_level=max_security_level, allowed_sites=allowed_sites)
+    rbac_filter = create_rbac_filter(
+        user_department,
+        user_roles,
+        allowed_departments,
+        max_security_level=max_security_level,
+        allowed_sites=allowed_sites,
+        strict_site_filter=bool(
+            getattr(runtime, "strict_site_filter", True)
+        ),
+    )
     strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data = extract_search_intent(
-        effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel, trace_id=trace_id, invoke_provider=invoke_provider
+        effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel, trace_id=trace_id, invoke_provider=invoke_provider,
+        runtime=getattr(runtime, "intent_runtime", None),
     )
 
     log_trace("intent", trace_id,

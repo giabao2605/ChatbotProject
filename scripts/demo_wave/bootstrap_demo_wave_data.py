@@ -25,6 +25,7 @@ for candidate in (ROOT, ROOT / "src"):
         sys.path.insert(0, str(candidate))
 
 from scripts.demo_wave.generate_demo_assets import DEFAULT_OUTPUT, DEMO_BATCH, DEPARTMENTS, generate_corpus, generate_eval
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
 from mech_chatbot.db.engine import _ensure_engine, engine
 
 
@@ -164,6 +165,7 @@ def import_eval_cases(output: Path = DEFAULT_OUTPUT) -> dict:
     return {"cases": len(cases), "inserted": inserted, "updated": updated}
 
 
+@with_configured_repository_runtime(include_qdrant=False)
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("generate", "seed-users", "import-eval", "all"))

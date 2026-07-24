@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mech_chatbot.api import app_security, app_server, rag_server
+from mech_chatbot.config.settings import Settings
 from mech_chatbot.api import dependencies
 from mech_chatbot.api.routers import documents as document_routes
 from mech_chatbot.api.routers import operations as operation_routes
@@ -22,6 +23,7 @@ from mech_chatbot.rag.execution import (
     RagPrepared,
     RagToken,
 )
+from mech_chatbot.rag.execution_contracts import RagRuntimeContract
 
 
 pytestmark = pytest.mark.unit
@@ -86,13 +88,23 @@ def rag_client(monkeypatch):
     from mech_chatbot.auth import core
 
     executor = ThreadPoolExecutor(max_workers=2)
-    monkeypatch.setattr(rag_server, "RAG_REQUIRE_SERVICE_AUTH", True)
-    monkeypatch.setattr(rag_server, "RAG_SERVICE_TOKEN", RAG_HEADERS["X-RAG-Service-Token"])
-    # Temporary runtime harness seams are unavoidable here: entering the real
-    # lifespan would load production RAG models instead of testing HTTP/SSE.
-    monkeypatch.setattr(rag_server, "_rag_ready", True)
-    monkeypatch.setattr(rag_server, "_rag_executor", executor)
-    monkeypatch.setattr(rag_server, "_rag_semaphore", rag_server.asyncio.Semaphore(2))
+    application = rag_server.create_rag_app(
+        Settings(
+            RAG_REQUIRE_SERVICE_AUTH=True,
+            RAG_SERVICE_TOKEN=RAG_HEADERS["X-RAG-Service-Token"],
+        )
+    )
+    state = application.state.rag_server
+    application.state.rag_server = replace(
+        state,
+        runtime=SimpleNamespace(
+            executor=object(),
+            thread_pool=executor,
+            semaphore=rag_server.asyncio.Semaphore(2),
+            runtime_contract=RagRuntimeContract("production", False, 120.0),
+        ),
+        ready=True,
+    )
     monkeypatch.setattr(
         core,
         "load_user_profile",
@@ -102,7 +114,7 @@ def rag_client(monkeypatch):
             "username": username or RAG_PROFILE["username"],
         },
     )
-    client = TestClient(rag_server.app)
+    client = TestClient(application)
     try:
         yield client
     finally:
@@ -122,13 +134,17 @@ class _BoundaryExecutor:
         yield from self.events
 
 
-def _install_rag_events(monkeypatch, events):
+def _install_rag_events(client, events):
     boundary = type("ConfiguredBoundaryExecutor", (_BoundaryExecutor,), {"events": tuple(events)})
-    monkeypatch.setattr(
-        rag_server.app.state,
-        "rag_runtime",
-        SimpleNamespace(executor=boundary()),
-        raising=False,
+    state = client.app.state.rag_server
+    client.app.state.rag_server = replace(
+        state,
+        runtime=SimpleNamespace(
+            executor=boundary(),
+            thread_pool=state.runtime.thread_pool,
+            semaphore=state.runtime.semaphore,
+            runtime_contract=state.runtime.runtime_contract,
+        ),
     )
 
 
@@ -453,7 +469,14 @@ def test_row_glossary_lifecycle_and_feedback_branches_remain_json_safe(
 def test_rag_service_auth_can_be_explicitly_disabled(rag_client, monkeypatch):
     from mech_chatbot import services
 
-    monkeypatch.setattr(rag_server, "RAG_REQUIRE_SERVICE_AUTH", False)
+    state = rag_client.app.state.rag_server
+    rag_client.app.state.rag_server = replace(
+        state,
+        process_settings=replace(
+            state.process_settings,
+            require_service_auth=False,
+        ),
+    )
     monkeypatch.setattr(services, "get_all_sessions", lambda **_scope: [])
 
     response = rag_client.post(
@@ -469,7 +492,7 @@ def test_rag_stream_covers_repeated_tokens_citations_and_completion_without_toke
 ):
     monkeypatch.setattr(rag_server, "pop_trace_stage_metrics", lambda _trace: {})
     _install_rag_events(
-        monkeypatch,
+        rag_client,
         [
             RagPrepared("", (), (), {}),
             RagToken("first"),
@@ -481,7 +504,7 @@ def test_rag_stream_covers_repeated_tokens_citations_and_completion_without_toke
     status, with_tokens = _stream_text(rag_client)
 
     _install_rag_events(
-        monkeypatch,
+        rag_client,
         [RagPrepared("", (), (), {}), RagCompleted("answered", "trace", {})],
     )
     no_token_status, without_tokens = _stream_text(rag_client)
@@ -514,7 +537,7 @@ def test_rag_stream_terminal_failures_never_emit_a_done_event(
     events = [RagPrepared("", (), (), {})]
     if terminal is not None:
         events.append(terminal)
-    _install_rag_events(monkeypatch, events)
+    _install_rag_events(rag_client, events)
 
     status, transcript = _stream_text(rag_client)
 
@@ -598,7 +621,7 @@ def test_admin_rag_audit_ignores_malformed_evidence_without_prompt_leakage(
         lambda *args, **kwargs: audits.append((args, kwargs)),
     )
     _install_rag_events(
-        monkeypatch,
+        rag_client,
         [
             RagPrepared(
                 "",
@@ -672,6 +695,21 @@ def test_signed_replay_streams_skip_live_audit_on_cancel_and_failure(
     payload = {"username": "wave6-viewer", "user_question": "How?"}
     monkeypatch.setenv("CRAG_PILOT_ASSIGNMENT_SALT", config.assignment_salt)
     monkeypatch.setenv("RAG_DEPLOYMENT_ID", route.opposite_deployment_id)
+    state = rag_client.app.state.rag_server
+    rag_client.app.state.rag_server = replace(
+        state,
+        settings=state.settings.model_copy(
+            update={
+                "CRAG_PILOT_ASSIGNMENT_SALT": config.assignment_salt,
+                "RAG_DEPLOYMENT_ID": route.opposite_deployment_id,
+            }
+        ),
+        process_settings=replace(
+            state.process_settings,
+            pilot_assignment_salt=config.assignment_salt,
+            deployment_id=route.opposite_deployment_id,
+        ),
+    )
     audits = []
     monkeypatch.setattr(
         services,
@@ -680,7 +718,7 @@ def test_signed_replay_streams_skip_live_audit_on_cancel_and_failure(
     )
 
     _install_rag_events(
-        monkeypatch, [RagPrepared("", (), (), {}), RagCancelled("cancelled")]
+        rag_client, [RagPrepared("", (), (), {}), RagCancelled("cancelled")]
     )
     cancelled_replay = build_replay_request(
         route, payload, original_trace_id="original-cancelled"
@@ -690,7 +728,7 @@ def test_signed_replay_streams_skip_live_audit_on_cancel_and_failure(
     )
 
     _install_rag_events(
-        monkeypatch,
+        rag_client,
         [
             RagPrepared("", (), (), {}),
             RagFailed(

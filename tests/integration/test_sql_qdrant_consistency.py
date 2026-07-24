@@ -41,10 +41,16 @@ def _pinned_snapshot():
 def engine():
     if os.getenv("RUN_DB_TESTS") != "1":
         pytest.skip("Can SQL Server that: dat RUN_DB_TESTS=1")
-    from mech_chatbot.db.repository import engine as _engine
-    if _engine is None:
-        pytest.skip("engine=None: kiem tra SQL_SERVER/SQL_DATABASE trong .env")
-    return _engine
+    from mech_chatbot.config.settings import SqlSettings, load_settings
+    from mech_chatbot.db.engine import build_database_runtime
+
+    runtime = build_database_runtime(
+        SqlSettings.from_settings(load_settings())
+    )
+    try:
+        yield runtime.engine
+    finally:
+        runtime.close()
 
 
 @pytest.fixture(scope="module")
@@ -52,10 +58,18 @@ def qdrant():
     if os.getenv("RUN_QDRANT_TESTS") != "1":
         pytest.skip("Can Qdrant that: dat RUN_QDRANT_TESTS=1")
     qc = pytest.importorskip("qdrant_client")
-    url = os.getenv("QDRANT_URL")
-    if not url:
-        pytest.skip("Thieu QDRANT_URL")
-    return qc.QdrantClient(url=url, api_key=os.getenv("QDRANT_API_KEY"), timeout=60)
+    from mech_chatbot.config.settings import QdrantSettings, load_settings
+
+    settings = QdrantSettings.from_settings(load_settings())
+    client = qc.QdrantClient(
+        url=settings.url,
+        api_key=settings.api_key,
+        timeout=60,
+    )
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 @pytest.fixture(scope="module")
@@ -167,16 +181,17 @@ def _csv_tokens(value):
 
 
 def test_every_vectorized_doc_has_qdrant_points(engine, qdrant, qmodels):
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
+    from mech_chatbot.config.settings import load_settings
 
-    _assert_snapshot_collection(QDRANT_COLLECTION)
+    collection = load_settings().QDRANT_COLLECTION
+    _assert_snapshot_collection(collection)
     docs = _sample_vectorized_docs(engine)
     if not docs:
         pytest.skip("Khong co TaiLieu.TrangThaiVector=1 de doi chieu")
 
     missing = []
     for doc in docs:
-        points = _scroll_points_for_doc(qdrant, qmodels, QDRANT_COLLECTION, doc["DocID"], limit=1)
+        points = _scroll_points_for_doc(qdrant, qmodels, collection, doc["DocID"], limit=1)
         if not points:
             missing.append({"DocID": doc["DocID"], "TenFile": doc["TenFile"], "ThuMuc": doc["ThuMuc"]})
 
@@ -184,16 +199,17 @@ def test_every_vectorized_doc_has_qdrant_points(engine, qdrant, qmodels):
 
 
 def test_qdrant_payload_matches_sql_rbac_metadata(engine, qdrant, qmodels):
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
+    from mech_chatbot.config.settings import load_settings
 
-    _assert_snapshot_collection(QDRANT_COLLECTION)
+    collection = load_settings().QDRANT_COLLECTION
+    _assert_snapshot_collection(collection)
     docs = _sample_vectorized_docs(engine)
     if not docs:
         pytest.skip("Khong co TaiLieu.TrangThaiVector=1 de doi chieu")
 
     mismatches = []
     for doc in docs:
-        points = _scroll_points_for_doc(qdrant, qmodels, QDRANT_COLLECTION, doc["DocID"], limit=1)
+        points = _scroll_points_for_doc(qdrant, qmodels, collection, doc["DocID"], limit=1)
         if not points:
             # Test tren se bao missing; bo qua tai day de thong bao ro rang hon.
             continue

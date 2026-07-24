@@ -96,10 +96,8 @@ def test_conversation_state_selection_and_history_branches(monkeypatch):
     assert conversation_state.resolve_selection("", [])["matched"] is False
     assert conversation_state.describe_candidate(candidates[0]) == "Khung thép lớn 10x20"
     assert conversation_state.public_candidates(candidates)[0]["index"] == 1
-    monkeypatch.delenv("ENABLE_CONV_STATE", raising=False)
-    assert not conversation_state.is_enabled()
-    monkeypatch.setenv("ENABLE_CONV_STATE", "yes")
-    assert conversation_state.is_enabled()
+    assert not conversation_state.is_enabled(False)
+    assert conversation_state.is_enabled(True)
     assert conversation_state.is_continuation("ok, chi tiết thêm")
     assert not conversation_state.is_continuation("bảng lương tháng 06")
     assert conversation_state.split_history_for_summary([1, 2], 3) == ([], [1, 2])
@@ -110,8 +108,7 @@ def test_conversation_state_selection_and_history_branches(monkeypatch):
 
 
 def test_graph_retrieval_governance_and_attachment_branches(monkeypatch):
-    monkeypatch.setenv("RAG_GRAPH_RETRIEVAL_ENABLED", "on")
-    assert graph_retrieval.enabled()
+    assert graph_retrieval.enabled(True)
     assert graph_retrieval.should_attempt_graph("show current version and relation")
     assert not graph_retrieval.should_attempt_graph("hello")
     assert graph_retrieval.select_graph_seeds("A-12 uses B_2", [" ", "C-3"]) == ["A-12", "B_2", "C-3"]
@@ -294,8 +291,7 @@ def test_wave6_additional_private_policy_branches(monkeypatch):
     assert answer_checks._extract_numbers("1.2 and 3,4") == {"1.2", "3.4"}
 
     # Community gates: env, invalid edges/provenance and each early-return reason.
-    monkeypatch.setenv("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED", "TRUE")
-    assert community_summaries.enabled()
+    assert community_summaries.enabled(True)
     assert not community_summaries.load_community_context(
         "overall summary", graph_enabled=True, community_enabled=True, access_context={}, seed_keys=[],
         serving_epoch="", graph_fingerprint="fp", client=None, collection_name="c"
@@ -324,8 +320,7 @@ def test_wave6_additional_private_policy_branches(monkeypatch):
     assert ctx.to_dict()["active_doc_refs"] == ["AB-12"] and ctx.pending_candidates == []
     docs = [SimpleNamespace(metadata={"file_goc": "Đoc.pdf"}), SimpleNamespace(metadata={})]
     assert conversation_state.dominant_doc_refs(docs) == ["Doc.pdf"]
-    monkeypatch.setenv("ENABLE_HISTORY_SUMMARY", "on")
-    assert conversation_state.history_summary_enabled()
+    assert conversation_state.history_summary_enabled(True)
 
     # Candidate scorer branches: empty groups, generic quoted names, and key fallbacks.
     assert entity_resolver.resolve_candidates_from_docs([], {})["decision"] == "pass"

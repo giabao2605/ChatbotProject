@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
 
 
@@ -21,6 +22,28 @@ class IngestionPipelineDependencies:
             raise ValueError("Ingestion vector collection must be configured.")
 
 
+@dataclass(frozen=True, slots=True)
+class IngestionPersistence:
+    """SQL operations required by the ingestion workflow.
+
+    The bundle keeps the PDF pipeline independent from repository globals. A
+    composition root binds every callable to one process-owned database
+    engine.
+    """
+
+    reset_document_metadata: Callable[..., Any]
+    get_document_info: Callable[..., Any]
+    update_document_classification: Callable[..., Any]
+    clear_reingest_snapshot: Callable[..., Any]
+    mark_document_ingest_failed: Callable[..., Any]
+    restore_document_children: Callable[..., Any]
+    save_bom_records: Callable[..., Any]
+    save_technical_attributes: Callable[..., Any]
+    save_document_attributes: Callable[..., Any]
+    save_document_page: Callable[..., Any]
+    save_page_metadata: Callable[..., Any]
+
+
 def require_pipeline_dependencies(
     dependencies: IngestionPipelineDependencies | None,
 ) -> IngestionPipelineDependencies:
@@ -31,4 +54,8 @@ def require_pipeline_dependencies(
     return dependencies
 
 
-__all__ = ["IngestionPipelineDependencies", "require_pipeline_dependencies"]
+__all__ = [
+    "IngestionPersistence",
+    "IngestionPipelineDependencies",
+    "require_pipeline_dependencies",
+]

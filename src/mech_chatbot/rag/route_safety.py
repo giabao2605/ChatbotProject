@@ -10,8 +10,6 @@ ranh gioi tu) de TRANH chan nham cau ky thuat hop le. Cac cum co the mo rong qua
 """
 from __future__ import annotations
 
-import os
-
 from mech_chatbot.rag import chitchat
 
 REASON_PROMPT_INJECTION = "prompt_injection"
@@ -41,9 +39,9 @@ _ABUSE_PHRASES = (
 )
 
 
-def _norm_list(env_name):
+def _norm_list(values):
     out = []
-    for part in str(os.getenv(env_name, "")).split(","):
+    for part in values or ():
         p = chitchat.normalize(part)
         if p:
             out.append(p)
@@ -57,14 +55,11 @@ def _contains_phrase(norm, phrase):
     return (" " + norm + " ").find(" " + phrase + " ") >= 0
 
 
-def enabled():
-    raw = os.getenv("SAFETY_BLOCK_ENABLED")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+def enabled(value: bool = True):
+    return bool(value)
 
 
-def detect(text):
+def detect(text, *, extra_injection=(), extra_abuse=()):
     """Tra ve ly do ('prompt_injection' | 'abuse') neu KHONG an toan, nguoc lai None."""
     if not text or not str(text).strip():
         return None
@@ -72,11 +67,11 @@ def detect(text):
     if not norm:
         return None
     # Injection: cum dac trung, khop substring (cum du dai nen it false positive).
-    for p in _INJECTION_PHRASES + _norm_list("SAFETY_EXTRA_INJECTION"):
+    for p in _INJECTION_PHRASES + _norm_list(extra_injection):
         if p and p in norm:
             return REASON_PROMPT_INJECTION
     # Abuse: khop theo ranh gioi tu.
-    for p in _ABUSE_PHRASES + _norm_list("SAFETY_EXTRA_ABUSE"):
+    for p in _ABUSE_PHRASES + _norm_list(extra_abuse):
         if _contains_phrase(norm, p):
             return REASON_ABUSE
     return None

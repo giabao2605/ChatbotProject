@@ -1,15 +1,19 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from mech_chatbot.api import rag_server
+from mech_chatbot.config.settings import Settings
 from mech_chatbot.rag.execution import (
     RagCitation,
     RagCompleted,
     RagPrepared,
     RagToken,
 )
+from mech_chatbot.rag.execution_contracts import RagRuntimeContract
 
 
 pytestmark = pytest.mark.unit
@@ -31,11 +35,30 @@ def rag_client(monkeypatch):
     from mech_chatbot.auth import core
 
     executor = ThreadPoolExecutor(max_workers=2)
-    monkeypatch.setattr(rag_server, "RAG_REQUIRE_SERVICE_AUTH", True)
-    monkeypatch.setattr(rag_server, "RAG_SERVICE_TOKEN", "test-service-token")
-    monkeypatch.setattr(rag_server, "_rag_ready", True)
-    monkeypatch.setattr(rag_server, "_rag_executor", executor)
-    monkeypatch.setattr(rag_server, "_rag_semaphore", rag_server.asyncio.Semaphore(2))
+    application = rag_server.create_rag_app(
+        Settings(
+            RAG_REQUIRE_SERVICE_AUTH=True,
+            RAG_SERVICE_TOKEN="test-service-token",
+        )
+    )
+    state = application.state.rag_server
+    runtime = SimpleNamespace(
+        executor=object(),
+        thread_pool=executor,
+        semaphore=rag_server.asyncio.Semaphore(2),
+        runtime_contract=RagRuntimeContract.from_mapping(
+            {
+                "execution_context": "production",
+                "evaluation_force_ambiguous": False,
+                "request_deadline_seconds": 120.0,
+            }
+        ),
+    )
+    application.state.rag_server = replace(
+        state,
+        runtime=runtime,
+        ready=True,
+    )
     monkeypatch.setattr(
         core,
         "load_user_profile",
@@ -46,12 +69,29 @@ def rag_client(monkeypatch):
         },
     )
 
-    client = TestClient(rag_server.app)
+    client = TestClient(application)
     try:
         yield client
     finally:
         client.close()
         executor.shutdown(wait=True)
+
+
+def _replace_server_state(client, **changes):
+    current = client.app.state.rag_server
+    client.app.state.rag_server = replace(current, **changes)
+
+
+def _replace_runtime(client, **changes):
+    state = client.app.state.rag_server
+    values = {
+        "executor": state.runtime.executor,
+        "thread_pool": state.runtime.thread_pool,
+        "semaphore": state.runtime.semaphore,
+        "runtime_contract": state.runtime.runtime_contract,
+    }
+    values.update(changes)
+    _replace_server_state(client, runtime=SimpleNamespace(**values))
 
 
 def _successful_rag_events():
@@ -95,7 +135,11 @@ def test_service_auth_fails_closed_when_the_server_token_is_missing(
     rag_client,
     monkeypatch,
 ):
-    monkeypatch.setattr(rag_server, "RAG_SERVICE_TOKEN", "")
+    state = rag_client.app.state.rag_server
+    _replace_server_state(
+        rag_client,
+        process_settings=replace(state.process_settings, service_token=""),
+    )
 
     response = rag_client.post("/chat", json={"user_question": "How?"})
 
@@ -115,7 +159,7 @@ def test_chat_rejects_an_empty_question_at_the_http_boundary(rag_client):
 
 
 def test_chat_reports_when_the_rag_runtime_is_not_ready(rag_client, monkeypatch):
-    monkeypatch.setattr(rag_server, "_rag_ready", False)
+    _replace_server_state(rag_client, ready=False)
 
     response = rag_client.post(
         "/chat",
@@ -199,7 +243,7 @@ def test_chat_reports_busy_without_opening_the_rag_pipeline(rag_client, monkeypa
             raise AssertionError("A permit was not acquired")
 
     opened = []
-    monkeypatch.setattr(rag_server, "_rag_semaphore", BusySemaphore())
+    _replace_runtime(rag_client, semaphore=BusySemaphore())
     monkeypatch.setattr(
         rag_server,
         "_open_rag_events",
@@ -222,7 +266,7 @@ def test_chat_busy_message_respects_the_requested_language(rag_client, monkeypat
         async def acquire(self):
             raise rag_server.asyncio.TimeoutError
 
-    monkeypatch.setattr(rag_server, "_rag_semaphore", BusySemaphore())
+    _replace_runtime(rag_client, semaphore=BusySemaphore())
 
     response = rag_client.post(
         "/chat",
@@ -343,7 +387,7 @@ def test_stream_reports_busy_before_starting_an_sse_response(rag_client, monkeyp
         async def acquire(self):
             raise rag_server.asyncio.TimeoutError
 
-    monkeypatch.setattr(rag_server, "_rag_semaphore", BusySemaphore())
+    _replace_runtime(rag_client, semaphore=BusySemaphore())
 
     response = rag_client.post(
         "/chat/stream",

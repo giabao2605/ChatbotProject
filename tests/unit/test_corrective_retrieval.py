@@ -26,8 +26,7 @@ def test_correction_budget_allows_exactly_one_ambiguous_retry():
     assert should_attempt_correction(decision, attempts=0, enabled=False) is False
 
 
-def test_crag_rollback_flag_disables_correction_runtime(monkeypatch):
-    monkeypatch.setenv("RAG_CRAG_ENABLED", "false")
+def test_crag_rollback_flag_disables_correction_runtime():
     decision = AnswerDecision(
         AnswerOutcome.INSUFFICIENT_EVIDENCE,
         EvidenceState.AMBIGUOUS,
@@ -35,9 +34,9 @@ def test_crag_rollback_flag_disables_correction_runtime(monkeypatch):
         correction_allowed=True,
     )
 
-    assert correction_enabled() is False
+    assert correction_enabled(False) is False
     assert should_attempt_correction(
-        decision, attempts=0, enabled=correction_enabled(),
+        decision, attempts=0, enabled=correction_enabled(False),
     ) is False
 
 

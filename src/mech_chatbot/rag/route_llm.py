@@ -15,7 +15,6 @@ thanh out_of_scope.
 from __future__ import annotations
 
 import json
-import os
 import re
 
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
@@ -51,18 +50,12 @@ _SYSTEM_PROMPT = (
 )
 
 
-def enabled():
-    raw = os.getenv("LLM_ROUTER_ENABLED")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+def enabled(value: bool = True):
+    return bool(value)
 
 
-def min_confidence():
-    try:
-        return float(os.getenv("LLM_ROUTER_MIN_CONFIDENCE", "0.5"))
-    except Exception:
-        return 0.5
+def min_confidence(value: float = 0.5):
+    return float(value)
 
 
 def _default_invoke(messages, *, trace_id=None):
@@ -122,9 +115,17 @@ def parse_response(text):
     return (route, conf)
 
 
-def classify_llm(text, context=None, invoke=None, trace_id=None):
+def classify_llm(
+    text,
+    context=None,
+    invoke=None,
+    trace_id=None,
+    *,
+    enabled=True,
+    minimum_confidence=0.5,
+):
     """Tra (route, confidence) neu du tu tin, nguoc lai None (fail-safe)."""
-    if not enabled():
+    if not enabled:
         return None
     if not text or not str(text).strip():
         return None
@@ -142,6 +143,6 @@ def classify_llm(text, context=None, invoke=None, trace_id=None):
     if parsed is None:
         return None
     route, conf = parsed
-    if conf < min_confidence():
+    if conf < minimum_confidence:
         return None
     return (route, conf)

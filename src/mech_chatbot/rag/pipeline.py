@@ -158,7 +158,7 @@ def execute_pipeline(state):
     return generation.prepared
 
 
-def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None, trace_id=None, cancel_event=None):
+def chat_with_rag(user_question, image_path=None, chat_history=None, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level="public", allowed_sites=None, response_language="vi", conversation_context=None, trace_id=None, cancel_event=None, execution_context=None):
     """Compatibility adapter for the legacy five-value RAG interface.
 
     New in-repo callers should consume ``mech_chatbot.rag.execution`` events.
@@ -178,7 +178,6 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         RagRequest,
         RagToken,
         _prepare_legacy_events,
-        current_execution_context,
     )
 
     request = RagRequest(
@@ -196,7 +195,7 @@ def chat_with_rag(user_question, image_path=None, chat_history=None, current_par
         response_language=response_language,
         conversation_context=conversation_context,
     )
-    ambient_context = current_execution_context()
+    ambient_context = str(execution_context or "production").strip().lower()
     invocation_mode = (
         ambient_context if ambient_context in {"evaluation", "test"} else "production"
     )

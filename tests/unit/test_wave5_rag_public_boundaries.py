@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from fastapi.testclient import TestClient
 from langchain_core.documents import Document
 
 from mech_chatbot.api import rag_server
+from mech_chatbot.config.settings import Settings
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.context_builders import (
     build_common_metadata_context,
@@ -43,11 +45,23 @@ def rag_client(monkeypatch):
     from mech_chatbot.auth import core
 
     executor = ThreadPoolExecutor(max_workers=2)
-    monkeypatch.setattr(rag_server, "RAG_REQUIRE_SERVICE_AUTH", True)
-    monkeypatch.setattr(rag_server, "RAG_SERVICE_TOKEN", "wave5-service-token")
-    monkeypatch.setattr(rag_server, "_rag_ready", True)
-    monkeypatch.setattr(rag_server, "_rag_executor", executor)
-    monkeypatch.setattr(rag_server, "_rag_semaphore", rag_server.asyncio.Semaphore(2))
+    application = rag_server.create_rag_app(
+        Settings(
+            RAG_REQUIRE_SERVICE_AUTH=True,
+            RAG_SERVICE_TOKEN="wave5-service-token",
+        )
+    )
+    state = application.state.rag_server
+    application.state.rag_server = replace(
+        state,
+        runtime=SimpleNamespace(
+            executor=object(),
+            thread_pool=executor,
+            semaphore=rag_server.asyncio.Semaphore(2),
+            runtime_contract=RagRuntimeContract("production", False, 120.0),
+        ),
+        ready=True,
+    )
     monkeypatch.setattr(
         core,
         "load_user_profile",
@@ -62,7 +76,7 @@ def rag_client(monkeypatch):
         },
     )
 
-    client = TestClient(rag_server.app)
+    client = TestClient(application)
     try:
         yield client
     finally:
@@ -116,13 +130,6 @@ def test_runtime_contract_accepts_an_existing_contract_without_reinterpreting_it
 
     assert RagRuntimeContract.from_mapping(contract) is contract
     assert contract.is_controlled_demo is True
-
-
-def test_runtime_contract_environment_rejects_an_invalid_boolean(monkeypatch):
-    monkeypatch.setenv("RAG_EVAL_FORCE_AMBIGUOUS", "sometimes")
-
-    with pytest.raises(ValueError, match="must be a boolean"):
-        RagRuntimeContract.from_environment()
 
 
 def test_typed_invocation_rejects_an_unknown_execution_mode():
@@ -211,11 +218,15 @@ def test_chat_without_attributed_sources_clears_reference_material(rag_client, m
             yield RagToken("Answer without a source attribution")
             yield RagCompleted("answered", invocation.trace_id, {})
 
-    monkeypatch.setattr(
-        rag_server.app.state,
-        "rag_runtime",
-        SimpleNamespace(executor=SourceFreeExecutor()),
-        raising=False,
+    state = rag_client.app.state.rag_server
+    rag_client.app.state.rag_server = replace(
+        state,
+        runtime=SimpleNamespace(
+            executor=SourceFreeExecutor(),
+            thread_pool=state.runtime.thread_pool,
+            semaphore=state.runtime.semaphore,
+            runtime_contract=state.runtime.runtime_contract,
+        ),
     )
 
     response = rag_client.post(
@@ -231,7 +242,8 @@ def test_chat_without_attributed_sources_clears_reference_material(rag_client, m
 
 
 def test_stream_rejects_requests_before_runtime_is_ready(rag_client, monkeypatch):
-    monkeypatch.setattr(rag_server, "_rag_ready", False)
+    state = rag_client.app.state.rag_server
+    rag_client.app.state.rag_server = replace(state, ready=False)
 
     response = rag_client.post(
         "/chat/stream",
@@ -319,13 +331,10 @@ def test_parent_hydration_preserves_opted_out_and_unkeyed_documents():
 
 
 def test_parent_hydration_fails_closed_when_vector_storage_is_unavailable(monkeypatch):
-    from mech_chatbot.db import repository
-
     class UnavailableVectorStore:
         def scroll(self, **_kwargs):
             raise RuntimeError("vector store unavailable")
 
-    monkeypatch.setattr(repository, "_get_qdrant_client", lambda: UnavailableVectorStore())
     selected = Document(
         page_content="selected evidence",
         metadata={
@@ -342,7 +351,12 @@ def test_parent_hydration_fails_closed_when_vector_storage_is_unavailable(monkey
         },
     )
 
-    assert hydrate_parent_context([selected], max_workers=1) == [selected]
+    assert hydrate_parent_context(
+        [selected],
+        max_workers=1,
+        client=UnavailableVectorStore(),
+        collection_name="test-knowledge",
+    ) == [selected]
 
 
 def test_document_formatter_supports_list_material_codes_and_string_btp_codes():

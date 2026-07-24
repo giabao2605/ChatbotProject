@@ -17,6 +17,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+
 
 def build_cleanup_plan(asset_root: Path, workspace_root: Path = ROOT) -> dict:
     asset = Path(asset_root).resolve()
@@ -26,17 +28,18 @@ def build_cleanup_plan(asset_root: Path, workspace_root: Path = ROOT) -> dict:
     return {"source_system": FIXTURE_BATCH, "collection": FIXTURE_COLLECTION, "asset_root": str(asset)}
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def cleanup_fixture(asset_root: Path = DEFAULT_OUTPUT) -> dict:
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before destructive staging cleanup")
     plan = build_cleanup_plan(asset_root)
     from sqlalchemy import text
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
+    from mech_chatbot.config.repository_runtime import current_qdrant_runtime
     from mech_chatbot.db.engine import _ensure_engine, engine
     from mech_chatbot.db.repositories.document import delete_document_completely
-    from mech_chatbot.db.repositories.qdrant import _get_qdrant_client
 
-    if QDRANT_COLLECTION != FIXTURE_COLLECTION:
+    client, collection = current_qdrant_runtime()
+    if collection != FIXTURE_COLLECTION:
         raise RuntimeError(f"QDRANT_COLLECTION must equal {FIXTURE_COLLECTION}")
     _ensure_engine()
     with engine.connect() as connection:
@@ -49,7 +52,6 @@ def cleanup_fixture(asset_root: Path = DEFAULT_OUTPUT) -> dict:
     )
     if deleted != len(doc_ids):
         raise RuntimeError(f"deleted {deleted}/{len(doc_ids)} fixture documents; collection retained")
-    client = _get_qdrant_client()
     existed = client.collection_exists(FIXTURE_COLLECTION)
     if existed:
         client.delete_collection(FIXTURE_COLLECTION)

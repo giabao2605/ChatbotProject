@@ -16,6 +16,7 @@ for candidate in (ROOT, ROOT / "src"):
         sys.path.insert(0, str(candidate))
 
 from scripts.demo_wave.generate_demo_assets import DEFAULT_OUTPUT, DEMO_BATCH, generate_corpus
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
 from mech_chatbot.db.engine import _ensure_engine, engine
 from mech_chatbot.db.repositories.jobs import create_ingestion_job, update_ingestion_job
 from mech_chatbot.db.repositories.publication import publish_document
@@ -139,6 +140,7 @@ def ingest_corpus(output: Path, limit: int | None = None) -> dict:
     return {"requested": len(records), "completed": completed, "skipped": skipped, "failed": failed}
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

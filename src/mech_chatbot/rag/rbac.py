@@ -6,8 +6,6 @@ Nho vay unit test import duoc ma KHONG bi tai model / goi mang / crash.
 
 Logic giu NGUYEN BAN tu service.py (khong doi hanh vi).
 """
-import os
-
 from qdrant_client import models
 
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
@@ -52,13 +50,7 @@ def _security_filter(max_security_level):
         return models.FieldCondition(key="metadata.security_level", match=models.MatchAny(any=levels))
 
 
-def _strict_site_enabled():
-    """Fail-closed theo config process, khong mo ket noi DB trong hot path."""
-    raw = os.getenv("RBAC_STRICT_SITE_FILTER", "true")
-    return str(raw).strip().lower() in ("true", "1", "yes", "on")
-
-
-def _site_filter(allowed_sites):
+def _site_filter(allowed_sites, *, strict_site_filter=True):
     """Fail closed by site when strict mode is enabled (the default).
 
     An empty site assignment is denied. In the temporary legacy compatibility
@@ -73,7 +65,7 @@ def _site_filter(allowed_sites):
         )
     match_cond = models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites))
     # STRICT ON: chi khop dung site duoc phep, khong noi long cho doc thieu site.
-    if _strict_site_enabled():
+    if strict_site_filter:
         return match_cond
     # STRICT OFF: giu hanh vi cu (cho qua doc thieu site).
     try:
@@ -85,7 +77,15 @@ def _site_filter(allowed_sites):
         return match_cond
 
 
-def create_rbac_filter(user_department, user_roles, allowed_departments=None, max_security_level=None, allowed_sites=None):
+def create_rbac_filter(
+    user_department,
+    user_roles,
+    allowed_departments=None,
+    max_security_level=None,
+    allowed_sites=None,
+    *,
+    strict_site_filter=True,
+):
     # Revised plan v3 retains global read only for the legacy ``admin`` role.
     # It is intentionally narrow: new platform/security control-plane roles
     # are never retrieval bypasses.  The RAG API records an audit event for
@@ -122,7 +122,10 @@ def create_rbac_filter(user_department, user_roles, allowed_departments=None, ma
         models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchAny(any=allowed)),
         _security_filter(max_security_level),
     ]
-    site_cond = _site_filter(allowed_sites)
+    site_cond = _site_filter(
+        allowed_sites,
+        strict_site_filter=strict_site_filter,
+    )
     if site_cond is not None:
         must.append(site_cond)
 

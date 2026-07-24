@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -19,7 +18,6 @@ from mech_chatbot.rag.answer_policy import (
     explicit_negative_evidence_quote,
     has_explicit_negative_evidence,
 )
-from mech_chatbot.rag.bootstrap import env_bool
 from mech_chatbot.rag.corrective import (
     merge_corrected_documents,
     run_corrected_retrieval,
@@ -69,6 +67,7 @@ class _RetrievalContext:
     user_roles: tuple[str, ...]
     allowed_departments: tuple[str, ...]
     allowed_sites: tuple[str, ...]
+    runtime: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +112,7 @@ class _DecompositionResult:
     correction_estimated_cost: float = 0.0
 
 
-def _make_context(decision: RouteDecision) -> _RetrievalContext:
+def _make_context(decision: RouteDecision, state: Any) -> _RetrievalContext:
     request = decision.request
     return _RetrievalContext(
         decision=decision,
@@ -123,6 +122,7 @@ def _make_context(decision: RouteDecision) -> _RetrievalContext:
         user_roles=tuple(request.user_roles),
         allowed_departments=tuple(request.allowed_departments),
         allowed_sites=tuple(request.allowed_sites),
+        runtime=state.retrieval_adapter,
     )
 
 
@@ -173,7 +173,11 @@ def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -
         context.effective_question,
         access_context,
         planner=planner,
-        planner_version=os.getenv("RAG_PLANNER_VERSION", "planner-v1"),
+        planner_version=getattr(
+            state.retrieval_adapter,
+            "planner_version",
+            "planner-v1",
+        ),
     )
     return _PlannerResult(plan, input_tokens, output_tokens, estimated_cost)
 
@@ -370,7 +374,12 @@ def _retrieve_branch(
         result, decision, policy, correction_budget, deadline_exceeded,
     )
     access_denied = _probe_branch_access(
-        subquery, part_ids, correction.result, inherited_access, deadline_exceeded
+        context,
+        subquery,
+        part_ids,
+        correction.result,
+        inherited_access,
+        deadline_exceeded,
     )
     return _finish_branch_result(
         correction, access_denied, branch_deadline_monotonic
@@ -429,6 +438,7 @@ def _maybe_correct_branch(
 
 
 def _probe_branch_access(
+    context: _RetrievalContext,
     subquery: str,
     part_ids: list[str],
     result: tuple[Any, ...],
@@ -444,6 +454,8 @@ def _probe_branch_access(
         max_security_level=inherited_access["max_security_level"],
         allowed_sites=inherited_access["allowed_sites"],
         part_ids=part_ids,
+        client=getattr(context.runtime, "client", None),
+        collection_name=getattr(context.runtime, "collection_name", None),
     )
     return bool(access_denied)
 
@@ -681,9 +693,15 @@ def _apply_hyde(
 
 
 def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOutcome:
-    context = _make_context(decision)
+    context = _make_context(decision, state)
     state.transition("retrieval")
-    if env_bool("RAG_QUERY_DECOMPOSITION_ENABLED", False):
+    if bool(
+        getattr(
+            state.retrieval_adapter,
+            "query_decomposition_enabled",
+            False,
+        )
+    ):
         result = _run_decomposition(context, state)
     else:
         result = _DecompositionResult(batch=_retrieve_direct(context, state))

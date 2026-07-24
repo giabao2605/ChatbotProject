@@ -5,14 +5,13 @@ Chi phu thuoc stdlib (re, time) + logger, va cac lazy import (DB registry, repos
 text_utils) BEN TRONG ham -> KHONG the gay circular import voi service.py.
 service.py re-import cac ten nay nen moi cho goi cu + tests van chay.
 """
-import os
 import re
 import time
 
 from mech_chatbot.config.logging import logger
 
 
-_GLOSSARY_TTL = float(os.getenv("GLOSSARY_CACHE_TTL", "60"))
+_GLOSSARY_TTL = 60.0
 
 
 _GLOSSARY_CACHE = {"ts": 0.0, "key": None, "data": []}
@@ -32,10 +31,10 @@ def _glossary_domains_for_department(user_department):
     return domains
 
 
-def _load_glossary_cached(domains):
+def _load_glossary_cached(domains, ttl_seconds=60.0):
     key = tuple(sorted(domains or []))
     now = time.time()
-    if _GLOSSARY_CACHE["key"] == key and (now - _GLOSSARY_CACHE["ts"]) < _GLOSSARY_TTL:
+    if _GLOSSARY_CACHE["key"] == key and (now - _GLOSSARY_CACHE["ts"]) < ttl_seconds:
         return _GLOSSARY_CACHE["data"]
     try:
         from mech_chatbot.db.repository import get_active_glossary
@@ -49,7 +48,7 @@ def _load_glossary_cached(domains):
     return data
 
 
-def glossary_expansion_terms(text_in, user_department=None):
+def glossary_expansion_terms(text_in, user_department=None, *, ttl_seconds=60.0):
     """P0-3: tra ve chuoi tu dong nghia/mo rong cho cac term glossary xuat hien trong text_in,
     gioi han theo domain cua phong ban user (+ generic). Khop theo ranh gioi tu."""
     if not text_in:
@@ -57,7 +56,7 @@ def glossary_expansion_terms(text_in, user_department=None):
     try:
         from mech_chatbot.rag.text_utils import remove_accents
         domains = _glossary_domains_for_department(user_department)
-        entries = _load_glossary_cached(domains)
+        entries = _load_glossary_cached(domains, ttl_seconds=ttl_seconds)
         if not entries:
             return ""
         norm_q = remove_accents(str(text_in).lower())

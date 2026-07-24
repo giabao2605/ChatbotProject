@@ -108,8 +108,7 @@ def test_configuration_code_fast_route_is_disabled_by_default(monkeypatch):
     assert calls["llm"] == 1
 
 
-def test_configuration_code_question_skips_llm_when_fast_route_enabled(monkeypatch):
-    monkeypatch.setenv("RAG_CRAG_ENABLED", "true")
+def test_configuration_code_question_skips_llm_when_fast_route_enabled():
     calls = {"llm": 0}
 
     def classifier(_, __=None):
@@ -119,6 +118,7 @@ def test_configuration_code_question_skips_llm_when_fast_route_enabled(monkeypat
     result = router.classify(
         "Mã cấu hình của CRAG-EVAL-SECRET-001 là gì?",
         llm_classifier=classifier,
+        crag_fast_routes_enabled=True,
     )
 
     assert result.route == router.ROUTE_TECHNICAL
@@ -179,11 +179,8 @@ def test_multi_segment_client_secret_still_reaches_llm_router():
 
 # ------------------------- L1 (P1) -------------------------
 @pytest.fixture(autouse=True)
-def _low_threshold(monkeypatch):
-    # Embedder BoW gia dinh -> nguong thap de kiem thu co che.
-    monkeypatch.setenv("SEMANTIC_ROUTER_SIM_THRESHOLD", "0.35")
-    monkeypatch.setenv("SEMANTIC_ROUTER_MARGIN", "0.0")
-    router.set_embedder(None)
+def _low_threshold():
+    yield
 
 
 L1_CASES = [
@@ -199,7 +196,12 @@ L1_CASES = [
 
 @pytest.mark.parametrize("q,expected", L1_CASES)
 def test_l1_semantic_routing(q, expected):
-    r = router.classify(q, embedder=fake_embed)
+    r = router.classify(
+        q,
+        embedder=fake_embed,
+        semantic_threshold=0.35,
+        semantic_margin=0.0,
+    )
     assert r.route == expected, "%r -> %s (mong %s)" % (q, r.route, expected)
     if expected != router.ROUTE_TECHNICAL:
         assert r.layer == router.LAYER_SEMANTIC
@@ -217,9 +219,12 @@ def test_semantic_router_class_scores():
     assert 0.0 <= score <= 1.0 and second <= score
 
 
-def test_semantic_disabled_behaves_like_p0(monkeypatch):
-    monkeypatch.setenv("SEMANTIC_ROUTER_ENABLED", "false")
-    r = router.classify("bạn làm được những gì", embedder=fake_embed)
+def test_semantic_disabled_behaves_like_p0():
+    r = router.classify(
+        "bạn làm được những gì",
+        embedder=fake_embed,
+        semantic_enabled=False,
+    )
     assert r.route == router.ROUTE_TECHNICAL  # L1 tat -> fallback
 
 

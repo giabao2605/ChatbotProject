@@ -75,6 +75,7 @@ def select_citation_docs(
     is_bom_query: bool = False,
     part_ids: Any = None,
     limit: int | None = None,
+    bom_limit: int = 3,
 ) -> list[Any]:
     """Return a small citation set without changing generation candidates."""
 
@@ -97,12 +98,9 @@ def select_citation_docs(
     )
     if not pool:
         pool = candidates
-    max_sources = int(limit or os.getenv("CITATION_MAX_SOURCES", "5"))
+    max_sources = int(limit or 5)
     if bom_mode:
-        max_sources = min(
-            max_sources,
-            int(os.getenv("BOM_CITATION_MAX_SOURCES", "3")),
-        )
+        max_sources = min(max_sources, int(bom_limit))
 
     return _deduplicate_sources(pool, max_sources)
 

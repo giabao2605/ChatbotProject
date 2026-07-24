@@ -546,9 +546,11 @@ def test_qdrant_failure_rolls_back_the_soft_delete(install_engine, monkeypatch):
         def delete(self, **_kwargs):
             raise RuntimeError("qdrant unavailable")
 
-    monkeypatch.setattr(document._r_qdrant, "_get_qdrant_client", FailingClient)
-
-    assert document.delete_document_completely(10) is False
+    assert document.delete_document_completely(
+        10,
+        qdrant_client=FailingClient(),
+        collection_name="test-knowledge",
+    ) is False
     updates = [(sql, params) for sql, params in connection.calls if "UPDATE TaiLieu" in sql]
     assert "LifecycleStatus = 'deleting'" in updates[0][0]
     assert updates[-1][1] == {"s": "published", "id": 10}
@@ -569,10 +571,8 @@ def test_successful_delete_cleans_all_stores_and_audits(install_engine, monkeypa
     cache_calls = []
     audit_calls = []
     removed_images = []
-    monkeypatch.setattr(
-        document._r_qdrant,
-        "_get_qdrant_client",
-        lambda: SimpleNamespace(delete=lambda **kwargs: qdrant_deletes.append(kwargs)),
+    qdrant_client = SimpleNamespace(
+        delete=lambda **kwargs: qdrant_deletes.append(kwargs)
     )
     monkeypatch.setattr(
         document._r_feedback,
@@ -592,7 +592,12 @@ def test_successful_delete_cleans_all_stores_and_audits(install_engine, monkeypa
     monkeypatch.setattr(document.os.path, "exists", lambda _path: True)
     monkeypatch.setattr(document.os, "remove", removed_images.append)
 
-    assert document.delete_document_completely(10, reviewer="alice") is True
+    assert document.delete_document_completely(
+        10,
+        reviewer="alice",
+        qdrant_client=qdrant_client,
+        collection_name="test-knowledge",
+    ) is True
 
     sql_text = "\n".join(sql for sql, _ in connection.calls)
     assert "LifecycleStatus = 'deleting'" in sql_text

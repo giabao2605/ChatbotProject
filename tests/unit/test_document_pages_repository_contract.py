@@ -8,6 +8,7 @@ from mech_chatbot.db.repositories import document_pages
 
 
 pytestmark = pytest.mark.unit
+_SNAPSHOTS = {}
 
 
 class _Result:
@@ -58,9 +59,14 @@ class _Engine:
 @pytest.fixture(autouse=True)
 def _fixed_repository_boundaries(monkeypatch):
     monkeypatch.setattr(document_pages, "_ensure_engine", lambda: None)
-    document_pages._reingest_snapshots.clear()
+    monkeypatch.setattr(
+        document_pages,
+        "resolve_engine",
+        lambda candidate=None: candidate or document_pages.engine,
+    )
+    _SNAPSHOTS.clear()
     yield
-    document_pages._reingest_snapshots.clear()
+    _SNAPSHOTS.clear()
 
 
 def _install(monkeypatch, *results):
@@ -79,9 +85,11 @@ def test_reset_document_metadata_snapshots_then_deletes_all_child_tables(monkeyp
     engine = _install(monkeypatch, *[_Result(rows=old_rows[table]) for table in old_rows])
     monkeypatch.setattr(document_pages._r_document, "_get_or_create_doc", lambda *_args: 7)
 
-    assert document_pages.reset_document_metadata("drawing.pdf", "Technical") == 7
+    assert document_pages.reset_document_metadata(
+        "drawing.pdf", "Technical", snapshot_store=_SNAPSHOTS
+    ) == 7
 
-    assert document_pages._reingest_snapshots[7] == old_rows
+    assert _SNAPSHOTS[7] == old_rows
     deletes = [query for query, params in engine.calls if query.strip().startswith("DELETE") and params == {"d": 7}]
     assert len(deletes) == 4
 
@@ -93,7 +101,7 @@ def test_reset_document_metadata_can_skip_snapshot_and_handle_missing_doc(monkey
 
     assert document_pages.reset_document_metadata("drawing.pdf", "Technical", keep_snapshot=False) == 8
     assert len(engine.calls) == 4
-    assert document_pages._reingest_snapshots == {}
+    assert _SNAPSHOTS == {}
     assert document_pages.reset_document_metadata("missing.pdf", "Technical") is None
     assert len(engine.calls) == 4
 
@@ -118,17 +126,17 @@ def test_reset_document_metadata_preserves_published_error_and_fails_closed_othe
 
 
 def test_clear_reingest_snapshot_is_idempotent():
-    document_pages._reingest_snapshots[7] = {"DocumentPages": []}
+    _SNAPSHOTS[7] = {"DocumentPages": []}
 
-    document_pages.clear_reingest_snapshot(None)
-    document_pages.clear_reingest_snapshot(7)
-    document_pages.clear_reingest_snapshot(7)
+    document_pages.clear_reingest_snapshot(None, snapshot_store=_SNAPSHOTS)
+    document_pages.clear_reingest_snapshot(7, snapshot_store=_SNAPSHOTS)
+    document_pages.clear_reingest_snapshot(7, snapshot_store=_SNAPSHOTS)
 
-    assert document_pages._reingest_snapshots == {}
+    assert _SNAPSHOTS == {}
 
 
 def test_restore_document_children_restores_only_empty_tables_without_identity_columns(monkeypatch):
-    document_pages._reingest_snapshots[7] = {
+    _SNAPSHOTS[7] = {
         "TaiLieuKyThuat": [{"ID": 1, "DocID": 7, "Value": "old"}],
         "BangKeVatTu": [{"ID": 2, "DocID": 7, "Value": "existing"}],
         "DocumentPages": [],
@@ -142,24 +150,28 @@ def test_restore_document_children_restores_only_empty_tables_without_identity_c
         _Result(scalar_value=0),
     )
 
-    assert document_pages.restore_document_children(7) is True
+    assert document_pages.restore_document_children(
+        7, snapshot_store=_SNAPSHOTS
+    ) is True
 
     inserts = [(query, params) for query, params in engine.calls if query.strip().startswith("INSERT")]
     assert len(inserts) == 1
     assert "[ID]" not in inserts[0][0]
     assert inserts[0][1] == {"DocID": 7, "Value": "old"}
-    assert 7 not in document_pages._reingest_snapshots
+    assert 7 not in _SNAPSHOTS
 
 
 def test_restore_document_children_rejects_missing_snapshot_and_fails_closed(monkeypatch):
     assert document_pages.restore_document_children(None) is False
     assert document_pages.restore_document_children(7) is False
 
-    document_pages._reingest_snapshots[7] = {
+    _SNAPSHOTS[7] = {
         "TaiLieuKyThuat": [{"ID": 1, "DocID": 7}],
     }
     _install(monkeypatch, RuntimeError("database unavailable"))
-    assert document_pages.restore_document_children(7) is False
+    assert document_pages.restore_document_children(
+        7, snapshot_store=_SNAPSHOTS
+    ) is False
 
 
 def test_save_document_page_persists_complete_page_contract(monkeypatch):

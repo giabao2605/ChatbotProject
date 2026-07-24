@@ -9,11 +9,13 @@ from mech_chatbot.ingestion.pdf import chunking
 pytestmark = pytest.mark.unit
 
 
-def test_contextual_chunk_flag_follows_environment(monkeypatch):
-    monkeypatch.setenv("ENABLE_CONTEXTUAL_CHUNK", "true")
-    assert chunking._contextual_chunk_enabled() is True
-    monkeypatch.delenv("ENABLE_CONTEXTUAL_CHUNK")
-    assert chunking._contextual_chunk_enabled() is False
+def test_contextual_chunk_flag_follows_explicit_config(monkeypatch):
+    monkeypatch.setenv("ENABLE_CONTEXTUAL_CHUNK", "false")
+    enabled = chunking.PdfIngestionConfig(contextual_chunk_enabled=True)
+    disabled = chunking.PdfIngestionConfig(contextual_chunk_enabled=False)
+
+    assert chunking._contextual_chunk_enabled(enabled) is True
+    assert chunking._contextual_chunk_enabled(disabled) is False
 
 
 def test_context_prefix_contains_available_document_metadata():

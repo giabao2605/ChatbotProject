@@ -90,6 +90,7 @@ def _generation_plan(
             outcome=outcome,
         ),
         explicit_negative_answer=evidence.explicit_negative_answer,
+        runtime=state,
     )
 
 
@@ -143,13 +144,24 @@ def _decorate_generated_stream(
     documents: list[Any],
     decomposition_branches: list[Any],
     debug_info: dict[str, Any],
+    state: Any,
 ) -> Any:
     citation_snapshot = make_source_snapshot(documents)
     evidence_snapshot = make_source_snapshot(documents)
     debug_info["citation_docs"] = citation_snapshot
     if decomposition_branches:
         stream = audit_decomposition_stream(stream, decomposition_branches)
-    _store_conversation_document_refs(debug_info, documents)
+    _store_conversation_document_refs(
+        debug_info,
+        documents,
+        enabled=bool(
+            getattr(
+                state.retrieval_adapter,
+                "conversation_state_enabled",
+                False,
+            )
+        ),
+    )
     _store_history_summary(debug_info, decision.request)
     return _wrap_semantic_cache(
         stream,
@@ -158,6 +170,7 @@ def _decorate_generated_stream(
         documents,
         citation_snapshot,
         evidence_snapshot,
+        state,
     )
 
 
@@ -229,8 +242,9 @@ def generate(
         decision,
         evidence,
         documents,
-        decomposition_branches,
-        debug_info,
+    decomposition_branches,
+    debug_info,
+        state,
     )
     return GenerationResult(
         prepared=state.prepared(
@@ -248,11 +262,13 @@ def generate(
 def _store_conversation_document_refs(
     debug_info: dict[str, Any],
     documents: list[Any],
+    *,
+    enabled: bool,
 ) -> None:
     try:
         from mech_chatbot.rag import conversation_state
 
-        if conversation_state.is_enabled() and documents:
+        if conversation_state.is_enabled(enabled) and documents:
             active_refs = conversation_state.dominant_doc_refs(documents)
             if active_refs:
                 context = dict(debug_info.get("conversation_context") or {})
@@ -287,13 +303,18 @@ def _wrap_semantic_cache(
     documents: list[Any],
     citation_snapshot: list[Any],
     evidence_snapshot: list[Any],
+    state: Any,
 ) -> Any:
     request = decision.request
     try:
         import mech_chatbot.rag.semantic_cache as semantic_cache
 
+        runtime = state.retrieval_adapter
         if (
-            semantic_cache.enabled()
+            semantic_cache.enabled(
+                getattr(runtime, "semantic_cache_enabled", True),
+                state.invocation.mode,
+            )
             and decision.cache_query_embedding is not None
             and documents
         ):
@@ -315,10 +336,13 @@ def _wrap_semantic_cache(
                 ref_text=evidence.ref_text,
                 ref_images=list(evidence.ref_images),
                 source_doc_ids=source_doc_ids,
-                model=get_llm_model_name(),
+                model=get_llm_model_name(state.provider_adapter),
                 input_char_len=input_length,
                 citation_snapshot=citation_snapshot,
                 evidence_snapshot=evidence_snapshot,
+                cache_enabled=bool(
+                    getattr(runtime, "semantic_cache_enabled", True)
+                ),
             )
     except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise

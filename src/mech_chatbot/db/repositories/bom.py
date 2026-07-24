@@ -3,15 +3,18 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 import re
-import os
 from decimal import Decimal, InvalidOperation
 import json
 from typing import NamedTuple
 from sqlalchemy import text
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
 from ._shared import _sanitize_int, _sanitize_text
+
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
 
 __all__ = [
     'BomSearchRow',
@@ -54,11 +57,11 @@ def normalize_material_name(raw):
         s = re.sub(r"\s+", " ", s)
         return s
 
-def save_bom_records(doc_id, trang_so, records):
+def save_bom_records(doc_id, trang_so, records, *, db_engine=None):
     """Luu danh sach cac vat tu cua bang ke vao SQL"""
     if not doc_id or not records:
         return 0
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     try:
         # Perf (GD1): bulk insert thay N+1 (executemany). Giu nguyen tung dong.
         _rows = [
@@ -78,7 +81,7 @@ def save_bom_records(doc_id, trang_so, records):
             }
             for rec in records
         ]
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             if _rows:
                 conn.execute(
                     text("""
@@ -142,6 +145,7 @@ def search_bom_facts(
     allowed_departments=None,
     max_security_level=None,
     allowed_sites=None,
+    strict_site_filter=True,
 ):
     """Return governed BOM facts scoped by part codes or retrieved documents.
 
@@ -282,9 +286,7 @@ def search_bom_facts(
                 # Legacy data without a site is visible only while the explicit
                 # compatibility switch is off; strict mode is the default.
                 sites = sorted({str(site).strip() for site in (allowed_sites or []) if str(site).strip()})
-                strict_site = str(os.getenv("RBAC_STRICT_SITE_FILTER", "true")).strip().lower() in {
-                    "1", "true", "yes", "on"
-                }
+                strict_site = bool(strict_site_filter)
                 if not sites:
                     filter_sql += " AND 1 = 0"
                 else:
@@ -325,6 +327,7 @@ def search_bom_by_code(
     allowed_departments=None,
     max_security_level=None,
     allowed_sites=None,
+    strict_site_filter=True,
 ):
     """Backward-compatible code-scoped BOM search."""
     return search_bom_facts(
@@ -336,4 +339,5 @@ def search_bom_by_code(
         allowed_departments=allowed_departments,
         max_security_level=max_security_level,
         allowed_sites=allowed_sites,
+        strict_site_filter=strict_site_filter,
     )

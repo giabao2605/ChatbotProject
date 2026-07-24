@@ -5,6 +5,7 @@ from langchain_core.documents import Document
 
 from mech_chatbot.rag import late_interaction
 from mech_chatbot.rag.late_interaction import (
+    LateInteractionConfig,
     attempt_shadow_rerank,
     candidate_key,
     preflight,
@@ -38,10 +39,11 @@ def test_document_encoder_uses_bounded_colbert_length(monkeypatch):
             seen.update(kwargs)
             return {"colbert_vecs": [[[0.1] * 1024] for _ in texts]}
 
-    monkeypatch.setattr(late_interaction, "_encoder", lambda: Encoder())
-    monkeypatch.setenv("RAG_LATE_DOCUMENT_MAX_LENGTH", "48")
-
-    late_interaction.encode_documents(["document"])
+    late_interaction.encode_documents(
+        ["document"],
+        encoder=Encoder(),
+        max_length=48,
+    )
 
     assert seen["max_length"] == 48
 
@@ -144,19 +146,64 @@ def test_shadow_attempt_fails_closed_when_qdrant_raises(monkeypatch):
 
 
 def test_late_interaction_requires_encoder_smoke_gate(monkeypatch):
-    monkeypatch.setenv("RAG_LATE_INTERACTION_ENABLED", "true")
-    monkeypatch.delenv("RAG_LATE_ENCODER_READY", raising=False)
-    assert late_interaction.enabled() is False
-
-    monkeypatch.setenv("RAG_LATE_ENCODER_READY", "true")
-    assert late_interaction.enabled() is True
+    assert late_interaction.enabled(
+        LateInteractionConfig(interaction_enabled=True, encoder_ready=False)
+    ) is False
+    assert late_interaction.enabled(
+        LateInteractionConfig(interaction_enabled=True, encoder_ready=True)
+    ) is True
 
 
 def test_late_interaction_flags_default_to_off(monkeypatch):
-    monkeypatch.delenv("RAG_LATE_INTERACTION_ENABLED", raising=False)
-    monkeypatch.delenv("RAG_LATE_ENCODER_READY", raising=False)
-
     assert late_interaction.enabled() is False
+
+
+def test_encoder_factory_uses_explicit_model_settings(monkeypatch):
+    created = []
+
+    class Encoder:
+        def __init__(self, model_name, *, use_fp16):
+            created.append((model_name, use_fp16))
+
+    monkeypatch.setattr(late_interaction, "_load_encoder_type", lambda: Encoder)
+
+    encoder = late_interaction.build_encoder(
+        LateInteractionConfig(model_name="local/model", use_fp16=True)
+    )
+
+    assert isinstance(encoder, Encoder)
+    assert created == [("local/model", True)]
+
+
+def test_shadow_attempt_uses_explicit_collection_and_index_version(monkeypatch):
+    candidate = doc(1, 1, 0, "one")
+    key = candidate_key(candidate)
+    seen = {}
+
+    class Client:
+        def query_points(self, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(points=[
+                SimpleNamespace(
+                    score=0.8,
+                    payload={"candidate_key": key, "index_version": "release-7"},
+                )
+            ])
+
+    result = attempt_shadow_rerank(
+        [candidate],
+        "query",
+        Client(),
+        query_encoder=lambda _query: [[0.1]],
+        config=LateInteractionConfig(
+            collection_name="shadow-release-7",
+            index_version="release-7",
+        ),
+    )
+
+    assert result.used_shadow is True
+    assert seen["collection_name"] == "shadow-release-7"
+    assert seen["query_filter"].must[1].match.value == "release-7"
 
 
 def test_preflight_requires_server_multivector_version():

@@ -176,7 +176,7 @@ def test_non_admin_search_applies_department_clearance_and_strict_site(monkeypat
 
 @pytest.mark.security
 def test_confidential_clearance_allows_legacy_empty_security_and_compat_empty_site(monkeypatch):
-    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "false")
+    monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "true")
     fake = _install(monkeypatch, (Result(scalar_value=0), Result(rows=())))
 
     bom.search_bom_facts(
@@ -187,6 +187,7 @@ def test_confidential_clearance_allows_legacy_empty_security_and_compat_empty_si
         allowed_departments=[],
         max_security_level="confidential",
         allowed_sites=["HQ"],
+        strict_site_filter=False,
     )
 
     sql, params = fake.connection.calls[1]
@@ -274,4 +275,5 @@ def test_legacy_code_search_forwards_public_scope(monkeypatch):
         "allowed_departments": ["Technical"],
         "max_security_level": "internal",
         "allowed_sites": ["HQ"],
+        "strict_site_filter": True,
     }

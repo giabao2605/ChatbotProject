@@ -16,6 +16,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+
 
 def export_review_queue(output: Path, *, limit=50):
     if os.getenv(LIVE_OPT_IN) != "1":
@@ -51,6 +53,7 @@ def export_review_queue(output: Path, *, limit=50):
     return {"schema": "graph-review-queue-v1", "edges": len(queue), "output": str(output)}
 
 
+@with_configured_repository_runtime(include_qdrant=False)
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)

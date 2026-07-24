@@ -2,12 +2,11 @@
 Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
-import os
 import json
+import os
 from sqlalchemy import text
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
-from mech_chatbot.config.settings import QDRANT_COLLECTION
 from ._shared import _sanitize_date, _sanitize_int, _sanitize_text, normalize_base_code
 from . import audit as _r_audit
 from . import catalog as _r_catalog
@@ -15,6 +14,10 @@ from . import doc_metadata as _r_doc_metadata
 from . import feedback as _r_feedback
 from . import qdrant as _r_qdrant
 from . import semantic_cache as _r_semantic_cache
+
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
 
 __all__ = [
     '_get_or_create_doc',
@@ -34,7 +37,13 @@ __all__ = [
 # ==========================================
 # DOCUMENT METADATA (Fix #1: tach reset / insert)
 # ==========================================
-def _get_or_create_doc(conn, file_name, thu_muc):
+def _get_or_create_doc(
+    conn,
+    file_name,
+    thu_muc,
+    *,
+    classification_model=None,
+):
     # Fetch classification json tu IngestionJobs (neu co) de update metadata
     job = conn.execute(
         text("SELECT TOP 1 ClassificationJson, FilePath, UploadMetaJson, Site FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t ORDER BY CreatedAt DESC"),
@@ -62,7 +71,7 @@ def _get_or_create_doc(conn, file_name, thu_muc):
     classification_model = (
         cls_data.get("classification_model")
         or cls_data.get("model")
-        or os.getenv("GPT_MODEL_NAME")
+        or classification_model
         or "rule_based"
     )
 
@@ -207,7 +216,14 @@ def get_document_departments(doc_id):
         return []
 
 
-def update_document_classification(doc_id, domain=None, security_level=None, phong_ban=None):
+def update_document_classification(
+    doc_id,
+    domain=None,
+    security_level=None,
+    phong_ban=None,
+    *,
+    db_engine=None,
+):
     """GD5 fix ro ri: dong bo lai Domain/SecurityLevel/PhongBan cho TaiLieu sau khi co
     override tu form va escalation tu sensitive_scanner. Truoc day _get_or_create_doc ghi
     TaiLieu theo ClassificationJson (suy tu folder) nen khi override/escalate muc mat,
@@ -215,7 +231,7 @@ def update_document_classification(doc_id, domain=None, security_level=None, pho
     """
     if doc_id is None:
         return False
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     try:
         sets = []
         params = {"d": doc_id}
@@ -228,7 +244,7 @@ def update_document_classification(doc_id, domain=None, security_level=None, pho
         # E1: PhongBan da chuyen sang bang nhieu-nhieu dbo.PhongBanChiaSe (khong con cot CSV).
         if not sets and phong_ban is None:
             return True
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             if sets:
                 conn.execute(text("UPDATE TaiLieu SET " + ", ".join(sets) + " WHERE DocID = :d"), params)
             if phong_ban is not None:
@@ -240,10 +256,16 @@ def update_document_classification(doc_id, domain=None, security_level=None, pho
         return False
 
 
-def mark_document_ingest_failed(file_name, thu_muc, error_message=None):
-    _ensure_engine()
+def mark_document_ingest_failed(
+    file_name,
+    thu_muc,
+    error_message=None,
+    *,
+    db_engine=None,
+):
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             row = conn.execute(
                 text("""
                     SELECT DocID
@@ -277,10 +299,10 @@ def mark_document_ingest_failed(file_name, thu_muc, error_message=None):
     except Exception as e:
         logger.error(f"Loi mark_document_ingest_failed: {e}", exc_info=True)
 
-def get_document_info(doc_id):
-    _ensure_engine()
+def get_document_info(doc_id, *, db_engine=None):
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.connect() as conn:
+        with selected_engine.connect() as conn:
             row = conn.execute(text("SELECT t.FamilyID, t.BaseCode, t.VersionNo, t.VersionLabel, t.VariantCode, t.VariantGroup, t.LifecycleStatus, t.ReviewStatus, t.IsCurrent, t.IsArchived, t.SupersedesDocID, t.PublicationState, t.Servable, t.PublicationVersion, t.OwnerDepartment, t.SourceSystem, t.ExternalProcessingPolicy, t.KnowledgeOwnerUserID, t.KnowledgeApproverUserID, t.TaxonomyVersion, t.ParentApplicable, t.ParentSection, t.ParentPage, t.ServingEpoch, ISNULL(p.ParentContextEnabled, 1) AS ParentContextEnabled, t.ClassificationJson, t.Title, t.DocNumber FROM TaiLieu t LEFT JOIN dbo.DepartmentDomainProfile p ON p.DeptCode = t.OwnerDepartment AND p.IsActive = 1 WHERE t.DocID = :d"), {"d": doc_id}).fetchone()
             if row:
                 try:
@@ -360,7 +382,14 @@ def _prepare_metadata_params(info):
     }
 
 
-def delete_document_completely(doc_id, reviewer="System"):
+def delete_document_completely(
+    doc_id,
+    reviewer="System",
+    *,
+    db_engine=None,
+    qdrant_client=None,
+    collection_name=None,
+):
     """Xoa VINH VIEN toan bo du lieu cua 1 tai lieu (safe 3-buoc).
 
     Quy trinh an toan de tranh tai lieu 'ma':
@@ -372,10 +401,10 @@ def delete_document_completely(doc_id, reviewer="System"):
          - Neu loi o buoc nay: vector da mat, SQL con trang thai 'deleting'
            -> khong xuat hien trong RAG, co the retry delete_document_completely() an toan.
     """
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
 
     # Doc thong tin + trang thai hien tai (can de rollback)
-    with engine.connect() as conn:
+    with selected_engine.connect() as conn:
         row = conn.execute(
             text("SELECT TenFile, ThuMuc, LifecycleStatus FROM TaiLieu WHERE DocID = :id"),
             {"id": doc_id}
@@ -391,7 +420,7 @@ def delete_document_completely(doc_id, reviewer="System"):
     # Buoc 1: SQL soft-delete — danh dau 'deleting'
     # ------------------------------------------------------------------
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             conn.execute(
                 text("UPDATE TaiLieu SET LifecycleStatus = 'deleting', IsCurrent = 0 WHERE DocID = :id"),
                 {"id": doc_id}
@@ -407,9 +436,10 @@ def delete_document_completely(doc_id, reviewer="System"):
     # ------------------------------------------------------------------
     try:
         from qdrant_client import models
-        client = _r_qdrant._get_qdrant_client()
-        client.delete(
-            collection_name=QDRANT_COLLECTION,
+        if qdrant_client is None or not str(collection_name or "").strip():
+            raise RuntimeError("Qdrant delete runtime is not configured")
+        qdrant_client.delete(
+            collection_name=collection_name,
             points_selector=models.FilterSelector(
                 filter=models.Filter(
                     must=[models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=doc_id))]
@@ -423,7 +453,7 @@ def delete_document_completely(doc_id, reviewer="System"):
             exc_info=True
         )
         try:
-            with engine.begin() as conn:
+            with selected_engine.begin() as conn:
                 conn.execute(
                     text("UPDATE TaiLieu SET LifecycleStatus = :s, IsCurrent = 1 WHERE DocID = :id"),
                     {"s": prev_status or "published", "id": doc_id}
@@ -444,7 +474,7 @@ def delete_document_completely(doc_id, reviewer="System"):
     # ------------------------------------------------------------------
     img_rows = []
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             # (a) Lay duong dan anh PNG de xoa file vat ly sau
             img_rows = conn.execute(
                 text("SELECT ImagePath FROM DocumentPages WHERE DocID = :id AND ImagePath IS NOT NULL"),
@@ -492,7 +522,15 @@ def delete_document_completely(doc_id, reviewer="System"):
     except Exception as _e:
         logger.warning(f"[delete] sc_clear_all loi: {_e}")
 
-    _r_audit.write_audit_log(reviewer, "delete_document", "TaiLieu", doc_id, {"ten_file": ten_file, "thu_muc": thu_muc})
+    audit_kwargs = {"db_engine": selected_engine} if db_engine is not None else {}
+    _r_audit.write_audit_log(
+        reviewer,
+        "delete_document",
+        "TaiLieu",
+        doc_id,
+        {"ten_file": ten_file, "thu_muc": thu_muc},
+        **audit_kwargs,
+    )
     return True
 
 def get_doc(doc_id):

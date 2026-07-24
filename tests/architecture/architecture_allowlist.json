@@ -20,22 +20,6 @@
     },
     {
       "rule": "direct_getenv",
-      "path": "api/app_security.py",
-      "dependency": "os.getenv",
-      "count": 6,
-      "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside canonical settings"
-    },
-    {
-      "rule": "direct_getenv",
-      "path": "api/app_server.py",
-      "dependency": "os.getenv",
-      "count": 10,
-      "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside canonical settings"
-    },
-    {
-      "rule": "direct_getenv",
       "path": "api/file_access.py",
       "dependency": "os.getenv",
       "count": 1,
@@ -55,14 +39,6 @@
       "path": "config/logging.py",
       "dependency": "os.getenv",
       "count": 2,
-      "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside canonical settings"
-    },
-    {
-      "rule": "direct_getenv",
-      "path": "config/worker_settings.py",
-      "dependency": "os.getenv",
-      "count": 1,
       "removal_phase": "Phase 5",
       "reason": "Existing configuration read outside canonical settings"
     },
@@ -420,14 +396,6 @@
     },
     {
       "rule": "import_time_resource",
-      "path": "api/app_server.py",
-      "dependency": "PilotReplayExecutor",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing resource constructed at module import time"
-    },
-    {
-      "rule": "import_time_resource",
       "path": "api/rag_server.py",
       "dependency": "Semaphore",
       "count": 1,
@@ -446,14 +414,6 @@
       "rule": "import_time_resource",
       "path": "db/engine.py",
       "dependency": "create_db_engine",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing resource constructed at module import time"
-    },
-    {
-      "rule": "import_time_resource",
-      "path": "ingestion/file_ingestor.py",
-      "dependency": "build_vision_model",
       "count": 1,
       "removal_phase": "Phase 5",
       "reason": "Existing resource constructed at module import time"
@@ -489,14 +449,6 @@
       "count": 1,
       "removal_phase": "Phase 5",
       "reason": "Existing resource constructed at module import time"
-    },
-    {
-      "rule": "ingestion_rag_dependency",
-      "path": "ingestion/pdf/pipeline_implementation.py",
-      "dependency": "mech_chatbot.rag",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Existing ingestion dependency on RAG implementation"
     },
     {
       "rule": "service_flat_export",

@@ -16,6 +16,7 @@ for item in (ROOT, SRC):
     if str(item) not in sys.path:
         sys.path.insert(0, str(item))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime  # noqa: E402
 from mech_chatbot.db.engine import _ensure_engine  # noqa: E402
 
 
@@ -356,6 +357,7 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
     return dict(counts)
 
 
+@with_configured_repository_runtime(include_qdrant=False)
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--department", action="append", dest="departments")

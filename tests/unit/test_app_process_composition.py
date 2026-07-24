@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
 from mech_chatbot.application.chat_turn import (
     ChatActor,
@@ -120,3 +121,65 @@ def test_create_app_builds_rag_transport_from_the_captured_snapshot(monkeypatch)
         "Content-Type": "application/json",
         "X-RAG-Service-Token": "captured-token",
     }
+
+
+def test_app_lifespan_closes_sql_and_qdrant_resources(monkeypatch):
+    from mech_chatbot.api import app_server
+
+    closed = []
+
+    class DatabaseRuntime:
+        engine = object()
+
+        def close(self):
+            closed.append("sql")
+
+    class QdrantRuntime:
+        client = object()
+        collection_name = "KnowledgeBase"
+
+        def close(self):
+            closed.append("qdrant")
+
+    monkeypatch.setattr(
+        app_server,
+        "refresh_expired_status",
+        lambda **_kwargs: {},
+    )
+    application = app_server.create_app(
+        Settings.from_env({"APP_SESSION_SECRET": "session-secret"}),
+        database_builder=lambda _settings: DatabaseRuntime(),
+        qdrant_builder=lambda _settings: QdrantRuntime(),
+    )
+
+    with TestClient(application) as client:
+        assert client.get("/api/health").status_code == 200
+
+    assert closed == ["qdrant", "sql"]
+
+
+def test_app_lifespan_closes_sql_when_qdrant_startup_fails():
+    from mech_chatbot.api import app_server
+
+    closed = []
+
+    class DatabaseRuntime:
+        engine = object()
+
+        def close(self):
+            closed.append("sql")
+
+    def fail_qdrant(_settings):
+        raise RuntimeError("qdrant unavailable")
+
+    application = app_server.create_app(
+        Settings.from_env({"APP_SESSION_SECRET": "session-secret"}),
+        database_builder=lambda _settings: DatabaseRuntime(),
+        qdrant_builder=fail_qdrant,
+    )
+
+    with pytest.raises(RuntimeError, match="qdrant unavailable"):
+        with TestClient(application):
+            pass
+
+    assert closed == ["sql"]

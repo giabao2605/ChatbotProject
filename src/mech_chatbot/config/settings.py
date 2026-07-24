@@ -579,6 +579,9 @@ class RepositoryPolicySettings:
     allow_admin_metadata_override: bool
     allow_admin_approval_override: bool
     publication_max_attempts: int
+    max_user_message_length: int = 20000
+    max_bot_message_length: int = 200000
+    catalog_cache_ttl: float = 60.0
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RepositoryPolicySettings":
@@ -591,6 +594,9 @@ class RepositoryPolicySettings:
                 settings.KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE
             ),
             publication_max_attempts=max(1, settings.PUBLICATION_MAX_ATTEMPTS),
+            max_user_message_length=max(1, settings.MAX_USER_MSG_LEN),
+            max_bot_message_length=max(1, settings.MAX_BOT_MSG_LEN),
+            catalog_cache_ttl=max(0.0, settings.CATALOG_CACHE_TTL),
         )
 
 
@@ -882,14 +888,3 @@ class WorkerProcessSettings:
             idle_sleep_seconds=max(0, settings.WORKER_IDLE_SLEEP_SECONDS),
             error_sleep_seconds=max(0, settings.WORKER_ERROR_SLEEP_SECONDS),
         )
-
-
-# Singleton dung chung — nap 1 lan luc import.
-settings = Settings.from_env()
-
-
-# ---------------------------------------------------------------------------
-# Backward-compat: giu nguyen hang so cu de KHONG vo import hien co
-#   `from ...config.settings import QDRANT_COLLECTION`
-# ---------------------------------------------------------------------------
-QDRANT_COLLECTION = settings.QDRANT_COLLECTION

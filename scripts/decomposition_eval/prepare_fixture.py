@@ -20,14 +20,18 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
 
+
+@with_configured_repository_runtime(include_qdrant=True)
 def prepare_fixture(output: Path = DEFAULT_OUTPUT) -> dict:
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before writing the decomposition fixture")
     if os.getenv("RUN_CRAG_EVAL_FIXTURE") != "1":
         raise RuntimeError("set RUN_CRAG_EVAL_FIXTURE=1 to prepare the shared CRAG fixture")
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
-    if QDRANT_COLLECTION != FIXTURE_COLLECTION:
+    from mech_chatbot.config.repository_runtime import current_qdrant_runtime
+    _client, collection = current_qdrant_runtime()
+    if collection != FIXTURE_COLLECTION:
         raise RuntimeError(f"QDRANT_COLLECTION must equal {FIXTURE_COLLECTION}")
     generate_manifest(output)
     ingest_report = ingest_fixture()

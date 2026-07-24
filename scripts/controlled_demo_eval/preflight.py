@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+
 
 def _mapped(value, aliases):
     return aliases.get(str(value), value)
@@ -267,6 +269,7 @@ def _json_env(name, default):
     return json.loads(raw) if raw else default
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def run_live_preflight(cases):
     if os.getenv("CONTROLLED_DEMO_LIVE_OPT_IN") != "1":
         raise RuntimeError("set CONTROLLED_DEMO_LIVE_OPT_IN=1 for live corpus access")
@@ -275,9 +278,9 @@ def run_live_preflight(cases):
 
     from sqlalchemy import text
     from qdrant_client import models
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
+    from mech_chatbot.config.repository_runtime import current_qdrant_runtime
     from mech_chatbot.db.engine import engine
-    from mech_chatbot.db.repositories.qdrant import _get_qdrant_client
+    client, collection = current_qdrant_runtime()
 
     source_aliases = _json_env(
         "CONTROLLED_DEMO_SOURCE_ALIASES", {"controlled-demo-v2": "upload"}
@@ -298,11 +301,10 @@ def run_live_preflight(cases):
                    SourceSystem, OwnerDepartment, Site, SecurityLevel
             FROM dbo.TaiLieu WHERE LifecycleStatus <> 'deleting'
         """)).mappings().all() if str(row["TenFile"] or "").casefold() in expected_names]
-    client = _get_qdrant_client()
     points = []
     for document in documents:
         found, _ = client.scroll(
-            collection_name=QDRANT_COLLECTION,
+            collection_name=collection,
             scroll_filter=models.Filter(must=[models.FieldCondition(
                 key="metadata.doc_id", match=models.MatchValue(value=int(document["DocID"]))
             )]),
@@ -312,7 +314,7 @@ def run_live_preflight(cases):
         )
         points.extend(dict((point.payload or {}).get("metadata") or {}) for point in found)
     return check_fixture_cases(
-        cases, aliases, documents, points, collection=QDRANT_COLLECTION,
+        cases, aliases, documents, points, collection=collection,
         site_aliases=site_aliases, source_aliases=source_aliases,
     )
 

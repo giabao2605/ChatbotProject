@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 
 from langchain_core.documents import Document
@@ -19,10 +18,8 @@ _RELATIONAL_TERMS = (
 )
 
 
-def enabled() -> bool:
-    return os.getenv("RAG_GRAPH_RETRIEVAL_ENABLED", "false").strip().lower() in {
-        "1", "true", "yes", "y", "on"
-    }
+def enabled(value: bool = False) -> bool:
+    return bool(value)
 
 
 def should_attempt_graph(question: str) -> bool:
