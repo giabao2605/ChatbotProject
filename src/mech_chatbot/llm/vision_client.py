@@ -1,58 +1,34 @@
-"""
-OpenAI-compatible vision client for ProxyLLM GPT-5.4.
-"""
+"""OpenAI-compatible vision adapter built from an immutable settings snapshot."""
+
+from __future__ import annotations
 
 import base64
 import io
 import json
-import os
 import threading
 import time
-from dataclasses import dataclass
-from tenacity import RetryError
+from dataclasses import dataclass, replace
+
 from openai import OpenAI
+from tenacity import RetryError
+
+from mech_chatbot.config.settings import ExternalAiSettings, VisionSettings
 from mech_chatbot.llm.external_ai import (
+    DEFAULT_EXTERNAL_AI_SETTINGS,
     audited_external_call,
-    get_provider_runtime,
     normalize_text_result,
 )
 
-DEFAULT_VISION_MODEL = os.getenv("GPT_VISION_MODEL_NAME", os.getenv("GPT_MODEL_NAME", "gpt-5.4"))
+
+DEFAULT_VISION_MODEL = "gpt-5.4"
 _PLACEHOLDER_KEY = "DIEN_KEY_CUA_BAN_VAO_DAY"
-_GPT_CALL_LOCK = threading.Lock()
-_LAST_GPT_CALL_AT = 0.0
-_VISION_MODEL_CACHE = None
-_VISION_MODEL_SIGNATURE = None
+_MISSING_PROVIDER_KEY = "provider API key is not configured"
+_DEFAULT_PROVIDER_ENDPOINT = "https://api.proxyllm.eu/v1"
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class GPTVisionResponse:
     text: str
-
-
-def _vision_runtime():
-    return get_provider_runtime(
-        "proxyllm",
-        fallback_endpoint=(
-            os.getenv("PROXYLLM_BASE_URL")
-            or os.getenv("OPENAI_BASE_URL")
-            or "https://api.proxyllm.eu/v1"
-        ),
-        fallback_model=(
-            os.getenv("GPT_VISION_MODEL_NAME")
-            or os.getenv("GPT_MODEL_NAME")
-            or "gpt-5.4"
-        ),
-        fallback_secret_envs=("PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY"),
-    )
-
-
-def _get_api_key():
-    return _vision_runtime().api_key
-
-
-def _get_base_url():
-    return _vision_runtime().endpoint
 
 
 def _unwrap_retry_error(exc):
@@ -65,7 +41,8 @@ def _unwrap_retry_error(exc):
 
 
 def classify_vision_error(exc) -> str:
-    """Phan loai loi cho GPT/ProxyLLM vision."""
+    """Classify an upstream failure for the ingestion recovery policy."""
+
     root = _unwrap_retry_error(exc)
     msg = str(root).lower()
     code = getattr(root, "status_code", None) or getattr(root, "code", None)
@@ -76,18 +53,23 @@ def classify_vision_error(exc) -> str:
         return "rate_limit_temporary"
     if isinstance(code, int) and code >= 500:
         return "server_error"
-    if "api key" in msg or "permission" in msg or "unauthorized" in msg or "401" in msg:
+    if (
+        "api key" in msg
+        or "permission" in msg
+        or "unauthorized" in msg
+        or "401" in msg
+    ):
         return "auth_error"
     return "unknown_error"
 
 
 def is_retryable_error(exc) -> bool:
-    err_type = classify_vision_error(exc)
-    return err_type in ["rate_limit_temporary", "server_error"]
+    return classify_vision_error(exc) in {"rate_limit_temporary", "server_error"}
 
 
 def describe_vision_error(exc) -> str:
-    """Mo ta loi GPT/ProxyLLM vision."""
+    """Describe a provider error without including configured credentials."""
+
     root = _unwrap_retry_error(exc)
     err_type = classify_vision_error(exc)
     code = getattr(root, "status_code", None) or getattr(root, "code", None)
@@ -102,131 +84,188 @@ def describe_vision_error(exc) -> str:
     return ", ".join(parts)
 
 
-def _throttle_gpt_call():
-    """Giam nguy co rate-limit khi re-ingest nhieu ban ve lien tiep."""
-    try:
-        min_interval = float(os.getenv("GPT_MIN_INTERVAL_SECONDS", "0"))
-    except ValueError:
-        min_interval = 0.0
-    if min_interval <= 0:
-        return
+def _validated_settings(settings: VisionSettings) -> VisionSettings:
+    api_key = str(settings.api_key or "").strip()
+    if not api_key or api_key == _PLACEHOLDER_KEY:
+        raise ValueError(_MISSING_PROVIDER_KEY)
+    image_format = str(settings.image_format or "jpeg").strip().lower()
+    if image_format not in {"jpeg", "png"}:
+        raise ValueError("vision image format must be 'jpeg' or 'png'")
+    model_name = str(settings.model_name or "").strip()
+    if not model_name:
+        raise ValueError("vision model is not configured")
+    if (
+        int(settings.max_edge) < 0
+        or not 1 <= int(settings.jpeg_quality) <= 100
+        or int(settings.max_output_tokens) <= 0
+        or float(settings.timeout_seconds) <= 0
+        or float(settings.min_interval_seconds) < 0
+    ):
+        raise ValueError("vision provider limits are invalid")
+    return replace(
+        settings,
+        api_key=api_key,
+        base_url=(
+            str(settings.base_url).strip()
+            if settings.base_url
+            else _DEFAULT_PROVIDER_ENDPOINT
+        ),
+        model_name=model_name,
+        image_format=image_format,
+        max_edge=int(settings.max_edge),
+        jpeg_quality=int(settings.jpeg_quality),
+    )
 
-    global _LAST_GPT_CALL_AT
-    with _GPT_CALL_LOCK:
-        now = time.monotonic()
-        wait_for = min_interval - (now - _LAST_GPT_CALL_AT)
-        if wait_for > 0:
-            time.sleep(wait_for)
-        _LAST_GPT_CALL_AT = time.monotonic()
 
-
-def _pil_to_data_url(image):
-    """Ma hoa anh trang PDF thanh data URL cho Vision API.
-
-    Cau hinh qua env:
-      - GPT_VISION_IMAGE_FORMAT = jpeg (mac dinh) | png. Dung PNG cho ban ve line-art
-        de giu net (JPEG gay artifact lam mo net manh / chu nho).
-      - GPT_VISION_MAX_EDGE = 0 (mac dinh, giu nguyen) hoac so px canh dai toi da; giup
-        kiem soat viec downscale (tranh phu thuoc hoan toan vao downscale phia server).
-      - GPT_VISION_JPEG_QUALITY = 85 (chi ap dung khi format=jpeg).
-    """
-    fmt = os.getenv("GPT_VISION_IMAGE_FORMAT", "jpeg").strip().lower()
-
-    # Optional: gioi han canh dai (0 = giu nguyen).
-    try:
-        max_edge = int(os.getenv("GPT_VISION_MAX_EDGE", "0"))
-    except ValueError:
-        max_edge = 0
+def _pil_to_data_url(image, settings: VisionSettings):
+    fmt = settings.image_format
+    max_edge = settings.max_edge
     if max_edge and hasattr(image, "size"):
-        w, h = image.size
-        longest = max(w, h)
+        width, height = image.size
+        longest = max(width, height)
         if longest > max_edge:
             scale = max_edge / float(longest)
-            image = image.resize((max(1, int(w * scale)), max(1, int(h * scale))))
+            image = image.resize(
+                (max(1, int(width * scale)), max(1, int(height * scale)))
+            )
 
-    buf = io.BytesIO()
+    buffer = io.BytesIO()
     if fmt == "png":
         if getattr(image, "mode", "RGB") not in ("RGB", "L", "RGBA"):
             image = image.convert("RGB")
-        image.save(buf, format="PNG", optimize=True)
+        image.save(buffer, format="PNG", optimize=True)
         mime = "image/png"
     else:
-        # Anh render tu PDF thuong la RGB/RGBA; JPEG nhe hon PNG cho API vision.
         if getattr(image, "mode", "RGB") not in ("RGB", "L"):
             image = image.convert("RGB")
-        image.save(buf, format="JPEG", quality=int(os.getenv("GPT_VISION_JPEG_QUALITY", "85")), optimize=True)
+        image.save(
+            buffer,
+            format="JPEG",
+            quality=settings.jpeg_quality,
+            optimize=True,
+        )
         mime = "image/jpeg"
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
 
 
 class GPTVisionModel:
-    """
-    Wrapper `.generate_content(...)`.
-    contents co the la str hoac list [prompt, PIL.Image].
-    Tra ve object co `.text`.
-    """
+    """Vision adapter with request options fixed at construction time."""
 
-    def __init__(self, api_key: str, model_name: str = DEFAULT_VISION_MODEL, endpoint: str | None = None):
-        self._endpoint = endpoint or _get_base_url()
-        self._client = OpenAI(api_key=api_key, base_url=self._endpoint)
-        self.model_name = model_name
+    def __init__(
+        self,
+        settings_or_api_key: VisionSettings | str,
+        model_name: str = DEFAULT_VISION_MODEL,
+        endpoint: str | None = None,
+        *,
+        image_format: str = "jpeg",
+        max_edge: int = 0,
+        jpeg_quality: int = 85,
+        temperature: float = 0.0,
+        max_output_tokens: int = 4096,
+        timeout_seconds: float = 120.0,
+        min_interval_seconds: float = 0.0,
+        external_ai_settings: ExternalAiSettings = DEFAULT_EXTERNAL_AI_SETTINGS,
+    ):
+        if isinstance(settings_or_api_key, VisionSettings):
+            settings = _validated_settings(settings_or_api_key)
+            min_interval_seconds = float(settings_or_api_key.min_interval_seconds)
+        else:
+            settings = _validated_settings(
+                VisionSettings(
+                    api_key=settings_or_api_key,
+                    base_url=endpoint,
+                    model_name=model_name,
+                    image_format=image_format,
+                    max_edge=max_edge,
+                    jpeg_quality=jpeg_quality,
+                    temperature=temperature,
+                    max_output_tokens=max_output_tokens,
+                    timeout_seconds=timeout_seconds,
+                    min_interval_seconds=min_interval_seconds,
+                )
+            )
+        self.settings = settings
+        self.external_ai_settings = external_ai_settings
+        self.model_name = settings.model_name
+        self._endpoint = settings.base_url
+        self._client = OpenAI(api_key=settings.api_key, base_url=settings.base_url)
+        self._min_interval_seconds = max(0.0, min_interval_seconds)
+        self._call_lock = threading.Lock()
+        self._last_call_at = 0.0
+
+    def _throttle(self) -> None:
+        if self._min_interval_seconds <= 0:
+            return
+        with self._call_lock:
+            now = time.monotonic()
+            wait_for = self._min_interval_seconds - (now - self._last_call_at)
+            if wait_for > 0:
+                time.sleep(wait_for)
+            self._last_call_at = time.monotonic()
 
     def generate_content(self, contents):
-        _throttle_gpt_call()
+        self._throttle()
         parts = list(contents) if isinstance(contents, (list, tuple)) else [contents]
-
         user_content = []
         for part in parts:
-            # PIL Image
             if hasattr(part, "save") and hasattr(part, "mode"):
-                user_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": _pil_to_data_url(part)},
-                })
+                user_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": _pil_to_data_url(part, self.settings),
+                        },
+                    }
+                )
             else:
                 user_content.append({"type": "text", "text": str(part)})
 
         serialized_content = json.dumps(user_content, ensure_ascii=False)
-        input_chars = len(serialized_content)
         with audited_external_call(
             provider="proxyllm",
             model=self.model_name,
             endpoint=self._endpoint,
             surface="vision_ocr",
-            input_chars=input_chars,
+            input_chars=len(serialized_content),
             input_bytes=len(serialized_content.encode("utf-8")),
+            settings=self.external_ai_settings,
         ):
-            resp = self._client.chat.completions.create(
+            response = self._client.chat.completions.create(
                 model=self.model_name,
                 messages=[{"role": "user", "content": user_content}],
-                temperature=float(os.getenv("GPT_VISION_TEMPERATURE", "0")),
-                max_tokens=int(os.getenv("GPT_VISION_MAX_OUTPUT_TOKENS", "4096")),
-                timeout=float(os.getenv("GPT_TIMEOUT_SECONDS", "180")),
+                temperature=self.settings.temperature,
+                max_tokens=self.settings.max_output_tokens,
+                timeout=self.settings.timeout_seconds,
             )
         normalized = normalize_text_result(
-            resp.choices[0].message,
+            response.choices[0].message,
             provider="proxyllm",
             model=self.model_name,
             kind="vision_extraction",
         )
-        text = normalized.text or ""
-        return GPTVisionResponse(text=text)
+        return GPTVisionResponse(text=normalized.text or "")
 
 
-def build_vision_model(model_name: str | None = None):
-    """Tra ve GPTVisionModel neu co ProxyLLM/OpenAI API key hop le, nguoc lai None."""
-    global _VISION_MODEL_CACHE, _VISION_MODEL_SIGNATURE
-    runtime = _vision_runtime()
-    api_key = runtime.api_key
-    selected_model = model_name or runtime.model or DEFAULT_VISION_MODEL
-    signature = (runtime.endpoint, selected_model, api_key)
-    with _GPT_CALL_LOCK:
-        if _VISION_MODEL_SIGNATURE == signature:
-            return _VISION_MODEL_CACHE
-        _VISION_MODEL_SIGNATURE = signature
-        _VISION_MODEL_CACHE = (
-            GPTVisionModel(api_key, selected_model, runtime.endpoint)
-            if api_key and api_key != _PLACEHOLDER_KEY else None
-        )
-        return _VISION_MODEL_CACHE
+def build_vision_model(
+    settings: VisionSettings,
+    *,
+    external_ai_settings: ExternalAiSettings = DEFAULT_EXTERNAL_AI_SETTINGS,
+) -> GPTVisionModel:
+    """Build one process-owned model without a cache or ambient environment."""
+
+    return GPTVisionModel(
+        settings,
+        external_ai_settings=external_ai_settings,
+    )
+
+
+__all__ = [
+    "DEFAULT_VISION_MODEL",
+    "GPTVisionModel",
+    "GPTVisionResponse",
+    "build_vision_model",
+    "classify_vision_error",
+    "describe_vision_error",
+    "is_retryable_error",
+]

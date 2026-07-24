@@ -3,19 +3,29 @@ from pathlib import Path
 
 import pytest
 
+from mech_chatbot.config.settings import ExternalAiSettings
 from mech_chatbot.llm import external_ai
 
 
 pytestmark = pytest.mark.unit
 
 
+def _external_settings(
+    *,
+    environment: str = "",
+    local: bool = False,
+    policy: str = "all_external",
+) -> ExternalAiSettings:
+    return ExternalAiSettings(
+        application_environment=environment,
+        local_development=local,
+        processing_policy=policy,
+    )
+
+
 @pytest.fixture(autouse=True)
-def _clear_provider_profile_cache(monkeypatch):
-    monkeypatch.delenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", raising=False)
-    monkeypatch.delenv("APP_ENV", raising=False)
-    external_ai.invalidate_external_ai_provider_profiles()
+def _provider_profile_test_boundary():
     yield
-    external_ai.invalidate_external_ai_provider_profiles()
 
 
 def _profile(provider="proxyllm", surfaces=("generation", "vision_ocr"), *, expires_in_days=30):
@@ -64,6 +74,21 @@ def test_internal_only_policy_fails_closed():
             surface="reranking",
             policies=["all_external", "internal_only"],
             profile=_profile("voyage", ("reranking",)),
+        )
+
+
+def test_policy_comes_from_explicit_settings_snapshot_not_ambient_environment(
+    monkeypatch,
+):
+    monkeypatch.setenv("EXTERNAL_PROCESSING_POLICY", "all_external")
+
+    with pytest.raises(external_ai.ExternalProcessingDenied):
+        external_ai.make_external_call_spec(
+            provider="voyage",
+            model="rerank-2.5-lite",
+            surface="reranking",
+            profile=_profile("voyage", ("reranking",)),
+            settings=_external_settings(policy="internal_only"),
         )
 
 
@@ -139,7 +164,6 @@ def test_inactive_profile_fails_closed():
 
 
 def test_missing_managed_profile_fails_closed_outside_local_development(monkeypatch):
-    monkeypatch.delenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", raising=False)
     monkeypatch.setattr(external_ai, "_load_managed_provider_profile", lambda _provider: None)
 
     assert external_ai.get_external_ai_provider_profile("voyage") is None
@@ -154,14 +178,16 @@ def test_missing_managed_profile_fails_closed_outside_local_development(monkeypa
 
 def test_bootstrap_profile_requires_explicit_local_development_flag(monkeypatch):
     monkeypatch.setattr(external_ai, "_load_managed_provider_profile", lambda _provider: None)
-    monkeypatch.setenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", "true")
-    monkeypatch.setenv("APP_ENV", "pilot")
 
-    assert external_ai.get_external_ai_provider_profile("voyage") is None
+    assert external_ai.get_external_ai_provider_profile(
+        "voyage",
+        settings=_external_settings(environment="pilot", local=True),
+    ) is None
 
-    monkeypatch.setenv("APP_ENV", "development")
-    external_ai.invalidate_external_ai_provider_profiles()
-    bootstrap = external_ai.get_external_ai_provider_profile("voyage")
+    bootstrap = external_ai.get_external_ai_provider_profile(
+        "voyage",
+        settings=_external_settings(environment="development", local=True),
+    )
 
     assert bootstrap is not None
     assert bootstrap.review_expires_at is None
@@ -170,13 +196,19 @@ def test_bootstrap_profile_requires_explicit_local_development_flag(monkeypatch)
 
 def test_proxyllm_bootstrap_profile_allows_governed_claim_repair(monkeypatch):
     monkeypatch.setattr(external_ai, "_load_managed_provider_profile", lambda _provider: None)
-    monkeypatch.setenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", "true")
-    monkeypatch.setenv("APP_ENV", "development")
+    settings = _external_settings(environment="development", local=True)
 
-    profile = external_ai.get_external_ai_provider_profile("proxyllm")
+    profile = external_ai.get_external_ai_provider_profile(
+        "proxyllm",
+        settings=settings,
+    )
 
     assert profile is not None
-    client = external_ai.ExternalAIClient("proxyllm", profile=profile)
+    client = external_ai.ExternalAIClient(
+        "proxyllm",
+        profile=profile,
+        settings=settings,
+    )
     spec = client.prepare_call(model="model-test", surface="claim_repair")
     assert spec.surface == "claim_repair"
     assert spec.policy_version == "risk-accepted-v4-claim-repair"
@@ -202,7 +234,6 @@ def test_claim_repair_profile_migration_is_additive_and_audited():
 
 
 def test_audit_unavailable_blocks_before_external_call_body(monkeypatch):
-    monkeypatch.delenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", raising=False)
     monkeypatch.setattr(external_ai, "_record_external_call", lambda *args, **kwargs: False)
     called = False
 
@@ -219,8 +250,6 @@ def test_audit_unavailable_blocks_before_external_call_body(monkeypatch):
 
 
 def test_local_development_may_continue_when_audit_unavailable(monkeypatch):
-    monkeypatch.setenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", "true")
-    monkeypatch.setenv("APP_ENV", "local")
     monkeypatch.setattr(external_ai, "_record_external_call", lambda *args, **kwargs: False)
     called = False
 
@@ -229,6 +258,7 @@ def test_local_development_may_continue_when_audit_unavailable(monkeypatch):
         model="gpt-test",
         surface="generation",
         profile=_profile(),
+        settings=_external_settings(environment="local", local=True),
     ):
         called = True
 
@@ -304,7 +334,6 @@ def test_provider_runtime_uses_the_profile_secret_reference(monkeypatch):
     profile = external_ai.ExternalAIProviderProfile(
         **{**profile.__dict__, "secret_reference": "env:TEST_RUNTIME_KEY"}
     )
-    monkeypatch.setenv("TEST_RUNTIME_KEY", "runtime-key")
     monkeypatch.setattr(
         external_ai,
         "_load_managed_provider_profile",
@@ -316,6 +345,7 @@ def test_provider_runtime_uses_the_profile_secret_reference(monkeypatch):
         fallback_endpoint="https://fallback.invalid/v1",
         fallback_model="fallback-model",
         fallback_secret_envs=("UNRELATED_PROVIDER_KEY",),
+        resolved_secrets={"TEST_RUNTIME_KEY": "runtime-key"},
     )
 
     assert runtime.endpoint == "https://provider.example/v1"
@@ -328,7 +358,6 @@ def test_provider_runtime_never_substitutes_a_different_key_for_secret_uri(monke
     profile = external_ai.ExternalAIProviderProfile(
         **{**profile.__dict__, "secret_reference": "secret://voyage/key"}
     )
-    monkeypatch.setenv("UNRELATED_PROVIDER_KEY", "must-not-be-used")
     monkeypatch.setattr(
         external_ai,
         "_load_managed_provider_profile",
@@ -340,6 +369,7 @@ def test_provider_runtime_never_substitutes_a_different_key_for_secret_uri(monke
         fallback_endpoint="https://fallback.invalid/v1",
         fallback_model="fallback-model",
         fallback_secret_envs=("UNRELATED_PROVIDER_KEY",),
+        resolved_secrets={"UNRELATED_PROVIDER_KEY": "must-not-be-used"},
     )
 
     assert runtime.api_key is None

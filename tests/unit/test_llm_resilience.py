@@ -40,12 +40,11 @@ def test_deterministic_evidence_gate_skips_second_llm_by_default(monkeypatch):
     assert quotes == []
 
 
-def test_evaluator_marks_missing_coverage_ambiguous_only_when_correction_enabled(monkeypatch):
-    monkeypatch.setenv("RAG_CRAG_ENABLED", "true")
-
+def test_evaluator_marks_missing_coverage_ambiguous_only_when_correction_enabled():
     decision = evidence_gate.evaluate_answerability(
         "Chi phí gia công là bao nhiêu?",
         "Tài liệu chỉ mô tả quy trình gồm ba bước chuẩn bị, gia công và kiểm tra.",
+        crag_enabled=True,
     )
 
     assert decision.state is evidence_gate.EvidenceState.AMBIGUOUS
@@ -66,7 +65,6 @@ def test_evaluator_reports_verifier_disabled(monkeypatch):
 
 
 def test_evaluator_accepts_ambiguous_state_from_verifier(monkeypatch):
-    monkeypatch.setenv("LLM_EVIDENCE_VERIFIER_ENABLED", "true")
     calls = []
     monkeypatch.setattr(
         evidence_gate,
@@ -80,6 +78,7 @@ def test_evaluator_accepts_ambiguous_state_from_verifier(monkeypatch):
         "Quy định gì?",
         "Có một phần quy định.",
         docs=[SimpleNamespace(metadata={})],
+        verifier_enabled=True,
     )
 
     assert decision.state is evidence_gate.EvidenceState.AMBIGUOUS

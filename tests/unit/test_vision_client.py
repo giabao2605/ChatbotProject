@@ -9,8 +9,8 @@ from unittest.mock import Mock
 import pytest
 from tenacity import Future, RetryError
 
+from mech_chatbot.config.settings import VisionSettings
 from mech_chatbot.llm import vision_client
-from mech_chatbot.llm.external_ai import ExternalProcessingDenied
 
 
 pytestmark = pytest.mark.unit
@@ -40,22 +40,20 @@ class ProviderError(Exception):
         self.code = code
 
 
-@pytest.fixture(autouse=True)
-def reset_vision_model_cache(monkeypatch):
-    monkeypatch.setattr(vision_client, "_VISION_MODEL_CACHE", None)
-    monkeypatch.setattr(vision_client, "_VISION_MODEL_SIGNATURE", None)
-    monkeypatch.setattr(vision_client, "_LAST_GPT_CALL_AT", 0.0)
-    defaults = {
-        "GPT_MIN_INTERVAL_SECONDS": "0",
-        "GPT_VISION_IMAGE_FORMAT": "jpeg",
-        "GPT_VISION_MAX_EDGE": "0",
-        "GPT_VISION_JPEG_QUALITY": "85",
-        "GPT_VISION_TEMPERATURE": "0",
-        "GPT_VISION_MAX_OUTPUT_TOKENS": "4096",
-        "GPT_TIMEOUT_SECONDS": "180",
+def _settings(**overrides) -> VisionSettings:
+    values = {
+        "api_key": "secret",
+        "base_url": "https://vision.example/v1",
+        "model_name": "vision-model",
+        "image_format": "jpeg",
+        "max_edge": 0,
+        "jpeg_quality": 85,
+        "temperature": 0.0,
+        "max_output_tokens": 4096,
+        "timeout_seconds": 180.0,
+        "min_interval_seconds": 0.0,
     }
-    for name, value in defaults.items():
-        monkeypatch.setenv(name, value)
+    return VisionSettings(**{**values, **overrides})
 
 
 def _install_openai_boundary(monkeypatch, *, response_text="recognized", error=None):
@@ -119,15 +117,12 @@ def test_generate_content_returns_normalized_text_and_request_settings(monkeypat
         monkeypatch,
         response_text="bearing drawing",
     )
-    monkeypatch.setenv("GPT_VISION_TEMPERATURE", "0.2")
-    monkeypatch.setenv("GPT_VISION_MAX_OUTPUT_TOKENS", "512")
-    monkeypatch.setenv("GPT_TIMEOUT_SECONDS", "30")
-    monkeypatch.setenv("GPT_MIN_INTERVAL_SECONDS", "invalid")
-
     model = vision_client.GPTVisionModel(
-        "secret",
-        model_name="vision-model",
-        endpoint="https://vision.example/v1",
+        _settings(
+            temperature=0.2,
+            max_output_tokens=512,
+            timeout_seconds=30.0,
+        )
     )
     result = model.generate_content("read the drawing")
 
@@ -166,14 +161,9 @@ def test_generate_content_sends_scaled_image_as_data_url(
     expected_bytes,
 ):
     _, create = _install_openai_boundary(monkeypatch)
-    monkeypatch.setenv("GPT_VISION_IMAGE_FORMAT", image_format)
-    monkeypatch.setenv("GPT_VISION_MAX_EDGE", "100")
-    monkeypatch.setenv("GPT_MIN_INTERVAL_SECONDS", "0")
 
     model = vision_client.GPTVisionModel(
-        "secret",
-        model_name="vision-model",
-        endpoint="https://vision.example/v1",
+        _settings(image_format=image_format, max_edge=100)
     )
     model.generate_content(["extract dimensions", FakeImage(mode=image_mode)])
 
@@ -188,11 +178,7 @@ def test_generate_content_sends_scaled_image_as_data_url(
 def test_generate_content_propagates_provider_failure(monkeypatch):
     provider_error = ProviderError("upstream unavailable", status_code=503)
     _install_openai_boundary(monkeypatch, error=provider_error)
-    model = vision_client.GPTVisionModel(
-        "secret",
-        model_name="vision-model",
-        endpoint="https://vision.example/v1",
-    )
+    model = vision_client.GPTVisionModel(_settings())
 
     with pytest.raises(ProviderError, match="upstream unavailable"):
         model.generate_content("read")
@@ -200,17 +186,12 @@ def test_generate_content_propagates_provider_failure(monkeypatch):
 
 def test_generate_content_respects_positive_throttle_interval(monkeypatch):
     _install_openai_boundary(monkeypatch)
-    monkeypatch.setenv("GPT_MIN_INTERVAL_SECONDS", "1")
-    monkeypatch.setattr(vision_client, "_LAST_GPT_CALL_AT", 9.5)
     monotonic = Mock(side_effect=(10.0, 11.0))
     sleep = Mock()
     monkeypatch.setattr(vision_client.time, "monotonic", monotonic)
     monkeypatch.setattr(vision_client.time, "sleep", sleep)
-    model = vision_client.GPTVisionModel(
-        "secret",
-        model_name="vision-model",
-        endpoint="https://vision.example/v1",
-    )
+    model = vision_client.GPTVisionModel(_settings(min_interval_seconds=1.0))
+    model._last_call_at = 9.5
 
     model.generate_content("read")
 
@@ -218,79 +199,37 @@ def test_generate_content_respects_positive_throttle_interval(monkeypatch):
 
 
 @pytest.mark.parametrize("api_key", [None, "DIEN_KEY_CUA_BAN_VAO_DAY"])
-def test_build_vision_model_returns_none_without_usable_secret(monkeypatch, api_key):
-    runtime = SimpleNamespace(
-        endpoint="https://vision.example/v1",
-        model="vision-model",
-        api_key=api_key,
-    )
-    monkeypatch.setattr(vision_client, "_vision_runtime", lambda: runtime)
-
-    assert vision_client.build_vision_model() is None
+def test_build_vision_model_rejects_unusable_secret(api_key):
+    with pytest.raises(ValueError, match="provider API key is not configured"):
+        vision_client.build_vision_model(_settings(api_key=api_key))
 
 
-def test_build_vision_model_reuses_cached_model_for_same_runtime(monkeypatch):
-    runtime = SimpleNamespace(
-        endpoint="https://vision.example/v1",
-        model="vision-model",
-        api_key="secret",
-    )
-    built_model = object()
-    constructor = Mock(return_value=built_model)
-    monkeypatch.setattr(vision_client, "_vision_runtime", lambda: runtime)
-    monkeypatch.setattr(vision_client, "GPTVisionModel", constructor)
-
-    first = vision_client.build_vision_model()
-    second = vision_client.build_vision_model()
-
-    assert first is built_model
-    assert second is built_model
-    constructor.assert_called_once_with(
-        "secret",
-        "vision-model",
-        "https://vision.example/v1",
-    )
-
-
-def test_build_vision_model_allows_explicit_model_override(monkeypatch):
-    runtime = SimpleNamespace(
-        endpoint="https://vision.example/v1",
-        model="runtime-model",
-        api_key="secret",
-    )
-    constructor = Mock(return_value=object())
-    monkeypatch.setattr(vision_client, "_vision_runtime", lambda: runtime)
-    monkeypatch.setattr(vision_client, "GPTVisionModel", constructor)
-
-    vision_client.build_vision_model("override-model")
-
-    constructor.assert_called_once_with(
-        "secret",
-        "override-model",
-        "https://vision.example/v1",
-    )
-
-
-def test_build_vision_model_propagates_runtime_policy_failure(monkeypatch):
-    def deny_runtime():
-        raise ExternalProcessingDenied("profile unavailable")
-
-    monkeypatch.setattr(vision_client, "_vision_runtime", deny_runtime)
-
-    with pytest.raises(ExternalProcessingDenied, match="profile unavailable"):
-        vision_client.build_vision_model()
-
-
-def test_model_constructor_uses_runtime_endpoint_when_not_explicit(monkeypatch):
-    runtime = SimpleNamespace(endpoint="https://runtime.example/v1")
+def test_build_vision_model_does_not_share_a_process_global_cache(monkeypatch):
     constructor = Mock(return_value=SimpleNamespace())
-    monkeypatch.setattr(vision_client, "_vision_runtime", lambda: runtime)
     monkeypatch.setattr(vision_client, "OpenAI", constructor)
 
-    model = vision_client.GPTVisionModel("secret", model_name="vision-model")
+    first = vision_client.build_vision_model(_settings())
+    second = vision_client.build_vision_model(_settings())
 
-    assert model.model_name == "vision-model"
-    constructor.assert_called_once_with(
-        api_key="secret",
-        base_url="https://runtime.example/v1",
+    assert first is not second
+    assert constructor.call_count == 2
+
+
+def test_build_vision_model_uses_model_from_snapshot(monkeypatch):
+    constructor = Mock(return_value=SimpleNamespace())
+    monkeypatch.setattr(vision_client, "OpenAI", constructor)
+
+    model = vision_client.build_vision_model(
+        _settings(model_name="explicit-model")
     )
+
+    assert model.model_name == "explicit-model"
+
+
+def test_build_vision_model_rejects_invalid_image_format_without_secret_leak():
+    settings = _settings(image_format="gif")
+
+    with pytest.raises(ValueError, match="vision image format") as error:
+        vision_client.build_vision_model(settings)
+
+    assert settings.api_key not in str(error.value)
