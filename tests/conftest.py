@@ -39,7 +39,7 @@ def pytest_collection_modifyitems(config, items):
                 item.add_marker(skip_qdrant)
             elif not needs_qdrant and not run_db:
                 item.add_marker(skip_db)
-        if "eval" in item.keywords and not run_eval:
+        if item.get_closest_marker("eval") is not None and not run_eval:
             item.add_marker(skip_eval)
 
 
