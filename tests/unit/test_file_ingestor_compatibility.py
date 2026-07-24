@@ -2,14 +2,40 @@ from __future__ import annotations
 
 import pytest
 
+from mech_chatbot.application.vector_ingestion import IngestionPipelineDependencies
 from mech_chatbot.ingestion import file_ingestor
+from mech_chatbot.ingestion.pdf.pipeline_dependencies import (
+    CompatibilityIngestionResources,
+)
 from mech_chatbot.ingestion.progress import IngestionProgressEvent
 
 
 pytestmark = pytest.mark.unit
 
 
-def test_typed_entrypoint_dispatches_pdf_and_preserves_overrides(monkeypatch) -> None:
+@pytest.fixture(autouse=True)
+def compatibility_resources(monkeypatch):
+    dependencies = IngestionPipelineDependencies(
+        vector_store=object(),
+        qdrant_client=object(),
+        collection_name="technical-documents",
+    )
+    vision_model = object()
+    monkeypatch.setattr(
+        file_ingestor,
+        "_build_compatibility_resources",
+        lambda **_kwargs: CompatibilityIngestionResources(
+            dependencies,
+            vision_model,
+        ),
+    )
+    return dependencies, vision_model
+
+
+def test_typed_entrypoint_dispatches_pdf_and_preserves_overrides(
+    monkeypatch,
+    compatibility_resources,
+) -> None:
     calls = []
     events = []
     monkeypatch.setattr(file_ingestor.os.path, "exists", lambda _: True)
@@ -42,6 +68,7 @@ def test_typed_entrypoint_dispatches_pdf_and_preserves_overrides(monkeypatch) ->
     assert message == "done"
     assert report["status"] == "success"
     assert events == [IngestionProgressEvent("embedding", "Embedding")]
+    assert calls[0][0][3] is compatibility_resources[1]
     assert calls[0][1] == {
         "domain_override": "mechanical",
         "security_override": "internal",
@@ -49,6 +76,7 @@ def test_typed_entrypoint_dispatches_pdf_and_preserves_overrides(monkeypatch) ->
         "site_override": "HCM",
         "scan_sensitive": True,
         "phong_ban_override": ("QA",),
+        "dependencies": compatibility_resources[0],
     }
 
 

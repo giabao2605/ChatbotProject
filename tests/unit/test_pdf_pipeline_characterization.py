@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from mech_chatbot.ingestion.pdf import pipeline_implementation as pipeline
+from mech_chatbot.application.vector_ingestion import IngestionPipelineDependencies
 
 
 pytestmark = pytest.mark.unit
@@ -99,6 +100,22 @@ class _QdrantClient:
     def set_payload(self, **kwargs):
         self.payloads.append(kwargs)
 
+    def delete(self, **_kwargs):
+        return None
+
+
+class _VectorStore:
+    def add_documents(self, _documents):
+        return None
+
+
+def _dependencies(qdrant=None):
+    return IngestionPipelineDependencies(
+        vector_store=_VectorStore(),
+        qdrant_client=qdrant or _QdrantClient(),
+        collection_name="technical-documents",
+    )
+
 
 def _captured_calls():
     return {
@@ -139,7 +156,7 @@ def _install_persistence_boundaries(monkeypatch, captured):
         "save_bom_records",
         lambda doc_id, page, records: captured["bom"].append((doc_id, page, records)) or len(records),
     )
-    monkeypatch.setattr(pipeline, "client", qdrant)
+    captured["dependencies"] = _dependencies(qdrant)
     return qdrant
 
 
@@ -172,7 +189,7 @@ def _install_lifecycle_boundaries(monkeypatch, captured):
     monkeypatch.setattr(
         pipeline,
         "_add_docs_with_retry",
-        lambda chunks: captured["added_batches"].append(list(chunks)),
+        lambda chunks, **_kwargs: captured["added_batches"].append(list(chunks)),
     )
 
 
@@ -238,6 +255,7 @@ def test_pdf_text_page_skips_vision_and_preserves_searchable_content(tmp_path, m
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "success"
@@ -282,6 +300,7 @@ def test_quality_block_after_vector_index_restores_snapshot_and_never_finalizes(
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "error"
@@ -290,10 +309,12 @@ def test_quality_block_after_vector_index_restores_snapshot_and_never_finalizes(
     assert captured["classifications"] == []
     assert captured["cleared"] == []
     assert captured["restored"] == [701]
-    assert captured["deleted"][-1] == (
-        ("blocked.pdf", "Technical"),
-        {"doc_id": 701},
-    )
+    delete_args, delete_kwargs = captured["deleted"][-1]
+    assert delete_args == ("blocked.pdf", "Technical")
+    assert delete_kwargs == {
+        "doc_id": 701,
+        "dependencies": captured["dependencies"],
+    }
 
 
 def test_final_qdrant_security_sync_failure_rolls_back_instead_of_failing_open(
@@ -310,14 +331,15 @@ def test_final_qdrant_security_sync_failure_rolls_back_instead_of_failing_open(
     )
     monkeypatch.setattr(pipeline.fitz, "open", lambda _path: pdf_document)
     monkeypatch.setattr(pipeline.pdfplumber, "open", lambda _path: plumber_document)
-    monkeypatch.setattr(
-        pipeline,
-        "client",
-        SimpleNamespace(
+    captured["dependencies"] = IngestionPipelineDependencies(
+        vector_store=_VectorStore(),
+        qdrant_client=SimpleNamespace(
             set_payload=lambda **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("qdrant unavailable")
-            )
+            ),
+            delete=lambda **_kwargs: None,
         ),
+        collection_name="technical-documents",
     )
     monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", True)
 
@@ -328,16 +350,19 @@ def test_final_qdrant_security_sync_failure_rolls_back_instead_of_failing_open(
         domain_override="generic",
         security_override="confidential",
         site_override="HQ",
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "error"
     assert "qdrant unavailable" in report["message"]
     assert captured["cleared"] == []
     assert captured["restored"] == [701]
-    assert captured["deleted"][-1] == (
-        ("sensitive.pdf", "Technical"),
-        {"doc_id": 701},
-    )
+    delete_args, delete_kwargs = captured["deleted"][-1]
+    assert delete_args == ("sensitive.pdf", "Technical")
+    assert delete_kwargs == {
+        "doc_id": 701,
+        "dependencies": captured["dependencies"],
+    }
 
 
 def test_pdf_vision_table_and_sensitive_scan_reach_manual_review(tmp_path, monkeypatch):
@@ -361,6 +386,7 @@ def test_pdf_vision_table_and_sensitive_scan_reach_manual_review(tmp_path, monke
         security_override="internal",
         site_override="HQ",
         scan_sensitive=True,
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "success"
@@ -404,6 +430,7 @@ def test_pdf_required_vision_failure_is_blocked_and_rolled_back(tmp_path, monkey
         domain_override="mechanical",
         security_override="internal",
         site_override="HQ",
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "error"
@@ -415,7 +442,15 @@ def test_pdf_required_vision_failure_is_blocked_and_rolled_back(tmp_path, monkey
     assert captured["failed"][0][:2] == ("scan.pdf", "Technical")
     assert "vision_timeout" in captured["failed"][0][2]
     assert captured["restored"] == [701]
-    assert captured["deleted"] == [(('scan.pdf', 'Technical'), {'doc_id': 701})]
+    assert captured["deleted"] == [
+        (
+            ("scan.pdf", "Technical"),
+            {
+                "doc_id": 701,
+                "dependencies": captured["dependencies"],
+            },
+        )
+    ]
     assert any("Da rollback vector/metadata" in warning for warning in report["warnings"])
 
 
@@ -440,6 +475,7 @@ def test_image_file_sensitive_content_escalates_security_and_keeps_vision_source
         security_override="internal",
         site_override="HQ",
         scan_sensitive=True,
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "success"

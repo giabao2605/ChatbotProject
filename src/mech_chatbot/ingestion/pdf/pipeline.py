@@ -11,8 +11,12 @@ from typing import Any
 
 from mech_chatbot.domain.ingestion_progress import IngestionProgressEvent
 from mech_chatbot.ingestion.pdf import pipeline_implementation as _implementation
-
-
+from mech_chatbot.application.vector_ingestion import (
+    IngestionPipelineDependencies,
+)
+from mech_chatbot.ingestion.pdf.pipeline_dependencies import (
+    build_compatibility_ingestion_resources as _build_compatibility_resources,
+)
 def _legacy_callback(callback: Any) -> Any:
     if callback is None:
         return None
@@ -38,7 +42,19 @@ def process_and_ingest_pdf(
     site_override: str | None = None,
     scan_sensitive: bool = False,
     phong_ban_override: Any = None,
+    *,
+    dependencies: IngestionPipelineDependencies | None = None,
 ) -> dict[str, Any]:
+    needs_dependencies = dependencies is None
+    if needs_dependencies:
+        resources = _build_compatibility_resources(
+            include_dependencies=needs_dependencies,
+            include_vision=False,
+        )
+        dependencies = resources.dependencies
+    dependency_kwargs = (
+        {"dependencies": dependencies} if dependencies is not None else {}
+    )
     return _implementation.process_and_ingest_pdf(
         pdf_path,
         ten_file,
@@ -51,6 +67,7 @@ def process_and_ingest_pdf(
         site_override,
         scan_sensitive,
         phong_ban_override,
+        **dependency_kwargs,
     )
 
 
@@ -66,7 +83,19 @@ def process_and_ingest_file(
     site_override: str | None = None,
     scan_sensitive: bool = False,
     phong_ban_override: Any = None,
+    *,
+    dependencies: IngestionPipelineDependencies | None = None,
 ) -> dict[str, Any]:
+    needs_dependencies = dependencies is None
+    if needs_dependencies:
+        resources = _build_compatibility_resources(
+            include_dependencies=needs_dependencies,
+            include_vision=False,
+        )
+        dependencies = resources.dependencies
+    dependency_kwargs = (
+        {"dependencies": dependencies} if dependencies is not None else {}
+    )
     return _implementation.process_and_ingest_file(
         file_path,
         ten_file,
@@ -79,6 +108,7 @@ def process_and_ingest_file(
         site_override,
         scan_sensitive,
         phong_ban_override,
+        **dependency_kwargs,
     )
 
 

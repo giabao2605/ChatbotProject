@@ -1,10 +1,37 @@
 from __future__ import annotations
 
+import pytest
+
+from mech_chatbot.application.vector_ingestion import IngestionPipelineDependencies
 from mech_chatbot.ingestion.pdf import pipeline
+from mech_chatbot.ingestion.pdf.pipeline_dependencies import (
+    CompatibilityIngestionResources,
+)
 from mech_chatbot.ingestion.progress import IngestionProgressEvent
 
 
-def test_pdf_entrypoint_forwards_to_single_implementation(monkeypatch) -> None:
+@pytest.fixture(autouse=True)
+def compatibility_resources(monkeypatch):
+    dependencies = IngestionPipelineDependencies(
+        vector_store=object(),
+        qdrant_client=object(),
+        collection_name="technical-documents",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_build_compatibility_resources",
+        lambda **_kwargs: CompatibilityIngestionResources(
+            dependencies,
+            None,
+        ),
+    )
+    return dependencies
+
+
+def test_pdf_entrypoint_forwards_to_single_implementation(
+    monkeypatch,
+    compatibility_resources,
+) -> None:
     calls = []
     monkeypatch.setattr(
         pipeline._implementation,
@@ -17,10 +44,13 @@ def test_pdf_entrypoint_forwards_to_single_implementation(monkeypatch) -> None:
     assert result == {"status": "success"}
     assert calls[0][0][:3] == ("manual.pdf", "manual.pdf", "quality")
     assert calls[0][0][4] is None
-    assert calls[0][1] == {}
+    assert calls[0][1]["dependencies"] is compatibility_resources
 
 
-def test_file_entrypoint_forwards_to_single_implementation(monkeypatch) -> None:
+def test_file_entrypoint_forwards_to_single_implementation(
+    monkeypatch,
+    compatibility_resources,
+) -> None:
     calls = []
     monkeypatch.setattr(
         pipeline._implementation,
@@ -33,7 +63,7 @@ def test_file_entrypoint_forwards_to_single_implementation(monkeypatch) -> None:
     assert result == {"status": "success"}
     assert calls[0][0][:3] == ("manual.md", "manual.md", "quality")
     assert calls[0][0][4] is None
-    assert calls[0][1] == {}
+    assert calls[0][1]["dependencies"] is compatibility_resources
 
 
 def test_compatibility_entrypoint_translates_typed_progress(monkeypatch) -> None:

@@ -3,42 +3,40 @@ from types import SimpleNamespace
 import pytest
 
 from mech_chatbot.ingestion.pdf import bom, metadata, pipeline_implementation as pipeline
+from mech_chatbot.application.vector_ingestion import IngestionPipelineDependencies
 
 
 pytestmark = pytest.mark.unit
 
 
-def test_lazy_rag_dependency_resolves_once_and_reuses_cached_object(monkeypatch):
-    from mech_chatbot import rag
-
-    dependency = SimpleNamespace(state="ready")
-    monkeypatch.setattr(
-        rag,
-        "service",
-        SimpleNamespace(wave6_dependency=dependency),
-        raising=False,
-    )
-    proxy = pipeline._LazyRagAttr("wave6_dependency")
-
-    assert proxy.state == "ready"
-    assert proxy._resolve() is dependency
-
-
 def test_vector_cleanup_prefers_document_identity_then_keeps_legacy_fallback(
-    monkeypatch,
 ):
     delete_calls = []
-    monkeypatch.setattr(
-        pipeline,
-        "client",
-        SimpleNamespace(delete=lambda **kwargs: delete_calls.append(kwargs)),
+    dependencies = IngestionPipelineDependencies(
+        vector_store=object(),
+        qdrant_client=SimpleNamespace(
+            delete=lambda **kwargs: delete_calls.append(kwargs)
+        ),
+        collection_name="technical-documents",
     )
 
-    pipeline._delete_vectors_for_file("drawing.pdf", "Welding", doc_id=41)
-    pipeline._delete_vectors_for_file("drawing.pdf", "Welding")
+    pipeline._delete_vectors_for_file(
+        "drawing.pdf",
+        "Welding",
+        doc_id=41,
+        dependencies=dependencies,
+    )
+    pipeline._delete_vectors_for_file(
+        "drawing.pdf",
+        "Welding",
+        dependencies=dependencies,
+    )
 
     assert len(delete_calls) == 3
-    assert all(call["collection_name"] == pipeline.QDRANT_COLLECTION for call in delete_calls)
+    assert all(
+        call["collection_name"] == "technical-documents"
+        for call in delete_calls
+    )
 
 
 def test_markdown_table_reader_rejects_invalid_shapes_and_stops_at_boundaries():

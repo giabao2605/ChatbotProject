@@ -12,28 +12,10 @@ from typing import Mapping
 from PIL import Image
 import pdfplumber
 from langchain_core.documents import Document
-from mech_chatbot.config.settings import QDRANT_COLLECTION
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception
 from qdrant_client import models
 from mech_chatbot.config.logging import logger
 from mech_chatbot.db.repository import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records, get_document_info, mark_document_ingest_failed, save_document_page, save_technical_attributes, save_document_attributes, update_document_classification, clear_reingest_snapshot, restore_document_children
-# P1.4: lazy proxy de bo canh cross-layer tinh ingestion -> rag (L4 -> L5).
-# vectorstore/client van la singleton dung chung tu rag.bootstrap, chi fetch khi
-# lan dau truy cap thuoc tinh (giu nguyen hanh vi, chi doi thoi diem khoi tao).
-class _LazyRagAttr:
-    def __init__(self, _name):
-        self.__dict__["_name"] = _name
-        self.__dict__["_obj"] = None
-    def _resolve(self):
-        if self.__dict__["_obj"] is None:
-            from mech_chatbot.rag import service as _svc
-            self.__dict__["_obj"] = getattr(_svc, self.__dict__["_name"])
-        return self.__dict__["_obj"]
-    def __getattr__(self, item):
-        return getattr(self._resolve(), item)
-
-vectorstore = _LazyRagAttr("vectorstore")
-client = _LazyRagAttr("client")
 from mech_chatbot.llm.vision_client import describe_vision_error, is_retryable_error
 from mech_chatbot.llm.external_ai import external_document_context
 
@@ -49,6 +31,10 @@ from mech_chatbot.ingestion.pdf.bom import (
 from mech_chatbot.ingestion.pdf.readers import extract_text_from_supported_file
 from mech_chatbot.ingestion.pdf.metadata import extract_metadata_smart
 from mech_chatbot.domain.ingestion_progress import IngestionProgressEvent
+from mech_chatbot.application.vector_ingestion import (
+    IngestionPipelineDependencies,
+    require_pipeline_dependencies,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +157,7 @@ def _initialize_report(
 def _finalize_successful_persistence(
     report,
     *,
+    dependencies,
     doc_id,
     ten_file,
     thu_muc,
@@ -190,8 +177,8 @@ def _finalize_successful_persistence(
     if classification_updated is False:
         raise RuntimeError("Khong dong bo duoc classification/RBAC vao SQL.")
     try:
-        client.set_payload(
-            collection_name=QDRANT_COLLECTION,
+        dependencies.qdrant_client.set_payload(
+            collection_name=dependencies.collection_name,
             payload={
                 "security_level": source_context.security_level,
                 "domain": source_context.domain,
@@ -213,12 +200,24 @@ def _finalize_successful_persistence(
     clear_reingest_snapshot(doc_id)
 
 
-def _rollback_failed_ingestion(report, *, doc_id, ten_file, thu_muc):
+def _rollback_failed_ingestion(
+    report,
+    *,
+    dependencies,
+    doc_id,
+    ten_file,
+    thu_muc,
+):
     if report["status"] != "error" or not ROLLBACK_ON_INGEST_ERROR:
         return
 
     try:
-        _delete_vectors_for_file(ten_file, thu_muc, doc_id=doc_id)
+        _delete_vectors_for_file(
+            ten_file,
+            thu_muc,
+            doc_id=doc_id,
+            dependencies=dependencies,
+        )
         mark_document_ingest_failed(ten_file, thu_muc, report.get("message"))
         restore_document_children(doc_id)
         report["total_chunks"] = 0
@@ -297,6 +296,7 @@ def _finalize_quality_report(report, context):
 def _finalize_pipeline_transaction(
     report,
     *,
+    dependencies,
     doc_id,
     ten_file,
     thu_muc,
@@ -311,6 +311,7 @@ def _finalize_pipeline_transaction(
         try:
             _finalize_successful_persistence(
                 report,
+                dependencies=dependencies,
                 doc_id=doc_id,
                 ten_file=ten_file,
                 thu_muc=thu_muc,
@@ -323,6 +324,7 @@ def _finalize_pipeline_transaction(
 
     _rollback_failed_ingestion(
         report,
+        dependencies=dependencies,
         doc_id=doc_id,
         ten_file=ten_file,
         thu_muc=thu_muc,
@@ -341,17 +343,23 @@ def _emit_progress(progress_callback, phase, message):
     stop=stop_after_attempt(4),
     reraise=True
 )
-def _add_docs_with_retry(chunks):
-    vectorstore.add_documents(chunks)
+def _add_docs_with_retry(chunks, *, dependencies):
+    dependencies.vector_store.add_documents(chunks)
 
 
-def _delete_vectors_for_file(ten_file, thu_muc, doc_id=None):
+def _delete_vectors_for_file(
+    ten_file,
+    thu_muc,
+    doc_id=None,
+    *,
+    dependencies,
+):
     # Uu tien xoa theo doc_id (chinh xac nhat, bat duoc ca khi doi ten file/thu muc
     # -> tranh sot vector cu gay trung lap/nhieu khi re-ingest).
     if doc_id is not None:
         try:
-            client.delete(
-                collection_name=QDRANT_COLLECTION,
+            dependencies.qdrant_client.delete(
+                collection_name=dependencies.collection_name,
                 points_selector=models.Filter(
                     must=[models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=doc_id))]
                 ),
@@ -362,8 +370,8 @@ def _delete_vectors_for_file(ten_file, thu_muc, doc_id=None):
     # metadata.phong_ban_quyen (danh sach quyen). phong_ban_quyen co the chua nhieu
     # phong chia se, dung MatchValue tren list de lai vector khi doi ten phong.
     # Van giu should de tuong thich nguoc voi vector cu (chua co metadata.thu_muc).
-    client.delete(
-        collection_name=QDRANT_COLLECTION,
+    dependencies.qdrant_client.delete(
+        collection_name=dependencies.collection_name,
         points_selector=models.Filter(
             must=[
                 models.FieldCondition(key="metadata.file_goc", match=models.MatchValue(value=ten_file)),
@@ -376,7 +384,22 @@ def _delete_vectors_for_file(ten_file, thu_muc, doc_id=None):
     )
 
 
-def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progress_callback=None, domain_override=None, security_override=None, cong_doan_override=None, site_override=None, scan_sensitive=False, phong_ban_override=None):
+def process_and_ingest_pdf(
+    pdf_path,
+    ten_file,
+    thu_muc,
+    vision_model=None,
+    progress_callback=None,
+    domain_override=None,
+    security_override=None,
+    cong_doan_override=None,
+    site_override=None,
+    scan_sensitive=False,
+    phong_ban_override=None,
+    *,
+    dependencies: IngestionPipelineDependencies | None = None,
+):
+    dependencies = require_pipeline_dependencies(dependencies)
     source_context = _initialize_source_context(
         thu_muc,
         domain_override=domain_override,
@@ -851,7 +874,12 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                 # Document Versioning: Xoa vector cu cua file nay truoc khi add (chi xoa 1 lan o trang 1)
                 if page_num == 0:
                     try:
-                        _delete_vectors_for_file(ten_file, thu_muc, doc_id=doc_id)
+                        _delete_vectors_for_file(
+                            ten_file,
+                            thu_muc,
+                            doc_id=doc_id,
+                            dependencies=dependencies,
+                        )
                     except Exception as e:
                         logger.warning(f"Khong xoa duoc vector cu (bo qua, tiep tuc): {ten_file}: {e}")
 
@@ -860,7 +888,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
                     "embedding",
                     "Đang tạo embedding...",
                 )
-                _add_docs_with_retry(all_chunks)
+                _add_docs_with_retry(all_chunks, dependencies=dependencies)
                 report["total_chunks"] += len(all_chunks)
 
             except Exception as e:
@@ -892,6 +920,7 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     finalized_source = replace(source_context, security_level=security_level)
     return _finalize_pipeline_transaction(
         report,
+        dependencies=dependencies,
         doc_id=doc_id,
         ten_file=ten_file,
         thu_muc=thu_muc,
@@ -905,7 +934,22 @@ def process_and_ingest_pdf(pdf_path, ten_file, thu_muc, vision_model=None, progr
     )
 
 
-def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, progress_callback=None, domain_override=None, security_override=None, cong_doan_override=None, site_override=None, scan_sensitive=False, phong_ban_override=None):
+def process_and_ingest_file(
+    file_path,
+    ten_file,
+    thu_muc,
+    vision_model=None,
+    progress_callback=None,
+    domain_override=None,
+    security_override=None,
+    cong_doan_override=None,
+    site_override=None,
+    scan_sensitive=False,
+    phong_ban_override=None,
+    *,
+    dependencies: IngestionPipelineDependencies | None = None,
+):
+    dependencies = require_pipeline_dependencies(dependencies)
     source_context = _initialize_source_context(
         thu_muc,
         domain_override=domain_override,
@@ -1166,7 +1210,12 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
         if all_chunks:
             # Document Versioning: Xoa vector cu
             try:
-                _delete_vectors_for_file(ten_file, thu_muc, doc_id=doc_id)
+                _delete_vectors_for_file(
+                    ten_file,
+                    thu_muc,
+                    doc_id=doc_id,
+                    dependencies=dependencies,
+                )
             except Exception as e:
                 logger.warning(f"Khong xoa duoc vector cu (bo qua, tiep tuc): {ten_file}: {e}")
 
@@ -1175,7 +1224,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
                 "embedding",
                 "Đang tạo embedding...",
             )
-            _add_docs_with_retry(all_chunks)
+            _add_docs_with_retry(all_chunks, dependencies=dependencies)
             report["total_chunks"] += len(all_chunks)
 
     except Exception as e:
@@ -1189,6 +1238,7 @@ def process_and_ingest_file(file_path, ten_file, thu_muc, vision_model=None, pro
     finalized_source = replace(source_context, security_level=security_level)
     return _finalize_pipeline_transaction(
         report,
+        dependencies=dependencies,
         doc_id=doc_id,
         ten_file=ten_file,
         thu_muc=thu_muc,

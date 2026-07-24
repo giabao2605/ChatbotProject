@@ -3,6 +3,7 @@ import json
 from contextlib import contextmanager
 
 from mech_chatbot.ingestion.pdf import pipeline_implementation as pipeline
+from mech_chatbot.application.vector_ingestion import IngestionPipelineDependencies
 from mech_chatbot.ingestion.pdf.bom import (
     extract_bom_records,
     extract_bom_records_from_markdown,
@@ -33,6 +34,22 @@ def test_markdown_bom_table_identity_is_one_based():
 class _ClientStub:
     def set_payload(self, **_kwargs):
         return None
+
+    def delete(self, **_kwargs):
+        return None
+
+
+class _VectorStoreStub:
+    def add_documents(self, _documents):
+        return None
+
+
+def _dependencies():
+    return IngestionPipelineDependencies(
+        vector_store=_VectorStoreStub(),
+        qdrant_client=_ClientStub(),
+        collection_name="technical-documents",
+    )
 
 
 class _TokenSplitterStub:
@@ -86,13 +103,16 @@ def _install_success_path_stubs(monkeypatch, saved_pages, saved_bom=None):
         ) or len(records),
     )
     monkeypatch.setattr(pipeline, "_delete_vectors_for_file", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(pipeline, "_add_docs_with_retry", lambda _chunks: None)
+    monkeypatch.setattr(
+        pipeline,
+        "_add_docs_with_retry",
+        lambda _chunks, **_kwargs: None,
+    )
     monkeypatch.setattr(pipeline, "token_splitter", _TokenSplitterStub())
     monkeypatch.setattr(pipeline, "tokenize_cached", lambda text: text)
     monkeypatch.setattr(pipeline, "_contextual_chunk_enabled", lambda: False)
     monkeypatch.setattr(pipeline, "update_document_classification", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(pipeline, "clear_reingest_snapshot", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(pipeline, "client", _ClientStub())
 
 
 def test_markdown_upload_records_extracted_page_and_reaches_review(tmp_path, monkeypatch):
@@ -111,6 +131,7 @@ def test_markdown_upload_records_extracted_page_and_reaches_review(tmp_path, mon
         domain_override="generic",
         security_override="internal",
         site_override="DEMO-HQ",
+        dependencies=_dependencies(),
     )
 
     assert report["status"] == "success"
@@ -178,6 +199,7 @@ def test_non_pdf_external_calls_run_inside_governed_document_context(
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
+        dependencies=_dependencies(),
     )
 
     assert report["status"] == "success"
@@ -198,6 +220,7 @@ def test_empty_markdown_upload_remains_blocked(tmp_path, monkeypatch):
         domain_override="generic",
         security_override="internal",
         site_override="DEMO-HQ",
+        dependencies=_dependencies(),
     )
 
     assert report["status"] == "error"
@@ -220,6 +243,7 @@ def test_binary_content_renamed_to_markdown_is_blocked(tmp_path, monkeypatch):
         domain_override="generic",
         security_override="internal",
         site_override="DEMO-HQ",
+        dependencies=_dependencies(),
     )
 
     assert report["status"] == "error"
@@ -286,6 +310,7 @@ def test_markdown_ingestion_saves_structured_bom_with_page_provenance(tmp_path, 
         domain_override="mechanical",
         security_override="internal",
         site_override="HQ",
+        dependencies=_dependencies(),
     )
 
     assert report["status"] == "success"
@@ -318,6 +343,7 @@ def test_markdown_ingestion_does_not_report_bom_rows_when_sql_persistence_fails(
         domain_override="mechanical",
         security_override="internal",
         site_override="HQ",
+        dependencies=_dependencies(),
     )
 
     assert report["bom_rows_count"] == 0

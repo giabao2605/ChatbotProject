@@ -36,6 +36,7 @@ def test_pdf_governance_lookup_failure_blocks_external_processing(
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
+        dependencies=characterization._dependencies(),
     )
 
     assert report["status"] == "error"
@@ -65,6 +66,7 @@ def test_supported_file_missing_document_id_blocks_external_processing(monkeypat
     monkeypatch.setattr(pipeline, "mark_document_ingest_failed", lambda *_a, **_k: None)
     monkeypatch.setattr(pipeline, "restore_document_children", lambda *_a, **_k: None)
 
+    dependencies = characterization._dependencies()
     report = pipeline.process_and_ingest_file(
         "missing-id.txt",
         "missing-id.txt",
@@ -73,6 +75,7 @@ def test_supported_file_missing_document_id_blocks_external_processing(monkeypat
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
+        dependencies=dependencies,
     )
 
     assert report["status"] == "error"
@@ -123,6 +126,7 @@ def test_pdf_vision_cache_hit_avoids_provider_and_missing_site_requires_review(
         progress_callback=progress.append,
         domain_override="mechanical",
         security_override="internal",
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "success"
@@ -167,6 +171,7 @@ def test_pdf_without_optional_vision_provider_blocks_and_restores_snapshot(
         domain_override="mechanical",
         security_override="internal",
         site_override="HQ",
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "error"
@@ -209,6 +214,7 @@ def test_pdf_page_failure_does_not_prevent_later_pages_from_being_ingested(
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "success"
@@ -242,6 +248,7 @@ def test_pdf_open_and_rollback_failures_are_reported_without_escaping(monkeypatc
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
+        dependencies=characterization._dependencies(),
     )
 
     assert report["status"] == "error"
@@ -283,6 +290,7 @@ def test_empty_supported_file_rolls_back_and_preserves_failure_reason(monkeypatc
         pipeline, "restore_document_children", lambda doc_id: restored.append(doc_id),
     )
 
+    dependencies = characterization._dependencies()
     report = pipeline.process_and_ingest_file(
         "empty.txt",
         "empty.txt",
@@ -290,12 +298,18 @@ def test_empty_supported_file_rolls_back_and_preserves_failure_reason(monkeypatc
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
+        dependencies=dependencies,
     )
 
     assert report["status"] == "error"
     assert report["quality_status"] == "blocked"
     assert "Khong trich xuat duoc noi dung" in report["message"]
-    assert deleted == [(("empty.txt", "Technical"), {"doc_id": 701})]
+    assert deleted == [
+        (
+            ("empty.txt", "Technical"),
+            {"doc_id": 701, "dependencies": dependencies},
+        )
+    ]
     assert failed == [
         ("empty.txt", "Technical", "Khong trich xuat duoc noi dung co the tim kiem tu file nay."),
     ]
@@ -329,6 +343,7 @@ def test_image_copy_failure_does_not_discard_successful_ocr(tmp_path, monkeypatc
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "success"
