@@ -56,6 +56,9 @@ def test_process_projections_are_frozen_and_keep_existing_defaults():
     assert app.thread_limit == 60
     assert app.rag_base_url == "http://127.0.0.1:8100"
     assert app.rag_chat_timeout_seconds == 300
+    assert app.cookie_secure is False
+    assert app.cookie_samesite == "lax"
+    assert app.session_ttl_seconds == 2700
     assert rag.host == "0.0.0.0"
     assert rag.port == 8100
     assert rag.max_concurrent_requests == 2
@@ -68,6 +71,24 @@ def test_process_projections_are_frozen_and_keep_existing_defaults():
 
     with pytest.raises(FrozenInstanceError):
         app.thread_limit = 99
+
+
+def test_app_security_projection_preserves_secret_fallback_and_clamps_values():
+    settings = Settings.from_env(
+        {
+            "CHAT_BRIDGE_SECRET": "bridge-secret",
+            "APP_COOKIE_SECURE": "true",
+            "APP_COOKIE_SAMESITE": "invalid",
+            "APP_SESSION_TTL_SECONDS": "999999",
+        }
+    )
+
+    app = AppProcessSettings.from_settings(settings)
+
+    assert app.session_secret == "bridge-secret"
+    assert app.cookie_secure is True
+    assert app.cookie_samesite == "lax"
+    assert app.session_ttl_seconds == 86400
 
 
 def test_adapter_projections_expose_only_their_required_configuration():
@@ -101,4 +122,3 @@ def test_adapter_projections_expose_only_their_required_configuration():
     assert vision.model_name == "vision-test"
     assert not hasattr(qdrant, "SQL_PASSWORD")
     assert not hasattr(sql, "QDRANT_API_KEY")
-

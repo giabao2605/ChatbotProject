@@ -199,6 +199,10 @@ class Settings(BaseModel):
     APP_RAG_CHAT_TIMEOUT_SECONDS: int = 300
     APP_SERVER_HOST: str = "0.0.0.0"
     APP_SERVER_PORT: int = 8080
+    APP_SESSION_SECRET: str = ""
+    APP_COOKIE_SECURE: bool = False
+    APP_COOKIE_SAMESITE: str = "lax"
+    APP_SESSION_TTL_SECONDS: int = 2700
     CRAG_PILOT_REPLAY_WORKERS: int = 2
     CRAG_PILOT_REPLAY_QUEUE_SIZE: int = 8
     CRAG_PILOT_REPLAY_TIMEOUT_SECONDS: float = 300.0
@@ -367,6 +371,19 @@ class Settings(BaseModel):
             ),
             APP_SERVER_HOST=_str("APP_SERVER_HOST", "0.0.0.0"),
             APP_SERVER_PORT=_int("APP_SERVER_PORT", 8080),
+            APP_SESSION_SECRET=_first(
+                "APP_SESSION_SECRET",
+                "CHAT_BRIDGE_SECRET",
+                "RAG_SERVICE_TOKEN",
+                default="",
+            ),
+            APP_COOKIE_SECURE=_bool(
+                "APP_COOKIE_SECURE",
+                False,
+                _TRUTHY_4,
+            ),
+            APP_COOKIE_SAMESITE=_str("APP_COOKIE_SAMESITE", "lax"),
+            APP_SESSION_TTL_SECONDS=_int("APP_SESSION_TTL_SECONDS", 2700),
             CRAG_PILOT_REPLAY_WORKERS=_int("CRAG_PILOT_REPLAY_WORKERS", 2),
             CRAG_PILOT_REPLAY_QUEUE_SIZE=_int(
                 "CRAG_PILOT_REPLAY_QUEUE_SIZE",
@@ -501,6 +518,10 @@ class AppProcessSettings:
     pilot_replay_workers: int
     pilot_replay_queue_size: int
     pilot_replay_timeout_seconds: float
+    session_secret: str
+    cookie_secure: bool
+    cookie_samesite: str
+    session_ttl_seconds: int
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "AppProcessSettings":
@@ -521,6 +542,17 @@ class AppProcessSettings:
             pilot_replay_queue_size=settings.CRAG_PILOT_REPLAY_QUEUE_SIZE,
             pilot_replay_timeout_seconds=(
                 settings.CRAG_PILOT_REPLAY_TIMEOUT_SECONDS
+            ),
+            session_secret=settings.APP_SESSION_SECRET,
+            cookie_secure=settings.APP_COOKIE_SECURE,
+            cookie_samesite=(
+                settings.APP_COOKIE_SAMESITE
+                if settings.APP_COOKIE_SAMESITE in {"lax", "strict", "none"}
+                else "lax"
+            ),
+            session_ttl_seconds=max(
+                60,
+                min(86400, settings.APP_SESSION_TTL_SECONDS),
             ),
         )
 
