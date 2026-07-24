@@ -4,6 +4,7 @@ import pytest
 
 from mech_chatbot.config.settings import (
     AppProcessSettings,
+    ExternalAiSettings,
     LlmSettings,
     QdrantSettings,
     RagProcessSettings,
@@ -63,6 +64,8 @@ def test_process_projections_are_frozen_and_keep_existing_defaults():
     assert rag.port == 8100
     assert rag.max_concurrent_requests == 2
     assert rag.require_service_auth is True
+    assert rag.hyde_enabled is True
+    assert rag.query_rewrite_enabled is True
     assert worker.publication_reconcile_interval_seconds == 15
     assert worker.serving_reconcile_interval_seconds == 600
     assert worker.serving_reconcile_batch_size == 500
@@ -71,6 +74,20 @@ def test_process_projections_are_frozen_and_keep_existing_defaults():
 
     with pytest.raises(FrozenInstanceError):
         app.thread_limit = 99
+
+
+def test_rag_process_projection_snapshots_query_expansion_flags():
+    settings = Settings.from_env(
+        {
+            "HYDE_ENABLED": "false",
+            "ENABLE_QUERY_REWRITE": "0",
+        }
+    )
+
+    rag = RagProcessSettings.from_settings(settings)
+
+    assert rag.hyde_enabled is False
+    assert rag.query_rewrite_enabled is False
 
 
 def test_app_security_projection_preserves_secret_fallback_and_clamps_values():
@@ -122,3 +139,20 @@ def test_adapter_projections_expose_only_their_required_configuration():
     assert vision.model_name == "vision-test"
     assert not hasattr(qdrant, "SQL_PASSWORD")
     assert not hasattr(sql, "QDRANT_API_KEY")
+
+
+def test_external_ai_projection_snapshots_local_policy_without_secrets():
+    settings = Settings.from_env(
+        {
+            "APP_ENV": "development",
+            "EXTERNAL_AI_LOCAL_DEVELOPMENT": "true",
+            "EXTERNAL_PROCESSING_POLICY": "internal_only",
+        }
+    )
+
+    external_ai = ExternalAiSettings.from_settings(settings)
+
+    assert external_ai.application_environment == "development"
+    assert external_ai.local_development is True
+    assert external_ai.processing_policy == "internal_only"
+    assert not hasattr(external_ai, "LLM_API_KEY")

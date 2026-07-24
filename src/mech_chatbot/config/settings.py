@@ -127,6 +127,9 @@ class Settings(BaseModel):
     GPT_MAX_OUTPUT_TOKENS: int = 4000
     GPT_TIMEOUT_SECONDS: float = 120.0  # llm_client=120; vision_client fallback=180
     GPT_MIN_INTERVAL_SECONDS: float = 0.0
+    APP_ENV: str = ""
+    EXTERNAL_AI_LOCAL_DEVELOPMENT: bool = False
+    EXTERNAL_PROCESSING_POLICY: str = "all_external"
 
     # --- Vision (llm/vision_client, ingestion/pdf/vision) -----------------
     GPT_VISION_MODEL_NAME: str = "gpt-5.4"  # goc: GPT_VISION_MODEL_NAME or GPT_MODEL_NAME or gpt-5.4
@@ -146,6 +149,8 @@ class Settings(BaseModel):
     USE_VOYAGE_RERANK: bool = True
     STRICT_ANSWER_MODE: bool = True
     STRICT_REALTIME_STREAMING: bool = False
+    HYDE_ENABLED: bool = True
+    ENABLE_QUERY_REWRITE: bool = True
     INTENT_MAX_WORKERS: int = 8
     PARENT_CONTEXT_MAX_WORKERS: int = 4
     INTENT_TIMEOUT: float = 6.0
@@ -293,6 +298,16 @@ class Settings(BaseModel):
             GPT_MAX_OUTPUT_TOKENS=_int("GPT_MAX_OUTPUT_TOKENS", 4000),
             GPT_TIMEOUT_SECONDS=_float("GPT_TIMEOUT_SECONDS", 120.0),
             GPT_MIN_INTERVAL_SECONDS=_float("GPT_MIN_INTERVAL_SECONDS", 0.0),
+            APP_ENV=_str("APP_ENV", ""),
+            EXTERNAL_AI_LOCAL_DEVELOPMENT=_bool(
+                "EXTERNAL_AI_LOCAL_DEVELOPMENT",
+                False,
+                _TRUTHY_5,
+            ),
+            EXTERNAL_PROCESSING_POLICY=_str(
+                "EXTERNAL_PROCESSING_POLICY",
+                "all_external",
+            ),
             # Vision
             GPT_VISION_MODEL_NAME=_first(
                 "GPT_VISION_MODEL_NAME", "GPT_MODEL_NAME", default="gpt-5.4"
@@ -312,6 +327,8 @@ class Settings(BaseModel):
             USE_VOYAGE_RERANK=_bool("USE_VOYAGE_RERANK", True, _TRUTHY_5),
             STRICT_ANSWER_MODE=_bool("STRICT_ANSWER_MODE", True, _TRUTHY_5),
             STRICT_REALTIME_STREAMING=_bool("STRICT_REALTIME_STREAMING", False, _TRUTHY_5),
+            HYDE_ENABLED=_bool("HYDE_ENABLED", True, _TRUTHY_5),
+            ENABLE_QUERY_REWRITE=_bool("ENABLE_QUERY_REWRITE", True, _TRUTHY_5),
             INTENT_MAX_WORKERS=_int("INTENT_MAX_WORKERS", 8),
             PARENT_CONTEXT_MAX_WORKERS=_int("PARENT_CONTEXT_MAX_WORKERS", 4),
             INTENT_TIMEOUT=_float("INTENT_TIMEOUT", 6.0),
@@ -491,6 +508,21 @@ class LlmSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalAiSettings:
+    application_environment: str
+    local_development: bool
+    processing_policy: str
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "ExternalAiSettings":
+        return cls(
+            application_environment=settings.APP_ENV,
+            local_development=settings.EXTERNAL_AI_LOCAL_DEVELOPMENT,
+            processing_policy=settings.EXTERNAL_PROCESSING_POLICY,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class VisionSettings:
     api_key: str | None
     base_url: str | None
@@ -581,6 +613,8 @@ class RagProcessSettings:
     snapshot_fingerprint: str | None
     graph_fingerprint: str | None
     pilot_assignment_salt: str
+    hyde_enabled: bool
+    query_rewrite_enabled: bool
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RagProcessSettings":
@@ -596,6 +630,8 @@ class RagProcessSettings:
             snapshot_fingerprint=settings.RAG_SNAPSHOT_FINGERPRINT,
             graph_fingerprint=settings.RAG_GRAPH_FINGERPRINT,
             pilot_assignment_salt=settings.CRAG_PILOT_ASSIGNMENT_SALT,
+            hyde_enabled=settings.HYDE_ENABLED,
+            query_rewrite_enabled=settings.ENABLE_QUERY_REWRITE,
         )
 
 
