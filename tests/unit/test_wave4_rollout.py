@@ -61,7 +61,7 @@ def test_each_wave4_department_pattern_routes_to_retrieval(
     monkeypatch, department, pattern, question
 ):
     monkeypatch.setattr(
-        "mech_chatbot.db.repository.get_department_domain_profile",
+        "mech_chatbot.db.repositories.knowledge_governance.get_department_domain_profile",
         lambda code: {"is_active": True, "router_patterns": [pattern]}
         if code == department
         else None,
@@ -77,7 +77,7 @@ def test_each_wave4_department_pattern_routes_to_retrieval(
 
 def test_wave4_patterns_do_not_hijack_chitchat(monkeypatch):
     monkeypatch.setattr(
-        "mech_chatbot.db.repository.get_department_domain_profile",
+        "mech_chatbot.db.repositories.knowledge_governance.get_department_domain_profile",
         lambda _code: {
             "is_active": True,
             "router_patterns": ["bản vẽ khuôn", "đánh giá rủi ro", "sự cố IT"],

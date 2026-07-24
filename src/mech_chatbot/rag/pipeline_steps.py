@@ -465,7 +465,7 @@ def _assemble_context(retrieved_docs, user_question):
         context_text = structured_context + "\n\n" + context_text
     # P3-4: chen Golden Answer (cau tra loi da duyet) lam context uu tien cao nhat
     try:
-        from mech_chatbot.db.repository import find_golden_answer
+        from mech_chatbot.db.repositories.feedback import find_golden_answer
         _golden = find_golden_answer(user_question)
     except Exception as _e:
         logger.error(f"Loi tra cuu Golden Answer: {_e}")
@@ -1063,7 +1063,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
     else:
         # Tim kiem chung neu khong co ma
         try:
-            from mech_chatbot.db.repository import get_app_setting_int
+            from mech_chatbot.db.repositories.settings import get_app_setting_int
             base_k = get_app_setting_int("rag_general_top_k", 30)
         except Exception:
             base_k = 30

@@ -1,5 +1,5 @@
 """P2.3 — Org service: phong ban / site / phan cong user (L6). Pass-through."""
-from mech_chatbot.db.repository import (
+from mech_chatbot.db.repositories.catalog import (
     archive_department,
     get_department_summary,
     get_user_sites,

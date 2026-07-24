@@ -124,7 +124,10 @@ def _snapshot(value):
 
 def _validated_cache_payload(best):
     """Return cache metadata only if its complete access basis remains valid."""
-    from mech_chatbot.db.repository import sc_delete, sc_docs_all_current
+    from mech_chatbot.db.repositories.semantic_cache import (
+        sc_delete,
+        sc_docs_all_current,
+    )
 
     try:
         doc_ids = json.loads(best.get("source_doc_ids") or "[]")
@@ -151,7 +154,7 @@ def _validated_cache_payload(best):
 
 def lookup_exact(question, scope_sig, *, ttl=24.0):
     """Indexed fast path that avoids embeddings and interaction routing."""
-    from mech_chatbot.db.repository import (
+    from mech_chatbot.db.repositories.semantic_cache import (
         sc_delete,
         sc_docs_all_current,
         sc_get_exact,
@@ -203,7 +206,7 @@ def select_best(candidates, embedding, threshold):
 
 
 def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93):
-    from mech_chatbot.db.repository import (
+    from mech_chatbot.db.repositories.semantic_cache import (
         sc_get_candidates, sc_docs_all_current, sc_record_lookup, sc_record_hit, sc_delete,
     )
     try:
@@ -285,7 +288,7 @@ def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, sco
         # citations and a full access basis for history re-authorization.
         return
     try:
-        from mech_chatbot.db.repository import sc_put
+        from mech_chatbot.db.repositories.semantic_cache import sc_put
         sc_put(
             question=question,
             embedding=json.dumps([round(float(x), 6) for x in (embedding or [])]),

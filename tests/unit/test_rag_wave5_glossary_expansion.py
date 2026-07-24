@@ -1,7 +1,7 @@
 import pytest
 
-from mech_chatbot.db import repository
 from mech_chatbot.db import registry_ports
+from mech_chatbot.db.repositories import glossary
 from mech_chatbot.rag import glossary_expand
 
 
@@ -17,7 +17,7 @@ def test_glossary_expansion_adds_only_terms_missing_from_the_question(monkeypatc
         lambda department: "wave5-mechanical" if department == "WAVE5" else None,
     )
     monkeypatch.setattr(
-        repository,
+        glossary,
         "get_active_glossary",
         lambda domains: calls.append(domains)
         or [
@@ -52,7 +52,7 @@ def test_glossary_expansion_is_empty_for_empty_input_or_repository_failure(monke
         del domains
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(repository, "get_active_glossary", fail_to_load)
+    monkeypatch.setattr(glossary, "get_active_glossary", fail_to_load)
 
     assert glossary_expand.glossary_expansion_terms("CNC", "WAVE5-FAIL") == ""
 
@@ -69,7 +69,7 @@ def test_glossary_expansion_falls_back_to_generic_when_domain_resolution_fails(
 
     monkeypatch.setattr(registry_ports, "resolve_domain_by_department", fail_domain)
     monkeypatch.setattr(
-        repository,
+        glossary,
         "get_active_glossary",
         lambda domains: requested.append(domains) or [],
     )

@@ -158,7 +158,7 @@ def collect_tables(args):
 
 
 def get_engine():
-    from mech_chatbot.db.repository import engine
+    from mech_chatbot.db.engine import engine
     if engine is None:
         raise RuntimeError(
             "SQLAlchemy Engine chua khoi tao duoc (kiem tra cau hinh DB / ODBC)."

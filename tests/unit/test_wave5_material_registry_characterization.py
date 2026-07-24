@@ -2,7 +2,6 @@ import re
 
 import pytest
 
-from mech_chatbot.db import repository
 from mech_chatbot.db import registry_ports
 from mech_chatbot.ingestion import material_registry
 
@@ -55,11 +54,10 @@ def isolated_material_cache(monkeypatch):
 
 
 def test_public_material_registry_reads_active_database_dictionary(monkeypatch):
-    monkeypatch.setattr(repository, "_ensure_engine", lambda: None)
     monkeypatch.setattr(
-        repository,
-        "engine",
-        _Engine(
+        registry_ports,
+        "_bound_engine",
+        lambda: _Engine(
             materials=[(7, "SUS304", "SUS 304", "stainless steel")],
             synonyms=[(7, "inox 304"), (7, None), (999, "ignored")],
         ),
@@ -77,12 +75,11 @@ def test_public_material_registry_reads_active_database_dictionary(monkeypatch):
 
 def test_empty_dictionary_uses_safe_defaults_and_cached_result(monkeypatch):
     calls = []
-
-    def ensure_engine():
-        calls.append("ensure")
-
-    monkeypatch.setattr(repository, "_ensure_engine", ensure_engine)
-    monkeypatch.setattr(repository, "engine", _Engine())
+    monkeypatch.setattr(
+        registry_ports,
+        "_bound_engine",
+        lambda: calls.append("resolve") or _Engine(),
+    )
 
     material_registry.refresh_cache()
     first = material_registry.get_known_materials()
@@ -90,13 +87,13 @@ def test_empty_dictionary_uses_safe_defaults_and_cached_result(monkeypatch):
 
     assert "SUS304" in first
     assert second == first
-    assert calls == ["ensure"]
+    assert calls == ["resolve"]
 
 
 def test_database_failure_never_breaks_public_material_normalization(monkeypatch):
     monkeypatch.setattr(
-        repository,
-        "_ensure_engine",
+        registry_ports,
+        "_bound_engine",
         lambda: (_ for _ in ()).throw(RuntimeError("connection details must stay internal")),
     )
 

@@ -12,6 +12,7 @@ import time
 
 from sqlalchemy import text
 
+from mech_chatbot.config.repository_runtime import current_repository_engine
 from mech_chatbot.domain import registry_policy
 
 
@@ -20,21 +21,18 @@ _material_cache_lock = threading.Lock()
 _material_cache = {"ts": 0.0, "materials": None}
 
 
-def _repository():
-    from mech_chatbot.db import repository
-
-    return repository
+def _bound_engine():
+    return current_repository_engine()
 
 
 def _department_domain_security_row(department):
     if not department:
         return None
     try:
-        repository = _repository()
-        repository._ensure_engine()
-        if repository.engine is None:
+        engine = _bound_engine()
+        if engine is None:
             return None
-        with repository.engine.connect() as connection:
+        with engine.connect() as connection:
             try:
                 return connection.execute(
                     text(
@@ -61,11 +59,10 @@ def _department_site(department):
     if not department:
         return None
     try:
-        repository = _repository()
-        repository._ensure_engine()
-        if repository.engine is None:
+        engine = _bound_engine()
+        if engine is None:
             return None
-        with repository.engine.connect() as connection:
+        with engine.connect() as connection:
             row = connection.execute(
                 text(
                     "SELECT Site FROM dbo.Departments "
@@ -109,12 +106,11 @@ canonical_label = registry_policy.canonical_label
 
 def _load_materials_from_db():
     try:
-        repository = _repository()
-        repository._ensure_engine()
-        if repository.engine is None:
+        engine = _bound_engine()
+        if engine is None:
             return None
         materials = {}
-        with repository.engine.connect() as connection:
+        with engine.connect() as connection:
             rows = connection.execute(
                 text(
                     "SELECT MaterialID, CanonicalCode, DisplayName, Category "

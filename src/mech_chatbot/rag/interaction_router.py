@@ -82,7 +82,9 @@ def _department_router_pattern_match(text: str, department_codes) -> str | None:
     normalized = chitchat.normalize(text)
     for department in department_codes or []:
         try:
-            from mech_chatbot.db.repository import get_department_domain_profile
+            from mech_chatbot.db.repositories.knowledge_governance import (
+                get_department_domain_profile,
+            )
 
             profile = get_department_domain_profile(str(department))
         except Exception:

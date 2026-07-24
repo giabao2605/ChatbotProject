@@ -123,9 +123,9 @@ class _ContextBoundEngine:
         return getattr(self._target(), name)
 
 
-# Phase 6 removes this proxy as the remaining repository shims gain typed
-# constructor dependencies.  The proxy is intentionally stateless and cannot
-# create an engine during import.
+# This proxy remains only for public/unknown compatibility imports. Internal
+# callers use explicit owner modules and process-owned runtimes. Remove it only
+# after a separate external inventory and deprecation decision.
 engine = _ContextBoundEngine()
 
 
@@ -158,8 +158,9 @@ def resolve_engine(candidate: Any | None = None) -> Any:
     return selected
 
 
-# Read-only compatibility defaults for unknown external imports.  They are not
-# runtime configuration and are removed with the repository shim in Phase 6.
+# Read-only compatibility defaults for unknown external imports. They are not
+# runtime configuration and follow the same external deprecation policy as the
+# repository facade.
 SQL_SERVER = r"localhost\SQLEXPRESS"
 SQL_DATABASE = "Mech_Chatbot_DB"
 SQL_DRIVER = "ODBC Driver 17 for SQL Server"

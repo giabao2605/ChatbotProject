@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pytest
 from langchain_core.documents import Document
 
-from mech_chatbot.db import repository
+from mech_chatbot.db.repositories import doc_metadata, document_pages
 from mech_chatbot.rag.context_builders import (
     build_common_metadata_context,
     build_structured_attributes_context,
@@ -29,7 +29,9 @@ def test_structured_attributes_are_deduplicated_sorted_and_rendered_as_json(monk
         calls.append(file_name)
         return {"material": "SUS304", "verified": True} if file_name == "a.pdf" else []
 
-    monkeypatch.setattr(repository, "get_technical_attributes_for_rag", fake_attributes)
+    monkeypatch.setattr(
+        document_pages, "get_technical_attributes_for_rag", fake_attributes
+    )
 
     rendered = build_structured_attributes_context(
         [_doc(file_goc="b.pdf"), _doc(file_goc="a.pdf"), _doc(file_goc="a.pdf"), _doc()]
@@ -44,7 +46,9 @@ def test_structured_attributes_are_deduplicated_sorted_and_rendered_as_json(monk
 
 @pytest.mark.parametrize("attributes", [None, {}, []])
 def test_structured_attributes_omit_empty_repository_results(monkeypatch, attributes):
-    monkeypatch.setattr(repository, "get_technical_attributes_for_rag", lambda _name: attributes)
+    monkeypatch.setattr(
+        document_pages, "get_technical_attributes_for_rag", lambda _name: attributes
+    )
 
     assert build_structured_attributes_context([_doc(file_goc="empty.pdf")]) == ""
 
@@ -53,14 +57,16 @@ def test_structured_attributes_fail_closed_when_repository_is_unavailable(monkey
     def unavailable(_name):
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(repository, "get_technical_attributes_for_rag", unavailable)
+    monkeypatch.setattr(
+        document_pages, "get_technical_attributes_for_rag", unavailable
+    )
 
     assert build_structured_attributes_context([_doc(file_goc="a.pdf")]) == ""
 
 
 def test_common_metadata_renders_all_supported_fields_and_expired_status_warning(monkeypatch):
     monkeypatch.setattr(
-        repository,
+        doc_metadata,
         "get_common_metadata_for_rag",
         lambda doc_ids: {
             doc_ids[0]: {
@@ -92,7 +98,7 @@ def test_common_metadata_renders_all_supported_fields_and_expired_status_warning
 def test_common_metadata_warns_for_past_expiry_but_tolerates_unparseable_dates(monkeypatch):
     yesterday = date.today() - timedelta(days=1)
     monkeypatch.setattr(
-        repository,
+        doc_metadata,
         "get_common_metadata_for_rag",
         lambda _ids: {
             1: {"title": "Expired", "expiry_date": yesterday.isoformat()},
@@ -110,14 +116,14 @@ def test_common_metadata_warns_for_past_expiry_but_tolerates_unparseable_dates(m
 
 @pytest.mark.parametrize("result", [None, {}, {7: {}}])
 def test_common_metadata_returns_empty_when_there_is_nothing_renderable(monkeypatch, result):
-    monkeypatch.setattr(repository, "get_common_metadata_for_rag", lambda _ids: result)
+    monkeypatch.setattr(doc_metadata, "get_common_metadata_for_rag", lambda _ids: result)
 
     assert build_common_metadata_context([_doc(doc_id=7)]) == ""
 
 
 def test_common_metadata_fail_closed_when_repository_is_unavailable(monkeypatch):
     monkeypatch.setattr(
-        repository,
+        doc_metadata,
         "get_common_metadata_for_rag",
         lambda _ids: (_ for _ in ()).throw(RuntimeError("database unavailable")),
     )

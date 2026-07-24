@@ -10,7 +10,8 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 
 from mech_chatbot.config.logging import log_trace, logger
-from mech_chatbot.db.repository import search_bom_facts, traverse_knowledge_graph
+from mech_chatbot.db.repositories.bom import search_bom_facts
+from mech_chatbot.db.repositories.graph import traverse_knowledge_graph
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.answer_policy import (
     PolicyEvidence,

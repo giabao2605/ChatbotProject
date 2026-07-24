@@ -29,10 +29,14 @@ def _stream_state(executor, semaphore, **settings_overrides):
 
 
 def test_legacy_admin_global_read_audit_contains_no_raw_prompt(monkeypatch):
-    from mech_chatbot import services
+    from mech_chatbot.services import audit_service
 
     writes = []
-    monkeypatch.setattr(services, "write_audit_log", lambda *args, **kwargs: writes.append((args, kwargs)))
+    monkeypatch.setattr(
+        audit_service,
+        "write_audit_log",
+        lambda *args, **kwargs: writes.append((args, kwargs)),
+    )
     profile = {"username": "legacy-admin", "user_id": 9, "roles": ["admin"]}
 
     rag_server._audit_admin_query(

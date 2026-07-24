@@ -122,14 +122,15 @@ class _LegacyDepartmentConnection:
 
 
 def test_database_department_values_win_over_static_fallbacks(monkeypatch):
-    from mech_chatbot.db import registry_ports, repository
+    from mech_chatbot.db import registry_ports
 
-    monkeypatch.setattr(repository, "_ensure_engine", lambda: None)
     monkeypatch.setattr(
-        repository,
-        "engine",
+        registry_ports,
+        "_bound_engine",
+        lambda: (
         _DepartmentEngine(
             _DepartmentConnection(("tabular", "restricted", "FACTORY_2"))
+        )
         ),
     )
 
@@ -142,13 +143,14 @@ def test_database_department_values_win_over_static_fallbacks(monkeypatch):
 
 
 def test_database_failure_uses_existing_department_fallbacks(monkeypatch):
-    from mech_chatbot.db import registry_ports, repository
+    from mech_chatbot.db import registry_ports
 
-    monkeypatch.setattr(repository, "_ensure_engine", lambda: None)
     monkeypatch.setattr(
-        repository,
-        "engine",
-        _DepartmentEngine(_DepartmentConnection(failure=RuntimeError("offline"))),
+        registry_ports,
+        "_bound_engine",
+        lambda: _DepartmentEngine(
+            _DepartmentConnection(failure=RuntimeError("offline"))
+        ),
     )
 
     assert registry_ports.resolve_domain_by_department("Technical") == "mechanical"
@@ -157,13 +159,12 @@ def test_database_failure_uses_existing_department_fallbacks(monkeypatch):
 
 
 def test_legacy_department_schema_keeps_domain_lookup_working(monkeypatch):
-    from mech_chatbot.db import registry_ports, repository
+    from mech_chatbot.db import registry_ports
 
-    monkeypatch.setattr(repository, "_ensure_engine", lambda: None)
     monkeypatch.setattr(
-        repository,
-        "engine",
-        _DepartmentEngine(_LegacyDepartmentConnection()),
+        registry_ports,
+        "_bound_engine",
+        lambda: _DepartmentEngine(_LegacyDepartmentConnection()),
     )
 
     assert registry_ports.resolve_domain_by_department("LegacyDept") == "tabular"

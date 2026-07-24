@@ -17,7 +17,7 @@ import re
 import secrets
 import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from collections.abc import Callable
@@ -37,8 +37,17 @@ from mech_chatbot.config.logging import (
     redact_sensitive_trace_fields,
 )
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled, external_processing_context
-from mech_chatbot.config.settings import RagProcessSettings, Settings, load_settings
+from mech_chatbot.config.repository_runtime import bind_repository_runtime
+from mech_chatbot.config.settings import (
+    RagProcessSettings,
+    RepositoryPolicySettings,
+    Settings,
+    SqlSettings,
+    load_settings,
+)
 from mech_chatbot.governance.feature_activation import ActivationStatus
+import mech_chatbot.services.audit_service as audit_service
+import mech_chatbot.services.chat_service as chat_service
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +58,9 @@ class RagServerState:
     settings: Settings
     process_settings: RagProcessSettings
     runtime_builder: Callable[[Settings], Any]
+    database_builder: Callable[[SqlSettings], Any]
     runtime: Any | None = None
+    database_runtime: Any | None = None
     activation: ActivationStatus | None = None
     ready: bool = False
 
@@ -77,6 +88,19 @@ def _environment_snapshot(settings: Settings) -> dict[str, str]:
 
 def get_rag_server_state(request: Request) -> RagServerState:
     return request.app.state.rag_server
+
+
+@contextmanager
+def _bind_rag_repository_runtime(state: RagServerState):
+    database_runtime = state.database_runtime
+    retrieval = getattr(state.runtime, "retrieval", None)
+    with bind_repository_runtime(
+        policy=RepositoryPolicySettings.from_settings(state.settings),
+        db_engine=getattr(database_runtime, "engine", None),
+        qdrant_client=getattr(retrieval, "client", None),
+        qdrant_collection=getattr(retrieval, "collection_name", None),
+    ):
+        yield
 
 
 def _activation_for(state: RagServerState) -> ActivationStatus:
@@ -122,14 +146,24 @@ async def lifespan(app: FastAPI):
     t0 = time.time()
 
     runtime = None
+    database_runtime = None
     try:
-        runtime = state.runtime_builder(state.settings)
+        database_runtime = state.database_builder(
+            SqlSettings.from_settings(state.settings)
+        )
+        startup_state = replace(
+            state,
+            database_runtime=database_runtime,
+        )
+        with _bind_rag_repository_runtime(startup_state):
+            runtime = state.runtime_builder(state.settings)
         # Nap tokenizer trong startup thay vi de request dau tien ganh cold load.
         from mech_chatbot.rag.rerank import tokenize_cached
         tokenize_cached("tai lieu noi bo")
         app.state.rag_server = replace(
             state,
             runtime=runtime,
+            database_runtime=database_runtime,
             activation=activation,
             ready=True,
         )
@@ -140,22 +174,39 @@ async def lifespan(app: FastAPI):
         app.state.rag_server = replace(
             state,
             runtime=None,
+            database_runtime=database_runtime,
             activation=activation,
             ready=False,
         )
+        if runtime is not None:
+            try:
+                runtime.close()
+            except Exception:
+                logger.exception(
+                    "Failed to close partially initialized RAG runtime"
+                )
+            finally:
+                runtime = None
 
     try:
         yield
     finally:
         logger.info("RAG Server shutting down...")
-        if runtime is not None:
-            runtime.close()
-        app.state.rag_server = replace(
-            state,
-            runtime=None,
-            activation=activation,
-            ready=False,
-        )
+        try:
+            try:
+                if runtime is not None:
+                    runtime.close()
+            finally:
+                if database_runtime is not None:
+                    database_runtime.close()
+        finally:
+            app.state.rag_server = replace(
+                state,
+                runtime=None,
+                database_runtime=None,
+                activation=activation,
+                ready=False,
+            )
 
 
 router = APIRouter()
@@ -265,6 +316,16 @@ async def require_service_auth(
         raise HTTPException(status_code=401, detail="Invalid RAG service token.")
 
 
+async def require_database_ready(
+    server_state: RagServerState = Depends(get_rag_server_state),
+) -> None:
+    if server_state.database_runtime is None:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG database runtime is not ready.",
+        )
+
+
 def load_profile_or_403(user_id=None, username=None) -> Dict[str, Any]:
     from mech_chatbot.auth.core import load_user_profile
 
@@ -307,9 +368,7 @@ def _audit_admin_query(
         if level:
             levels.append(str(level))
     try:
-        from mech_chatbot.services import write_audit_log
-
-        write_audit_log(
+        audit_service.write_audit_log(
             profile.get("username"),
             "admin_global_read_query",
             "RAG",
@@ -435,10 +494,10 @@ async def chat_endpoint(
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             server_state.runtime.thread_pool,
-            _run_rag_sync,
+            _run_rag_sync_with_repository,
             req,
             user_profile,
-            server_state.runtime,
+            server_state,
         )
         result.elapsed_ms = int((time.time() - t_start) * 1000)
         logger.info(
@@ -569,7 +628,7 @@ async def chat_stream_endpoint(
 
     request_trace_id = f"rag_{secrets.token_hex(8)}"
 
-    def worker():
+    def run_worker_body():
         events = None
         debug_info: dict[str, Any] = {}
         from mech_chatbot.rag.execution import (
@@ -726,6 +785,10 @@ async def chat_stream_endpoint(
                         pass
                 emit("_end", {})
 
+    def worker():
+        with _bind_rag_repository_runtime(server_state):
+            run_worker_body()
+
     future = loop.run_in_executor(server_state.runtime.thread_pool, worker)
     future.add_done_callback(
         lambda _f: loop.call_soon_threadsafe(
@@ -755,28 +818,38 @@ async def chat_stream_endpoint(
     )
 
 
-@router.post("/chat/sessions", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/sessions",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def list_chat_sessions(req: UserContextRequest):
     """List chat sessions visible to the current user."""
-    from mech_chatbot.services import get_all_sessions
-
     profile = resolve_user_profile(req)
     return {
-        "sessions": get_all_sessions(
+        "sessions": chat_service.get_all_sessions(
             username=profile.get("username"),
             is_admin=False,
         )
     }
 
 
-@router.post("/chat/history", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/history",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def load_chat_history(req: SessionHistoryRequest):
     """Load a single chat session with the same RBAC redaction as Streamlit UI."""
-    from mech_chatbot.services import get_chat_history
-
     profile = resolve_user_profile(req)
     return {
-        "messages": get_chat_history(
+        "messages": chat_service.get_chat_history(
             req.session_id,
             username=profile.get("username"),
             is_admin=_is_admin(profile),
@@ -787,13 +860,18 @@ async def load_chat_history(req: SessionHistoryRequest):
     }
 
 
-@router.post("/chat/history/delete", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/history/delete",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def delete_chat_history(req: SessionHistoryRequest):
     """Delete one chat session, scoped to the current user unless admin."""
-    from mech_chatbot.services import clear_chat_history
-
     profile = resolve_user_profile(req)
-    deleted = clear_chat_history(
+    deleted = chat_service.clear_chat_history(
         req.session_id,
         username=profile.get("username"),
         is_admin=False,
@@ -801,19 +879,19 @@ async def delete_chat_history(req: SessionHistoryRequest):
     return {"ok": True, "deleted": deleted}
 
 
-@router.post("/chat/history/save", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/history/save",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def save_chat_turn(req: SaveChatRequest):
     """Persist one chat turn and its answer sources, matching the Streamlit path."""
-    from mech_chatbot.services import (
-        save_answer_sources,
-        save_answer_evidence,
-        save_chat_history,
-        write_audit_log,
-    )
-
     profile = resolve_user_profile(req)
     username = profile.get("username")
-    chat_id = save_chat_history(
+    chat_id = chat_service.save_chat_history(
         session_id=req.session_id,
         user_msg=req.user_msg,
         bot_msg=req.bot_msg,
@@ -823,14 +901,14 @@ async def save_chat_turn(req: SaveChatRequest):
     )
 
     if chat_id:
-        save_answer_evidence(chat_id, req.retrieved_docs)
+        chat_service.save_answer_evidence(chat_id, req.retrieved_docs)
         final_sources = _final_stream_citations(
             {"citation_docs": req.retrieved_docs}, req.bot_msg
         )
         if final_sources:
-            save_answer_sources(chat_id, final_sources)
+            chat_service.save_answer_sources(chat_id, final_sources)
 
-    write_audit_log(
+    audit_service.write_audit_log(
         username=username,
         action="chat_query",
         entity_type="LichSuChat",
@@ -848,7 +926,7 @@ async def save_chat_turn(req: SaveChatRequest):
         if isinstance(d, dict) and d.get("security_level") == "confidential"
     ]
     if confidential_sources:
-        write_audit_log(
+        audit_service.write_audit_log(
             username=username,
             action="read_confidential",
             entity_type="LichSuChat",
@@ -864,13 +942,18 @@ async def save_chat_turn(req: SaveChatRequest):
     return {"ok": bool(chat_id), "chat_id": chat_id}
 
 
-@router.post("/chat/feedback", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/feedback",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def save_chat_feedback(req: FeedbackRequest):
     """Persist like/dislike feedback for a saved chat answer."""
-    from mech_chatbot.services import update_chat_feedback
-
     profile = resolve_user_profile(req)
-    update_chat_feedback(
+    chat_service.update_chat_feedback(
         req.chat_id,
         1 if req.rating > 0 else -1,
         voter_username=profile.get("username"),
@@ -992,14 +1075,29 @@ def _run_rag_sync(
     )
 
 
+def _run_rag_sync_with_repository(
+    req: ChatRequest,
+    user_profile: Dict[str, Any],
+    state: RagServerState,
+) -> ChatResponse:
+    """Rebind request-scoped repository dependencies inside the RAG worker."""
+
+    with _bind_rag_repository_runtime(state):
+        return _run_rag_sync(req, user_profile, state.runtime)
+
+
 def create_rag_app(
     settings: Settings,
     *,
     runtime_builder: Callable[[Settings], Any] | None = None,
+    database_builder: Callable[[SqlSettings], Any] | None = None,
 ) -> FastAPI:
     """Create one RAG delivery adapter from an immutable settings snapshot."""
 
-    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+    from mech_chatbot.composition.rag_runtime import (
+        build_rag_database_runtime,
+        build_rag_runtime,
+    )
 
     process_settings = RagProcessSettings.from_settings(settings)
     application = FastAPI(
@@ -1012,7 +1110,16 @@ def create_rag_app(
         settings=settings,
         process_settings=process_settings,
         runtime_builder=runtime_builder or build_rag_runtime,
+        database_builder=database_builder or build_rag_database_runtime,
     )
+
+    @application.middleware("http")
+    async def _bind_repository_dependencies(request: Request, call_next):
+        with _bind_rag_repository_runtime(
+            request.app.state.rag_server
+        ):
+            return await call_next(request)
+
     if process_settings.cors_allow_origins:
         application.add_middleware(
             CORSMiddleware,

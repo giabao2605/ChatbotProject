@@ -310,7 +310,7 @@ def run_evaluation(
         consume_rag_events,
     )
     if intent_extractor is None:
-        from mech_chatbot.rag.service import extract_search_intent
+        from mech_chatbot.rag.intent import extract_search_intent
         intent_extractor = extract_search_intent
     if rag_chat is None and rag_executor is None:
         rag_executor = DefaultRagExecutor()

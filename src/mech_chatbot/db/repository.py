@@ -16,10 +16,34 @@ from mech_chatbot.db.engine import (
     SQL_TRUSTED_CONNECTION,
 )
 
-from mech_chatbot.db.repositories import *  # noqa: F401,F403 re-export toan bo
-from mech_chatbot.db.repositories import __all__ as _repos_all
+from mech_chatbot.db.repositories._shared import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.access import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.analytics import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.audit import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.bom import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.catalog import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.chat import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.community_summaries import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.doc_metadata import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.document import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.document_pages import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.external_ai import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.feedback import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.glossary import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.graph import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.jobs import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.knowledge_governance import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.lifecycle import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.material import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.publication import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.qdrant import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.rollout import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.semantic_cache import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.settings import *  # noqa: F401,F403
+from mech_chatbot.db.repositories.version import *  # noqa: F401,F403
+from mech_chatbot.db.repositories import _LEGACY_EXPORTS
 
-__all__ = list(_repos_all) + [
+__all__ = list(_LEGACY_EXPORTS) + [
     'engine', '_ensure_engine', 'SQL_SERVER', 'SQL_DATABASE', 'SQL_DRIVER',
     'SQL_USERNAME', 'SQL_PASSWORD', 'SQL_TRUSTED_CONNECTION',
 ]

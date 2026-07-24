@@ -359,7 +359,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         intent_data["is_chitchat"] = True
         intent_data["base_codes"] = [c for c in intent_data["base_codes"] if str(c).strip().upper() != "CHITCHAT"]
 
-    from mech_chatbot.db.repository import normalize_base_code
+    from mech_chatbot.db.repositories._shared import normalize_base_code
     extracted_codes = [normalize_base_code(c) for c in intent_data["base_codes"] if c]
     
     # Co che cap nhat State

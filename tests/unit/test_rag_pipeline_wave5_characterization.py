@@ -65,7 +65,13 @@ def _offline_executor(*, semantic_cache_enabled=False):
 @pytest.fixture
 def offline_boundaries(monkeypatch):
     """Run the real executor while replacing SQL, Qdrant, and provider boundaries."""
-    from mech_chatbot.db import repository
+    from mech_chatbot.db.repositories import (
+        doc_metadata,
+        document_pages,
+        feedback,
+        glossary,
+        settings,
+    )
 
     documents = []
     qdrant_calls = []
@@ -78,11 +84,13 @@ def offline_boundaries(monkeypatch):
             return list(documents)
 
     monkeypatch.setattr("langchain_qdrant.QdrantVectorStore", OfflineQdrantVectorStore)
-    monkeypatch.setattr(repository, "get_app_setting_int", lambda *_args: 5)
-    monkeypatch.setattr(repository, "get_active_glossary", lambda *_args: [])
-    monkeypatch.setattr(repository, "get_common_metadata_for_rag", lambda *_args: {})
-    monkeypatch.setattr(repository, "get_technical_attributes_for_rag", lambda *_args: [])
-    monkeypatch.setattr(repository, "find_golden_answer", lambda *_args: None)
+    monkeypatch.setattr(settings, "get_app_setting_int", lambda *_args: 5)
+    monkeypatch.setattr(glossary, "get_active_glossary", lambda *_args: [])
+    monkeypatch.setattr(doc_metadata, "get_common_metadata_for_rag", lambda *_args: {})
+    monkeypatch.setattr(
+        document_pages, "get_technical_attributes_for_rag", lambda *_args: []
+    )
+    monkeypatch.setattr(feedback, "find_golden_answer", lambda *_args: None)
 
     executor, runtime = _offline_executor()
     return documents, qdrant_calls, executor, runtime
@@ -124,17 +132,17 @@ def test_exact_cache_outage_falls_back_to_a_fail_closed_retrieval(
     monkeypatch,
     offline_boundaries,
 ):
-    from mech_chatbot.db import repository
+    from mech_chatbot.db.repositories import semantic_cache
 
     _documents, qdrant_calls, executor, runtime = offline_boundaries
     runtime.semantic_cache_enabled = True
     monkeypatch.setattr(
-        repository,
+        semantic_cache,
         "sc_get_exact",
         lambda *_args: (_ for _ in ()).throw(RuntimeError("cache unavailable")),
     )
-    monkeypatch.setattr(repository, "sc_get_candidates", lambda *_args: [])
-    monkeypatch.setattr(repository, "sc_record_lookup", lambda *_args: None)
+    monkeypatch.setattr(semantic_cache, "sc_get_candidates", lambda *_args: [])
+    monkeypatch.setattr(semantic_cache, "sc_record_lookup", lambda *_args: None)
 
     events = _run(
         "Quy trình phê duyệt nội bộ hiện hành là gì?",
@@ -152,7 +160,7 @@ def test_semantic_cache_hit_preserves_attribution_and_skips_qdrant(
     monkeypatch,
     offline_boundaries,
 ):
-    from mech_chatbot.db import repository
+    from mech_chatbot.db.repositories import semantic_cache
 
     _documents, qdrant_calls, executor, runtime = offline_boundaries
     source = {
@@ -177,12 +185,14 @@ def test_semantic_cache_hit_preserves_attribution_and_skips_qdrant(
 
     runtime.semantic_cache_enabled = True
     runtime.semantic_cache_sim_threshold = 0.90
-    monkeypatch.setattr(repository, "sc_get_exact", lambda *_args: None)
-    monkeypatch.setattr(repository, "sc_get_candidates", lambda *_args: [cache_row])
-    monkeypatch.setattr(repository, "sc_docs_all_current", lambda _ids: True)
-    monkeypatch.setattr(repository, "sc_record_hit", lambda *_args: None)
-    monkeypatch.setattr(repository, "sc_record_lookup", lambda *_args: None)
-    monkeypatch.setattr(repository, "sc_delete", lambda *_args: None)
+    monkeypatch.setattr(semantic_cache, "sc_get_exact", lambda *_args: None)
+    monkeypatch.setattr(
+        semantic_cache, "sc_get_candidates", lambda *_args: [cache_row]
+    )
+    monkeypatch.setattr(semantic_cache, "sc_docs_all_current", lambda _ids: True)
+    monkeypatch.setattr(semantic_cache, "sc_record_hit", lambda *_args: None)
+    monkeypatch.setattr(semantic_cache, "sc_record_lookup", lambda *_args: None)
+    monkeypatch.setattr(semantic_cache, "sc_delete", lambda *_args: None)
 
     events = _run(
         "Hãy nhắc lại quy trình phê duyệt nội bộ.",
@@ -208,7 +218,7 @@ def test_conversation_history_bypasses_cache_entries_from_an_unrelated_turn(
     monkeypatch,
     offline_boundaries,
 ):
-    from mech_chatbot.db import repository
+    from mech_chatbot.db.repositories import semantic_cache
 
     _documents, qdrant_calls, executor, runtime = offline_boundaries
     runtime.semantic_cache_enabled = True
@@ -216,8 +226,8 @@ def test_conversation_history_bypasses_cache_entries_from_an_unrelated_turn(
     def unexpected_cache_read(*_args, **_kwargs):
         pytest.fail("a contextual turn must not reuse a context-free cache entry")
 
-    monkeypatch.setattr(repository, "sc_get_exact", unexpected_cache_read)
-    monkeypatch.setattr(repository, "sc_get_candidates", unexpected_cache_read)
+    monkeypatch.setattr(semantic_cache, "sc_get_exact", unexpected_cache_read)
+    monkeypatch.setattr(semantic_cache, "sc_get_candidates", unexpected_cache_read)
 
     events = _run(
         "Trình bày quy trình phê duyệt nội bộ hiện hành của phòng nhân sự.",

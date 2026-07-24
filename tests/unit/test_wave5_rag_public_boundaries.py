@@ -294,11 +294,11 @@ def test_stream_rejects_a_non_numeric_replay_expiry(rag_client, monkeypatch):
 
 
 def test_common_metadata_with_future_expiry_does_not_emit_a_warning(monkeypatch):
-    from mech_chatbot.db import repository
+    from mech_chatbot.db.repositories import doc_metadata
 
     expiry = date.today() + timedelta(days=1)
     monkeypatch.setattr(
-        repository,
+        doc_metadata,
         "get_common_metadata_for_rag",
         lambda _doc_ids: {
             9: {

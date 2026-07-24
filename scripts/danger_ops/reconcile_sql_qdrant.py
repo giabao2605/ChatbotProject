@@ -23,12 +23,13 @@ if _SRC.exists() and str(_SRC) not in sys.path:
 from sqlalchemy import text
 from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
 from mech_chatbot.config.repository_runtime import current_qdrant_runtime
-from mech_chatbot.db import repository as repo
+from mech_chatbot.db.engine import _ensure_engine, engine
+from mech_chatbot.db.repositories.document import delete_document_completely
 
 
 def _get_sql_doc_ids():
-    repo._ensure_engine()
-    with repo.engine.connect() as conn:
+    _ensure_engine()
+    with engine.connect() as conn:
         rows = conn.execute(text(
             "SELECT DocID FROM TaiLieu WHERE ISNULL(LifecycleStatus, '') <> 'deleting'"
         )).fetchall()
@@ -36,8 +37,8 @@ def _get_sql_doc_ids():
 
 
 def _get_stuck_deleting(stuck_hours):
-    repo._ensure_engine()
-    with repo.engine.connect() as conn:
+    _ensure_engine()
+    with engine.connect() as conn:
         rows = conn.execute(text("""
             SELECT DocID, TenFile
             FROM TaiLieu
@@ -124,7 +125,7 @@ def main():
     fixed_docs = 0
     for doc_id, ten in stuck:
         try:
-            if repo.delete_document_completely(doc_id, reviewer="reconcile_job"):
+            if delete_document_completely(doc_id, reviewer="reconcile_job"):
                 fixed_docs += 1
         except Exception as e:
             print(f"    [LOI] Khong xoa duoc DocID={doc_id}: {e}")

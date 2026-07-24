@@ -17,7 +17,22 @@ from langchain_core.documents import Document
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception
 from qdrant_client import models
 from mech_chatbot.config.logging import logger
-from mech_chatbot.db.repository import reset_document_metadata, save_page_metadata, save_document_metadata, save_bom_records, get_document_info, mark_document_ingest_failed, save_document_page, save_technical_attributes, save_document_attributes, update_document_classification, clear_reingest_snapshot, restore_document_children
+from mech_chatbot.db.repositories.bom import save_bom_records
+from mech_chatbot.db.repositories.document import (
+    get_document_info,
+    mark_document_ingest_failed,
+    update_document_classification,
+)
+from mech_chatbot.db.repositories.document_pages import (
+    clear_reingest_snapshot,
+    reset_document_metadata,
+    restore_document_children,
+    save_document_attributes,
+    save_document_metadata,
+    save_document_page,
+    save_page_metadata,
+    save_technical_attributes,
+)
 from mech_chatbot.llm.vision_client import describe_vision_error, is_retryable_error
 from mech_chatbot.llm.external_ai import external_document_context
 

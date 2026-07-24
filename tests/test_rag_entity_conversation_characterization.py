@@ -253,12 +253,7 @@ def test_summary_refresh_waits_for_configured_increment(
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(None, False), ("YES", True), (" on ", True), ("0", False)],
+    [(None, False), (False, False), (True, True), (0, False), (1, True)],
 )
-def test_history_summary_flag_is_fail_closed(monkeypatch, value, expected):
-    if value is None:
-        monkeypatch.delenv(conversation.HISTORY_SUMMARY_FLAG_ENV, raising=False)
-    else:
-        monkeypatch.setenv(conversation.HISTORY_SUMMARY_FLAG_ENV, value)
-
-    assert conversation.history_summary_enabled() is expected
+def test_history_summary_flag_uses_explicit_runtime_value(value, expected):
+    assert conversation.history_summary_enabled(value) is expected

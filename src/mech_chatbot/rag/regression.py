@@ -12,7 +12,7 @@ import random
 from datetime import datetime
 
 from mech_chatbot.config.logging import logger
-from mech_chatbot.db import repository as repo
+import mech_chatbot.db.repositories.feedback as repo
 
 
 def _consume_regression_events(events):

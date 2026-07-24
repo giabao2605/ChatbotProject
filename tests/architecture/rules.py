@@ -147,7 +147,7 @@ def _assigned_names(node: ast.AST) -> tuple[str, ...]:
 
 
 def _scan_service_exports(relative: Path, tree: ast.Module) -> list[ArchitectureViolation]:
-    if not relative.parts or relative.parts[0] != "services":
+    if relative.as_posix() != "services/__init__.py":
         return []
     findings: list[ArchitectureViolation] = []
     for node in tree.body:

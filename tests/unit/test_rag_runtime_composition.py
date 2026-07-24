@@ -259,11 +259,15 @@ def test_rag_server_opens_requests_through_composed_runtime(monkeypatch):
 
 def test_rag_app_lifespan_builds_reports_and_closes_one_runtime(monkeypatch):
     from mech_chatbot.api import rag_server
+    from mech_chatbot.config.repository_runtime import current_repository_engine
     from mech_chatbot.rag import rerank
     from mech_chatbot.rag.execution_contracts import RagRuntimeContract
 
     closed = []
+    database_closed = []
     observed_settings = []
+    observed_sql_settings = []
+    database_engine = object()
     credentials = {
         "QDRANT_" + "API_KEY": "qdrant-lifespan-value",
         "LLM_" + "API_KEY": "llm-lifespan-value",
@@ -280,20 +284,137 @@ def test_rag_app_lifespan_builds_reports_and_closes_one_runtime(monkeypatch):
         close=lambda: closed.append(True),
     )
     monkeypatch.setattr(rerank, "tokenize_cached", lambda _text: "tokens")
+
+    def build_runtime(snapshot):
+        assert current_repository_engine() is database_engine
+        observed_settings.append(snapshot)
+        return runtime
+
     application = rag_server.create_rag_app(
         settings,
-        runtime_builder=lambda snapshot: observed_settings.append(snapshot) or runtime,
+        runtime_builder=build_runtime,
+        database_builder=lambda sql_settings: (
+            observed_sql_settings.append(sql_settings)
+            or SimpleNamespace(
+                engine=database_engine,
+                close=lambda: database_closed.append(True),
+            )
+        ),
     )
+
+    @application.get("/_phase6/repository-binding")
+    def repository_binding():
+        return {"bound": current_repository_engine() is database_engine}
 
     with TestClient(application) as client:
         response = client.get("/health")
+        binding_response = client.get("/_phase6/repository-binding")
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert response.json()["rag_loaded"] is True
+    assert binding_response.json() == {"bound": True}
     assert observed_settings == [settings]
+    assert len(observed_sql_settings) == 1
     assert closed == [True]
+    assert database_closed == [True]
     assert application.state.rag_server.ready is False
+
+
+def test_rag_thread_worker_rebinds_repository_runtime(monkeypatch):
+    from mech_chatbot.api import rag_server
+    from mech_chatbot.config.repository_runtime import current_repository_engine
+
+    database_engine = object()
+    state = SimpleNamespace(
+        settings=Settings(),
+        database_runtime=SimpleNamespace(engine=database_engine),
+        runtime=object(),
+    )
+    monkeypatch.setattr(
+        rag_server,
+        "_run_rag_sync",
+        lambda *_args: current_repository_engine(),
+    )
+
+    result = rag_server._run_rag_sync_with_repository(
+        object(),
+        {},
+        state,
+    )
+
+    assert result is database_engine
+
+
+def test_rag_lifespan_keeps_database_when_model_startup_fails():
+    from mech_chatbot.api import rag_server
+
+    database_closed = []
+    database_runtime = SimpleNamespace(
+        engine=object(),
+        close=lambda: database_closed.append(True),
+    )
+    application = rag_server.create_rag_app(
+        Settings(
+            QDRANT_URL="https://qdrant.invalid",
+            QDRANT_API_KEY="qdrant-value",
+            LLM_BASE_URL="https://llm.invalid",
+            LLM_API_KEY="llm-value",
+            RAG_REQUIRE_SERVICE_AUTH=False,
+        ),
+        runtime_builder=lambda _settings: (_ for _ in ()).throw(
+            RuntimeError("model startup failed")
+        ),
+        database_builder=lambda _settings: database_runtime,
+    )
+
+    with TestClient(application) as client:
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "degraded"
+        assert application.state.rag_server.database_runtime is database_runtime
+
+    assert database_closed == [True]
+    assert application.state.rag_server.database_runtime is None
+
+
+def test_rag_shutdown_resets_state_and_closes_database_when_runtime_close_fails(
+    monkeypatch,
+):
+    from mech_chatbot.api import rag_server
+    from mech_chatbot.rag import rerank
+    from mech_chatbot.rag.execution_contracts import RagRuntimeContract
+
+    database_closed = []
+    runtime = SimpleNamespace(
+        semaphore=SimpleNamespace(_value=2),
+        runtime_contract=RagRuntimeContract("production", False, 120.0),
+        close=lambda: (_ for _ in ()).throw(RuntimeError("close failed")),
+    )
+    monkeypatch.setattr(rerank, "tokenize_cached", lambda _text: "tokens")
+    application = rag_server.create_rag_app(
+        Settings(
+            QDRANT_URL="https://qdrant.invalid",
+            QDRANT_API_KEY="qdrant-value",
+            LLM_BASE_URL="https://llm.invalid",
+            LLM_API_KEY="llm-value",
+            RAG_REQUIRE_SERVICE_AUTH=False,
+        ),
+        runtime_builder=lambda _settings: runtime,
+        database_builder=lambda _settings: SimpleNamespace(
+            engine=object(),
+            close=lambda: database_closed.append(True),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        with TestClient(application):
+            assert application.state.rag_server.ready is True
+
+    assert database_closed == [True]
+    assert application.state.rag_server.ready is False
+    assert application.state.rag_server.runtime is None
+    assert application.state.rag_server.database_runtime is None
 
 
 def test_rag_app_invalid_settings_fail_at_lifespan_without_secret_values():

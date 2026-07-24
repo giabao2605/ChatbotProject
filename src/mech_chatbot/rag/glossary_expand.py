@@ -37,7 +37,7 @@ def _load_glossary_cached(domains, ttl_seconds=60.0):
     if _GLOSSARY_CACHE["key"] == key and (now - _GLOSSARY_CACHE["ts"]) < ttl_seconds:
         return _GLOSSARY_CACHE["data"]
     try:
-        from mech_chatbot.db.repository import get_active_glossary
+        from mech_chatbot.db.repositories.glossary import get_active_glossary
         data = get_active_glossary(list(key) if key else None)
     except Exception as e:
         logger.warning(f"load glossary loi: {e}")

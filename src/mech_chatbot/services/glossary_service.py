@@ -1,5 +1,5 @@
 """P2.3 — Glossary service (L6). Pass-through toi db repositories."""
-from mech_chatbot.db.repository import (
+from mech_chatbot.db.repositories.glossary import (
     delete_glossary_term,
     list_domain_glossary,
     set_glossary_active,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from mech_chatbot.adapters.chat_runtime import (
     HttpRagStreamAdapter,
@@ -51,9 +51,24 @@ from mech_chatbot.application.document_upload import (
     UploadStorage,
 )
 from mech_chatbot.application.protected_files import ProtectedFileResolver
-from mech_chatbot.config.settings import AppProcessSettings
+from mech_chatbot.config.settings import AppProcessSettings, SqlSettings
+from mech_chatbot.db.engine import build_database_runtime
 
 Callback = Callable[..., Any]
+
+
+class AppDatabaseRuntime(Protocol):
+    """SQL resource owned by the app process composition root."""
+
+    engine: Any
+
+    def close(self) -> None: ...
+
+
+def build_app_database_runtime(settings: SqlSettings) -> AppDatabaseRuntime:
+    """Build the concrete SQL runtime without exposing DB construction to FastAPI."""
+
+    return build_database_runtime(settings)
 
 
 class _NullUploadStorage:
@@ -388,7 +403,9 @@ def production_create_ingestion_job(**kwargs: Any) -> int | None:
 
 
 __all__ = [
+    "AppDatabaseRuntime",
     "AppRuntime",
+    "build_app_database_runtime",
     "build_app_runtime",
     "build_default_app_runtime",
     "production_create_ingestion_job",

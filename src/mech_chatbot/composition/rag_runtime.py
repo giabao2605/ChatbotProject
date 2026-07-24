@@ -10,7 +10,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import Any, Protocol
 
-from mech_chatbot.config.settings import RagProcessSettings, Settings
+from mech_chatbot.config.settings import RagProcessSettings, Settings, SqlSettings
 from mech_chatbot.config.logging import TraceRuntime
 from mech_chatbot.rag.execution import (
     DefaultRagExecutor,
@@ -26,6 +26,20 @@ class RagRetrievalAdapter(Protocol):
 
 class RagProviderAdapter(Protocol):
     def invoke(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class RagDatabaseRuntime(Protocol):
+    engine: Any
+
+    def close(self) -> None: ...
+
+
+def build_rag_database_runtime(settings: SqlSettings) -> RagDatabaseRuntime:
+    """Build the SQL lifecycle dependency owned by one RAG process."""
+
+    from mech_chatbot.db.engine import build_database_runtime
+
+    return build_database_runtime(settings)
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,6 +485,8 @@ __all__ = [
     "RagProviderAdapter",
     "RagRetrievalAdapter",
     "RagRetrievalRuntime",
+    "RagDatabaseRuntime",
     "RagRuntime",
+    "build_rag_database_runtime",
     "build_rag_runtime",
 ]

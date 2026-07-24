@@ -38,7 +38,9 @@ def _context_domain(docs, part_ids=None):
 
 def build_structured_attributes_context(docs):
     try:
-        from mech_chatbot.db.repository import get_technical_attributes_for_rag
+        from mech_chatbot.db.repositories.document_pages import (
+            get_technical_attributes_for_rag,
+        )
         import json
         source_files = sorted(set(
             d.metadata.get("file_goc")
@@ -66,7 +68,9 @@ def build_common_metadata_context(docs):
     va canh bao khi tai lieu het hieu luc / da bi thay the.
     """
     try:
-        from mech_chatbot.db.repository import get_common_metadata_for_rag
+        from mech_chatbot.db.repositories.doc_metadata import (
+            get_common_metadata_for_rag,
+        )
         from datetime import date, datetime
         _nl = chr(10)
         doc_ids = [d.metadata.get("doc_id") for d in docs if d is not None and d.metadata.get("doc_id") is not None]

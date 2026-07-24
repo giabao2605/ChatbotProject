@@ -111,86 +111,91 @@ def _build_vision(settings: VisionSettings) -> Any:
     return build_vision_model(settings)
 
 
-class _RepositoryProvider:
-    def __init__(self) -> None:
-        self._repository: Any | None = None
-
-    def get(self) -> Any:
-        if self._repository is None:
-            from mech_chatbot.db import repository
-
-            self._repository = repository
-        return self._repository
-
-
 def _with_engine(callback: Callable[..., Any], engine: Any) -> Callable[..., Any]:
     return partial(callback, db_engine=engine)
 
 
-def _build_job_store(repository: Any, engine: Any) -> RepositoryIngestionJobStore:
+def _build_job_store(engine: Any) -> RepositoryIngestionJobStore:
+    import mech_chatbot.db.repositories.audit as audit_repository
+    import mech_chatbot.db.repositories.jobs as jobs_repository
+
     return RepositoryIngestionJobStore(
-        get_pending_job=_with_engine(repository.get_pending_job, engine),
-        update_ingestion_job=_with_engine(repository.update_ingestion_job, engine),
-        update_ingestion_report=_with_engine(repository.update_ingestion_report, engine),
-        mark_job_failed=_with_engine(repository.mark_job_failed, engine),
-        mark_job_waiting_quota=_with_engine(
-            repository.mark_job_waiting_quota,
+        get_pending_job=_with_engine(jobs_repository.get_pending_job, engine),
+        update_ingestion_job=_with_engine(
+            jobs_repository.update_ingestion_job,
             engine,
         ),
-        write_audit_log=_with_engine(repository.write_audit_log, engine),
+        update_ingestion_report=_with_engine(
+            jobs_repository.update_ingestion_report,
+            engine,
+        ),
+        mark_job_failed=_with_engine(jobs_repository.mark_job_failed, engine),
+        mark_job_waiting_quota=_with_engine(
+            jobs_repository.mark_job_waiting_quota,
+            engine,
+        ),
+        write_audit_log=_with_engine(audit_repository.write_audit_log, engine),
         engine=engine,
     )
 
 
 def _build_ingestion_persistence(
-    repository: Any,
     engine: Any,
     settings: Settings,
 ) -> IngestionPersistence:
+    import mech_chatbot.db.repositories.bom as bom_repository
+    import mech_chatbot.db.repositories.document as document_repository
+    import mech_chatbot.db.repositories.document_pages as document_pages_repository
+
     reingest_snapshots: dict[int, Any] = {}
     return IngestionPersistence(
         reset_document_metadata=partial(
-            repository.reset_document_metadata,
+            document_pages_repository.reset_document_metadata,
             db_engine=engine,
             snapshot_store=reingest_snapshots,
             classification_model=settings.GPT_MODEL_NAME,
         ),
-        get_document_info=_with_engine(repository.get_document_info, engine),
+        get_document_info=_with_engine(document_repository.get_document_info, engine),
         update_document_classification=_with_engine(
-            repository.update_document_classification,
+            document_repository.update_document_classification,
             engine,
         ),
         clear_reingest_snapshot=partial(
-            repository.clear_reingest_snapshot,
+            document_pages_repository.clear_reingest_snapshot,
             snapshot_store=reingest_snapshots,
         ),
         mark_document_ingest_failed=_with_engine(
-            repository.mark_document_ingest_failed,
+            document_repository.mark_document_ingest_failed,
             engine,
         ),
         restore_document_children=partial(
-            repository.restore_document_children,
+            document_pages_repository.restore_document_children,
             db_engine=engine,
             snapshot_store=reingest_snapshots,
         ),
-        save_bom_records=_with_engine(repository.save_bom_records, engine),
+        save_bom_records=_with_engine(bom_repository.save_bom_records, engine),
         save_technical_attributes=_with_engine(
-            repository.save_technical_attributes,
+            document_pages_repository.save_technical_attributes,
             engine,
         ),
         save_document_attributes=_with_engine(
-            repository.save_document_attributes,
+            document_pages_repository.save_document_attributes,
             engine,
         ),
-        save_document_page=_with_engine(repository.save_document_page, engine),
-        save_page_metadata=_with_engine(repository.save_page_metadata, engine),
+        save_document_page=_with_engine(
+            document_pages_repository.save_document_page,
+            engine,
+        ),
+        save_page_metadata=_with_engine(
+            document_pages_repository.save_page_metadata,
+            engine,
+        ),
     )
 
 
 def _build_runner(
     settings: Settings,
     job_store: Any,
-    repository: Any,
     engine: Any,
     *,
     pipeline_dependencies: IngestionPipelineDependencies | None,
@@ -202,11 +207,14 @@ def _build_runner(
     from mech_chatbot.ingestion.file_ingestor import learn_new_file_typed
     from mech_chatbot.ingestion.pdf.config import PdfIngestionConfig
     from mech_chatbot.llm.external_ai import external_processing_context
+    from mech_chatbot.db.repositories.knowledge_governance import (
+        get_department_knowledge_governance,
+    )
 
     dependencies = pipeline_dependencies or qdrant_builder(
         QdrantSettings.from_settings(settings)
     )
-    persistence = _build_ingestion_persistence(repository, engine, settings)
+    persistence = _build_ingestion_persistence(engine, settings)
     vision = (
         vision_builder(VisionSettings.from_settings(settings))
         if vision_model is _MISSING
@@ -215,10 +223,10 @@ def _build_runner(
     return IngestionRunner(
         job_store=job_store,
         classifier=LegacyDocumentClassifier(
-            classify_document,
+            partial(classify_document, db_engine=engine),
             processing_context=external_processing_context,
             load_governance=_with_engine(
-                repository.get_department_knowledge_governance,
+                get_department_knowledge_governance,
                 engine,
             ),
         ),
@@ -265,7 +273,6 @@ def build_worker_runtime(
         or reconcile_serving_state is None
     )
     owned_database = database_runtime
-    repository = _RepositoryProvider()
     if needs_repository and owned_database is None:
         owned_database = build_database_runtime(
             SqlSettings.from_settings(settings_snapshot)
@@ -285,14 +292,35 @@ def build_worker_runtime(
             QdrantSettings.from_settings(settings_snapshot)
         )
         owns_pipeline_dependencies = True
-    resolved_store = job_store or _build_job_store(
-        repository.get(),
-        repository_engine,
-    )
+    resolved_publication_reconciler = reconcile_publications
+    resolved_serving_reconciler = reconcile_serving_state
+    if (
+        resolved_publication_reconciler is None
+        or resolved_serving_reconciler is None
+    ):
+        import mech_chatbot.db.repositories.publication as publication_repository
+
+        if resolved_publication_reconciler is None:
+            resolved_publication_reconciler = partial(
+                publication_repository.reconcile_publications,
+                db_engine=repository_engine,
+                policy=RepositoryPolicySettings.from_settings(settings_snapshot),
+                qdrant_client=resolved_pipeline_dependencies.qdrant_client,
+                collection_name=resolved_pipeline_dependencies.collection_name,
+            )
+        if resolved_serving_reconciler is None:
+            resolved_serving_reconciler = partial(
+                publication_repository.reconcile_serving_state,
+                db_engine=repository_engine,
+                qdrant_client=resolved_pipeline_dependencies.qdrant_client,
+                collection_name=resolved_pipeline_dependencies.collection_name,
+            )
+    assert resolved_publication_reconciler is not None
+    assert resolved_serving_reconciler is not None
+    resolved_store = job_store or _build_job_store(repository_engine)
     resolved_runner = runner or _build_runner(
         settings_snapshot,
         resolved_store,
-        repository.get(),
         repository_engine,
         pipeline_dependencies=resolved_pipeline_dependencies,
         vision_model=vision_model,
@@ -305,25 +333,8 @@ def build_worker_runtime(
         job_store=resolved_store,
         runner=resolved_runner,
         clock=clock or SystemWorkerClock(),
-        reconcile_publications=(
-            reconcile_publications
-            or partial(
-                repository.get().reconcile_publications,
-                db_engine=repository_engine,
-                policy=RepositoryPolicySettings.from_settings(settings_snapshot),
-                qdrant_client=resolved_pipeline_dependencies.qdrant_client,
-                collection_name=resolved_pipeline_dependencies.collection_name,
-            )
-        ),
-        reconcile_serving_state=(
-            reconcile_serving_state
-            or partial(
-                repository.get().reconcile_serving_state,
-                db_engine=repository_engine,
-                qdrant_client=resolved_pipeline_dependencies.qdrant_client,
-                collection_name=resolved_pipeline_dependencies.collection_name,
-            )
-        ),
+        reconcile_publications=resolved_publication_reconciler,
+        reconcile_serving_state=resolved_serving_reconciler,
         reconcile_job_failure=(
             reconcile_job_failure or resolved_store.reconcile_unexpected_failure
         ),

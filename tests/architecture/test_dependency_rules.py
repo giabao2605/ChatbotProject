@@ -86,7 +86,7 @@ def test_guard_detects_dependencies_across_every_planned_layer_rule(tmp_path):
         "workers/job.py": "import os\nVALUE = os.getenv('VALUE')\n",
         "api/legacy_ui.py": "import streamlit\n",
         "legacy.py": "from mech_chatbot.rag.pipeline import *\n",
-        "services/new_service.py": "__all__ = ['new_flat_export']\n",
+        "services/__init__.py": "__all__ = ['new_flat_export']\n",
         "services/legacy_ui.py": "from mech_chatbot.ui import page\n",
     }
     for relative, source in files.items():
@@ -159,7 +159,7 @@ def test_guard_detects_dependencies_across_every_planned_layer_rule(tmp_path):
         ArchitectureViolation("core_ui_dependency", "api/legacy_ui.py", "streamlit"),
         ArchitectureViolation("wildcard_import", "legacy.py", "mech_chatbot.rag.pipeline"),
         ArchitectureViolation(
-            "service_flat_export", "services/new_service.py", "new_flat_export"
+            "service_flat_export", "services/__init__.py", "new_flat_export"
         ),
         ArchitectureViolation(
             "service_ui_dependency", "services/legacy_ui.py", "mech_chatbot.ui"

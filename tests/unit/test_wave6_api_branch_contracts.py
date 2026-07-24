@@ -103,6 +103,7 @@ def rag_client(monkeypatch):
             semaphore=rag_server.asyncio.Semaphore(2),
             runtime_contract=RagRuntimeContract("production", False, 120.0),
         ),
+        database_runtime=SimpleNamespace(engine=object()),
         ready=True,
     )
     monkeypatch.setattr(
@@ -467,7 +468,7 @@ def test_row_glossary_lifecycle_and_feedback_branches_remain_json_safe(
 
 
 def test_rag_service_auth_can_be_explicitly_disabled(rag_client, monkeypatch):
-    from mech_chatbot import services
+    from mech_chatbot.services import chat_service
 
     state = rag_client.app.state.rag_server
     rag_client.app.state.rag_server = replace(
@@ -477,7 +478,7 @@ def test_rag_service_auth_can_be_explicitly_disabled(rag_client, monkeypatch):
             require_service_auth=False,
         ),
     )
-    monkeypatch.setattr(services, "get_all_sessions", lambda **_scope: [])
+    monkeypatch.setattr(chat_service, "get_all_sessions", lambda **_scope: [])
 
     response = rag_client.post(
         "/chat/sessions", json={"username": "wave6-viewer"}
@@ -553,23 +554,25 @@ def test_rag_stream_terminal_failures_never_emit_a_done_event(
 def test_rag_history_save_reports_unsaved_and_unattributed_outcomes(
     rag_client, monkeypatch
 ):
-    from mech_chatbot import services
+    from mech_chatbot.services import audit_service, chat_service
 
     saved = {"evidence": [], "sources": [], "audits": []}
     chat_ids = iter([0, 81])
-    monkeypatch.setattr(services, "save_chat_history", lambda **_record: next(chat_ids))
     monkeypatch.setattr(
-        services,
+        chat_service, "save_chat_history", lambda **_record: next(chat_ids)
+    )
+    monkeypatch.setattr(
+        chat_service,
         "save_answer_evidence",
         lambda chat_id, docs: saved["evidence"].append((chat_id, docs)),
     )
     monkeypatch.setattr(
-        services,
+        chat_service,
         "save_answer_sources",
         lambda chat_id, docs: saved["sources"].append((chat_id, docs)),
     )
     monkeypatch.setattr(
-        services,
+        audit_service,
         "write_audit_log",
         lambda **record: saved["audits"].append(record),
     )
@@ -606,7 +609,7 @@ def test_rag_history_save_reports_unsaved_and_unattributed_outcomes(
 def test_admin_rag_audit_ignores_malformed_evidence_without_prompt_leakage(
     rag_client, monkeypatch
 ):
-    from mech_chatbot import services
+    from mech_chatbot.services import audit_service
     from mech_chatbot.auth import core
 
     audits = []
@@ -616,7 +619,7 @@ def test_admin_rag_audit_ignores_malformed_evidence_without_prompt_leakage(
         lambda **_identity: {**RAG_PROFILE, "roles": ["admin"]},
     )
     monkeypatch.setattr(
-        services,
+        audit_service,
         "write_audit_log",
         lambda *args, **kwargs: audits.append((args, kwargs)),
     )
@@ -667,7 +670,7 @@ def test_admin_rag_audit_ignores_malformed_evidence_without_prompt_leakage(
 def test_signed_replay_streams_skip_live_audit_on_cancel_and_failure(
     rag_client, monkeypatch
 ):
-    from mech_chatbot import services
+    from mech_chatbot.services import audit_service
     from mech_chatbot.evaluation.crag_pilot import (
         PilotConfig,
         assign_pilot_route,
@@ -712,7 +715,7 @@ def test_signed_replay_streams_skip_live_audit_on_cancel_and_failure(
     )
     audits = []
     monkeypatch.setattr(
-        services,
+        audit_service,
         "write_audit_log",
         lambda *args, **kwargs: audits.append((args, kwargs)),
     )

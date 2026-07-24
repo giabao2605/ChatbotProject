@@ -45,7 +45,7 @@ from sqlalchemy import text  # noqa: E402
 from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime  # noqa: E402
 from mech_chatbot.config.repository_runtime import current_qdrant_runtime  # noqa: E402
 from mech_chatbot.config.settings import load_settings  # noqa: E402
-from mech_chatbot.db import repository as repo  # noqa: E402
+from mech_chatbot.db.engine import _ensure_engine, engine  # noqa: E402
 
 
 def _timestamp():
@@ -54,14 +54,14 @@ def _timestamp():
 
 def backup_sql(sql_dir=None):
     """BACKUP DATABASE (full) + BACKUP LOG (neu FULL recovery). Tra ve list file da tao."""
-    repo._ensure_engine()
+    _ensure_engine()
     db = load_settings().SQL_DATABASE
     ts = _timestamp()
     created = []
 
     # Neu khong chi dinh thu muc -> hoi SQL Server thu muc backup mac dinh cua instance
     if not sql_dir:
-        with repo.engine.connect() as conn:
+        with engine.connect() as conn:
             row = conn.execute(text(
                 "SELECT CAST(SERVERPROPERTY('InstanceDefaultBackupPath') AS NVARCHAR(4000))"
             )).fetchone()
@@ -71,7 +71,7 @@ def backup_sql(sql_dir=None):
 
     full_path = os.path.join(sql_dir, f"{db}_full_{ts}.bak")
     # autocommit: BACKUP khong chay trong transaction
-    with repo.engine.connect() as conn:
+    with engine.connect() as conn:
         conn = conn.execution_options(isolation_level="AUTOCOMMIT")
         conn.execute(text(
             f"BACKUP DATABASE [{db}] TO DISK = :p WITH INIT, COMPRESSION, "

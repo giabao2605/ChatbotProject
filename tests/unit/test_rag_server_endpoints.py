@@ -46,6 +46,10 @@ def rag_client(monkeypatch):
         executor=object(),
         thread_pool=executor,
         semaphore=rag_server.asyncio.Semaphore(2),
+        retrieval=SimpleNamespace(
+            client=object(),
+            collection_name="phase6-test-collection",
+        ),
         runtime_contract=RagRuntimeContract.from_mapping(
             {
                 "execution_context": "production",
@@ -57,6 +61,7 @@ def rag_client(monkeypatch):
     application.state.rag_server = replace(
         state,
         runtime=runtime,
+        database_runtime=SimpleNamespace(engine=object()),
         ready=True,
     )
     monkeypatch.setattr(
@@ -88,6 +93,7 @@ def _replace_runtime(client, **changes):
         "executor": state.runtime.executor,
         "thread_pool": state.runtime.thread_pool,
         "semaphore": state.runtime.semaphore,
+        "retrieval": state.runtime.retrieval,
         "runtime_contract": state.runtime.runtime_contract,
     }
     values.update(changes)
@@ -232,6 +238,140 @@ def test_chat_returns_a_completed_rag_answer_and_attributed_sources(
     assert captured["profile"]["allowed_departments"] == ["Technical"]
     assert captured["profile"]["max_security_level"] == "internal"
     assert captured["profile"]["allowed_sites"] == ["HQ"]
+
+
+def test_history_returns_503_when_database_runtime_is_unavailable(rag_client):
+    _replace_server_state(rag_client, database_runtime=None)
+
+    response = rag_client.post(
+        "/chat/sessions",
+        headers=SERVICE_HEADERS,
+        json={"username": "viewer-test"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "RAG database runtime is not ready."
+    }
+
+
+def test_chat_executor_binds_and_resets_repository_context(
+    rag_client,
+    monkeypatch,
+):
+    from mech_chatbot.config.repository_runtime import (
+        current_qdrant_runtime,
+        current_repository_engine,
+    )
+
+    database_engine = object()
+    qdrant_client = object()
+    collection_name = "phase6-chat-context"
+    _replace_server_state(
+        rag_client,
+        database_runtime=SimpleNamespace(engine=database_engine),
+    )
+    _replace_runtime(
+        rag_client,
+        retrieval=SimpleNamespace(
+            client=qdrant_client,
+            collection_name=collection_name,
+        ),
+    )
+    observed = []
+
+    def run_sync(*_args):
+        observed.append(
+            (
+                current_repository_engine(),
+                current_qdrant_runtime(),
+            )
+        )
+        return rag_server.ChatResponse(response="bound")
+
+    monkeypatch.setattr(rag_server, "_run_rag_sync", run_sync)
+
+    response = rag_client.post(
+        "/chat",
+        headers=SERVICE_HEADERS,
+        json={"username": "viewer-test", "user_question": "How?"},
+    )
+
+    assert response.status_code == 200
+    assert observed == [
+        (database_engine, (qdrant_client, collection_name))
+    ]
+    reset = rag_client.app.state.rag_server.runtime.thread_pool.submit(
+        lambda: (
+            current_repository_engine(),
+            current_qdrant_runtime(),
+        )
+    ).result()
+    assert reset == (None, (None, None))
+
+
+def test_stream_executor_binds_and_resets_repository_context(
+    rag_client,
+    monkeypatch,
+):
+    from mech_chatbot.config.repository_runtime import (
+        current_qdrant_runtime,
+        current_repository_engine,
+    )
+
+    database_engine = object()
+    qdrant_client = object()
+    collection_name = "phase6-stream-context"
+    _replace_server_state(
+        rag_client,
+        database_runtime=SimpleNamespace(engine=database_engine),
+    )
+    _replace_runtime(
+        rag_client,
+        retrieval=SimpleNamespace(
+            client=qdrant_client,
+            collection_name=collection_name,
+        ),
+    )
+    observed = []
+
+    def open_events(*_args, **_kwargs):
+        observed.append(
+            (
+                current_repository_engine(),
+                current_qdrant_runtime(),
+            )
+        )
+        return iter(
+            [
+                RagCompleted(
+                    "answered",
+                    "phase6-stream",
+                    {"citation_docs": []},
+                )
+            ]
+        )
+
+    monkeypatch.setattr(rag_server, "_open_rag_events", open_events)
+
+    response = rag_client.post(
+        "/chat/stream",
+        headers=SERVICE_HEADERS,
+        json={"username": "viewer-test", "user_question": "How?"},
+    )
+
+    assert response.status_code == 200
+    assert "event: done" in response.text
+    assert observed == [
+        (database_engine, (qdrant_client, collection_name))
+    ]
+    reset = rag_client.app.state.rag_server.runtime.thread_pool.submit(
+        lambda: (
+            current_repository_engine(),
+            current_qdrant_runtime(),
+        )
+    ).result()
+    assert reset == (None, (None, None))
 
 
 def test_chat_reports_busy_without_opening_the_rag_pipeline(rag_client, monkeypatch):
@@ -424,11 +564,11 @@ def test_stream_emits_an_error_event_when_the_pipeline_fails(rag_client, monkeyp
 
 
 def test_session_list_is_scoped_to_the_authenticated_username(rag_client, monkeypatch):
-    from mech_chatbot import services
+    from mech_chatbot.services import chat_service
 
     observed = []
     monkeypatch.setattr(
-        services,
+        chat_service,
         "get_all_sessions",
         lambda **scope: observed.append(scope) or [{"session_id": "session-42"}],
     )
@@ -444,7 +584,7 @@ def test_session_list_is_scoped_to_the_authenticated_username(rag_client, monkey
 
 
 def test_history_uses_the_server_side_profile_scope(rag_client, monkeypatch):
-    from mech_chatbot import services
+    from mech_chatbot.services import chat_service
 
     observed = {}
 
@@ -452,7 +592,7 @@ def test_history_uses_the_server_side_profile_scope(rag_client, monkeypatch):
         observed.update({"session_id": session_id, **scope})
         return [{"role": "assistant", "content": "saved answer"}]
 
-    monkeypatch.setattr(services, "get_chat_history", fake_history)
+    monkeypatch.setattr(chat_service, "get_chat_history", fake_history)
 
     response = rag_client.post(
         "/chat/history",
@@ -475,11 +615,11 @@ def test_history_uses_the_server_side_profile_scope(rag_client, monkeypatch):
 
 
 def test_history_delete_is_scoped_to_the_authenticated_username(rag_client, monkeypatch):
-    from mech_chatbot import services
+    from mech_chatbot.services import chat_service
 
     observed = []
     monkeypatch.setattr(
-        services,
+        chat_service,
         "clear_chat_history",
         lambda session_id, **scope: observed.append((session_id, scope)) or 2,
     )
@@ -500,22 +640,22 @@ def test_save_history_persists_only_sources_attributed_by_the_answer(
     rag_client,
     monkeypatch,
 ):
-    from mech_chatbot import services
+    from mech_chatbot.services import audit_service, chat_service
 
     saved = {"evidence": [], "sources": [], "audits": []}
-    monkeypatch.setattr(services, "save_chat_history", lambda **_kwargs: 91)
+    monkeypatch.setattr(chat_service, "save_chat_history", lambda **_kwargs: 91)
     monkeypatch.setattr(
-        services,
+        chat_service,
         "save_answer_evidence",
         lambda chat_id, docs: saved["evidence"].append((chat_id, docs)),
     )
     monkeypatch.setattr(
-        services,
+        chat_service,
         "save_answer_sources",
         lambda chat_id, docs: saved["sources"].append((chat_id, docs)),
     )
     monkeypatch.setattr(
-        services,
+        audit_service,
         "write_audit_log",
         lambda **kwargs: saved["audits"].append(kwargs),
     )
@@ -568,11 +708,11 @@ def test_feedback_normalizes_the_public_rating_contract(
     rating,
     stored_rating,
 ):
-    from mech_chatbot import services
+    from mech_chatbot.services import chat_service
 
     saved = []
     monkeypatch.setattr(
-        services,
+        chat_service,
         "update_chat_feedback",
         lambda chat_id, value, voter_username=None: saved.append(
             (chat_id, value, voter_username)

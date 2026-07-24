@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from mech_chatbot.db import repository
+from mech_chatbot.db.repositories import semantic_cache as cache_repository_module
 from mech_chatbot.rag import semantic_cache
 
 
@@ -24,7 +24,7 @@ def cache_repository(monkeypatch: pytest.MonkeyPatch):
         sc_record_lookup=Mock(),
     )
     for name, operation in vars(boundary).items():
-        monkeypatch.setattr(repository, name, operation)
+        monkeypatch.setattr(cache_repository_module, name, operation)
     return boundary
 
 

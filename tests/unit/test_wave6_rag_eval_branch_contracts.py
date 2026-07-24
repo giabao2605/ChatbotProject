@@ -188,7 +188,7 @@ def test_interaction_router_and_query_decomposition_policy_branches(monkeypatch)
     assert interaction_router._cosine([1, 0], [1, 0]) == 1.0
     assert interaction_router._cosine([], [1]) == 0.0
     monkeypatch.setattr(
-        "mech_chatbot.db.repository.get_department_domain_profile",
+        "mech_chatbot.db.repositories.knowledge_governance.get_department_domain_profile",
         lambda _: {"is_active": True, "router_patterns": ["HR"]},
     )
     assert interaction_router._department_router_pattern_match("HR policy", ["hr"]) == "HR"

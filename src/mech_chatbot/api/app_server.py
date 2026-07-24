@@ -46,6 +46,8 @@ from mech_chatbot.adapters.qdrant_runtime import (
     build_qdrant_admin_runtime,
 )
 from mech_chatbot.composition.app_runtime import (
+    AppDatabaseRuntime,
+    build_app_database_runtime,
     build_default_app_runtime,
     production_create_ingestion_job,
 )
@@ -59,7 +61,6 @@ from mech_chatbot.config.settings import (
     SqlSettings,
     load_settings,
 )
-from mech_chatbot.db.engine import DatabaseRuntime, build_database_runtime
 import mech_chatbot.services.audit_service as audit_service
 import mech_chatbot.services.chat_service as chat_service
 import mech_chatbot.services.document_service as document_service
@@ -366,8 +367,8 @@ def create_app(
     existing_settings: Settings | None = None,
     *,
     post: Callable[..., Any] = requests.post,
-    database_builder: Callable[[SqlSettings], DatabaseRuntime] = (
-        build_database_runtime
+    database_builder: Callable[[SqlSettings], AppDatabaseRuntime] = (
+        build_app_database_runtime
     ),
     qdrant_builder: Callable[[QdrantSettings], QdrantAdminRuntime] = (
         build_qdrant_admin_runtime
