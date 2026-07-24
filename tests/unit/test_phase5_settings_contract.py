@@ -81,6 +81,17 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
         {
             "HYDE_ENABLED": "false",
             "ENABLE_QUERY_REWRITE": "0",
+            "RAG_EXECUTION_CONTEXT": "evaluation",
+            "RAG_REQUEST_DEADLINE_SECONDS": "45.5",
+            "EVALUATION_FORCE_AMBIGUOUS": "true",
+            "RBAC_STRICT_SITE_FILTER": "false",
+            "RAG_LATE_MODEL": "local/late-model",
+            "RAG_LATE_QUERY_MAX_LENGTH": "72",
+            "RAG_LATE_DOCUMENT_MAX_LENGTH": "56",
+            "RAG_LATE_COLLECTION": "late-shadow",
+            "RERANK_MAX_CHUNKS_PER_DOCUMENT": "6",
+            "RERANK_MAX_CHUNKS_PER_SECTION": "2",
+            "RERANK_CANDIDATE_CAP": "24",
         }
     )
 
@@ -88,6 +99,17 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
 
     assert rag.hyde_enabled is False
     assert rag.query_rewrite_enabled is False
+    assert rag.execution_context == "evaluation"
+    assert rag.request_deadline_seconds == 45.5
+    assert rag.evaluation_force_ambiguous is True
+    assert rag.strict_site_filter is False
+    assert rag.late_model_name == "local/late-model"
+    assert rag.late_query_max_length == 72
+    assert rag.late_document_max_length == 56
+    assert rag.late_collection == "late-shadow"
+    assert rag.rerank_max_chunks_per_document == 6
+    assert rag.rerank_max_chunks_per_section == 2
+    assert rag.rerank_candidate_cap == 24
 
 
 def test_app_security_projection_preserves_secret_fallback_and_clamps_values():
@@ -137,6 +159,7 @@ def test_adapter_projections_expose_only_their_required_configuration():
     assert qdrant.url == "https://qdrant.example"
     assert llm.model_name == "gpt-test"
     assert vision.model_name == "vision-test"
+    assert vision.min_interval_seconds == 0.0
     assert not hasattr(qdrant, "SQL_PASSWORD")
     assert not hasattr(sql, "QDRANT_API_KEY")
 
@@ -156,3 +179,15 @@ def test_external_ai_projection_snapshots_local_policy_without_secrets():
     assert external_ai.local_development is True
     assert external_ai.processing_policy == "internal_only"
     assert not hasattr(external_ai, "LLM_API_KEY")
+
+
+def test_settings_snapshot_preserves_misc_phase_five_flags():
+    settings = Settings.from_env(
+        {
+            "ENABLE_CONTEXTUAL_CHUNK": "true",
+            "RAG_TRACE_LOG_FILE": "runtime/trace.jsonl",
+        }
+    )
+
+    assert settings.ENABLE_CONTEXTUAL_CHUNK is True
+    assert settings.RAG_TRACE_LOG_FILE == "runtime/trace.jsonl"

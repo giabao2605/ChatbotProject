@@ -164,6 +164,10 @@ class Settings(BaseModel):
     RAG_GROUNDED_MATH_ENABLED: bool = False
     RAG_LATE_INTERACTION_ENABLED: bool = False
     RAG_LATE_ENCODER_READY: bool = False
+    RAG_LATE_MODEL: str = "BAAI/bge-m3"
+    RAG_LATE_QUERY_MAX_LENGTH: int = 64
+    RAG_LATE_DOCUMENT_MAX_LENGTH: int = 48
+    RAG_LATE_COLLECTION: str = "MechChatbot_LateInteraction_v1"
     RAG_QUERY_DECOMPOSITION_ENABLED: bool = False
     RAG_GRAPH_RETRIEVAL_ENABLED: bool = False
     RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED: bool = False
@@ -172,6 +176,9 @@ class Settings(BaseModel):
     RAG_ACTIVATION_BUNDLE_SHA256: Optional[str] = None
     RAG_PLANNER_VERSION: str = "planner-v1"
     RAG_LATE_INDEX_VERSION: str = "late-v2"
+    RERANK_MAX_CHUNKS_PER_DOCUMENT: int = 4
+    RERANK_MAX_CHUNKS_PER_SECTION: int = 1
+    RERANK_CANDIDATE_CAP: int = 20
     RAG_GRAPH_SERVING_EPOCH: str = "graph-v1"
     RAG_COMMUNITY_SERVING_EPOCH: str = "community-v1"
     RAG_GRAPH_FINGERPRINT: Optional[str] = None
@@ -181,6 +188,11 @@ class Settings(BaseModel):
     CRAG_PILOT_ASSIGNMENT_SALT: str = ""
     GLOSSARY_CACHE_TTL: float = 60.0
     LLM_ROUTER_MIN_CONFIDENCE: float = 0.5
+    RAG_EXECUTION_CONTEXT: str = "production"
+    RAG_REQUEST_DEADLINE_SECONDS: float = 120.0
+    EVALUATION_FORCE_AMBIGUOUS: bool = False
+    RBAC_STRICT_SITE_FILTER: bool = True
+    RAG_TRACE_LOG_FILE: Optional[str] = None
 
     # --- Ingestion (ingestion/*) -----------------------------------------
     LLM_METADATA_MODE: str = "missing_only"
@@ -190,6 +202,7 @@ class Settings(BaseModel):
     METADATA_TEXT_LIMIT: int = 20000
     VISION_CACHE_ENABLED: bool = True
     VISION_CACHE_DIR: Optional[str] = None  # default that thu tinh o vision_cache.py
+    ENABLE_CONTEXTUAL_CHUNK: bool = False
 
     # --- Server / Workers / App (api, workers, ui) ------------------------
     MAX_CONCURRENT_RAG: int = 2
@@ -344,6 +357,16 @@ class Settings(BaseModel):
             RAG_GROUNDED_MATH_ENABLED=_bool("RAG_GROUNDED_MATH_ENABLED", False, _TRUTHY_5),
             RAG_LATE_INTERACTION_ENABLED=_bool("RAG_LATE_INTERACTION_ENABLED", False, _TRUTHY_5),
             RAG_LATE_ENCODER_READY=_bool("RAG_LATE_ENCODER_READY", False, _TRUTHY_5),
+            RAG_LATE_MODEL=_str("RAG_LATE_MODEL", "BAAI/bge-m3"),
+            RAG_LATE_QUERY_MAX_LENGTH=_int("RAG_LATE_QUERY_MAX_LENGTH", 64),
+            RAG_LATE_DOCUMENT_MAX_LENGTH=_int(
+                "RAG_LATE_DOCUMENT_MAX_LENGTH",
+                48,
+            ),
+            RAG_LATE_COLLECTION=_str(
+                "RAG_LATE_COLLECTION",
+                "MechChatbot_LateInteraction_v1",
+            ),
             RAG_QUERY_DECOMPOSITION_ENABLED=_bool("RAG_QUERY_DECOMPOSITION_ENABLED", False, _TRUTHY_5),
             RAG_GRAPH_RETRIEVAL_ENABLED=_bool("RAG_GRAPH_RETRIEVAL_ENABLED", False, _TRUTHY_5),
             RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED=_bool(
@@ -354,6 +377,15 @@ class Settings(BaseModel):
             RAG_ACTIVATION_BUNDLE_SHA256=_str("RAG_ACTIVATION_BUNDLE_SHA256"),
             RAG_PLANNER_VERSION=_str("RAG_PLANNER_VERSION", "planner-v1"),
             RAG_LATE_INDEX_VERSION=_str("RAG_LATE_INDEX_VERSION", "late-v2"),
+            RERANK_MAX_CHUNKS_PER_DOCUMENT=_int(
+                "RERANK_MAX_CHUNKS_PER_DOCUMENT",
+                4,
+            ),
+            RERANK_MAX_CHUNKS_PER_SECTION=_int(
+                "RERANK_MAX_CHUNKS_PER_SECTION",
+                1,
+            ),
+            RERANK_CANDIDATE_CAP=_int("RERANK_CANDIDATE_CAP", 20),
             RAG_GRAPH_SERVING_EPOCH=_str("RAG_GRAPH_SERVING_EPOCH", "graph-v1"),
             RAG_COMMUNITY_SERVING_EPOCH=_str(
                 "RAG_COMMUNITY_SERVING_EPOCH", "community-v1"
@@ -368,6 +400,22 @@ class Settings(BaseModel):
             ),
             GLOSSARY_CACHE_TTL=_float("GLOSSARY_CACHE_TTL", 60.0),
             LLM_ROUTER_MIN_CONFIDENCE=_float("LLM_ROUTER_MIN_CONFIDENCE", 0.5),
+            RAG_EXECUTION_CONTEXT=_str("RAG_EXECUTION_CONTEXT", "production"),
+            RAG_REQUEST_DEADLINE_SECONDS=_float(
+                "RAG_REQUEST_DEADLINE_SECONDS",
+                120.0,
+            ),
+            EVALUATION_FORCE_AMBIGUOUS=_bool(
+                "EVALUATION_FORCE_AMBIGUOUS",
+                False,
+                _TRUTHY_5,
+            ),
+            RBAC_STRICT_SITE_FILTER=_bool(
+                "RBAC_STRICT_SITE_FILTER",
+                True,
+                _TRUTHY_5,
+            ),
+            RAG_TRACE_LOG_FILE=_str("RAG_TRACE_LOG_FILE"),
             # Ingestion
             LLM_METADATA_MODE=_str("LLM_METADATA_MODE", "missing_only").strip().lower(),
             STRICT_INGEST_REQUIRE_VISION=_bool("STRICT_INGEST_REQUIRE_VISION", False, _TRUTHY_5),
@@ -376,6 +424,11 @@ class Settings(BaseModel):
             METADATA_TEXT_LIMIT=_int("METADATA_TEXT_LIMIT", 20000),
             VISION_CACHE_ENABLED=_bool("VISION_CACHE_ENABLED", True, _TRUTHY_4),
             VISION_CACHE_DIR=_str("VISION_CACHE_DIR"),
+            ENABLE_CONTEXTUAL_CHUNK=_bool(
+                "ENABLE_CONTEXTUAL_CHUNK",
+                False,
+                _TRUTHY_5,
+            ),
             # Server / Workers / App
             MAX_CONCURRENT_RAG=_int("MAX_CONCURRENT_RAG", 2),
             RAG_SERVER_PORT=_int("RAG_SERVER_PORT", 8100),
@@ -533,6 +586,7 @@ class VisionSettings:
     temperature: float
     max_output_tokens: int
     timeout_seconds: float
+    min_interval_seconds: float
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "VisionSettings":
@@ -546,6 +600,7 @@ class VisionSettings:
             temperature=settings.GPT_VISION_TEMPERATURE,
             max_output_tokens=settings.GPT_VISION_MAX_OUTPUT_TOKENS,
             timeout_seconds=settings.GPT_TIMEOUT_SECONDS,
+            min_interval_seconds=settings.GPT_MIN_INTERVAL_SECONDS,
         )
 
 
@@ -615,6 +670,19 @@ class RagProcessSettings:
     pilot_assignment_salt: str
     hyde_enabled: bool
     query_rewrite_enabled: bool
+    execution_context: str
+    request_deadline_seconds: float
+    evaluation_force_ambiguous: bool
+    strict_site_filter: bool
+    late_model_name: str
+    late_use_fp16: bool
+    late_query_max_length: int
+    late_document_max_length: int
+    late_collection: str
+    late_index_version: str
+    rerank_max_chunks_per_document: int
+    rerank_max_chunks_per_section: int
+    rerank_candidate_cap: int
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RagProcessSettings":
@@ -632,6 +700,23 @@ class RagProcessSettings:
             pilot_assignment_salt=settings.CRAG_PILOT_ASSIGNMENT_SALT,
             hyde_enabled=settings.HYDE_ENABLED,
             query_rewrite_enabled=settings.ENABLE_QUERY_REWRITE,
+            execution_context=settings.RAG_EXECUTION_CONTEXT,
+            request_deadline_seconds=settings.RAG_REQUEST_DEADLINE_SECONDS,
+            evaluation_force_ambiguous=settings.EVALUATION_FORCE_AMBIGUOUS,
+            strict_site_filter=settings.RBAC_STRICT_SITE_FILTER,
+            late_model_name=settings.RAG_LATE_MODEL,
+            late_use_fp16=settings.EMBEDDING_DEVICE.lower().startswith("cuda"),
+            late_query_max_length=settings.RAG_LATE_QUERY_MAX_LENGTH,
+            late_document_max_length=settings.RAG_LATE_DOCUMENT_MAX_LENGTH,
+            late_collection=settings.RAG_LATE_COLLECTION,
+            late_index_version=settings.RAG_LATE_INDEX_VERSION,
+            rerank_max_chunks_per_document=(
+                settings.RERANK_MAX_CHUNKS_PER_DOCUMENT
+            ),
+            rerank_max_chunks_per_section=(
+                settings.RERANK_MAX_CHUNKS_PER_SECTION
+            ),
+            rerank_candidate_cap=settings.RERANK_CANDIDATE_CAP,
         )
 
 
