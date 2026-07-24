@@ -7,13 +7,13 @@ import sys
 from mech_chatbot.application.ingestion_runner import IngestionJob
 from mech_chatbot.composition.worker_runtime import WorkerRuntime, build_worker_runtime
 from mech_chatbot.config.logging import logger
-from mech_chatbot.config.worker_settings import worker_int
+from mech_chatbot.config.settings import Settings
 
 
 def _reconcile(runtime: WorkerRuntime, last_publication: float, last_serving: float) -> tuple[float, float]:
     now = runtime.clock.monotonic()
-    publication_interval = worker_int("PUBLICATION_RECONCILE_INTERVAL_SECONDS", 15, 5)
-    serving_interval = worker_int("SERVING_RECONCILE_INTERVAL_SECONDS", 600, 60)
+    publication_interval = runtime.settings.publication_reconcile_interval_seconds
+    serving_interval = runtime.settings.serving_reconcile_interval_seconds
     if now - last_publication >= publication_interval:
         try:
             summary = runtime.reconcile_publications(limit=10)
@@ -25,7 +25,7 @@ def _reconcile(runtime: WorkerRuntime, last_publication: float, last_serving: fl
     if now - last_serving >= serving_interval:
         try:
             summary = runtime.reconcile_serving_state(
-                limit=worker_int("SERVING_RECONCILE_BATCH_SIZE", 500, 1),
+                limit=runtime.settings.serving_reconcile_batch_size,
                 worker_id="ingestion-worker-serving-reconciler",
             )
             if summary.get("failed_doc_ids"):
@@ -39,7 +39,7 @@ def _reconcile(runtime: WorkerRuntime, last_publication: float, last_serving: fl
 def run_worker(runtime: WorkerRuntime | None = None) -> None:
     """Poll, claim, and delegate jobs; business decisions stay in the runner."""
 
-    resolved_runtime = runtime or build_worker_runtime(None)
+    resolved_runtime = runtime or build_worker_runtime(Settings.from_env())
     logger.info("Khởi động Ingestion Worker chạy ngầm...")
     print("Ingestion Worker đã sẵn sàng. Đang chờ file mới...")
     last_publication_reconcile = 0.0
@@ -55,7 +55,9 @@ def run_worker(runtime: WorkerRuntime | None = None) -> None:
             )
             job = resolved_runtime.job_store.claim_next(resolved_runtime.worker_id)
             if job is None:
-                resolved_runtime.clock.sleep(5)
+                resolved_runtime.clock.sleep(
+                    resolved_runtime.settings.idle_sleep_seconds
+                )
                 continue
             logger.info("Worker bắt đầu xử lý JobID %s: %s", job.job_id, job.file_name)
             result = resolved_runtime.runner.run(job)
@@ -69,7 +71,9 @@ def run_worker(runtime: WorkerRuntime | None = None) -> None:
             logger.error("Lỗi không xác định trong Ingestion Worker: %s", exc, exc_info=True)
             if job is not None:
                 resolved_runtime.reconcile_job_failure(job, exc)
-            resolved_runtime.clock.sleep(10)
+            resolved_runtime.clock.sleep(
+                resolved_runtime.settings.error_sleep_seconds
+            )
 
 
 if __name__ == "__main__":

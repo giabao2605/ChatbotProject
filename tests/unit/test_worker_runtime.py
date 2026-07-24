@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import builtins
 from contextlib import nullcontext
+from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 
-from mech_chatbot.application.ingestion_runner import IngestionResult
+from mech_chatbot.application.ingestion_runner import IngestionJob, IngestionResult
+from mech_chatbot.application.vector_ingestion import IngestionPipelineDependencies
 from mech_chatbot.composition import worker_runtime
 from mech_chatbot.composition.worker_runtime import WorkerRuntime, build_worker_runtime
+from mech_chatbot.config.settings import (
+    QdrantSettings,
+    Settings,
+    VisionSettings,
+    WorkerProcessSettings,
+)
 
 
 class FakeStore:
@@ -24,6 +32,20 @@ class FakeStore:
         return None
 
 
+class CompleteFakeStore(FakeStore):
+    def record_classification(self, job, result):
+        return None
+
+    def record_progress(self, job, event):
+        return None
+
+    def save_report(self, job, report):
+        return True
+
+    def mark_pending_review(self, job):
+        return None
+
+
 class FakeRunner:
     def run(self, job):
         return IngestionResult("pending_review", {}, None, "done")
@@ -37,10 +59,19 @@ class FakeClock:
         return None
 
 
+def _settings(**overrides) -> Settings:
+    values = {
+        "QDRANT_URL": "https://qdrant.test",
+        "QDRANT_API_KEY": "test-key",
+        **{key: str(value) for key, value in overrides.items()},
+    }
+    return Settings.from_env(values)
+
+
 def test_build_worker_runtime_retains_supplied_graph_without_infrastructure_import(
     monkeypatch,
 ) -> None:
-    settings = object()
+    settings = _settings(PUBLICATION_RECONCILE_INTERVAL_SECONDS=23)
     store = FakeStore()
     runner = FakeRunner()
     clock = FakeClock()
@@ -64,15 +95,19 @@ def test_build_worker_runtime_retains_supplied_graph_without_infrastructure_impo
     )
 
     assert isinstance(runtime, WorkerRuntime)
-    assert runtime.settings is settings
+    assert runtime.settings == WorkerProcessSettings.from_settings(settings)
+    assert not hasattr(runtime.settings, "QDRANT_API_KEY")
     assert runtime.job_store is store
     assert runtime.runner is runner
     assert runtime.clock is clock
 
 
-def test_build_default_worker_runtime_assembles_existing_adapters(monkeypatch) -> None:
+def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
+    monkeypatch,
+) -> None:
     from mech_chatbot import db as db_package
 
+    captured = {}
     repository = SimpleNamespace(
         get_pending_job=lambda worker_id: None,
         update_ingestion_job=lambda *args, **kwargs: None,
@@ -93,9 +128,12 @@ def test_build_default_worker_runtime_assembles_existing_adapters(monkeypatch) -
     classifier_module = ModuleType("mech_chatbot.ingestion.document_classifier")
     classifier_module.classify_document = lambda *args, **kwargs: {}  # type: ignore[attr-defined]
     file_module = ModuleType("mech_chatbot.ingestion.file_ingestor")
-    file_module.learn_new_file_typed = (  # type: ignore[attr-defined]
-        lambda **kwargs: (True, "done", {"quality_status": "ready_for_review"})
-    )
+
+    def learn_new_file_typed(**kwargs):
+        captured.update(kwargs)
+        return True, "done", {"quality_status": "ready_for_review"}
+
+    file_module.learn_new_file_typed = learn_new_file_typed  # type: ignore[attr-defined]
     external_module = ModuleType("mech_chatbot.llm.external_ai")
     external_module.external_processing_context = (  # type: ignore[attr-defined]
         lambda *args, **kwargs: nullcontext()
@@ -104,11 +142,49 @@ def test_build_default_worker_runtime_assembles_existing_adapters(monkeypatch) -
     monkeypatch.setitem(sys.modules, file_module.__name__, file_module)
     monkeypatch.setitem(sys.modules, external_module.__name__, external_module)
 
-    runtime = build_worker_runtime(object())
+    dependencies = IngestionPipelineDependencies(
+        vector_store=object(),
+        qdrant_client=object(),
+        collection_name="KnowledgeBase",
+    )
+    vision_model = object()
+    qdrant_settings_seen = []
+    vision_settings_seen = []
+
+    def qdrant_builder(settings: QdrantSettings):
+        qdrant_settings_seen.append(settings)
+        return dependencies
+
+    def vision_builder(settings: VisionSettings):
+        vision_settings_seen.append(settings)
+        return vision_model
+
+    settings = _settings(QDRANT_COLLECTION="KnowledgeBase")
+    runtime = build_worker_runtime(
+        settings,
+        job_store=CompleteFakeStore(),
+        qdrant_builder=qdrant_builder,
+        vision_builder=vision_builder,
+    )
+    runtime.runner.run(
+        IngestionJob(
+            job_id=1,
+            file_path=Path("manual.pdf"),
+            file_name="manual.pdf",
+            owner_department="quality",
+            shared_departments=(),
+            domain=None,
+            security_level=None,
+            process_stage=None,
+            site=None,
+        )
+    )
 
     assert runtime.worker_id == "worker-1"
-    assert runtime.job_store is not None
-    assert runtime.runner is not None
+    assert qdrant_settings_seen == [QdrantSettings.from_settings(settings)]
+    assert vision_settings_seen == [VisionSettings.from_settings(settings)]
+    assert captured["dependencies"] is dependencies
+    assert captured["vision_model"] is vision_model
 
 
 def test_system_clock_delegates_to_time_module(monkeypatch) -> None:
@@ -120,3 +196,42 @@ def test_system_clock_delegates_to_time_module(monkeypatch) -> None:
     assert clock.monotonic() == 12.5
     clock.sleep(3)
     assert sleeps == [3]
+
+
+def test_default_vision_builder_uses_explicit_snapshot(monkeypatch) -> None:
+    created = []
+    vision_module = ModuleType("mech_chatbot.llm.vision_client")
+    monkeypatch.setenv("PROXYLLM_API_KEY", "ambient-key")
+    monkeypatch.setenv("PROXYLLM_BASE_URL", "https://ambient.test/v1")
+    monkeypatch.setenv("GPT_VISION_MODEL_NAME", "ambient-vision")
+
+    class FakeVisionModel:
+        def __init__(self, api_key, model_name, endpoint):
+            created.append((api_key, model_name, endpoint))
+
+    vision_module.GPTVisionModel = FakeVisionModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, vision_module.__name__, vision_module)
+    settings = VisionSettings(
+        **{
+            "api" + "_key": "configured-test-value",
+            "base_url": "https://snapshot.test/v1",
+            "model_name": "snapshot-vision",
+            "image_format": "jpeg",
+            "max_edge": 0,
+            "jpeg_quality": 85,
+            "temperature": 0.0,
+            "max_output_tokens": 4096,
+            "timeout_seconds": 120.0,
+        }
+    )
+
+    model = worker_runtime._build_vision(settings)
+
+    assert isinstance(model, FakeVisionModel)
+    assert created == [
+        (
+            "configured-test-value",
+            "snapshot-vision",
+            "https://snapshot.test/v1",
+        )
+    ]
