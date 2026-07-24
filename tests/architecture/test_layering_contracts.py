@@ -75,3 +75,31 @@ def test_phase5_registry_and_pipeline_edges_are_removed():
     ]
 
     assert blocked == []
+
+
+def test_phase5_imports_do_not_create_resources_or_mutate_environment():
+    violations = scan_repository(
+        SOURCE_ROOT,
+        required_packages=(
+            "api",
+            "application",
+            "config",
+            "db",
+            "ingestion",
+            "llm",
+            "rag",
+            "workers",
+        ),
+    )
+
+    blocked = [
+        item
+        for item in violations
+        if item.rule
+        in {
+            "import_time_environment_mutation",
+            "import_time_resource",
+        }
+    ]
+
+    assert blocked == []
