@@ -179,6 +179,16 @@ class Settings(BaseModel):
     RERANK_MAX_CHUNKS_PER_DOCUMENT: int = 4
     RERANK_MAX_CHUNKS_PER_SECTION: int = 1
     RERANK_CANDIDATE_CAP: int = 20
+    RAG_AUTO_SOURCE_CARDS: bool = True
+    GPT_STREAM_MAX_ATTEMPTS: int = 3
+    STRICT_STREAMING_HOLDBACK_CHARS: int = 160
+    RAG_EVAL_DRAFT_OVERRIDE: Optional[str] = None
+    PARENT_CONTEXT_ENABLED: bool = True
+    PARENT_CONTEXT_MAX_SECTIONS: int = 8
+    PARENT_CONTEXT_MAX_CHUNKS: int = 6
+    CITATION_MAX_SOURCES: int = 5
+    BOM_CITATION_MAX_SOURCES: int = 3
+    RAG_EVAL_FORCE_AMBIGUOUS: bool = False
     RAG_GRAPH_SERVING_EPOCH: str = "graph-v1"
     RAG_COMMUNITY_SERVING_EPOCH: str = "community-v1"
     RAG_GRAPH_FINGERPRINT: Optional[str] = None
@@ -389,6 +399,34 @@ class Settings(BaseModel):
                 1,
             ),
             RERANK_CANDIDATE_CAP=_int("RERANK_CANDIDATE_CAP", 20),
+            RAG_AUTO_SOURCE_CARDS=_bool(
+                "RAG_AUTO_SOURCE_CARDS",
+                True,
+                _TRUTHY_5,
+            ),
+            GPT_STREAM_MAX_ATTEMPTS=_int("GPT_STREAM_MAX_ATTEMPTS", 3),
+            STRICT_STREAMING_HOLDBACK_CHARS=_int(
+                "STRICT_STREAMING_HOLDBACK_CHARS",
+                160,
+            ),
+            RAG_EVAL_DRAFT_OVERRIDE=_str("RAG_EVAL_DRAFT_OVERRIDE"),
+            PARENT_CONTEXT_ENABLED=_bool(
+                "PARENT_CONTEXT_ENABLED",
+                True,
+                _TRUTHY_5,
+            ),
+            PARENT_CONTEXT_MAX_SECTIONS=_int(
+                "PARENT_CONTEXT_MAX_SECTIONS",
+                8,
+            ),
+            PARENT_CONTEXT_MAX_CHUNKS=_int("PARENT_CONTEXT_MAX_CHUNKS", 6),
+            CITATION_MAX_SOURCES=_int("CITATION_MAX_SOURCES", 5),
+            BOM_CITATION_MAX_SOURCES=_int("BOM_CITATION_MAX_SOURCES", 3),
+            RAG_EVAL_FORCE_AMBIGUOUS=_bool(
+                "RAG_EVAL_FORCE_AMBIGUOUS",
+                False,
+                _TRUTHY_5,
+            ),
             RAG_GRAPH_SERVING_EPOCH=_str("RAG_GRAPH_SERVING_EPOCH", "graph-v1"),
             RAG_COMMUNITY_SERVING_EPOCH=_str(
                 "RAG_COMMUNITY_SERVING_EPOCH", "community-v1"
@@ -720,6 +758,16 @@ class RagProcessSettings:
     rerank_max_chunks_per_document: int
     rerank_max_chunks_per_section: int
     rerank_candidate_cap: int
+    auto_source_cards: bool
+    stream_max_attempts: int
+    streaming_holdback_chars: int
+    eval_draft_override: str | None
+    parent_context_enabled: bool
+    parent_context_max_sections: int
+    parent_context_max_chunks: int
+    citation_max_sources: int
+    bom_citation_max_sources: int
+    eval_force_ambiguous: bool
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RagProcessSettings":
@@ -756,6 +804,28 @@ class RagProcessSettings:
                 settings.RERANK_MAX_CHUNKS_PER_SECTION
             ),
             rerank_candidate_cap=settings.RERANK_CANDIDATE_CAP,
+            auto_source_cards=settings.RAG_AUTO_SOURCE_CARDS,
+            stream_max_attempts=max(1, settings.GPT_STREAM_MAX_ATTEMPTS),
+            streaming_holdback_chars=max(
+                64,
+                settings.STRICT_STREAMING_HOLDBACK_CHARS,
+            ),
+            eval_draft_override=settings.RAG_EVAL_DRAFT_OVERRIDE,
+            parent_context_enabled=settings.PARENT_CONTEXT_ENABLED,
+            parent_context_max_sections=max(
+                1,
+                settings.PARENT_CONTEXT_MAX_SECTIONS,
+            ),
+            parent_context_max_chunks=max(
+                1,
+                settings.PARENT_CONTEXT_MAX_CHUNKS,
+            ),
+            citation_max_sources=max(1, settings.CITATION_MAX_SOURCES),
+            bom_citation_max_sources=max(
+                1,
+                settings.BOM_CITATION_MAX_SOURCES,
+            ),
+            eval_force_ambiguous=settings.RAG_EVAL_FORCE_AMBIGUOUS,
         )
 
 

@@ -97,6 +97,16 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
             "RERANK_MAX_CHUNKS_PER_DOCUMENT": "6",
             "RERANK_MAX_CHUNKS_PER_SECTION": "2",
             "RERANK_CANDIDATE_CAP": "24",
+            "RAG_AUTO_SOURCE_CARDS": "false",
+            "GPT_STREAM_MAX_ATTEMPTS": "4",
+            "STRICT_STREAMING_HOLDBACK_CHARS": "192",
+            "RAG_EVAL_DRAFT_OVERRIDE": "controlled draft",
+            "PARENT_CONTEXT_ENABLED": "false",
+            "PARENT_CONTEXT_MAX_SECTIONS": "9",
+            "PARENT_CONTEXT_MAX_CHUNKS": "7",
+            "CITATION_MAX_SOURCES": "6",
+            "BOM_CITATION_MAX_SOURCES": "4",
+            "RAG_EVAL_FORCE_AMBIGUOUS": "true",
         }
     )
 
@@ -115,6 +125,16 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
     assert rag.rerank_max_chunks_per_document == 6
     assert rag.rerank_max_chunks_per_section == 2
     assert rag.rerank_candidate_cap == 24
+    assert rag.auto_source_cards is False
+    assert rag.stream_max_attempts == 4
+    assert rag.streaming_holdback_chars == 192
+    assert rag.eval_draft_override == "controlled draft"
+    assert rag.parent_context_enabled is False
+    assert rag.parent_context_max_sections == 9
+    assert rag.parent_context_max_chunks == 7
+    assert rag.citation_max_sources == 6
+    assert rag.bom_citation_max_sources == 4
+    assert rag.eval_force_ambiguous is True
 
 
 def test_app_security_projection_preserves_secret_fallback_and_clamps_values():
