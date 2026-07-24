@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+import os
 
 import pytest
 
@@ -13,6 +14,7 @@ from mech_chatbot.config.settings import (
     SqlSettings,
     VisionSettings,
     WorkerProcessSettings,
+    load_settings,
 )
 
 
@@ -46,6 +48,20 @@ def test_settings_parse_one_explicit_environment_snapshot():
     )
     assert settings.PUBLICATION_RECONCILE_INTERVAL_SECONDS == 21
     assert settings.LLM_API_KEY == "llm-secret"
+
+
+def test_dotenv_loading_is_explicit_and_does_not_mutate_process_environment(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("APP_THREAD_LIMIT", raising=False)
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("APP_THREAD_LIMIT=11\n", encoding="utf-8")
+
+    settings = load_settings(dotenv_path)
+
+    assert settings.APP_THREAD_LIMIT == 11
+    assert "APP_THREAD_LIMIT" not in os.environ
 
 
 def test_process_projections_are_frozen_and_keep_existing_defaults():

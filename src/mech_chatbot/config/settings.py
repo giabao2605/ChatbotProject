@@ -1,15 +1,10 @@
 """Cau hinh dung chung (tap trung, co kieu).
 
-P2.2 — Pydantic Settings (CONG DON, AN TOAN):
-- Truoc day cau hinh doc rai rac qua ~91 loi goi `os.getenv` trong 24 file,
-  nhieu cho co default am tham -> kho biet co bao nhieu bien, kieu gi, default gi.
-- Buoc nay THEM mot nguon su that co kieu: lop `Settings` (Pydantic v2) gom
-  TAT CA bien moi truong dang dung, kem default + kieu, va singleton `settings`.
-- **Khong xoa** cac `os.getenv` cu o cac module khac trong buoc nay (cong don,
-  khong doi hanh vi). Cac module co the chuyen dan sang doc tu `settings` sau.
-- `Settings.from_env()` tai hien CHINH XAC default + quy tac parse cua tung bien
-  (int/float/bool voi dung tap gia tri "truthy" nhu code goc). Parser khoan dung
-  (loi parse -> ve default) de KHONG tao them che do loi moi khi khoi dong.
+Phase 5 — immutable process configuration:
+- `Settings.from_env(mapping)` parses one explicit environment snapshot.
+- `load_settings(path)` reads a dotenv file without mutating `os.environ`.
+- Composition roots project the snapshot into narrow frozen settings bundles.
+- Importing this module does not read dotenv files or capture process settings.
 
 QDRANT_COLLECTION: ten collection vector store dung CHUNG cho moi phong ban.
 - Day chi la dinh danh NOI BO (nguoi dung khong nhin thay tren UI).
@@ -27,56 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
 
-from dotenv import load_dotenv
 from pydantic import BaseModel
-
-load_dotenv()
-
-
-# ---------------------------------------------------------------------------
-# Helper parse — tai hien dung quy tac cua code goc
-# ---------------------------------------------------------------------------
-
-def _str(name: str, default: Optional[str] = None) -> Optional[str]:
-    v = os.getenv(name)
-    return v if v is not None else default
-
-
-def _int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or str(raw).strip() == "":
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None or str(raw).strip() == "":
-        return default
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _bool(name: str, default: bool, truthy) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in truthy
-
-
-def _first(*names: str, default: Optional[str] = None) -> Optional[str]:
-    """Tra ve gia tri dau tien khac None/rong trong chuoi ten (chained fallback)."""
-    for n in names:
-        v = os.getenv(n)
-        if v:
-            return v
-    return default
-
 
 # Cac tap "truthy" khac nhau ton tai trong code goc — giu nguyen tung cai
 _TRUTHY_3 = frozenset({"1", "true", "yes"})             # SQL_TRUSTED_CONNECTION
@@ -91,7 +37,7 @@ _TRUTHY_5 = frozenset({"1", "true", "yes", "y", "on"})  # env_bool / rerank / ca
 class Settings(BaseModel):
     """Nguon su that co kieu cho toan bo cau hinh runtime.
 
-    Dung `Settings.from_env()` (hoac singleton `settings`) de nap tu moi truong.
+    Dung `Settings.from_env()` de nap tu mot mapping moi truong da chup lai.
     Cac ghi chu ben canh chi ra file/hanh vi goc de doi chieu khi migrate.
     """
 
@@ -545,6 +491,26 @@ class Settings(BaseModel):
             WORKER_IDLE_SLEEP_SECONDS=_int("WORKER_IDLE_SLEEP_SECONDS", 5),
             WORKER_ERROR_SLEEP_SECONDS=_int("WORKER_ERROR_SLEEP_SECONDS", 10),
         )
+
+
+def load_settings(
+    dotenv_path: str | os.PathLike[str] | None = None,
+) -> Settings:
+    """Read dotenv plus process environment into one immutable snapshot.
+
+    Existing process variables take precedence, matching python-dotenv's
+    historical ``override=False`` behavior. The function never mutates
+    ``os.environ``.
+    """
+
+    from dotenv import dotenv_values
+
+    dotenv_mapping = {
+        key: value
+        for key, value in dotenv_values(dotenv_path).items()
+        if value is not None
+    }
+    return Settings.from_env({**dotenv_mapping, **os.environ})
 
 
 @dataclass(frozen=True, slots=True)
