@@ -46,6 +46,19 @@ _APPLICATION_EXTERNAL_PREFIXES = (
     "sqlalchemy",
     "streamlit",
     "mech_chatbot.adapters",
+    "mech_chatbot.db",
+    "mech_chatbot.ingestion",
+    "mech_chatbot.rag",
+)
+_CONFIG_UPWARD_PREFIXES = (
+    "mech_chatbot.api",
+    "mech_chatbot.application",
+    "mech_chatbot.db",
+    "mech_chatbot.evaluation",
+    "mech_chatbot.ingestion",
+    "mech_chatbot.llm",
+    "mech_chatbot.rag",
+    "mech_chatbot.workers",
 )
 _DB_UPWARD_PREFIXES = (
     "mech_chatbot.api",
@@ -56,10 +69,14 @@ _DB_UPWARD_PREFIXES = (
 _RESOURCE_FACTORIES = {
     "ChatOpenAI",
     "OpenAI",
+    "PilotReplayExecutor",
     "QdrantClient",
+    "Semaphore",
     "ThreadPoolExecutor",
+    "_get_runtime_llm",
     "build_vision_model",
     "create_db_engine",
+    "get_instance",
 }
 _CORE_PACKAGES = {"api", "application", "config", "db", "ingestion", "llm", "rag", "workers"}
 
@@ -109,13 +126,8 @@ def _call_name(call: ast.Call) -> str:
     return ""
 
 
-def _is_config_or_bootstrap(path: Path) -> bool:
-    return (
-        "config" in path.parts
-        or path.name == "bootstrap.py"
-        or path.stem == "config"
-        or path.stem.endswith("_config")
-    )
+def _is_canonical_settings(path: Path) -> bool:
+    return path.as_posix() == "config/settings.py"
 
 
 def _literal_string_list(node: ast.AST) -> tuple[str, ...]:
@@ -171,10 +183,21 @@ def _import_rules_for_package(package: str) -> tuple[_ImportRule, ...]:
         rules.append(
             _ImportRule("application_external_dependency", _APPLICATION_EXTERNAL_PREFIXES)
         )
+    if package == "config":
+        rules.append(
+            _ImportRule("config_upward_dependency", _CONFIG_UPWARD_PREFIXES)
+        )
     if package == "db":
         rules.append(_ImportRule("db_upward_dependency", _DB_UPWARD_PREFIXES))
+    if package == "ingestion":
+        rules.append(
+            _ImportRule("ingestion_rag_dependency", ("mech_chatbot.rag",))
+        )
     if package == "rag":
         rules.append(_ImportRule("rag_evaluation_dependency", ("mech_chatbot.evaluation",)))
+        rules.append(
+            _ImportRule("rag_ingestion_dependency", ("mech_chatbot.ingestion",))
+        )
     if package == "evaluation":
         rules.append(
             _ImportRule(
@@ -209,7 +232,7 @@ def _scan_import_rules(
 
 
 def _scan_direct_getenv(relative: Path, tree: ast.Module) -> list[ArchitectureViolation]:
-    if _is_config_or_bootstrap(relative):
+    if _is_canonical_settings(relative):
         return []
     findings = []
     for node in ast.walk(tree):
@@ -223,6 +246,32 @@ def _scan_direct_getenv(relative: Path, tree: ast.Module) -> list[ArchitectureVi
         if is_getenv:
             findings.append(
                 ArchitectureViolation("direct_getenv", relative.as_posix(), "os.getenv")
+            )
+    return findings
+
+
+def _scan_dynamic_imports(
+    relative: Path,
+    tree: ast.Module,
+) -> list[ArchitectureViolation]:
+    if not relative.parts or relative.parts[0] != "db":
+        return []
+    findings = []
+    for node in ast.walk(tree):
+        function = node.func if isinstance(node, ast.Call) else None
+        is_import_module = (
+            isinstance(function, ast.Attribute)
+            and isinstance(function.value, ast.Name)
+            and function.value.id == "importlib"
+            and function.attr == "import_module"
+        )
+        if is_import_module:
+            findings.append(
+                ArchitectureViolation(
+                    "db_dynamic_import",
+                    relative.as_posix(),
+                    "importlib.import_module",
+                )
             )
     return findings
 
@@ -281,6 +330,7 @@ def _scan_python_file(source_root: Path, path: Path) -> list[ArchitectureViolati
     return [
         *_scan_import_rules(relative, imports),
         *_scan_direct_getenv(relative, tree),
+        *_scan_dynamic_imports(relative, tree),
         *_scan_api_calls(relative, tree),
         *_scan_import_time_resources(relative, tree),
         *_scan_service_exports(relative, tree),
@@ -365,10 +415,15 @@ def write_allowlist(path: Path, violations: Iterable[ArchitectureViolation]) -> 
         "api_direct_data_access": "Phase 2",
         "api_engine_access": "Phase 2",
         "api_raw_sql": "Phase 2",
+        "application_external_dependency": "Phase 5",
+        "config_upward_dependency": "Phase 5",
+        "db_dynamic_import": "Phase 5",
         "db_upward_dependency": "Phase 5",
         "direct_getenv": "Phase 5",
         "evaluation_private_rag_dependency": "Phase 4",
         "import_time_resource": "Phase 5",
+        "ingestion_rag_dependency": "Phase 5",
+        "rag_ingestion_dependency": "Phase 5",
         "service_flat_export": "Phase 6",
         "service_root_module": "Phase 6",
         "wildcard_import": "Phase 6",
@@ -377,10 +432,15 @@ def write_allowlist(path: Path, violations: Iterable[ArchitectureViolation]) -> 
         "api_direct_data_access": "Existing FastAPI data-access debt",
         "api_engine_access": "Existing FastAPI engine access debt",
         "api_raw_sql": "Existing FastAPI raw SQL debt",
+        "application_external_dependency": "Existing application dependency on an upper or adapter layer",
+        "config_upward_dependency": "Existing config callback into a runtime layer",
+        "db_dynamic_import": "Existing dynamic DB callback into an upper layer",
         "db_upward_dependency": "Existing reverse dependency from DB into an upper layer",
-        "direct_getenv": "Existing configuration read outside a config/bootstrap module",
+        "direct_getenv": "Existing configuration read outside canonical settings",
         "evaluation_private_rag_dependency": "Existing evaluation dependency on private RAG implementation",
         "import_time_resource": "Existing resource constructed at module import time",
+        "ingestion_rag_dependency": "Existing ingestion dependency on RAG implementation",
+        "rag_ingestion_dependency": "Existing RAG dependency on ingestion implementation",
         "service_flat_export": "Existing flat services compatibility export",
         "service_root_module": "Existing module in the flat services compatibility facade",
         "wildcard_import": "Existing wildcard compatibility import",

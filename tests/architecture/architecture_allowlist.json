@@ -3,6 +3,46 @@
   "policy": "Current count must equal the reviewed count; update debt and allowlist together.",
   "entries": [
     {
+      "rule": "application_external_dependency",
+      "path": "application/ingestion_runner.py",
+      "dependency": "mech_chatbot.ingestion.progress",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing application dependency on an upper or adapter layer"
+    },
+    {
+      "rule": "application_external_dependency",
+      "path": "application/protected_files.py",
+      "dependency": "mech_chatbot.rag.serving_state",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing application dependency on an upper or adapter layer"
+    },
+    {
+      "rule": "config_upward_dependency",
+      "path": "config/logging.py",
+      "dependency": "mech_chatbot.db.repository",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing config callback into a runtime layer"
+    },
+    {
+      "rule": "config_upward_dependency",
+      "path": "config/logging.py",
+      "dependency": "mech_chatbot.rag.execution",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing config callback into a runtime layer"
+    },
+    {
+      "rule": "db_dynamic_import",
+      "path": "db/registry_ports.py",
+      "dependency": "importlib.import_module",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing dynamic DB callback into an upper layer"
+    },
+    {
       "rule": "db_upward_dependency",
       "path": "db/repositories/community_summaries.py",
       "dependency": "mech_chatbot.rag.community_summaries",
@@ -40,7 +80,7 @@
       "dependency": "os.getenv",
       "count": 6,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -48,7 +88,7 @@
       "dependency": "os.getenv",
       "count": 10,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -56,7 +96,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -64,7 +104,23 @@
       "dependency": "os.getenv",
       "count": 14,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "config/logging.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside canonical settings"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "config/worker_settings.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -72,7 +128,7 @@
       "dependency": "os.getenv",
       "count": 6,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -80,7 +136,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -88,7 +144,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -96,7 +152,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -104,7 +160,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -112,7 +168,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -120,7 +176,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -128,7 +184,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -136,7 +192,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -144,7 +200,15 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "ingestion/pdf/config.py",
+      "dependency": "os.getenv",
+      "count": 5,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -152,7 +216,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -160,7 +224,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -168,7 +232,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -176,7 +240,7 @@
       "dependency": "os.getenv",
       "count": 8,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -184,7 +248,7 @@
       "dependency": "os.getenv",
       "count": 6,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -192,7 +256,15 @@
       "dependency": "os.getenv",
       "count": 13,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/bootstrap.py",
+      "dependency": "os.getenv",
+      "count": 8,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -200,7 +272,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -208,7 +280,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -216,7 +288,7 @@
       "dependency": "os.getenv",
       "count": 4,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -224,7 +296,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -232,7 +304,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -240,7 +312,7 @@
       "dependency": "os.getenv",
       "count": 3,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -248,7 +320,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -256,7 +328,7 @@
       "dependency": "os.getenv",
       "count": 3,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -264,7 +336,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -272,7 +344,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -280,7 +352,7 @@
       "dependency": "os.getenv",
       "count": 4,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -288,7 +360,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -296,31 +368,7 @@
       "dependency": "os.getenv",
       "count": 8,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
-    },
-    {
-      "rule": "direct_getenv",
-      "path": "rag/phases/retrieval.py",
-      "dependency": "os.getenv",
-      "count": 1,
-      "removal_phase": "Phase 5",
-      "reason": "Behavior-preserving extraction; configuration ownership moves in Phase 5"
-    },
-    {
-      "rule": "direct_getenv",
-      "path": "rag/phases/retrieval_enrichment.py",
-      "dependency": "os.getenv",
-      "count": 6,
-      "removal_phase": "Phase 5",
-      "reason": "Behavior-preserving extraction; configuration ownership moves in Phase 5"
-    },
-    {
-      "rule": "direct_getenv",
-      "path": "rag/phases/retrieval_rerank.py",
-      "dependency": "os.getenv",
-      "count": 4,
-      "removal_phase": "Phase 5",
-      "reason": "Behavior-preserving extraction; configuration ownership moves in Phase 5"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -328,7 +376,31 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Behavior-preserving extraction; configuration ownership moves in Phase 5"
+      "reason": "Existing configuration read outside canonical settings"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/phases/retrieval.py",
+      "dependency": "os.getenv",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside canonical settings"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/phases/retrieval_enrichment.py",
+      "dependency": "os.getenv",
+      "count": 6,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside canonical settings"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/phases/retrieval_rerank.py",
+      "dependency": "os.getenv",
+      "count": 4,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -336,7 +408,7 @@
       "dependency": "os.getenv",
       "count": 8,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -344,7 +416,7 @@
       "dependency": "os.getenv",
       "count": 1,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -352,7 +424,15 @@
       "dependency": "os.getenv",
       "count": 3,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
+    },
+    {
+      "rule": "direct_getenv",
+      "path": "rag/route_config.py",
+      "dependency": "os.getenv",
+      "count": 2,
+      "removal_phase": "Phase 5",
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -360,7 +440,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -368,7 +448,7 @@
       "dependency": "os.getenv",
       "count": 2,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "direct_getenv",
@@ -376,7 +456,7 @@
       "dependency": "os.getenv",
       "count": 4,
       "removal_phase": "Phase 5",
-      "reason": "Existing configuration read outside a config/bootstrap module"
+      "reason": "Existing configuration read outside canonical settings"
     },
     {
       "rule": "evaluation_private_rag_dependency",
@@ -420,6 +500,22 @@
     },
     {
       "rule": "import_time_resource",
+      "path": "api/app_server.py",
+      "dependency": "PilotReplayExecutor",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "import_time_resource",
+      "path": "api/rag_server.py",
+      "dependency": "Semaphore",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "import_time_resource",
       "path": "api/rag_server.py",
       "dependency": "ThreadPoolExecutor",
       "count": 1,
@@ -444,8 +540,24 @@
     },
     {
       "rule": "import_time_resource",
+      "path": "llm/llm_client.py",
+      "dependency": "_get_runtime_llm",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "import_time_resource",
       "path": "rag/bootstrap.py",
       "dependency": "build_vision_model",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "import_time_resource",
+      "path": "rag/bootstrap.py",
+      "dependency": "get_instance",
       "count": 1,
       "removal_phase": "Phase 5",
       "reason": "Existing resource constructed at module import time"
@@ -457,6 +569,30 @@
       "count": 1,
       "removal_phase": "Phase 5",
       "reason": "Existing resource constructed at module import time"
+    },
+    {
+      "rule": "ingestion_rag_dependency",
+      "path": "ingestion/pdf/pipeline_implementation.py",
+      "dependency": "mech_chatbot.rag",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing ingestion dependency on RAG implementation"
+    },
+    {
+      "rule": "rag_ingestion_dependency",
+      "path": "rag/answer_checks.py",
+      "dependency": "mech_chatbot.ingestion.material_registry",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing RAG dependency on ingestion implementation"
+    },
+    {
+      "rule": "rag_ingestion_dependency",
+      "path": "rag/glossary_expand.py",
+      "dependency": "mech_chatbot.ingestion.domain_registry",
+      "count": 1,
+      "removal_phase": "Phase 5",
+      "reason": "Existing RAG dependency on ingestion implementation"
     },
     {
       "rule": "service_flat_export",
