@@ -23,6 +23,8 @@ QDRANT_COLLECTION: ten collection vector store dung CHUNG cho moi phong ban.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -189,11 +191,74 @@ class Settings(BaseModel):
     MAX_USER_MSG_LEN: int = 20000
     MAX_BOT_MSG_LEN: int = 200000
     CATALOG_CACHE_TTL: float = 60.0
+    RAG_REQUIRE_SERVICE_AUTH: bool = True
+    RAG_SERVICE_TOKEN: str = ""
+    RAG_CORS_ALLOW_ORIGINS: tuple[str, ...] = ()
+
+    APP_THREAD_LIMIT: int = 60
+    APP_RAG_CHAT_TIMEOUT_SECONDS: int = 300
+    APP_SERVER_HOST: str = "0.0.0.0"
+    APP_SERVER_PORT: int = 8080
+    CRAG_PILOT_REPLAY_WORKERS: int = 2
+    CRAG_PILOT_REPLAY_QUEUE_SIZE: int = 8
+    CRAG_PILOT_REPLAY_TIMEOUT_SECONDS: float = 300.0
+    LIFECYCLE_RECONCILE_SECONDS: int = 300
+
+    PUBLICATION_RECONCILE_INTERVAL_SECONDS: int = 15
+    SERVING_RECONCILE_INTERVAL_SECONDS: int = 600
+    SERVING_RECONCILE_BATCH_SIZE: int = 500
+    WORKER_IDLE_SLEEP_SECONDS: int = 5
+    WORKER_ERROR_SLEEP_SECONDS: int = 10
 
     # ------------------------------------------------------------------
     @classmethod
-    def from_env(cls) -> "Settings":
-        """Nap tu os.environ, tai hien dung default + quy tac parse cua code goc."""
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
+        """Parse one environment snapshot with the legacy coercion rules."""
+
+        source = dict(os.environ if environ is None else environ)
+
+        def _str(name: str, default: Optional[str] = None) -> Optional[str]:
+            value = source.get(name)
+            return value if value is not None else default
+
+        def _int(name: str, default: int) -> int:
+            raw = source.get(name)
+            if raw is None or str(raw).strip() == "":
+                return default
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return default
+
+        def _float(name: str, default: float) -> float:
+            raw = source.get(name)
+            if raw is None or str(raw).strip() == "":
+                return default
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return default
+
+        def _bool(name: str, default: bool, truthy) -> bool:
+            raw = source.get(name)
+            if raw is None:
+                return default
+            return str(raw).strip().lower() in truthy
+
+        def _first(*names: str, default: Optional[str] = None) -> Optional[str]:
+            for name in names:
+                value = source.get(name)
+                if value:
+                    return value
+            return default
+
+        def _csv(name: str) -> tuple[str, ...]:
+            return tuple(
+                item.strip()
+                for item in str(source.get(name) or "").split(",")
+                if item.strip()
+            )
+
         return cls(
             # SQL
             SQL_SERVER=_str("SQL_SERVER", r"localhost\SQLEXPRESS"),
@@ -288,6 +353,224 @@ class Settings(BaseModel):
             MAX_USER_MSG_LEN=_int("MAX_USER_MSG_LEN", 20000),
             MAX_BOT_MSG_LEN=_int("MAX_BOT_MSG_LEN", 200000),
             CATALOG_CACHE_TTL=_float("CATALOG_CACHE_TTL", 60.0),
+            RAG_REQUIRE_SERVICE_AUTH=_bool(
+                "RAG_REQUIRE_SERVICE_AUTH",
+                True,
+                _TRUTHY_5,
+            ),
+            RAG_SERVICE_TOKEN=_str("RAG_SERVICE_TOKEN", ""),
+            RAG_CORS_ALLOW_ORIGINS=_csv("RAG_CORS_ALLOW_ORIGINS"),
+            APP_THREAD_LIMIT=_int("APP_THREAD_LIMIT", 60),
+            APP_RAG_CHAT_TIMEOUT_SECONDS=_int(
+                "APP_RAG_CHAT_TIMEOUT_SECONDS",
+                300,
+            ),
+            APP_SERVER_HOST=_str("APP_SERVER_HOST", "0.0.0.0"),
+            APP_SERVER_PORT=_int("APP_SERVER_PORT", 8080),
+            CRAG_PILOT_REPLAY_WORKERS=_int("CRAG_PILOT_REPLAY_WORKERS", 2),
+            CRAG_PILOT_REPLAY_QUEUE_SIZE=_int(
+                "CRAG_PILOT_REPLAY_QUEUE_SIZE",
+                8,
+            ),
+            CRAG_PILOT_REPLAY_TIMEOUT_SECONDS=_float(
+                "CRAG_PILOT_REPLAY_TIMEOUT_SECONDS",
+                300.0,
+            ),
+            LIFECYCLE_RECONCILE_SECONDS=_int(
+                "LIFECYCLE_RECONCILE_SECONDS",
+                300,
+            ),
+            PUBLICATION_RECONCILE_INTERVAL_SECONDS=_int(
+                "PUBLICATION_RECONCILE_INTERVAL_SECONDS",
+                15,
+            ),
+            SERVING_RECONCILE_INTERVAL_SECONDS=_int(
+                "SERVING_RECONCILE_INTERVAL_SECONDS",
+                600,
+            ),
+            SERVING_RECONCILE_BATCH_SIZE=_int(
+                "SERVING_RECONCILE_BATCH_SIZE",
+                500,
+            ),
+            WORKER_IDLE_SLEEP_SECONDS=_int("WORKER_IDLE_SLEEP_SECONDS", 5),
+            WORKER_ERROR_SLEEP_SECONDS=_int("WORKER_ERROR_SLEEP_SECONDS", 10),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SqlSettings:
+    server: str
+    database: str
+    driver: str
+    username: str | None
+    password: str | None
+    trusted_connection: bool
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "SqlSettings":
+        return cls(
+            server=settings.SQL_SERVER,
+            database=settings.SQL_DATABASE,
+            driver=settings.SQL_DRIVER,
+            username=settings.SQL_USERNAME,
+            password=settings.SQL_PASSWORD,
+            trusted_connection=settings.SQL_TRUSTED_CONNECTION,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QdrantSettings:
+    url: str | None
+    api_key: str | None
+    collection: str
+    embedding_model: str
+    embedding_device: str
+    embedding_dimension: int
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "QdrantSettings":
+        return cls(
+            url=settings.QDRANT_URL,
+            api_key=settings.QDRANT_API_KEY,
+            collection=settings.QDRANT_COLLECTION,
+            embedding_model=settings.EMBEDDING_MODEL,
+            embedding_device=settings.EMBEDDING_DEVICE,
+            embedding_dimension=settings.EMBEDDING_DIM,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LlmSettings:
+    api_key: str | None
+    base_url: str | None
+    model_name: str
+    temperature: float
+    max_output_tokens: int
+    timeout_seconds: float
+    min_interval_seconds: float
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "LlmSettings":
+        return cls(
+            api_key=settings.LLM_API_KEY,
+            base_url=settings.LLM_BASE_URL,
+            model_name=settings.GPT_MODEL_NAME,
+            temperature=settings.GPT_TEMPERATURE,
+            max_output_tokens=settings.GPT_MAX_OUTPUT_TOKENS,
+            timeout_seconds=settings.GPT_TIMEOUT_SECONDS,
+            min_interval_seconds=settings.GPT_MIN_INTERVAL_SECONDS,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class VisionSettings:
+    api_key: str | None
+    base_url: str | None
+    model_name: str
+    image_format: str
+    max_edge: int
+    jpeg_quality: int
+    temperature: float
+    max_output_tokens: int
+    timeout_seconds: float
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "VisionSettings":
+        return cls(
+            api_key=settings.LLM_API_KEY,
+            base_url=settings.LLM_BASE_URL,
+            model_name=settings.GPT_VISION_MODEL_NAME,
+            image_format=settings.GPT_VISION_IMAGE_FORMAT,
+            max_edge=settings.GPT_VISION_MAX_EDGE,
+            jpeg_quality=settings.GPT_VISION_JPEG_QUALITY,
+            temperature=settings.GPT_VISION_TEMPERATURE,
+            max_output_tokens=settings.GPT_VISION_MAX_OUTPUT_TOKENS,
+            timeout_seconds=settings.GPT_TIMEOUT_SECONDS,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AppProcessSettings:
+    thread_limit: int
+    rag_base_url: str
+    rag_service_token: str
+    rag_chat_timeout_seconds: int
+    server_host: str
+    server_port: int
+    lifecycle_reconcile_seconds: int
+    pilot_replay_workers: int
+    pilot_replay_queue_size: int
+    pilot_replay_timeout_seconds: float
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "AppProcessSettings":
+        return cls(
+            thread_limit=settings.APP_THREAD_LIMIT,
+            rag_base_url=(
+                settings.RAG_SERVER_URL or "http://127.0.0.1:8100"
+            ).rstrip("/"),
+            rag_service_token=settings.RAG_SERVICE_TOKEN,
+            rag_chat_timeout_seconds=settings.APP_RAG_CHAT_TIMEOUT_SECONDS,
+            server_host=settings.APP_SERVER_HOST,
+            server_port=settings.APP_SERVER_PORT,
+            lifecycle_reconcile_seconds=max(
+                60,
+                settings.LIFECYCLE_RECONCILE_SECONDS,
+            ),
+            pilot_replay_workers=settings.CRAG_PILOT_REPLAY_WORKERS,
+            pilot_replay_queue_size=settings.CRAG_PILOT_REPLAY_QUEUE_SIZE,
+            pilot_replay_timeout_seconds=(
+                settings.CRAG_PILOT_REPLAY_TIMEOUT_SECONDS
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RagProcessSettings:
+    host: str
+    port: int
+    max_concurrent_requests: int
+    require_service_auth: bool
+    service_token: str
+    cors_allow_origins: tuple[str, ...]
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "RagProcessSettings":
+        return cls(
+            host=settings.RAG_SERVER_HOST,
+            port=settings.RAG_SERVER_PORT,
+            max_concurrent_requests=settings.MAX_CONCURRENT_RAG,
+            require_service_auth=settings.RAG_REQUIRE_SERVICE_AUTH,
+            service_token=settings.RAG_SERVICE_TOKEN,
+            cors_allow_origins=settings.RAG_CORS_ALLOW_ORIGINS,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerProcessSettings:
+    publication_reconcile_interval_seconds: int
+    serving_reconcile_interval_seconds: int
+    serving_reconcile_batch_size: int
+    idle_sleep_seconds: int
+    error_sleep_seconds: int
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "WorkerProcessSettings":
+        return cls(
+            publication_reconcile_interval_seconds=max(
+                5,
+                settings.PUBLICATION_RECONCILE_INTERVAL_SECONDS,
+            ),
+            serving_reconcile_interval_seconds=max(
+                60,
+                settings.SERVING_RECONCILE_INTERVAL_SECONDS,
+            ),
+            serving_reconcile_batch_size=max(
+                1,
+                settings.SERVING_RECONCILE_BATCH_SIZE,
+            ),
+            idle_sleep_seconds=max(0, settings.WORKER_IDLE_SLEEP_SECONDS),
+            error_sleep_seconds=max(0, settings.WORKER_ERROR_SLEEP_SECONDS),
         )
 
 
