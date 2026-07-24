@@ -1,6 +1,6 @@
 # Kế hoạch refactor codebase theo deep module và dependency một chiều
 
-Trạng thái: **In progress — Phase 0, Phase 1 và Phase 2 đã hoàn tất; Phase 3 chưa bắt đầu**
+Trạng thái: **In progress — Phase 0 đến Phase 5 đã hoàn tất; Phase 6 chưa bắt đầu**
 
 Ngày lập kế hoạch: **2026-07-20**
 
@@ -1236,3 +1236,31 @@ stage comparison đỏ vẫn là performance debt; khi có thay đổi hiệu n�
 feedback loop nhỏ phải chứng minh hướng sửa trước khi chạy lại đúng full matrix.
 Không được dùng ngoại lệ này làm release decision hoặc tiền lệ để bỏ qua gate
 riêng của Phase 5 và các phase sau.
+
+### 9.6. Phase 5 — Composition root, config và dependency một chiều
+
+Trạng thái: **Completed / Validated**. Phase 5 chỉ thay đổi cách backend tạo,
+truyền và đóng dependency; không chủ ý thay đổi HTTP/OpenAPI/SSE, RBAC,
+database schema, dữ liệu, thuật toán RAG, feature flag hoặc rollout decision.
+
+| Trường evidence | Kết quả thực tế |
+|---|---|
+| Baseline / candidate | Baseline `0e58620` (`docs: accept phase four benchmark exception`), candidate code `7bd39da` (`refactor: complete phase five dependency composition`), branch `codex/codebase-layer-refactor`. Phase 5 được triển khai thành các commit nhỏ cho settings projection, app/RAG/worker composition, provider adapter, Qdrant runtime và ingestion dependency trước commit closure. |
+| Contract được bảo vệ | App vẫn có 116 OpenAPI paths; `/api/health` trả HTTP 200 với SQL `ok`; `/openapi.json` trả HTTP 200. HTTP/SSE/RBAC, repository result shape, ingestion report/progress, RAG facade và mặc định sáu feature flag được giữ. Collection vẫn là `TaiLieuKyThuat_v2`. Không có schema/data migration, ingest, re-ingest hoặc delete trong acceptance run. |
+| RED | Test Phase 5 khóa các lỗi import-time side effect, environment đọc tại nơi sử dụng, settings projection thiếu, Qdrant singleton, DB engine global, registry callback đảo chiều dependency, thiếu resource cleanup và RAG feature config ngầm. Các contract mới nằm chủ yếu tại `test_db_engine_runtime.py`, `test_phase5_misc_config.py`, `test_rag_feature_config_injection.py`, `test_app_process_composition.py`, `test_rag_runtime_composition.py` và `test_worker_runtime.py`. Test RAG/ingestion cũ được chuyển từ monkeypatch module global sang inject runtime adapter để kiểm tra đúng seam mới. |
+| GREEN | `load_settings()` chụp environment một lần thành immutable settings snapshot. `build_app_process()`, `build_rag_process()` và `build_worker_runtime()` là composition roots sở hữu vòng đời SQL, Qdrant, provider và policy. `QdrantAdminRuntime`, `IngestionPersistence` và các typed settings projection thay cho singleton/config ngầm. Script vận hành dùng `with_configured_repository_runtime()` để compose dependency tại CLI boundary. App và RAG lifespan đóng resource bằng `try/finally`, kể cả startup failure/cancellation; worker chỉ đóng resource do chính composition tạo. |
+| Compatibility seam | `_ContextBoundEngine` là proxy không trạng thái để các repository legacy của Phase 6 tiếp tục dùng interface cũ. Nó không sở hữu connection và không phải process singleton; app/request hoặc CLI composition phải bind `RepositoryRuntime` trước khi dùng. Phase 6 phải chuyển các call site còn lại sang port tường minh rồi xóa shim này. |
+| Architecture delta | Source scan không còn lời gọi `os.getenv`/`getenv` thực thi trong `src/mech_chatbot`; chỉ còn một comment giải thích tại settings boundary. Không còn `_get_qdrant_client`, import `QDRANT_COLLECTION` hoặc client singleton trong `src`, `tests`, `scripts`. Architecture suite **5 passed**; không có dependency `db -> rag/ingestion`, `rag -> evaluation` hoặc config callback registry. |
+| Validation | Full backend collection **2.077 tests**: **2.058 passed, 19 skipped, 0 failed**, 1 `StarletteDeprecationWarning` đã biết. Sau chỉnh sửa lifecycle cuối, unit + architecture rerun pass. `tests/architecture/test_layering_contracts.py`: **5 passed**. `compileall src/mech_chatbot scripts`, import smoke cho config/DB/RAG/app/worker và import smoke **26** operational scripts đều pass. `git diff --check` pass. |
+| Coverage | Artifact `reports/refactor/phase-5/candidate/coverage-backend.json`: **91,969628% line / 84,591425% branch**, checker 80/80 pass. Từ cùng artifact sạch, các package refactor-owned `application`, `adapters`, `composition`, `rag/phases` đạt **90,936375% line / 81,925676% branch** trên 32 file, 3.332 statement và 592 branch. Một lần thử tạo artifact owned thứ hai bằng nhiều `--cov` option bị lỗi native `numpy/onnxruntime` do module bị load lại trong cùng process; run lỗi này không được dùng làm evidence, số liệu authoritative vẫn lấy từ full backend artifact. |
+| SQL/Qdrant chính | Theo phê duyệt của người dùng, app startup dùng SQL/Qdrant chính: health và OpenAPI đều HTTP 200. Read-only consistency với `RUN_DB_TESTS=1` và `RUN_QDRANT_TESTS=1`: **2 passed**. Không tạo fixture, không ghi/xóa dữ liệu và không thay đổi collection. |
+| Test lifecycle | Giữ các test contract lâu dài cho composition, settings projection, request-scoped repository, resource cleanup và feature injection. Test legacy được cập nhật sang dependency seam mới thay vì giữ monkeypatch global. Không giữ test đo lường tạm chỉ phục vụ quá trình refactor; không xóa test nào chưa có replacement bảo vệ cùng behavior. |
+| Security / config | Environment và secret chỉ được đọc tại settings boundary; production dependency thiếu thì fail fast. Scan toàn bộ dòng mới được stage theo mẫu OpenAI/GitHub/AWS/private-key/generic credential không phát hiện secret. `pip-audit` chưa có trong `chat_env`, vì vậy dependency vulnerability audit chưa được xác nhận và không được trình bày như pass. |
+| Known issues | 19 integration/eval test là opt-in skip, không phải pass. Còn 1 warning `httpx`/`TestClient`. Extra owned-coverage run lỗi native reload không ảnh hưởng full artifact nhưng là hạn chế của cách chạy coverage trong một process. `_ContextBoundEngine` là compatibility debt phải xóa ở Phase 6. Ngoại lệ benchmark Phase 4 và bảy stage comparison đỏ vẫn còn nguyên; Phase 5 không biến chúng thành pass hoặc phê duyệt live rollout. |
+| Rollback | Revert `7bd39da`, sau đó revert các commit Phase 5 theo thứ tự ngược về baseline `0e58620` nếu cần rollback toàn phase. Không cần schema/data rollback. Không chạm hoặc xóa corpus nguồn `9.3.03844` và `9.3.03951`; rollback Phase 5 cũng không thay đổi dữ liệu đã ingest trong Phase 4. |
+
+Review cuối không còn finding P0/P1/P2 về correctness, security hoặc resource
+lifecycle. Phase 5 hoàn tất gate riêng nhưng không tự động cho phép release:
+mọi quyết định rollout vẫn phải dùng artifact/decision gate hiện hành. Phase 6
+chưa bắt đầu; mục tiêu tiếp theo là loại compatibility proxy và các flat legacy
+repository/service call còn lại mà không đổi contract.
