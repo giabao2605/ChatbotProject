@@ -49,3 +49,29 @@ def test_auth_service_keeps_core_authentication_compatibility_import():
     imports = _imported_modules(SOURCE_ROOT / "auth" / "service.py")
 
     assert "mech_chatbot.auth.core" in imports
+
+
+def test_phase5_registry_and_pipeline_edges_are_removed():
+    violations = scan_repository(
+        SOURCE_ROOT,
+        required_packages=("db", "ingestion", "rag"),
+    )
+    targeted_paths = {
+        "db/registry_ports.py",
+        "ingestion/pdf/pipeline_implementation.py",
+        "rag/answer_checks.py",
+        "rag/glossary_expand.py",
+    }
+    targeted_rules = {
+        "db_dynamic_import",
+        "ingestion_rag_dependency",
+        "rag_ingestion_dependency",
+    }
+
+    blocked = [
+        item
+        for item in violations
+        if item.rule in targeted_rules and item.path in targeted_paths
+    ]
+
+    assert blocked == []
