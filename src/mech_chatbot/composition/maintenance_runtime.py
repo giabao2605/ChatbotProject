@@ -14,6 +14,7 @@ from mech_chatbot.config.repository_runtime import (
 )
 from mech_chatbot.config.settings import (
     QdrantSettings,
+    Settings,
     SqlSettings,
     load_settings,
 )
@@ -33,7 +34,7 @@ def _repository_runtime_is_bound(*, include_qdrant: bool) -> bool:
 
 @contextmanager
 def configured_repository_runtime(
-    settings: Any,
+    settings: Settings,
     *,
     include_qdrant: bool,
 ) -> Iterator[None]:
@@ -63,9 +64,11 @@ def configured_repository_runtime(
         ):
             yield
     finally:
-        if qdrant_runtime is not None:
-            qdrant_runtime.close()
-        database_runtime.close()
+        try:
+            if qdrant_runtime is not None:
+                qdrant_runtime.close()
+        finally:
+            database_runtime.close()
 
 
 def with_configured_repository_runtime(

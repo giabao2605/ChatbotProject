@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.crag_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN
-from scripts.eval.provider_smoke import provider_configuration_sha256
+from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -224,10 +224,8 @@ def run_rollout(
     git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest_sha = _sha(manifest)
     from mech_chatbot.config.settings import load_settings
-    from scripts.eval.provider_smoke import resolve_provider_configuration
-
-    provider_config_sha = provider_configuration_sha256(
-        resolve_provider_configuration(load_settings())
+    provider_config_sha = provider_configuration_sha256_for_settings(
+        load_settings()
     )
     governance_sha = governance_scope_sha256(manifest)
     baseline = _run(

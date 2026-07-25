@@ -11,6 +11,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable, Protocol, TypedDict
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -19,12 +20,30 @@ for value in (ROOT, SRC):
         sys.path.insert(0, str(value))
 
 from mech_chatbot.evaluation.milestone_decisions import classify_provider_outcome
+from mech_chatbot.config.settings import Settings
 
 
 _SMOKE_MESSAGES = [
     ("system", "Return only the word OK."),
     ("human", "Provider readiness probe."),
 ]
+
+
+class ProviderConfiguration(TypedDict):
+    endpoint: str
+    model: str
+    max_concurrent_rag: int
+
+
+class _ProviderAdapterSettings(Protocol):
+    base_url: str
+    model_name: str
+
+
+class _ProviderAdapter(Protocol):
+    settings: _ProviderAdapterSettings
+
+    def invoke(self, *args: Any, **kwargs: Any) -> object: ...
 
 
 def _root_exception(exc: Exception) -> Exception:
@@ -64,7 +83,10 @@ def _error_category(exc: Exception) -> str:
     return "other"
 
 
-def resolve_provider_configuration(settings, adapter=None) -> dict:
+def resolve_provider_configuration(
+    settings: Settings,
+    adapter: _ProviderAdapter | None = None,
+) -> ProviderConfiguration:
     """Resolve provider identity from one explicit process settings snapshot."""
     from mech_chatbot.config.settings import LlmSettings
     from mech_chatbot.llm.llm_client import get_llm_endpoint
@@ -92,10 +114,20 @@ def resolve_provider_configuration(settings, adapter=None) -> dict:
     }
 
 
-def provider_configuration_sha256(configuration: dict) -> str:
+def provider_configuration_sha256(
+    configuration: ProviderConfiguration,
+) -> str:
     return hashlib.sha256(
         json.dumps(configuration, sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+def provider_configuration_sha256_for_settings(settings: Settings) -> str:
+    """Hash the normalized provider identity from one settings snapshot."""
+
+    return provider_configuration_sha256(
+        resolve_provider_configuration(settings)
+    )
 
 
 def _percentile(values, percentile):
@@ -106,7 +138,11 @@ def _percentile(values, percentile):
     return ordered[index]
 
 
-def run_provider_smoke(invoke, *, request_count: int = 5) -> dict:
+def run_provider_smoke(
+    invoke: Callable[..., object],
+    *,
+    request_count: int = 5,
+) -> dict[str, object]:
     if request_count != 5:
         raise ValueError("controlled-demo provider smoke requires exactly five requests")
     latencies = []
@@ -162,7 +198,11 @@ def run_provider_smoke(invoke, *, request_count: int = 5) -> dict:
     }
 
 
-def run_configured_provider_smoke(settings, *, adapter_builder=None) -> tuple[dict, dict]:
+def run_configured_provider_smoke(
+    settings: Settings,
+    *,
+    adapter_builder: Callable[..., _ProviderAdapter] | None = None,
+) -> tuple[dict[str, object], ProviderConfiguration]:
     """Compose and run the smoke from one immutable CLI settings snapshot."""
     from mech_chatbot.config.settings import ExternalAiSettings, LlmSettings
     from mech_chatbot.llm.llm_client import build_llm_adapter

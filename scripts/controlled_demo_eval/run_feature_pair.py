@@ -21,7 +21,7 @@ from scripts.crag_eval.run_rollout import (
     _utc_now,
     governance_scope_sha256,
 )
-from scripts.eval.provider_smoke import provider_configuration_sha256
+from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -295,10 +295,8 @@ def run_feature_pair(
         raise ValueError(f"unsupported controlled-demo stage: {stage}")
     validate_collection(collection)
     from mech_chatbot.config.settings import load_settings
-    from scripts.eval.provider_smoke import resolve_provider_configuration
-
-    provider_sha256 = provider_configuration_sha256(
-        resolve_provider_configuration(load_settings())
+    provider_sha256 = provider_configuration_sha256_for_settings(
+        load_settings()
     )
     readiness = validate_readiness_artifacts(
         full_preflight_artifact,

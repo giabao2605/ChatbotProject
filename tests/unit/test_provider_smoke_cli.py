@@ -220,6 +220,66 @@ def test_cli_repository_runtime_closes_all_owned_resources_when_body_raises(
     assert current_qdrant_runtime() == (None, None)
 
 
+def test_cli_repository_runtime_closes_sql_when_qdrant_close_raises(
+    monkeypatch,
+):
+    settings = _settings_snapshot()
+    closed = []
+
+    @dataclass(frozen=True)
+    class FakeDatabaseRuntime:
+        engine: object
+
+        def close(self):
+            closed.append("sql")
+
+    @dataclass(frozen=True)
+    class FakeQdrantRuntime:
+        client: object
+        collection_name: str
+
+        def close(self):
+            closed.append("qdrant")
+            raise RuntimeError("qdrant close failed")
+
+    database = FakeDatabaseRuntime(engine=object())
+    qdrant = FakeQdrantRuntime(
+        client=object(),
+        collection_name="KnowledgeBase",
+    )
+    monkeypatch.setattr(
+        maintenance_runtime.SqlSettings,
+        "from_settings",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        maintenance_runtime.QdrantSettings,
+        "from_settings",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        maintenance_runtime,
+        "build_database_runtime",
+        lambda value: database if value is settings else None,
+    )
+    monkeypatch.setattr(
+        maintenance_runtime,
+        "build_qdrant_admin_runtime",
+        lambda value: qdrant if value is settings else None,
+    )
+
+    with pytest.raises(RuntimeError, match="qdrant close failed"):
+        with maintenance_runtime.configured_repository_runtime(
+            settings,
+            include_qdrant=True,
+        ):
+            pass
+
+    assert closed == ["qdrant", "sql"]
+    assert current_repository_engine() is None
+    assert current_qdrant_runtime() == (None, None)
+
+
 def test_decorated_cli_reuses_bound_runtime_without_reloading_settings(monkeypatch):
     engine = object()
     monkeypatch.setattr(
