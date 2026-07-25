@@ -310,6 +310,7 @@ The important runtime values are:
 # Application security and external processing
 APP_ENV=production
 APP_SESSION_SECRET=<long-random-secret>
+APP_COOKIE_SECURE=true
 EXTERNAL_AI_LOCAL_DEVELOPMENT=false
 EXTERNAL_PROCESSING_POLICY=internal_only
 
@@ -404,9 +405,17 @@ required governance review. Controlled RAG flags also require their matching
 activation bundle and release decision; code, tests, or a successful provider
 smoke do not authorize enabling them.
 
+Use a distinct random `APP_SESSION_SECRET`; do not reuse the RAG service or
+chat bridge secret. Keep `APP_COOKIE_SECURE=true` behind HTTPS. A local or LAN
+HTTP-only demo may set it to `false`, but that exception must not be copied to
+an HTTPS deployment.
+
 For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QDRANT_API_KEY`, `SQL_SERVER`, `SQL_DATABASE`, `SQL_USERNAME`, `SQL_PASSWORD`, `OPENAI_API_KEY`.
 
-> **Config validation:** The app calls `assert_config_valid()` at startup. If any required variable is missing or has the wrong type, it will raise `ConfigError` immediately with a clear list of issues. Secrets are never printed in plain text.
+> **Config validation:** The RAG server and workers call
+> `assert_config_valid()` at startup. Browser-session security fails closed
+> when `APP_SESSION_SECRET` is missing. Configuration errors never print
+> secrets in plain text.
 
 ### 3. Database Setup
 
@@ -442,7 +451,7 @@ demo again.
 ```bash
 git clone https://github.com/giabao2605/ChatbotProject.git
 cd ChatbotProject
-pip install -r requirements.txt
+pip install -r requirements.lock.txt
 ```
 
 Start each service in a separate terminal:
