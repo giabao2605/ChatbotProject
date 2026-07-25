@@ -64,20 +64,35 @@ def _error_category(exc: Exception) -> str:
     return "other"
 
 
-def resolve_provider_configuration() -> dict:
-    """Resolve the same non-secret provider identity used by the live runtime."""
-    from mech_chatbot.config.settings import settings
-    from mech_chatbot.llm.llm_client import get_llm_endpoint, get_llm_model_name
+def resolve_provider_configuration(settings, adapter=None) -> dict:
+    """Resolve provider identity from one explicit process settings snapshot."""
+    from mech_chatbot.config.settings import LlmSettings
+    from mech_chatbot.llm.llm_client import get_llm_endpoint
+
+    llm_settings = LlmSettings.from_settings(settings)
+    endpoint = (
+        str(adapter.settings.base_url).strip()
+        if adapter is not None
+        else (
+            str(llm_settings.base_url).strip()
+            if llm_settings.base_url
+            else get_llm_endpoint()
+        )
+    )
+    model = (
+        str(adapter.settings.model_name).strip()
+        if adapter is not None
+        else str(llm_settings.model_name).strip()
+    )
 
     return {
-        "endpoint": get_llm_endpoint(),
-        "model": get_llm_model_name(),
+        "endpoint": endpoint,
+        "model": model,
         "max_concurrent_rag": settings.MAX_CONCURRENT_RAG,
     }
 
 
-def provider_configuration_sha256(configuration: dict | None = None) -> str:
-    configuration = configuration or resolve_provider_configuration()
+def provider_configuration_sha256(configuration: dict) -> str:
     return hashlib.sha256(
         json.dumps(configuration, sort_keys=True).encode("utf-8")
     ).hexdigest()
@@ -147,14 +162,32 @@ def run_provider_smoke(invoke, *, request_count: int = 5) -> dict:
     }
 
 
+def run_configured_provider_smoke(settings, *, adapter_builder=None) -> tuple[dict, dict]:
+    """Compose and run the smoke from one immutable CLI settings snapshot."""
+    from mech_chatbot.config.settings import ExternalAiSettings, LlmSettings
+    from mech_chatbot.llm.llm_client import build_llm_adapter
+
+    builder = adapter_builder or build_llm_adapter
+    adapter = builder(
+        LlmSettings.from_settings(settings),
+        external_ai_settings=ExternalAiSettings.from_settings(settings),
+    )
+    configuration = resolve_provider_configuration(settings, adapter)
+    return run_provider_smoke(adapter.invoke), configuration
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    from mech_chatbot.llm.llm_client import gpt_invoke
+    from mech_chatbot.composition.maintenance_runtime import (
+        configured_repository_runtime,
+    )
+    from mech_chatbot.config.settings import load_settings
 
-    configuration = resolve_provider_configuration()
-    artifact = run_provider_smoke(gpt_invoke)
+    settings = load_settings()
+    with configured_repository_runtime(settings, include_qdrant=False):
+        artifact, configuration = run_configured_provider_smoke(settings)
     artifact["model"] = configuration["model"]
     artifact["provider_configuration_sha256"] = provider_configuration_sha256(
         configuration

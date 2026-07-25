@@ -708,6 +708,9 @@ def test_rollout_provider_router_mode_preserves_explicit_router_configuration(mo
 def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
     monkeypatch, tmp_path
 ):
+    from mech_chatbot.config import settings as settings_module
+    from mech_chatbot.config.settings import Settings
+
     rollout = _load("crag_rollout_provider_hash", "scripts/crag_eval/run_rollout.py")
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
@@ -717,12 +720,15 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
 
     monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
     monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
-    monkeypatch.setattr(
-        rollout,
-        "provider_configuration_sha256",
-        lambda: "runtime-resolved-provider-sha",
-        raising=False,
+    snapshot = Settings.from_env(
+        {
+            "PROXYLLM_API_KEY": "test-provider-key",
+            "PROXYLLM_BASE_URL": "https://provider.example/v1",
+            "GPT_MODEL_NAME": "snapshot-model",
+            "MAX_CONCURRENT_RAG": "7",
+        }
     )
+    monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
     monkeypatch.setattr(
         rollout.subprocess,
         "check_output",
@@ -773,7 +779,7 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
 
     assert (
         report["provider_configuration_sha256"]
-        == "runtime-resolved-provider-sha"
+        == "26e3767de31a51ce116fe21158fc060e9348b1a0ab766892467204504f751f2c"
     )
 
 

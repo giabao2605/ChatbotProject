@@ -115,6 +115,74 @@ def test_readiness_requires_full_preflight_and_clean_provider_smoke(tmp_path):
         )
 
 
+def test_feature_pair_uses_one_explicit_settings_snapshot_for_provider_hash(
+    monkeypatch,
+    tmp_path,
+):
+    from mech_chatbot.config import settings as settings_module
+    from mech_chatbot.config.settings import Settings
+    from scripts.controlled_demo_eval.run_feature_pair import run_feature_pair
+
+    snapshot = Settings.from_env(
+        {
+            "PROXYLLM_API_KEY": "test-provider-key",
+            "PROXYLLM_BASE_URL": "https://provider.example/v1",
+            "GPT_MODEL_NAME": "snapshot-model",
+            "MAX_CONCURRENT_RAG": "7",
+        }
+    )
+    monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
+    monkeypatch.setenv("CONTROLLED_DEMO_LIVE_OPT_IN", "1")
+    alias_path = tmp_path / "aliases.json"
+    alias_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CONTROLLED_DEMO_FIXTURE_ALIASES", str(alias_path))
+
+    preflight = tmp_path / "preflight.json"
+    preflight.write_text(
+        json.dumps(
+            {
+                "schema": "controlled-demo-main-preflight-v1",
+                "passed": True,
+                "collection": "TaiLieuKyThuat_v2",
+                "checked_cases": 44,
+                "failures": [],
+                "fixture_fingerprint": "snapshot",
+            }
+        ),
+        encoding="utf-8",
+    )
+    smoke = tmp_path / "smoke.json"
+    smoke.write_text(
+        json.dumps(
+            {
+                "schema": "provider-smoke-v1",
+                "passed": True,
+                "request_count": 5,
+                "successful_requests": 5,
+                "failed_requests": 0,
+                "provider_retries": 0,
+                "provider_configuration_sha256": (
+                    "26e3767de31a51ce116fe21158fc060e9348b1a0ab766892467204504f751f2c"
+                ),
+                "provider_outcome": {"provider_blocked": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="manifest and trace files must exist"):
+        run_feature_pair(
+            "crag",
+            tmp_path / "missing-manifest.jsonl",
+            tmp_path / "output",
+            tmp_path / "missing-trace.jsonl",
+            collection="TaiLieuKyThuat_v2",
+            full_preflight_artifact=preflight,
+            provider_smoke_artifact=smoke,
+            manifest_inventory_artifact=tmp_path / "missing-inventory.json",
+        )
+
+
 def test_inventory_binds_pair_to_prepared_milestone_manifest(tmp_path):
     from scripts.controlled_demo_eval.run_feature_pair import validate_manifest_inventory
 

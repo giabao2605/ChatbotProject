@@ -223,7 +223,12 @@ def run_rollout(
             raise ValueError(f"refusing to overwrite non-empty run directory: {run_dir}")
     git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest_sha = _sha(manifest)
-    provider_config_sha = provider_configuration_sha256()
+    from mech_chatbot.config.settings import load_settings
+    from scripts.eval.provider_smoke import resolve_provider_configuration
+
+    provider_config_sha = provider_configuration_sha256(
+        resolve_provider_configuration(load_settings())
+    )
     governance_sha = governance_scope_sha256(manifest)
     baseline = _run(
         "baseline", manifest, output, trace, enabled=False, router_mode=router_mode,

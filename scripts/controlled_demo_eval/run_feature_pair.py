@@ -294,7 +294,12 @@ def run_feature_pair(
     if config is None or not config.pair_enabled:
         raise ValueError(f"unsupported controlled-demo stage: {stage}")
     validate_collection(collection)
-    provider_sha256 = provider_configuration_sha256()
+    from mech_chatbot.config.settings import load_settings
+    from scripts.eval.provider_smoke import resolve_provider_configuration
+
+    provider_sha256 = provider_configuration_sha256(
+        resolve_provider_configuration(load_settings())
+    )
     readiness = validate_readiness_artifacts(
         full_preflight_artifact,
         provider_smoke_artifact,
