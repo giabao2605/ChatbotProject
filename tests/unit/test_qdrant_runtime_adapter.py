@@ -93,4 +93,3 @@ def test_qdrant_runtime_fails_fast_without_leaking_secret(overrides, missing_key
 
     assert missing_key in str(error.value)
     assert "secret" not in str(error.value)
-
