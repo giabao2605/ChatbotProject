@@ -451,7 +451,7 @@ demo again.
 ```bash
 git clone https://github.com/giabao2605/ChatbotProject.git
 cd ChatbotProject
-pip install -r requirements.lock.txt
+pip install -r requirements.txt
 ```
 
 Start each service in a separate terminal:

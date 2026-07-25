@@ -58,12 +58,8 @@ Tao va kich hoat virtual environment:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.lock.txt
+pip install -r requirements.txt
 ```
-
-The lock is resolved from all runtime requirements and audited before release.
-For an HTTP-only LAN demo, set `APP_COOKIE_SECURE=false` in the local `.env`.
-Keep it `true` whenever the browser application is behind HTTPS.
 
 Neu da co `chat_env` nhu may hien tai, cach nhanh nhat la chay script:
 
