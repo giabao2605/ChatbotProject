@@ -37,6 +37,65 @@ def test_claim_repair_accepts_one_grounded_rewrite():
     assert "ALLOWED_SOURCE_IDS: ['D7P3']" in calls[0]
 
 
+def test_claim_repair_replaces_one_number_from_a_matching_source_sentence_without_provider():
+    result = repair_grounded_answer(
+        "Giá trị định mức là 1,501.",
+        context_text=(
+            "Giá trị định mức là 1,500 đơn vị. "
+            "Khe hở chuẩn là 12,50 mm. Phiên bản hiện hành là 12."
+        ),
+        question="Giá trị định mức là bao nhiêu?",
+        documents=[_doc()],
+        invoke=lambda _prompt: (_ for _ in ()).throw(
+            AssertionError("deterministic repair must not call the provider")
+        ),
+        require_citation=False,
+        enabled=True,
+        allow_deterministic=True,
+    )
+
+    assert result.attempted is True
+    assert result.accepted is True
+    assert result.answer == "Giá trị định mức là 1,500."
+    assert result.estimated_cost == 0.0
+
+
+def test_claim_repair_keeps_provider_fallback_when_source_number_is_ambiguous():
+    calls = []
+    result = repair_grounded_answer(
+        "Chi phí là 2,500 USD.",
+        context_text="Chi phí là 1,500 USD. Chi phí là 1,700 USD.",
+        question="Chi phí là bao nhiêu?",
+        documents=[_doc()],
+        invoke=lambda prompt: calls.append(prompt) or "Chi phí là 1,500 USD.",
+        require_citation=False,
+        enabled=True,
+        allow_deterministic=True,
+    )
+
+    assert result.attempted is True
+    assert result.accepted is True
+    assert len(calls) == 1
+    assert result.estimated_cost > 0
+
+
+def test_claim_repair_does_not_match_reordered_source_words():
+    calls = []
+    result = repair_grounded_answer(
+        "Chi phí vận chuyển là 2,500 USD.",
+        context_text="Chi phí là 1,500 USD, không gồm vận chuyển.",
+        question="Chi phí vận chuyển là bao nhiêu?",
+        documents=[_doc()],
+        invoke=lambda prompt: calls.append(prompt) or "Không có chi phí vận chuyển.",
+        require_citation=False,
+        enabled=True,
+        allow_deterministic=True,
+    )
+
+    assert result.attempted is True
+    assert len(calls) == 1
+
+
 def test_claim_repair_rejects_second_unsupported_answer_without_retrying():
     calls = []
     result = repair_grounded_answer(

@@ -319,7 +319,7 @@ def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch, pol
     with pytest.raises(ExternalProcessingDenied, match="internal_only"):
         module._attempt_number_claim_repair(
             "Chi phí 2500 USD.",
-            context_text="Chi phí 1500 USD.",
+            context_text="Chi phí 1500 USD. Chi phí 1700 USD.",
             user_question="Chi phí bao nhiêu?",
             retrieved_docs=[document],
             trace_id="claim-repair-policy-test",

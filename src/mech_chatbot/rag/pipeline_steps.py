@@ -153,6 +153,7 @@ def _attempt_number_claim_repair(
             and not auto_source_cards
         ),
         enabled=enabled,
+        allow_deterministic=auto_source_cards,
     )
 
 
