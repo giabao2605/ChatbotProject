@@ -869,6 +869,8 @@ def main(argv: list[str] | None = None) -> int:
                 preflight_runner=cached_preflight,
             )
 
+        from mech_chatbot.config.logging import LoggingConfig, configure_logging
+        configure_logging(LoggingConfig.from_settings(settings))
         runtime = build_rag_runtime(settings)
         try:
             _, passed = run_evaluation(

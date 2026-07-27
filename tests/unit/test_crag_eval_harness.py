@@ -1029,7 +1029,9 @@ def test_fixture_generation_is_deterministic_and_identity_complete(tmp_path):
 
 def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
     runner = _load("run_eval_composition", "scripts/eval/run_eval.py")
+    logging_config = importlib.import_module("mech_chatbot.config.logging")
     settings = object()
+    log_config = object()
     executor = object()
     events = []
     runtime = SimpleNamespace(
@@ -1049,6 +1051,16 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runner, "load_settings", lambda: settings)
     monkeypatch.setattr(runner, "load_manifest_files", lambda _paths: [])
+    monkeypatch.setattr(
+        logging_config.LoggingConfig,
+        "from_settings",
+        lambda value: log_config if value is settings else None,
+    )
+    monkeypatch.setattr(
+        logging_config,
+        "configure_logging",
+        lambda value: events.append("logging") if value is log_config else None,
+    )
     monkeypatch.setattr(
         runner,
         "_default_preflight_runner",
@@ -1078,11 +1090,12 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_evaluation", run_evaluation)
 
     assert runner.main([]) == 0
-    assert events == ["bind", "run", "close", "unbind"]
+    assert events == ["bind", "logging", "run", "close", "unbind"]
 
 
 def test_eval_main_does_not_compose_runtime_before_failed_preflight(monkeypatch, tmp_path):
     runner = _load("run_eval_preflight_order", "scripts/eval/run_eval.py")
+    logging_config = importlib.import_module("mech_chatbot.config.logging")
     settings = object()
     preflight_report = {"passed": False}
     events = []
@@ -1106,6 +1119,11 @@ def test_eval_main_does_not_compose_runtime_before_failed_preflight(monkeypatch,
         runner,
         "build_rag_runtime",
         lambda _settings: pytest.fail("runtime composition happened before preflight passed"),
+    )
+    monkeypatch.setattr(
+        logging_config,
+        "configure_logging",
+        lambda _config: pytest.fail("logging initialized before preflight passed"),
     )
     monkeypatch.setattr(
         runner,
