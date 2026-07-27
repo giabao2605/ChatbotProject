@@ -707,6 +707,47 @@ def test_rollout_provider_router_mode_preserves_explicit_router_configuration(mo
     assert env["RAG_EVAL_ROUTER_MODE"] == "provider"
 
 
+def test_crag_rollout_arm_binds_trace_log_file(monkeypatch, tmp_path):
+    rollout = _load("crag_rollout_trace_env", "scripts/crag_eval/run_rollout.py")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "rollout"
+    env_values = []
+
+    def fake_run(command, **kwargs):
+        env_values.append(kwargs["env"]["RAG_TRACE_LOG_FILE"])
+        if "scripts.eval.run_eval" in command:
+            run_dir = output / "baseline"
+            run_dir.mkdir(parents=True)
+            (run_dir / "eval.json").write_text(
+                json.dumps({"schema": "rag-labeled-eval-v4"}),
+                encoding="utf-8",
+            )
+        else:
+            (output / "baseline" / "trace.json").write_text(
+                json.dumps({"schema": "rag-refusal-snapshot-v1"}),
+                encoding="utf-8",
+            )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(rollout.subprocess, "run", fake_run)
+
+    rollout._run(
+        "baseline",
+        manifest,
+        output,
+        trace,
+        enabled=False,
+        router_mode="offline",
+        provider_configuration_sha256="provider",
+        governance_scope_sha256_value="scope",
+    )
+
+    assert env_values == [str(trace), str(trace)]
+
+
 def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
     monkeypatch, tmp_path
 ):

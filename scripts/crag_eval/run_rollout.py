@@ -183,6 +183,7 @@ def _run(
         "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256": provider_configuration_sha256,
         "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_scope_sha256_value,
         "RAG_EVAL_CONCURRENCY": "1",
+        "RAG_TRACE_LOG_FILE": str(trace),
     })
     started_at = _utc_now()
     eval_result = subprocess.run([
