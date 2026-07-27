@@ -29,7 +29,6 @@ from mech_chatbot.rag.phases.routing import RouteDecision
 from mech_chatbot.rag.pipeline_steps import (
     _RETRIEVE_UNSET,
     _assemble_context,
-    _retrieve,
 )
 from mech_chatbot.rag.rbac import compose_retrieval_filters
 from mech_chatbot.rag.rerank import tokenize_cached
@@ -273,7 +272,7 @@ def _correct_branch(
             retry_counter=state.budget,
         ).content
         corrected_result = run_corrected_retrieval(
-            _retrieve,
+            state.retrieve,
             corrected_query=tokenize_cached(str(rewritten or subquery)),
             new_part_ids=branch_part_ids,
             strict_filter=strict_filter,

@@ -673,7 +673,7 @@ def test_crag_rollout_gate_blocks_wrong_answers_leakage_and_excess_cost():
         ],
     }
     baseline_trace = {"system_metrics": {"latency_p95_ms": 1000, "estimated_cost": 1.0, "correction_rate": 0.0, "repair_rate": 0.0, "retry_rate": 0.0}}
-    candidate_trace = {"system_metrics": {"latency_p95_ms": 1200, "estimated_cost": 1.2, "correction_rate": 0.2, "repair_rate": 0.1, "retry_rate": 0.3, "correction_trace_ids": ["eval:candidate:ambiguous"], "repair_trace_ids": ["eval:candidate:repair"]}}
+    candidate_trace = {"system_metrics": {"latency_p95_ms": 1200, "estimated_cost": 1.2, "correction_rate": 0.2, "repair_rate": 0.1, "retry_rate": 0.3, "correction_trace_ids": ["eval:candidate:ambiguous"], "correction_error_count": 0, "repair_trace_ids": ["eval:candidate:repair"]}}
 
     report = crag_gate.compare_reports(baseline_eval, candidate_eval, baseline_trace, candidate_trace)
     assert report["passed"] is True
@@ -693,6 +693,75 @@ def test_crag_rollout_gate_fails_closed_when_metrics_are_null():
     assert report["checks"]["latency_within_budget"] is False
     assert report["checks"]["cost_within_budget"] is False
     assert report["passed"] is False
+
+
+def test_crag_rollout_gate_rejects_failed_correction_attempts():
+    baseline_eval = {
+        "outcome_confusion": {
+            "wrong_refusal": 1,
+            "wrong_answer": 0,
+            "leakage": 0,
+        }
+    }
+    candidate_eval = {
+        "outcome_confusion": {
+            "wrong_refusal": 0,
+            "wrong_answer": 0,
+            "leakage": 0,
+        },
+        "total_cases": 1,
+        "passed_cases": 1,
+        "feature_flags": {
+            "crag": "true",
+            "claim_repair": "true",
+            "semantic_cache": "false",
+        },
+        "cases": [
+            {
+                "trace_id": "eval:candidate:ambiguous",
+                "requires_correction": True,
+            }
+        ],
+    }
+    baseline_trace = {
+        "system_metrics": {
+            "latency_p95_ms": 100,
+            "estimated_cost": 1,
+        }
+    }
+    candidate_trace = {
+        "system_metrics": {
+            "latency_p95_ms": 100,
+            "estimated_cost": 1,
+            "correction_rate": 1,
+            "repair_rate": 0,
+            "retry_rate": 0,
+            "max_corrections_per_query": 1,
+            "max_repairs_per_query": 0,
+            "correction_trace_ids": ["eval:candidate:ambiguous"],
+            "repair_trace_ids": [],
+            "correction_error_count": 1,
+        }
+    }
+
+    report = crag_gate.compare_reports(
+        baseline_eval,
+        candidate_eval,
+        baseline_trace,
+        candidate_trace,
+    )
+
+    assert report["checks"]["correction_errors_zero"] is False
+    assert report["passed"] is False
+
+    del candidate_trace["system_metrics"]["correction_error_count"]
+    report = crag_gate.compare_reports(
+        baseline_eval,
+        candidate_eval,
+        baseline_trace,
+        candidate_trace,
+    )
+    assert report["checks"]["correction_errors_zero"] is False
 
 
 def test_crag_rollout_gate_rejects_malformed_numeric_metrics():
@@ -754,7 +823,7 @@ def test_crag_rollout_gate_blocks_more_than_one_correction_or_repair_per_query()
         "latency_p95_ms": 100, "estimated_cost": 1, "correction_rate": 0.5,
         "repair_rate": 0.5, "retry_rate": 0, "max_corrections_per_query": 2,
         "max_repairs_per_query": 1, "correction_trace_ids": ["eval:candidate:ambiguous"],
-        "repair_trace_ids": ["eval:candidate:repair"],
+        "correction_error_count": 0, "repair_trace_ids": ["eval:candidate:repair"],
     }}
     report = crag_gate.compare_reports(eval_report, eval_report, baseline_trace, candidate_trace)
     assert report["checks"]["correction_budget"] is False

@@ -362,21 +362,16 @@ def test_executor_runs_graph_bom_image_and_corrective_enrichment(monkeypatch):
         ),
     )
     monkeypatch.setattr(enrichment_phase, "should_attempt_correction", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        enrichment_phase,
-        "run_corrected_retrieval",
-        lambda *_args, **_kwargs: (
-            [corrected_document],
-            5,
-            "corrected",
-            time.time(),
-            object(),
-        ),
-    )
-
     outcome = _run_phase(
         lambda state: enrichment_phase.enrich_retrieval(decision, primary, state),
         retrieval=_retrieval_adapter(
+            retrieve=lambda **_kwargs: (
+                [corrected_document],
+                5,
+                "corrected",
+                time.time(),
+                object(),
+            ),
             graph_retrieval_enabled=True,
             community_summaries_enabled=True,
             grounded_math_enabled=True,
@@ -408,7 +403,7 @@ def test_executor_runs_one_governed_correction_across_decomposition_branches(mon
         part_ids=("P-1", "P-2"),
         crag_enabled=True,
     )
-    correction_calls = []
+    retrieval_calls = []
 
     monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
     monkeypatch.setattr(retrieval_phase, "_assemble_context", lambda *_args: "")
@@ -432,22 +427,6 @@ def test_executor_runs_one_governed_correction_across_decomposition_branches(mon
     )
     monkeypatch.setattr(
         retrieval_phase,
-        "run_corrected_retrieval",
-        lambda *_args, **kwargs: correction_calls.append(kwargs) or (
-            [
-                Document(
-                    page_content="corrected branch evidence",
-                    metadata={"doc_id": 21, "trang_so": 1},
-                )
-            ],
-            5,
-            "corrected",
-            time.time(),
-            object(),
-        ),
-    )
-    monkeypatch.setattr(
-        retrieval_phase,
         "probe_restricted_access",
         lambda *_args, **_kwargs: (False, None),
     )
@@ -462,13 +441,29 @@ def test_executor_runs_one_governed_correction_across_decomposition_branches(mon
     outcome = _run_phase(
         lambda state: retrieval_phase.retrieve_primary(decision, state),
         retrieval=_retrieval_adapter(
-            retrieve=lambda **_kwargs: ([], 5, "hybrid", time.time(), object()),
+            retrieve=lambda **kwargs: retrieval_calls.append(kwargs) or (
+                [
+                    Document(
+                        page_content="corrected branch evidence",
+                        metadata={"doc_id": 21, "trang_so": 1},
+                    )
+                ]
+                if kwargs["query_to_search"] == "rewritten branch"
+                else [],
+                5,
+                "hybrid",
+                time.time(),
+                object(),
+            ),
             query_decomposition_enabled=True,
         ),
         provider=SimpleNamespace(invoke=invoke),
     )
 
-    assert len(correction_calls) == 1
+    assert sum(
+        call["query_to_search"] == "rewritten branch"
+        for call in retrieval_calls
+    ) == 1
     assert outcome.correction_estimated_cost > 0
     assert sum(
         branch["correction_attempted"]

@@ -147,6 +147,52 @@ def test_snapshot_summarizes_external_ai_latency_by_surface_without_payload(tmp_
     assert "120000.0" in markdown
 
 
+def test_snapshot_does_not_count_failed_correction_as_exercised(tmp_path):
+    snapshot = _load_snapshot_module()
+    path = tmp_path / "trace.jsonl"
+    events = [
+        {
+            "ts": "2026-07-13T00:00:00+00:00",
+            "event": "corrective_retrieval",
+            "trace_id": "eval:candidate:failed",
+            "execution_context": "evaluation",
+            "attempt": 1,
+            "error": "TypeError",
+        },
+        {
+            "ts": "2026-07-13T00:00:01+00:00",
+            "event": "corrective_retrieval",
+            "trace_id": "eval:candidate:succeeded",
+            "execution_context": "evaluation",
+            "attempt": 1,
+        },
+        {
+            "ts": "2026-07-13T00:00:02+00:00",
+            "event": "rag_end",
+            "trace_id": "eval:candidate:failed",
+            "execution_context": "evaluation",
+            "refusal": False,
+        },
+        {
+            "ts": "2026-07-13T00:00:03+00:00",
+            "event": "rag_end",
+            "trace_id": "eval:candidate:succeeded",
+            "execution_context": "evaluation",
+            "refusal": False,
+        },
+    ]
+    path.write_text("\n".join(json.dumps(item) for item in events), encoding="utf-8")
+
+    metrics = snapshot.build_snapshot(
+        path,
+        execution_contexts={"evaluation"},
+    )["system_metrics"]
+
+    assert metrics["correction_error_count"] == 1
+    assert metrics["correction_trace_ids"] == ["eval:candidate:succeeded"]
+    assert metrics["max_corrections_per_query"] == 1
+
+
 def test_snapshot_reports_voyage_error_and_local_fallback_rate(tmp_path):
     snapshot = _load_snapshot_module()
     path = tmp_path / "trace.jsonl"

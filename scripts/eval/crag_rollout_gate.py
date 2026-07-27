@@ -48,6 +48,7 @@ def compare_reports(
     candidate_latency = candidate_system.get("latency_p95_ms")
     baseline_cost = baseline_system.get("estimated_cost")
     candidate_cost = candidate_system.get("estimated_cost")
+    correction_error_count = candidate_system.get("correction_error_count")
     checks = {
         "candidate_cases_passed": (
             candidate_eval.get("total_cases", 0) > 0
@@ -62,6 +63,10 @@ def compare_reports(
         "repair_fixture_present": bool(required_repairs),
         "required_corrections_exercised": required_corrections <= correction_traces,
         "required_repairs_exercised": required_repairs <= repair_traces,
+        "correction_errors_zero": (
+            _valid_metric(correction_error_count)
+            and correction_error_count == 0
+        ),
         "wrong_refusal_reduced": (
             candidate_wrong_refusal < baseline_wrong_refusal
             if baseline_wrong_refusal > 0

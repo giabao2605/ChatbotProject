@@ -57,6 +57,8 @@ def build_snapshot(
     corrective_attempts = 0
     repair_attempts = 0
     corrections_by_trace: Counter[str] = Counter()
+    successful_corrections_by_trace: Counter[str] = Counter()
+    correction_errors = 0
     repairs_by_trace: Counter[str] = Counter()
     llm_retries = 0
     query_count = 0
@@ -95,7 +97,12 @@ def build_snapshot(
             estimated_cost += float(event.get("estimated_cost") or 0)
         if event.get("event") == "corrective_retrieval" and event.get("attempt"):
             corrective_attempts += 1
-            corrections_by_trace[str(event.get("trace_id") or "<missing>")] += 1
+            correction_trace_id = str(event.get("trace_id") or "<missing>")
+            corrections_by_trace[correction_trace_id] += 1
+            if event.get("error"):
+                correction_errors += 1
+            else:
+                successful_corrections_by_trace[correction_trace_id] += 1
         if event.get("event") == "claim_repair" and event.get("attempted"):
             repair_attempts += 1
             repairs_by_trace[str(event.get("trace_id") or "<missing>")] += 1
@@ -197,7 +204,8 @@ def build_snapshot(
             "repair_rate": repair_attempts / query_count if query_count else 0.0,
             "max_corrections_per_query": max(corrections_by_trace.values(), default=0),
             "max_repairs_per_query": max(repairs_by_trace.values(), default=0),
-            "correction_trace_ids": sorted(corrections_by_trace),
+            "correction_trace_ids": sorted(successful_corrections_by_trace),
+            "correction_error_count": correction_errors,
             "repair_trace_ids": sorted(repairs_by_trace),
             "retry_rate": llm_retries / query_count if query_count else 0.0,
         },

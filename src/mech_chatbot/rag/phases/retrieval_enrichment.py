@@ -43,7 +43,7 @@ from mech_chatbot.rag.phases.retrieval_enrichment_support import (
     prepend_image,
 )
 from mech_chatbot.rag.phases.routing import RouteDecision
-from mech_chatbot.rag.pipeline_steps import _assemble_context, _disambiguate, _retrieve
+from mech_chatbot.rag.pipeline_steps import _assemble_context, _disambiguate
 from mech_chatbot.rag.prompt import _normalize_lang, _t_rag
 from mech_chatbot.rag.rerank import tokenize_cached
 from mech_chatbot.rag.retrieval import current_published_filter, probe_restricted_access
@@ -644,7 +644,7 @@ def _correct_retrieval(
         output_tokens = len(str(rewritten)) // 4
         estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1_000_000
         corrected_documents, _, corrected_mode, _, _ = run_corrected_retrieval(
-            _retrieve,
+            state.retrieve,
             corrected_query=tokenize_cached(
                 str(rewritten or context.decision.effective_question)
             ),
