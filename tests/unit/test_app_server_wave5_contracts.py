@@ -90,6 +90,7 @@ class _Engine:
 
 def test_auth_session_lifecycle_exposes_only_public_profile(
     monkeypatch,
+    isolated_app_lifespan,
 ):
     profile = _profile("viewer") | {"password_hash": "must-not-leak"}
     monkeypatch.setattr(
@@ -135,7 +136,10 @@ def test_auth_session_lifecycle_exposes_only_public_profile(
         assert client.get("/api/auth/me").status_code == 401
 
 
-def test_auth_profile_and_refresh_fail_closed_for_inactive_user(monkeypatch):
+def test_auth_profile_and_refresh_fail_closed_for_inactive_user(
+    monkeypatch,
+    isolated_app_lifespan,
+):
     token, payload = app_server.app_security.create_session_token(
         user_id=7,
         username="alice",
@@ -154,7 +158,10 @@ def test_auth_profile_and_refresh_fail_closed_for_inactive_user(monkeypatch):
     assert refreshed.status_code == 401
 
 
-def test_protected_dependencies_reject_inactive_session_before_storage(monkeypatch):
+def test_protected_dependencies_reject_inactive_session_before_storage(
+    monkeypatch,
+    isolated_app_lifespan,
+):
     token, payload = app_server.app_security.create_session_token(
         user_id=7,
         username="alice",

@@ -77,7 +77,10 @@ def test_dashboard_requires_admin_role():
     assert exc_info.value.status_code == 403
 
 
-def test_dashboard_endpoint_is_role_aware_for_viewer(monkeypatch):
+def test_dashboard_endpoint_is_role_aware_for_viewer(
+    monkeypatch,
+    isolated_app_lifespan,
+):
     monkeypatch.setattr(
         operation_routes.ui_query_service,
         "get_role_dashboard",
@@ -97,7 +100,10 @@ def test_dashboard_endpoint_is_role_aware_for_viewer(monkeypatch):
     }
 
 
-def test_external_ai_policy_endpoint_returns_metadata_only(monkeypatch):
+def test_external_ai_policy_endpoint_returns_metadata_only(
+    monkeypatch,
+    isolated_app_lifespan,
+):
     profiles = [{
         "provider": "voyage",
         "default_model": "rerank-2.5-lite",

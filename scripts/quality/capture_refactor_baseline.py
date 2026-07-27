@@ -69,6 +69,16 @@ class _OpenAPIApp(Protocol):
     def openapi(self) -> Mapping[str, Any]: ...
 
 
+class _BaselineQdrantRuntime:
+    """No-I/O Qdrant boundary used while observing the in-memory app."""
+
+    client = object()
+    collection_name = "baseline-capture"
+
+    def close(self) -> None:
+        return None
+
+
 AppFactory = Callable[[], _OpenAPIApp]
 SseTranscripts = Mapping[str, Sequence[Mapping[str, Any]]]
 SseCapture = Callable[[], SseTranscripts]
@@ -224,6 +234,20 @@ def _isolated_app_client(
                     app_server.app.state,
                     "post",
                     return_value=rag_response,
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    app_server.app.state,
+                    "qdrant_builder",
+                    return_value=_BaselineQdrantRuntime(),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    app_server,
+                    "refresh_expired_status",
+                    return_value={},
                 )
             )
             stack.enter_context(patch.object(app_server, "_pilot_route", return_value=None))
