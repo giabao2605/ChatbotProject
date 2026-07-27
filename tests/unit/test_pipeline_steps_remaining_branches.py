@@ -290,6 +290,110 @@ def test_general_retrieval_recovers_invalid_top_k_through_vectorstore_fallback(
     assert active_filter is not steps._RETRIEVE_UNSET
 
 
+def test_explicit_hybrid_search_skips_revalidating_process_owned_runtime(
+    load_steps,
+    monkeypatch,
+):
+    steps = load_steps()
+    document = _doc("Approved sparse result")
+    constructor_calls = []
+
+    class Store:
+        def __init__(self, **kwargs):
+            constructor_calls.append(kwargs)
+
+        def similarity_search(self, *_args, **_kwargs):
+            return [document]
+
+    monkeypatch.setattr("langchain_qdrant.QdrantVectorStore", Store)
+    vectorstore = SimpleNamespace(
+        embeddings=object(),
+        sparse_embeddings=object(),
+    )
+
+    documents, mode = steps._explicit_hybrid_rrf(
+        "approved query",
+        payload_filter=object(),
+        dense_top_k=5,
+        sparse_top_k=5,
+        result_cap=5,
+        vectorstore=vectorstore,
+        client=object(),
+        collection_name="test",
+    )
+
+    assert documents == [document]
+    assert mode == "explicit_dense_bm25_rrf"
+    assert len(constructor_calls) == 2
+    assert all(
+        call["validate_embeddings"] is False
+        and call["validate_collection_config"] is False
+        for call in constructor_calls
+    )
+
+
+def test_slow_bm25_search_uses_bounded_dense_fallback(
+    load_steps,
+    monkeypatch,
+):
+    steps = load_steps()
+    dense_document = _doc("Dense result")
+    sparse_calls = []
+    trace_events = []
+
+    class Store:
+        def __init__(self, **kwargs):
+            self.mode = getattr(
+                kwargs["retrieval_mode"],
+                "value",
+                kwargs["retrieval_mode"],
+            )
+
+        def similarity_search(self, *_args, **kwargs):
+            if self.mode == "sparse":
+                sparse_calls.append(kwargs)
+                raise TimeoutError("simulated sparse tail latency")
+            return [dense_document]
+
+    class VectorStore:
+        embeddings = object()
+        sparse_embeddings = object()
+
+        def as_retriever(self, **_kwargs):
+            pytest.fail("BM25 timeout must not retry sparse through HYBRID")
+
+    monkeypatch.setattr("langchain_qdrant.QdrantVectorStore", Store)
+    monkeypatch.setattr(
+        steps,
+        "log_trace",
+        lambda event, trace_id, **fields: trace_events.append(
+            {"event": event, "trace_id": trace_id, **fields}
+        ),
+    )
+
+    documents, mode = steps._explicit_hybrid_rrf(
+        "approved query",
+        payload_filter=object(),
+        dense_top_k=5,
+        sparse_top_k=5,
+        result_cap=5,
+        trace_id="bm25-timeout",
+        vectorstore=VectorStore(),
+        client=object(),
+        collection_name="test",
+    )
+
+    assert documents == [dense_document]
+    assert mode == "explicit_dense_fallback"
+    assert sparse_calls[0]["timeout"] == 3
+    bm25_event = next(
+        event for event in trace_events if event["event"] == "bm25_retrieval"
+    )
+    assert bm25_event["fallback"] == "dense"
+    assert bm25_event["retry_attempted"] is False
+    assert bm25_event["error"] == "TimeoutError"
+
+
 def test_empty_exact_retrieval_broadens_without_exposing_unservable_documents(
     load_steps,
 ):

@@ -62,6 +62,7 @@ from mech_chatbot.rag.execution import (
 )
 
 _RETRIEVE_UNSET = object()
+_BM25_SEARCH_TIMEOUT_SECONDS = 3
 
 
 @dataclass(slots=True)
@@ -222,6 +223,8 @@ def _explicit_hybrid_rrf(
             collection_name=collection_name,
             embedding=dense_embedding,
             retrieval_mode=RetrievalMode.DENSE,
+            validate_embeddings=False,
+            validate_collection_config=False,
         )
         sparse_store = QdrantVectorStore(
             client=client,
@@ -230,6 +233,8 @@ def _explicit_hybrid_rrf(
             sparse_embedding=sparse_embedding,
             sparse_vector_name="sparse",
             retrieval_mode=RetrievalMode.SPARSE,
+            validate_embeddings=False,
+            validate_collection_config=False,
         )
         t_dense = time.perf_counter()
         dense_docs = dense_store.similarity_search(
@@ -239,11 +244,21 @@ def _explicit_hybrid_rrf(
         )
         dense_ms = int((time.perf_counter() - t_dense) * 1000)
         t_bm25 = time.perf_counter()
-        sparse_docs = sparse_store.similarity_search(
-            query,
-            k=sparse_top_k,
-            filter=payload_filter,
-        )
+        sparse_error = None
+        try:
+            sparse_docs = sparse_store.similarity_search(
+                query,
+                k=sparse_top_k,
+                filter=payload_filter,
+                timeout=_BM25_SEARCH_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            sparse_error = exc
+            sparse_docs = []
+            logger.warning(
+                "BM25 retrieval unavailable, using dense results: %s",
+                exc,
+            )
         bm25_ms = int((time.perf_counter() - t_bm25) * 1000)
         t_rrf = time.perf_counter()
         fused_docs = _rrf_fuse(
@@ -259,13 +274,18 @@ def _explicit_hybrid_rrf(
                 phase=phase,
                 docs_count=len(dense_docs),
             )
-            log_trace(
-                "bm25_retrieval",
-                trace_id,
-                latency_ms=bm25_ms,
-                phase=phase,
-                docs_count=len(sparse_docs),
-            )
+            bm25_fields = {
+                "latency_ms": bm25_ms,
+                "phase": phase,
+                "docs_count": len(sparse_docs),
+            }
+            if sparse_error is not None:
+                bm25_fields.update(
+                    error=type(sparse_error).__name__,
+                    fallback="dense",
+                    retry_attempted=False,
+                )
+            log_trace("bm25_retrieval", trace_id, **bm25_fields)
             log_trace(
                 "rrf_grouping",
                 trace_id,
@@ -282,14 +302,22 @@ def _explicit_hybrid_rrf(
                     for doc in fused_docs[:20]
                 ],
             )
-        return fused_docs, "explicit_dense_bm25_rrf"
+        return fused_docs, (
+            "explicit_dense_fallback"
+            if sparse_error is not None
+            else "explicit_dense_bm25_rrf"
+        )
     except Exception as exc:
         logger.warning("Explicit dense+BM25 RRF unavailable, fallback HYBRID: %s", exc)
         if trace_id:
             log_trace("hybrid_fallback", trace_id, phase=phase, error=type(exc).__name__)
         fallback = vectorstore.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": result_cap, "filter": payload_filter},
+            search_kwargs={
+                "k": result_cap,
+                "filter": payload_filter,
+                "timeout": _BM25_SEARCH_TIMEOUT_SECONDS,
+            },
         ).invoke(query)
         return list(fallback or []), "hybrid_fallback"
 
