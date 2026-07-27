@@ -5,7 +5,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
+
+
+def _valid_metric(value) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
 
 
 def compare_reports(
@@ -34,6 +44,10 @@ def compare_reports(
 
     baseline_wrong_refusal = baseline_outcomes.get("wrong_refusal", 0)
     candidate_wrong_refusal = candidate_outcomes.get("wrong_refusal", 0)
+    baseline_latency = baseline_system.get("latency_p95_ms")
+    candidate_latency = candidate_system.get("latency_p95_ms")
+    baseline_cost = baseline_system.get("estimated_cost")
+    candidate_cost = candidate_system.get("estimated_cost")
     checks = {
         "candidate_cases_passed": (
             candidate_eval.get("total_cases", 0) > 0
@@ -57,10 +71,16 @@ def compare_reports(
         <= baseline_outcomes.get("wrong_answer", 0),
         "refusal_types_correct": candidate_outcomes.get("wrong_refusal_type", 0) == 0,
         "leakage_zero": candidate_outcomes.get("leakage", 0) == 0,
-        "latency_within_budget": candidate_system.get("latency_p95_ms", float("inf"))
-        <= baseline_system.get("latency_p95_ms", 0) * max_latency_ratio,
-        "cost_within_budget": candidate_system.get("estimated_cost", float("inf"))
-        <= baseline_system.get("estimated_cost", 0) * max_cost_ratio,
+        "latency_within_budget": (
+            _valid_metric(baseline_latency)
+            and _valid_metric(candidate_latency)
+            and candidate_latency <= baseline_latency * max_latency_ratio
+        ),
+        "cost_within_budget": (
+            _valid_metric(baseline_cost)
+            and _valid_metric(candidate_cost)
+            and candidate_cost <= baseline_cost * max_cost_ratio
+        ),
         "correction_budget": (
             candidate_system.get("correction_rate", float("inf")) <= 1.0
             and candidate_system.get("max_corrections_per_query", 0) <= 1

@@ -1,7 +1,9 @@
 import importlib.util
 import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -982,3 +984,105 @@ def test_fixture_generation_is_deterministic_and_identity_complete(tmp_path):
         assert all(case.get(field) for field in (
             "user_department", "user_roles", "allowed_departments", "allowed_sites", "max_security_level"
         ))
+
+
+def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
+    runner = _load("run_eval_composition", "scripts/eval/run_eval.py")
+    settings = object()
+    executor = object()
+    events = []
+    runtime = SimpleNamespace(
+        executor=executor,
+        close=lambda: events.append("close"),
+    )
+
+    @contextmanager
+    def bind_runtime(value, *, include_qdrant):
+        assert value is settings
+        assert include_qdrant is True
+        events.append("bind")
+        try:
+            yield
+        finally:
+            events.append("unbind")
+
+    monkeypatch.setattr(runner, "load_settings", lambda: settings)
+    monkeypatch.setattr(runner, "load_manifest_files", lambda _paths: [])
+    monkeypatch.setattr(
+        runner,
+        "_default_preflight_runner",
+        lambda: lambda _cases: {"passed": True},
+    )
+    monkeypatch.setattr(runner, "configured_repository_runtime", bind_runtime)
+    monkeypatch.setattr(
+        runner,
+        "build_rag_runtime",
+        lambda value: runtime if value is settings else None,
+    )
+    monkeypatch.setattr(
+        runner,
+        "parse_args",
+        lambda _argv=None: SimpleNamespace(
+            manifest=[tmp_path / "manifest.jsonl"],
+            output_dir=tmp_path,
+            run_label="baseline",
+        ),
+    )
+
+    def run_evaluation(*args, **kwargs):
+        assert kwargs["rag_executor"] is executor
+        events.append("run")
+        return {}, True
+
+    monkeypatch.setattr(runner, "run_evaluation", run_evaluation)
+
+    assert runner.main([]) == 0
+    assert events == ["bind", "run", "close", "unbind"]
+
+
+def test_eval_main_does_not_compose_runtime_before_failed_preflight(monkeypatch, tmp_path):
+    runner = _load("run_eval_preflight_order", "scripts/eval/run_eval.py")
+    settings = object()
+    preflight_report = {"passed": False}
+    events = []
+
+    monkeypatch.setattr(runner, "load_manifest_files", lambda _paths: [])
+    monkeypatch.setattr(
+        runner,
+        "_default_preflight_runner",
+        lambda: lambda _cases: preflight_report,
+    )
+    monkeypatch.setattr(runner, "load_settings", lambda: settings)
+
+    @contextmanager
+    def bind_runtime(value, *, include_qdrant):
+        assert value is settings
+        assert include_qdrant is True
+        yield
+
+    monkeypatch.setattr(runner, "configured_repository_runtime", bind_runtime)
+    monkeypatch.setattr(
+        runner,
+        "build_rag_runtime",
+        lambda _settings: pytest.fail("runtime composition happened before preflight passed"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "parse_args",
+        lambda _argv=None: SimpleNamespace(
+            manifest=[tmp_path / "manifest.jsonl"],
+            output_dir=tmp_path,
+            run_label="baseline",
+        ),
+    )
+
+    def run_evaluation(*args, **kwargs):
+        assert kwargs["preflight_runner"]([]) is preflight_report
+        events.append("failed-preflight")
+        raise RuntimeError("fixture preflight failed; no LLM request was sent")
+
+    monkeypatch.setattr(runner, "run_evaluation", run_evaluation)
+
+    with pytest.raises(RuntimeError, match="fixture preflight failed"):
+        runner.main([])
+    assert events == ["failed-preflight"]

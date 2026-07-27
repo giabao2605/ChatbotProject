@@ -22,6 +22,12 @@ for candidate in (ROOT, SRC):
 
 os.environ.setdefault("RAG_EXECUTION_CONTEXT", "evaluation")
 
+from mech_chatbot.composition.maintenance_runtime import (
+    configured_repository_runtime,
+)
+from mech_chatbot.composition.rag_runtime import build_rag_runtime
+from mech_chatbot.config.settings import load_settings
+
 REQUIRED_IDENTITY_FIELDS = (
     "user_department",
     "user_roles",
@@ -229,6 +235,23 @@ def _render_markdown(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _default_preflight_runner():
+    preflight_kind = os.environ.get("RAG_EVAL_PREFLIGHT_KIND", "crag").strip().lower()
+    if preflight_kind == "grounded_math":
+        from scripts.grounded_math_eval.preflight import run_live_preflight
+    elif preflight_kind == "decomposition":
+        from scripts.decomposition_eval.preflight import run_live_preflight
+    elif preflight_kind in {"graph", "community"}:
+        from scripts.graph_eval.preflight import run_live_preflight
+    elif preflight_kind == "controlled_demo":
+        from scripts.controlled_demo_eval.preflight import run_live_preflight
+    elif preflight_kind == "crag":
+        from scripts.crag_eval.preflight import run_live_preflight
+    else:
+        raise ValueError(f"unsupported RAG_EVAL_PREFLIGHT_KIND: {preflight_kind}")
+    return run_live_preflight
+
+
 def run_evaluation(
     manifest_files: list[Path],
     output_dir: Path,
@@ -250,22 +273,7 @@ def run_evaluation(
     preflight_report = {}
     if preflight:
         if preflight_runner is None:
-            preflight_kind = os.environ.get("RAG_EVAL_PREFLIGHT_KIND", "crag").strip().lower()
-            if preflight_kind == "grounded_math":
-                from scripts.grounded_math_eval.preflight import run_live_preflight
-            elif preflight_kind == "decomposition":
-                from scripts.decomposition_eval.preflight import run_live_preflight
-            elif preflight_kind == "graph":
-                from scripts.graph_eval.preflight import run_live_preflight
-            elif preflight_kind == "community":
-                from scripts.graph_eval.preflight import run_live_preflight
-            elif preflight_kind == "controlled_demo":
-                from scripts.controlled_demo_eval.preflight import run_live_preflight
-            elif preflight_kind == "crag":
-                from scripts.crag_eval.preflight import run_live_preflight
-            else:
-                raise ValueError(f"unsupported RAG_EVAL_PREFLIGHT_KIND: {preflight_kind}")
-            preflight_runner = run_live_preflight
+            preflight_runner = _default_preflight_runner()
         preflight_report = preflight_runner(cases)
         (paths["directory"] / "preflight.json").write_text(
             json.dumps(preflight_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -848,7 +856,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    _, passed = run_evaluation(args.manifest, args.output_dir, args.run_label)
+    cases = load_manifest_files(args.manifest)
+    settings = load_settings()
+    with configured_repository_runtime(settings, include_qdrant=True):
+        preflight_report = _default_preflight_runner()(cases)
+        cached_preflight = lambda _cases: preflight_report
+        if not preflight_report["passed"]:
+            run_evaluation(
+                args.manifest,
+                args.output_dir,
+                args.run_label,
+                preflight_runner=cached_preflight,
+            )
+
+        runtime = build_rag_runtime(settings)
+        try:
+            _, passed = run_evaluation(
+                args.manifest,
+                args.output_dir,
+                args.run_label,
+                rag_executor=runtime.executor,
+                preflight_runner=cached_preflight,
+            )
+        finally:
+            runtime.close()
     # Artifacts are always written. The rollout decision belongs to crag_rollout_gate.py.
     return 0 if passed else 2
 

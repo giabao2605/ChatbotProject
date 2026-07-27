@@ -682,6 +682,38 @@ def test_crag_rollout_gate_blocks_wrong_answers_leakage_and_excess_cost():
     assert crag_gate.compare_reports(baseline_eval, candidate_eval, baseline_trace, candidate_trace)["passed"] is False
 
 
+def test_crag_rollout_gate_fails_closed_when_metrics_are_null():
+    report = crag_gate.compare_reports(
+        {},
+        {},
+        {"system_metrics": {"latency_p95_ms": None, "estimated_cost": None}},
+        {"system_metrics": {"latency_p95_ms": None, "estimated_cost": None}},
+    )
+
+    assert report["checks"]["latency_within_budget"] is False
+    assert report["checks"]["cost_within_budget"] is False
+    assert report["passed"] is False
+
+
+def test_crag_rollout_gate_rejects_malformed_numeric_metrics():
+    for invalid in (True, -1, float("nan"), float("inf")):
+        report = crag_gate.compare_reports(
+            {},
+            {},
+            {"system_metrics": {"latency_p95_ms": 1, "estimated_cost": 1}},
+            {
+                "system_metrics": {
+                    "latency_p95_ms": invalid,
+                    "estimated_cost": invalid,
+                }
+            },
+        )
+
+        assert report["checks"]["latency_within_budget"] is False
+        assert report["checks"]["cost_within_budget"] is False
+        assert report["passed"] is False
+
+
 def test_crag_rollout_gate_cli_binds_all_input_hashes(tmp_path, monkeypatch):
     paths = {}
     for name in ("baseline_eval", "candidate_eval", "baseline_trace", "candidate_trace"):
