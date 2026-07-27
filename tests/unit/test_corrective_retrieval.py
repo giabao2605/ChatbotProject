@@ -1,10 +1,12 @@
 import ast
 from pathlib import Path
 
+import pytest
 from langchain_core.documents import Document
 
 from mech_chatbot.rag.corrective import (
     correction_enabled,
+    metadata_correction_query,
     merge_corrected_documents,
     run_corrected_retrieval,
     should_attempt_correction,
@@ -60,6 +62,64 @@ def test_corrected_documents_are_deduplicated_without_changing_metadata():
 
     assert merged == [original, added]
     assert merged[1].metadata["site"] == "HQ"
+
+
+def test_metadata_correction_query_adds_top_governed_document_code_locally():
+    documents = [
+        Document(
+            page_content="Mắt cú xanh là biệt danh đã phê duyệt.",
+            metadata={"base_code": "crag-eval-alias-001"},
+        ),
+        Document(
+            page_content="lower-ranked evidence",
+            metadata={"base_code": "crag-eval-other-001"},
+        ),
+    ]
+
+    corrected = metadata_correction_query(
+        "Mắt cú xanh cần kiểm tra theo chu kỳ bao lâu?",
+        documents,
+    )
+
+    assert corrected == (
+        "Mắt cú xanh cần kiểm tra theo chu kỳ bao lâu? "
+        "crag-eval-alias-001"
+    )
+
+
+@pytest.mark.parametrize(
+    ("question", "documents"),
+    [
+        ("query", []),
+        (
+            "query",
+            [Document(page_content="x", metadata={"base_code": "unsafe code"})],
+        ),
+        (
+            "Mắt cú xanh kiểm tra khi nào?",
+            [
+                Document(
+                    page_content="Tài liệu hoàn toàn không liên quan.",
+                    metadata={"base_code": "crag-eval-alias-001"},
+                )
+            ],
+        ),
+        (
+            "Thông số CRAG-EVAL-ALIAS-001",
+            [
+                Document(
+                    page_content="x",
+                    metadata={"base_code": "crag-eval-alias-001"},
+                )
+            ],
+        ),
+    ],
+)
+def test_metadata_correction_query_falls_back_when_no_new_safe_code(
+    question,
+    documents,
+):
+    assert metadata_correction_query(question, documents) is None
 
 
 def test_corrected_retrieval_reuses_governance_filters_unchanged():

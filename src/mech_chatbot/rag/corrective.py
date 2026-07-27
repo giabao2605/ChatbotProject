@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
+
 from mech_chatbot.rag.answer_policy import AnswerDecision
 
 
 MAX_CORRECTION_PASSES = 1
+_SAFE_CORRECTION_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{1,127}$")
 
 
 def correction_enabled(enabled: bool = False) -> bool:
@@ -24,6 +28,41 @@ def should_attempt_correction(
         and attempts < MAX_CORRECTION_PASSES
         and decision.correction_allowed
     )
+
+
+def _normalized_terms(value):
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    ascii_text = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    return re.findall(r"[a-z0-9]+", ascii_text)
+
+
+def _shares_query_phrase(question, document):
+    query_terms = _normalized_terms(question)
+    document_text = " ".join(
+        _normalized_terms(getattr(document, "page_content", ""))
+    )
+    return any(
+        " ".join(query_terms[index:index + 3]) in document_text
+        for index in range(max(0, len(query_terms) - 2))
+    )
+
+
+def metadata_correction_query(question, documents):
+    """Expand a query with the top governed result's stable document code."""
+    docs = list(documents or [])
+    if not docs:
+        return None
+    metadata = getattr(docs[0], "metadata", {}) or {}
+    code = str(metadata.get("base_code") or "").strip()
+    if (
+        not _SAFE_CORRECTION_CODE.fullmatch(code)
+        or code.casefold() in str(question or "").casefold()
+        or not _shares_query_phrase(question, docs[0])
+    ):
+        return None
+    return f"{str(question or '').strip()} {code}".strip()
 
 
 def _document_key(document):

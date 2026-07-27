@@ -21,6 +21,7 @@ from mech_chatbot.rag.answer_policy import (
 )
 from mech_chatbot.rag.context_builders import _context_is_mechanical
 from mech_chatbot.rag.corrective import (
+    metadata_correction_query,
     merge_corrected_documents,
     run_corrected_retrieval,
     should_attempt_correction,
@@ -631,23 +632,34 @@ def _correct_retrieval(
     started_at = time.time()
     input_tokens = 0
     output_tokens = 0
+    estimated_cost = 0.0
+    strategy = "metadata_expansion"
     state.budget.record("corrections", 1, cumulative=True)
     try:
         state.checkpoint("corrective_retrieval")
-        prompt = _correction_prompt(context, coverage_decision)
-        rewritten = state.invoke_provider(
-            [HumanMessage(content=prompt)], surface="query_disambiguation",
-            trace_id=context.trace_id, retry_counter=state.budget,
-        ).content
-        state.checkpoint("corrective_retrieval")
-        input_tokens = len(prompt) // 4
-        output_tokens = len(str(rewritten)) // 4
-        estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1_000_000
+        corrected_query = metadata_correction_query(
+            context.decision.query_to_search,
+            documents,
+        )
+        if corrected_query is None:
+            strategy = "query_rewrite"
+            prompt = _correction_prompt(context, coverage_decision)
+            rewritten = state.invoke_provider(
+                [HumanMessage(content=prompt)], surface="query_disambiguation",
+                trace_id=context.trace_id, retry_counter=state.budget,
+            ).content
+            state.checkpoint("corrective_retrieval")
+            input_tokens = len(prompt) // 4
+            output_tokens = len(str(rewritten)) // 4
+            estimated_cost = (
+                input_tokens * 2.5 + output_tokens * 15.0
+            ) / 1_000_000
+            corrected_query = str(
+                rewritten or context.decision.effective_question
+            )
         corrected_documents, _, corrected_mode, _, _ = run_corrected_retrieval(
             state.retrieve,
-            corrected_query=tokenize_cached(
-                str(rewritten or context.decision.effective_question)
-            ),
+            corrected_query=tokenize_cached(corrected_query),
             new_part_ids=list(part_ids),
             strict_filter=context.decision.strict_filter,
             broad_filter=context.decision.broad_filter,
@@ -655,18 +667,21 @@ def _correct_retrieval(
             rbac_filter=context.decision.rbac_filter,
             trace_id=context.trace_id,
         )
+        if strategy == "metadata_expansion" and not corrected_documents:
+            raise ValueError("metadata correction returned no documents")
         state.checkpoint("corrective_retrieval")
         return _successful_correction(
             context, state, started_at, documents, corrected_documents,
             corrected_mode, coverage_decision, input_tokens, output_tokens,
-            estimated_cost,
+            estimated_cost, strategy,
         )
     except (ExternalAICallCancelled, RequestBudgetExceeded, TimeoutError):
         raise
     except Exception as exc:
         logger.warning("Corrective retrieval failed: %s", exc)
         _log_correction_failure(
-            context, state, started_at, documents, coverage_decision, exc
+            context, state, started_at, documents, coverage_decision, exc,
+            strategy,
         )
         return _CorrectionResult(
             tuple(documents), input_tokens=input_tokens, output_tokens=output_tokens
@@ -695,11 +710,12 @@ def _successful_correction(
     input_tokens: int,
     output_tokens: int,
     estimated_cost: float,
+    strategy: str,
 ) -> _CorrectionResult:
     merged = merge_corrected_documents(documents, corrected_documents)
     _log_correction(
         context, state, started_at, documents, corrected_documents,
-        merged, corrected_mode, coverage_decision, estimated_cost,
+        merged, corrected_mode, coverage_decision, estimated_cost, strategy,
     )
     return _CorrectionResult(
         tuple(merged), input_tokens, output_tokens, estimated_cost
@@ -713,11 +729,12 @@ def _log_correction_failure(
     documents: Sequence[Any],
     coverage_decision: Any,
     error: Exception,
+    strategy: str,
 ) -> None:
     log_trace(
         "corrective_retrieval", context.trace_id,
         latency_ms=int((time.time() - started_at) * 1000),
-        strategy="query_rewrite", attempt=state.budget.corrections,
+        strategy=strategy, attempt=state.budget.corrections,
         before_docs=len(documents), after_docs=len(documents),
         evaluator_state=coverage_decision.state.value,
         error=type(error).__name__,
@@ -734,10 +751,11 @@ def _log_correction(
     corrected_mode: str,
     coverage_decision: Any,
     estimated_cost: float,
+    strategy: str,
 ) -> None:
     log_trace(
         "corrective_retrieval", context.trace_id,
-        latency_ms=int((time.time() - started_at) * 1000), strategy="query_rewrite",
+        latency_ms=int((time.time() - started_at) * 1000), strategy=strategy,
         attempt=state.budget.corrections, before_docs=len(documents),
         corrected_docs=len(corrected_documents), after_docs=len(merged),
         retrieval_mode=corrected_mode,
