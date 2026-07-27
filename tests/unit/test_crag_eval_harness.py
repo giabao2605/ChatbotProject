@@ -1033,9 +1033,11 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
     settings = object()
     log_config = object()
     executor = object()
+    trace_runtime = object()
     events = []
     runtime = SimpleNamespace(
         executor=executor,
+        trace_runtime=trace_runtime,
         close=lambda: events.append("close"),
     )
 
@@ -1061,6 +1063,17 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
         "configure_logging",
         lambda value: events.append("logging") if value is log_config else None,
     )
+
+    @contextmanager
+    def bind_trace(value):
+        assert value is trace_runtime
+        events.append("trace-bind")
+        try:
+            yield
+        finally:
+            events.append("trace-unbind")
+
+    monkeypatch.setattr(logging_config, "bind_trace_runtime", bind_trace)
     monkeypatch.setattr(
         runner,
         "_default_preflight_runner",
@@ -1090,7 +1103,10 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_evaluation", run_evaluation)
 
     assert runner.main([]) == 0
-    assert events == ["bind", "logging", "run", "close", "unbind"]
+    assert events == [
+        "bind", "logging", "trace-bind", "run",
+        "trace-unbind", "close", "unbind",
+    ]
 
 
 def test_eval_main_does_not_compose_runtime_before_failed_preflight(monkeypatch, tmp_path):
@@ -1124,6 +1140,11 @@ def test_eval_main_does_not_compose_runtime_before_failed_preflight(monkeypatch,
         logging_config,
         "configure_logging",
         lambda _config: pytest.fail("logging initialized before preflight passed"),
+    )
+    monkeypatch.setattr(
+        logging_config,
+        "bind_trace_runtime",
+        lambda _runtime: pytest.fail("trace runtime bound before preflight passed"),
     )
     monkeypatch.setattr(
         runner,

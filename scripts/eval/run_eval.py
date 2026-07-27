@@ -869,17 +869,22 @@ def main(argv: list[str] | None = None) -> int:
                 preflight_runner=cached_preflight,
             )
 
-        from mech_chatbot.config.logging import LoggingConfig, configure_logging
+        from mech_chatbot.config.logging import (
+            LoggingConfig,
+            bind_trace_runtime,
+            configure_logging,
+        )
         configure_logging(LoggingConfig.from_settings(settings))
         runtime = build_rag_runtime(settings)
         try:
-            _, passed = run_evaluation(
-                args.manifest,
-                args.output_dir,
-                args.run_label,
-                rag_executor=runtime.executor,
-                preflight_runner=cached_preflight,
-            )
+            with bind_trace_runtime(runtime.trace_runtime):
+                _, passed = run_evaluation(
+                    args.manifest,
+                    args.output_dir,
+                    args.run_label,
+                    rag_executor=runtime.executor,
+                    preflight_runner=cached_preflight,
+                )
         finally:
             runtime.close()
     # Artifacts are always written. The rollout decision belongs to crag_rollout_gate.py.
