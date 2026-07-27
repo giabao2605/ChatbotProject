@@ -590,10 +590,14 @@ def _coverage_policy(
             getattr(runtime, "evidence_verifier_enabled", False)
         ),
     )
-    if (
-        current_execution_context() == "evaluation"
-        and bool(getattr(runtime, "evaluation_force_ambiguous", False))
-    ):
+    force_ambiguous = bool(
+        getattr(state.invocation, "evaluation_force_ambiguous", False)
+    )
+    if not force_ambiguous and current_execution_context() == "evaluation":
+        force_ambiguous = bool(
+            getattr(runtime, "evaluation_force_ambiguous", False)
+        )
+    if force_ambiguous:
         decision = EvidenceDecision(
             EvidenceState.AMBIGUOUS,
             reason="controlled_evaluation_correction_fixture",

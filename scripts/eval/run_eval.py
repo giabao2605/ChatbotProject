@@ -126,6 +126,20 @@ def validate_live_case(case: dict, *, source: Path, line_number: int) -> None:
         raise ValueError(f"{source}:{line_number}: invalid max_security_level")
     if not case.get("question"):
         raise ValueError(f"{source}:{line_number}: case question is required")
+    if (
+        "evaluation_force_ambiguous" in case
+        and not isinstance(case["evaluation_force_ambiguous"], bool)
+    ):
+        raise ValueError(
+            f"{source}:{line_number}: evaluation_force_ambiguous must be a boolean"
+        )
+    if "evaluation_draft_override" in case and (
+        not isinstance(case["evaluation_draft_override"], str)
+        or not case["evaluation_draft_override"].strip()
+    ):
+        raise ValueError(
+            f"{source}:{line_number}: evaluation_draft_override must be non-empty text"
+        )
     if "expected_outcome" not in case and "should_refuse" not in case:
         raise ValueError(f"{source}:{line_number}: expected_outcome is required")
     if "expected_outcome" in case and case["expected_outcome"] not in VALID_EXPECTED_OUTCOMES:
@@ -379,6 +393,12 @@ def run_evaluation(
                         RagInvocation(
                             trace_id=trace_id,
                             mode=EVALUATION_EXECUTION_MODE,
+                            evaluation_force_ambiguous=case.get(
+                                "evaluation_force_ambiguous", False
+                            ),
+                            evaluation_draft_override=case.get(
+                                "evaluation_draft_override"
+                            ),
                         ),
                     )
                     terminal = consume_rag_events(events)

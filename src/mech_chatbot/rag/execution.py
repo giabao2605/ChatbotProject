@@ -86,10 +86,25 @@ class RagRequest:
 class RagInvocation:
     trace_id: str
     mode: ExecutionMode = "production"
+    evaluation_force_ambiguous: bool = False
+    evaluation_draft_override: str | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in {"production", "evaluation", "pilot_replay", "test"}:
             raise ValueError(f"Unsupported RAG execution mode: {self.mode}")
+        if (
+            self.mode != "evaluation"
+            and (
+                self.evaluation_force_ambiguous
+                or self.evaluation_draft_override is not None
+            )
+        ):
+            raise ValueError("Evaluation overrides require evaluation mode")
+        if (
+            self.evaluation_draft_override is not None
+            and not isinstance(self.evaluation_draft_override, str)
+        ):
+            raise ValueError("Evaluation draft override must be text")
 
 
 class CancellationSignal(Protocol):

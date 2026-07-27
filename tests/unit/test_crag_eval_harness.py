@@ -63,6 +63,31 @@ def test_manifest_validation_rejects_invalid_outcome_and_missing_provenance(tmp_
         runner.load_manifest_files([path])
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("evaluation_force_ambiguous", "false"),
+        ("evaluation_force_ambiguous", 1),
+        ("evaluation_draft_override", ""),
+        ("evaluation_draft_override", 42),
+    ],
+)
+def test_manifest_validation_rejects_invalid_evaluation_controls(
+    tmp_path,
+    field,
+    value,
+):
+    runner = _load("run_eval_control_validation", "scripts/eval/run_eval.py")
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        json.dumps(_case(**{field: value})) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=field):
+        runner.load_manifest_files([path])
+
+
 def test_manifest_v2_requires_labeled_claim_and_citation_ground_truth(tmp_path):
     runner = _load("run_eval_manifest_v2", "scripts/eval/run_eval.py")
     path = tmp_path / "cases.jsonl"
@@ -164,7 +189,12 @@ def test_main_evaluator_uses_typed_evaluation_invocation(tmp_path, monkeypatch):
     runner = _load("run_eval_typed_execution", "scripts/eval/run_eval.py")
     manifest = tmp_path / "cases.jsonl"
     manifest.write_text(
-        json.dumps(_case(expected_document="target.md", expected_sources=["target.md"])) + "\n",
+        json.dumps(_case(
+            expected_document="target.md",
+            expected_sources=["target.md"],
+            evaluation_force_ambiguous=True,
+            evaluation_draft_override="controlled draft",
+        )) + "\n",
         encoding="utf-8",
     )
     diagnostics = RagDiagnostics.from_mapping({
@@ -197,6 +227,8 @@ def test_main_evaluator_uses_typed_evaluation_invocation(tmp_path, monkeypatch):
     request, invocation = observed[0]
     assert invocation.mode == "evaluation"
     assert invocation.trace_id == "eval:candidate:case-1"
+    assert invocation.evaluation_force_ambiguous is True
+    assert invocation.evaluation_draft_override == "controlled draft"
     assert request.question == "Gia tri la bao nhieu?"
     assert request.access.department == "CRAG_EVAL"
     assert request.access.roles == frozenset({"viewer"})

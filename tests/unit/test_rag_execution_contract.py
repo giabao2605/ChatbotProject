@@ -24,6 +24,15 @@ from mech_chatbot.rag.execution import (
 pytestmark = pytest.mark.unit
 
 
+def test_evaluation_overrides_are_rejected_outside_evaluation_mode():
+    with pytest.raises(ValueError, match="evaluation mode"):
+        RagInvocation(
+            trace_id="invalid-production-override",
+            mode="production",
+            evaluation_force_ambiguous=True,
+        )
+
+
 def test_safety_refusal_obeys_public_event_order_without_external_calls():
     executor = DefaultRagExecutor()
     request = RagRequest(

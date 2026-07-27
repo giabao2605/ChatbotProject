@@ -707,15 +707,21 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         time.sleep(delay)
                 _raise_if_cancelled()
                 answer = "".join(chunks)
-                if current_execution_context() == "evaluation":
+                draft_override = getattr(
+                    getattr(request_runtime, "invocation", None),
+                    "evaluation_draft_override",
+                    None,
+                )
+                if (
+                    not draft_override
+                    and current_execution_context() == "evaluation"
+                ):
                     draft_override = getattr(
-                        retrieval_runtime,
-                        "eval_draft_override",
-                        None,
+                        retrieval_runtime, "eval_draft_override", None
                     )
-                    if draft_override:
-                        answer = draft_override
-                        log_trace("evaluation_override", trace_id, override="draft")
+                if draft_override:
+                    answer = draft_override
+                    log_trace("evaluation_override", trace_id, override="draft")
                 
                 input_tokens = len(context_text + user_question + chat_history_str) // 4
                 output_tokens = len(answer) // 4

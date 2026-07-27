@@ -90,7 +90,7 @@ def _route_decision(
     )
 
 
-def _run_phase(callback, *, retrieval, provider):
+def _run_phase(callback, *, retrieval, provider, invocation=None):
     observed = {}
 
     def execute_pipeline(state):
@@ -104,7 +104,7 @@ def _run_phase(callback, *, retrieval, provider):
             provider_adapter=provider,
         ).run(
             RagRequest("phase feature contract", AccessScope()),
-            RagInvocation(trace_id="phase-feature-contract", mode="test"),
+            invocation or RagInvocation(trace_id="phase-feature-contract", mode="test"),
         )
     )
 
@@ -178,6 +178,44 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
     assert outcome.decomposition_used_fallback is False
     assert outcome.documents
     assert outcome.reason_code == "retrieved"
+
+
+def test_crag_force_ambiguous_override_is_request_local(monkeypatch):
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval_enrichment as enrichment_phase
+
+    monkeypatch.setattr(
+        enrichment_phase,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="normally covered",
+        ),
+    )
+    document = Document(page_content="Approved evidence", metadata={"doc_id": 1})
+    decision = _run_phase(
+        lambda state: enrichment_phase._coverage_policy(
+            SimpleNamespace(
+                user_question="Alias này là gì?",
+                trace_id="phase-feature-contract",
+            ),
+            [document],
+            state,
+        )[0],
+        retrieval=_retrieval_adapter(
+            crag_enabled=True,
+            evaluation_force_ambiguous=False,
+        ),
+        provider=SimpleNamespace(invoke=lambda *_args, **_kwargs: None),
+        invocation=RagInvocation(
+            trace_id="phase-feature-contract",
+            mode="evaluation",
+            evaluation_force_ambiguous=True,
+        ),
+    )
+
+    assert decision.state is EvidenceState.AMBIGUOUS
+    assert decision.reason == "controlled_evaluation_correction_fixture"
 
 
 def test_executor_runs_graph_bom_image_and_corrective_enrichment(monkeypatch):

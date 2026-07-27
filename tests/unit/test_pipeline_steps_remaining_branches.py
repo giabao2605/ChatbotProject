@@ -139,6 +139,7 @@ def _plan(
     budget=None,
     provider=None,
     runtime_overrides=None,
+    invocation=None,
 ):
     documents = list(docs or [_doc()])
     provider = provider or _Provider([["unused provider response"]])
@@ -178,6 +179,9 @@ def _plan(
         ),
         explicit_negative_answer=answer,
         runtime=SimpleNamespace(
+            invocation=invocation or SimpleNamespace(
+                evaluation_draft_override=None,
+            ),
             retrieval_adapter=SimpleNamespace(**retrieval_config),
             provider_adapter=SimpleNamespace(
                 client=provider,
@@ -625,3 +629,22 @@ def test_claim_repair_releases_only_the_grounded_rewrite(load_steps, monkeypatch
 
     assert answer == "Chi phí là 10 USD."
     assert metrics["repair_count"] == 1
+
+
+def test_evaluation_draft_override_is_request_local(load_steps, monkeypatch):
+    from mech_chatbot.rag.execution import RagInvocation
+
+    steps = load_steps()
+    provider = _prepare_provider(steps, monkeypatch, [["ignored provider draft"]])
+    controlled_draft = "Quy định yêu cầu nhân viên nộp đề nghị."
+    plan = _plan(
+        steps,
+        provider=provider,
+        invocation=RagInvocation(
+            trace_id="remaining-branch-contract",
+            mode="evaluation",
+            evaluation_draft_override=controlled_draft,
+        ),
+    )
+
+    assert "".join(steps.generate_answer(plan)) == controlled_draft
