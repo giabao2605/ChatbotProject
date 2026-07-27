@@ -389,6 +389,7 @@ def _load_parent_section_chunks(
             limit=max(1, int(limit)),
             with_payload=True,
             with_vectors=False,
+            timeout=5,
         )
         docs = []
         for point in points or []:

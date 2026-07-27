@@ -96,6 +96,7 @@ def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(
 
     assert [doc.page_content for doc in docs] == ["safe parent evidence"]
     assert len(client.calls) == 1
+    assert client.calls[0]["timeout"] == 5
     conditions = {
         condition.key: condition.match
         for condition in client.calls[0]["scroll_filter"].must
