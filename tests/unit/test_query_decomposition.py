@@ -214,9 +214,10 @@ def test_execute_plan_returns_at_deadline_without_waiting_for_slow_branch():
 
 def test_only_sufficient_branch_documents_reach_final_generation():
     sufficient = Document(page_content="approved", metadata={"doc_id": 1, "trang_so": 1})
+    extra = Document(page_content="extra", metadata={"doc_id": 9, "trang_so": 1})
     ambiguous = Document(page_content="unproven", metadata={"doc_id": 2, "trang_so": 1})
     results = [
-        BranchRetrievalResult([sufficient], 5, "strict", 1.0, None),
+        BranchRetrievalResult([sufficient, extra], 5, "strict", 1.0, None),
         BranchRetrievalResult([ambiguous], 5, "broad", 1.0, None),
     ]
 
