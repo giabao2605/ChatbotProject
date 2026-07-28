@@ -50,6 +50,11 @@ def test_department_fixture_covers_every_active_demo_department(tmp_path: Path):
         == 4
         for department in {row["department"] for row in documents}
     )
+    assert all(
+        citation.get("base_code")
+        for case in cases
+        for citation in case.get("expected_citations") or []
+    )
 
 
 def test_department_fixture_has_simple_full_and_access_denied_cases(
@@ -138,6 +143,7 @@ def test_preflight_accepts_department_fixture_in_main_collection(tmp_path: Path)
             "doc_id": doc_id,
             "page": 1,
             "version_no": 1,
+            "base_code": row["doc_number"].lower(),
             "source_system": BATCH_ID,
             "servable": True,
             "is_current": True,
@@ -175,6 +181,21 @@ def test_preflight_accepts_department_fixture_in_main_collection(tmp_path: Path)
         failure["reason"] == "qdrant_page_missing"
         for failure in invalid["failures"]
     )
+
+    points[0]["owner_department"] = by_name[sorted(referenced)[0]][
+        "department"
+    ]
+    points[0]["base_code"] = "wrong-code"
+    invalid_code = check_fixture_cases(
+        technical_cases,
+        documents,
+        [],
+        points,
+        collection="TaiLieuKyThuat_v2",
+        expected_collection="TaiLieuKyThuat_v2",
+        fixture_batch=BATCH_ID,
+    )
+    assert invalid_code["passed"] is False
 
 
 def test_ingest_rejects_manifest_from_another_batch_before_db_access(
@@ -327,6 +348,7 @@ def test_ingest_repairs_existing_qdrant_provenance_before_skip(
     }
     assert metadata_updates[0][0] == 101
     assert metadata_updates[0][1]["source_system"] == BATCH_ID
+    assert metadata_updates[0][1]["base_code"] == "tk-100-d1"
     assert metadata_updates[0][2] is True
 
 

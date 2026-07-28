@@ -155,6 +155,7 @@ def _citation(document: dict) -> dict:
         "page": 1,
         "version": 1,
         "source_id": f"$PAGE:{filename}:1",
+        "base_code": document["doc_number"].lower(),
     }
 
 
@@ -293,6 +294,7 @@ def generate_eval(output: Path, documents: list[dict]) -> list[dict]:
                 preflight_documents=[{
                     "document": Path(foreign["path"]).name,
                     "version": 1,
+                    "base_code": foreign["doc_number"].lower(),
                     "department": foreign_department,
                     "site": foreign["site"],
                     "security_level": foreign["security_level"],

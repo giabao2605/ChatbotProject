@@ -147,6 +147,20 @@ def check_fixture_cases(
                 case.get("expected_security_level", "internal"),
             )
             expected_version = expected_extra.get("version") or next((citation.get("version") for citation in case.get("expected_citations") or [] if citation.get("document") == filename), None) or next((citation.get("version") for branch in case.get("expected_branches") or [] for citation in branch.get("expected_citations") or [] if citation.get("document") == filename), None)
+            expected_base_code = (
+                expected_extra.get("base_code")
+                or next((
+                    citation.get("base_code")
+                    for citation in case.get("expected_citations") or []
+                    if citation.get("document") == filename
+                ), None)
+                or next((
+                    citation.get("base_code")
+                    for branch in case.get("expected_branches") or []
+                    for citation in branch.get("expected_citations") or []
+                    if citation.get("document") == filename
+                ), None)
+            )
             sql_valid = all((
                 document.get("SourceSystem") == fixture_batch,
                 str(document.get("LifecycleStatus") or "").casefold() == "published",
@@ -162,6 +176,11 @@ def check_fixture_cases(
                 int(point.get("page") or point.get("trang_so") or 0) == 1
                 and point.get("source_system") == fixture_batch
                 and int(point.get("version_no") or 0) == int(expected_version or 0)
+                and (
+                    expected_base_code is None
+                    or str(point.get("base_code") or "").casefold()
+                    == str(expected_base_code).casefold()
+                )
                 and bool(point.get("servable")) and bool(point.get("is_current"))
                 and point.get("owner_department") == expected_department
                 and expected_department

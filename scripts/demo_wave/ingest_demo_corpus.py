@@ -32,8 +32,13 @@ from mech_chatbot.ingestion.file_ingestor import learn_new_file
 
 
 def _fixture_qdrant_metadata(record: dict, batch: str, lifecycle: str) -> dict:
+    base_code = str(record["doc_number"]).strip().lower()
     return {
         "source_system": batch,
+        "doc_number": record["doc_number"],
+        "base_code": base_code,
+        "ma_chinh": base_code,
+        "ma_doi_tuong": [base_code],
         "owner_department": record["department"],
         "phong_ban_quyen": [record["department"]],
         "lifecycle_status": lifecycle,

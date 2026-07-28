@@ -25,6 +25,7 @@ def _document(doc_id, filename, version=1, *, site="CRAG-EVAL-HQ", security="int
 def _point(document):
     return {
         "doc_id": document["DocID"], "page": 1, "version_no": document["VersionNo"],
+        "base_code": "legacy-code",
         "source_system": "crag-eval-v1", "servable": True, "is_current": True,
         "site": document["Site"], "security_level": document["SecurityLevel"],
         "owner_department": document["OwnerDepartment"],
