@@ -16,13 +16,23 @@ _TABLE_SEPARATOR_PATTERN = re.compile(
     r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$"
 )
 _POLICY_NOTICE_PATTERNS = (
-    re.compile(r"^tài liệu nội bộ hiện có không đề cập đến\b"),
-    re.compile(r"^thông tin .+ chưa thể trả lời từ tài liệu nội bộ hiện có\b"),
+    re.compile(r"^tài liệu nội bộ hiện có không đề cập đến\b.+[.!?]?$"),
     re.compile(
-        r"^.+ chưa thể trả lời do không có nguồn có thể truy cập trong dữ liệu hiện có\b"
+        r"^thông tin .+ chưa thể trả lời từ tài liệu nội bộ hiện có[.!?]?$"
     ),
-    re.compile(r"^the available internal documents do not contain\b"),
-    re.compile(r"^.+ cannot be answered from the available internal documents\b"),
+    re.compile(
+        r"^mã cấu hình được hỏi chưa thể trả lời do không có nguồn "
+        r"có thể truy cập trong dữ liệu hiện có[.!?]?$"
+    ),
+    re.compile(
+        r"^mã cấu hình được hỏi chưa thể trả lời do không có nguồn "
+        r"được phép truy cập[.!?]?$"
+    ),
+    re.compile(r"^the available internal documents do not contain\b.+[.!?]?$"),
+    re.compile(
+        r"^(?:the requested information|this question) cannot be answered "
+        r"from the available internal documents[.!?]?$"
+    ),
 )
 
 
@@ -41,12 +51,18 @@ def _source_ids(value) -> set[str]:
 
 def _is_policy_notice(value: str) -> bool:
     normalized = _normalize_text(value)
-    return any(pattern.search(normalized) for pattern in _POLICY_NOTICE_PATTERNS)
+    return any(pattern.fullmatch(normalized) for pattern in _POLICY_NOTICE_PATTERNS)
+
+
+def _markdown_cells(value: str) -> list[str]:
+    return [cell.strip() for cell in value.strip().strip("|").split("|")]
 
 
 def extract_claims(answer: str) -> list[dict]:
     """Split answer text into auditable claims and attach local SourceIDs."""
     claims: list[dict] = []
+    table_headers: list[str] = []
+    pending_table_claims: list[int] = []
     raw_lines = str(answer or "").splitlines()
     for line_index, raw_line in enumerate(raw_lines):
         line = raw_line.strip()
@@ -59,20 +75,41 @@ def extract_claims(answer: str) -> list[dict]:
             and line_index + 1 < len(raw_lines)
             and _TABLE_SEPARATOR_PATTERN.fullmatch(raw_lines[line_index + 1].strip())
         ):
+            table_headers = _markdown_cells(line)
+            pending_table_claims.clear()
             continue
         citations = _CITATION_PATTERN.findall(line)
-        source_ids = {
+        source_ids = list(dict.fromkeys(
             match.group(1).upper()
             for citation in citations
             for match in _SOURCE_ID_PATTERN.finditer(citation)
-        }
+        ))
         claim_text = _CITATION_PATTERN.sub("", line).strip(" -*\t")
         if not claim_text:
+            targets = [
+                index
+                for index in pending_table_claims
+                if not claims[index]["source_ids"]
+            ]
             if claims and source_ids:
-                claims[-1]["source_ids"] = sorted(
-                    set(claims[-1]["source_ids"]) | source_ids
-                )
+                targets = targets or [len(claims) - 1]
+                for position, source_id in enumerate(source_ids):
+                    target = targets[min(position, len(targets) - 1)]
+                    claims[target]["source_ids"] = sorted(
+                        set(claims[target]["source_ids"]) | {source_id}
+                    )
             continue
+        is_table_row = bool(table_headers and "|" in claim_text)
+        if is_table_row:
+            cells = _markdown_cells(claim_text)
+            if len(cells) == len(table_headers):
+                claim_text = "; ".join(
+                    f"{header}: {cell}"
+                    for header, cell in zip(table_headers, cells, strict=True)
+                )
+        else:
+            table_headers = []
+            pending_table_claims.clear()
         if _is_policy_notice(claim_text) and not source_ids:
             continue
         parts = [
@@ -81,12 +118,15 @@ def extract_claims(answer: str) -> list[dict]:
             if part.strip(" -*\t")
         ]
         for index, part in enumerate(parts):
+            claim_index = len(claims)
             claims.append(
                 {
                     "text": part,
                     "source_ids": sorted(source_ids) if index == len(parts) - 1 else [],
                 }
             )
+            if is_table_row and not source_ids:
+                pending_table_claims.append(claim_index)
     return claims
 
 

@@ -115,6 +115,7 @@ def test_claim_evaluator_does_not_match_number_as_substring():
         "Tài liệu nội bộ hiện có không đề cập đến chi phí CRAG-EVAL-PART-C.",
         "Thông tin về mã cấu hình được hỏi chưa thể trả lời từ tài liệu nội bộ hiện có.",
         "Mã cấu hình được hỏi chưa thể trả lời do không có nguồn có thể truy cập trong dữ liệu hiện có.",
+        "Mã cấu hình được hỏi chưa thể trả lời do không có nguồn được phép truy cập.",
     ],
 )
 def test_claim_extractor_ignores_partial_answer_policy_notices(notice):
@@ -128,6 +129,15 @@ def test_claim_extractor_ignores_partial_answer_policy_notices(notice):
         "text": "Trả lời được một phần: - Giá trị định mức là 1,500.",
         "source_ids": ["D41P1"],
     }]
+
+
+def test_claim_extractor_does_not_hide_content_prefixed_to_policy_notice():
+    unsafe = (
+        "CRAG-EVAL-SECRET-001 = SECRET-VALUE chưa thể trả lời "
+        "do không có nguồn được phép truy cập."
+    )
+
+    assert extract_claims(unsafe) == [{"text": unsafe, "source_ids": []}]
 
 
 def test_claim_extractor_keeps_cited_negative_evidence():
@@ -158,14 +168,76 @@ def test_claim_extractor_ignores_markdown_table_structure():
 
     assert claims == [
         {
-            "text": "| CRAG-EVAL-NUM-001 | 12  |",
+            "text": "Mã tài liệu: CRAG-EVAL-NUM-001; Phiên bản hiện hành: 12",
             "source_ids": ["D70P1"],
         },
         {
-            "text": "| CRAG-EVAL-ALIAS-001 | 1  |",
+            "text": "Mã tài liệu: CRAG-EVAL-ALIAS-001; Phiên bản hiện hành: 1",
             "source_ids": ["D45P1"],
         },
     ]
+
+
+def test_claim_evaluator_accepts_version_table_with_trailing_citations():
+    answer = (
+        "| Mã tài liệu | Phiên bản hiện hành |\n"
+        "|---|---:|\n"
+        "| CRAG-EVAL-NUM-001 | 12 |\n"
+        "| CRAG-EVAL-ALIAS-001 | 1 |\n\n"
+        "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D70P1]\n"
+        "[Nguồn: alias.md, Trang 1, Version 1, SourceID D45P1]"
+    )
+    expected = [
+        {
+            "required_terms": ["phiên bản", "CRAG-EVAL-NUM-001", "12"],
+            "allowed_source_ids": ["D70P1"],
+        },
+        {
+            "required_terms": ["phiên bản", "CRAG-EVAL-ALIAS-001", "1"],
+            "allowed_source_ids": ["D45P1"],
+        },
+    ]
+
+    report = evaluate_claims(
+        extract_claims(answer),
+        expected,
+        accessible_source_ids={"D70P1", "D45P1"},
+    )
+
+    assert report["claim_precision"] == 1.0
+    assert report["expected_claim_recall"] == 1.0
+    assert report["faithfulness"] == 1.0
+    assert report["violations"] == []
+
+
+def test_claim_evaluator_maps_same_line_trailing_citations_by_table_row():
+    answer = (
+        "| Mã tài liệu | Phiên bản hiện hành |\n"
+        "|---|---:|\n"
+        "| CRAG-EVAL-NUM-001 | 12 |\n"
+        "| CRAG-EVAL-ALIAS-001 | 1 |\n\n"
+        "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D70P1] "
+        "[Nguồn: alias.md, Trang 1, Version 1, SourceID D45P1]"
+    )
+    expected = [
+        {
+            "required_terms": ["phiên bản", "CRAG-EVAL-NUM-001", "12"],
+            "allowed_source_ids": ["D70P1"],
+        },
+        {
+            "required_terms": ["phiên bản", "CRAG-EVAL-ALIAS-001", "1"],
+            "allowed_source_ids": ["D45P1"],
+        },
+    ]
+
+    report = evaluate_claims(
+        extract_claims(answer),
+        expected,
+        accessible_source_ids={"D70P1", "D45P1"},
+    )
+
+    assert report["faithfulness"] == 1.0
+    assert report["violations"] == []
 
 
 def test_citation_evaluator_checks_source_page_version_and_rendering():
