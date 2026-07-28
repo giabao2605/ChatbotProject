@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 
 import pytest
 
@@ -10,9 +11,11 @@ from mech_chatbot.config.repository_runtime import (
 )
 from mech_chatbot.composition import maintenance_runtime
 from scripts.eval.provider_smoke import (
+    provider_environment_for_settings,
     provider_configuration_sha256,
     resolve_provider_configuration,
     run_configured_provider_smoke,
+    validate_provider_smoke_artifact,
 )
 
 
@@ -93,6 +96,38 @@ def test_provider_configuration_hash_matches_adapter_after_whitespace_normalizat
     assert provider_configuration_sha256(settings_configuration) == (
         provider_configuration_sha256(adapter_configuration)
     )
+
+
+def test_provider_environment_is_frozen_from_the_same_settings_snapshot():
+    assert provider_environment_for_settings(_settings_snapshot()) == {
+        "PROXYLLM_API_KEY": "test-provider-key",
+        "PROXYLLM_BASE_URL": "https://provider.example/v1",
+        "GPT_MODEL_NAME": "snapshot-model",
+        "MAX_CONCURRENT_RAG": "7",
+    }
+
+
+def test_provider_smoke_validator_rejects_malformed_provider_outcome(tmp_path):
+    path = tmp_path / "provider-smoke.json"
+    path.write_text(
+        json.dumps({
+            "schema": "provider-smoke-v1",
+            "passed": True,
+            "request_count": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+            "provider_retries": 0,
+            "provider_configuration_sha256": "provider-v1",
+            "provider_outcome": "malformed",
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="provider smoke artifact"):
+        validate_provider_smoke_artifact(
+            path,
+            expected_provider_sha256="provider-v1",
+        )
 
 
 def test_configured_smoke_builds_and_uses_snapshot_owned_adapter():

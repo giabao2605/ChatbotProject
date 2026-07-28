@@ -10,6 +10,9 @@ from datetime import datetime
 from pathlib import Path
 
 from mech_chatbot.governance.artifact_references import load_json_reference
+from mech_chatbot.governance.provider_smoke import (
+    provider_smoke_artifact_valid,
+)
 
 
 PAIR_SCHEMA = "rollout-evidence-pair-v1"
@@ -173,6 +176,28 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         and mutation_mode in {"staging", "shadow", "read_only"}
         and (not touches_production or mutation_mode == "read_only")
     )
+    provider_smoke = _load_verified_artifact(
+        pair.get("provider_smoke") or {},
+        root=root,
+    )
+    provider_smoke_valid = provider_smoke_artifact_valid(
+        provider_smoke,
+        expected_provider_sha256=str(
+            baseline.get("provider_configuration_sha256") or ""
+        ),
+    )
+    try:
+        provider_smoke_precedes_pair = (
+            provider_smoke_valid
+            and datetime.fromisoformat(
+                str(provider_smoke.get("completed_at")).replace("Z", "+00:00")
+            )
+            <= datetime.fromisoformat(
+                str(baseline.get("started_at")).replace("Z", "+00:00")
+            )
+        )
+    except (TypeError, ValueError):
+        provider_smoke_precedes_pair = False
     gate = pair.get("gate") or {}
     gate_artifact = _load_verified_artifact(gate, root=root)
     gate_schema_valid = (
@@ -237,6 +262,8 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         "baseline_candidate_artifacts_distinct": artifacts_distinct,
         "evidence_windows_valid": evidence_windows_valid,
         "production_collection_not_mutated": production_collection_not_mutated,
+        "provider_smoke_artifact_valid": provider_smoke_valid,
+        "provider_smoke_precedes_pair": provider_smoke_precedes_pair,
         "gate_artifact_present": gate_artifact is not None,
         "gate_schema_valid": gate_schema_valid,
         "gate_stage_valid": gate_stage_valid,

@@ -12,7 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.crag_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN
-from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
+from scripts.eval.provider_smoke import (
+    provider_configuration_sha256_for_settings,
+    provider_environment_for_settings,
+    validate_provider_smoke_artifact,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -142,6 +146,14 @@ def require_clean_worktree() -> None:
         )
 
 
+def require_source_commit(expected: str) -> None:
+    current = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
+    ).strip()
+    if current != expected:
+        raise RuntimeError("commit changed during rollout")
+
+
 def build_evaluation_environment(*, enabled: bool, router_mode: str) -> dict[str, str]:
     """Build one controlled evaluation environment without mutating the caller.
 
@@ -177,8 +189,10 @@ def _run(
     router_mode: str,
     provider_configuration_sha256: str,
     governance_scope_sha256_value: str,
+    provider_environment: dict[str, str] | None = None,
 ) -> dict:
     env = build_evaluation_environment(enabled=enabled, router_mode=router_mode)
+    env.update(provider_environment or {})
     env.update({
         "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256": provider_configuration_sha256,
         "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_scope_sha256_value,
@@ -210,6 +224,7 @@ def run_rollout(
     output: Path,
     trace: Path,
     *,
+    provider_smoke_artifact: Path,
     router_mode: str = "offline",
     rollback_test_artifact: Path | None = None,
 ) -> dict:
@@ -225,28 +240,34 @@ def run_rollout(
     git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest_sha = _sha(manifest)
     from mech_chatbot.config.settings import load_settings
-    provider_config_sha = provider_configuration_sha256_for_settings(
-        load_settings()
+    settings = load_settings()
+    provider_config_sha = provider_configuration_sha256_for_settings(settings)
+    provider_environment = provider_environment_for_settings(settings)
+    validate_provider_smoke_artifact(
+        provider_smoke_artifact,
+        expected_provider_sha256=provider_config_sha,
     )
     governance_sha = governance_scope_sha256(manifest)
     baseline = _run(
         "baseline", manifest, output, trace, enabled=False, router_mode=router_mode,
         provider_configuration_sha256=provider_config_sha,
         governance_scope_sha256_value=governance_sha,
+        provider_environment=provider_environment,
     )
     require_clean_worktree()
     if _sha(manifest) != manifest_sha:
         raise RuntimeError("manifest changed after baseline")
-    if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip() != git_sha:
-        raise RuntimeError("commit changed between baseline and candidate")
+    require_source_commit(git_sha)
     candidate = _run(
         "candidate", manifest, output, trace, enabled=True, router_mode=router_mode,
         provider_configuration_sha256=provider_config_sha,
         governance_scope_sha256_value=governance_sha,
+        provider_environment=provider_environment,
     )
     require_clean_worktree()
     if _sha(manifest) != manifest_sha:
         raise RuntimeError("manifest changed after candidate")
+    require_source_commit(git_sha)
     baseline_preflight = json.loads((output / "baseline" / "preflight.json").read_text(encoding="utf-8"))
     candidate_preflight = json.loads((output / "candidate" / "preflight.json").read_text(encoding="utf-8"))
     if baseline_preflight["fixture_fingerprint"] != candidate_preflight["fixture_fingerprint"]:
@@ -259,28 +280,35 @@ def run_rollout(
         "--output", str(gate_path),
     ], cwd=ROOT, check=False)
     gate = json.loads(gate_path.read_text(encoding="utf-8"))
-    pair = build_rollout_pair(
-        run_id=output.name,
-        git_sha=git_sha,
-        manifest_sha256=manifest_sha,
-        snapshot_fingerprint=baseline_preflight["fixture_fingerprint"],
-        provider_configuration_sha256=provider_config_sha,
-        governance_scope_sha256_value=governance_sha,
-        baseline_evidence={
-            **_artifact_reference(output / "baseline" / "eval.json"),
-            **_artifact_reference(output / "baseline" / "trace.json", prefix="trace"),
-            "started_at": baseline["started_at"],
-            "completed_at": baseline["completed_at"],
-        },
-        candidate_evidence={
-            **_artifact_reference(output / "candidate" / "eval.json"),
-            **_artifact_reference(output / "candidate" / "trace.json", prefix="trace"),
-            "started_at": candidate["started_at"],
-            "completed_at": candidate["completed_at"],
-        },
-        gate_artifact=gate_path,
-        rollback_test_artifact=rollback_test_artifact,
-    )
+    pair = {
+        **build_rollout_pair(
+            run_id=output.name,
+            git_sha=git_sha,
+            manifest_sha256=manifest_sha,
+            snapshot_fingerprint=baseline_preflight["fixture_fingerprint"],
+            provider_configuration_sha256=provider_config_sha,
+            governance_scope_sha256_value=governance_sha,
+            baseline_evidence={
+                **_artifact_reference(output / "baseline" / "eval.json"),
+                **_artifact_reference(
+                    output / "baseline" / "trace.json", prefix="trace"
+                ),
+                "started_at": baseline["started_at"],
+                "completed_at": baseline["completed_at"],
+            },
+            candidate_evidence={
+                **_artifact_reference(output / "candidate" / "eval.json"),
+                **_artifact_reference(
+                    output / "candidate" / "trace.json", prefix="trace"
+                ),
+                "started_at": candidate["started_at"],
+                "completed_at": candidate["completed_at"],
+            },
+            gate_artifact=gate_path,
+            rollback_test_artifact=rollback_test_artifact,
+        ),
+        "provider_smoke": _artifact_reference(provider_smoke_artifact),
+    }
     pair_path = output / "rollout_pair.json"
     pair_path.write_text(
         json.dumps(pair, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -293,7 +321,7 @@ def run_rollout(
         "fixture_fingerprint": baseline_preflight["fixture_fingerprint"],
         "router_mode": router_mode,
         "baseline": baseline, "candidate": candidate, "gate_exit": gate_result.returncode,
-        "passed": bool(gate["passed"]),
+        "passed": bool(gate["passed"]) and bool(pair_guardrail["production_eligible"]),
         "rollout_pair_sha256": _sha(pair_path),
         "production_eligible": bool(pair_guardrail["production_eligible"]),
         "guardrail_checks": pair_guardrail["checks"],
@@ -307,6 +335,7 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--trace", type=Path, default=ROOT / "logs" / "rag_trace.jsonl")
+    parser.add_argument("--provider-smoke-artifact", type=Path, required=True)
     parser.add_argument("--router-mode", choices=("offline", "provider"), default="offline")
     parser.add_argument("--rollback-test-artifact", type=Path)
     args = parser.parse_args()
@@ -314,6 +343,7 @@ def main() -> int:
         args.manifest,
         args.output_dir,
         args.trace,
+        provider_smoke_artifact=args.provider_smoke_artifact,
         router_mode=args.router_mode,
         rollback_test_artifact=args.rollback_test_artifact,
     )

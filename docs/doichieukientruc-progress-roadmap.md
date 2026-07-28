@@ -162,10 +162,13 @@ if (-not (Test-Path -LiteralPath $trace)) {
 .\chat_env\Scripts\python.exe -m scripts.crag_eval.ingest_fixture
 .\chat_env\Scripts\python.exe -m scripts.crag_eval.preflight `
   --manifest data\crag_eval_v1\eval_manifest.jsonl
+.\chat_env\Scripts\python.exe -m scripts.eval.provider_smoke `
+  --output "$output\provider-smoke.json"
 .\chat_env\Scripts\python.exe -m scripts.crag_eval.run_rollout `
   --manifest data\crag_eval_v1\eval_manifest.jsonl `
   --output-dir $output `
   --trace $trace `
+  --provider-smoke-artifact "$output\provider-smoke.json" `
   --router-mode offline
 ```
 

@@ -803,6 +803,23 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
             "MAX_CONCURRENT_RAG": "7",
         }
     )
+    provider_sha = (
+        "26e3767de31a51ce116fe21158fc060e9348b1a0ab766892467204504f751f2c"
+    )
+    smoke = tmp_path / "provider-smoke.json"
+    smoke.write_text(
+        json.dumps({
+            "schema": "provider-smoke-v1",
+            "passed": True,
+            "request_count": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+            "provider_retries": 0,
+            "provider_configuration_sha256": provider_sha,
+            "provider_outcome": {"provider_blocked": False},
+        }),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
     monkeypatch.setattr(
         rollout.subprocess,
@@ -850,12 +867,14 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
         lambda pair: {"production_eligible": True, "checks": {}},
     )
 
-    report = rollout.run_rollout(manifest, output, trace)
-
-    assert (
-        report["provider_configuration_sha256"]
-        == "26e3767de31a51ce116fe21158fc060e9348b1a0ab766892467204504f751f2c"
+    report = rollout.run_rollout(
+        manifest,
+        output,
+        trace,
+        provider_smoke_artifact=smoke,
     )
+
+    assert report["provider_configuration_sha256"] == provider_sha
 
 
 def test_rollout_rejects_dirty_tracked_worktree(monkeypatch):
@@ -868,6 +887,18 @@ def test_rollout_rejects_dirty_tracked_worktree(monkeypatch):
 
     with pytest.raises(RuntimeError, match="clean tracked worktree"):
         rollout.require_clean_worktree()
+
+
+def test_rollout_rejects_source_commit_drift(monkeypatch):
+    rollout = _load("crag_rollout_source_commit", "scripts/crag_eval/run_rollout.py")
+    monkeypatch.setattr(
+        rollout.subprocess,
+        "check_output",
+        lambda *args, **kwargs: "changed-commit\n",
+    )
+
+    with pytest.raises(RuntimeError, match="commit changed during rollout"):
+        rollout.require_source_commit("expected-commit")
 
 
 def test_crag_rollout_pair_requires_commit_pinned_rollback_evidence(tmp_path):

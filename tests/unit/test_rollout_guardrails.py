@@ -111,12 +111,29 @@ def _pair(tmp_path, **overrides):
         git_sha="abc123", passed=True,
         flags=["RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"],
     )
+    provider_smoke = _artifact_reference(
+        tmp_path,
+        f"{run_id}-provider-smoke",
+        "provider-smoke-v1",
+        started_at="2026-07-13T23:58:00Z",
+        completed_at="2026-07-13T23:59:00Z",
+        request_count=5,
+        successful_requests=5,
+        failed_requests=0,
+        provider_retries=0,
+        provider_configuration_sha256=baseline[
+            "provider_configuration_sha256"
+        ],
+        provider_outcome={"provider_blocked": False},
+        passed=True,
+    )
     pair = {
         "schema": "rollout-evidence-pair-v1",
         "source_commit": "abc123",
         "run_id": run_id,
         "stage": stage,
         "evidence_type": "staging_evaluation",
+        "provider_smoke": provider_smoke,
         "baseline": baseline,
         "candidate": candidate,
         "data_plane": {
@@ -132,6 +149,32 @@ def _pair(tmp_path, **overrides):
     }
     pair.update(overrides)
     return pair
+
+
+def test_rollout_pair_recomputes_provider_smoke_identity(tmp_path):
+    pair = _pair(tmp_path)
+    pair["provider_smoke"]["artifact_sha256"] = "invented"
+
+    report = evaluate_rollout_pair(pair)
+
+    assert report["checks"]["provider_smoke_artifact_valid"] is False
+    assert report["production_eligible"] is False
+
+
+def test_rollout_pair_rejects_malformed_provider_outcome(tmp_path):
+    pair = _pair(tmp_path)
+    smoke_path = Path(pair["provider_smoke"]["artifact_path"])
+    smoke = json.loads(smoke_path.read_text(encoding="utf-8"))
+    smoke["provider_outcome"] = "malformed"
+    smoke_path.write_text(json.dumps(smoke), encoding="utf-8")
+    pair["provider_smoke"]["artifact_sha256"] = hashlib.sha256(
+        smoke_path.read_bytes()
+    ).hexdigest()
+
+    report = evaluate_rollout_pair(pair)
+
+    assert report["checks"]["provider_smoke_artifact_valid"] is False
+    assert report["production_eligible"] is False
 
 
 def test_rollout_pair_requires_identical_baseline_and_candidate_conditions(tmp_path):

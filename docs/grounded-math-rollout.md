@@ -30,16 +30,18 @@ Preflight phải có `passed=true`. Nó xác minh lifecycle, version, department
 Runner yêu cầu working tree sạch để commit SHA mô tả đúng code đã chạy. Tạo rollback evidence trên cùng commit, rồi chạy một output directory mới:
 
 ```powershell
+.\chat_env\Scripts\python.exe -m scripts.eval.provider_smoke --output reports/grounded-math/provider-smoke.json
 .\chat_env\Scripts\python.exe -m scripts.grounded_math_eval.verify_rollback --output reports/grounded-math/rollback.json
 .\chat_env\Scripts\python.exe -m scripts.grounded_math_eval.run_rollout `
   --manifest data/grounded_math_eval_v1/eval_manifest.jsonl `
   --output-dir reports/grounded-math/<run-id> `
   --trace logs/rag_trace.jsonl `
+  --provider-smoke-artifact reports/grounded-math/provider-smoke.json `
   --router-mode offline `
   --rollback-test-artifact reports/grounded-math/rollback.json
 ```
 
-Mỗi arm ghi `eval.json`, `eval.md`, `trace.json`, `trace.md` và `preflight.json`. Runner từ chối ghi đè, kiểm tra manifest/snapshot/commit không đổi và gọi `retrieval_intelligence_gate.py grounded_math`.
+Mỗi arm ghi `eval.json`, `eval.md`, `trace.json`, `trace.md` và `preflight.json`. Runner từ chối ghi đè, yêu cầu provider smoke 5/5 cùng provider hash, kiểm tra manifest/snapshot/commit không đổi và gọi `retrieval_intelligence_gate.py grounded_math`.
 
 Gate chỉ đạt khi 100% case đúng, Decimal/công thức/đơn vị/provenance/citation đều chính xác, không có số không được phép, tối đa một plan/query, leakage bằng 0, wrong-answer không tăng, P95 không quá 1,25 lần và cost không quá 1,5 lần baseline.
 

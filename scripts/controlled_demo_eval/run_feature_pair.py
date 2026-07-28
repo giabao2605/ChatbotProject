@@ -21,7 +21,11 @@ from scripts.crag_eval.run_rollout import (
     _utc_now,
     governance_scope_sha256,
 )
-from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
+from scripts.eval.provider_smoke import (
+    provider_configuration_sha256_for_settings,
+    provider_environment_for_settings,
+    validate_provider_smoke_artifact,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -78,7 +82,10 @@ def validate_readiness_artifacts(
     full_preflight_artifact = Path(full_preflight_artifact)
     provider_smoke_artifact = Path(provider_smoke_artifact)
     preflight = json.loads(full_preflight_artifact.read_text(encoding="utf-8"))
-    smoke = json.loads(provider_smoke_artifact.read_text(encoding="utf-8"))
+    validate_provider_smoke_artifact(
+        provider_smoke_artifact,
+        expected_provider_sha256=expected_provider_sha256,
+    )
     preflight_valid = all((
         preflight.get("schema") == "controlled-demo-main-preflight-v1",
         preflight.get("passed") is True,
@@ -89,18 +96,6 @@ def validate_readiness_artifacts(
     ))
     if not preflight_valid:
         raise ValueError("full controlled-demo preflight artifact is invalid")
-    provider_valid = all((
-        smoke.get("schema") == "provider-smoke-v1",
-        smoke.get("passed") is True,
-        int(smoke.get("request_count") or 0) == 5,
-        int(smoke.get("successful_requests") or 0) == 5,
-        int(smoke.get("failed_requests") or 0) == 0,
-        int(smoke.get("provider_retries") or 0) == 0,
-        smoke.get("provider_configuration_sha256") == expected_provider_sha256,
-        (smoke.get("provider_outcome") or {}).get("provider_blocked") is False,
-    ))
-    if not provider_valid:
-        raise ValueError("provider smoke artifact is invalid")
     return {
         "snapshot_fingerprint": preflight["fixture_fingerprint"],
         "preflight": _artifact_reference(full_preflight_artifact),
@@ -168,10 +163,12 @@ def _run_arm(
     collection: str,
     provider_sha256: str,
     governance_sha256: str,
+    provider_environment: dict[str, str] | None = None,
 ) -> dict:
     environment = build_feature_environment(
         stage, candidate=label == "candidate", collection=collection,
     )
+    environment.update(provider_environment or {})
     environment.update({
         "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256": provider_sha256,
         "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_sha256,
@@ -295,9 +292,9 @@ def run_feature_pair(
         raise ValueError(f"unsupported controlled-demo stage: {stage}")
     validate_collection(collection)
     from mech_chatbot.config.settings import load_settings
-    provider_sha256 = provider_configuration_sha256_for_settings(
-        load_settings()
-    )
+    settings = load_settings()
+    provider_sha256 = provider_configuration_sha256_for_settings(settings)
+    provider_environment = provider_environment_for_settings(settings)
     readiness = validate_readiness_artifacts(
         full_preflight_artifact,
         provider_smoke_artifact,
@@ -325,6 +322,7 @@ def run_feature_pair(
         stage, "baseline", manifest, output_dir, trace_path,
         collection=collection, provider_sha256=provider_sha256,
         governance_sha256=governance_sha256,
+        provider_environment=provider_environment,
     )
     require_clean_worktree()
     if _sha(manifest) != manifest_sha256:
@@ -333,6 +331,7 @@ def run_feature_pair(
         stage, "candidate", manifest, output_dir, trace_path,
         collection=collection, provider_sha256=provider_sha256,
         governance_sha256=governance_sha256,
+        provider_environment=provider_environment,
     )
     require_clean_worktree()
     if _sha(manifest) != manifest_sha256:

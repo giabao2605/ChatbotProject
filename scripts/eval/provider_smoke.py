@@ -21,6 +21,7 @@ for value in (ROOT, SRC):
 
 from mech_chatbot.evaluation.milestone_decisions import classify_provider_outcome
 from mech_chatbot.config.settings import Settings
+from mech_chatbot.governance.provider_smoke import provider_smoke_artifact_valid
 
 
 _SMOKE_MESSAGES = [
@@ -128,6 +129,30 @@ def provider_configuration_sha256_for_settings(settings: Settings) -> str:
     return provider_configuration_sha256(
         resolve_provider_configuration(settings)
     )
+
+
+def provider_environment_for_settings(settings: Settings) -> dict[str, str]:
+    configuration = resolve_provider_configuration(settings)
+    return {
+        "PROXYLLM_API_KEY": str(settings.LLM_API_KEY or ""),
+        "PROXYLLM_BASE_URL": configuration["endpoint"],
+        "GPT_MODEL_NAME": configuration["model"],
+        "MAX_CONCURRENT_RAG": str(configuration["max_concurrent_rag"]),
+    }
+
+
+def validate_provider_smoke_artifact(
+    path: str | Path,
+    *,
+    expected_provider_sha256: str,
+) -> dict[str, object]:
+    artifact = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not provider_smoke_artifact_valid(
+        artifact,
+        expected_provider_sha256=expected_provider_sha256,
+    ):
+        raise ValueError("provider smoke artifact is invalid")
+    return artifact
 
 
 def _percentile(values, percentile):

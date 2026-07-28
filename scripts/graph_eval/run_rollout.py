@@ -3,14 +3,24 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from scripts.crag_eval.run_rollout import _artifact_reference, _sha, _utc_now, governance_scope_sha256
+from scripts.crag_eval.run_rollout import (
+    _artifact_reference,
+    _sha,
+    _utc_now,
+    governance_scope_sha256,
+    require_source_commit,
+)
+from scripts.eval.provider_smoke import (
+    provider_configuration_sha256_for_settings,
+    provider_environment_for_settings,
+    validate_provider_smoke_artifact,
+)
 from scripts.graph_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN, ROOT
 
 
@@ -37,8 +47,19 @@ def build_evaluation_environment(*, enabled):
     return environment
 
 
-def _run(label, manifest, output, trace, *, enabled, provider_sha, governance_sha):
+def _run(
+    label,
+    manifest,
+    output,
+    trace,
+    *,
+    enabled,
+    provider_sha,
+    governance_sha,
+    provider_environment=None,
+):
     environment = build_evaluation_environment(enabled=enabled)
+    environment.update(provider_environment or {})
     environment.update({
         "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256": provider_sha,
         "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_sha,
@@ -64,7 +85,14 @@ def _run(label, manifest, output, trace, *, enabled, provider_sha, governance_sh
     return {"started_at": started_at, "completed_at": completed_at, "runner_exit": result.returncode}
 
 
-def run_rollout(manifest, output, trace, *, rollback_test_artifact=None):
+def run_rollout(
+    manifest,
+    output,
+    trace,
+    *,
+    provider_smoke_artifact,
+    rollback_test_artifact=None,
+):
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before live graph evaluation")
     manifest, output, trace = Path(manifest), Path(output), Path(trace)
@@ -77,15 +105,25 @@ def run_rollout(manifest, output, trace, *, rollback_test_artifact=None):
             raise ValueError(f"refusing to overwrite {directory}")
     git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest_sha = _sha(manifest)
-    provider = {key: os.getenv(key) for key in ("GPT_MODEL_NAME", "OPENAI_BASE_URL", "MAX_CONCURRENT_RAG") if os.getenv(key)}
-    provider_sha = hashlib.sha256(json.dumps(provider, sort_keys=True).encode()).hexdigest()
+    from mech_chatbot.config.settings import load_settings
+    settings = load_settings()
+    provider_sha = provider_configuration_sha256_for_settings(settings)
+    provider_environment = provider_environment_for_settings(settings)
+    validate_provider_smoke_artifact(
+        provider_smoke_artifact,
+        expected_provider_sha256=provider_sha,
+    )
     governance_sha = governance_scope_sha256(manifest)
-    baseline = _run("baseline", manifest, output, trace, enabled=False, provider_sha=provider_sha, governance_sha=governance_sha)
+    baseline = _run("baseline", manifest, output, trace, enabled=False, provider_sha=provider_sha, governance_sha=governance_sha, provider_environment=provider_environment)
     require_clean_worktree()
-    candidate = _run("candidate", manifest, output, trace, enabled=True, provider_sha=provider_sha, governance_sha=governance_sha)
+    if _sha(manifest) != manifest_sha:
+        raise RuntimeError("manifest changed after baseline")
+    require_source_commit(git_sha)
+    candidate = _run("candidate", manifest, output, trace, enabled=True, provider_sha=provider_sha, governance_sha=governance_sha, provider_environment=provider_environment)
     require_clean_worktree()
     if _sha(manifest) != manifest_sha:
         raise RuntimeError("manifest changed during graph rollout")
+    require_source_commit(git_sha)
     baseline_preflight = json.loads((output / "baseline" / "preflight.json").read_text(encoding="utf-8"))
     candidate_preflight = json.loads((output / "candidate" / "preflight.json").read_text(encoding="utf-8"))
     fingerprint = baseline_preflight["fixture_fingerprint"]
@@ -117,20 +155,36 @@ def run_rollout(manifest, output, trace, *, rollback_test_artifact=None):
         "schema": "rollout-evidence-pair-v1", "source_commit": git_sha,
         "run_id": output.name,
         "stage": "graph_retrieval", "evidence_type": "staging_evaluation",
-        "baseline": {**context, **_artifact_reference(output / "baseline" / "eval.json"), **baseline},
-        "candidate": {**context, **_artifact_reference(output / "candidate" / "eval.json"), **candidate},
+        "provider_smoke": _artifact_reference(Path(provider_smoke_artifact)),
+        "baseline": {
+            **context,
+            **_artifact_reference(output / "baseline" / "eval.json"),
+            **_artifact_reference(output / "baseline" / "trace.json", prefix="trace"),
+            **baseline,
+        },
+        "candidate": {
+            **context,
+            **_artifact_reference(output / "candidate" / "eval.json"),
+            **_artifact_reference(output / "candidate" / "trace.json", prefix="trace"),
+            **candidate,
+        },
         "data_plane": {"production_collection": os.getenv("RAG_PRODUCTION_QDRANT_COLLECTION", "TaiLieuKyThuat_v2"), "mutation_mode": "staging"},
         "gate": _artifact_reference(gate_path),
         "rollback": {"flags": ["RAG_GRAPH_RETRIEVAL_ENABLED"], "defaults_disabled": True, **rollback},
     }
     pair_path = output / "rollout_pair.json"
     pair_path.write_text(json.dumps(pair, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from mech_chatbot.evaluation.rollout_guardrails import evaluate_rollout_pair
+    guardrail = evaluate_rollout_pair(pair)
     gate = json.loads(gate_path.read_text(encoding="utf-8"))
     report = {
         "schema": "graph-rollout-run-v1", "git_sha": git_sha,
         "manifest_sha256": manifest_sha, "fixture_fingerprint": fingerprint,
         "baseline": baseline, "candidate": candidate, "gate_exit": gate_result.returncode,
-        "passed": bool(gate["passed"]), "rollout_pair_sha256": _sha(pair_path),
+        "passed": bool(gate["passed"]) and bool(guardrail["production_eligible"]),
+        "rollout_pair_sha256": _sha(pair_path),
+        "production_eligible": bool(guardrail["production_eligible"]),
+        "guardrail_checks": guardrail["checks"],
     }
     (output / "run.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return report
@@ -141,9 +195,16 @@ def main():
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--trace", type=Path, default=ROOT / "logs" / "rag_trace.jsonl")
+    parser.add_argument("--provider-smoke-artifact", type=Path, required=True)
     parser.add_argument("--rollback-test-artifact", type=Path)
     args = parser.parse_args()
-    report = run_rollout(args.manifest, args.output_dir, args.trace, rollback_test_artifact=args.rollback_test_artifact)
+    report = run_rollout(
+        args.manifest,
+        args.output_dir,
+        args.trace,
+        provider_smoke_artifact=args.provider_smoke_artifact,
+        rollback_test_artifact=args.rollback_test_artifact,
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["passed"] else 1
 

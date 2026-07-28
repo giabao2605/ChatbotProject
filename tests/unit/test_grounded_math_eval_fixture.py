@@ -233,6 +233,21 @@ def test_grounded_math_rollout_records_runtime_provider_hash(monkeypatch, tmp_pa
         "GPT_MODEL_NAME": "snapshot-model",
         "MAX_CONCURRENT_RAG": "7",
     })
+    provider_sha = provider_configuration_sha256_for_settings(snapshot)
+    smoke = tmp_path / "provider-smoke.json"
+    smoke.write_text(
+        json.dumps({
+            "schema": "provider-smoke-v1",
+            "passed": True,
+            "request_count": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+            "provider_retries": 0,
+            "provider_configuration_sha256": provider_sha,
+            "provider_outcome": {"provider_blocked": False},
+        }),
+        encoding="utf-8",
+    )
 
     monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
     monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
@@ -276,12 +291,17 @@ def test_grounded_math_rollout_records_runtime_provider_hash(monkeypatch, tmp_pa
         lambda pair: {"production_eligible": True, "checks": {}},
     )
 
-    rollout.run_rollout(manifest, output, trace)
+    rollout.run_rollout(
+        manifest,
+        output,
+        trace,
+        provider_smoke_artifact=smoke,
+    )
     pair = json.loads((output / "rollout_pair.json").read_text(encoding="utf-8"))
 
     assert pair["baseline"]["provider_configuration_sha256"] == (
-        provider_configuration_sha256_for_settings(snapshot)
+        provider_sha
     )
     assert pair["candidate"]["provider_configuration_sha256"] == (
-        provider_configuration_sha256_for_settings(snapshot)
+        provider_sha
     )

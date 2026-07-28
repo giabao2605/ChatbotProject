@@ -9,6 +9,9 @@ from mech_chatbot.governance.artifact_references import (
     build_json_reference,
     load_json_reference,
 )
+from mech_chatbot.governance.provider_smoke import (
+    provider_smoke_artifact_valid,
+)
 from mech_chatbot.governance.rollout_guardrails import evaluate_rollout_series
 
 
@@ -169,14 +172,10 @@ def _checks(artifact: dict, *, root: Path) -> dict[str, bool]:
         "provider_smokes_passed": (
             len(smokes) == 3
             and all(
-                smoke is not None
-                and smoke.get("passed") is True
-                and smoke.get("request_count") == 5
-                and smoke.get("successful_requests") == 5
-                and smoke.get("failed_requests") == 0
-                and smoke.get("provider_retries") == 0
-                and isinstance(smoke.get("provider_outcome"), dict)
-                and smoke["provider_outcome"].get("provider_blocked") is False
+                provider_smoke_artifact_valid(
+                    smoke,
+                    expected_provider_sha256=provider_hash,
+                )
                 for smoke in smokes
             )
         ),

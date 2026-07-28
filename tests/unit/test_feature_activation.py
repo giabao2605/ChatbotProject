@@ -116,12 +116,27 @@ def _crag_pair(tmp_path, index, *, source_commit, passed):
             "flags": ["RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"],
         },
     )
+    provider_smoke = _artifact_reference(
+        tmp_path / f"provider-smoke-{index}.json",
+        {
+            "schema": "provider-smoke-v1",
+            "completed_at": f"2026-07-20T0{index - 1}:59:00Z",
+            "request_count": 5,
+            "successful_requests": 5 if passed else 0,
+            "failed_requests": 0 if passed else 5,
+            "provider_retries": 0 if passed else 15,
+            "provider_configuration_sha256": "provider-v1",
+            "provider_outcome": {"provider_blocked": not passed},
+            "passed": passed,
+        },
+    )
     pair = {
         "schema": "rollout-evidence-pair-v1",
         "source_commit": source_commit,
         "run_id": run_id,
         "stage": "crag",
         "evidence_type": "staging_evaluation",
+        "provider_smoke": provider_smoke,
         "baseline": contexts["baseline"],
         "candidate": contexts["candidate"],
         "data_plane": {
