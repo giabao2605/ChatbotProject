@@ -72,9 +72,13 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
         from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT as _SHARE
         if _SHARE not in allowed:
             allowed.append(_SHARE)
+        allowed_departments_normalized = {
+            str(department).strip().casefold()
+            for department in allowed
+            if str(department).strip()
+        }
         governance = current_published_filter()
         must = list(governance.must or ()) + [
-            models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchAny(any=allowed)),
             models.Filter(should=[
                 models.FieldCondition(
                     key=key,
@@ -88,23 +92,42 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
             collection_name=collection_name,
             scroll_filter=probe_filter,
             limit=10,
-            with_payload=["metadata.security_level", "metadata.site"],
+            with_payload=[
+                "metadata.security_level",
+                "metadata.site",
+                "metadata.phong_ban_quyen",
+            ],
             with_vectors=False,
         )
         levels_above = []
         site_restricted = False
+        department_restricted = False
         normalized_sites = {
             str(site).strip().lower() for site in (allowed_sites or []) if str(site).strip()
         }
         for point in points:
             payload = getattr(point, "payload", {}) or {}
             metadata = payload.get("metadata") or {}
+            raw_departments = metadata.get("phong_ban_quyen") or []
+            if isinstance(raw_departments, str):
+                raw_departments = [raw_departments]
+            document_departments = {
+                str(department).strip().casefold()
+                for department in raw_departments
+                if str(department).strip()
+            }
+            if not document_departments.intersection(
+                allowed_departments_normalized
+            ):
+                department_restricted = True
             lvl = metadata.get("security_level") or "confidential"
             if LEVEL_ORDER.get(lvl, 2) > user_order:
                 levels_above.append(lvl)
             doc_site = str(metadata.get("site") or "").strip().lower()
             if not normalized_sites or doc_site not in normalized_sites:
                 site_restricted = True
+        if department_restricted:
+            return True, "department_restricted"
         if levels_above:
             needed = min(levels_above, key=lambda l: LEVEL_ORDER.get(l, 2))
             return True, needed

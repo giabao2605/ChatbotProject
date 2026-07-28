@@ -38,6 +38,7 @@ def _probe(
 
 def test_probe_reports_cross_site_document_as_access_denied(monkeypatch):
     blocked, reason = _probe(monkeypatch, {
+        "phong_ban_quyen": ["Technical"],
         "security_level": "internal",
         "site": "REMOTE",
     })
@@ -54,15 +55,20 @@ def test_probe_uses_exact_code_governance_filter_and_payload_only(monkeypatch):
     request = client.last_scroll
     serialized_filter = request["scroll_filter"].model_dump_json()
     assert request["collection_name"] == QDRANT_COLLECTION
-    assert request["with_payload"] == ["metadata.security_level", "metadata.site"]
+    assert request["with_payload"] == [
+        "metadata.security_level",
+        "metadata.site",
+        "metadata.phong_ban_quyen",
+    ]
     assert request["with_vectors"] is False
     assert "restricted-fixture" in serialized_filter
-    assert "metadata.phong_ban_quyen" in serialized_filter
+    assert "metadata.phong_ban_quyen" not in serialized_filter
     assert "metadata.effective_status" in serialized_filter
 
 
 def test_probe_reports_higher_clearance_without_revealing_document(monkeypatch):
     blocked, reason = _probe(monkeypatch, {
+        "phong_ban_quyen": ["Technical"],
         "security_level": "confidential",
         "site": "HQ",
     })
@@ -73,6 +79,7 @@ def test_probe_reports_higher_clearance_without_revealing_document(monkeypatch):
 
 def test_probe_does_not_block_document_within_security_and_site_scope(monkeypatch):
     assert _probe(monkeypatch, {
+        "phong_ban_quyen": ["Technical"],
         "security_level": "internal",
         "site": "HQ",
     }) == (False, None)
@@ -80,9 +87,21 @@ def test_probe_does_not_block_document_within_security_and_site_scope(monkeypatc
 
 def test_probe_fails_closed_when_user_has_no_site_assignment(monkeypatch):
     blocked, reason = _probe(monkeypatch, {
+        "phong_ban_quyen": ["Technical"],
         "security_level": "internal",
         "site": "HQ",
     }, allowed_sites=())
 
     assert blocked is True
     assert reason == "site_restricted"
+
+
+def test_probe_reports_cross_department_document_as_access_denied(monkeypatch):
+    blocked, reason = _probe(monkeypatch, {
+        "phong_ban_quyen": ["HR"],
+        "security_level": "internal",
+        "site": "HQ",
+    })
+
+    assert blocked is True
+    assert reason == "department_restricted"
