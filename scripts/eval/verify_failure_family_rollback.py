@@ -21,7 +21,7 @@ ROLLBACK_TEST_PROFILES = {
     ),
     frozenset({"RAG_GROUNDED_MATH_ENABLED"}): (
         "-m", "pytest",
-        "tests/unit/test_strict_stream_guard.py::test_grounded_math_flag_defaults_to_normal_generation_path",
+        "tests/unit/test_strict_stream_guard.py::test_grounded_math_disabled_uses_normal_generation_path",
         "tests/unit/test_grounded_math_eval_fixture.py::test_grounded_math_rollout_toggles_only_math_between_arms",
         "-q",
     ),
