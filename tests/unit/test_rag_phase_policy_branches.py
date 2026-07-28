@@ -575,6 +575,7 @@ def test_rerank_voyage_path_keeps_image_graph_and_community_context(monkeypatch)
     real = Document(page_content="real", metadata={"file_goc": "doc.pdf", "trang_so": 1})
     graph = Document(page_content="graph", metadata={"doc_id": 8})
     community = Document(page_content="community", metadata={"doc_id": 9})
+    voyage_calls = []
     enrichment = _enrichment(
         [image, real],
         graph_documents=(graph,),
@@ -590,7 +591,7 @@ def test_rerank_voyage_path_keeps_image_graph_and_community_context(monkeypatch)
     monkeypatch.setattr(
         retrieval_rerank,
         "voyage_rerank_documents",
-        lambda docs, *_args, **_kwargs: docs,
+        lambda docs, *_args, **_kwargs: voyage_calls.append(True) or docs,
     )
     monkeypatch.setattr(
         retrieval_rerank,
@@ -605,12 +606,50 @@ def test_rerank_voyage_path_keeps_image_graph_and_community_context(monkeypatch)
     monkeypatch.setattr(retrieval_rerank, "long_context_reorder", lambda docs: docs)
 
     outcome = retrieval_rerank.rerank_retrieval(
-        _decision(), enrichment, _state()
+        _decision(),
+        enrichment,
+        _state(),
+        decomposition_branch_count=2,
     )
 
+    assert voyage_calls == [True]
     assert outcome.documents[0] is image
     assert community in outcome.documents
     assert outcome.served_graph_documents == (graph,)
+
+
+def test_decomposed_evidence_skips_redundant_voyage_rerank(monkeypatch):
+    from mech_chatbot.rag.phases import retrieval_rerank
+
+    first = Document(page_content="first", metadata={"doc_id": 1, "trang_so": 1})
+    second = Document(page_content="second", metadata={"doc_id": 2, "trang_so": 1})
+    enrichment = _enrichment(
+        [first, second],
+        retrieval_mode="decomposed_general:explicit_dense_bm25_rrf",
+    )
+    calls = []
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "RerankPolicy",
+        lambda **_kwargs: SimpleNamespace(select_backend=lambda _docs: "voyage"),
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "voyage_rerank_documents",
+        lambda *_args, **_kwargs: calls.append(True),
+    )
+    monkeypatch.setattr(retrieval_rerank, "hydrate_parent_context", lambda docs, **_kwargs: docs)
+    monkeypatch.setattr(retrieval_rerank, "long_context_reorder", lambda docs: docs)
+
+    outcome = retrieval_rerank.rerank_retrieval(
+        _decision(),
+        enrichment,
+        _state(),
+        decomposition_branch_count=2,
+    )
+
+    assert outcome.documents == (first, second)
+    assert calls == []
 
 
 def test_generation_updates_context_and_wraps_semantic_cache(monkeypatch):

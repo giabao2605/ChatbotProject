@@ -84,7 +84,12 @@ def _run_retrieval(
     primary = _reconcile_grounded_math(primary, enrichment)
     from mech_chatbot.rag.phases.retrieval_rerank import rerank_retrieval
 
-    reranked = rerank_retrieval(route_decision, enrichment, state)
+    reranked = rerank_retrieval(
+        route_decision,
+        enrichment,
+        state,
+        decomposition_branch_count=len(primary.decomposition_branches),
+    )
     if isinstance(reranked, PhaseTerminal):
         return reranked
     return _RetrievalResult(primary, enrichment, reranked)

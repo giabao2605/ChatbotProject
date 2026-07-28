@@ -332,6 +332,8 @@ def rerank_retrieval(
     decision: RouteDecision,
     enrichment: EnrichmentOutcome,
     state: Any,
+    *,
+    decomposition_branch_count: int = 0,
 ) -> RerankOutcome | PhaseTerminal:
     request = decision.request
     trace_id = request.trace_id
@@ -358,16 +360,37 @@ def rerank_retrieval(
             new_part_ids,
             runtime,
         )
-        real_docs = _apply_rerank_backend(
-            real_docs,
-            late_used,
-            effective_question,
-            user_question,
-            trace_id,
-            new_part_ids,
-            len(retrieved_docs),
-            runtime,
+        branch_rank_is_final = (
+            decomposition_branch_count > 0
+            and str(enrichment.retrieval_mode).startswith("decomposed_")
+            and len(real_docs) <= decomposition_branch_count
+            and not graph_docs
+            and not community_docs
+            and not late_used
         )
+        if branch_rank_is_final:
+            real_docs = rerank_docs(real_docs)
+            log_trace(
+                "rerank",
+                trace_id,
+                input_docs=len(retrieved_docs),
+                output_docs=len(real_docs),
+                backend="branch_rank",
+                status="skipped",
+                fallback=False,
+                reason="decomposition_already_ranked",
+            )
+        else:
+            real_docs = _apply_rerank_backend(
+                real_docs,
+                late_used,
+                effective_question,
+                user_question,
+                trace_id,
+                new_part_ids,
+                len(retrieved_docs),
+                runtime,
+            )
 
         if not real_docs and not fake_docs:
             return _empty_context_terminal(

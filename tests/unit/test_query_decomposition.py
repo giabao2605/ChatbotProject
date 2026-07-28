@@ -226,7 +226,25 @@ def test_only_sufficient_branch_documents_reach_final_generation():
         {"outcome": "insufficient_evidence"},
     ])
 
-    assert selected == [sufficient]
+    assert selected == [sufficient, extra]
+
+
+def test_general_branch_limits_generation_to_top_evidence():
+    relevant = Document(page_content="relevant", metadata={"doc_id": 1, "trang_so": 1})
+    unrelated = Document(page_content="unrelated", metadata={"doc_id": 2, "trang_so": 1})
+    results = [
+        BranchRetrievalResult(
+            [relevant, unrelated],
+            5,
+            "general:explicit_dense_bm25_rrf",
+            1.0,
+            None,
+        ),
+    ]
+
+    selected = sufficient_branch_documents(results, [{"outcome": "full_answer"}])
+
+    assert selected == [relevant]
 
 
 def test_grounded_negative_branch_documents_do_not_reach_final_generation():

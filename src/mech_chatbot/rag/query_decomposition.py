@@ -331,7 +331,11 @@ def merge_branch_documents(branches):
 def sufficient_branch_documents(results, branches):
     """Return only evidence from branches allowed to reach final generation."""
     return merge_branch_documents(
-        result.documents[:1]
+        (
+            result.documents[:1]
+            if str(result.retrieval_mode).startswith("general")
+            else result.documents
+        )
         for result, branch in zip(results or (), branches or ())
         if (branch or {}).get("outcome") == "full_answer"
     )
