@@ -435,6 +435,87 @@ def test_evidence_treats_a_grounded_negative_decomposition_branch_as_partial(
     assert outcome.answer_policy.outcome is AnswerOutcome.PARTIAL_ANSWER
 
 
+def test_grounded_calculation_supersedes_only_the_missing_bom_total_notice(
+    monkeypatch,
+):
+    from dataclasses import replace
+
+    from mech_chatbot.rag.phases import evidence
+
+    request = replace(
+        _request(),
+        user_question="Tổng BOM P-1 là bao nhiêu và thông số P-2 là gì?",
+    )
+    document = Document(
+        page_content=(
+            "Không có tổng BOM được phê duyệt trong tài liệu này. "
+            "Phép tính có kiểm soát cho kết quả 5 cái."
+        ),
+        metadata={
+            "doc_id": 7,
+            "trang_so": 1,
+            "file_goc": "bom.md",
+            "version_no": 1,
+            "calculation_provenance": {
+                "status": "valid",
+                "operation": "sum",
+            },
+        },
+    )
+    primary = _primary(branches=(
+        {"outcome": "full_answer", "bom_lookup": True},
+        {"outcome": "full_answer", "bom_lookup": False},
+    ))
+    enrichment = _enrichment([document], grounded_math_enabled=True)
+    reranked = RerankOutcome((document,), (), reason_code="reranked")
+    monkeypatch.setattr(
+        evidence,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = evidence.evaluate_evidence(
+        _decision(request=request),
+        primary,
+        enrichment,
+        reranked,
+        _state(),
+    )
+
+    assert isinstance(outcome, EvidenceOutcome)
+    assert outcome.answer_policy.outcome is AnswerOutcome.FULL_ANSWER
+    assert outcome.answer_policy.reason == "all_branches_sufficient"
+
+
+def test_grounded_calculation_keeps_an_unrelated_cost_denial():
+    from mech_chatbot.rag.phases.evidence import _relevant_negative_quote
+
+    document = Document(
+        page_content="calculation",
+        metadata={
+            "calculation_provenance": {
+                "status": "valid",
+                "operation": "sum",
+            },
+        },
+    )
+    invalid = Document(
+        page_content="invalid calculation metadata",
+        metadata={"calculation_provenance": None},
+    )
+
+    quote = _relevant_negative_quote(
+        "Tổng BOM là bao nhiêu và chi phí là bao nhiêu?",
+        "Tài liệu không công bố chi phí hoặc đơn giá.",
+        [invalid, document],
+    )
+
+    assert "chi phí" in quote
+
+
 def test_evidence_keeps_non_bom_citations_for_mixed_decomposition(monkeypatch):
     from mech_chatbot.rag.phases import evidence
 

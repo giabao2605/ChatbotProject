@@ -186,9 +186,9 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
         "Tổng BOM P-1": True,
         "phiên bản P-2": False,
     }
-    assert [call["surface"] for call in provider_calls] == ["query_decomposition"]
+    assert provider_calls == []
     assert len(outcome.decomposition_branches) == 2
-    assert outcome.decomposition_used_fallback is False
+    assert outcome.decomposition_used_fallback is True
     assert outcome.documents
     assert outcome.reason_code == "retrieved"
 
@@ -280,7 +280,7 @@ def test_decomposition_scopes_only_router_validated_branch_codes(
         call["query_to_search"]: call["new_part_ids"]
         for call in retrieval_calls
     }
-    assert part_ids_by_query["Giá trị CRAG-EVAL-NUM-001"] == [
+    assert part_ids_by_query["Giá trị CRAG-EVAL-NUM-001 là bao nhiêu"] == [
         "CRAG-EVAL-NUM-001"
     ]
     assert part_ids_by_query["mắt cú xanh kiểm tra theo chu kỳ nào"] == []
@@ -370,7 +370,7 @@ def test_decomposition_branch_filter_preserves_rbac_when_part_filter_is_not_last
         ),
     )
 
-    no_code_must = filters_by_query["mắt cú xanh"].must
+    no_code_must = filters_by_query["Mắt cú xanh"].must
     assert rbac_filter in no_code_must
     assert lifecycle_filter in no_code_must
     assert part_filter not in no_code_must

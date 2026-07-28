@@ -11,7 +11,6 @@ from mech_chatbot.rag.answer_policy import (
     PolicyEvidence,
     decide_answer_policy,
     explicit_negative_evidence_quote,
-    has_explicit_negative_evidence,
     render_cited_explicit_negative_answer,
 )
 from mech_chatbot.rag.evidence_gate import (
@@ -92,6 +91,32 @@ def _audit_confidential_access(request: Any, documents: list[Any]) -> None:
         )
 
 
+def _relevant_negative_quote(
+    question: str,
+    context_text: str,
+    documents: list[Any],
+) -> str:
+    quote = explicit_negative_evidence_quote(question, context_text)
+    has_grounded_total = False
+    for document in documents:
+        provenance = (getattr(document, "metadata", {}) or {}).get(
+            "calculation_provenance"
+        )
+        if (
+            isinstance(provenance, dict)
+            and provenance.get("status") == "valid"
+            and provenance.get("operation") in {"add", "sum"}
+        ):
+            has_grounded_total = True
+            break
+    if not quote or not has_grounded_total:
+        return quote
+    folded_quote = quote.casefold()
+    if "tổng bom" in folded_quote or "total bom" in folded_quote:
+        return ""
+    return quote
+
+
 def _decide_evidence_policy(
     decision: RouteDecision,
     context_text: str,
@@ -119,6 +144,11 @@ def _decide_evidence_policy(
         branch.get("outcome") == "full_answer"
         for branch in decomposition_branches
     )
+    negative_quote = _relevant_negative_quote(
+        request.user_question,
+        context_text,
+        documents,
+    )
     answer_policy = decide_answer_policy(
         request.user_question,
         PolicyEvidence(
@@ -128,12 +158,8 @@ def _decide_evidence_policy(
                 decision.crag_enabled
                 and state.budget.corrections < state.budget.limits.corrections
             ),
-            negative_evidence=has_explicit_negative_evidence(
-                request.user_question, context_text
-            ),
-            negative_evidence_quote=explicit_negative_evidence_quote(
-                request.user_question, context_text
-            ),
+            negative_evidence=bool(negative_quote),
+            negative_evidence_quote=negative_quote,
             sufficient_branch_count=sufficient_branch_count,
             total_branch_count=len(decomposition_branches),
         ),

@@ -143,6 +143,23 @@ def _access_context(context: _RetrievalContext) -> dict[str, Any]:
 def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -> _PlannerResult:
     from mech_chatbot.rag.query_decomposition import compile_query_plan
 
+    deterministic_plan = compile_query_plan(
+        context.effective_question,
+        access_context,
+        planner=None,
+        planner_version=getattr(
+            state.retrieval_adapter,
+            "planner_version",
+            "planner-v1",
+        ),
+    )
+    if (
+        len(deterministic_plan.subqueries) > 1
+        and not deterministic_plan.intent_overflow
+        and all(deterministic_plan.intent_coverage)
+    ):
+        return _PlannerResult(deterministic_plan, 0, 0, 0.0)
+
     input_tokens = 0
     output_tokens = 0
     estimated_cost = 0.0
