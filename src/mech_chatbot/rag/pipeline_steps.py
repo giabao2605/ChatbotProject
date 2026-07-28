@@ -62,7 +62,8 @@ from mech_chatbot.rag.execution import (
 )
 
 _RETRIEVE_UNSET = object()
-_BM25_SEARCH_TIMEOUT_SECONDS = 3
+_QDRANT_SEARCH_TIMEOUT_SECONDS = 3
+_BM25_SEARCH_TIMEOUT_SECONDS = _QDRANT_SEARCH_TIMEOUT_SECONDS
 
 
 @dataclass(slots=True)
@@ -242,6 +243,7 @@ def _explicit_hybrid_rrf(
             query,
             k=dense_top_k,
             filter=payload_filter,
+            timeout=_QDRANT_SEARCH_TIMEOUT_SECONDS,
         )
         dense_ms = int((time.perf_counter() - t_dense) * 1000)
         t_bm25 = time.perf_counter()

@@ -394,6 +394,43 @@ def test_slow_bm25_search_uses_bounded_dense_fallback(
     assert bm25_event["error"] == "TimeoutError"
 
 
+def test_dense_search_uses_bounded_qdrant_timeout(load_steps, monkeypatch):
+    steps = load_steps()
+    dense_calls = []
+
+    class Store:
+        def __init__(self, **kwargs):
+            self.mode = getattr(
+                kwargs["retrieval_mode"],
+                "value",
+                kwargs["retrieval_mode"],
+            )
+
+        def similarity_search(self, *_args, **kwargs):
+            if self.mode == "dense":
+                dense_calls.append(kwargs)
+            return []
+
+    class VectorStore:
+        embeddings = object()
+        sparse_embeddings = object()
+
+    monkeypatch.setattr("langchain_qdrant.QdrantVectorStore", Store)
+
+    steps._explicit_hybrid_rrf(
+        "approved query",
+        payload_filter=object(),
+        dense_top_k=5,
+        sparse_top_k=5,
+        result_cap=5,
+        vectorstore=VectorStore(),
+        client=object(),
+        collection_name="test",
+    )
+
+    assert dense_calls[0]["timeout"] == 3
+
+
 def test_empty_exact_retrieval_broadens_without_exposing_unservable_documents(
     load_steps,
 ):
