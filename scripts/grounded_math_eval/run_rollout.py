@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
@@ -13,6 +12,7 @@ from pathlib import Path
 from scripts.crag_eval.run_rollout import (
     _artifact_reference, _sha, _utc_now, governance_scope_sha256,
 )
+from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
 from scripts.grounded_math_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -100,11 +100,8 @@ def run_rollout(manifest, output, trace, *, router_mode="offline", rollback_test
             raise ValueError(f"refusing to overwrite non-empty run directory: {directory}")
     git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest_sha = _sha(Path(manifest))
-    provider_config = {
-        key: os.getenv(key) for key in ("GPT_MODEL_NAME", "OPENAI_BASE_URL", "MAX_CONCURRENT_RAG")
-        if os.getenv(key)
-    }
-    provider_sha = hashlib.sha256(json.dumps(provider_config, sort_keys=True).encode()).hexdigest()
+    from mech_chatbot.config.settings import load_settings
+    provider_sha = provider_configuration_sha256_for_settings(load_settings())
     governance_sha = governance_scope_sha256(Path(manifest))
     baseline = _run("baseline", Path(manifest), Path(output), Path(trace), enabled=False,
                     router_mode=router_mode, provider_sha=provider_sha, governance_sha=governance_sha)
