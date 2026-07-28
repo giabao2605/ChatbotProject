@@ -282,3 +282,6 @@ def test_grounded_math_rollout_records_runtime_provider_hash(monkeypatch, tmp_pa
     assert pair["baseline"]["provider_configuration_sha256"] == (
         provider_configuration_sha256_for_settings(snapshot)
     )
+    assert pair["candidate"]["provider_configuration_sha256"] == (
+        provider_configuration_sha256_for_settings(snapshot)
+    )
