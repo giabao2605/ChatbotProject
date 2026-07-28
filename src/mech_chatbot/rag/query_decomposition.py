@@ -17,6 +17,12 @@ from mech_chatbot.rag.execution import RequestBudgetExceeded
 
 _COMPLEX_CUES = (" và ", " đồng thời ", " so sánh ", " đối chiếu ", " versus ", " vs ")
 _CODE_RE = re.compile(r"\b[A-Z]{1,10}[-_][A-Z0-9][A-Z0-9._-]*\b", re.IGNORECASE)
+_MISSING_NOTICE = (
+    "Phần chưa có đủ bằng chứng chưa thể trả lời từ tài liệu nội bộ hiện có."
+)
+_DENIED_NOTICE = (
+    "Phần bị chặn chưa thể trả lời do không có nguồn được phép truy cập."
+)
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,19 @@ def audit_decomposition_stream(stream, branches):
         yield marker
     for chunk in stream:
         rendered_parts.append(str(chunk))
+        yield chunk
+    notices = []
+    if any(outcome in {"insufficient_evidence", "partial_answer"} for outcome in outcomes):
+        notices.append(_MISSING_NOTICE)
+    if "access_denied" in outcomes:
+        notices.append(_DENIED_NOTICE)
+    rendered_text = "".join(rendered_parts)
+    for notice in notices:
+        if notice in rendered_text:
+            continue
+        chunk = f"\n{notice}"
+        rendered_parts.append(chunk)
+        rendered_text += chunk
         yield chunk
     rendered_source_ids = extract_source_ids("".join(rendered_parts))
     for branch in branches or ():
@@ -280,7 +299,8 @@ def build_decomposition_instruction(branches) -> str:
         notices.append(f"{denied} nhánh không thể truy cập")
     return (
         instruction + "\n\nLưu ý bắt buộc: " + "; ".join(notices) + ". "
-        "Chỉ trả lời các nhánh có nguồn, nêu rõ phần chưa thể trả lời và không tiết lộ tên hoặc nội dung nguồn bị chặn."
+        "Chỉ trả lời các nhánh có nguồn; không tự viết câu từ chối hoặc lặp lại "
+        "mã, tên hay nội dung của phần bị chặn. Hệ thống sẽ tự thêm thông báo."
     )
 
 

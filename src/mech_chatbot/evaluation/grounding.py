@@ -36,6 +36,14 @@ _POLICY_NOTICE_PATTERNS = (
         r"^(?:the requested information|this question) cannot be answered "
         r"from the available internal documents[.!?]?$"
     ),
+    re.compile(
+        r"^phần chưa có đủ bằng chứng chưa thể trả lời "
+        r"từ tài liệu nội bộ hiện có[.!?]?$"
+    ),
+    re.compile(
+        r"^phần bị chặn chưa thể trả lời do không có nguồn "
+        r"được phép truy cập[.!?]?$"
+    ),
 )
 
 
@@ -125,7 +133,7 @@ def extract_claims(answer: str) -> list[dict]:
             claims.append(
                 {
                     "text": part,
-                    "source_ids": sorted(source_ids) if index == len(parts) - 1 else [],
+                    "source_ids": sorted(source_ids),
                 }
             )
             if is_table_row and not source_ids:

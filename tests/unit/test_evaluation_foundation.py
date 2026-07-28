@@ -117,6 +117,11 @@ def test_claim_evaluator_does_not_match_number_as_substring():
             "Chi phí **CRAG-EVAL-PART-C**: Tài liệu nội bộ hiện có "
             "không đề cập đến thông tin này."
         ),
+        (
+            "Phần chưa có đủ bằng chứng chưa thể trả lời "
+            "từ tài liệu nội bộ hiện có."
+        ),
+        "Phần bị chặn chưa thể trả lời do không có nguồn được phép truy cập.",
         "Thông tin về mã cấu hình được hỏi chưa thể trả lời từ tài liệu nội bộ hiện có.",
         "Mã cấu hình được hỏi chưa thể trả lời do không có nguồn có thể truy cập trong dữ liệu hiện có.",
         "Mã cấu hình được hỏi chưa thể trả lời do không có nguồn được phép truy cập.",
@@ -191,6 +196,47 @@ def test_claim_extractor_ignores_markdown_table_structure():
             "text": "Mã tài liệu: CRAG-EVAL-ALIAS-001; Phiên bản hiện hành: 1",
             "source_ids": ["D45P1"],
         },
+    ]
+
+
+def test_claim_extractor_propagates_citation_to_each_sentence():
+    claims = extract_claims(
+        "Kết quả tính có kiểm soát: 5 cái. Công thức: 2 + 3 = 5 cái. "
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D43P1]"
+    )
+
+    assert claims == [
+        {
+            "text": "Kết quả tính có kiểm soát: 5 cái.",
+            "source_ids": ["D43P1"],
+        },
+        {
+            "text": "Công thức: 2 + 3 = 5 cái.",
+            "source_ids": ["D43P1"],
+        },
+    ]
+
+
+def test_claim_evaluator_rejects_extra_cited_sentence():
+    claims = extract_claims(
+        "Giá trị định mức là 1,500. "
+        "CRAG-EVAL-SECRET-001 = SECRET-VALUE. "
+        "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D41P1]"
+    )
+    expected = [{
+        "required_terms": ["1,500"],
+        "allowed_source_ids": ["D41P1"],
+    }]
+
+    report = evaluate_claims(
+        claims,
+        expected,
+        accessible_source_ids={"D41P1"},
+    )
+
+    assert report["claim_precision"] == 0.5
+    assert report["violations"] == [
+        {"claim_index": 2, "reason": "unexpected_claim"}
     ]
 
 

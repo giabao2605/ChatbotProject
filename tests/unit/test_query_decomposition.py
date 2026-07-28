@@ -31,9 +31,45 @@ def test_decomposition_stream_marks_partial_and_audits_rendered_branch_sources()
     ]
     rendered = "".join(audit_decomposition_stream(iter(["Evidence [SRC:D198P1]"]), branches))
 
-    assert rendered == "Trả lời được một phần: Evidence [SRC:D198P1]"
+    assert rendered == (
+        "Trả lời được một phần: Evidence [SRC:D198P1]\n"
+        "Phần bị chặn chưa thể trả lời do không có nguồn được phép truy cập."
+    )
     assert branches[0]["rendered_source_ids"] == ["D198P1"]
     assert branches[1]["rendered_source_ids"] == []
+
+
+def test_decomposition_stream_appends_canonical_missing_evidence_notice():
+    branches = [
+        {"outcome": "full_answer", "citations": [{"source_id": "D198P1"}]},
+        {"outcome": "insufficient_evidence", "citations": []},
+    ]
+
+    rendered = "".join(
+        audit_decomposition_stream(iter(["Evidence [SRC:D198P1]"]), branches)
+    )
+
+    assert rendered.endswith(
+        "\nPhần chưa có đủ bằng chứng chưa thể trả lời "
+        "từ tài liệu nội bộ hiện có."
+    )
+
+
+def test_decomposition_stream_does_not_duplicate_canonical_notice():
+    notice = "Phần bị chặn chưa thể trả lời do không có nguồn được phép truy cập."
+    branches = [
+        {"outcome": "full_answer", "citations": [{"source_id": "D198P1"}]},
+        {"outcome": "access_denied", "citations": []},
+    ]
+
+    rendered = "".join(
+        audit_decomposition_stream(
+            iter([f"Evidence [SRC:D198P1]\n{notice}"]),
+            branches,
+        )
+    )
+
+    assert rendered.count(notice) == 1
 
 
 def test_branch_code_extraction_is_normalized_and_does_not_inherit_other_codes():
@@ -158,6 +194,7 @@ def test_partial_answer_instruction_counts_missing_and_denied_without_source_nam
 
     assert "1 nhánh chưa có đủ bằng chứng" in instruction
     assert "1 nhánh không thể truy cập" in instruction
+    assert "không tự viết câu từ chối" in instruction.lower()
     assert "secret-payroll.md" not in instruction
 
 
