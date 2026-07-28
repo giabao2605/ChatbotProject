@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from scripts.decomposition_eval.constants import DEFAULT_OUTPUT
+from scripts.decomposition_eval.constants import BOM_DOCUMENT, BOM_ROWS, DEFAULT_OUTPUT
 
 
 DOCS = {
@@ -49,6 +49,21 @@ def _branch(position, outcome, *keys):
     }
 
 
+def _bom_calculation():
+    sources = [{
+        "document": BOM_DOCUMENT, "doc_id": f"$DOC:{BOM_DOCUMENT}",
+        "page": 1, "version": 1, "source_id": f"$ROW:{row['row_key']}",
+        "source_row_key": row["row_key"], "value": row["value"],
+        "unit": row["unit"],
+    } for row in BOM_ROWS]
+    return {
+        "operation": "sum", "status": "valid",
+        "formula": "2 + 3 = 5 cái", "unit": "cái",
+        "exact_value": "5", "display_value": "5",
+        "allowed_numbers": ["2", "3"], "sources": sources,
+    }
+
+
 def _case(case_id, question, group, outcome, claims, citations, branches, *, primary="numbers", **extra):
     document, version = DOCS[primary]
     sources = list(dict.fromkeys(citation["document"] for citation in citations))
@@ -67,24 +82,30 @@ def _case(case_id, question, group, outcome, claims, citations, branches, *, pri
 def cases():
     number = _claim("number", ["1,500"], "numbers")
     alias = _claim("alias-cycle", ["90 ngày"], "alias")
-    version = _claim("version", ["phiên bản", "12"], "numbers")
+    version = _claim(
+        "version", ["phiên bản", "CRAG-EVAL-NUM-001", "12"], "numbers"
+    )
     bom = _claim("bom-total", ["5", "cái"], "bom")
     install = _claim("install", ["quy trình", "lắp", "CRAG-EVAL-PART-C"], "no_cost")
-    alias_version = _claim("alias-version", ["phiên bản", "1"], "alias")
+    alias_version = _claim(
+        "alias-version",
+        ["phiên bản", "CRAG-EVAL-ALIAS-001", "1"],
+        "alias",
+    )
     return [
         _case("decomp-simple-factual", "Giá trị định mức CRAG-EVAL-NUM-001 là bao nhiêu?", "simple", "full_answer", [number], [_citation("numbers")], []),
         _case("decomp-simple-alias", "Mắt cú xanh kiểm tra theo chu kỳ nào?", "simple", "full_answer", [alias], [_citation("alias")], [], primary="alias"),
         _case("decomp-simple-install", "Quy trình lắp CRAG-EVAL-PART-C là gì?", "simple", "full_answer", [install], [_citation("no_cost")], [], primary="no_cost"),
         _case("decomp-two-intents", "Giá trị định mức CRAG-EVAL-NUM-001 là bao nhiêu và mắt cú xanh kiểm tra theo chu kỳ nào?", "complex", "full_answer", [number, alias], [_citation("numbers"), _citation("alias")], [_branch(1, "full_answer", "numbers"), _branch(2, "full_answer", "alias")]),
         _case("decomp-three-intents", "Cho biết giá trị CRAG-EVAL-NUM-001, chu kỳ mắt cú xanh và quy trình lắp CRAG-EVAL-PART-C?", "complex", "full_answer", [number, alias, install], [_citation("numbers"), _citation("alias"), _citation("no_cost")], [_branch(1, "full_answer", "numbers"), _branch(2, "full_answer", "alias"), _branch(3, "full_answer", "no_cost")]),
-        _case("decomp-sql-bom-doc", "Tổng BOM CRAG-EVAL-BOM-001 là bao nhiêu và phiên bản hiện hành của CRAG-EVAL-NUM-001 là gì?", "complex", "full_answer", [bom, version], [_citation("bom"), _citation("numbers")], [_branch(1, "full_answer", "bom"), _branch(2, "full_answer", "numbers")], primary="bom", requires_grounded_math=True),
+        _case("decomp-sql-bom-doc", "Tổng BOM CRAG-EVAL-BOM-001 là bao nhiêu và phiên bản hiện hành của CRAG-EVAL-NUM-001 là gì?", "complex", "full_answer", [bom, version], [_citation("bom"), _citation("numbers")], [_branch(1, "full_answer", "bom"), _branch(2, "full_answer", "numbers")], primary="bom", requires_grounded_math=True, expected_calculation=_bom_calculation()),
         _case("decomp-version-candidate", "So sánh phiên bản hiện hành của CRAG-EVAL-NUM-001 và CRAG-EVAL-ALIAS-001?", "complex", "full_answer", [version, alias_version], [_citation("numbers"), _citation("alias")], [_branch(1, "full_answer", "numbers"), _branch(2, "full_answer", "alias")]),
         _case("decomp-sufficient-missing", "Giá trị CRAG-EVAL-NUM-001 là bao nhiêu và chi phí CRAG-EVAL-PART-C là bao nhiêu?", "complex", "partial_answer", [number], [_citation("numbers")], [_branch(1, "full_answer", "numbers"), _branch(2, "insufficient_evidence")]),
         _case("decomp-access-denied", "Giá trị CRAG-EVAL-NUM-001 và mã cấu hình CRAG-EVAL-SECRET-001 là gì?", "complex", "partial_answer", [number], [_citation("numbers")], [_branch(1, "full_answer", "numbers"), _branch(2, "access_denied")], forbidden_sources=[DOCS["restricted"][0]], preflight_documents=[{"document": DOCS["restricted"][0], "version": 1, "site": "CRAG-EVAL-REMOTE", "security_level": "confidential"}]),
         _case("decomp-code-boundary", "Đối chiếu CRAG-EVAL-NUM-001 và CRAG-EVAL-ALIAS-001: nêu định mức và chu kỳ kiểm tra.", "complex", "full_answer", [number, alias], [_citation("numbers"), _citation("alias")], [_branch(1, "full_answer", "numbers"), _branch(2, "full_answer", "alias")], allowed_planner_codes=["CRAG-EVAL-NUM-001", "CRAG-EVAL-ALIAS-001"]),
-        _case("decomp-bom-alias", "Tổng BOM CRAG-EVAL-BOM-001 là bao nhiêu và mắt cú xanh kiểm tra theo chu kỳ nào?", "complex", "full_answer", [bom, alias], [_citation("bom"), _citation("alias")], [_branch(1, "full_answer", "bom"), _branch(2, "full_answer", "alias")], primary="bom", requires_grounded_math=True),
+        _case("decomp-bom-alias", "Tổng BOM CRAG-EVAL-BOM-001 là bao nhiêu và mắt cú xanh kiểm tra theo chu kỳ nào?", "complex", "full_answer", [bom, alias], [_citation("bom"), _citation("alias")], [_branch(1, "full_answer", "bom"), _branch(2, "full_answer", "alias")], primary="bom", requires_grounded_math=True, expected_calculation=_bom_calculation()),
         _case("decomp-install-version", "Nêu quy trình lắp CRAG-EVAL-PART-C và phiên bản hiện hành của CRAG-EVAL-ALIAS-001.", "complex", "full_answer", [install, alias_version], [_citation("no_cost"), _citation("alias")], [_branch(1, "full_answer", "no_cost"), _branch(2, "full_answer", "alias")], primary="no_cost"),
-        _case("decomp-three-source-compare", "Đối chiếu định mức CRAG-EVAL-NUM-001, tổng BOM CRAG-EVAL-BOM-001 và quy trình lắp CRAG-EVAL-PART-C.", "complex", "full_answer", [number, bom, install], [_citation("numbers"), _citation("bom"), _citation("no_cost")], [_branch(1, "full_answer", "numbers"), _branch(2, "full_answer", "bom"), _branch(3, "full_answer", "no_cost")], requires_grounded_math=True),
+        _case("decomp-three-source-compare", "Đối chiếu định mức CRAG-EVAL-NUM-001, tổng BOM CRAG-EVAL-BOM-001 và quy trình lắp CRAG-EVAL-PART-C.", "complex", "full_answer", [number, bom, install], [_citation("numbers"), _citation("bom"), _citation("no_cost")], [_branch(1, "full_answer", "numbers"), _branch(2, "full_answer", "bom"), _branch(3, "full_answer", "no_cost")], requires_grounded_math=True, expected_calculation=_bom_calculation()),
     ]
 
 

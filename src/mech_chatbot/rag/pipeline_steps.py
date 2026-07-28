@@ -114,7 +114,7 @@ class GenerationPlan:
     runtime: Any = None
 
 
-def _attempt_number_claim_repair(
+def _attempt_claim_repair(
     answer,
     *,
     context_text,
@@ -583,6 +583,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     grounded_math_enabled = bool(
         getattr(retrieval_runtime, "grounded_math_enabled", False)
     )
+    grounded_prefix = ""
     if grounded_math_enabled and calculation_docs:
         if budget is not None:
             budget.record("calculations", 1, cumulative=True)
@@ -603,6 +604,30 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
             )
         metrics["calculation_count"] = 1
         metrics["output_tokens"] += len(answer) // 4
+
+        calculation_sources = {
+            (
+                source.get("doc_id"),
+                source.get("page"),
+                source.get("version"),
+            )
+            for document in calculation_docs
+            for source in (
+                document.metadata.get("calculation_provenance", {}).get("sources")
+                or ()
+            )
+            if isinstance(source, dict)
+        }
+        remaining_docs = [
+            document
+            for document in retrieved_docs
+            if (
+                document.metadata.get("doc_id"),
+                document.metadata.get("trang_so"),
+                document.metadata.get("version_no"),
+            )
+            not in calculation_sources
+        ]
 
         def grounded_math_stream():
             if cancel_event is not None and cancel_event.is_set():
@@ -625,7 +650,15 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 rag_end["refusal_reason"] = "grounded_math_post_check"
             log_trace("rag_end", trace_id, **rag_end)
 
-        return grounded_math_stream()
+        if violation or not remaining_docs:
+            return grounded_math_stream()
+        grounded_prefix = answer
+        context_text = _assemble_context(remaining_docs, user_question)
+        context_text += (
+            "\n\nPhép tính đã được hệ thống xử lý riêng. Chỉ trả lời các ý "
+            "còn lại từ nguồn trên; không nhắc lại hoặc tự tính lại phép tính."
+        )
+        strict_answer_mode = True
     # GD3: chon prompt + gate guard co khi theo ngu canh truy hoi
     _ctx_is_mech = _context_is_mechanical(retrieved_docs, new_part_ids)
     _ctx_domain = _context_domain(retrieved_docs, new_part_ids)
@@ -686,6 +719,11 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
             and time.monotonic() >= plan.control.deadline_monotonic
         ):
             raise TimeoutError("RAG request deadline exceeded during generation")
+
+    def _with_grounded_prefix(value):
+        if not grounded_prefix:
+            return value
+        return f"{grounded_prefix}\n{value}".strip()
     _strict_holdback_chars = max(
         64,
         int(getattr(retrieval_runtime, "strict_streaming_holdback_chars", 160)),
@@ -770,42 +808,30 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     bad_mats, unsupported_mats = False, []
                     bad_codes, unsupported_codes = False, []
                     bad_units, unsupported_units = False, []
-                
-                if bad_mats or bad_codes:
-                    outcome.refusal_reason = "post_check_materials_codes"
-                    ans = make_insufficient_evidence_message(
-                        user_question,
-                        f"Câu trả lời chứa thông tin tự tạo không có trong nguồn: materials={unsupported_mats}, codes={unsupported_codes}",
-                        lang=response_language,
-                    )
-                    yield ans
-                    log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
-                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_materials_codes", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
-                elif bad_units:
-                    outcome.refusal_reason = "post_check_units"
-                    ans = make_insufficient_evidence_message(
-                        user_question,
-                        f"Câu trả lời chứa đơn vị/ký hiệu kỹ thuật không có trong nguồn: {unsupported_units}",
-                        lang=response_language,
-                    )
-                    yield ans
-                    log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
-                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_units", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                 # Source cards are constructed by the backend from retrieved
                 # documents.  Keep number holdback for high-risk questions,
                 # where a fabricated figure has material impact, without
                 # rejecting a normal policy answer merely because the model
                 # formats an otherwise sourced value differently.
-                elif has_unsupported_numbers(
+                bad_numbers = has_unsupported_numbers(
                     answer,
                     context_text,
                     user_question,
                     strict_mode=is_high_risk_question(user_question),
-                ):
+                )
+                if bad_mats or bad_codes:
+                    violation_reason = "materials_codes"
+                elif bad_units:
+                    violation_reason = "units"
+                elif bad_numbers:
+                    violation_reason = "numbers"
+                else:
+                    violation_reason = ""
+                if violation_reason:
                     if _claim_repair_enabled and budget is not None:
                         budget.record("repairs", 1, cumulative=True)
                     repair_started = time.time()
-                    repair_result = _attempt_number_claim_repair(
+                    repair_result = _attempt_claim_repair(
                         answer,
                         context_text=context_text,
                         user_question=user_question,
@@ -835,20 +861,36 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     metrics["repair_count"] = int(repair_result.attempted)
                     metrics["estimated_cost"] += repair_result.estimated_cost
                     if repair_result.accepted:
-                        answer = repair_result.answer
+                        answer = _with_grounded_prefix(repair_result.answer)
                         yield answer
                         log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), repaired=True, input_tokens=input_tokens, output_tokens=len(answer)//4, estimated_cost=estimated_cost)
                         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                         return
-                    ans = make_insufficient_evidence_message(
+                    detail = {
+                        "materials_codes": (
+                            "Câu trả lời chứa thông tin tự tạo không có trong "
+                            f"nguồn: materials={unsupported_mats}, "
+                            f"codes={unsupported_codes}"
+                        ),
+                        "units": (
+                            "Câu trả lời chứa đơn vị/ký hiệu kỹ thuật không có "
+                            f"trong nguồn: {unsupported_units}"
+                        ),
+                        "numbers": (
+                            "cau tra loi sinh ra co so lieu khong truy vet duoc "
+                            "trong tai lieu"
+                        ),
+                    }[violation_reason]
+                    refusal_reason = f"post_check_{violation_reason}"
+                    outcome.refusal_reason = refusal_reason
+                    ans = _with_grounded_prefix(make_insufficient_evidence_message(
                         user_question,
-                        "cau tra loi sinh ra co so lieu khong truy vet duoc trong tai lieu",
+                        detail,
                         lang=response_language,
-                    )
-                    outcome.refusal_reason = "post_check_numbers"
+                    ))
                     yield ans
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
-                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason="post_check_numbers", docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
+                    log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason=refusal_reason, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                 elif (
                     strict_answer_mode
                     and requires_source_citation(user_question)
@@ -870,7 +912,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         "câu trả lời không có đủ nguồn file/trang/version rõ ràng",
                         lang=response_language,
                     )
-                    yield ans
+                    yield _with_grounded_prefix(ans)
                     log_trace(
                         "rag_end",
                         trace_id,
@@ -880,6 +922,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     )
                     return
                 else:
+                    answer = _with_grounded_prefix(answer)
                     yield answer
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)

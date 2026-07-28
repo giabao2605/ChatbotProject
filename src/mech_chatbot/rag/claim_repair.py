@@ -182,6 +182,11 @@ def repair_grounded_answer(
     violations = find_unsupported_numbers(
         answer, context_text, question, strict_mode=True
     )
+    _, unsupported_materials = has_unsupported_materials(answer, context_text)
+    _, unsupported_codes = has_unsupported_codes(answer, context_text, question)
+    _, unsupported_units = has_unsupported_units_symbols(
+        answer, context_text, question
+    )
     allowed_numbers = sorted(
         normalized_number_values(context_text) | normalized_number_values(question)
     )
@@ -224,6 +229,9 @@ def repair_grounded_answer(
         "Repair the draft using only facts and numbers present in CONTEXT or QUESTION. "
         "Remove unsupported claims. Preserve every REQUIRED_SOURCE_ID exactly; only use ALLOWED_SOURCE_IDS. "
         "Do not explain the repair. Return only the repaired answer.\n\n"
+        f"UNSUPPORTED_MATERIALS: {sorted(unsupported_materials)}\n"
+        f"UNSUPPORTED_CODES: {sorted(unsupported_codes)}\n"
+        f"UNSUPPORTED_UNITS: {sorted(unsupported_units)}\n"
         f"UNSUPPORTED_NUMBERS: {[item.normalized for item in violations]}\n"
         f"ALLOWED_NUMBERS: {allowed_numbers}\n"
         f"REQUIRED_SOURCE_IDS: {original_source_ids}\n"

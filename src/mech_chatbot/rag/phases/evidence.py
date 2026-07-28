@@ -58,7 +58,7 @@ def _select_citations(
     citation_docs = select_citation_docs(
         documents,
         question=decision.request.user_question,
-        is_bom_query=decision.is_bom_query,
+        is_bom_query=decision.is_bom_query and not primary.decomposition_branches,
         part_ids=list(enrichment.new_part_ids),
         limit=getattr(runtime, "citation_max_sources", 5),
         bom_limit=getattr(runtime, "bom_citation_max_sources", 3),
@@ -116,7 +116,7 @@ def _decide_evidence_policy(
         ),
     )
     sufficient_branch_count = sum(
-        branch.get("outcome") == "full_answer" or branch.get("grounded_negative")
+        branch.get("outcome") == "full_answer"
         for branch in decomposition_branches
     )
     answer_policy = decide_answer_policy(

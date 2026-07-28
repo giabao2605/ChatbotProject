@@ -47,6 +47,7 @@ class CalculationResult:
 def select_grounded_bom_document_ids(documents, question: str = "") -> list[int]:
     """Resolve exactly one document for a code-free aggregate, or fail closed."""
     candidates: dict[int, set[str]] = {}
+    descriptors: dict[int, str] = {}
     for document in documents or ():
         metadata = getattr(document, "metadata", {}) or {}
         try:
@@ -60,9 +61,24 @@ def select_grounded_bom_document_ids(documents, question: str = "") -> list[int]
             metadata.get("doc_number"),
             str(getattr(document, "page_content", ""))[:300],
         ))
+        descriptors[doc_id] = _fold(descriptor)
         candidates.setdefault(doc_id, set()).update(_identity_tokens(descriptor))
     if len(candidates) == 1:
         return [next(iter(candidates))]
+    explicit_bom = re.search(
+        r"\bbom(?:\s+cua)?\s+([a-z0-9]+(?:[-_./][a-z0-9]+)+)",
+        _fold(question),
+    )
+    if explicit_bom:
+        matches = [
+            doc_id
+            for doc_id, descriptor in descriptors.items()
+            if explicit_bom.group(1) in descriptor
+        ]
+        if len(matches) == 1:
+            return matches
+        if matches:
+            return []
     query_tokens = _identity_tokens(question)
     scores = sorted(
         ((len(query_tokens & tokens), doc_id) for doc_id, tokens in candidates.items()),

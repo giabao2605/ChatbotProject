@@ -40,15 +40,22 @@ def _search_bom_rows(
     search_bom_facts: Callable[..., Sequence[Any]],
 ) -> Sequence[Any]:
     request = context.decision.request
-    return search_bom_facts(
-        part_codes=list(part_ids), document_ids=list(document_ids),
-        version_policy=context.decision.intent_data.get("version_policy", "current_only"),
-        detected_versions=context.decision.intent_data.get("detected_versions"),
-        user_department=request.user_department, user_roles=list(context.user_roles),
-        allowed_departments=list(context.allowed_departments),
-        max_security_level=request.max_security_level,
-        allowed_sites=list(context.allowed_sites),
-    )
+
+    def find(codes: Sequence[str]) -> Sequence[Any]:
+        return search_bom_facts(
+            part_codes=list(codes), document_ids=list(document_ids),
+            version_policy=context.decision.intent_data.get("version_policy", "current_only"),
+            detected_versions=context.decision.intent_data.get("detected_versions"),
+            user_department=request.user_department, user_roles=list(context.user_roles),
+            allowed_departments=list(context.allowed_departments),
+            max_security_level=request.max_security_level,
+            allowed_sites=list(context.allowed_sites),
+        )
+
+    rows = find(part_ids)
+    if rows or not (part_ids and document_ids):
+        return rows
+    return find(())
 
 
 def _group_bom_rows(
@@ -176,11 +183,13 @@ def inject_bom(
     env_bool: Callable[[str, bool], bool],
     context_is_mechanical: Callable[[Sequence[Any], Sequence[str]], bool],
     search_bom_facts: Callable[..., Sequence[Any]],
+    lookup_documents: Sequence[Any] | None = None,
 ) -> tuple[tuple[Any, ...], bool]:
     grounded_math_enabled = env_bool("RAG_GROUNDED_MATH_ENABLED", False)
-    document_ids = (
-        _bom_document_ids(documents, context.user_question, grounded_math_enabled)
-        if not part_ids else []
+    document_ids = _bom_document_ids(
+        documents if lookup_documents is None else lookup_documents,
+        context.user_question,
+        grounded_math_enabled,
     )
     if not (part_ids or document_ids) or not context_is_mechanical(documents, part_ids):
         return tuple(documents), grounded_math_enabled

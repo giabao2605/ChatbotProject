@@ -65,6 +65,11 @@ class CorrectionBudget:
 def audit_decomposition_stream(stream, branches):
     """Forward a final stream and record citations rendered for each branch."""
     rendered_parts = []
+    outcomes = [str((branch or {}).get("outcome") or "") for branch in branches or ()]
+    if "full_answer" in outcomes and any(outcome != "full_answer" for outcome in outcomes):
+        marker = "Trả lời được một phần: "
+        rendered_parts.append(marker)
+        yield marker
     for chunk in stream:
         rendered_parts.append(str(chunk))
         yield chunk
@@ -84,7 +89,7 @@ def is_complex_query(question: str) -> bool:
 
 
 _INTENT_SEPARATOR = re.compile(
-    r"\s*(?:[;\n]+|,\s*(?:đồng\s+thời|dong\s+thoi)|"
+    r"\s*(?:[;\n]+|,\s*(?:đồng\s+thời|dong\s+thoi)|,\s+|"
     r"\b(?:đồng\s+thời|dong\s+thoi|và|va|also)\b)\s*",
     re.IGNORECASE,
 )
@@ -251,25 +256,55 @@ def execute_plan(
         executor.shutdown(wait=False, cancel_futures=True)
 
 
-def build_partial_answer_instruction(branches) -> str:
-    """Build a safe generation instruction without naming inaccessible sources."""
+def build_decomposition_instruction(branches) -> str:
+    """Build a safe multi-branch instruction without naming blocked sources."""
+    if not branches:
+        return ""
+    instruction = (
+        "\n\nHướng dẫn tổng hợp nhiều ý: với mỗi ý, chỉ trả lời đúng thông tin "
+        "được hỏi bằng một kết luận ngắn có nguồn; không thêm thuộc tính khác "
+        "từ cùng tài liệu và không suy diễn điều tài liệu không nói."
+    )
     outcomes = [str((branch or {}).get("outcome") or "") for branch in (branches or ())]
     missing = sum(
         outcome in {"insufficient_evidence", "partial_answer"}
-        and not bool((branch or {}).get("grounded_negative"))
-        for outcome, branch in zip(outcomes, branches or ())
+        for outcome in outcomes
     )
     denied = sum(outcome == "access_denied" for outcome in outcomes)
     if not missing and not denied:
-        return ""
+        return instruction
     notices = []
     if missing:
         notices.append(f"{missing} nhánh chưa có đủ bằng chứng")
     if denied:
         notices.append(f"{denied} nhánh không thể truy cập")
     return (
-        "\n\nLưu ý bắt buộc: " + "; ".join(notices) + ". "
+        instruction + "\n\nLưu ý bắt buộc: " + "; ".join(notices) + ". "
         "Chỉ trả lời các nhánh có nguồn, nêu rõ phần chưa thể trả lời và không tiết lộ tên hoặc nội dung nguồn bị chặn."
+    )
+
+
+def reconcile_grounded_calculation_branch(branches, citations):
+    """Promote one resolved BOM branch after governed calculation succeeds."""
+    candidates = [
+        index
+        for index, branch in enumerate(branches or ())
+        if (branch or {}).get("bom_lookup")
+        and (branch or {}).get("outcome") != "full_answer"
+    ]
+    if len(candidates) != 1 or not citations:
+        return tuple(branches or ())
+    selected = candidates[0]
+    return tuple(
+        {
+            **branch,
+            "outcome": "full_answer",
+            "grounded_negative": False,
+            "citations": list(citations),
+        }
+        if index == selected
+        else branch
+        for index, branch in enumerate(branches or ())
     )
 
 
@@ -299,5 +334,4 @@ def sufficient_branch_documents(results, branches):
         result.documents
         for result, branch in zip(results or (), branches or ())
         if (branch or {}).get("outcome") == "full_answer"
-        or bool((branch or {}).get("grounded_negative"))
     )

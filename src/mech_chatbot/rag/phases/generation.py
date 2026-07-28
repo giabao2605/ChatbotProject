@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,8 +52,34 @@ def _generation_metrics(
     }
 
 
+def _effective_generation_question(
+    decision: RouteDecision,
+    primary: PrimaryRetrievalOutcome,
+    documents: list[Any],
+) -> str:
+    if not any(
+        isinstance(document.metadata.get("calculation_provenance"), dict)
+        for document in documents
+    ):
+        return decision.effective_question
+    remaining = [
+        re.sub(
+            r"^(?:đối chiếu|so sánh)\s+",
+            "",
+            str(branch.get("subquery") or "").strip(),
+            flags=re.IGNORECASE,
+        )
+        for branch in primary.decomposition_branches
+        if branch.get("outcome") == "full_answer"
+        and not branch.get("bom_lookup")
+        and str(branch.get("subquery") or "").strip()
+    ]
+    return " và ".join(remaining) or decision.effective_question
+
+
 def _generation_plan(
     decision: RouteDecision,
+    primary: PrimaryRetrievalOutcome,
     enrichment: EnrichmentOutcome,
     evidence: EvidenceOutcome,
     state: Any,
@@ -64,7 +91,11 @@ def _generation_plan(
     return GenerationPlan(
         turn=GenerationTurn(
             user_question=request.user_question,
-            effective_question=decision.effective_question,
+            effective_question=_effective_generation_question(
+                decision,
+                primary,
+                documents,
+            ),
             chat_history_str=request.history_text,
             new_part_ids=new_part_ids,
             response_language=request.response_language,
@@ -193,6 +224,7 @@ def _start_generation(
     stream = generate_answer(
         _generation_plan(
             decision,
+            primary,
             enrichment,
             evidence,
             state,

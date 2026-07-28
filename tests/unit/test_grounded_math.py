@@ -90,6 +90,27 @@ def test_document_scoped_total_resolves_explicit_document_identity_not_rank():
     ) == [31]
 
 
+def test_document_scoped_total_prefers_the_code_named_after_bom():
+    documents = [
+        SimpleNamespace(
+            page_content="Mã tài liệu: CRAG-EVAL-BOM-001",
+            metadata={"doc_id": 43, "file_goc": "crag_eval_bom_v1.md"},
+        ),
+        SimpleNamespace(
+            page_content="Mã tài liệu: CRAG-EVAL-NUM-001. Phiên bản 12.",
+            metadata={"doc_id": 70, "file_goc": "crag_eval_numbers_v12.md"},
+        ),
+    ]
+
+    assert select_grounded_bom_document_ids(
+        documents,
+        (
+            "Tổng BOM CRAG-EVAL-BOM-001 là bao nhiêu và phiên bản "
+            "hiện hành của CRAG-EVAL-NUM-001 là gì?"
+        ),
+    ) == [43]
+
+
 def test_document_scoped_total_fails_closed_when_document_is_ambiguous():
     documents = [
         SimpleNamespace(page_content="# BOM A", metadata={"doc_id": 31}),

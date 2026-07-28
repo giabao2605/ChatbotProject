@@ -313,8 +313,9 @@ def run_evaluation(
         ranked_retrieval_metrics,
     )
     from mech_chatbot.evaluation.outcomes import (
-        ANSWER_OUTCOMES, REFUSAL_OUTCOMES, classify_actual_outcome, expected_outcome,
-        outcome_matches_expected, summarize_outcomes,
+        ANSWER_OUTCOMES, REFUSAL_OUTCOMES, VALID_OUTCOMES,
+        classify_actual_outcome, expected_outcome, outcome_matches_expected,
+        summarize_outcomes,
     )
     from mech_chatbot.evaluation.risk_coverage import build_risk_coverage_report
     from mech_chatbot.evaluation.failure_families import build_failure_family_report
@@ -352,6 +353,8 @@ def run_evaluation(
         roles = case["user_roles"]
         trace_id = f"eval:{run_label}:{case['id']}"
         debug: dict = {}
+        completion_outcome = None
+        refusal_reason = None
         try:
             intent = intent_extractor(
                 case["question"], [], case["user_department"], roles,
@@ -412,6 +415,8 @@ def run_evaluation(
                     ref_text = terminal.ref_text
                     debug = dict(terminal.diagnostics)
                     answer = terminal.answer
+                    completion_outcome = terminal.outcome
+                    refusal_reason = terminal.refusal_reason
             finally:
                 for name, value in previous_env.items():
                     if value is None:
@@ -420,7 +425,16 @@ def run_evaluation(
                         os.environ[name] = value
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
             latencies.append(latency_ms)
-            actual = classify_actual_outcome(answer)
+            runtime_outcome = debug.get("answer_outcome")
+            if (
+                completion_outcome == "refused"
+                and runtime_outcome in ANSWER_OUTCOMES
+            ):
+                actual = classify_actual_outcome(answer)
+            elif runtime_outcome in VALID_OUTCOMES:
+                actual = runtime_outcome
+            else:
+                actual = classify_actual_outcome(answer)
             retrieved_docs = debug.get("retrieved_docs", [])[:20]
             retrieved = [canonical_source_identity(doc) for doc in retrieved_docs]
             expected_sources = (
@@ -470,11 +484,11 @@ def run_evaluation(
             )
             citation_evaluation = evaluate_citations(
                 select_rendered_citations(
-                    debug.get("citation_docs") or [], f"{answer}\n{ref_text}"
+                    debug.get("citation_docs") or [], answer
                 ),
                 case.get("expected_citations") or [],
                 accessible_source_ids=accessible_source_ids,
-                rendered_text=f"{answer}\n{ref_text}",
+                rendered_text=answer,
             )
             calculation_evaluation = evaluate_grounded_calculation(
                 case.get("expected_calculation"),
@@ -517,7 +531,7 @@ def run_evaluation(
             ).upper()
             expected_policy_contract = case.get("expected_policy")
             actual_policy_contract = {
-                "outcome": str(debug.get("answer_outcome") or actual),
+                "outcome": actual,
                 "evidence_state": evidence_state,
                 "correction_allowed": bool(debug.get(
                     "correction_allowed",
@@ -567,6 +581,8 @@ def run_evaluation(
             row = {
                 "id": case["id"], "passed": passed, "expected_outcome": expected,
                 "actual_outcome": actual, "latency_ms": latency_ms,
+                "completion_outcome": completion_outcome,
+                "refusal_reason": refusal_reason,
                 "answer_metadata": _content_metadata(answer),
                 "reference_metadata": _content_metadata(ref_text),
                 "retrieved_source_metadata": [
@@ -619,6 +635,8 @@ def run_evaluation(
             row = {
                 "id": case["id"], "passed": False, "expected_outcome": expected,
                 "actual_outcome": "error", "latency_ms": latency_ms,
+                "completion_outcome": completion_outcome,
+                "refusal_reason": refusal_reason,
                 "error_type": type(exc).__name__, "retrieval_expected": False,
                 "retrieval_passed": False,
                 "trace_id": trace_id, "requires_correction": bool(case.get("requires_correction")),

@@ -521,6 +521,8 @@ def _inject_bom(
     documents: Sequence[Any],
     part_ids: Sequence[str],
     state: Any,
+    *,
+    lookup_documents: Sequence[Any] | None = None,
 ) -> tuple[tuple[Any, ...], bool]:
     grounded_math_enabled = bool(
         getattr(
@@ -534,6 +536,7 @@ def _inject_bom(
         env_bool=lambda _name, _default: grounded_math_enabled,
         context_is_mechanical=_context_is_mechanical,
         search_bom_facts=search_bom_facts,
+        lookup_documents=lookup_documents,
     )
 
 
@@ -803,7 +806,8 @@ def enrich_retrieval(
     if terminal is not None:
         return terminal
     documents, grounded_math_enabled = _inject_bom(
-        context, documents, code_result.part_ids, state
+        context, documents, code_result.part_ids, state,
+        lookup_documents=primary.lookup_documents,
     )
     documents = _prepend_image(documents, decision.request.image_analysis)
     if not documents:

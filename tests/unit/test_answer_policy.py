@@ -152,6 +152,30 @@ def test_negative_detector_does_not_cross_sentence_into_positive_evidence():
     ) is False
 
 
+def test_negative_detector_does_not_match_an_unasked_topic_by_code_only():
+    assert has_explicit_negative_evidence(
+        "Quy trình lắp CRAG-EVAL-PART-C là gì?",
+        (
+            "Quy trình lắp CRAG-EVAL-PART-C gồm ba bước. "
+            "Tài liệu không có trường đơn giá cho CRAG-EVAL-PART-C."
+        ),
+    ) is False
+
+
+def test_negative_detector_does_not_treat_value_as_unit_price():
+    assert has_explicit_negative_evidence(
+        (
+            "Cho biết giá trị CRAG-EVAL-NUM-001, chu kỳ mắt cú xanh "
+            "và quy trình lắp CRAG-EVAL-PART-C?"
+        ),
+        (
+            "Giá trị định mức là 1,500 đơn vị. Chu kỳ kiểm tra là 90 ngày. "
+            "Tài liệu mô tả quy trình lắp CRAG-EVAL-PART-C. "
+            "Tài liệu không công bố chi phí hoặc đơn giá."
+        ),
+    ) is False
+
+
 def test_ambiguous_evidence_only_allows_correction_when_retrieval_can_improve():
     retrievable = decide_answer_policy(
         "Quy định nào áp dụng?",

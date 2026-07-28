@@ -109,6 +109,65 @@ def test_claim_evaluator_does_not_match_number_as_substring():
     assert report["expected_claim_recall"] == 0.0
 
 
+@pytest.mark.parametrize(
+    "notice",
+    [
+        "Tài liệu nội bộ hiện có không đề cập đến chi phí CRAG-EVAL-PART-C.",
+        "Thông tin về mã cấu hình được hỏi chưa thể trả lời từ tài liệu nội bộ hiện có.",
+        "Mã cấu hình được hỏi chưa thể trả lời do không có nguồn có thể truy cập trong dữ liệu hiện có.",
+    ],
+)
+def test_claim_extractor_ignores_partial_answer_policy_notices(notice):
+    claims = extract_claims(
+        "Trả lời được một phần: - Giá trị định mức là 1,500. "
+        "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D41P1]\n"
+        f"- {notice}"
+    )
+
+    assert claims == [{
+        "text": "Trả lời được một phần: - Giá trị định mức là 1,500.",
+        "source_ids": ["D41P1"],
+    }]
+
+
+def test_claim_extractor_keeps_cited_negative_evidence():
+    claims = extract_claims(
+        "Tài liệu nội bộ hiện có không đề cập đến các bước quy trình lắp "
+        "CRAG-EVAL-PART-C. "
+        "[Nguồn: install.md, Trang 1, Version 1, SourceID D44P1]"
+    )
+
+    assert claims == [{
+        "text": (
+            "Tài liệu nội bộ hiện có không đề cập đến các bước quy trình lắp "
+            "CRAG-EVAL-PART-C."
+        ),
+        "source_ids": ["D44P1"],
+    }]
+
+
+def test_claim_extractor_ignores_markdown_table_structure():
+    claims = extract_claims(
+        "| Mã tài liệu | Phiên bản hiện hành |\n"
+        "|---|---:|\n"
+        "| CRAG-EVAL-NUM-001 | 12 "
+        "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D70P1] |\n"
+        "| CRAG-EVAL-ALIAS-001 | 1 "
+        "[Nguồn: alias.md, Trang 1, Version 1, SourceID D45P1] |"
+    )
+
+    assert claims == [
+        {
+            "text": "| CRAG-EVAL-NUM-001 | 12  |",
+            "source_ids": ["D70P1"],
+        },
+        {
+            "text": "| CRAG-EVAL-ALIAS-001 | 1  |",
+            "source_ids": ["D45P1"],
+        },
+    ]
+
+
 def test_citation_evaluator_checks_source_page_version_and_rendering():
     actual = [
         {

@@ -12,6 +12,18 @@ _CITATION_PATTERN = re.compile(r"\[(?:Nguồn|Source)\s*:[^\]]+\]", re.IGNORECAS
 _SOURCE_ID_PATTERN = re.compile(
     r"\bSourceID\s*[:#]?\s*([A-Za-z0-9_-]+)", re.IGNORECASE
 )
+_TABLE_SEPARATOR_PATTERN = re.compile(
+    r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$"
+)
+_POLICY_NOTICE_PATTERNS = (
+    re.compile(r"^tài liệu nội bộ hiện có không đề cập đến\b"),
+    re.compile(r"^thông tin .+ chưa thể trả lời từ tài liệu nội bộ hiện có\b"),
+    re.compile(
+        r"^.+ chưa thể trả lời do không có nguồn có thể truy cập trong dữ liệu hiện có\b"
+    ),
+    re.compile(r"^the available internal documents do not contain\b"),
+    re.compile(r"^.+ cannot be answered from the available internal documents\b"),
+)
 
 
 def _normalize_text(value) -> str:
@@ -27,12 +39,26 @@ def _source_ids(value) -> set[str]:
     return {str(item).strip().upper() for item in values if str(item).strip()}
 
 
+def _is_policy_notice(value: str) -> bool:
+    normalized = _normalize_text(value)
+    return any(pattern.search(normalized) for pattern in _POLICY_NOTICE_PATTERNS)
+
+
 def extract_claims(answer: str) -> list[dict]:
     """Split answer text into auditable claims and attach local SourceIDs."""
     claims: list[dict] = []
-    for raw_line in str(answer or "").splitlines():
+    raw_lines = str(answer or "").splitlines()
+    for line_index, raw_line in enumerate(raw_lines):
         line = raw_line.strip()
         if not line:
+            continue
+        if _TABLE_SEPARATOR_PATTERN.fullmatch(line):
+            continue
+        if (
+            "|" in line
+            and line_index + 1 < len(raw_lines)
+            and _TABLE_SEPARATOR_PATTERN.fullmatch(raw_lines[line_index + 1].strip())
+        ):
             continue
         citations = _CITATION_PATTERN.findall(line)
         source_ids = {
@@ -46,6 +72,8 @@ def extract_claims(answer: str) -> list[dict]:
                 claims[-1]["source_ids"] = sorted(
                     set(claims[-1]["source_ids"]) | source_ids
                 )
+            continue
+        if _is_policy_notice(claim_text) and not source_ids:
             continue
         parts = [
             part.strip(" -*\t")

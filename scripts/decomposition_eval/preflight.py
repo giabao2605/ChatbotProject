@@ -46,6 +46,44 @@ def _resolve_citation(citation, documents):
     return value
 
 
+def _resolve_calculation(
+    calculation,
+    resolved_claims,
+    resolved_citations,
+    actual_rows,
+    bom_document,
+):
+    if not calculation or not bom_document:
+        return None
+    resolved_sources = []
+    for source in calculation.get("sources") or []:
+        row = actual_rows.get(str(source.get("source_row_key") or ""))
+        if row:
+            resolved_sources.append({
+                **source,
+                "doc_id": int(bom_document["DocID"]),
+                "source_id": f"BOM-{int(row['ID'])}",
+            })
+    if len(resolved_sources) != len(calculation.get("sources") or []):
+        return None
+    allowed_numbers = list(calculation.get("allowed_numbers") or [])
+    allowed_numbers.extend(
+        term
+        for claim in resolved_claims
+        for term in claim.get("required_terms") or []
+    )
+    allowed_numbers.extend(
+        citation.get(field)
+        for citation in resolved_citations
+        for field in ("doc_id", "page", "version", "source_id")
+    )
+    return {
+        **calculation,
+        "allowed_numbers": list(dict.fromkeys(allowed_numbers)),
+        "sources": resolved_sources,
+    }
+
+
 def validate_manifest_scope(cases, *, min_complex=10, min_simple=3):
     groups = {"complex": 0, "simple": 0}
     for case in cases:
@@ -68,6 +106,8 @@ def check_fixture_cases(cases, sql_documents, bom_rows, qdrant_points, *, collec
         points_by_doc.setdefault(int(point.get("doc_id") or 0), []).append(point)
     failures = []
     resolutions = {}
+    actual_rows = {_row_key(row): row for row in bom_rows if _row_key(row)}
+    bom_document = documents.get(BOM_DOCUMENT.casefold())
     for case in cases:
         referenced = {
             citation.get("document")
@@ -132,14 +172,22 @@ def check_fixture_cases(cases, sql_documents, bom_rows, qdrant_points, *, collec
                 else:
                     allowed.append(source_id)
             resolved_claims.append({**claim, "allowed_source_ids": allowed})
-        resolutions[case["id"]] = {
+        resolution = {
             "expected_citations": resolved_citations,
             "expected_branches": resolved_branches,
             "expected_claims": resolved_claims,
         }
+        resolved_calculation = _resolve_calculation(
+            case.get("expected_calculation"),
+            resolved_claims,
+            resolved_citations,
+            actual_rows,
+            bom_document,
+        )
+        if resolved_calculation:
+            resolution["expected_calculation"] = resolved_calculation
+        resolutions[case["id"]] = resolution
     expected_rows = {row["row_key"]: row for row in BOM_ROWS}
-    actual_rows = {_row_key(row): row for row in bom_rows if _row_key(row)}
-    bom_document = documents.get(BOM_DOCUMENT.casefold())
     for key, expected in expected_rows.items():
         row = actual_rows.get(key)
         if not row or not bom_document or int(row.get("DocID") or 0) != int(bom_document["DocID"]):
@@ -176,7 +224,7 @@ def run_live_preflight(cases):
             FROM dbo.TaiLieu WHERE SourceSystem=:batch
         """), {"batch": FIXTURE_BATCH}).mappings().all()]
         bom_rows = [dict(row) for row in connection.execute(text("""
-            SELECT b.DocID, b.SoLuong, b.Unit, b.RawRowJson
+            SELECT b.ID, b.DocID, b.TrangSo, b.SoLuong, b.Unit, b.RawRowJson
             FROM dbo.BangKeVatTu b JOIN dbo.TaiLieu t ON t.DocID=b.DocID
             WHERE t.SourceSystem=:batch
         """), {"batch": FIXTURE_BATCH}).mappings().all()]

@@ -37,6 +37,24 @@ def test_claim_repair_accepts_one_grounded_rewrite():
     assert "ALLOWED_SOURCE_IDS: ['D7P3']" in calls[0]
 
 
+def test_claim_repair_prompt_identifies_unsupported_code():
+    calls = []
+    result = repair_grounded_answer(
+        "Dùng FAKE-999 để lắp.",
+        context_text="Tài liệu không cung cấp mã dụng cụ lắp.",
+        question="Quy trình lắp là gì?",
+        documents=[_doc()],
+        invoke=lambda prompt: calls.append(prompt) or (
+            "Tài liệu không cung cấp mã dụng cụ lắp."
+        ),
+        require_citation=False,
+        enabled=True,
+    )
+
+    assert result.accepted is True
+    assert "UNSUPPORTED_CODES: ['FAKE-999']" in calls[0]
+
+
 def test_claim_repair_replaces_one_number_from_a_matching_source_sentence_without_provider():
     result = repair_grounded_answer(
         "Giá trị định mức là 1,501.",

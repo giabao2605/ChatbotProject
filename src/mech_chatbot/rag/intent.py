@@ -157,6 +157,22 @@ def _business_normalize(value):
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+_BOM_QUERY_TERMS = (
+    "vat tu", "bang ke", "bom", "danh sach", "chi tiet", "gom nhung gi",
+    "cau tao", "linh kien", "part list", "thanh phan", "chi tiet con",
+    "vat lieu", "cum nay", "ma nao",
+)
+
+
+def is_bom_lookup(question, *, query_type=""):
+    from mech_chatbot.rag.text_utils import remove_accents
+
+    normalized = remove_accents(str(question or "").lower())
+    return query_type == "bom_lookup" or any(
+        term in normalized for term in _BOM_QUERY_TERMS
+    )
+
+
 def deterministic_business_document_intent(question):
     """Recognize PO, contract and form requests without an LLM round trip."""
     raw = str(question or "")
@@ -464,9 +480,10 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         qdrant_filter = models.Filter(must=must_conditions)
         return qdrant_filter, qdrant_filter, new_part_ids, is_inherited, False, intent_data
  
-    from mech_chatbot.rag.text_utils import remove_accents
-    q_norm = remove_accents(question.lower())
-    is_bom_query = intent_data["query_type"] == "bom_lookup" or any(kw in q_norm for kw in ["vat tu", "bang ke", "bom", "danh sach", "chi tiet", "gom nhung gi", "cau tao", "linh kien", "part list", "thanh phan", "chi tiet con", "vat lieu", "cum nay", "ma nao"])
+    is_bom_query = is_bom_lookup(
+        question,
+        query_type=intent_data["query_type"],
+    )
  
     # Ghep strict & broad qua MOT nguon duy nhat (rbac.py) -> chong noi quyen.
     strict_filter, broad_filter = compose_retrieval_filters(must_conditions, new_part_ids)

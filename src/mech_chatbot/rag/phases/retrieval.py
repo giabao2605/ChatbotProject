@@ -24,13 +24,14 @@ from mech_chatbot.rag.corrective import (
 )
 from mech_chatbot.rag.evidence_gate import evaluate_answerability
 from mech_chatbot.rag.execution import RequestBudgetExceeded
+from mech_chatbot.rag.intent import is_bom_lookup
 from mech_chatbot.rag.phases.diagnostics import make_source_snapshot
 from mech_chatbot.rag.phases.routing import RouteDecision
 from mech_chatbot.rag.pipeline_steps import (
     _RETRIEVE_UNSET,
     _assemble_context,
 )
-from mech_chatbot.rag.rbac import compose_retrieval_filters
+from mech_chatbot.rag.rbac import PART_ID_KEYS_BROAD, compose_retrieval_filters
 from mech_chatbot.rag.rerank import tokenize_cached
 from mech_chatbot.rag.retrieval import probe_restricted_access
 
@@ -55,6 +56,7 @@ class PrimaryRetrievalOutcome:
     planner_estimated_cost: float
     correction_estimated_cost: float
     reason_code: str = "retrieved"
+    lookup_documents: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +78,7 @@ class _RetrievalBatch:
     mode: str
     started_at: float
     active_filter: Any = _RETRIEVE_UNSET
+    lookup_documents: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,13 +193,22 @@ def _branch_filters(context: _RetrievalContext, subquery: str) -> tuple[list[str
         for part_id in context.new_part_ids
         if str(part_id).lower() in branch_codes
     ]
-    if not branch_part_ids and len(context.new_part_ids) == 1:
-        branch_part_ids = list(context.new_part_ids)
     common_must = list(getattr(context.decision.strict_filter, "must", ()) or ())
     if context.new_part_ids and common_must:
-        common_must = common_must[:-1]
+        common_must = [
+            condition for condition in common_must
+            if not _is_part_id_filter(condition)
+        ]
     strict_filter, broad_filter = compose_retrieval_filters(common_must, branch_part_ids)
     return branch_part_ids, strict_filter, broad_filter
+
+
+def _is_part_id_filter(condition: Any) -> bool:
+    keys = {
+        getattr(item, "key", "")
+        for item in (getattr(condition, "should", None) or ())
+    }
+    return bool(keys) and keys.issubset(set(PART_ID_KEYS_BROAD))
 
 
 def _deadline_exceeded(deadline_monotonic: float | None) -> bool:
@@ -277,7 +289,7 @@ def _correct_branch(
             new_part_ids=branch_part_ids,
             strict_filter=strict_filter,
             broad_filter=broad_filter,
-            is_bom_query=context.decision.is_bom_query,
+            is_bom_query=is_bom_lookup(subquery),
             rbac_filter=context.decision.rbac_filter,
             trace_id=context.trace_id,
         )
@@ -352,7 +364,7 @@ def _retrieve_branch(
         new_part_ids=part_ids,
         strict_filter=strict_filter,
         broad_filter=broad_filter,
-        is_bom_query=context.decision.is_bom_query,
+        is_bom_query=is_bom_lookup(subquery),
         query_to_search=tokenize_cached(subquery),
         rbac_filter=context.decision.rbac_filter,
         trace_id=context.trace_id,
@@ -483,10 +495,16 @@ def _branch_diagnostics(
         )
         branches.append({
             "branch_id": f"branch-{branch_index}",
+            "subquery": subquery,
             "outcome": policy.outcome.value,
             "evaluator_state": policy.evidence_state.value,
             "grounded_negative": policy.reason == "explicit_negative_evidence",
-            "citations": make_source_snapshot(result.documents),
+            "bom_lookup": is_bom_lookup(subquery),
+            "citations": (
+                make_source_snapshot(result.documents)
+                if policy.outcome.value == "full_answer"
+                else []
+            ),
             "correction_attempted": result.correction_attempted,
             "deadline_exceeded": result.deadline_exceeded,
         })
@@ -528,7 +546,7 @@ def _run_complex_plan(
     planner_result: _PlannerResult,
 ) -> _DecompositionResult:
     from mech_chatbot.rag.query_decomposition import (
-        CorrectionBudget, build_partial_answer_instruction, execute_plan,
+        CorrectionBudget, build_decomposition_instruction, execute_plan,
     )
 
     plan = planner_result.plan
@@ -554,7 +572,7 @@ def _run_complex_plan(
     )
     return _DecompositionResult(
         batch=_complex_retrieval_batch(branch_results, branches),
-        notice=build_partial_answer_instruction(branches),
+        notice=build_decomposition_instruction(branches),
         states=states, branches=branches, intents=tuple(plan.intents),
         intent_coverage=tuple(plan.intent_coverage),
         used_fallback=plan.used_fallback, intent_overflow=plan.intent_overflow,
@@ -607,6 +625,11 @@ def _complex_retrieval_batch(
             (result.started_at for result in branch_results), default=time.time()
         ),
         active_filter=active_filter,
+        lookup_documents=tuple(
+            document
+            for result in branch_results
+            for document in result.documents
+        ),
     )
 
 
@@ -725,6 +748,7 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
         auxiliary_output_tokens=result.auxiliary_output_tokens,
         planner_estimated_cost=result.planner_estimated_cost,
         correction_estimated_cost=result.correction_estimated_cost,
+        lookup_documents=batch.lookup_documents or batch.documents,
     )
 
 

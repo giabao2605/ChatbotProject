@@ -70,6 +70,9 @@ def _route_decision(
     *,
     part_ids=("P-1",),
     crag_enabled=False,
+    strict_filter=None,
+    broad_filter=None,
+    rbac_filter=None,
 ) -> RouteDecision:
     return RouteDecision(
         request=request,
@@ -78,9 +81,9 @@ def _route_decision(
         is_inherited=False,
         is_bom_query=False,
         intent_data={"version_policy": "current_only"},
-        strict_filter=SimpleNamespace(must=()),
-        broad_filter=SimpleNamespace(must=()),
-        rbac_filter=SimpleNamespace(must=()),
+        strict_filter=strict_filter or SimpleNamespace(must=()),
+        broad_filter=broad_filter or SimpleNamespace(must=()),
+        rbac_filter=rbac_filter or SimpleNamespace(must=()),
         skip_hyde_anchor=False,
         hyde_eligible=False,
         query_to_search=request.user_question,
@@ -116,8 +119,11 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
     from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
     from mech_chatbot.rag.phases import retrieval as retrieval_phase
 
-    request = _prepared_request(question="So sánh P-1 và P-2")
-    decision = _route_decision(request, part_ids=("P-1", "P-2"))
+    request = _prepared_request(question="Tổng BOM P-1 và phiên bản P-2?")
+    decision = replace(
+        _route_decision(request, part_ids=("P-1", "P-2")),
+        is_bom_query=True,
+    )
     retrieval_calls = []
     provider_calls = []
 
@@ -145,7 +151,7 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
     def invoke(*_args, **kwargs):
         provider_calls.append(kwargs)
         return SimpleNamespace(
-            content='{"subqueries":["So sánh P-1","P-2"]}'
+            content='{"subqueries":["Tổng BOM P-1","phiên bản P-2"]}'
         )
 
     monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
@@ -173,11 +179,279 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
     )
 
     assert len(retrieval_calls) == 2
+    assert {
+        call["query_to_search"]: call["is_bom_query"]
+        for call in retrieval_calls
+    } == {
+        "Tổng BOM P-1": True,
+        "phiên bản P-2": False,
+    }
     assert [call["surface"] for call in provider_calls] == ["query_decomposition"]
     assert len(outcome.decomposition_branches) == 2
     assert outcome.decomposition_used_fallback is False
     assert outcome.documents
     assert outcome.reason_code == "retrieved"
+
+
+def test_decomposition_scopes_only_router_validated_branch_codes(
+    monkeypatch,
+):
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+    from qdrant_client import models
+
+    request = _prepared_request(
+        question=(
+            "Giá trị CRAG-EVAL-NUM-001 là bao nhiêu và "
+            "mắt cú xanh kiểm tra theo chu kỳ nào và "
+            "quy trình lắp CRAG-EVAL-PART-C?"
+        )
+    )
+    inherited_part_filter = models.Filter(
+        should=[
+            models.FieldCondition(
+                key="metadata.base_code",
+                match=models.MatchAny(any=["CRAG-EVAL-NUM-001"]),
+            )
+        ]
+    )
+    governance_filter = models.FieldCondition(
+        key="metadata.servable",
+        match=models.MatchValue(value=True),
+    )
+    decision = _route_decision(
+        request,
+        part_ids=("CRAG-EVAL-NUM-001",),
+        strict_filter=models.Filter(
+            must=[inherited_part_filter, governance_filter]
+        ),
+    )
+    retrieval_calls = []
+
+    def retrieve(**kwargs):
+        retrieval_calls.append(kwargs)
+        documents = [
+            Document(
+                page_content=f"Approved evidence for {kwargs['query_to_search']}",
+                metadata={"doc_id": len(retrieval_calls), "trang_so": 1},
+            )
+        ]
+        return (
+            documents,
+            5,
+            "hybrid",
+            time.time(),
+            object(),
+        )
+
+    monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
+    monkeypatch.setattr(
+        retrieval_phase,
+        "_assemble_context",
+        lambda docs, _query: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        retrieval_phase,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = _run_phase(
+        lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(
+            retrieve=retrieve,
+            query_decomposition_enabled=True,
+        ),
+        provider=SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: SimpleNamespace(
+                content=(
+                    '{"subqueries":["Giá trị CRAG-EVAL-NUM-001",'
+                    '"mắt cú xanh kiểm tra theo chu kỳ nào",'
+                    '"quy trình lắp CRAG-EVAL-PART-C"]}'
+                )
+            )
+        ),
+    )
+
+    part_ids_by_query = {
+        call["query_to_search"]: call["new_part_ids"]
+        for call in retrieval_calls
+    }
+    assert part_ids_by_query["Giá trị CRAG-EVAL-NUM-001"] == [
+        "CRAG-EVAL-NUM-001"
+    ]
+    assert part_ids_by_query["mắt cú xanh kiểm tra theo chu kỳ nào"] == []
+    assert part_ids_by_query["quy trình lắp CRAG-EVAL-PART-C"] == []
+    assert all(
+        governance_filter in call["strict_filter"].must
+        and governance_filter in call["broad_filter"].must
+        for call in retrieval_calls
+    )
+
+
+def test_decomposition_branch_filter_preserves_rbac_when_part_filter_is_not_last(
+    monkeypatch,
+):
+    from qdrant_client import models
+
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+    from mech_chatbot.rag.rbac import create_rbac_filter
+
+    request = _prepared_request(question="Mắt cú xanh và CRAG-EVAL-NUM-001?")
+    rbac_filter = create_rbac_filter(
+        "Technical",
+        ["viewer"],
+        allowed_departments=["Technical"],
+        max_security_level="internal",
+        allowed_sites=["HQ"],
+    )
+    part_filter = models.Filter(should=[
+        models.FieldCondition(
+            key="metadata.base_code",
+            match=models.MatchAny(any=["CRAG-EVAL-NUM-001"]),
+        )
+    ])
+    lifecycle_filter = models.FieldCondition(
+        key="metadata.servable",
+        match=models.MatchValue(value=True),
+    )
+    decision = _route_decision(
+        request,
+        part_ids=("CRAG-EVAL-NUM-001",),
+        strict_filter=models.Filter(must=[part_filter, rbac_filter, lifecycle_filter]),
+        rbac_filter=rbac_filter,
+    )
+    filters_by_query = {}
+
+    def retrieve(**kwargs):
+        filters_by_query[kwargs["query_to_search"]] = kwargs["strict_filter"]
+        return (
+            [
+                Document(
+                    page_content=f"Approved evidence for {kwargs['query_to_search']}",
+                    metadata={"doc_id": len(filters_by_query), "trang_so": 1},
+                )
+            ],
+            5,
+            "hybrid",
+            time.time(),
+            object(),
+        )
+
+    monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
+    monkeypatch.setattr(
+        retrieval_phase,
+        "_assemble_context",
+        lambda docs, _query: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        retrieval_phase,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    _run_phase(
+        lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(
+            retrieve=retrieve,
+            query_decomposition_enabled=True,
+        ),
+        provider=SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: SimpleNamespace(
+                content='{"subqueries":["mắt cú xanh","CRAG-EVAL-NUM-001"]}'
+            )
+        ),
+    )
+
+    no_code_must = filters_by_query["mắt cú xanh"].must
+    assert rbac_filter in no_code_must
+    assert lifecycle_filter in no_code_must
+    assert part_filter not in no_code_must
+
+
+def test_decomposition_missing_branch_does_not_publish_citations(monkeypatch):
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+
+    request = _prepared_request(
+        question=(
+            "Giá trị CRAG-EVAL-NUM-001 là bao nhiêu và "
+            "chi phí CRAG-EVAL-PART-C là bao nhiêu?"
+        )
+    )
+    decision = _route_decision(
+        request,
+        part_ids=("CRAG-EVAL-NUM-001", "CRAG-EVAL-PART-C"),
+    )
+
+    def retrieve(**kwargs):
+        query = kwargs["query_to_search"]
+        content = (
+            "Không có trường đơn giá."
+            if "chi phí" in query
+            else "CRAG-EVAL-NUM-001 có giá trị 1,500."
+        )
+        return (
+            [
+                Document(
+                    page_content=content,
+                    metadata={"doc_id": 1 if "chi phí" not in query else 2, "trang_so": 1},
+                )
+            ],
+            5,
+            "hybrid",
+            time.time(),
+            object(),
+        )
+
+    monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
+    monkeypatch.setattr(
+        retrieval_phase,
+        "_assemble_context",
+        lambda docs, _query: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        retrieval_phase,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = _run_phase(
+        lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(
+            retrieve=retrieve,
+            query_decomposition_enabled=True,
+        ),
+        provider=SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: SimpleNamespace(
+                content=(
+                    '{"subqueries":["Giá trị CRAG-EVAL-NUM-001",'
+                    '"chi phí CRAG-EVAL-PART-C"]}'
+                )
+            )
+        ),
+    )
+
+    assert [branch["outcome"] for branch in outcome.decomposition_branches] == [
+        "full_answer",
+        "insufficient_evidence",
+    ]
+    assert outcome.decomposition_branches[1]["citations"] == []
+    assert "1 nhánh chưa có đủ bằng chứng" in outcome.decomposition_notice
+    assert [document.metadata["doc_id"] for document in outcome.documents] == [1]
+    assert [
+        document.metadata["doc_id"] for document in outcome.lookup_documents
+    ] == [1, 2]
 
 
 def test_crag_force_ambiguous_override_is_request_local(monkeypatch):
@@ -537,6 +811,91 @@ def test_executor_runs_graph_bom_image_and_corrective_enrichment(monkeypatch):
     assert any(doc.metadata.get("loai_du_lieu") == "sql_bom" for doc in outcome.documents)
     assert any(doc.metadata.get("loai_du_lieu") == "image_summary" for doc in outcome.documents)
     assert corrected_document in outcome.documents
+
+
+def test_bom_lookup_falls_back_to_the_governed_document_scope():
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import (
+        _search_bom_rows,
+    )
+
+    calls = []
+
+    def search_bom_facts(**kwargs):
+        calls.append(kwargs)
+        return [] if kwargs["part_codes"] else ["document-row"]
+
+    context = SimpleNamespace(
+        decision=SimpleNamespace(
+            request=SimpleNamespace(
+                user_department="Technical",
+                max_security_level="internal",
+            ),
+            intent_data={"version_policy": "current_only"},
+        ),
+        user_roles=("viewer",),
+        allowed_departments=("Technical",),
+        allowed_sites=("HQ",),
+    )
+
+    rows = _search_bom_rows(
+        context,
+        ["CRAG-EVAL-BOM-001"],
+        [43],
+        search_bom_facts,
+    )
+
+    assert rows == ["document-row"]
+    assert [call["part_codes"] for call in calls] == [
+        ["CRAG-EVAL-BOM-001"],
+        [],
+    ]
+    assert all(call["document_ids"] == [43] for call in calls)
+
+
+def test_bom_lookup_resolves_the_retrieved_document_even_when_a_code_was_parsed(
+    monkeypatch,
+):
+    from mech_chatbot.rag.phases import retrieval_enrichment_support as support
+
+    document = Document(
+        page_content="BOM CRAG-EVAL-BOM-001",
+        metadata={"doc_id": 43},
+    )
+    observed = []
+    context = SimpleNamespace(
+        decision=SimpleNamespace(
+            request=SimpleNamespace(
+                user_department="Technical",
+                max_security_level="internal",
+            ),
+            intent_data={"version_policy": "current_only"},
+        ),
+        trace_id="bom-document-scope",
+        user_question="Tổng BOM CRAG-EVAL-BOM-001 là bao nhiêu?",
+        user_roles=("viewer",),
+        allowed_departments=("Technical",),
+        allowed_sites=("HQ",),
+    )
+    monkeypatch.setattr(
+        support,
+        "_search_bom_rows",
+        lambda _context, part_ids, document_ids, _search: (
+            observed.append((list(part_ids), list(document_ids))) or []
+        ),
+    )
+
+    documents, _ = support.inject_bom(
+        context,
+        [],
+        ["CRAG-EVAL-BOM-001"],
+        env_bool=lambda *_args: True,
+        context_is_mechanical=lambda *_args: True,
+        search_bom_facts=lambda **_kwargs: [],
+        lookup_documents=[document],
+    )
+
+    assert observed == [(["CRAG-EVAL-BOM-001"], [43])]
+    assert documents == ()
 
 
 def test_executor_runs_one_governed_correction_across_decomposition_branches(monkeypatch):

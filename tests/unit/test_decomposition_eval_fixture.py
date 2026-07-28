@@ -39,9 +39,10 @@ def _fixture():
         _document(14, "crag_eval_restricted_v1.md", site="CRAG-EVAL-REMOTE", security="confidential"),
     ]
     rows = [{
-        "DocID": 12, "SoLuong": Decimal(row["value"]), "Unit": row["unit"],
+        "ID": 100 + index, "DocID": 12, "TrangSo": 1,
+        "SoLuong": Decimal(row["value"]), "Unit": row["unit"],
         "RawRowJson": __import__("json").dumps(row, ensure_ascii=False),
-    } for row in BOM_ROWS]
+    } for index, row in enumerate(BOM_ROWS, 1)]
     return documents, rows, [_point(document) for document in documents]
 
 
@@ -63,6 +64,15 @@ def test_manifest_covers_every_roadmap_scenario_and_simple_has_no_branches():
     assert len(simple_cases) >= 3
     assert all(case["expected_branches"] == [] for case in simple_cases)
     assert max(len(case["expected_branches"]) for case in values) == 3
+    version_case = next(
+        case for case in values if case["id"] == "decomp-version-candidate"
+    )
+    assert [
+        claim["required_terms"] for claim in version_case["expected_claims"]
+    ] == [
+        ["phiên bản", "CRAG-EVAL-NUM-001", "12"],
+        ["phiên bản", "CRAG-EVAL-ALIAS-001", "1"],
+    ]
 
 
 def test_manifest_scope_requires_ten_complex_and_three_simple_negative_cases():
@@ -77,6 +87,18 @@ def test_manifest_scope_requires_ten_complex_and_three_simple_negative_cases():
         ])
 
 
+def test_manifest_labels_every_case_that_runs_grounded_math():
+    math_cases = [case for case in cases() if case.get("requires_grounded_math")]
+
+    assert len(math_cases) == 3
+    assert all(case.get("expected_calculation") for case in math_cases)
+    assert all(
+        [source["source_row_key"] for source in case["expected_calculation"]["sources"]]
+        == ["decomp-row-a", "decomp-row-b"]
+        for case in math_cases
+    )
+
+
 def test_preflight_resolves_dynamic_source_identity_and_checks_restricted_source():
     documents, rows, points = _fixture()
     report = check_fixture_cases(cases(), documents, rows, points, collection=FIXTURE_COLLECTION)
@@ -86,6 +108,27 @@ def test_preflight_resolves_dynamic_source_identity_and_checks_restricted_source
     assert resolved["expected_citations"][0]["doc_id"] == 10
     assert resolved["expected_citations"][0]["source_id"] == "D10P1"
     assert resolved["expected_claims"][0]["allowed_source_ids"] == ["D10P1"]
+
+
+def test_preflight_resolves_grounded_math_row_sources():
+    documents, rows, points = _fixture()
+    report = check_fixture_cases(cases(), documents, rows, points, collection=FIXTURE_COLLECTION)
+
+    resolved = report["case_resolutions"]["decomp-sql-bom-doc"][
+        "expected_calculation"
+    ]
+    assert [source["doc_id"] for source in resolved["sources"]] == [12, 12]
+    assert [source["source_id"] for source in resolved["sources"]] == [
+        "BOM-101", "BOM-102",
+    ]
+    alias_math = report["case_resolutions"]["decomp-bom-alias"][
+        "expected_calculation"
+    ]
+    assert "90 ngày" in alias_math["allowed_numbers"]
+    mixed_math = report["case_resolutions"]["decomp-three-source-compare"][
+        "expected_calculation"
+    ]
+    assert "1,500" in mixed_math["allowed_numbers"]
 
 
 def test_preflight_fails_closed_when_bom_provenance_is_missing():

@@ -224,6 +224,32 @@ def test_strict_buffered_stream_never_yields_unsupported_factual_token(monkeypat
     assert events[-1].refusal_reason == "post_check_numbers"
 
 
+def test_claim_repair_removes_unsupported_code_before_serving(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    repair_calls = []
+    runtime = _prepare(
+        module,
+        monkeypatch,
+        _FakeChain(["Dùng FAKE-999 để lắp."]),
+        claim_repair_enabled=True,
+        invoke_provider=lambda messages, **_kwargs: (
+            repair_calls.append(messages)
+            or SimpleNamespace(content="Tài liệu không cung cấp mã dụng cụ lắp.")
+        ),
+    )
+    monkeypatch.setattr(module, "_context_is_mechanical", lambda *_args: True)
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == ["Tài liệu không cung cấp mã dụng cụ lắp."]
+    assert len(repair_calls) == 1
+    assert events[-1].outcome == "answered"
+
+
 def test_cancelled_stream_raises_before_any_provider_chunk_is_emitted(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     cancelled = threading.Event()
@@ -317,7 +343,7 @@ def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch, pol
         raise ExternalProcessingDenied("internal_only")
 
     with pytest.raises(ExternalProcessingDenied, match="internal_only"):
-        module._attempt_number_claim_repair(
+        module._attempt_claim_repair(
             "Chi phí 2500 USD.",
             context_text="Chi phí 1500 USD. Chi phí 1700 USD.",
             user_question="Chi phí bao nhiêu?",
@@ -382,6 +408,76 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
             cancel_event=cancelled,
             runtime=runtime,
         ))
+
+
+def test_grounded_math_generation_keeps_the_other_decomposition_answer(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    chain = _FakeChain([
+        "Phiên bản hiện hành của CRAG-EVAL-NUM-001 là 12. "
+        "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D70P1]"
+    ])
+    runtime = _prepare(
+        module,
+        monkeypatch,
+        chain,
+        grounded_math_enabled=True,
+    )
+    monkeypatch.setattr(
+        module,
+        "has_unsupported_numbers",
+        lambda *_args, **_kwargs: False,
+    )
+    plan = CalculationPlan(
+        "sum",
+        (
+            GroundedFact(Decimal("2"), "cái", 43, 1, 1, "BOM-1", "PART-A"),
+            GroundedFact(Decimal("3"), "cái", 43, 1, 1, "BOM-2", "PART-B"),
+        ),
+    )
+    docs = [
+        SimpleNamespace(
+            page_content="BOM rows",
+            metadata={
+                "doc_id": 43,
+                "trang_so": 1,
+                "version_no": 1,
+                "file_goc": "bom.md",
+                "security_level": "internal",
+                "calculation_provenance": make_calculation_provenance(
+                    plan,
+                    derive_claim(plan),
+                ),
+            },
+        ),
+        SimpleNamespace(
+            page_content="Phiên bản hiện hành là 12.",
+            metadata={
+                "doc_id": 70,
+                "trang_so": 1,
+                "version_no": 12,
+                "file_goc": "numbers.md",
+                "security_level": "internal",
+            },
+        ),
+    ]
+
+    emitted = list(_run_generation(
+        module,
+        question=(
+            "Tổng BOM CRAG-EVAL-BOM-001 là bao nhiêu và phiên bản "
+            "hiện hành của CRAG-EVAL-NUM-001 là gì?"
+        ),
+        context_text="BOM rows\nPhiên bản hiện hành là 12.",
+        docs=docs,
+        runtime=runtime,
+    ))
+
+    assert emitted == [
+        "Kết quả tính có kiểm soát: 5 cái; công thức: 2 + 3 = 5 cái. "
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D43P1]\n"
+        "Phiên bản hiện hành của CRAG-EVAL-NUM-001 là 12. "
+        "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D70P1]"
+    ]
 
 
 def test_grounded_math_disabled_uses_normal_generation_path(monkeypatch):

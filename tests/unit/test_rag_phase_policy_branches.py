@@ -387,6 +387,103 @@ def test_evidence_prefers_grounded_citations_and_audits_confidential_docs(monkey
     assert outcome.reason_code == "evidence_approved"
 
 
+def test_evidence_treats_a_grounded_negative_decomposition_branch_as_partial(
+    monkeypatch,
+):
+    from mech_chatbot.rag.phases import evidence
+
+    document = Document(
+        page_content="CRAG-EVAL-NUM-001 có giá trị 1,500.",
+        metadata={
+            "doc_id": 7,
+            "trang_so": 1,
+            "file_goc": "numbers.md",
+            "version_no": 1,
+        },
+    )
+    primary = _primary(
+        branches=(
+            {"outcome": "full_answer", "grounded_negative": False},
+            {"outcome": "insufficient_evidence", "grounded_negative": True},
+        )
+    )
+    enrichment = _enrichment([document])
+    reranked = RerankOutcome((document,), (), reason_code="reranked")
+    monkeypatch.setattr(
+        evidence,
+        "_assemble_context",
+        lambda docs, _question: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = evidence.evaluate_evidence(
+        _decision(),
+        primary,
+        enrichment,
+        reranked,
+        _state(),
+    )
+
+    assert isinstance(outcome, EvidenceOutcome)
+    assert outcome.answer_policy.outcome is AnswerOutcome.PARTIAL_ANSWER
+
+
+def test_evidence_keeps_non_bom_citations_for_mixed_decomposition(monkeypatch):
+    from mech_chatbot.rag.phases import evidence
+
+    bom = Document(
+        page_content="BOM P-1 có tổng 5 cái.",
+        metadata={
+            "doc_id": 7,
+            "trang_so": 1,
+            "file_goc": "bom.md",
+            "loai_du_lieu": "sql_bom",
+        },
+    )
+    alias = Document(
+        page_content="Mắt cú xanh kiểm tra mỗi 90 ngày.",
+        metadata={"doc_id": 8, "trang_so": 1, "file_goc": "alias.md"},
+    )
+    primary = _primary(branches=(
+        {"outcome": "full_answer"},
+        {"outcome": "full_answer"},
+    ))
+    enrichment = _enrichment([bom, alias])
+    reranked = RerankOutcome((bom, alias), (), reason_code="reranked")
+    monkeypatch.setattr(
+        evidence,
+        "_assemble_context",
+        lambda docs, _question: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = evidence.evaluate_evidence(
+        _decision(is_bom_query=True),
+        primary,
+        enrichment,
+        reranked,
+        _state(),
+    )
+
+    assert isinstance(outcome, EvidenceOutcome)
+    assert "bom.md" in outcome.ref_text
+    assert "alias.md" in outcome.ref_text
+
+
 def test_rerank_voyage_path_keeps_image_graph_and_community_context(monkeypatch):
     from mech_chatbot.rag.phases import retrieval_rerank
 
@@ -506,3 +603,73 @@ def test_generation_updates_context_and_wraps_semantic_cache(monkeypatch):
     assert debug["late_interaction_hits"] == 1
     assert debug["calculation_provenance"] == [{"status": "valid"}]
     assert cache_calls[0]["source_doc_ids"] == [7]
+
+
+def test_grounded_generation_targets_only_the_remaining_non_bom_branch():
+    from mech_chatbot.rag.phases.generation import (
+        _effective_generation_question,
+    )
+
+    decision = _decision()
+    primary = _primary(branches=(
+        {
+            "outcome": "full_answer",
+            "bom_lookup": True,
+            "subquery": "Tổng BOM P-1 là bao nhiêu?",
+        },
+        {
+            "outcome": "full_answer",
+            "bom_lookup": False,
+            "subquery": "Phiên bản hiện hành của P-2 là gì?",
+        },
+    ))
+    documents = [
+        Document(
+            page_content="BOM",
+            metadata={"calculation_provenance": {"status": "valid"}},
+        ),
+        Document(page_content="Phiên bản 12", metadata={}),
+    ]
+
+    assert _effective_generation_question(
+        decision,
+        primary,
+        documents,
+    ) == "Phiên bản hiện hành của P-2 là gì?"
+
+
+def test_grounded_generation_drops_compare_verb_after_math_is_done():
+    from mech_chatbot.rag.phases.generation import (
+        _effective_generation_question,
+    )
+
+    decision = _decision()
+    primary = _primary(branches=(
+        {
+            "outcome": "full_answer",
+            "bom_lookup": False,
+            "subquery": "Đối chiếu định mức P-1",
+        },
+        {
+            "outcome": "full_answer",
+            "bom_lookup": True,
+            "subquery": "tổng BOM P-2",
+        },
+        {
+            "outcome": "full_answer",
+            "bom_lookup": False,
+            "subquery": "quy trình lắp P-3",
+        },
+    ))
+    documents = [
+        Document(
+            page_content="BOM",
+            metadata={"calculation_provenance": {"status": "valid"}},
+        ),
+    ]
+
+    assert _effective_generation_question(
+        decision,
+        primary,
+        documents,
+    ) == "định mức P-1 và quy trình lắp P-3"

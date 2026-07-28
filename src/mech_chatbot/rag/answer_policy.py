@@ -65,9 +65,9 @@ _STOP_WORDS = {
     "what", "which", "the", "does", "document", "provide",
 }
 _NEGATIVE_TOPIC_GROUPS = (
-    ({"chi", "phi", "don", "gia", "cost", "price"}, {"chi", "phi", "don", "gia", "cost", "price"}),
-    ({"thoi", "gian", "chu", "ky", "duration", "cycle", "time"}, {"thoi", "gian", "chu", "ky", "duration", "cycle", "time"}),
-    ({"vat", "lieu", "material"}, {"vat", "lieu", "material"}),
+    ("chi phi", "don gia", "cost", "price"),
+    ("thoi gian", "chu ky", "duration", "cycle", "time"),
+    ("vat lieu", "material"),
 )
 
 
@@ -85,12 +85,18 @@ def explicit_negative_evidence_quote(question: str, context_text: str) -> str:
         context_folded = _fold(original_sentence)
         for match in _NEGATIVE_STATEMENT.finditer(context_folded):
             statement_tokens = set(re.findall(r"[a-z0-9]+", match.group(0)))
-            if question_tokens & statement_tokens:
-                return original_sentence.strip()
-            if any(
-                question_tokens & question_group and statement_tokens & statement_group
-                for question_group, statement_group in _NEGATIVE_TOPIC_GROUPS
+            matched_topics = [
+                group
+                for group in _NEGATIVE_TOPIC_GROUPS
+                if any(re.search(rf"\b{re.escape(topic)}\b", context_folded) for topic in group)
+            ]
+            if matched_topics and any(
+                re.search(rf"\b{re.escape(topic)}\b", question_folded)
+                for group in matched_topics
+                for topic in group
             ):
+                return original_sentence.strip()
+            if not matched_topics and question_tokens & statement_tokens:
                 return original_sentence.strip()
     return ""
 

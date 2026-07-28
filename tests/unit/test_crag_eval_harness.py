@@ -342,12 +342,15 @@ def test_eval_v4_artifact_contains_shared_foundation_metrics(tmp_path, monkeypat
     )
     rag_chat = lambda *args, **kwargs: (
             iter([answer]),
-            "target.md Trang 1 Version 12 SourceID D41P1",
+            (
+                "other-1.md Trang 1 Version 1 SourceID D1P1\n"
+                "target.md Trang 1 Version 12 SourceID D41P1"
+            ),
             [],
             [],
             {
                 "retrieved_docs": retrieved,
-                "citation_docs": [retrieved[-1]],
+                "citation_docs": [retrieved[0], retrieved[-1]],
                 "evidence_state": "SUFFICIENT",
                 "pipeline_namespace": "eval-v4",
                 "generation_metrics": {},
@@ -569,6 +572,94 @@ def test_eval_case_fails_when_runtime_answer_policy_differs_from_family_contract
         "evidence_state": "SUFFICIENT",
         "correction_allowed": False,
     }
+
+
+def test_eval_prefers_the_typed_runtime_outcome_over_answer_wording(tmp_path):
+    runner = _load("run_eval_typed_outcome", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "typed-outcome.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    intent_extractor = lambda *args, **kwargs: (
+        None, None, None, None, None, {"version_policy": "current_only"}
+    )
+    rag_chat = lambda *args, **kwargs: (
+        iter([
+            "Tài liệu xác nhận có quy trình lắp, nhưng không cung cấp các bước cụ thể."
+        ]),
+        "",
+        [],
+        [],
+        {
+            "retrieved_docs": [{
+                "file_goc": "crag_eval_numbers_v12.md",
+                "doc_id": 41,
+                "trang": 1,
+                "version_no": 12,
+            }],
+            "citation_docs": [],
+            "answer_outcome": "full_answer",
+            "evidence_state": "SUFFICIENT",
+        },
+    )
+
+    report, passed = runner.run_evaluation(
+        [manifest], tmp_path / "result", "candidate", preflight=False,
+        intent_extractor=intent_extractor, rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is True
+    assert report["cases"][0]["actual_outcome"] == "full_answer"
+
+
+def test_typed_refusal_overrides_stale_answer_policy_diagnostics(tmp_path):
+    from mech_chatbot.rag.execution import (
+        RagCompleted,
+        RagDiagnostics,
+        RagPrepared,
+        RagToken,
+    )
+
+    runner = _load("run_eval_typed_refusal", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "typed-refusal.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    diagnostics = RagDiagnostics.from_mapping({
+        "retrieved_docs": [{
+            "file_goc": "crag_eval_numbers_v12.md",
+            "doc_id": 41,
+            "trang": 1,
+            "version_no": 12,
+        }],
+        "answer_outcome": "full_answer",
+        "evidence_state": "SUFFICIENT",
+    })
+
+    class RefusingExecutor:
+        def run(self, request, invocation, cancellation=None):
+            yield RagPrepared("", (), (), diagnostics)
+            yield RagToken("Tài liệu hiện tại không cung cấp thông tin này.")
+            yield RagCompleted(
+                "refused",
+                invocation.trace_id,
+                diagnostics,
+                refusal_reason="post_check_materials_codes",
+            )
+
+    report, passed = runner.run_evaluation(
+        [manifest],
+        tmp_path / "result",
+        "candidate",
+        preflight=False,
+        intent_extractor=lambda *args, **kwargs: (
+            None, None, None, None, None, {"version_policy": "current_only"}
+        ),
+        rag_executor=RefusingExecutor(),
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is False
+    assert report["cases"][0]["actual_outcome"] == "insufficient_evidence"
+    assert report["cases"][0]["completion_outcome"] == "refused"
+    assert report["cases"][0]["refusal_reason"] == "post_check_materials_codes"
 
 
 def test_eval_report_includes_decomposition_branch_and_budget_evidence(tmp_path, monkeypatch):

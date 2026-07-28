@@ -204,8 +204,8 @@ def test_interaction_router_and_query_decomposition_policy_branches(monkeypatch)
     assert plan.is_complex and not plan.used_fallback
     fallback = query_decomposition.compile_query_plan("A-1 và B-2", {}, planner=lambda _: {"subqueries": ["X-9"]})
     assert fallback.used_fallback
-    assert query_decomposition.build_partial_answer_instruction([]) == ""
-    assert "không thể truy cập" in query_decomposition.build_partial_answer_instruction([{"outcome": "access_denied"}])
+    assert query_decomposition.build_decomposition_instruction([]) == ""
+    assert "không thể truy cập" in query_decomposition.build_decomposition_instruction([{"outcome": "access_denied"}])
     assert query_decomposition.merge_branch_documents([
         [Document(page_content="x", metadata={"doc_id": 1})],
         [Document(page_content="x", metadata={"doc_id": 1})],

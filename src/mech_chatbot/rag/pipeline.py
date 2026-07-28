@@ -7,7 +7,7 @@ existing retrieval/generation implementation and compatibility surface.
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from mech_chatbot.config.logging import log_trace
@@ -81,12 +81,43 @@ def _run_retrieval(
     enrichment = enrich_retrieval(route_decision, primary, state)
     if isinstance(enrichment, PhaseTerminal):
         return enrichment
+    primary = _reconcile_grounded_math(primary, enrichment)
     from mech_chatbot.rag.phases.retrieval_rerank import rerank_retrieval
 
     reranked = rerank_retrieval(route_decision, enrichment, state)
     if isinstance(reranked, PhaseTerminal):
         return reranked
     return _RetrievalResult(primary, enrichment, reranked)
+
+
+def _reconcile_grounded_math(primary, enrichment):
+    calculation_docs = [
+        document
+        for document in enrichment.documents
+        if (
+            document.metadata.get("calculation_provenance", {}).get("status")
+            == "valid"
+        )
+    ]
+    if not calculation_docs:
+        return primary
+    from mech_chatbot.rag.phases.diagnostics import make_source_snapshot
+    from mech_chatbot.rag.query_decomposition import (
+        build_decomposition_instruction,
+        reconcile_grounded_calculation_branch,
+    )
+
+    branches = reconcile_grounded_calculation_branch(
+        primary.decomposition_branches,
+        make_source_snapshot(calculation_docs),
+    )
+    if branches == primary.decomposition_branches:
+        return primary
+    return replace(
+        primary,
+        decomposition_branches=branches,
+        decomposition_notice=build_decomposition_instruction(branches),
+    )
 
 
 def execute_pipeline(state):
