@@ -16,7 +16,11 @@ from scripts.crag_eval.run_rollout import (
     governance_scope_sha256,
     require_source_commit,
 )
-from scripts.decomposition_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN
+from scripts.decomposition_eval.constants import (
+    FIXTURE_BATCH,
+    FIXTURE_COLLECTION,
+    LIVE_OPT_IN,
+)
 from scripts.eval.provider_smoke import (
     provider_configuration_sha256_for_settings,
     provider_environment_for_settings,
@@ -32,7 +36,12 @@ def require_clean_worktree():
         raise RuntimeError("decomposition rollout requires a clean tracked worktree")
 
 
-def build_evaluation_environment(*, enabled: bool):
+def build_evaluation_environment(
+    *,
+    enabled: bool,
+    collection: str = FIXTURE_COLLECTION,
+    fixture_batch: str = FIXTURE_BATCH,
+):
     environment = os.environ.copy()
     environment.update({
         "RAG_EXECUTION_CONTEXT": "evaluation",
@@ -41,7 +50,9 @@ def build_evaluation_environment(*, enabled: bool):
         "RAG_QUERY_DECOMPOSITION_ENABLED": str(enabled).lower(),
         "RAG_LATE_INTERACTION_ENABLED": "false", "RAG_GRAPH_RETRIEVAL_ENABLED": "false",
         "SEMANTIC_CACHE_ENABLED": "false", "STRICT_REALTIME_STREAMING": "false",
-        "QDRANT_COLLECTION": FIXTURE_COLLECTION,
+        "QDRANT_COLLECTION": collection,
+        "RAG_EVAL_EXPECTED_COLLECTION": collection,
+        "RAG_EVAL_FIXTURE_BATCH": fixture_batch,
         "RAG_EVAL_PREFLIGHT_KIND": "decomposition",
         "RAG_EVAL_ROUTER_MODE": "offline", "LLM_ROUTER_ENABLED": "false",
         "SEMANTIC_ROUTER_ENABLED": "false",
@@ -58,9 +69,15 @@ def _run(
     enabled,
     provider_sha,
     governance_sha,
+    collection,
+    fixture_batch,
     provider_environment=None,
 ):
-    environment = build_evaluation_environment(enabled=enabled)
+    environment = build_evaluation_environment(
+        enabled=enabled,
+        collection=collection,
+        fixture_batch=fixture_batch,
+    )
     environment.update(provider_environment or {})
     environment.update({
         "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256": provider_sha,
@@ -86,6 +103,8 @@ def run_rollout(
     *,
     provider_smoke_artifact,
     rollback_test_artifact=None,
+    collection=FIXTURE_COLLECTION,
+    fixture_batch=FIXTURE_BATCH,
 ):
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before running live staging evaluation")
@@ -108,12 +127,34 @@ def run_rollout(
         expected_provider_sha256=provider_sha,
     )
     governance_sha = governance_scope_sha256(manifest)
-    baseline = _run("baseline", manifest, output, trace, enabled=False, provider_sha=provider_sha, governance_sha=governance_sha, provider_environment=provider_environment)
+    baseline = _run(
+        "baseline",
+        manifest,
+        output,
+        trace,
+        enabled=False,
+        provider_sha=provider_sha,
+        governance_sha=governance_sha,
+        collection=collection,
+        fixture_batch=fixture_batch,
+        provider_environment=provider_environment,
+    )
     require_clean_worktree()
     if _sha(manifest) != manifest_sha:
         raise RuntimeError("manifest changed after baseline")
     require_source_commit(git_sha)
-    candidate = _run("candidate", manifest, output, trace, enabled=True, provider_sha=provider_sha, governance_sha=governance_sha, provider_environment=provider_environment)
+    candidate = _run(
+        "candidate",
+        manifest,
+        output,
+        trace,
+        enabled=True,
+        provider_sha=provider_sha,
+        governance_sha=governance_sha,
+        collection=collection,
+        fixture_batch=fixture_batch,
+        provider_environment=provider_environment,
+    )
     require_clean_worktree()
     if _sha(manifest) != manifest_sha:
         raise RuntimeError("manifest changed after candidate")
@@ -129,7 +170,7 @@ def run_rollout(
         "git_sha": git_sha, "manifest_sha256": manifest_sha,
         "snapshot_fingerprint": fingerprint, "provider_configuration_sha256": provider_sha,
         "concurrency": 1, "governance_scope_sha256": governance_sha,
-        "collection": FIXTURE_COLLECTION,
+        "collection": collection,
     }
     rollback = {}
     if rollback_test_artifact:
@@ -138,6 +179,11 @@ def run_rollout(
         if evidence.get("schema") != "rollback-test-evidence-v1" or evidence.get("passed") is not True or evidence.get("git_sha") != git_sha or set(evidence.get("flags") or []) != {"RAG_QUERY_DECOMPOSITION_ENABLED"}:
             raise ValueError("rollback evidence must pass for this commit and decomposition flag")
         rollback = _artifact_reference(rollback_test_artifact)
+    production_collection = os.getenv(
+        "RAG_PRODUCTION_QDRANT_COLLECTION",
+        "TaiLieuKyThuat_v2",
+    )
+    touches_production = collection == production_collection
     pair = {
         "schema": "rollout-evidence-pair-v1", "source_commit": git_sha,
         "run_id": output.name,
@@ -145,7 +191,10 @@ def run_rollout(
         "provider_smoke": _artifact_reference(Path(provider_smoke_artifact)),
         "baseline": {**context, **_artifact_reference(output / "baseline" / "eval.json"), **_artifact_reference(output / "baseline" / "trace.json", prefix="trace"), **baseline},
         "candidate": {**context, **_artifact_reference(output / "candidate" / "eval.json"), **_artifact_reference(output / "candidate" / "trace.json", prefix="trace"), **candidate},
-        "data_plane": {"production_collection": os.getenv("RAG_PRODUCTION_QDRANT_COLLECTION", "TaiLieuKyThuat_v2"), "mutation_mode": "staging"},
+        "data_plane": {
+            "production_collection": production_collection,
+            "mutation_mode": "in_place" if touches_production else "staging",
+        },
         "gate": _artifact_reference(gate_path),
         "rollback": {"flags": ["RAG_QUERY_DECOMPOSITION_ENABLED"], "defaults_disabled": True, **rollback},
     }
@@ -154,7 +203,30 @@ def run_rollout(
     from mech_chatbot.evaluation.rollout_guardrails import evaluate_rollout_pair
     guardrail = evaluate_rollout_pair(pair)
     gate = json.loads(gate_path.read_text(encoding="utf-8"))
-    report = {"schema": "decomposition-rollout-run-v1", "git_sha": git_sha, "manifest_sha256": manifest_sha, "fixture_fingerprint": fingerprint, "baseline": baseline, "candidate": candidate, "gate_exit": gate_result.returncode, "passed": bool(gate["passed"]) and bool(guardrail["production_eligible"]), "rollout_pair_sha256": _sha(pair_path), "production_eligible": bool(guardrail["production_eligible"]), "guardrail_checks": guardrail["checks"]}
+    technical_guardrails_passed = all(
+        passed
+        for name, passed in guardrail["checks"].items()
+        if not (
+            touches_production
+            and name == "production_collection_not_mutated"
+        )
+    )
+    technical_passed = bool(gate["passed"]) and technical_guardrails_passed
+    report = {
+        "schema": "decomposition-rollout-run-v1",
+        "git_sha": git_sha,
+        "manifest_sha256": manifest_sha,
+        "fixture_fingerprint": fingerprint,
+        "baseline": baseline,
+        "candidate": candidate,
+        "gate_exit": gate_result.returncode,
+        "passed": technical_passed,
+        "technical_eligible": technical_passed,
+        "production_eligible": False,
+        "decision_status": "pending_human_review",
+        "rollout_pair_sha256": _sha(pair_path),
+        "guardrail_checks": guardrail["checks"],
+    }
     (output / "run.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return report
 
@@ -166,6 +238,8 @@ def main():
     parser.add_argument("--trace", type=Path, default=ROOT / "logs" / "rag_trace.jsonl")
     parser.add_argument("--provider-smoke-artifact", type=Path, required=True)
     parser.add_argument("--rollback-test-artifact", type=Path)
+    parser.add_argument("--collection", default=FIXTURE_COLLECTION)
+    parser.add_argument("--fixture-batch", default=FIXTURE_BATCH)
     args = parser.parse_args()
     report = run_rollout(
         args.manifest,
@@ -173,6 +247,8 @@ def main():
         args.trace,
         provider_smoke_artifact=args.provider_smoke_artifact,
         rollback_test_artifact=args.rollback_test_artifact,
+        collection=args.collection,
+        fixture_batch=args.fixture_batch,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["passed"] else 1

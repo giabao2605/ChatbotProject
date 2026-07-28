@@ -27,6 +27,8 @@ def _point(document):
         "doc_id": document["DocID"], "page": 1, "version_no": document["VersionNo"],
         "source_system": "crag-eval-v1", "servable": True, "is_current": True,
         "site": document["Site"], "security_level": document["SecurityLevel"],
+        "owner_department": document["OwnerDepartment"],
+        "phong_ban_quyen": [document["OwnerDepartment"]],
     }
 
 
@@ -151,6 +153,21 @@ def test_rollout_toggles_only_decomposition_between_arms(monkeypatch):
     assert baseline["QDRANT_COLLECTION"] == candidate["QDRANT_COLLECTION"] == FIXTURE_COLLECTION
 
 
+def test_rollout_can_read_fixture_from_main_collection():
+    environment = build_evaluation_environment(
+        enabled=True,
+        collection="TaiLieuKyThuat_v2",
+        fixture_batch="department-decomposition-eval-v1",
+    )
+
+    assert environment["QDRANT_COLLECTION"] == "TaiLieuKyThuat_v2"
+    assert environment["RAG_EVAL_EXPECTED_COLLECTION"] == "TaiLieuKyThuat_v2"
+    assert (
+        environment["RAG_EVAL_FIXTURE_BATCH"]
+        == "department-decomposition-eval-v1"
+    )
+
+
 def test_decomposition_rollout_records_runtime_provider_hash(monkeypatch, tmp_path):
     from mech_chatbot.config import settings as settings_module
     from mech_chatbot.config.settings import Settings
@@ -234,6 +251,8 @@ def test_decomposition_rollout_records_runtime_provider_hash(monkeypatch, tmp_pa
         output,
         trace,
         provider_smoke_artifact=smoke,
+        collection="TaiLieuKyThuat_v2",
+        fixture_batch="department-decomposition-eval-v1",
     )
     pair = json.loads((output / "rollout_pair.json").read_text(encoding="utf-8"))
 
@@ -241,6 +260,8 @@ def test_decomposition_rollout_records_runtime_provider_hash(monkeypatch, tmp_pa
     assert pair["candidate"]["provider_configuration_sha256"] == expected
     assert report["passed"] is False
     assert report["production_eligible"] is False
+    assert report["decision_status"] == "pending_human_review"
+    assert pair["data_plane"]["mutation_mode"] == "in_place"
     assert report["guardrail_checks"] == {"rollback_contract_valid": False}
 
 

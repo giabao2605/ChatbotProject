@@ -144,6 +144,7 @@ uploads/
 sessions/
 .local/
 data/demo_wave_v1/
+data/department_decomposition_eval_v1/
 reports/demo_wave/
 *.tmp
 *.tmp.*
