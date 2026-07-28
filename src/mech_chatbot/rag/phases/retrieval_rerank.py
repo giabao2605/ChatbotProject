@@ -333,7 +333,7 @@ def rerank_retrieval(
     enrichment: EnrichmentOutcome,
     state: Any,
     *,
-    decomposition_branch_count: int = 0,
+    answerable_branch_count: int = 0,
 ) -> RerankOutcome | PhaseTerminal:
     request = decision.request
     trace_id = request.trace_id
@@ -361,9 +361,9 @@ def rerank_retrieval(
             runtime,
         )
         branch_rank_is_final = (
-            decomposition_branch_count > 0
+            answerable_branch_count > 0
             and str(enrichment.retrieval_mode).startswith("decomposed_")
-            and len(real_docs) <= decomposition_branch_count
+            and len(real_docs) <= answerable_branch_count
             and not graph_docs
             and not community_docs
             and not late_used

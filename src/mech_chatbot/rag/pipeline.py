@@ -88,7 +88,10 @@ def _run_retrieval(
         route_decision,
         enrichment,
         state,
-        decomposition_branch_count=len(primary.decomposition_branches),
+        answerable_branch_count=sum(
+            branch.get("outcome") == "full_answer"
+            for branch in primary.decomposition_branches
+        ),
     )
     if isinstance(reranked, PhaseTerminal):
         return reranked
