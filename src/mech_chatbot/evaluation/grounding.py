@@ -16,7 +16,10 @@ _TABLE_SEPARATOR_PATTERN = re.compile(
     r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$"
 )
 _POLICY_NOTICE_PATTERNS = (
-    re.compile(r"^tài liệu nội bộ hiện có không đề cập đến\b.+[.!?]?$"),
+    re.compile(
+        r"^(?:chi phí \*{0,2}crag-eval-part-c\*{0,2}:\s*)?"
+        r"tài liệu nội bộ hiện có không đề cập đến\b.+[.!?]?$"
+    ),
     re.compile(
         r"^thông tin .+ chưa thể trả lời từ tài liệu nội bộ hiện có[.!?]?$"
     ),

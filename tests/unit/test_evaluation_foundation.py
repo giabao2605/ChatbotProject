@@ -113,6 +113,10 @@ def test_claim_evaluator_does_not_match_number_as_substring():
     "notice",
     [
         "Tài liệu nội bộ hiện có không đề cập đến chi phí CRAG-EVAL-PART-C.",
+        (
+            "Chi phí **CRAG-EVAL-PART-C**: Tài liệu nội bộ hiện có "
+            "không đề cập đến thông tin này."
+        ),
         "Thông tin về mã cấu hình được hỏi chưa thể trả lời từ tài liệu nội bộ hiện có.",
         "Mã cấu hình được hỏi chưa thể trả lời do không có nguồn có thể truy cập trong dữ liệu hiện có.",
         "Mã cấu hình được hỏi chưa thể trả lời do không có nguồn được phép truy cập.",
@@ -131,12 +135,24 @@ def test_claim_extractor_ignores_partial_answer_policy_notices(notice):
     }]
 
 
-def test_claim_extractor_does_not_hide_content_prefixed_to_policy_notice():
-    unsafe = (
-        "CRAG-EVAL-SECRET-001 = SECRET-VALUE chưa thể trả lời "
-        "do không có nguồn được phép truy cập."
-    )
-
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        (
+            "CRAG-EVAL-SECRET-001 = SECRET-VALUE chưa thể trả lời "
+            "do không có nguồn được phép truy cập."
+        ),
+        (
+            "Chi phí **SECRET-VALUE**: Tài liệu nội bộ hiện có "
+            "không đề cập đến thông tin này."
+        ),
+        (
+            "Chi phí **CRAG-EVAL-SECRET-001**: Tài liệu nội bộ hiện có "
+            "không đề cập đến thông tin này."
+        ),
+    ],
+)
+def test_claim_extractor_does_not_hide_content_prefixed_to_policy_notice(unsafe):
     assert extract_claims(unsafe) == [{"text": unsafe, "source_ids": []}]
 
 
