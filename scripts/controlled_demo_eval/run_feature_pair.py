@@ -25,6 +25,7 @@ from scripts.eval.provider_smoke import (
     provider_configuration_sha256_for_settings,
     provider_environment_for_settings,
     validate_provider_smoke_artifact,
+    validate_provider_smoke_for_baseline,
 )
 
 
@@ -318,6 +319,11 @@ def run_feature_pair(
     manifest_sha256 = inventory_binding["manifest_sha256"]
     governance_sha256 = governance_scope_sha256(manifest)
 
+    validate_provider_smoke_for_baseline(
+        provider_smoke_artifact,
+        expected_provider_sha256=provider_sha256,
+        baseline_started_at=_utc_now(),
+    )
     baseline = _run_arm(
         stage, "baseline", manifest, output_dir, trace_path,
         collection=collection, provider_sha256=provider_sha256,

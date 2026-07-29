@@ -196,6 +196,7 @@ def test_decomposition_rollout_records_runtime_provider_hash(monkeypatch, tmp_pa
             "successful_requests": 5,
             "failed_requests": 0,
             "provider_retries": 0,
+            "completed_at": "2026-07-28T00:00:00Z",
             "provider_configuration_sha256": expected,
             "provider_outcome": {"provider_blocked": False},
         }),
@@ -203,6 +204,7 @@ def test_decomposition_rollout_records_runtime_provider_hash(monkeypatch, tmp_pa
     )
 
     monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-28T00:01:00Z")
     monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
     monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
     monkeypatch.setattr(

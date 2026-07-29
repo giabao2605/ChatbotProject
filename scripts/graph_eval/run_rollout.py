@@ -19,7 +19,7 @@ from scripts.crag_eval.run_rollout import (
 from scripts.eval.provider_smoke import (
     provider_configuration_sha256_for_settings,
     provider_environment_for_settings,
-    validate_provider_smoke_artifact,
+    validate_provider_smoke_for_baseline,
 )
 from scripts.graph_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN, ROOT
 
@@ -109,11 +109,12 @@ def run_rollout(
     settings = load_settings()
     provider_sha = provider_configuration_sha256_for_settings(settings)
     provider_environment = provider_environment_for_settings(settings)
-    validate_provider_smoke_artifact(
+    governance_sha = governance_scope_sha256(manifest)
+    validate_provider_smoke_for_baseline(
         provider_smoke_artifact,
         expected_provider_sha256=provider_sha,
+        baseline_started_at=_utc_now(),
     )
-    governance_sha = governance_scope_sha256(manifest)
     baseline = _run("baseline", manifest, output, trace, enabled=False, provider_sha=provider_sha, governance_sha=governance_sha, provider_environment=provider_environment)
     require_clean_worktree()
     if _sha(manifest) != manifest_sha:

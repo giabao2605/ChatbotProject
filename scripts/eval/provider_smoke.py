@@ -21,7 +21,10 @@ for value in (ROOT, SRC):
 
 from mech_chatbot.evaluation.milestone_decisions import classify_provider_outcome
 from mech_chatbot.config.settings import Settings
-from mech_chatbot.governance.provider_smoke import provider_smoke_artifact_valid
+from mech_chatbot.governance.provider_smoke import (
+    provider_smoke_artifact_valid,
+    provider_smoke_fresh_for_baseline,
+)
 
 
 _SMOKE_MESSAGES = [
@@ -152,6 +155,24 @@ def validate_provider_smoke_artifact(
         expected_provider_sha256=expected_provider_sha256,
     ):
         raise ValueError("provider smoke artifact is invalid")
+    return artifact
+
+
+def validate_provider_smoke_for_baseline(
+    path: str | Path,
+    *,
+    expected_provider_sha256: str,
+    baseline_started_at: object,
+) -> dict[str, object]:
+    artifact = validate_provider_smoke_artifact(
+        path,
+        expected_provider_sha256=expected_provider_sha256,
+    )
+    if not provider_smoke_fresh_for_baseline(
+        artifact,
+        baseline_started_at=baseline_started_at,
+    ):
+        raise ValueError("provider smoke artifact is older than 30 minutes")
     return artifact
 
 

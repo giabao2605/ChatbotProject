@@ -6,7 +6,12 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def _write_provider_smoke(path, provider_sha):
+def _write_provider_smoke(
+    path,
+    provider_sha,
+    *,
+    completed_at="2026-07-28T00:00:00Z",
+):
     path.write_text(
         json.dumps({
             "schema": "provider-smoke-v1",
@@ -15,6 +20,7 @@ def _write_provider_smoke(path, provider_sha):
             "successful_requests": 5,
             "failed_requests": 0,
             "provider_retries": 0,
+            "completed_at": completed_at,
             "provider_configuration_sha256": provider_sha,
             "provider_outcome": {"provider_blocked": False},
         }),
@@ -47,6 +53,7 @@ def test_graph_rollout_records_runtime_provider_hash(monkeypatch, tmp_path):
     )
 
     monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-28T00:01:00Z")
     monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
     monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
     monkeypatch.setattr(
@@ -130,6 +137,7 @@ def test_graph_rollout_rejects_manifest_drift_after_baseline(monkeypatch, tmp_pa
     )
 
     monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-28T00:01:00Z")
     monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
     monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
     monkeypatch.setattr(rollout, "_sha", lambda path: next(checks))
@@ -150,6 +158,52 @@ def test_graph_rollout_rejects_manifest_drift_after_baseline(monkeypatch, tmp_pa
         rollout.run_rollout(
             manifest,
             output,
+            trace,
+            provider_smoke_artifact=smoke,
+        )
+
+
+def test_graph_rollout_rejects_stale_provider_smoke_before_eval(
+    monkeypatch,
+    tmp_path,
+):
+    from mech_chatbot.config import settings as settings_module
+    from mech_chatbot.config.settings import Settings
+    from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
+    from scripts.graph_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("{}\n", encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    snapshot = Settings.from_env({})
+    smoke = _write_provider_smoke(
+        tmp_path / "provider-smoke.json",
+        provider_configuration_sha256_for_settings(snapshot),
+        completed_at="2026-07-28T00:00:00Z",
+    )
+
+    monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+    monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
+    monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
+    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-28T00:31:00Z")
+    monkeypatch.setattr(
+        rollout.subprocess,
+        "check_output",
+        lambda *args, **kwargs: "abc123\n",
+    )
+    monkeypatch.setattr(
+        rollout,
+        "_run",
+        lambda *args, **kwargs: pytest.fail(
+            "evaluation started with stale smoke"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="older than 30 minutes"):
+        rollout.run_rollout(
+            manifest,
+            tmp_path / "rollout",
             trace,
             provider_smoke_artifact=smoke,
         )

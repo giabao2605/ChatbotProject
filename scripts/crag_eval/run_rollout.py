@@ -15,15 +15,13 @@ from scripts.crag_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN
 from scripts.eval.provider_smoke import (
     provider_configuration_sha256_for_settings,
     provider_environment_for_settings,
-    validate_provider_smoke_artifact,
+    validate_provider_smoke_for_baseline,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
-from mech_chatbot.governance.provider_smoke import provider_smoke_fresh_for_baseline
-
 GOVERNANCE_FIELDS = (
     "user_department",
     "user_roles",
@@ -245,16 +243,12 @@ def run_rollout(
     settings = load_settings()
     provider_config_sha = provider_configuration_sha256_for_settings(settings)
     provider_environment = provider_environment_for_settings(settings)
-    provider_smoke = validate_provider_smoke_artifact(
+    governance_sha = governance_scope_sha256(manifest)
+    validate_provider_smoke_for_baseline(
         provider_smoke_artifact,
         expected_provider_sha256=provider_config_sha,
-    )
-    if not provider_smoke_fresh_for_baseline(
-        provider_smoke,
         baseline_started_at=_utc_now(),
-    ):
-        raise ValueError("provider smoke artifact is older than 30 minutes")
-    governance_sha = governance_scope_sha256(manifest)
+    )
     baseline = _run(
         "baseline", manifest, output, trace, enabled=False, router_mode=router_mode,
         provider_configuration_sha256=provider_config_sha,
