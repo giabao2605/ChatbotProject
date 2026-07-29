@@ -516,6 +516,22 @@ def test_grounded_calculation_keeps_an_unrelated_cost_denial():
     assert "chi phí" in quote
 
 
+def test_reconcile_grounded_math_ignores_null_provenance():
+    from mech_chatbot.rag.pipeline import _reconcile_grounded_math
+
+    primary = _primary()
+    enrichment = _enrichment(
+        [
+            Document(
+                page_content="ordinary document",
+                metadata={"calculation_provenance": None},
+            )
+        ]
+    )
+
+    assert _reconcile_grounded_math(primary, enrichment) is primary
+
+
 def test_evidence_keeps_non_bom_citations_for_mixed_decomposition(monkeypatch):
     from mech_chatbot.rag.phases import evidence
 

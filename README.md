@@ -481,6 +481,20 @@ $env:PYTHONPATH="src"; $env:APP_SERVER_HOST="0.0.0.0"; $env:APP_SERVER_PORT="808
 > PYTHONPATH=src APP_SERVER_HOST=0.0.0.0 APP_SERVER_PORT=8080 python -m mech_chatbot.api.app_server
 > ```
 
+Run the baseline browser E2E only after the RAG API is ready on port 8100, the
+browser app is ready on port 8080, and
+`.local/demo-wave-credentials.json` exists:
+
+```powershell
+$env:E2E_BROWSER_CHANNEL="chrome"
+npm --prefix web-ui run test:e2e
+```
+
+Omit `E2E_BROWSER_CHANNEL` after installing bundled Chromium with
+`npx playwright install chromium` from `web-ui`. The E2E runner reads demo
+credentials only inside the test process and keeps traces/videos off while
+login and chat requests are in flight.
+
 ---
 
 ## Application Pages

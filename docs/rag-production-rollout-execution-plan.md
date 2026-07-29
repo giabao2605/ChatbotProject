@@ -178,6 +178,20 @@ và controlled-demo assignment mà không dùng credential production.
 - RBAC, department, site và clearance phản ánh đúng qua public API.
 - Không credential nào xuất hiện trong git diff, report hoặc console transcript.
 
+### Trạng thái thực thi 2026-07-29
+
+- Reuse 33 account `demo_...` hiện có; không tạo account mới và không chạy
+  cleanup.
+- `demo_viewer`, `demo_uploader` và `demo_reviewer` đều login và đọc profile
+  thành công qua `/api/auth/login` + `/api/auth/me`.
+- Public profile xác nhận đúng Technical/HQ; clearance lần lượt là internal,
+  internal và confidential; role lần lượt là viewer, uploader và
+  knowledge_approver/reviewer.
+- Browser flow xác nhận actor Technical không nhận nội dung IT, còn
+  `demo_owner_it` nhận đúng claim SLA 4 giờ và citation IT tương ứng.
+- Credential chỉ được load trong process test; không ghi vào diff, report hoặc
+  console.
+
 ## Ticket 4: Thêm browser E2E và chứng minh baseline all-off
 
 ### Mục tiêu
@@ -200,6 +214,25 @@ RAG nền usable trước khi đánh giá feature nâng cao.
 - Allowed và denied flow đều đạt.
 - Không wrong-answer/leakage regression trên baseline corpus.
 - P95, provider error, retry và fallback được ghi metadata-only.
+
+### Trạng thái thực thi 2026-07-29
+
+- Playwright Chromium harness tối thiểu có 3 test và chạy lại đạt `3/3` bằng
+  Chrome hệ Chromium có sẵn qua `E2E_BROWSER_CHANNEL=chrome`; bundled Chromium
+  chưa dùng được vì download bị treo trên máy này.
+- Browser test xác nhận login/profile thật, SSE hoàn tất với claim SLA 4 giờ và
+  citation; anonymous/session/CSRF bị chặn; actor Technical không rò claim hoặc
+  nguồn IT.
+- RAG health đạt `status=ok`, `rag_loaded=true`, activation hợp lệ/live và toàn
+  bộ governed feature OFF. Cache identity là
+  `d=IT|lvl=internal|s=HQ|pipe=0ef99535644c00f41c51`.
+- Golden public `/chat` ban đầu bắt được lỗi deterministic khi payload ngoài hệ
+  thống có `calculation_provenance=null`; regression test đã RED/GREEN, 101 test
+  liên quan đạt và golden chạy lại đạt `5/5`.
+- Benchmark metadata-only dùng 5 câu, không lỗi: concurrency 1 có complete P95
+  `211 ms`; concurrency 5 có complete P95 `554 ms`. Runtime log sau khi khóa
+  provider Voyage không có provider error, retry hoặc fallback.
+- Frontend unit `32/32`, production build và `npm audit` đạt.
 
 ## Ticket 5: Hoàn tất CRAG + Claim Repair
 

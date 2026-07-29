@@ -103,8 +103,13 @@ def _reconcile_grounded_math(primary, enrichment):
         document
         for document in enrichment.documents
         if (
-            document.metadata.get("calculation_provenance", {}).get("status")
-            == "valid"
+            isinstance(
+                provenance := document.metadata.get(
+                    "calculation_provenance"
+                ),
+                dict,
+            )
+            and provenance.get("status") == "valid"
         )
     ]
     if not calculation_docs:
