@@ -1,0 +1,80 @@
+{
+  "artifact_sha256": {
+    "coverage-backend.json": "597aa2c3485283fe8182a5d7a2c8552a46f27763f108202162d7e53bd010d040",
+    "coverage-owned.json": "006a6a743e9e4d060adb885e0f4003c1821123d3e635b5d728f0a8b163cb1796",
+    "coverage-touched.json": "1b45b58b81604fe91b1f498a3f395880a40b9417b56783e7256c5f77bc9ce2a3",
+    "sql-qdrant-consistency.txt": "643d87c80cea4c390a03d5c2e0f32c67354b84a8b90fb3583124c265b908494b",
+    "sql-qdrant-snapshot.json": "f089d880b44851ef41c7a321658b77045fcc46b40e95b08b77c0b401b62febbc",
+    "validation-summary.txt": "7b7a6c4bce6e70f946b5785511b3cff7cb18c99427fcae949057d828664fd7fa"
+  },
+  "artifact_tracking": {
+    "coverage-backend.json": "local_raw_report_ignored_by_repository_policy",
+    "coverage-owned.json": "local_raw_report_ignored_by_repository_policy",
+    "coverage-touched.json": "local_raw_report_ignored_by_repository_policy",
+    "sql-qdrant-consistency.txt": "tracked",
+    "sql-qdrant-snapshot.json": "tracked",
+    "validation-summary.txt": "tracked"
+  },
+  "closure_exception": {
+    "affected_modules": [
+      "src/mech_chatbot/rag/pipeline.py",
+      "src/mech_chatbot/rag/pipeline_steps.py"
+    ],
+    "gate": "changed_module_coverage_80_line_and_branch",
+    "rationale": "Both legacy monoliths received fail-closed policy changes with direct regression tests. Global backend and Phase 3 owned coverage pass 80/80; no threshold was lowered.",
+    "severity": "P2",
+    "accepted_on": "2026-07-22",
+    "status": "accepted_by_user_without_lowering_threshold"
+  },
+  "closure_status": "completed_validated_with_accepted_p2_exception",
+  "collection": "TaiLieuKyThuat_v2",
+  "data_snapshot": {
+    "document_count": 18,
+    "fixture_created": false,
+    "ingest_or_reingest_performed": false,
+    "read_only": true,
+    "snapshot_schema": "phase3-ingestion-consistency-snapshot-v1",
+    "source_scope": "upload_documents",
+    "status": "validated_on_user_authorized_demo_sql_and_qdrant"
+  },
+  "dependency_lock_sha256": "b3b13bb2ed4dfad3f03d7d59dd6c39eccd39424a098013961755fe2609992662",
+  "execution": {
+    "commands": [
+      ".\\chat_env\\Scripts\\python.exe -m pytest -q --cov=mech_chatbot --cov-branch --cov-report=json:reports/refactor/phase-3/candidate/coverage-backend.json (exit 0; 2008 passed, 22 skipped)",
+      ".\\chat_env\\Scripts\\python.exe scripts/quality/check_coverage.py reports/refactor/phase-3/candidate/coverage-backend.json --min-line 80 --min-branch 80 (exit 0)",
+      ".\\chat_env\\Scripts\\python.exe scripts/quality/check_coverage.py reports/refactor/phase-3/candidate/coverage-owned.json --min-line 80 --min-branch 80 (exit 0)",
+      ".\\chat_env\\Scripts\\python.exe -m pytest -q tests/architecture (exit 0; 8 passed)",
+      ".\\chat_env\\Scripts\\python.exe -m pytest -q tests/unit/test_strict_stream_guard.py tests/unit/test_rag_pipeline_public_characterization.py (exit 0; 15 passed)",
+      "RUN_DB_TESTS=1 RUN_QDRANT_TESTS=1 CONSISTENCY_SAMPLE_LIMIT=50 CONSISTENCY_SOURCE_SYSTEM=upload CONSISTENCY_SNAPSHOT_PATH=reports/refactor/phase-3/candidate/sql-qdrant-snapshot.json .\\chat_env\\Scripts\\python.exe -m pytest tests/integration/test_sql_qdrant_consistency.py -v -o addopts=--strict-markers (exit 0; 2 passed; read-only)",
+      "git diff --check (exit 0)"
+    ],
+    "concurrency": 1
+  },
+  "feature_flags": {
+    "changed": false,
+    "rollout_authorized": false
+  },
+  "git": {
+    "baseline_sha": "1447d3c8f45a24eaa5deefd800e9f12d25070059",
+    "branch": "codex/codebase-layer-refactor",
+    "code_candidate_sha": "387ee9ec22d96e68f1b2551fadd794cbb4fe9b13",
+    "working_tree_status_before_evidence_commit": [
+      " M docs/codebase-layer-refactor-plan.md",
+      "?? reports/refactor/phase-3/candidate/manifest.json",
+      "?? reports/refactor/phase-3/candidate/sql-qdrant-consistency.txt",
+      "?? reports/refactor/phase-3/candidate/sql-qdrant-snapshot.json",
+      "?? reports/refactor/phase-3/candidate/validation-summary.txt"
+    ]
+  },
+  "phase": "phase-3-ingestion-lifecycle-owner",
+  "provider_configuration": {
+    "model": "not_invoked",
+    "provider": "not_invoked",
+    "status": "not_invoked_during_phase_3_validation"
+  },
+  "runtime": {
+    "os": "Microsoft Windows NT 10.0.19045.0",
+    "python_version": "3.12.3"
+  },
+  "schema": "refactor-evidence-manifest-v1"
+}

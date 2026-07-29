@@ -1,0 +1,109 @@
+"""Versioned contracts for manifests and evaluation artifacts."""
+
+from __future__ import annotations
+
+from mech_chatbot.domain.graph_policy import RELATION_ONTOLOGY
+
+CURRENT_MANIFEST_SCHEMA = "rag-eval-manifest-v2"
+LEGACY_MANIFEST_SCHEMA = "rag-eval-manifest-v1-legacy"
+SUPPORTED_MANIFEST_SCHEMAS = {CURRENT_MANIFEST_SCHEMA, LEGACY_MANIFEST_SCHEMA}
+EVALUATION_REPORT_SCHEMA = "rag-labeled-eval-v4"
+EVALUATOR_VERSION = "evaluation-foundation-v1"
+EVALUATOR_MODELS = {
+    "retrieval": "binary-relevance-v2",
+    "claims": "deterministic-labeled-claims-v1",
+    "citations": "structured-source-identity-v1",
+    "risk_coverage": "explicit-operating-points-v1",
+}
+
+
+def is_valid_relation_contract(value: object) -> bool:
+    """Return whether a graph relation has the complete canonical identity."""
+    return isinstance(value, dict) and all(
+        isinstance(value.get(field), str) and value[field].strip()
+        for field in ("source_key", "relation_type", "target_key")
+    ) and str(value["relation_type"]).strip().upper() in RELATION_ONTOLOGY
+
+
+def version_manifest_case(case: dict) -> str:
+    schema = case.get("manifest_schema") or LEGACY_MANIFEST_SCHEMA
+    if schema not in SUPPORTED_MANIFEST_SCHEMAS:
+        raise ValueError(f"unsupported manifest_schema: {schema}")
+    case["manifest_schema"] = schema
+    return schema
+
+
+def validate_manifest_ground_truth(case: dict, *, expected_outcome: str) -> None:
+    """Validate v2 human-authored claim/citation labels; legacy stays readable."""
+    from mech_chatbot.evaluation.failure_families import validate_failure_contract
+
+    validate_failure_contract(case)
+    if case.get("manifest_schema") != CURRENT_MANIFEST_SCHEMA:
+        return
+    for field in ("expected_claims", "expected_citations"):
+        if not isinstance(case.get(field), list):
+            raise ValueError(f"{field} must be a list for {CURRENT_MANIFEST_SCHEMA}")
+    has_calculation_contract = (
+        case.get("evaluation_group") == "grounded_math"
+        and isinstance(case.get("expected_calculation"), dict)
+    )
+    if expected_outcome in {"full_answer", "partial_answer"}:
+        if not has_calculation_contract and not case["expected_claims"]:
+            raise ValueError("expected_claims must be non-empty for answer outcomes")
+        if not case["expected_citations"]:
+            raise ValueError("expected_citations must be non-empty for answer outcomes")
+    for claim in case["expected_claims"]:
+        if not isinstance(claim, dict) or not str(claim.get("id") or "").strip():
+            raise ValueError("each expected_claim must have an id")
+        if not isinstance(claim.get("required_terms"), list) or not claim["required_terms"]:
+            raise ValueError("each expected_claim must have required_terms")
+        if not isinstance(claim.get("allowed_source_ids"), list) or not claim["allowed_source_ids"]:
+            raise ValueError("each expected_claim must have allowed_source_ids")
+    for citation in case["expected_citations"]:
+        if not isinstance(citation, dict):
+            raise ValueError("each expected_citation must be an object")
+        required = ("document", "doc_id", "page", "version", "source_id")
+        if any(citation.get(field) in (None, "") for field in required):
+            raise ValueError(
+                "each expected_citation requires document/doc_id/page/version/source_id"
+            )
+    single_relation = case.get("expected_relation")
+    multiple_relations = case.get("expected_relations")
+    graph_case = case.get("evaluation_group") in {"graphrag", "relational"}
+    if single_relation is not None and multiple_relations is not None:
+        raise ValueError("use expected_relation or expected_relations, not both")
+    if multiple_relations is not None:
+        if not isinstance(multiple_relations, list) or not multiple_relations:
+            raise ValueError("expected_relations must be a non-empty list")
+        relation_contracts = multiple_relations
+        relation_field = "expected_relations"
+    elif single_relation is not None:
+        relation_contracts = [single_relation]
+        relation_field = "expected_relation"
+    else:
+        relation_contracts = []
+        relation_field = "expected_relations"
+    if graph_case and not relation_contracts:
+        raise ValueError("graph cases require expected_relation or expected_relations")
+    for relation in relation_contracts:
+        if not is_valid_relation_contract(relation):
+            raise ValueError(
+                f"each {relation_field} item requires source_key/relation_type/target_key"
+            )
+    if case.get("evaluation_group") == "grounded_math":
+        calculation = case.get("expected_calculation")
+        if not isinstance(calculation, dict):
+            raise ValueError("expected_calculation is required for grounded_math")
+        required = ("operation", "status", "formula", "unit", "sources")
+        if any(calculation.get(field) is None for field in required):
+            raise ValueError("expected_calculation is incomplete")
+        if not isinstance(calculation.get("sources"), list) or not calculation["sources"]:
+            raise ValueError("expected_calculation sources must be non-empty")
+        for source in calculation["sources"]:
+            if not isinstance(source, dict) or any(
+                source.get(field) in (None, "")
+                for field in ("doc_id", "page", "version", "source_id")
+            ) or source.get("value") is None or source.get("unit") is None:
+                raise ValueError(
+                    "each calculation source requires doc_id/page/version/source_id/value/unit"
+                )

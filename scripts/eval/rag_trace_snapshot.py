@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
 from collections import Counter
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -55,9 +57,20 @@ def build_snapshot(
     corrective_attempts = 0
     repair_attempts = 0
     corrections_by_trace: Counter[str] = Counter()
+    successful_corrections_by_trace: Counter[str] = Counter()
+    correction_errors = 0
     repairs_by_trace: Counter[str] = Counter()
     llm_retries = 0
     query_count = 0
+    event_counts: Counter[str] = Counter()
+    planner_max = subquery_max = calculation_max = graph_edge_max = 0
+    retries_by_trace: Counter[str] = Counter()
+    external_ai_latencies: dict[str, list[float]] = defaultdict(list)
+    external_ai_statuses: dict[str, Counter[str]] = defaultdict(Counter)
+    voyage_statuses: Counter[str] = Counter()
+    voyage_fallbacks = 0
+    voyage_status_codes: Counter[str] = Counter()
+    voyage_retry_attempts = 0
     for raw in path.read_text(encoding="utf-8").splitlines():
         try:
             event = json.loads(raw)
@@ -71,19 +84,50 @@ def build_snapshot(
             continue
         if end_at and (timestamp is None or timestamp > end_at):
             continue
+        event_name = str(event.get("event") or "<missing>")
+        event_counts[event_name] += 1
+        if event_name == "query_decomposition":
+            planner_max = max(planner_max, int(event.get("planner_count") or 0))
+            subquery_max = max(subquery_max, int(event.get("subquery_count") or 0))
+        if event_name == "grounded_math_generation":
+            calculation_max = max(calculation_max, int(event.get("calculations") or 0))
+        if event_name == "graph_retrieval":
+            graph_edge_max = max(graph_edge_max, int(event.get("edge_count") or 0))
         if event.get("estimated_cost") is not None:
             estimated_cost += float(event.get("estimated_cost") or 0)
         if event.get("event") == "corrective_retrieval" and event.get("attempt"):
             corrective_attempts += 1
-            corrections_by_trace[str(event.get("trace_id") or "<missing>")] += 1
+            correction_trace_id = str(event.get("trace_id") or "<missing>")
+            corrections_by_trace[correction_trace_id] += 1
+            if event.get("error"):
+                correction_errors += 1
+            else:
+                successful_corrections_by_trace[correction_trace_id] += 1
         if event.get("event") == "claim_repair" and event.get("attempted"):
             repair_attempts += 1
             repairs_by_trace[str(event.get("trace_id") or "<missing>")] += 1
         if event.get("event") == "llm_retry":
             llm_retries += 1
+            retries_by_trace[str(event.get("trace_id") or "<missing>")] += 1
+        if event.get("event") == "external_ai_call":
+            surface = str(event.get("surface") or "unknown")
+            try:
+                latency = max(0.0, float(event.get("latency_ms") or 0.0))
+            except (TypeError, ValueError):
+                latency = 0.0
+            external_ai_latencies[surface].append(latency)
+            external_ai_statuses[surface][str(event.get("status") or "unknown")] += 1
+        if event.get("event") == "rerank" and event.get("backend") == "voyage":
+            voyage_statuses[str(event.get("status") or "unknown")] += 1
+            voyage_fallbacks += int(bool(event.get("fallback")))
+            if event.get("provider_status_code") is not None:
+                voyage_status_codes[str(event.get("provider_status_code"))] += 1
+            voyage_retry_attempts += int(bool(event.get("retry_attempted")))
         if event.get("event") != "rag_end":
             continue
         query_count += 1
+        if event.get("ts"):
+            included_timestamps.append(event["ts"])
         if event.get("final_latency_ms") is not None:
             query_latencies.append(float(event["final_latency_ms"]))
         if not event.get("refusal"):
@@ -95,12 +139,33 @@ def build_snapshot(
         if not reason or reason in excluded:
             continue
         counts[str(reason)] += 1
-        if event.get("ts"):
-            included_timestamps.append(event["ts"])
     ordered_latencies = sorted(query_latencies)
+    external_ai_latency = {}
+    for surface, values in sorted(external_ai_latencies.items()):
+        ordered = sorted(values)
+        statuses = external_ai_statuses[surface]
+        external_ai_latency[surface] = {
+            "call_count": len(ordered),
+            "success_count": statuses.get("success", 0),
+            "error_count": statuses.get("error", 0),
+            "cancelled_count": statuses.get("cancelled", 0),
+            "unknown_count": sum(
+                count
+                for status, count in statuses.items()
+                if status not in {"success", "error", "cancelled"}
+            ),
+            "latency_p50_ms": nearest_rank(ordered, 0.50),
+            "latency_p95_ms": nearest_rank(ordered, 0.95),
+            "latency_max_ms": max(ordered, default=None),
+        }
+    voyage_calls = sum(voyage_statuses.values())
     return {
         "schema": "rag-refusal-snapshot-v1",
-        "source": {"path": str(path.resolve()), "git_sha": _git_sha()},
+        "source": {
+            "path": str(path.resolve()),
+            "git_sha": _git_sha(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        },
         "filters": {
             "start": start,
             "end": end,
@@ -116,6 +181,20 @@ def build_snapshot(
         "refusal_reasons": dict(sorted(counts.items())),
         "parse_errors": parse_errors,
         "legacy_reason_events": legacy_reason_events,
+        "event_counts": dict(sorted(event_counts.items())),
+        "external_ai_latency": external_ai_latency,
+        "voyage_rerank": {
+            "call_count": voyage_calls,
+            "success_count": voyage_statuses.get("success", 0),
+            "error_count": voyage_statuses.get("error", 0),
+            "fallback_count": voyage_fallbacks,
+            "error_rate": (
+                voyage_statuses.get("error", 0) / voyage_calls if voyage_calls else 0.0
+            ),
+            "fallback_rate": voyage_fallbacks / voyage_calls if voyage_calls else 0.0,
+            "status_codes": dict(sorted(voyage_status_codes.items())),
+            "retry_attempt_count": voyage_retry_attempts,
+        },
         "system_metrics": {
             "query_count": query_count,
             "latency_p50_ms": nearest_rank(ordered_latencies, 0.50),
@@ -125,9 +204,19 @@ def build_snapshot(
             "repair_rate": repair_attempts / query_count if query_count else 0.0,
             "max_corrections_per_query": max(corrections_by_trace.values(), default=0),
             "max_repairs_per_query": max(repairs_by_trace.values(), default=0),
-            "correction_trace_ids": sorted(corrections_by_trace),
+            "correction_trace_ids": sorted(successful_corrections_by_trace),
+            "correction_error_count": correction_errors,
             "repair_trace_ids": sorted(repairs_by_trace),
             "retry_rate": llm_retries / query_count if query_count else 0.0,
+        },
+        "observed_budget_metrics": {
+            "max_planner_count": planner_max,
+            "max_subquery_count": subquery_max,
+            "max_correction_count": max(corrections_by_trace.values(), default=0),
+            "max_repair_count": max(repairs_by_trace.values(), default=0),
+            "max_calculation_count": calculation_max,
+            "max_graph_edge_count": graph_edge_max,
+            "max_provider_retries": max(retries_by_trace.values(), default=0),
         },
     }
 
@@ -141,6 +230,7 @@ def render_markdown(report: dict) -> str:
         f"- Denominator: {report['denominator']}",
         f"- Observed range: `{report['observed_range']['first']}` to `{report['observed_range']['last']}`",
         f"- Filters: `{json.dumps(report['filters'], ensure_ascii=False)}`",
+        f"- Voyage rerank: `{json.dumps(report.get('voyage_rerank', {}), ensure_ascii=False)}`",
         "",
         "| Refusal reason | Count |",
         "|---|---:|",
@@ -148,6 +238,22 @@ def render_markdown(report: dict) -> str:
     lines.extend(
         f"| {reason} | {count} |"
         for reason, count in report["refusal_reasons"].items()
+    )
+    lines.extend([
+        "",
+        "## External AI latency",
+        "",
+        "| Surface | Calls | Success | Error | Cancelled | Unknown | P50 ms | P95 ms | Max ms |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ])
+    lines.extend(
+        "| {surface} | {call_count} | {success_count} | {error_count} | "
+        "{cancelled_count} | {unknown_count} | "
+        "{latency_p50_ms} | {latency_p95_ms} | {latency_max_ms} |".format(
+            surface=surface,
+            **metrics,
+        )
+        for surface, metrics in report.get("external_ai_latency", {}).items()
     )
     return "\n".join(lines) + "\n"
 

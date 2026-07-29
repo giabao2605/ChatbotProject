@@ -90,13 +90,97 @@ def test_fast_internal_rule_skips_embedding_and_llm(q):
     assert calls == {"embed": 0, "llm": 0}
 
 
+def test_configuration_code_fast_route_is_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("RAG_CRAG_ENABLED", raising=False)
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình của CRAG-EVAL-SECRET-001 là gì?",
+        llm_classifier=classifier,
+    )
+
+    assert result.route == router.ROUTE_SAFETY_BLOCK
+    assert result.layer == router.LAYER_LLM
+    assert calls["llm"] == 1
+
+
+def test_configuration_code_question_skips_llm_when_fast_route_enabled():
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình của CRAG-EVAL-SECRET-001 là gì?",
+        llm_classifier=classifier,
+        crag_fast_routes_enabled=True,
+    )
+
+    assert result.route == router.ROUTE_TECHNICAL
+    assert result.layer == router.LAYER_RULE
+    assert calls["llm"] == 0
+
+
+def test_system_configuration_question_still_reaches_llm_router():
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình hệ thống chatbot/API là gì?",
+        llm_classifier=classifier,
+    )
+
+    assert result.route == router.ROUTE_SAFETY_BLOCK
+    assert result.layer == router.LAYER_LLM
+    assert calls["llm"] == 1
+
+
+def test_code_shaped_system_credential_still_reaches_llm_router():
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình API-KEY-123 của hệ thống chatbot là gì?",
+        llm_classifier=classifier,
+    )
+
+    assert result.route == router.ROUTE_SAFETY_BLOCK
+    assert result.layer == router.LAYER_LLM
+    assert calls["llm"] == 1
+
+
+def test_multi_segment_client_secret_still_reaches_llm_router():
+    calls = {"llm": 0}
+
+    def classifier(_, __=None):
+        calls["llm"] += 1
+        return (router.ROUTE_SAFETY_BLOCK, 1.0)
+
+    result = router.classify(
+        "Mã cấu hình CLIENT-SECRET-PROD-123 là gì?",
+        llm_classifier=classifier,
+    )
+
+    assert result.route == router.ROUTE_SAFETY_BLOCK
+    assert result.layer == router.LAYER_LLM
+    assert calls["llm"] == 1
+
+
 # ------------------------- L1 (P1) -------------------------
 @pytest.fixture(autouse=True)
-def _low_threshold(monkeypatch):
-    # Embedder BoW gia dinh -> nguong thap de kiem thu co che.
-    monkeypatch.setenv("SEMANTIC_ROUTER_SIM_THRESHOLD", "0.35")
-    monkeypatch.setenv("SEMANTIC_ROUTER_MARGIN", "0.0")
-    router.set_embedder(None)
+def _low_threshold():
+    yield
 
 
 L1_CASES = [
@@ -112,7 +196,12 @@ L1_CASES = [
 
 @pytest.mark.parametrize("q,expected", L1_CASES)
 def test_l1_semantic_routing(q, expected):
-    r = router.classify(q, embedder=fake_embed)
+    r = router.classify(
+        q,
+        embedder=fake_embed,
+        semantic_threshold=0.35,
+        semantic_margin=0.0,
+    )
     assert r.route == expected, "%r -> %s (mong %s)" % (q, r.route, expected)
     if expected != router.ROUTE_TECHNICAL:
         assert r.layer == router.LAYER_SEMANTIC
@@ -130,9 +219,12 @@ def test_semantic_router_class_scores():
     assert 0.0 <= score <= 1.0 and second <= score
 
 
-def test_semantic_disabled_behaves_like_p0(monkeypatch):
-    monkeypatch.setenv("SEMANTIC_ROUTER_ENABLED", "false")
-    r = router.classify("bạn làm được những gì", embedder=fake_embed)
+def test_semantic_disabled_behaves_like_p0():
+    r = router.classify(
+        "bạn làm được những gì",
+        embedder=fake_embed,
+        semantic_enabled=False,
+    )
     assert r.route == router.ROUTE_TECHNICAL  # L1 tat -> fallback
 
 

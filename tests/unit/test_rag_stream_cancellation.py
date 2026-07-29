@@ -1,22 +1,42 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 
 from mech_chatbot.api import rag_server
+from mech_chatbot.config.settings import Settings
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.rag.execution import RagCancelled, RagCompleted, RagPrepared, RagToken
 
 
 pytestmark = pytest.mark.unit
 
 
+def _stream_state(executor, semaphore, **settings_overrides):
+    application = rag_server.create_rag_app(Settings(**settings_overrides))
+    state = application.state.rag_server
+    runtime = SimpleNamespace(
+        executor=object(),
+        thread_pool=executor,
+        semaphore=semaphore,
+        runtime_contract=object(),
+    )
+    return replace(state, runtime=runtime, ready=True)
+
+
 def test_legacy_admin_global_read_audit_contains_no_raw_prompt(monkeypatch):
-    from mech_chatbot import services
+    from mech_chatbot.services import audit_service
 
     writes = []
-    monkeypatch.setattr(services, "write_audit_log", lambda *args, **kwargs: writes.append((args, kwargs)))
+    monkeypatch.setattr(
+        audit_service,
+        "write_audit_log",
+        lambda *args, **kwargs: writes.append((args, kwargs)),
+    )
     profile = {"username": "legacy-admin", "user_id": 9, "roles": ["admin"]}
 
     rag_server._audit_admin_query(
@@ -45,9 +65,7 @@ def test_client_disconnect_cancels_stream_and_releases_rag_permit(monkeypatch):
     executor = ThreadPoolExecutor(max_workers=1)
     semaphore = asyncio.Semaphore(1)
 
-    monkeypatch.setattr(rag_server, "_rag_ready", True)
-    monkeypatch.setattr(rag_server, "_rag_executor", executor)
-    monkeypatch.setattr(rag_server, "_rag_semaphore", semaphore)
+    server_state = _stream_state(executor, semaphore)
     monkeypatch.setattr(
         rag_server,
         "resolve_user_profile",
@@ -67,24 +85,34 @@ def test_client_disconnect_cancels_stream_and_releases_rag_permit(monkeypatch):
         lambda _profile, _trace, _surface, *, outcome, debug_info=None: audit_outcomes.append(outcome),
     )
 
-    def fake_open(_req, _profile, trace_id=None, cancel_event=None):
-        del trace_id
+    def fake_open(
+        _req,
+        _profile,
+        trace_id=None,
+        cancel_event=None,
+        mode=None,
+        runtime=None,
+    ):
+        del trace_id, mode, runtime
 
-        def stream():
-            yield "first token"
+        def events():
+            yield RagPrepared("", (), (), {"citation_docs": []})
+            yield RagToken("first token")
             assert cancel_event is not None
             if not cancel_event.wait(timeout=2):
                 raise AssertionError("client disconnect was not forwarded to worker")
             observed_cancel.set()
-            raise ExternalAICallCancelled("cancelled by test client")
+            error = ExternalAICallCancelled("cancelled by test client")
+            yield RagCancelled(str(error), cause=error)
 
-        return stream(), "", [], [], {"citation_docs": []}
+        return events()
 
-    monkeypatch.setattr(rag_server, "_open_rag_stream", fake_open)
+    monkeypatch.setattr(rag_server, "_open_rag_events", fake_open)
 
     async def scenario():
         response = await rag_server.chat_stream_endpoint(
-            rag_server.ChatRequest(user_question="test disconnect", username="admin-test")
+            rag_server.ChatRequest(user_question="test disconnect", username="admin-test"),
+            server_state=server_state,
         )
         iterator = response.body_iterator
         seen_token = False
@@ -111,9 +139,7 @@ def test_client_disconnect_cancels_stream_and_releases_rag_permit(monkeypatch):
 def test_stream_done_exposes_numeric_trace_stages_for_benchmark(monkeypatch):
     executor = ThreadPoolExecutor(max_workers=1)
     semaphore = asyncio.Semaphore(1)
-    monkeypatch.setattr(rag_server, "_rag_ready", True)
-    monkeypatch.setattr(rag_server, "_rag_executor", executor)
-    monkeypatch.setattr(rag_server, "_rag_semaphore", semaphore)
+    server_state = _stream_state(executor, semaphore)
     monkeypatch.setattr(
         rag_server,
         "resolve_user_profile",
@@ -129,8 +155,14 @@ def test_stream_done_exposes_numeric_trace_stages_for_benchmark(monkeypatch):
     )
     monkeypatch.setattr(
         rag_server,
-        "_open_rag_stream",
-        lambda *_args, **_kwargs: (iter(["safe answer"]), "", [], [], {"citation_docs": []}),
+        "_open_rag_events",
+        lambda *_args, **_kwargs: iter(
+            [
+                RagPrepared("", (), (), {"citation_docs": []}),
+                RagToken("safe answer"),
+                RagCompleted("answered", "trace-test", {"citation_docs": []}),
+            ]
+        ),
     )
     monkeypatch.setattr(
         rag_server,
@@ -143,7 +175,8 @@ def test_stream_done_exposes_numeric_trace_stages_for_benchmark(monkeypatch):
 
     async def scenario():
         response = await rag_server.chat_stream_endpoint(
-            rag_server.ChatRequest(user_question="test trace", username="viewer-test")
+            rag_server.ChatRequest(user_question="test trace", username="viewer-test"),
+            server_state=server_state,
         )
         done = None
         async for event in response.body_iterator:
@@ -163,3 +196,95 @@ def test_stream_done_exposes_numeric_trace_stages_for_benchmark(monkeypatch):
     assert payload["trace_stages"]["rrf_grouping"] == {"latency_ms": 2}
     assert payload["trace_stages"]["first_token"]["latency_ms"] >= 0
     assert payload["trace_stages"]["completion"]["latency_ms"] >= 0
+
+
+def test_pilot_replay_header_disables_cache_inside_worker(monkeypatch):
+    from mech_chatbot.rag import semantic_cache
+    from mech_chatbot.evaluation.crag_pilot import (
+        PilotConfig,
+        assign_pilot_route,
+        build_replay_request,
+    )
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    semaphore = asyncio.Semaphore(1)
+    observed = []
+    monkeypatch.setenv("SEMANTIC_CACHE_ENABLED", "true")
+    monkeypatch.setenv("CRAG_PILOT_ASSIGNMENT_SALT", "pilot-test-salt")
+    monkeypatch.setenv("RAG_DEPLOYMENT_ID", "candidate-1")
+    monkeypatch.setattr(
+        rag_server,
+        "resolve_user_profile",
+        lambda _req: {
+            "username": "viewer-test", "user_id": 2, "roles": ["viewer"],
+            "department": "Technical", "allowed_departments": ["Technical"],
+            "allowed_sites": ["HQ"], "max_security_level": "internal",
+        },
+    )
+
+    def fake_open(*_args, **_kwargs):
+        observed.append(semantic_cache.enabled())
+        return iter(
+            [
+                RagPrepared("", (), (), {"citation_docs": []}),
+                RagToken("replay answer"),
+                RagCompleted("answered", "trace-replay", {"citation_docs": []}),
+            ]
+        )
+
+    monkeypatch.setattr(rag_server, "_open_rag_events", fake_open)
+    route = assign_pilot_route(
+        PilotConfig(
+            experiment_id="exp-1",
+            assignment_salt="pilot-test-salt",
+            eligible_department="Technical",
+            cohort_sha256="cohort-v1",
+            control_url="http://control",
+            candidate_url="http://candidate",
+            control_deployment_id="control-1",
+            candidate_deployment_id="candidate-1",
+            snapshot_fingerprint="snapshot-v1",
+        ),
+        user_id="2",
+        department="Technical",
+        request_id="request-1",
+    )
+    if route.opposite_deployment_id != "candidate-1":
+        monkeypatch.setenv("RAG_DEPLOYMENT_ID", route.opposite_deployment_id)
+    server_state = _stream_state(
+        executor,
+        semaphore,
+        SEMANTIC_CACHE_ENABLED=True,
+        CRAG_PILOT_ASSIGNMENT_SALT="pilot-test-salt",
+        RAG_DEPLOYMENT_ID=route.opposite_deployment_id,
+    )
+    replay = build_replay_request(
+        route,
+        {"user_question": "replay", "username": "viewer-test"},
+        original_trace_id="rag-original",
+    )
+
+    async def scenario():
+        response = await rag_server.chat_stream_endpoint(
+            rag_server.ChatRequest(user_question="replay", username="viewer-test"),
+            x_rag_pilot_replay="true",
+            x_rag_pilot_experiment_id="exp-1",
+            x_rag_matched_pair_id=route.matched_pair_id,
+            x_rag_original_trace_id="rag-original",
+            x_rag_assigned_arm=route.arm,
+            x_rag_pilot_payload_sha256=replay.headers["X-RAG-Pilot-Payload-SHA256"],
+            x_rag_pilot_replay_nonce=replay.headers["X-RAG-Pilot-Replay-Nonce"],
+            x_rag_pilot_replay_expires=replay.headers["X-RAG-Pilot-Replay-Expires"],
+            x_rag_pilot_replay_signature=replay.headers["X-RAG-Pilot-Replay-Signature"],
+            server_state=server_state,
+        )
+        async for _event in response.body_iterator:
+            pass
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        executor.shutdown(wait=True)
+
+    assert observed == [False]
+    assert semantic_cache.enabled() is True

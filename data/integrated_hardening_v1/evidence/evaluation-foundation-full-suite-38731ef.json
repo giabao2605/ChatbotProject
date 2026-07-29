@@ -1,0 +1,27 @@
+{
+  "schema": "evaluation-foundation-full-suite-evidence-v1",
+  "git_sha": "38731ef88b95a40b1b38d46ba335402bbf5c9b8f",
+  "tested_at": "2026-07-16T02:07:41Z",
+  "passed": true,
+  "tests": 766,
+  "passed_tests": 743,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 23,
+  "duration_seconds": 13.185,
+  "command": [
+    "python", "-m", "pytest", "-q",
+    "--junitxml=reports/integrated-hardening/38731ef-final/full-suite.xml"
+  ],
+  "junit_xml": {
+    "path": "reports/integrated-hardening/38731ef-final/full-suite.xml",
+    "sha256": "b14e595c13e634a85e9ef874245863cd7f21be1d3970080991aa78ea587ac9cb",
+    "tracked": true
+  },
+  "opt_in_suites_not_run": [
+    "live_provider_evaluation",
+    "sql_server_integration",
+    "qdrant_integration",
+    "late_interaction_isolated_encoder_integration"
+  ]
+}

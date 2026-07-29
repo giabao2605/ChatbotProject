@@ -61,6 +61,14 @@ rag_trace.jsonl
 
 # ===== Generated Reports =====
 reports/
+# Refactor evidence is deterministic, sanitized, and reviewed as a repository
+# contract. Raw captures remain local and must never be committed.
+!reports/
+reports/*
+!reports/refactor/
+!reports/refactor/**
+reports/refactor/**/raw/
+reports/refactor/**/coverage-*.json
 *.prof
 *.lprof
 
@@ -136,6 +144,7 @@ uploads/
 sessions/
 .local/
 data/demo_wave_v1/
+data/department_decomposition_eval_v1/
 reports/demo_wave/
 *.tmp
 *.tmp.*

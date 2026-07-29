@@ -1,19 +1,59 @@
+import ast
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 from langchain_core.documents import Document
+from qdrant_client import models
 
 from mech_chatbot.rag.corrective import (
+    correction_enabled,
+    load_metadata_corrected_documents,
+    metadata_correction_query,
     merge_corrected_documents,
     run_corrected_retrieval,
     should_attempt_correction,
 )
-from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+from mech_chatbot.rag.answer_policy import AnswerDecision, AnswerOutcome
+from mech_chatbot.rag.evidence_gate import EvidenceState
 
 
 def test_correction_budget_allows_exactly_one_ambiguous_retry():
-    decision = EvidenceDecision(EvidenceState.AMBIGUOUS, reason="missing coverage")
+    decision = AnswerDecision(
+        AnswerOutcome.INSUFFICIENT_EVIDENCE,
+        EvidenceState.AMBIGUOUS,
+        reason="missing coverage",
+        correction_allowed=True,
+    )
 
     assert should_attempt_correction(decision, attempts=0, enabled=True) is True
     assert should_attempt_correction(decision, attempts=1, enabled=True) is False
     assert should_attempt_correction(decision, attempts=0, enabled=False) is False
+
+
+def test_crag_rollback_flag_disables_correction_runtime():
+    decision = AnswerDecision(
+        AnswerOutcome.INSUFFICIENT_EVIDENCE,
+        EvidenceState.AMBIGUOUS,
+        reason="missing coverage",
+        correction_allowed=True,
+    )
+
+    assert correction_enabled(False) is False
+    assert should_attempt_correction(
+        decision, attempts=0, enabled=correction_enabled(False),
+    ) is False
+
+
+def test_ambiguous_state_does_not_override_policy_that_forbids_correction():
+    decision = AnswerDecision(
+        AnswerOutcome.INSUFFICIENT_EVIDENCE,
+        EvidenceState.AMBIGUOUS,
+        reason="explicit negative evidence",
+        correction_allowed=False,
+    )
+
+    assert should_attempt_correction(decision, attempts=0, enabled=True) is False
 
 
 def test_corrected_documents_are_deduplicated_without_changing_metadata():
@@ -25,6 +65,77 @@ def test_corrected_documents_are_deduplicated_without_changing_metadata():
 
     assert merged == [original, added]
     assert merged[1].metadata["site"] == "HQ"
+
+
+def test_corrected_documents_keep_distinct_chunks_on_the_same_page():
+    first = Document(
+        page_content="first",
+        metadata={"doc_id": 1, "trang_so": 2, "chunk_index": 0},
+    )
+    second = Document(
+        page_content="second",
+        metadata={"doc_id": 1, "trang_so": 2, "chunk_index": 1},
+    )
+
+    assert merge_corrected_documents([], [first, second]) == [first, second]
+
+
+def test_metadata_correction_query_adds_top_governed_document_code_locally():
+    documents = [
+        Document(
+            page_content="Mắt cú xanh là biệt danh đã phê duyệt.",
+            metadata={"base_code": "crag-eval-alias-001"},
+        ),
+        Document(
+            page_content="lower-ranked evidence",
+            metadata={"base_code": "crag-eval-other-001"},
+        ),
+    ]
+
+    corrected = metadata_correction_query(
+        "Mắt cú xanh cần kiểm tra theo chu kỳ bao lâu?",
+        documents,
+    )
+
+    assert corrected == (
+        "Mắt cú xanh cần kiểm tra theo chu kỳ bao lâu? "
+        "crag-eval-alias-001"
+    )
+
+
+@pytest.mark.parametrize(
+    ("question", "documents"),
+    [
+        ("query", []),
+        (
+            "query",
+            [Document(page_content="x", metadata={"base_code": "unsafe code"})],
+        ),
+        (
+            "Mắt cú xanh kiểm tra khi nào?",
+            [
+                Document(
+                    page_content="Tài liệu hoàn toàn không liên quan.",
+                    metadata={"base_code": "crag-eval-alias-001"},
+                )
+            ],
+        ),
+        (
+            "Thông số CRAG-EVAL-ALIAS-001",
+            [
+                Document(
+                    page_content="x",
+                    metadata={"base_code": "crag-eval-alias-001"},
+                )
+            ],
+        ),
+    ],
+)
+def test_metadata_correction_query_falls_back_when_no_new_safe_code(
+    question,
+    documents,
+):
+    assert metadata_correction_query(question, documents) is None
 
 
 def test_corrected_retrieval_reuses_governance_filters_unchanged():
@@ -52,3 +163,115 @@ def test_corrected_retrieval_reuses_governance_filters_unchanged():
     assert observed["strict_filter"] is strict_filter
     assert observed["broad_filter"] is broad_filter
     assert observed["rbac_filter"] is rbac_filter
+
+
+def test_metadata_corrected_retrieval_narrows_strict_filter_and_returns_servable_payloads():
+    strict_filter = models.Filter(
+        must=[
+            models.FieldCondition(
+                key="metadata.site",
+                match=models.MatchValue(value="HQ"),
+            )
+        ]
+    )
+    observed = {}
+
+    class Client:
+        def scroll(self, **kwargs):
+            observed.update(kwargs)
+            return [
+                SimpleNamespace(
+                    id="point-2",
+                    payload={
+                        "page_content": "second",
+                        "metadata": {
+                            "doc_id": 1,
+                            "trang_so": 2,
+                            "chunk_index": 1,
+                            "base_code": "crag-eval-alias-001",
+                            "servable": True,
+                            "publication_state": "published",
+                            "lifecycle_status": "published",
+                            "review_status": "approved",
+                            "is_current": True,
+                        },
+                    },
+                ),
+                SimpleNamespace(
+                    id="point-expired",
+                    payload={
+                        "page_content": "expired",
+                        "metadata": {
+                            "doc_id": 1,
+                            "trang_so": 1,
+                            "base_code": "crag-eval-alias-001",
+                            "servable": True,
+                            "publication_state": "published",
+                            "lifecycle_status": "published",
+                            "review_status": "approved",
+                            "is_current": False,
+                        },
+                    },
+                ),
+                SimpleNamespace(
+                    id="point-1",
+                    payload={
+                        "page_content": "first",
+                        "metadata": {
+                            "doc_id": 1,
+                            "trang_so": 10,
+                            "chunk_index": 0,
+                            "base_code": "crag-eval-alias-001",
+                            "servable": True,
+                            "publication_state": "published",
+                            "lifecycle_status": "published",
+                            "review_status": "approved",
+                            "is_current": True,
+                        },
+                    },
+                ),
+            ], None
+
+    documents = load_metadata_corrected_documents(
+        client=Client(),
+        collection_name="test-knowledge",
+        strict_filter=strict_filter,
+        base_code="crag-eval-alias-001",
+    )
+
+    assert [document.page_content for document in documents] == ["second", "first"]
+    assert observed["collection_name"] == "test-knowledge"
+    assert observed["limit"] == 30
+    assert observed["with_payload"] is True
+    assert observed["with_vectors"] is False
+    assert observed["timeout"] == 3
+    assert strict_filter in observed["scroll_filter"].must
+    exact_conditions = [
+        condition
+        for condition in observed["scroll_filter"].must
+        if isinstance(condition, models.FieldCondition)
+    ]
+    assert len(exact_conditions) == 1
+    assert exact_conditions[0].key == "metadata.base_code"
+    assert exact_conditions[0].match.value == "crag-eval-alias-001"
+
+
+def test_corrective_query_rewrites_use_approved_disambiguation_surface():
+    rag_root = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "mech_chatbot"
+        / "rag"
+    )
+    surfaces = []
+    for source_path in rag_root.rglob("*.py"):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg == "surface" and isinstance(keyword.value, ast.Constant):
+                    surfaces.append(keyword.value.value)
+
+    assert "corrective_retrieval" not in surfaces
+    assert surfaces.count("query_disambiguation") >= 2

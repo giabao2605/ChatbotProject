@@ -11,16 +11,15 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import lru_cache
 import json
 import math
-import os
 import time
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from sqlalchemy import text
 
 from mech_chatbot.config.logging import logger
+from mech_chatbot.config.settings import ExternalAiSettings
 
 
 ALL_EXTERNAL = "all_external"
@@ -121,6 +120,11 @@ _POLICIES: ContextVar[tuple[str, ...]] = ContextVar("external_ai_policies", defa
 _LOCAL_DEVELOPMENT_FLAG = "EXTERNAL_AI_LOCAL_DEVELOPMENT"
 _APPLICATION_ENVIRONMENT_FLAG = "APP_ENV"
 _LOCAL_APPLICATION_ENVIRONMENTS = frozenset({"development", "local"})
+DEFAULT_EXTERNAL_AI_SETTINGS = ExternalAiSettings(
+    application_environment="",
+    local_development=False,
+    processing_policy=ALL_EXTERNAL,
+)
 
 
 _DEFAULT_SURFACES = (
@@ -131,6 +135,7 @@ _DEFAULT_SURFACES = (
     "hyde",
     "interaction_routing",
     "evidence_verification",
+    "claim_repair",
     "generation",
     "vision_ocr",
 )
@@ -143,12 +148,12 @@ def _fallback_provider_profile(provider: str) -> ExternalAIProviderProfile | Non
     if normalized == "proxyllm":
         return ExternalAIProviderProfile(
             provider="proxyllm",
-            endpoint=os.getenv("PROXYLLM_BASE_URL", "https://api.proxyllm.eu/v1"),
-            default_model=os.getenv("GPT_MODEL_NAME", "gpt-5.4"),
+            endpoint="https://api.proxyllm.eu/v1",
+            default_model="gpt-5.4",
             secret_reference="env:PROXYLLM_API_KEY",
             allowed_surfaces=_DEFAULT_SURFACES,
             retention_mode="provider_default_no_opt_out",
-            policy_version="risk-accepted-v3",
+            policy_version="risk-accepted-v4-claim-repair",
             approved_by="documented-risk-acceptance",
             risk_acceptance_ref="notion:92459b78-3e54-4c47-8322-d44ab2b65664",
             # Local bootstrap is deliberately not a synthetic 90-day review.
@@ -159,7 +164,7 @@ def _fallback_provider_profile(provider: str) -> ExternalAIProviderProfile | Non
         return ExternalAIProviderProfile(
             provider="voyage",
             endpoint="https://api.voyageai.com/v1",
-            default_model=os.getenv("VOYAGE_RERANK_MODEL", "rerank-2.5-lite"),
+            default_model="rerank-2.5-lite",
             secret_reference="env:VOYAGE_API_KEY",
             allowed_surfaces=("reranking",),
             retention_mode="provider_default_no_opt_out",
@@ -212,7 +217,9 @@ def _profile_from_mapping(value: Mapping[str, Any]) -> ExternalAIProviderProfile
     )
 
 
-def _is_explicit_local_development() -> bool:
+def _is_explicit_local_development(
+    settings: ExternalAiSettings = DEFAULT_EXTERNAL_AI_SETTINGS,
+) -> bool:
     """Return true only for the explicit local-development escape hatch.
 
     Both an opt-in flag and an explicitly local application environment are
@@ -220,11 +227,10 @@ def _is_explicit_local_development() -> bool:
     profiles in pilot or production.
     """
 
-    local_flag_enabled = str(os.getenv(_LOCAL_DEVELOPMENT_FLAG, "")).strip().lower() in {
-        "1", "true", "yes", "on"
-    }
-    application_environment = str(os.getenv(_APPLICATION_ENVIRONMENT_FLAG, "")).strip().lower()
-    return local_flag_enabled and application_environment in _LOCAL_APPLICATION_ENVIRONMENTS
+    return bool(settings.local_development) and (
+        str(settings.application_environment).strip().lower()
+        in _LOCAL_APPLICATION_ENVIRONMENTS
+    )
 
 
 def _load_managed_provider_profile(provider: str) -> Mapping[str, Any] | None:
@@ -237,14 +243,18 @@ def _load_managed_provider_profile(provider: str) -> Mapping[str, Any] | None:
     return _get_profile(provider)
 
 
-@lru_cache(maxsize=16)
-def get_external_ai_provider_profile(provider: str) -> ExternalAIProviderProfile | None:
+def get_external_ai_provider_profile(
+    provider: str,
+    *,
+    settings: ExternalAiSettings = DEFAULT_EXTERNAL_AI_SETTINGS,
+    profile_loader: Callable[[str], Mapping[str, Any] | None] | None = None,
+) -> ExternalAIProviderProfile | None:
     """Load a managed profile and fail closed outside explicit local development."""
     normalized = str(provider or "").strip().lower()
     if not normalized:
         return None
     try:
-        stored = _load_managed_provider_profile(normalized)
+        stored = (profile_loader or _load_managed_provider_profile)(normalized)
         if stored:
             return _profile_from_mapping(stored)
     except Exception:
@@ -255,7 +265,7 @@ def get_external_ai_provider_profile(provider: str) -> ExternalAIProviderProfile
             normalized,
         )
 
-    if _is_explicit_local_development():
+    if _is_explicit_local_development(settings):
         fallback = _fallback_provider_profile(normalized)
         if fallback is not None:
             logger.warning(
@@ -273,14 +283,18 @@ def get_external_ai_provider_profile(provider: str) -> ExternalAIProviderProfile
 
 
 def invalidate_external_ai_provider_profiles() -> None:
-    get_external_ai_provider_profile.cache_clear()
+    """Compatibility no-op; provider profiles are no longer process-global cached."""
 
 
-def _resolve_secret_reference(reference: str) -> str | None:
-    """Resolve only env-backed references; secret-manager URIs stay opaque."""
+def _resolve_secret_reference(
+    reference: str,
+    resolved_secrets: Mapping[str, str | None] | None = None,
+) -> str | None:
+    """Resolve a reference only from the process composition secret snapshot."""
     normalized = str(reference or "").strip()
     if normalized.startswith("env:"):
-        return os.getenv(normalized[4:].strip()) or None
+        value = (resolved_secrets or {}).get(normalized[4:].strip())
+        return str(value).strip() if value else None
     # A secret:// resolver is deployment-specific.  Do not attempt to parse
     # or log it; deployments must inject the resolved value into the adapter.
     return None
@@ -292,6 +306,9 @@ def get_provider_runtime(
     fallback_endpoint: str,
     fallback_model: str,
     fallback_secret_envs: Iterable[str] = (),
+    settings: ExternalAiSettings = DEFAULT_EXTERNAL_AI_SETTINGS,
+    profile_loader: Callable[[str], Mapping[str, Any] | None] | None = None,
+    resolved_secrets: Mapping[str, str | None] | None = None,
 ) -> ExternalAIProviderRuntime:
     """Resolve endpoint/model/secret from one managed provider profile.
 
@@ -302,7 +319,11 @@ def get_provider_runtime(
     """
     del fallback_endpoint, fallback_model, fallback_secret_envs
     normalized_provider = str(provider or "").strip().lower()
-    profile = get_external_ai_provider_profile(normalized_provider)
+    profile = get_external_ai_provider_profile(
+        normalized_provider,
+        settings=settings,
+        profile_loader=profile_loader,
+    )
     if profile is None:
         raise ExternalProcessingDenied(
             f"Khong co ExternalAIProviderProfile cho provider '{normalized_provider}'"
@@ -313,7 +334,7 @@ def get_provider_runtime(
         raise ExternalProcessingDenied(
             f"ExternalAIProviderProfile cua '{normalized_provider}' khong day du"
         )
-    api_key = _resolve_secret_reference(profile.secret_reference)
+    api_key = _resolve_secret_reference(profile.secret_reference, resolved_secrets)
     return ExternalAIProviderRuntime(
         provider=normalized_provider,
         endpoint=endpoint,
@@ -355,10 +376,16 @@ def external_document_context(doc_ids=None, security_levels=None, policies=None)
         _POLICIES.reset(policy_token)
 
 
-def _assert_profile_allows(profile: ExternalAIProviderProfile, surface: str) -> None:
+def _assert_profile_allows(
+    profile: ExternalAIProviderProfile,
+    surface: str,
+    settings: ExternalAiSettings = DEFAULT_EXTERNAL_AI_SETTINGS,
+) -> None:
     if not profile.is_active:
         raise ExternalProcessingDenied(f"Provider '{profile.provider}' dang bi tat")
-    if profile.review_expires_at is None and not _is_explicit_local_development():
+    if profile.review_expires_at is None and not _is_explicit_local_development(
+        settings
+    ):
         raise ExternalProcessingDenied(
             f"Provider '{profile.provider}' thieu han review policy"
         )
@@ -390,6 +417,8 @@ def make_external_call_spec(
     input_bytes=None,
     input_token_estimate=None,
     profile: ExternalAIProviderProfile | None = None,
+    settings: ExternalAiSettings = DEFAULT_EXTERNAL_AI_SETTINGS,
+    profile_loader: Callable[[str], Mapping[str, Any] | None] | None = None,
 ):
     normalized_provider = str(provider or "").strip().lower()
     normalized_surface = str(surface or "unknown").strip()[:50]
@@ -397,15 +426,21 @@ def make_external_call_spec(
     resolved_security_levels = _clean_tokens(security_levels) if security_levels is not None else _SECURITY_LEVELS.get()
     normalized_policies = _clean_tokens(policies) if policies is not None else _POLICIES.get()
     if not normalized_policies:
-        normalized_policies = (os.getenv("EXTERNAL_PROCESSING_POLICY", ALL_EXTERNAL).strip() or ALL_EXTERNAL,)
+        normalized_policies = (
+            str(settings.processing_policy or ALL_EXTERNAL).strip() or ALL_EXTERNAL,
+        )
     denied = [policy for policy in normalized_policies if policy != ALL_EXTERNAL]
     if denied:
         raise ExternalProcessingDenied("External processing bi chan boi policy: " + ", ".join(denied))
 
-    resolved_profile = profile or get_external_ai_provider_profile(normalized_provider)
+    resolved_profile = profile or get_external_ai_provider_profile(
+        normalized_provider,
+        settings=settings,
+        profile_loader=profile_loader,
+    )
     if resolved_profile is None:
         raise ExternalProcessingDenied(f"Khong co ExternalAIProviderProfile cho provider '{normalized_provider}'")
-    _assert_profile_allows(resolved_profile, normalized_surface)
+    _assert_profile_allows(resolved_profile, normalized_surface, settings)
 
     chars = max(0, int(input_chars or 0))
     bytes_estimate = max(0, int(input_bytes if input_bytes is not None else chars))
@@ -437,6 +472,9 @@ def make_external_call_spec(
 
 def external_error_metadata(exc: BaseException) -> ExternalAIErrorMetadata:
     status_code = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+    if status_code is None:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
     try:
         status_code = int(status_code) if status_code is not None else None
     except (TypeError, ValueError):
@@ -544,7 +582,10 @@ def _record_external_call(
         return False
 
 
-def _preflight_compliance_audit(spec: ExternalCallSpec) -> None:
+def _preflight_compliance_audit(
+    spec: ExternalCallSpec,
+    settings: ExternalAiSettings = DEFAULT_EXTERNAL_AI_SETTINGS,
+) -> None:
     """Verify audit persistence before an external request is allowed to start."""
 
     try:
@@ -553,13 +594,13 @@ def _preflight_compliance_audit(spec: ExternalCallSpec) -> None:
         written = False
     if written:
         return
-    if _is_explicit_local_development():
+    if _is_explicit_local_development(settings):
         logger.warning(
             "External AI compliance audit unavailable; continuing only in explicit local development "
             "(%s=true and %s=%s)",
             _LOCAL_DEVELOPMENT_FLAG,
             _APPLICATION_ENVIRONMENT_FLAG,
-            os.getenv(_APPLICATION_ENVIRONMENT_FLAG),
+            settings.application_environment,
         )
         return
     raise ExternalAIComplianceAuditUnavailable(
@@ -567,15 +608,60 @@ def _preflight_compliance_audit(spec: ExternalCallSpec) -> None:
     )
 
 
+def _emit_external_call_trace(
+    spec: ExternalCallSpec,
+    *,
+    status: str,
+    latency_ms: float,
+    error_type: str | None = None,
+) -> None:
+    """Emit metadata-only provider timing into the RAG trace.
+
+    The event deliberately excludes prompts, responses, endpoints, and secrets.
+    """
+    if not spec.trace_id:
+        return
+    try:
+        from mech_chatbot.config.logging import log_trace
+
+        log_trace(
+            "external_ai_call",
+            spec.trace_id,
+            provider=spec.provider,
+            model=spec.model,
+            surface=spec.surface,
+            status=status,
+            latency_ms=max(0, int(latency_ms or 0)),
+            error_type=error_type,
+        )
+    except Exception:
+        logger.debug("External AI latency trace unavailable", exc_info=True)
+
+
 class ExternalAIClient:
     """One policy/audit entry point shared by provider-specific adapters."""
 
-    def __init__(self, provider: str, profile: ExternalAIProviderProfile | None = None):
+    def __init__(
+        self,
+        provider: str,
+        profile: ExternalAIProviderProfile | None = None,
+        *,
+        settings: ExternalAiSettings = DEFAULT_EXTERNAL_AI_SETTINGS,
+        profile_loader: Callable[[str], Mapping[str, Any] | None] | None = None,
+    ):
         self.provider = str(provider or "").strip().lower()
         self.profile = profile
+        self.settings = settings
+        self.profile_loader = profile_loader
 
     def prepare_call(self, **kwargs: Any) -> ExternalCallSpec:
-        return make_external_call_spec(provider=self.provider, profile=self.profile, **kwargs)
+        return make_external_call_spec(
+            provider=self.provider,
+            profile=self.profile,
+            settings=self.settings,
+            profile_loader=self.profile_loader,
+            **kwargs,
+        )
 
     @contextmanager
     def audited_call(self, **kwargs: Any):
@@ -584,26 +670,39 @@ class ExternalAIClient:
         # This is deliberately before handing control to the adapter.  A
         # failed audit store must not result in an untracked provider request
         # in pilot or production.
-        _preflight_compliance_audit(spec)
+        _preflight_compliance_audit(spec, self.settings)
         try:
             yield spec
         except ExternalAICallCancelled:
+            latency_ms = (time.perf_counter() - started) * 1000
             _record_external_call(
                 spec,
                 status="cancelled",
-                latency_ms=(time.perf_counter() - started) * 1000,
+                latency_ms=latency_ms,
+            )
+            _emit_external_call_trace(
+                spec, status="cancelled", latency_ms=latency_ms, error_type=None
             )
             raise
         except Exception as exc:
+            latency_ms = (time.perf_counter() - started) * 1000
+            error_type = external_error_metadata(exc).error_type
             _record_external_call(
                 spec,
                 status="error",
-                latency_ms=(time.perf_counter() - started) * 1000,
-                error_type=external_error_metadata(exc).error_type,
+                latency_ms=latency_ms,
+                error_type=error_type,
+            )
+            _emit_external_call_trace(
+                spec, status="error", latency_ms=latency_ms, error_type=error_type
             )
             raise
         else:
-            _record_external_call(spec, status="success", latency_ms=(time.perf_counter() - started) * 1000)
+            latency_ms = (time.perf_counter() - started) * 1000
+            _record_external_call(spec, status="success", latency_ms=latency_ms)
+            _emit_external_call_trace(
+                spec, status="success", latency_ms=latency_ms, error_type=None
+            )
 
 
 @contextmanager
@@ -611,7 +710,14 @@ def audited_external_call(**kwargs: Any):
     """Compatibility function; all existing callers now use ``ExternalAIClient``."""
     provider = kwargs.pop("provider", None)
     profile = kwargs.pop("profile", None)
-    client = ExternalAIClient(provider, profile=profile)
+    settings = kwargs.pop("settings", DEFAULT_EXTERNAL_AI_SETTINGS)
+    profile_loader = kwargs.pop("profile_loader", None)
+    client = ExternalAIClient(
+        provider,
+        profile=profile,
+        settings=settings,
+        profile_loader=profile_loader,
+    )
     with client.audited_call(**kwargs) as spec:
         yield spec
 
@@ -641,6 +747,7 @@ def text_byte_count(messages) -> int:
 
 __all__ = [
     "ALL_EXTERNAL",
+    "DEFAULT_EXTERNAL_AI_SETTINGS",
     "INTERNAL_ONLY",
     "ExternalAICallCancelled",
     "ExternalAIClient",

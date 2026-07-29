@@ -10,18 +10,31 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
-import os
 
 from sqlalchemy import text
 
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
+from mech_chatbot.config.settings import RepositoryPolicySettings
 from mech_chatbot.config.logging import logger
 from . import audit as _r_audit
 from . import qdrant as _r_qdrant
 from . import semantic_cache as _r_semantic_cache
 
 
-MAX_PUBLICATION_ATTEMPTS = int(os.getenv("PUBLICATION_MAX_ATTEMPTS", "5"))
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
+
+
+def _qdrant_runtime_kwargs(client, collection_name):
+    if client is None or not str(collection_name or "").strip():
+        return {}
+    return {
+        "qdrant_client": client,
+        "collection_name": collection_name,
+    }
+
+
+MAX_PUBLICATION_ATTEMPTS = 5
 
 
 @dataclass(frozen=True)
@@ -97,11 +110,13 @@ def _json_list(value):
     return [_clean(item) for item in value if _clean(item)]
 
 
-def _env_bool(name, default=False):
-    value = os.getenv(name)
-    if value is None:
-        return bool(default)
-    return _clean(value).lower() in {"1", "true", "yes", "on"}
+def _default_policy() -> RepositoryPolicySettings:
+    return RepositoryPolicySettings(
+        strict_site_filter=True,
+        allow_admin_metadata_override=False,
+        allow_admin_approval_override=False,
+        publication_max_attempts=MAX_PUBLICATION_ATTEMPTS,
+    )
 
 
 def _required_metadata_value(field_name, row, doc_type):
@@ -126,7 +141,7 @@ def _required_metadata_value(field_name, row, doc_type):
     return values.get(_clean(field_name).lower())
 
 
-def validate_publish_contract(doc_id) -> ValidationResult:
+def validate_publish_contract(doc_id, *, db_engine=None) -> ValidationResult:
     """Validate the canonical publication contract from SQL source-of-truth."""
     try:
         doc_id = int(doc_id)
@@ -137,8 +152,8 @@ def validate_publish_contract(doc_id) -> ValidationResult:
             issues=(ValidationIssue("doc_id", "invalid", "DocID khong hop le"),),
         )
 
-    _ensure_engine()
-    with engine.connect() as conn:
+    selected_engine = resolve_engine(db_engine)
+    with selected_engine.connect() as conn:
         row = conn.execute(
             text(
                 """
@@ -357,7 +372,14 @@ def validate_publish_contract(doc_id) -> ValidationResult:
     return ValidationResult(doc_id=doc_id, valid=not issues, issues=tuple(issues))
 
 
-def validate_publish_actor(doc_id, reviewer_id=None, reviewer_roles=None) -> ValidationResult:
+def validate_publish_actor(
+    doc_id,
+    reviewer_id=None,
+    reviewer_roles=None,
+    *,
+    db_engine=None,
+    policy: RepositoryPolicySettings | None = None,
+) -> ValidationResult:
     """Require the configured departmental approver for every publish path.
 
     A platform admin has global read by business decision, but does not silently
@@ -377,8 +399,8 @@ def validate_publish_actor(doc_id, reviewer_id=None, reviewer_roles=None) -> Val
     except (TypeError, ValueError):
         actor_id = None
     roles = {str(role).strip().lower() for role in (reviewer_roles or []) if str(role).strip()}
-    _ensure_engine()
-    with engine.connect() as conn:
+    selected_engine = resolve_engine(db_engine)
+    with selected_engine.connect() as conn:
         row = conn.execute(
             text(
                 """
@@ -431,7 +453,11 @@ def validate_publish_actor(doc_id, reviewer_id=None, reviewer_roles=None) -> Val
             )
         )
     if actor_id is not None and approver_id is not None and actor_id != int(approver_id):
-        admin_override = "admin" in roles and _env_bool("KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE", False)
+        selected_policy = policy or _default_policy()
+        admin_override = (
+            "admin" in roles
+            and selected_policy.allow_admin_approval_override
+        )
         if not admin_override:
             issues.append(
                 ValidationIssue(
@@ -443,9 +469,29 @@ def validate_publish_actor(doc_id, reviewer_id=None, reviewer_roles=None) -> Val
     return ValidationResult(doc_id=normalized_doc_id, valid=not issues, issues=tuple(issues))
 
 
-def _create_outbox_event(doc_id, action, reviewer, reviewer_id=None, reviewer_roles=None):
-    contract_validation = validate_publish_contract(doc_id)
-    actor_validation = validate_publish_actor(doc_id, reviewer_id, reviewer_roles)
+def _create_outbox_event(
+    doc_id,
+    action,
+    reviewer,
+    reviewer_id=None,
+    reviewer_roles=None,
+    *,
+    db_engine=None,
+    policy: RepositoryPolicySettings | None = None,
+):
+    selected_engine = resolve_engine(db_engine)
+    selected_policy = policy or _default_policy()
+    validation_kwargs = (
+        {"db_engine": selected_engine} if db_engine is not None else {}
+    )
+    contract_validation = validate_publish_contract(doc_id, **validation_kwargs)
+    actor_validation = validate_publish_actor(
+        doc_id,
+        reviewer_id,
+        reviewer_roles,
+        **validation_kwargs,
+        policy=selected_policy,
+    )
     validation = ValidationResult(
         doc_id=contract_validation.doc_id,
         valid=bool(contract_validation) and bool(actor_validation),
@@ -458,6 +504,7 @@ def _create_outbox_event(doc_id, action, reviewer, reviewer_id=None, reviewer_ro
             "TaiLieu",
             doc_id,
             validation.to_dict(),
+            db_engine=selected_engine,
         )
         return PublicationResult(
             ok=False,
@@ -479,7 +526,7 @@ def _create_outbox_event(doc_id, action, reviewer, reviewer_id=None, reviewer_ro
         },
         ensure_ascii=False,
     )
-    with engine.begin() as conn:
+    with selected_engine.begin() as conn:
         state = conn.execute(
             text(
                 """
@@ -520,7 +567,7 @@ def _create_outbox_event(doc_id, action, reviewer, reviewer_id=None, reviewer_ro
             {
                 "doc_id": doc_id,
                 "action": action,
-                "max_attempts": MAX_PUBLICATION_ATTEMPTS,
+                "max_attempts": selected_policy.publication_max_attempts,
             },
         ).mappings().first()
 
@@ -582,9 +629,16 @@ def _create_outbox_event(doc_id, action, reviewer, reviewer_id=None, reviewer_ro
     )
 
 
-def _claim_outbox(outbox_id=None, worker_id="publication-inline"):
-    _ensure_engine()
-    with engine.begin() as conn:
+def _claim_outbox(
+    outbox_id=None,
+    worker_id="publication-inline",
+    *,
+    db_engine=None,
+    policy: RepositoryPolicySettings | None = None,
+):
+    selected_engine = resolve_engine(db_engine)
+    max_attempts = (policy or _default_policy()).publication_max_attempts
+    with selected_engine.begin() as conn:
         # Worker chet giua chung khong duoc khoa event vinh vien.
         conn.execute(
             text(
@@ -610,7 +664,7 @@ def _claim_outbox(outbox_id=None, worker_id="publication-inline"):
                     ORDER BY CreatedAt, OutboxID
                     """
                 ),
-                {"max_attempts": MAX_PUBLICATION_ATTEMPTS},
+                {"max_attempts": max_attempts},
             ).fetchone()
             if not row:
                 return None
@@ -636,7 +690,7 @@ def _claim_outbox(outbox_id=None, worker_id="publication-inline"):
             {
                 "worker": worker_id,
                 "outbox_id": int(outbox_id),
-                "max_attempts": MAX_PUBLICATION_ATTEMPTS,
+                "max_attempts": max_attempts,
             },
         ).mappings().first()
         if claimed:
@@ -654,7 +708,15 @@ def _claim_outbox(outbox_id=None, worker_id="publication-inline"):
     return dict(claimed) if claimed else None
 
 
-def _mark_outbox_failure(event, error):
+def _mark_outbox_failure(
+    event,
+    error,
+    *,
+    db_engine=None,
+    qdrant_client=None,
+    collection_name=None,
+):
+    selected_engine = resolve_engine(db_engine)
     outbox_id = int(event["OutboxID"])
     doc_id = int(event["DocID"])
     attempt = int(event.get("AttemptCount") or 1)
@@ -665,8 +727,9 @@ def _mark_outbox_failure(event, error):
     _r_qdrant.update_qdrant_metadata(
         doc_id,
         {"servable": False, "publication_state": "failed"},
+        **_qdrant_runtime_kwargs(qdrant_client, collection_name),
     )
-    with engine.begin() as conn:
+    with selected_engine.begin() as conn:
         conn.execute(
             text(
                 """
@@ -700,7 +763,15 @@ def _mark_outbox_failure(event, error):
     )
 
 
-def _publish_event(event):
+def _publish_event(
+    event,
+    *,
+    db_engine=None,
+    policy: RepositoryPolicySettings | None = None,
+    qdrant_client=None,
+    collection_name=None,
+):
+    selected_engine = resolve_engine(db_engine)
     doc_id = int(event["DocID"])
     action = _clean(event["Action"])
     try:
@@ -710,14 +781,23 @@ def _publish_event(event):
     reviewer = _clean(payload.get("reviewer")) or "System"
     reviewer_id = payload.get("reviewer_id")
     reviewer_roles = payload.get("reviewer_roles") or []
-    contract_validation = validate_publish_contract(doc_id)
-    actor_validation = validate_publish_actor(doc_id, reviewer_id, reviewer_roles)
+    validation_kwargs = (
+        {"db_engine": selected_engine} if db_engine is not None else {}
+    )
+    contract_validation = validate_publish_contract(doc_id, **validation_kwargs)
+    actor_validation = validate_publish_actor(
+        doc_id,
+        reviewer_id,
+        reviewer_roles,
+        **validation_kwargs,
+        policy=policy,
+    )
     if not contract_validation or not actor_validation:
         problems = [issue.message for issue in contract_validation.issues + actor_validation.issues]
         raise RuntimeError("Publish contract/actor khong con hop le: " + "; ".join(problems))
     serving_epoch = int(event["OutboxID"])
 
-    with engine.connect() as conn:
+    with selected_engine.connect() as conn:
         doc = conn.execute(
             text(
                 """
@@ -761,11 +841,12 @@ def _publish_event(event):
             "serving_epoch": serving_epoch,
         },
         require_points=True,
+        **_qdrant_runtime_kwargs(qdrant_client, collection_name),
     ):
         raise RuntimeError("Khong dong bo duoc staging points sang Qdrant")
 
     # Persist the state-machine transition before changing serving visibility.
-    with engine.begin() as conn:
+    with selected_engine.begin() as conn:
         conn.execute(
             text(
                 """
@@ -803,11 +884,15 @@ def _publish_event(event):
         "published_at": datetime.now().isoformat(),
         "supersedes_doc_id": old_ids[0] if old_ids else None,
     }
-    if not _r_qdrant.batch_update_qdrant_metadata(publish_updates, require_points=True):
+    if not _r_qdrant.batch_update_qdrant_metadata(
+        publish_updates,
+        require_points=True,
+        **_qdrant_runtime_kwargs(qdrant_client, collection_name),
+    ):
         raise RuntimeError("Khong batch activate/disable duoc Qdrant serving points")
 
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             for old_id in old_ids:
                 conn.execute(
                     text(
@@ -877,9 +962,14 @@ def _publish_event(event):
             "publication_state": "qdrant_synced",
             "serving_epoch": int(doc["ServingEpoch"] or 0),
         }
-        _r_qdrant.batch_update_qdrant_metadata(rollback_updates, require_points=False)
+        _r_qdrant.batch_update_qdrant_metadata(
+            rollback_updates,
+            require_points=False,
+            **_qdrant_runtime_kwargs(qdrant_client, collection_name),
+        )
         raise
 
+    audit_kwargs = {"db_engine": selected_engine} if db_engine is not None else {}
     _r_audit.write_audit_log(
         reviewer,
         f"publish_{action}",
@@ -891,6 +981,7 @@ def _publish_event(event):
             "serving_epoch": serving_epoch,
             "reviewer_id": reviewer_id,
         },
+        **audit_kwargs,
     )
     _r_semantic_cache._invalidate_semantic_cache("doc.publish")
     return PublicationResult(
@@ -901,15 +992,42 @@ def _publish_event(event):
     )
 
 
-def process_publication_outbox_once(outbox_id=None, worker_id="publication-worker"):
+def process_publication_outbox_once(
+    outbox_id=None,
+    worker_id="publication-worker",
+    *,
+    db_engine=None,
+    policy: RepositoryPolicySettings | None = None,
+    qdrant_client=None,
+    collection_name=None,
+):
     """Claim and process one publication event. Safe to call repeatedly."""
-    event = _claim_outbox(outbox_id=outbox_id, worker_id=worker_id)
+    event = _claim_outbox(
+        outbox_id=outbox_id,
+        worker_id=worker_id,
+        db_engine=db_engine,
+        policy=policy,
+    )
     if not event:
         return None
     try:
-        return _publish_event(event)
+        publish_kwargs = _qdrant_runtime_kwargs(
+            qdrant_client,
+            collection_name,
+        )
+        if db_engine is not None:
+            publish_kwargs["db_engine"] = db_engine
+        if policy is not None:
+            publish_kwargs["policy"] = policy
+        return _publish_event(event, **publish_kwargs)
     except Exception as exc:
-        _mark_outbox_failure(event, exc)
+        failure_kwargs = _qdrant_runtime_kwargs(
+            qdrant_client,
+            collection_name,
+        )
+        if db_engine is not None:
+            failure_kwargs["db_engine"] = db_engine
+        _mark_outbox_failure(event, exc, **failure_kwargs)
         return PublicationResult(
             ok=False,
             doc_id=int(event["DocID"]),
@@ -925,6 +1043,11 @@ def publish_document(
     reviewer="System",
     reviewer_id=None,
     reviewer_roles=None,
+    *,
+    db_engine=None,
+    policy: RepositoryPolicySettings | None = None,
+    qdrant_client=None,
+    collection_name=None,
 ):
     """Validate, enqueue, and attempt publication synchronously once."""
     action = _clean(action).lower()
@@ -950,25 +1073,51 @@ def publish_document(
         reviewer,
         reviewer_id=reviewer_id,
         reviewer_roles=reviewer_roles,
+        db_engine=db_engine,
+        policy=policy,
     )
     if not queued:
         return queued
     if queued.state in {"published", "processing"}:
         return queued
+    process_kwargs = {
+        "outbox_id": queued.outbox_id,
+        "worker_id": f"inline:{reviewer}",
+        **_qdrant_runtime_kwargs(qdrant_client, collection_name),
+    }
+    if db_engine is not None:
+        process_kwargs["db_engine"] = db_engine
+    if policy is not None:
+        process_kwargs["policy"] = policy
     return process_publication_outbox_once(
-        outbox_id=queued.outbox_id,
-        worker_id=f"inline:{reviewer}",
+        **process_kwargs,
     )
 
 
-def reconcile_publications(limit=100, worker_id="publication-reconciler"):
+def reconcile_publications(
+    limit=100,
+    worker_id="publication-reconciler",
+    *,
+    db_engine=None,
+    policy: RepositoryPolicySettings | None = None,
+    qdrant_client=None,
+    collection_name=None,
+):
     """Retry pending/failed publication events and return a compact summary."""
     limit = max(1, min(int(limit or 100), 1000))
     processed = 0
     succeeded = 0
     failed = 0
     for _ in range(limit):
-        result = process_publication_outbox_once(worker_id=worker_id)
+        process_kwargs = {
+            "worker_id": worker_id,
+            **_qdrant_runtime_kwargs(qdrant_client, collection_name),
+        }
+        if db_engine is not None:
+            process_kwargs["db_engine"] = db_engine
+        if policy is not None:
+            process_kwargs["policy"] = policy
+        result = process_publication_outbox_once(**process_kwargs)
         if result is None:
             break
         processed += 1
@@ -979,29 +1128,49 @@ def reconcile_publications(limit=100, worker_id="publication-reconciler"):
     return {"processed": processed, "succeeded": succeeded, "failed": failed}
 
 
-def reconcile_serving_state(limit=500, worker_id="serving-reconciler"):
+def reconcile_serving_state(
+    limit=500,
+    worker_id="serving-reconciler",
+    *,
+    db_engine=None,
+    qdrant_client=None,
+    collection_name=None,
+):
     """Repair SQL-to-Qdrant serving metadata drift from the SQL source of truth."""
-    result = backfill_qdrant_servable(limit=limit)
+    result = backfill_qdrant_servable(
+        limit=limit,
+        db_engine=db_engine,
+        qdrant_client=qdrant_client,
+        collection_name=collection_name,
+    )
     result["worker_id"] = str(worker_id)[:100]
+    audit_kwargs = {"db_engine": db_engine} if db_engine is not None else {}
     _r_audit.write_audit_log(
         str(worker_id)[:100],
         "reconcile_qdrant_serving_state",
         "TaiLieu",
         None,
         {"total": result.get("total"), "updated": result.get("updated"), "failed_doc_ids": result.get("failed_doc_ids", [])[:100]},
+        **audit_kwargs,
     )
     return result
 
 
-def backfill_qdrant_servable(limit=None):
+def backfill_qdrant_servable(
+    limit=None,
+    *,
+    db_engine=None,
+    qdrant_client=None,
+    collection_name=None,
+):
     """Copy authoritative SQL serving state to all Qdrant points."""
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     limit_clause = ""
     params = {}
     if limit is not None:
         limit = max(1, int(limit))
         limit_clause = f"TOP ({limit})"
-    with engine.connect() as conn:
+    with selected_engine.connect() as conn:
         rows = conn.execute(
             text(
                 f"""
@@ -1030,10 +1199,13 @@ def backfill_qdrant_servable(limit=None):
             "publication_version": int(row["PublicationVersion"] or 1),
             "serving_epoch": int(row["ServingEpoch"] or 0),
             "taxonomy_version": row["TaxonomyVersion"] or "v1",
-            "external_processing_policy": row["ExternalProcessingPolicy"] or "all_external",
+            "external_processing_policy": row["ExternalProcessingPolicy"] or "internal_only",
         }
         if _r_qdrant.update_qdrant_metadata(
-            int(row["DocID"]), metadata, require_points=True
+            int(row["DocID"]),
+            metadata,
+            require_points=True,
+            **_qdrant_runtime_kwargs(qdrant_client, collection_name),
         ):
             updated += 1
         else:

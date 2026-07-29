@@ -1,0 +1,19 @@
+{
+  "schema": "graph-rollout-run-v1",
+  "git_sha": "48e5fc61b62b402c2f48610cb90ae637c9e24bc4",
+  "manifest_sha256": "6452449338b6c3b8b27968b374c27438f6c312740e43e80a3e91e6dc1923f86c",
+  "fixture_fingerprint": "0d8649e7eebafbec6978bc76f56ab4f3bc691f05dced0ddae41ffa93f3d0d69d",
+  "baseline": {
+    "started_at": "2026-07-15T06:38:49.624366Z",
+    "completed_at": "2026-07-15T06:41:51.213240Z",
+    "runner_exit": 2
+  },
+  "candidate": {
+    "started_at": "2026-07-15T06:41:52.228737Z",
+    "completed_at": "2026-07-15T06:44:55.604995Z",
+    "runner_exit": 2
+  },
+  "gate_exit": 1,
+  "passed": false,
+  "rollout_pair_sha256": "f85a47a82bceaa9d82259870d4d56104304efb1a64d515bb4291f9a67e6f7e39"
+}

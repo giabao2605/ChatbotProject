@@ -1,0 +1,149 @@
+from types import SimpleNamespace
+
+from langchain_core.documents import Document
+
+
+def test_rerank_phase_passes_bootstrap_client_to_late_interaction(monkeypatch):
+    from mech_chatbot.rag import late_interaction
+    from mech_chatbot.rag.phases import retrieval_rerank
+
+    client = object()
+    document = Document(page_content="bearing", metadata={"doc_id": 7})
+    observed = []
+
+    monkeypatch.setattr(late_interaction, "enabled", lambda _config: True)
+
+    def attempt(
+        documents,
+        query,
+        received_client,
+        *,
+        top_n,
+        query_encoder,
+        config,
+    ):
+        assert query_encoder is None
+        assert config.index_version == "late-test"
+        observed.append((documents, query, received_client, top_n))
+        return SimpleNamespace(
+            documents=tuple(documents),
+            used_shadow=True,
+            total_latency_ms=1,
+            encode_latency_ms=1,
+            query_latency_ms=0,
+            candidate_count=len(documents),
+            shadow_hits=len(documents),
+            coverage=1.0,
+            fallback_reason=None,
+        )
+
+    monkeypatch.setattr(late_interaction, "attempt_shadow_rerank", attempt)
+    monkeypatch.setattr(retrieval_rerank, "hydrate_parent_context", lambda docs, **_kwargs: docs)
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "parent_context_max_workers",
+        lambda configured: configured,
+    )
+    monkeypatch.setattr(retrieval_rerank, "long_context_reorder", lambda docs: docs)
+
+    request = SimpleNamespace(
+        trace_id="late-phase-contract",
+        user_question="bearing",
+        response_language="vi",
+        user_department="Technical",
+        user_roles=("viewer",),
+        started_at=0.0,
+    )
+    decision = SimpleNamespace(
+        request=request,
+        effective_question="bearing",
+        intent_data={},
+    )
+    enrichment = SimpleNamespace(
+        new_part_ids=(),
+        documents=(document,),
+        graph_documents=(),
+        served_graph_documents=(),
+        community_documents=(),
+        base_k=5,
+        retrieval_mode="hybrid",
+        has_active_filter=False,
+    )
+
+    state = SimpleNamespace(
+        retrieval_adapter=SimpleNamespace(
+            client=client,
+            collection_name="test-knowledge",
+            late_interaction_config=SimpleNamespace(
+                interaction_enabled=True,
+                index_version="late-test",
+            ),
+            late_query_encoder=None,
+            rerank_per_part=8,
+            rerank_top_n_cap=20,
+            voyage_enabled=False,
+            parent_context_enabled=False,
+            parent_context_max_workers=1,
+        )
+    )
+
+    result = retrieval_rerank.rerank_retrieval(decision, enrichment, state)
+
+    assert result.documents == (document,)
+    assert result.reason_code == "reranked"
+    assert observed == [(([document]), "bearing", client, 8)]
+
+
+def test_rerank_empty_context_keeps_typed_terminal_with_active_filter(monkeypatch):
+    from mech_chatbot.rag.phases import retrieval_rerank
+    from mech_chatbot.rag.phases.contracts import PhaseTerminal
+
+    document = Document(page_content="bearing", metadata={"doc_id": 7})
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "RerankPolicy",
+        lambda **_kwargs: SimpleNamespace(select_backend=lambda _docs: "local"),
+    )
+    monkeypatch.setattr(retrieval_rerank, "rerank_docs", lambda _docs: [])
+    monkeypatch.setattr(retrieval_rerank, "serialize_qdrant_filter", lambda value: value)
+
+    request = SimpleNamespace(
+        trace_id="empty-rerank-contract",
+        user_question="bearing",
+        response_language="vi",
+        user_department="Technical",
+        user_roles=("viewer",),
+        started_at=0.0,
+    )
+    decision = SimpleNamespace(
+        request=request,
+        effective_question="bearing",
+        intent_data={},
+    )
+    enrichment = SimpleNamespace(
+        new_part_ids=(),
+        documents=(document,),
+        graph_documents=(),
+        served_graph_documents=(),
+        community_documents=(),
+        base_k=5,
+        retrieval_mode="hybrid",
+        has_active_filter=True,
+        active_filter=None,
+    )
+    refused = []
+    state = SimpleNamespace(
+        refuse=refused.append,
+        prepared=lambda values: values,
+        retrieval_adapter=SimpleNamespace(
+            late_interaction_config=None,
+            voyage_enabled=False,
+            parent_context_enabled=False,
+        ),
+    )
+
+    result = retrieval_rerank.rerank_retrieval(decision, enrichment, state)
+
+    assert isinstance(result, PhaseTerminal)
+    assert result.reason_code == "empty_context"
+    assert refused == ["empty_context"]

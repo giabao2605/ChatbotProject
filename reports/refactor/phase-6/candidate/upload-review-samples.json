@@ -1,0 +1,1 @@
+{"review_bulk_publish":{"failed":0,"failures":[{"doc_id":42,"ok":true,"state":"processing"}],"ok":true,"pending":1,"updated":0},"upload_accepted":{"file_name":"sample.pdf","job_id":9,"ok":true}}

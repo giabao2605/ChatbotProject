@@ -1,0 +1,334 @@
+{
+  "version": 1,
+  "policy": "Only reviewed public or unknown-external compatibility debt may remain; current count must match exactly.",
+  "entries": [
+    {
+      "rule": "service_flat_export",
+      "path": "services/__init__.py",
+      "dependency": "engine",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public service facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories._shared",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.access",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.analytics",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.audit",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.bom",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.catalog",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.chat",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.community_summaries",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.doc_metadata",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.document",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.document_pages",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.external_ai",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.feedback",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.glossary",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.graph",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.jobs",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.knowledge_governance",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.lifecycle",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.material",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.publication",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.qdrant",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.rollout",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.semantic_cache",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.settings",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "db/repository.py",
+      "dependency": "mech_chatbot.db.repositories.version",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public repository facade; no internal caller remains"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.bom",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public PDF facade with unknown external callers"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.chunking",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public PDF facade with unknown external callers"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.config",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public PDF facade with unknown external callers"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.metadata",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public PDF facade with unknown external callers"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.pipeline",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public PDF facade with unknown external callers"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.quality",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public PDF facade with unknown external callers"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.readers",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public PDF facade with unknown external callers"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "ingestion/pdf_processor.py",
+      "dependency": "mech_chatbot.ingestion.pdf.vision",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public PDF facade with unknown external callers"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.bootstrap",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public RAG facade; typed executor is the internal path"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.evidence_gate",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public RAG facade; typed executor is the internal path"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.intent",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public RAG facade; typed executor is the internal path"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.pipeline",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public RAG facade; typed executor is the internal path"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.prompt",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public RAG facade; typed executor is the internal path"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.rerank",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public RAG facade; typed executor is the internal path"
+    },
+    {
+      "rule": "wildcard_import",
+      "path": "rag/service.py",
+      "dependency": "mech_chatbot.rag.retrieval",
+      "count": 1,
+      "removal_phase": "External deprecation decision",
+      "reason": "Historical public RAG facade; typed executor is the internal path"
+    }
+  ]
+}

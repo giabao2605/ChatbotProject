@@ -27,32 +27,10 @@ from . import (
     external_ai,
     knowledge_governance,
     rollout,
+    graph,
+    community_summaries,
 )
-from ._shared import *  # noqa: F401,F403
-from .chat import *  # noqa: F401,F403
-from .feedback import *  # noqa: F401,F403
-from .semantic_cache import *  # noqa: F401,F403
-from .document import *  # noqa: F401,F403
-from .document_pages import *  # noqa: F401,F403
-from .version import *  # noqa: F401,F403
-from .doc_metadata import *  # noqa: F401,F403
-from .lifecycle import *  # noqa: F401,F403
-from .bom import *  # noqa: F401,F403
-from .material import *  # noqa: F401,F403
-from .jobs import *  # noqa: F401,F403
-from .audit import *  # noqa: F401,F403
-from .qdrant import *  # noqa: F401,F403
-from .catalog import *  # noqa: F401,F403
-from .analytics import *  # noqa: F401,F403
-from .settings import *  # noqa: F401,F403
-from .access import *  # noqa: F401,F403
-from .glossary import *  # noqa: F401,F403
-from .publication import *  # noqa: F401,F403
-from .external_ai import *  # noqa: F401,F403
-from .knowledge_governance import *  # noqa: F401,F403
-from .rollout import *  # noqa: F401,F403
-
-__all__ = [
+_LEGACY_EXPORTS = [
     'MAX_BOT_MSG_LEN',
     'MAX_USER_MSG_LEN',
     '_cap_len',
@@ -110,7 +88,6 @@ __all__ = [
     'set_document_departments',
     'update_document_classification',
     '_REINGEST_SNAPSHOT_TABLES',
-    '_reingest_snapshots',
     '_snapshot_document_children',
     'clear_reingest_snapshot',
     'get_technical_attributes_for_rag',
@@ -146,6 +123,7 @@ __all__ = [
     'set_document_lifecycle',
     'normalize_material_name',
     'save_bom_records',
+    'search_bom_facts',
     'search_bom_by_code',
     '_refresh_material_cache',
     'add_material_synonym',
@@ -164,8 +142,6 @@ __all__ = [
     'update_ingestion_job',
     'update_ingestion_report',
     'write_audit_log',
-    '_get_qdrant_client',
-    '_qdrant_client_singleton',
     'batch_update_qdrant_metadata',
     'update_qdrant_metadata',
     '_CATALOG_CACHE_TTL',
@@ -245,4 +221,39 @@ __all__ = [
     'list_department_rollout_plans',
     'record_department_evaluation_gate',
     'upsert_department_rollout_plan',
+    'list_graph_proposals',
+    'list_community_summaries',
+    'load_servable_community_summaries',
+    'propose_graph_edge',
+    'review_graph_proposal',
+    'propose_community_summary',
+    'review_community_summary',
+    'traverse_knowledge_graph',
+]
+
+__all__ = [
+    "access",
+    "analytics",
+    "audit",
+    "bom",
+    "catalog",
+    "chat",
+    "community_summaries",
+    "doc_metadata",
+    "document",
+    "document_pages",
+    "external_ai",
+    "feedback",
+    "glossary",
+    "graph",
+    "jobs",
+    "knowledge_governance",
+    "lifecycle",
+    "material",
+    "publication",
+    "qdrant",
+    "rollout",
+    "semantic_cache",
+    "settings",
+    "version",
 ]

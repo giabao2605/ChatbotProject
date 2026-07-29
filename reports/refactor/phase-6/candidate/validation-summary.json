@@ -1,0 +1,69 @@
+{
+  "schema": "phase-6-validation-summary-v1",
+  "baseline_sha": "47e1e73c58663d3496dbcd19f290ef5cff97f8d4",
+  "candidate_sha": "29c8cafab73005d45e0313c069172fb6bde8049c",
+  "backend": {
+    "passed": 2147,
+    "failed": 0,
+    "errors": 0,
+    "skipped_opt_in": 22,
+    "warnings": 1,
+    "line_coverage_percent": 92.217489,
+    "branch_coverage_percent": 84.791362
+  },
+  "changed_source_denominator": {
+    "files": 38,
+    "covered_lines": 3979,
+    "statements": 4399,
+    "line_coverage_percent": 90.452376,
+    "covered_branches": 936,
+    "branches": 1152,
+    "branch_coverage_percent": 81.25
+  },
+  "architecture": {
+    "passed": 18,
+    "failed": 0
+  },
+  "sql_qdrant_consistency": {
+    "passed": 2,
+    "failed": 0,
+    "mode": "read_only_main_demo_data",
+    "snapshot_id": "phase3-ingestion-consistency-snapshot-v1"
+  },
+  "frontend": {
+    "test_files_passed": 11,
+    "tests_passed": 32,
+    "build": "passed"
+  },
+  "contract_diff": {
+    "baseline": "reports/refactor/phase-4/candidate",
+    "openapi_app_equal": true,
+    "openapi_rag_equal": true,
+    "sse_success_equal": true,
+    "sse_busy_equal": true,
+    "upload_review_samples_equal": true
+  },
+  "import_smoke": {
+    "modules": 4,
+    "scripts": 8,
+    "status": "passed",
+    "executed_migrations_or_destructive_operations": false
+  },
+  "review": {
+    "standards": "no_open_findings",
+    "spec": "no_open_findings"
+  },
+  "secondary_owned_coverage_run": {
+    "status": "tooling_error_not_used_as_evidence",
+    "reason": "onnxruntime/numpy native module reload during multi-package coverage collection"
+  },
+  "security": {
+    "staged_secret_scan": "passed_test_fixture_values_only",
+    "pip_audit": "not_available_not_presented_as_pass"
+  },
+  "known_debt": {
+    "starlette_httpx_warning": true,
+    "phase_4_benchmark_exception_unchanged": true,
+    "live_rollout_authorized": false
+  }
+}

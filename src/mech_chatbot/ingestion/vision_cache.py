@@ -1,82 +1,99 @@
-"""P2-5 - Cache ket qua Vision (OCR/trich xuat) theo HASH anh trang.
+"""Cache Vision results by image hash through explicit immutable config."""
 
-Muc tieu: giam chi phi goi GPT-5.4 Vision. Cung 1 anh trang (hash sha256
-giong nhau) -> tra ket qua da luu, KHONG goi lai API. Huu ich khi:
-  - Re-ingest / re-embed lai cung tai lieu.
-  - Retry sau loi.
-  - Cac trang/anh trung lap (vd trang bia, mau title-block giong nhau).
+from __future__ import annotations
 
-Cache la file JSON tren dia (ben vung qua cac lan chay). Key = sha256(anh)+schema.
-Tat bang env VISION_CACHE_ENABLED=false. Thu muc qua VISION_CACHE_DIR.
-"""
-import os
-import json
+from dataclasses import dataclass
 import hashlib
+import json
+from pathlib import Path
 
 from mech_chatbot.config.logging import logger
 
-# Tang khi doi prompt/schema Vision de tu dong vo hieu cache cu.
+
 SCHEMA_VERSION = "v2"
-_DEFAULT_DIR = os.path.join("data", "cache", "vision")
+_DEFAULT_DIR = Path("data") / "cache" / "vision"
 
 
-def _enabled():
-    return os.getenv("VISION_CACHE_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+@dataclass(frozen=True, slots=True)
+class VisionCacheConfig:
+    enabled: bool = True
+    directory: Path = _DEFAULT_DIR
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "directory", Path(self.directory))
 
 
-def _cache_dir():
-    d = os.getenv("VISION_CACHE_DIR", _DEFAULT_DIR)
-    try:
-        os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
-    return d
+def _resolved_config(config: VisionCacheConfig | None) -> VisionCacheConfig:
+    return config or VisionCacheConfig()
+
+
+def _enabled(config: VisionCacheConfig | None = None) -> bool:
+    return _resolved_config(config).enabled
+
+
+def _cache_dir(config: VisionCacheConfig | None = None) -> Path:
+    directory = _resolved_config(config).directory
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 
 def hash_image_bytes(image_bytes):
     if not image_bytes:
         return None
-    h = hashlib.sha256()
-    h.update(SCHEMA_VERSION.encode("utf-8"))
-    h.update(image_bytes)
-    return h.hexdigest()
+    digest = hashlib.sha256()
+    digest.update(SCHEMA_VERSION.encode("utf-8"))
+    digest.update(image_bytes)
+    return digest.hexdigest()
 
 
 def hash_image_file(path):
     try:
-        with open(path, "rb") as f:
-            return hash_image_bytes(f.read())
-    except Exception as e:
-        logger.warning(f"vision_cache: khong hash duoc anh {path}: {e}")
+        with open(path, "rb") as image_file:
+            return hash_image_bytes(image_file.read())
+    except Exception as error:
+        logger.warning(f"vision_cache: khong hash duoc anh {path}: {error}")
         return None
 
 
-def _path(key):
-    return os.path.join(_cache_dir(), f"{key}.json")
+def _path(key, config: VisionCacheConfig | None = None) -> Path:
+    return _cache_dir(config) / f"{key}.json"
 
 
-def get(key):
-    """Tra ve vision_data (dict) da cache, hoac None."""
-    if not key or not _enabled():
+def get(key, *, config: VisionCacheConfig | None = None):
+    """Return cached Vision data, or ``None`` when absent/disabled."""
+
+    if not key or not _enabled(config):
         return None
-    p = _path(key)
+    path = _path(key, config)
     try:
-        if os.path.exists(p):
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.warning(f"vision_cache get loi: {e}")
+        if path.exists():
+            with path.open("r", encoding="utf-8") as cache_file:
+                return json.load(cache_file)
+    except Exception as error:
+        logger.warning(f"vision_cache get loi: {error}")
     return None
 
 
-def put(key, data):
-    """Luu vision_data (dict) vao cache."""
-    if not key or not _enabled() or data is None:
+def put(key, data, *, config: VisionCacheConfig | None = None):
+    """Persist Vision data using the explicitly selected cache directory."""
+
+    if not key or not _enabled(config) or data is None:
         return False
     try:
-        with open(_path(key), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+        path = _path(key, config)
+        with path.open("w", encoding="utf-8") as cache_file:
+            json.dump(data, cache_file, ensure_ascii=False)
         return True
-    except Exception as e:
-        logger.warning(f"vision_cache put loi: {e}")
+    except Exception as error:
+        logger.warning(f"vision_cache put loi: {error}")
         return False
+
+
+__all__ = [
+    "SCHEMA_VERSION",
+    "VisionCacheConfig",
+    "get",
+    "hash_image_bytes",
+    "hash_image_file",
+    "put",
+]

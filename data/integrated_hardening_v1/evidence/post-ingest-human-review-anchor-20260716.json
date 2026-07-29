@@ -1,0 +1,28 @@
+{
+  "schema": "controlled-demo-human-review-anchor-v1",
+  "scope": "controlled_demo",
+  "source_commit": "7c411e9f00fc40b192ab2361adaea9c7681b5899",
+  "generated_at": "2026-07-16T09:30:00Z",
+  "controlled_packs": {
+    "crag-high-risk-v3": {
+      "pack_id": "crag-high-risk-v3",
+      "pack_sha256": "96f9b5d88036e508ad4b986245ba48d8567daac2725f4f5cc1e97bd8fd93a7fb",
+      "review_contract_sha256": "c2848741c8c44646e7e21e1281577ce4c4ccedb83ffc698f6b0d8e1b57c157ca",
+      "case_count": 6
+    },
+    "grounded-math-v3": {
+      "pack_id": "grounded-math-v3",
+      "pack_sha256": "aecf78b67cb8b28a50ad74b71d66c9156fa8f5758f7b9bc52fb722e927645a50",
+      "review_contract_sha256": "068cc0305ff9923f5d89d847adf4c4def8ac7ff23ee9c33c823b9c87b0cee316",
+      "case_count": 10
+    }
+  },
+  "graph_queue": {
+    "path": "reports/graph/20260715-130721/review-queue.jsonl",
+    "source_sha256": "3d6982e68bd729fd123e5c1bd722d01d2ba33ea55eed44d7104a43abc1ed04aa",
+    "edge_count": 21,
+    "minimum_review_sample": 20,
+    "minimum_reviewed_edge_precision": 0.95,
+    "review_source": "independent"
+  }
+}

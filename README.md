@@ -297,9 +297,23 @@ and state directories are ignored.
 
 ### 2. Configure Environment
 
-Create a `.env` file at the project root:
+Copy the fail-closed example to a local `.env` file, then replace the blank
+secret values. Never commit the resulting `.env` file.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+The important runtime values are:
 
 ```env
+# Application security and external processing
+APP_ENV=production
+APP_SESSION_SECRET=<long-random-secret>
+APP_COOKIE_SECURE=true
+EXTERNAL_AI_LOCAL_DEVELOPMENT=false
+EXTERNAL_PROCESSING_POLICY=internal_only
+
 # LLM / Vision
 PROXYLLM_BASE_URL=https://api.proxyllm.eu/v1
 PROXYLLM_API_KEY=<your-api-key>
@@ -358,6 +372,24 @@ SEMANTIC_ROUTER_MARGIN=0.04
 # Chat Bridge (app_server <-> rag_server shared secret)
 CHAT_BRIDGE_SECRET=<long-random-hex-string>
 
+# Authorization defaults
+RBAC_STRICT_SITE_FILTER=true
+KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE=false
+KNOWLEDGE_ALLOW_ADMIN_METADATA_OVERRIDE=false
+
+# Governed RAG features stay disabled by default
+RAG_CRAG_ENABLED=false
+RAG_CLAIM_REPAIR_ENABLED=false
+RAG_GROUNDED_MATH_ENABLED=false
+RAG_LATE_INTERACTION_ENABLED=false
+RAG_LATE_ENCODER_READY=false
+RAG_QUERY_DECOMPOSITION_ENABLED=false
+RAG_GRAPH_RETRIEVAL_ENABLED=false
+RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED=false
+RAG_ACTIVATION_SCOPE=default_rollout
+RAG_ACTIVATION_BUNDLE_PATH=
+RAG_ACTIVATION_BUNDLE_SHA256=
+
 # Strict Modes
 STRICT_INGEST_REQUIRE_VISION=true
 STRICT_ANSWER_MODE=true
@@ -367,9 +399,23 @@ PDF_RENDER_DPI=300
 METADATA_TEXT_LIMIT=20000
 ```
 
+`EXTERNAL_PROCESSING_POLICY=all_external` is an explicit opt-in. Use it only
+with an approved provider profile, privacy-safe audit metadata, and the
+required governance review. Controlled RAG flags also require their matching
+activation bundle and release decision; code, tests, or a successful provider
+smoke do not authorize enabling them.
+
+Use a distinct random `APP_SESSION_SECRET`; do not reuse the RAG service or
+chat bridge secret. Keep `APP_COOKIE_SECURE=true` behind HTTPS. A local or LAN
+HTTP-only demo may set it to `false`, but that exception must not be copied to
+an HTTPS deployment.
+
 For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QDRANT_API_KEY`, `SQL_SERVER`, `SQL_DATABASE`, `SQL_USERNAME`, `SQL_PASSWORD`, `OPENAI_API_KEY`.
 
-> **Config validation:** The app calls `assert_config_valid()` at startup. If any required variable is missing or has the wrong type, it will raise `ConfigError` immediately with a clear list of issues. Secrets are never printed in plain text.
+> **Config validation:** The RAG server and workers call
+> `assert_config_valid()` at startup. Browser-session security fails closed
+> when `APP_SESSION_SECRET` is missing. Configuration errors never print
+> secrets in plain text.
 
 ### 3. Database Setup
 

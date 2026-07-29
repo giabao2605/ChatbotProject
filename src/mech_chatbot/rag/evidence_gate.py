@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """Auto-split tu rag/service.py (P1.2 refactor). Giu nguyen logic goc; chi tach file + import."""
 
-import os
 import re
 from dataclasses import dataclass
 from enum import Enum
 from mech_chatbot.config.logging import logger, log_trace
 from langchain_core.messages import HumanMessage
 from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.answer_checks import (  # noqa: F401
     _safe_json_loads,
     _extract_numbers,
@@ -25,11 +25,12 @@ from mech_chatbot.rag.answer_checks import (  # noqa: F401
 
 # cross-module (owned) refs
 from mech_chatbot.rag.prompt import _normalize_lang
-STRICT_ANSWER_MODE = os.getenv("STRICT_ANSWER_MODE", "true").strip().lower() in {
-    "1", "true", "yes", "on"
-}
-
-
+from mech_chatbot.rag.number_normalization import (
+    NUMBER_PATTERN as _NUMBER_PATTERN,
+    normalize_number_token as _normalize_number_token,
+    normalized_number_values,
+)
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 class EvidenceState(str, Enum):
     SUFFICIENT = "SUFFICIENT"
     AMBIGUOUS = "AMBIGUOUS"
@@ -100,6 +101,10 @@ def _has_any_pattern(text, patterns):
     return any(re.search(pat, t, flags=re.IGNORECASE | re.DOTALL) for pat in patterns)
 
 
+def _contains_phrase(text, phrase):
+    return bool(re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text))
+
+
 def heuristic_missing_evidence_reason(question, context_text):
     """Chan nhanh cac cau hoi bay ma context ro rang khong co du kien can thiet."""
     q = _norm(question)
@@ -115,7 +120,10 @@ def heuristic_missing_evidence_reason(question, context_text):
     if asks_time and not _has_any_pattern(ctx, TIME_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi thoi gian gia cong/nang suat/dinh muc san xuat"
 
-    asks_cost = any(kw in q for kw in ["chi phi", "gia", "bao nhieu tien", "don gia"])
+    asks_cost = any(
+        _contains_phrase(q, keyword)
+        for keyword in ["chi phi", "bao nhieu tien", "don gia"]
+    ) or (_contains_phrase(q, "gia") and not _contains_phrase(q, "gia tri"))
     if asks_cost and not _has_any_pattern(ctx, COST_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi chi phi/don gia/gia thanh"
 
@@ -123,7 +131,16 @@ def heuristic_missing_evidence_reason(question, context_text):
     if asks_standard and not _has_any_pattern(ctx, STANDARD_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi tieu chuan/ket qua kiem tra de ket luan dat hay khong dat"
 
-    asks_material_sub = any(kw in q for kw in ["thay duoc", "thay the", "vat lieu khac", "tuong duong"])
+    material_context = any(
+        _contains_phrase(q, kw)
+        for kw in [
+            "vat lieu", "material", "thep", "steel", "aluminum",
+            "inox", "copper", "cao su", "rubber", "nylon",
+        ]
+    )
+    asks_material_sub = any(
+        kw in q for kw in ["thay duoc", "vat lieu khac", "tuong duong"]
+    ) or ("thay the" in q and material_context)
     if asks_material_sub and not _has_any_pattern(ctx, MATERIAL_SUB_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi thong tin vat lieu thay the/tuong duong"
 
@@ -144,16 +161,22 @@ def make_insufficient_evidence_message(question, reason, lang="vi"):
     )
 
 
-def evaluate_answerability(question, context_text, docs=None, trace_id=None):
+def evaluate_answerability(
+    question,
+    context_text,
+    docs=None,
+    trace_id=None,
+    *,
+    strict_answer_mode=True,
+    crag_enabled=False,
+    verifier_enabled=False,
+):
     """Return a structured evidence decision for generation or correction."""
-    if not STRICT_ANSWER_MODE and not is_high_risk_question(question):
+    if not strict_answer_mode and not is_high_risk_question(question):
         return EvidenceDecision(EvidenceState.SUFFICIENT, telemetry_status="heuristic_pass")
 
     quick_reason = heuristic_missing_evidence_reason(question, context_text)
     if quick_reason:
-        crag_enabled = os.getenv("RAG_CRAG_ENABLED", "false").strip().lower() in {
-            "1", "true", "yes", "on"
-        }
         state = EvidenceState.AMBIGUOUS if crag_enabled and str(context_text).strip() else EvidenceState.INSUFFICIENT
         return EvidenceDecision(
             state,
@@ -165,9 +188,7 @@ def evaluate_answerability(question, context_text, docs=None, trace_id=None):
     # Final prompt, source-citation gate and deterministic post-check already
     # validate the generated answer. A second GPT call here doubles latency and
     # can exhaust provider capacity; keep it as an explicit opt-in for audits.
-    if os.getenv("LLM_EVIDENCE_VERIFIER_ENABLED", "false").strip().lower() not in {
-        "1", "true", "yes", "on"
-    }:
+    if not verifier_enabled:
         return EvidenceDecision(
             EvidenceState.SUFFICIENT,
             reason="deterministic_evidence_gate_passed",
@@ -206,7 +227,7 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
             trace_id=trace_id,
             doc_ids=[(getattr(doc, "metadata", {}) or {}).get("doc_id") for doc in evidence_docs],
             security_levels=[(getattr(doc, "metadata", {}) or {}).get("security_level") for doc in evidence_docs],
-            policies=[(getattr(doc, "metadata", {}) or {}).get("external_processing_policy") or "all_external" for doc in evidence_docs],
+            policies=[(getattr(doc, "metadata", {}) or {}).get("external_processing_policy") or "internal_only" for doc in evidence_docs],
         ).content
         data = _safe_json_loads(response)
         if not isinstance(data, dict):
@@ -233,6 +254,8 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
             evidence_quotes=tuple(quotes) if isinstance(quotes, list) else (),
             telemetry_status="verifier_pass" if state is EvidenceState.SUFFICIENT else "verifier_block",
         )
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception as e:
         logger.warning(f"Evidence gate loi ({e}). Fallback sang heuristic/prompt nghiem ngat.")
         return EvidenceDecision(
@@ -248,44 +271,22 @@ def verify_answerability(question, context_text, docs=None, trace_id=None):
     return decision.answerable, decision.reason, list(decision.evidence_quotes)
 
 
-_NUMBER_PATTERN = re.compile(r"(?<![\w.])\d+(?:[\.,]\d+)*(?![\w.])")
-
-
-def _normalize_number_token(raw):
-    value = str(raw).strip()
-    separators = [char for char in value if char in ".,"]
-    if not separators:
-        return str(int(value)) if value.isdigit() else value
-    if len(set(separators)) == 2:
-        decimal_separator = "." if value.rfind(".") > value.rfind(",") else ","
-        grouping_separator = "," if decimal_separator == "." else "."
-        value = value.replace(grouping_separator, "").replace(decimal_separator, ".")
-    else:
-        separator = separators[0]
-        parts = value.split(separator)
-        if len(parts) > 2 or (len(parts[-1]) == 3 and parts[0] != "0"):
-            value = "".join(parts)
-        else:
-            value = ".".join(parts)
-    if "." in value:
-        value = value.rstrip("0").rstrip(".")
-    return value.lstrip("0") or "0"
-
-
-def normalized_number_values(text):
-    return {_normalize_number_token(match.group(0)) for match in _NUMBER_PATTERN.finditer(str(text or ""))}
-
-
 def find_unsupported_numbers(answer, context_text, question, strict_mode=False):
     """Return positioned number violations after formatting normalization."""
     if not strict_mode and not is_high_risk_question(question):
         return []
     allowed = normalized_number_values(context_text) | normalized_number_values(question)
-    harmless = {str(value) for value in range(11)}
+    answer_text = str(answer or "")
+    citation_spans = [
+        match.span()
+        for match in re.finditer(r"\[(?:Nguồn|Source):[^\]]+\]", answer_text, flags=re.IGNORECASE)
+    ]
     violations = []
-    for match in _NUMBER_PATTERN.finditer(str(answer or "")):
+    for match in _NUMBER_PATTERN.finditer(answer_text):
+        if any(start <= match.start() and match.end() <= end for start, end in citation_spans):
+            continue
         normalized = _normalize_number_token(match.group(0))
-        if normalized in allowed or normalized in harmless:
+        if normalized in allowed:
             continue
         violations.append(
             NumberViolation(match.group(0), normalized, match.start(), match.end())

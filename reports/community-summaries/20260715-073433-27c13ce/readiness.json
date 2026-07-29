@@ -1,0 +1,47 @@
+{
+  "schema": "community-summary-readiness-v1",
+  "capability_passed": true,
+  "ready_for_generation": false,
+  "ready_for_serving": false,
+  "detection_version": "connected-components-v1",
+  "serving_epoch": "community-v1",
+  "target_locked_before_benchmark": true,
+  "min_global_answer_gain": 0.1,
+  "prerequisite_graph_gate_passed": false,
+  "reviewed_edge_precision": 0.0,
+  "structured_coverage": 1.0,
+  "provenance_completeness": 1.0,
+  "serving_epoch_valid": true,
+  "indexing_latency_ms": 24.096,
+  "max_indexing_latency_ms": 60000.0,
+  "manifest_groups": {
+    "global": 2,
+    "local": 2,
+    "relational": 2
+  },
+  "approved_summary_count": 0,
+  "pending_summaries_served": 0,
+  "stale_summary_violations": 0,
+  "capability_checks": {
+    "graph_gate_schema": true,
+    "graph_readiness_schema": true,
+    "evaluation_groups_complete": true,
+    "detection_version_present": true,
+    "serving_epoch_present": true,
+    "quality_target_locked": true,
+    "detection_schema": true,
+    "serving_edge_validation": true
+  },
+  "blockers": [
+    "graph_gate_not_passed",
+    "reviewed_edge_precision_below_95_percent"
+  ],
+  "generated_at": "2026-07-15T07:34:34.458395Z",
+  "git_sha": "27c13ce87296dffe756a713771376150160d8d95",
+  "inputs": {
+    "reports\\graph\\quality-gate\\20260715-133845-48e5fc6\\gate.json": "ffc6e45c6ef780d8880a24788325af193eea3d4db5b29c821ec4a17e793d7e48",
+    "reports\\graph\\quality-gate\\20260715-133845-48e5fc6\\graph_readiness.json": "d2744ea8b19934f70c508a06509b24f7bb09adb8c298415844f2d21172895b40",
+    "reports\\community-summaries\\20260715-073433-27c13ce\\detection.json": "8023df80de99a34453dcd4e5e567b3d16ee4be5c647fe96e5fb0c1fbccf5d6ca",
+    "data\\community_eval_v1\\manifest.jsonl": "fb93ec5f5fd91ce9dbc53271e5294f0edbebeba115613996b519b543cf4c3fb0"
+  }
+}

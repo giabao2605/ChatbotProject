@@ -7,6 +7,7 @@
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,7 +40,7 @@ def pytest_collection_modifyitems(config, items):
                 item.add_marker(skip_qdrant)
             elif not needs_qdrant and not run_db:
                 item.add_marker(skip_db)
-        if "eval" in item.keywords and not run_eval:
+        if item.get_closest_marker("eval") is not None and not run_eval:
             item.add_marker(skip_eval)
 
 
@@ -66,3 +67,26 @@ def make_user():
             "allowed_sites": allowed_sites or [],
         }
     return _make
+
+
+@pytest.fixture
+def isolated_app_lifespan(monkeypatch):
+    """Keep unit-test app lifespans independent from external Qdrant."""
+
+    from mech_chatbot.api import app_server
+
+    qdrant_runtime = SimpleNamespace(
+        client=object(),
+        collection_name="unit-test-collection",
+        close=lambda: None,
+    )
+    monkeypatch.setattr(
+        app_server.app.state,
+        "qdrant_builder",
+        lambda _settings: qdrant_runtime,
+    )
+    monkeypatch.setattr(
+        app_server,
+        "refresh_expired_status",
+        lambda **_kwargs: {},
+    )

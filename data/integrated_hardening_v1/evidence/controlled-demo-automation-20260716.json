@@ -1,0 +1,96 @@
+{
+  "schema": "controlled-demo-automation-evidence-v1",
+  "scope": "controlled_demo",
+  "source_commit": "7da6afa3fdb70e42ab8b750609df67477115489a",
+  "generated_at": "2026-07-16T02:42:20Z",
+  "privacy": {
+    "credentials_recorded": false,
+    "raw_prompt_recorded": false,
+    "raw_response_recorded": false,
+    "raw_document_recorded": false
+  },
+  "provider_smoke": {
+    "requests": 5,
+    "successes": 5,
+    "provider_retries": 0,
+    "provider_outcome": "available"
+  },
+  "grounded_math": {
+    "fixture_collection": "MechChatbot_GroundedMath_Eval_v1",
+    "fixture_documents": 3,
+    "preflight_cases": 15,
+    "preflight_failures": 0,
+    "preflight_passed": true,
+    "manual_demo_reviews_completed": 0
+  },
+  "browser_flow": {
+    "base_url": "http://127.0.0.1:8080",
+    "login_succeeded": true,
+    "chat_route": "/chat",
+    "question_sha256": "fc687802f5366db6abbf493208af5479a2d89568e92f11993d61c9e73a60734d",
+    "completion_state": "completed",
+    "citation_count": 3,
+    "human_quality_label": null
+  },
+  "query_decomposition": {
+    "manifest_cases": 8,
+    "baseline_passed_cases": 1,
+    "candidate_passed_cases": 1,
+    "baseline_wrong_answer": 4,
+    "candidate_wrong_answer": 5,
+    "candidate_branch_accuracy": 0.40476190476190477,
+    "candidate_citation_accuracy": 0.47619047619047616,
+    "provider_retries": 0,
+    "gate_passed": false,
+    "decision": "inconclusive",
+    "additional_complex_demo_questions_completed": 0
+  },
+  "graph_review": {
+    "exported_edges": 20,
+    "independently_labeled_edges": 0,
+    "reviewer_fields_blank": 20,
+    "expected_correct_fields_blank": 20
+  },
+  "integrated_preflight": {
+    "capability_passed": true,
+    "security_cases": 15,
+    "leakage_count": 0,
+    "admin_exception_count": 1,
+    "ready_for_demo_matrix": true,
+    "ready_for_live_matrix": false,
+    "resolved_fallback_combinations": 7,
+    "executed_baseline_candidate_pairs": 0
+  },
+  "local_source_artifacts": [
+    {
+      "path": "reports/controlled-demo/20260716-browser-computer/provider-smoke.json",
+      "sha256": "ebc36f9d5a3048a34ee3739b717e69d4285dec074c2ea09c7938f793ab24962d"
+    },
+    {
+      "path": "reports/controlled-demo/20260716-browser-computer/grounded-math-preflight-after-ingest.json",
+      "sha256": "4acce612ae66f1f4c5769b95812b9e05e0c9c7b6f6d37acc2e0b5a008707a147"
+    },
+    {
+      "path": "reports/controlled-demo/20260716-browser-computer/decomposition-pair-02/run.json",
+      "sha256": "1ae2d91bb01315152262f8c338435f047c79a3e90cc46e8a83a8614ef7e97d34"
+    },
+    {
+      "path": "reports/controlled-demo/20260716-browser-computer/decomposition-pair-02/gate.json",
+      "sha256": "cafde4b8e6e677849eead095ead8d119df5c296f56104c68939c17727a66510c"
+    },
+    {
+      "path": "reports/controlled-demo/20260716-browser-computer/graph-review-queue.json",
+      "sha256": "f20e9117554f5b2f35bf0100680564cd66ee14641147ac3b81022f2647107edf"
+    },
+    {
+      "path": "reports/controlled-demo/20260716-browser-computer/integrated-preflight.json",
+      "sha256": "4248ee877fd7ef613c305d8e2ace0a43a2bf358ce626d7170cc03e396764529e"
+    }
+  ],
+  "limitations": [
+    "Local source artifacts are gitignored; their hashes are retained for audit on the originating workstation.",
+    "Browser verification has no independent human quality label.",
+    "No integrated baseline/candidate pair was executed by this checkpoint.",
+    "This artifact does not authorize default rollout or production serving."
+  ]
+}

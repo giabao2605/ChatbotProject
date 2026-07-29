@@ -13,99 +13,203 @@ Environment variables:
 
 import asyncio
 import json
-import os
 import re
 import secrets
-import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-import traceback
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass, replace
+from pathlib import Path
+from collections.abc import Callable
 
-from dotenv import load_dotenv
-load_dotenv()
-
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
-from mech_chatbot.config.logging import logger, log_trace, pop_trace_stage_metrics
+from mech_chatbot.config.logging import (
+    TraceRuntime,
+    bind_trace_runtime,
+    logger,
+    log_trace,
+    pop_trace_stage_metrics,
+    redact_sensitive_trace_fields,
+)
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled, external_processing_context
+from mech_chatbot.config.repository_runtime import bind_repository_runtime
+from mech_chatbot.config.settings import (
+    RagProcessSettings,
+    RepositoryPolicySettings,
+    Settings,
+    SqlSettings,
+    load_settings,
+)
+from mech_chatbot.governance.feature_activation import ActivationStatus
+import mech_chatbot.services.audit_service as audit_service
+import mech_chatbot.services.chat_service as chat_service
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-MAX_CONCURRENT_RAG = int(os.getenv("MAX_CONCURRENT_RAG", "2"))
-RAG_SERVER_PORT = int(os.getenv("RAG_SERVER_PORT", "8100"))
-RAG_SERVER_HOST = os.getenv("RAG_SERVER_HOST", "0.0.0.0")
-RAG_REQUIRE_SERVICE_AUTH = os.getenv("RAG_REQUIRE_SERVICE_AUTH", "true").strip().lower() in {
-    "1", "true", "yes", "on"
-}
-RAG_SERVICE_TOKEN = os.getenv("RAG_SERVICE_TOKEN", "").strip()
-RAG_CORS_ALLOW_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv("RAG_CORS_ALLOW_ORIGINS", "").split(",")
-    if origin.strip()
-]
 
 # ---------------------------------------------------------------------------
 # Lifespan: load RAG system once at startup, clean up at shutdown
 # ---------------------------------------------------------------------------
-_rag_ready = False
+@dataclass(frozen=True, slots=True)
+class RagServerState:
+    settings: Settings
+    process_settings: RagProcessSettings
+    runtime_builder: Callable[[Settings], Any]
+    database_builder: Callable[[SqlSettings], Any]
+    runtime: Any | None = None
+    database_runtime: Any | None = None
+    activation: ActivationStatus | None = None
+    ready: bool = False
+
+
+def _environment_snapshot(settings: Settings) -> dict[str, str]:
+    values = settings.model_dump()
+    snapshot: dict[str, str] = {}
+    for key, value in values.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            snapshot[key] = "true" if value else "false"
+        elif isinstance(value, (tuple, list)):
+            snapshot[key] = ",".join(str(item) for item in value)
+        else:
+            snapshot[key] = str(value)
+    # The validator and activation ledger retain public legacy environment
+    # names; map the canonical typed projections without re-reading ambient env.
+    if settings.LLM_API_KEY:
+        snapshot["PROXYLLM_API_KEY"] = settings.LLM_API_KEY
+    if settings.LLM_BASE_URL:
+        snapshot["PROXYLLM_BASE_URL"] = settings.LLM_BASE_URL
+    return snapshot
+
+
+def get_rag_server_state(request: Request) -> RagServerState:
+    return request.app.state.rag_server
+
+
+@contextmanager
+def _bind_rag_repository_runtime(state: RagServerState):
+    database_runtime = state.database_runtime
+    retrieval = getattr(state.runtime, "retrieval", None)
+    with bind_repository_runtime(
+        policy=RepositoryPolicySettings.from_settings(state.settings),
+        db_engine=getattr(database_runtime, "engine", None),
+        qdrant_client=getattr(retrieval, "client", None),
+        qdrant_collection=getattr(retrieval, "collection_name", None),
+    ):
+        yield
+
+
+def _activation_for(state: RagServerState) -> ActivationStatus:
+    if state.activation is not None:
+        return state.activation
+    from mech_chatbot.governance.feature_activation import (
+        activation_status,
+        current_git_commit,
+    )
+
+    project_root = Path(__file__).resolve().parents[3]
+    return activation_status(
+        _environment_snapshot(state.settings),
+        root=project_root,
+        current_commit=current_git_commit(project_root),
+    )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _rag_ready
     from mech_chatbot.config.validate import assert_config_valid, safe_config_summary
-    assert_config_valid(require_service_auth=RAG_REQUIRE_SERVICE_AUTH)
-    logger.info("Config OK: %s", safe_config_summary())
+    state: RagServerState = app.state.rag_server
+    environment = _environment_snapshot(state.settings)
+    assert_config_valid(
+        environment,
+        require_service_auth=state.process_settings.require_service_auth,
+    )
+    activation = _activation_for(state)
+    app.state.rag_server = replace(state, activation=activation)
+    if not activation.valid:
+        logger.error(
+            "RAG activation rejected: scope=%s reason=%s enabled_flags=%s",
+            activation.scope,
+            activation.reason,
+            list(activation.enabled_flags),
+        )
+        yield
+        return
+    logger.info("Config OK: %s", safe_config_summary(environment))
     logger.info("=" * 60)
     logger.info("RAG Server starting — loading models (one-time)...")
     logger.info("=" * 60)
 
     t0 = time.time()
 
-    # Force-import rag_logic which triggers RAGSystem.get_instance()
-    # This loads: Qdrant client, embedding model, BM25, LLM client
+    runtime = None
+    database_runtime = None
     try:
-        import mech_chatbot.rag.service  # noqa: F401
+        database_runtime = state.database_builder(
+            SqlSettings.from_settings(state.settings)
+        )
+        startup_state = replace(
+            state,
+            database_runtime=database_runtime,
+        )
+        with _bind_rag_repository_runtime(startup_state):
+            runtime = state.runtime_builder(state.settings)
         # Nap tokenizer trong startup thay vi de request dau tien ganh cold load.
         from mech_chatbot.rag.rerank import tokenize_cached
         tokenize_cached("tai lieu noi bo")
-        _rag_ready = True
+        app.state.rag_server = replace(
+            state,
+            runtime=runtime,
+            database_runtime=database_runtime,
+            activation=activation,
+            ready=True,
+        )
         elapsed = time.time() - t0
         logger.info(f"RAG system loaded successfully in {elapsed:.1f}s")
     except Exception as e:
         logger.error(f"FATAL: Could not load RAG system: {e}", exc_info=True)
-        _rag_ready = False
+        app.state.rag_server = replace(
+            state,
+            runtime=None,
+            database_runtime=database_runtime,
+            activation=activation,
+            ready=False,
+        )
+        if runtime is not None:
+            try:
+                runtime.close()
+            except Exception:
+                logger.exception(
+                    "Failed to close partially initialized RAG runtime"
+                )
+            finally:
+                runtime = None
 
-    yield  # ← server is running
+    try:
+        yield
+    finally:
+        logger.info("RAG Server shutting down...")
+        try:
+            try:
+                if runtime is not None:
+                    runtime.close()
+            finally:
+                if database_runtime is not None:
+                    database_runtime.close()
+        finally:
+            app.state.rag_server = replace(
+                state,
+                runtime=None,
+                database_runtime=None,
+                activation=activation,
+                ready=False,
+            )
 
-    logger.info("RAG Server shutting down...")
 
-
-app = FastAPI(
-    title="RAG Chat API — Mechanical Engineering",
-    version="2.0.0",
-    description="FastAPI backend for the Mechanical Engineering RAG Chatbot",
-    lifespan=lifespan,
-)
-
-if RAG_CORS_ALLOW_ORIGINS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=RAG_CORS_ALLOW_ORIGINS,
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-# Semaphore to limit concurrent RAG processing
-_rag_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RAG)
-_rag_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_RAG, thread_name_prefix="rag")
+router = APIRouter()
 
 # ---------------------------------------------------------------------------
 # Request / Response schemas
@@ -149,6 +253,24 @@ class HealthResponse(BaseModel):
     rag_loaded: bool
     max_concurrent: int
     current_available: int
+    deployment_id: Optional[str] = None
+    git_sha: Optional[str] = None
+    snapshot_fingerprint: Optional[str] = None
+    qdrant_collection: Optional[str] = None
+    feature_flags: Dict[str, bool] = Field(default_factory=dict)
+    feature_versions: Dict[str, str] = Field(default_factory=dict)
+    activation_scope: str = "default_rollout"
+    activation_profile: Optional[str] = None
+    review_mode: str = "multi_reviewer"
+    activation_valid: bool = False
+    activation_reason: str = "not_evaluated"
+    live_authorized: bool = False
+    decision_source_commit: Optional[str] = None
+    fallback_features: List[str] = Field(default_factory=list)
+    graph_fingerprint: Optional[str] = None
+    execution_context: str = "production"
+    evaluation_force_ambiguous: bool = False
+    request_deadline_seconds: float = 120.0
 
 
 class UserContextRequest(BaseModel):
@@ -178,16 +300,31 @@ class FeedbackRequest(UserContextRequest):
 # ---------------------------------------------------------------------------
 async def require_service_auth(
     x_rag_service_token: Optional[str] = Header(default=None, alias="X-RAG-Service-Token"),
+    server_state: RagServerState = Depends(get_rag_server_state),
 ):
-    if not RAG_REQUIRE_SERVICE_AUTH:
+    settings = server_state.process_settings
+    if not settings.require_service_auth:
         return
-    if not RAG_SERVICE_TOKEN:
+    if not settings.service_token:
         raise HTTPException(
             status_code=503,
             detail="RAG service auth is enabled but RAG_SERVICE_TOKEN is not configured.",
         )
-    if not x_rag_service_token or not secrets.compare_digest(x_rag_service_token, RAG_SERVICE_TOKEN):
+    if not x_rag_service_token or not secrets.compare_digest(
+        x_rag_service_token,
+        settings.service_token,
+    ):
         raise HTTPException(status_code=401, detail="Invalid RAG service token.")
+
+
+async def require_database_ready(
+    server_state: RagServerState = Depends(get_rag_server_state),
+) -> None:
+    if server_state.database_runtime is None:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG database runtime is not ready.",
+        )
 
 
 def load_profile_or_403(user_id=None, username=None) -> Dict[str, Any]:
@@ -232,9 +369,7 @@ def _audit_admin_query(
         if level:
             levels.append(str(level))
     try:
-        from mech_chatbot.services import write_audit_log
-
-        write_audit_log(
+        audit_service.write_audit_log(
             profile.get("username"),
             "admin_global_read_query",
             "RAG",
@@ -252,27 +387,79 @@ def _audit_admin_query(
         logger.warning("Admin RAG audit write failed: %s", exc)
 
 
-@app.get("/health", response_model=HealthResponse, tags=["System"])
-async def health_check():
+def _trace_runtime(runtime: Any) -> TraceRuntime:
+    return getattr(runtime, "trace_runtime", TraceRuntime())
+
+
+@router.get("/health", response_model=HealthResponse, tags=["System"])
+async def health_check(
+    server_state: RagServerState = Depends(get_rag_server_state),
+):
     """Health check endpoint for monitoring/load balancer."""
+    from mech_chatbot.rag.execution_contracts import RagRuntimeContract
+    from mech_chatbot.governance.feature_activation import (
+        feature_flags,
+        feature_versions,
+    )
+
+    process = server_state.process_settings
+    runtime_contract = (
+        server_state.runtime.runtime_contract
+        if server_state.runtime is not None
+        else RagRuntimeContract.from_mapping(
+            {
+                "execution_context": process.execution_context,
+                "evaluation_force_ambiguous": process.evaluation_force_ambiguous,
+                "request_deadline_seconds": process.request_deadline_seconds,
+            }
+        )
+    )
+    activation = _activation_for(server_state)
+    environment = _environment_snapshot(server_state.settings)
+    semaphore = getattr(server_state.runtime, "semaphore", None)
+    retrieval = getattr(server_state.runtime, "retrieval", None)
+
     return HealthResponse(
-        status="ok" if _rag_ready else "degraded",
-        rag_loaded=_rag_ready,
-        max_concurrent=MAX_CONCURRENT_RAG,
+        status="ok" if server_state.ready and activation.valid else "degraded",
+        rag_loaded=server_state.ready,
+        max_concurrent=process.max_concurrent_requests,
         # Semaphore._value gives remaining permits (CPython implementation detail)
-        current_available=getattr(_rag_semaphore, "_value", -1),
+        current_available=getattr(semaphore, "_value", -1),
+        deployment_id=process.deployment_id,
+        git_sha=process.deployment_git_sha,
+        snapshot_fingerprint=process.snapshot_fingerprint,
+        qdrant_collection=getattr(
+            retrieval,
+            "collection_name",
+            server_state.settings.QDRANT_COLLECTION,
+        ),
+        feature_flags=feature_flags(environment),
+        feature_versions=feature_versions(environment),
+        activation_scope=activation.scope,
+        activation_profile=activation.profile,
+        review_mode=activation.review_mode,
+        activation_valid=activation.valid,
+        activation_reason=activation.reason,
+        live_authorized=activation.live_authorized,
+        decision_source_commit=activation.decision_source_commit,
+        fallback_features=list(activation.fallback_features),
+        graph_fingerprint=process.graph_fingerprint,
+        **runtime_contract.to_dict(),
     )
 
 
-@app.post("/chat", response_model=ChatResponse, tags=["RAG"], dependencies=[Depends(require_service_auth)])
-async def chat_endpoint(req: ChatRequest):
+@router.post("/chat", response_model=ChatResponse, tags=["RAG"], dependencies=[Depends(require_service_auth)])
+async def chat_endpoint(
+    req: ChatRequest,
+    server_state: RagServerState = Depends(get_rag_server_state),
+):
     """
     Process a RAG chat question.
     
     This endpoint uses models loaded at startup — no cold start per request.
     Concurrency is limited by MAX_CONCURRENT_RAG semaphore.
     """
-    if not _rag_ready:
+    if not server_state.ready or server_state.runtime is None:
         _lang_pre = (getattr(req, "response_language", None) or "vi").lower()
         raise HTTPException(
             status_code=503,
@@ -288,18 +475,22 @@ async def chat_endpoint(req: ChatRequest):
     # Try to acquire semaphore with timeout
     try:
         acquired = await asyncio.wait_for(
-            _rag_semaphore.acquire(), timeout=120.0
+            server_state.runtime.semaphore.acquire(), timeout=120.0
         )
     except asyncio.TimeoutError:
         _lang = (getattr(req, "response_language", None) or "vi").lower()
         if _lang.startswith("en"):
             _detail_503 = (
-                f"System is busy ({MAX_CONCURRENT_RAG} requests being processed). "
+                "System is busy "
+                f"({server_state.process_settings.max_concurrent_requests} "
+                "requests being processed). "
                 "Please retry in a moment."
             )
         else:
             _detail_503 = (
-                f"Hệ thống đang bận ({MAX_CONCURRENT_RAG} request đang xử lý). "
+                "Hệ thống đang bận "
+                f"({server_state.process_settings.max_concurrent_requests} "
+                "request đang xử lý). "
                 "Vui lòng thử lại sau."
             )
         raise HTTPException(status_code=503, detail=_detail_503)
@@ -309,12 +500,16 @@ async def chat_endpoint(req: ChatRequest):
         # Run the synchronous RAG pipeline in a thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            _rag_executor, _run_rag_sync, req, user_profile
+            server_state.runtime.thread_pool,
+            _run_rag_sync_with_repository,
+            req,
+            user_profile,
+            server_state,
         )
         result.elapsed_ms = int((time.time() - t_start) * 1000)
         logger.info(
-            f"RAG request completed in {result.elapsed_ms}ms "
-            f"(question={req.user_question[:80]}...)"
+            "RAG request completed in %sms",
+            result.elapsed_ms,
         )
         return result
 
@@ -326,7 +521,7 @@ async def chat_endpoint(req: ChatRequest):
             detail=f"{type(e).__name__}: {str(e)[:500]}",
         )
     finally:
-        _rag_semaphore.release()
+        server_state.runtime.semaphore.release()
 
 
 def _sse(event, payload):
@@ -335,54 +530,98 @@ def _sse(event, payload):
 
 def _final_stream_citations(debug_info: dict[str, Any] | None, answer: str) -> list[dict[str, Any]]:
     """Emit only SourceIDs actually attributed by the completed answer."""
-    source_ids = {
-        value.upper()
-        for value in re.findall(
-            r"(?:source[_ ]?id\s*[:#]?\s*|\[SRC:)(D\d+P\d+)",
-            str(answer or ""),
-            flags=re.IGNORECASE,
-        )
-    }
-    if not source_ids:
-        return []
-    raw_docs = (debug_info or {}).get("citation_docs") or []
-    result = []
-    seen = set()
-    for item in raw_docs:
-        if not isinstance(item, dict):
-            continue
-        try:
-            doc_id = int(item.get("doc_id"))
-            page_no = int(item.get("trang") or item.get("trang_so") or item.get("page_no"))
-        except (TypeError, ValueError):
-            continue
-        source_id = str(item.get("source_id") or f"D{doc_id}P{page_no}").upper()
-        if source_id not in source_ids or source_id in seen:
-            continue
-        seen.add(source_id)
-        result.append(
-            {
-                "doc_id": doc_id,
-                "page_no": page_no,
-                "file_name": item.get("file_goc") or item.get("file_name"),
-                "file_goc": item.get("file_goc") or item.get("file_name"),
-                "version_no": item.get("version_no"),
-                "score": item.get("score"),
-                "trang": page_no,
-                "source_id": source_id,
-            }
-        )
-    return result
+    from mech_chatbot.rag.execution import attributed_citations
+
+    return [dict(item) for item in attributed_citations(debug_info, answer)]
 
 
-@app.post("/chat/stream", tags=["RAG"], dependencies=[Depends(require_service_auth)])
-async def chat_stream_endpoint(req: ChatRequest):
+@router.post("/chat/stream", tags=["RAG"], dependencies=[Depends(require_service_auth)])
+async def chat_stream_endpoint(
+    req: ChatRequest,
+    x_rag_pilot_replay: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Replay"
+    ),
+    x_rag_pilot_experiment_id: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Experiment-ID"
+    ),
+    x_rag_matched_pair_id: Optional[str] = Header(
+        default=None, alias="X-RAG-Matched-Pair-ID"
+    ),
+    x_rag_original_trace_id: Optional[str] = Header(
+        default=None, alias="X-RAG-Original-Trace-ID"
+    ),
+    x_rag_assigned_arm: Optional[str] = Header(
+        default=None, alias="X-RAG-Assigned-Arm"
+    ),
+    x_rag_pilot_replay_signature: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Replay-Signature"
+    ),
+    x_rag_pilot_payload_sha256: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Payload-SHA256"
+    ),
+    x_rag_pilot_replay_nonce: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Replay-Nonce"
+    ),
+    x_rag_pilot_replay_expires: Optional[str] = Header(
+        default=None, alias="X-RAG-Pilot-Replay-Expires"
+    ),
+    server_state: RagServerState = Depends(get_rag_server_state),
+):
     """Stream real pipeline chunks and final metadata over SSE."""
-    if not _rag_ready:
+    if not server_state.ready or server_state.runtime is None:
         raise HTTPException(status_code=503, detail="RAG system is not loaded yet.")
     user_profile = resolve_user_profile(req)
+    replay = isinstance(x_rag_pilot_replay, str) and x_rag_pilot_replay.strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if replay:
+        if (
+            not isinstance(x_rag_matched_pair_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", x_rag_matched_pair_id)
+            or not isinstance(x_rag_original_trace_id, str)
+            or not x_rag_original_trace_id.strip()
+            or x_rag_assigned_arm not in {"control", "candidate"}
+            or not isinstance(x_rag_pilot_experiment_id, str)
+            or not x_rag_pilot_experiment_id.strip()
+        ):
+            raise HTTPException(status_code=400, detail="Invalid CRAG pilot replay headers")
+        from mech_chatbot.evaluation.crag_pilot import (
+            canonical_payload_sha256,
+            verify_replay_signature,
+        )
+
+        if hasattr(req, "model_fields_set"):
+            fields_set = req.model_fields_set
+        else:
+            fields_set = req.__fields_set__
+        if hasattr(req, "model_dump"):
+            signed_payload = req.model_dump(include=fields_set)
+        else:
+            signed_payload = req.dict(include=fields_set)
+        actual_payload_sha256 = canonical_payload_sha256(signed_payload)
+
+        try:
+            replay_expires_at = int(x_rag_pilot_replay_expires or 0)
+        except (TypeError, ValueError):
+            replay_expires_at = 0
+        if not verify_replay_signature(
+            assignment_salt=server_state.process_settings.pilot_assignment_salt,
+            experiment_id=x_rag_pilot_experiment_id,
+            matched_pair_id=x_rag_matched_pair_id,
+            assigned_arm=x_rag_assigned_arm,
+            target_deployment_id=server_state.process_settings.deployment_id or "",
+            original_trace_id=x_rag_original_trace_id,
+            payload_sha256=actual_payload_sha256,
+            nonce=str(x_rag_pilot_replay_nonce or ""),
+            expires_at=replay_expires_at,
+            signature=str(x_rag_pilot_replay_signature or ""),
+        ) or actual_payload_sha256 != x_rag_pilot_payload_sha256:
+            raise HTTPException(status_code=403, detail="Invalid CRAG pilot replay signature")
     try:
-        await asyncio.wait_for(_rag_semaphore.acquire(), timeout=120.0)
+        await asyncio.wait_for(
+            server_state.runtime.semaphore.acquire(),
+            timeout=120.0,
+        )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=503, detail="RAG server busy")
 
@@ -396,55 +635,94 @@ async def chat_stream_endpoint(req: ChatRequest):
 
     request_trace_id = f"rag_{secrets.token_hex(8)}"
 
-    def worker():
-        stream = None
+    def run_worker_body():
+        events = None
         debug_info: dict[str, Any] = {}
-        with external_processing_context(
+        from mech_chatbot.rag.execution import (
+            RagCancelled,
+            RagCitation,
+            RagCompleted,
+            RagFailed,
+            RagPrepared,
+            RagToken,
+        )
+        from mech_chatbot.rag.semantic_cache import replay_cache_disabled
+
+        with bind_trace_runtime(
+            _trace_runtime(server_state.runtime)
+        ), external_processing_context(
             user_profile.get("username"),
             _is_admin(user_profile),
             request_trace_id,
-        ):
+        ), replay_cache_disabled(replay), redact_sensitive_trace_fields(replay):
+            if replay:
+                log_trace(
+                    "pilot_replay_start",
+                    request_trace_id,
+                    matched_pair_id=x_rag_matched_pair_id,
+                    original_trace_id=x_rag_original_trace_id,
+                    assigned_arm=x_rag_assigned_arm,
+                    deployment_id=server_state.process_settings.deployment_id,
+                    snapshot_fingerprint=(
+                        server_state.process_settings.snapshot_fingerprint
+                    ),
+                    cache_disabled=True,
+                    side_effects_disabled=True,
+                )
             first_token_ms = None
             try:
                 if cancel_event.is_set():
                     raise ExternalAICallCancelled("RAG stream da bi client huy truoc khi bat dau")
-                stream, ref_text, ref_images, new_part_ids, debug_info = _open_rag_stream(
+                events = _open_rag_events(
                     req,
                     user_profile,
                     trace_id=request_trace_id,
                     cancel_event=cancel_event,
+                    mode="pilot_replay" if replay else "production",
+                    runtime=server_state.runtime,
                 )
-                emit(
-                    "metadata",
-                    {
-                        "ref_text": ref_text or "",
-                        "ref_images": ref_images or [],
-                        "new_part_ids": new_part_ids or [],
-                        "debug_info": debug_info or {},
-                    },
-                )
-                answer_parts = []
-                for chunk in stream:
+                completed = False
+                for event in events:
                     if cancel_event.is_set():
                         raise ExternalAICallCancelled("RAG stream da bi client huy")
-                    if first_token_ms is None:
-                        first_token_ms = int((time.time() - started) * 1000)
-                        logger.info("RAG first token in %sms", first_token_ms)
-                        log_trace("first_token", request_trace_id, latency_ms=first_token_ms)
-                    token = str(chunk)
-                    answer_parts.append(token)
-                    emit("token", {"text": token})
-                if cancel_event.is_set():
-                    raise ExternalAICallCancelled("RAG stream da bi client huy")
-                for citation in _final_stream_citations(debug_info, "".join(answer_parts)):
-                    emit("citation", citation)
-                _audit_admin_query(
-                    user_profile,
-                    request_trace_id,
-                    "chat_stream",
-                    outcome="success",
-                    debug_info=debug_info,
-                )
+                    if isinstance(event, RagPrepared):
+                        debug_info = dict(event.diagnostics)
+                        emit(
+                            "metadata",
+                            {
+                                "ref_text": event.ref_text,
+                                "ref_images": list(event.ref_images),
+                                "new_part_ids": list(event.new_part_ids),
+                                "debug_info": debug_info,
+                            },
+                        )
+                    elif isinstance(event, RagToken):
+                        if first_token_ms is None:
+                            first_token_ms = int((time.time() - started) * 1000)
+                            logger.info("RAG first token in %sms", first_token_ms)
+                            log_trace("first_token", request_trace_id, latency_ms=first_token_ms)
+                        emit("token", {"text": event.text})
+                    elif isinstance(event, RagCitation):
+                        emit("citation", dict(event.citation))
+                    elif isinstance(event, RagCompleted):
+                        debug_info = dict(event.diagnostics)
+                        completed = True
+                    elif isinstance(event, RagCancelled):
+                        if event.cause is not None:
+                            raise event.cause
+                        raise ExternalAICallCancelled(event.reason)
+                    elif isinstance(event, RagFailed):
+                        raise event.cause
+                if not completed:
+                    raise RuntimeError("RAG executor ended without a completion event")
+                if not replay:
+                    _audit_admin_query(
+                        user_profile,
+                        request_trace_id,
+                        "chat_stream",
+                        outcome="success",
+                        debug_info=debug_info,
+                    )
                 elapsed_ms = int((time.time() - started) * 1000)
                 trace_stages = pop_trace_stage_metrics(request_trace_id)
                 if first_token_ms is not None:
@@ -461,9 +739,8 @@ async def chat_stream_endpoint(req: ChatRequest):
                     },
                 )
                 logger.info(
-                    "RAG stream completed in %sms (question=%s...)",
+                    "RAG stream completed in %sms",
                     elapsed_ms,
-                    req.user_question[:80],
                 )
                 log_trace(
                     "complete",
@@ -474,13 +751,14 @@ async def chat_stream_endpoint(req: ChatRequest):
             except ExternalAICallCancelled:
                 elapsed_ms = int((time.time() - started) * 1000)
                 logger.info("RAG stream cancelled after %sms", elapsed_ms)
-                _audit_admin_query(
-                    user_profile,
-                    request_trace_id,
-                    "chat_stream",
-                    outcome="cancelled",
-                    debug_info=debug_info,
-                )
+                if not replay:
+                    _audit_admin_query(
+                        user_profile,
+                        request_trace_id,
+                        "chat_stream",
+                        outcome="cancelled",
+                        debug_info=debug_info,
+                    )
                 log_trace(
                     "rag_end",
                     request_trace_id,
@@ -491,12 +769,13 @@ async def chat_stream_endpoint(req: ChatRequest):
                 )
             except Exception as exc:
                 logger.error("RAG stream failed: %s", exc, exc_info=True)
-                _audit_admin_query(
-                    user_profile,
-                    request_trace_id,
-                    "chat_stream",
-                    outcome="error",
-                )
+                if not replay:
+                    _audit_admin_query(
+                        user_profile,
+                        request_trace_id,
+                        "chat_stream",
+                        outcome="error",
+                    )
                 emit(
                     "error",
                     {
@@ -505,7 +784,7 @@ async def chat_stream_endpoint(req: ChatRequest):
                     },
                 )
             finally:
-                close = getattr(stream, "close", None)
+                close = getattr(events, "close", None)
                 if callable(close):
                     try:
                         close()
@@ -513,8 +792,16 @@ async def chat_stream_endpoint(req: ChatRequest):
                         pass
                 emit("_end", {})
 
-    future = loop.run_in_executor(_rag_executor, worker)
-    future.add_done_callback(lambda _f: loop.call_soon_threadsafe(_rag_semaphore.release))
+    def worker():
+        with _bind_rag_repository_runtime(server_state):
+            run_worker_body()
+
+    future = loop.run_in_executor(server_state.runtime.thread_pool, worker)
+    future.add_done_callback(
+        lambda _f: loop.call_soon_threadsafe(
+            server_state.runtime.semaphore.release
+        )
+    )
 
     async def event_stream():
         try:
@@ -538,28 +825,38 @@ async def chat_stream_endpoint(req: ChatRequest):
     )
 
 
-@app.post("/chat/sessions", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/sessions",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def list_chat_sessions(req: UserContextRequest):
     """List chat sessions visible to the current user."""
-    from mech_chatbot.services import get_all_sessions
-
     profile = resolve_user_profile(req)
     return {
-        "sessions": get_all_sessions(
+        "sessions": chat_service.get_all_sessions(
             username=profile.get("username"),
             is_admin=False,
         )
     }
 
 
-@app.post("/chat/history", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/history",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def load_chat_history(req: SessionHistoryRequest):
     """Load a single chat session with the same RBAC redaction as Streamlit UI."""
-    from mech_chatbot.services import get_chat_history
-
     profile = resolve_user_profile(req)
     return {
-        "messages": get_chat_history(
+        "messages": chat_service.get_chat_history(
             req.session_id,
             username=profile.get("username"),
             is_admin=_is_admin(profile),
@@ -570,13 +867,18 @@ async def load_chat_history(req: SessionHistoryRequest):
     }
 
 
-@app.post("/chat/history/delete", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/history/delete",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def delete_chat_history(req: SessionHistoryRequest):
     """Delete one chat session, scoped to the current user unless admin."""
-    from mech_chatbot.services import clear_chat_history
-
     profile = resolve_user_profile(req)
-    deleted = clear_chat_history(
+    deleted = chat_service.clear_chat_history(
         req.session_id,
         username=profile.get("username"),
         is_admin=False,
@@ -584,19 +886,19 @@ async def delete_chat_history(req: SessionHistoryRequest):
     return {"ok": True, "deleted": deleted}
 
 
-@app.post("/chat/history/save", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/history/save",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def save_chat_turn(req: SaveChatRequest):
     """Persist one chat turn and its answer sources, matching the Streamlit path."""
-    from mech_chatbot.services import (
-        save_answer_sources,
-        save_answer_evidence,
-        save_chat_history,
-        write_audit_log,
-    )
-
     profile = resolve_user_profile(req)
     username = profile.get("username")
-    chat_id = save_chat_history(
+    chat_id = chat_service.save_chat_history(
         session_id=req.session_id,
         user_msg=req.user_msg,
         bot_msg=req.bot_msg,
@@ -606,14 +908,14 @@ async def save_chat_turn(req: SaveChatRequest):
     )
 
     if chat_id:
-        save_answer_evidence(chat_id, req.retrieved_docs)
+        chat_service.save_answer_evidence(chat_id, req.retrieved_docs)
         final_sources = _final_stream_citations(
             {"citation_docs": req.retrieved_docs}, req.bot_msg
         )
         if final_sources:
-            save_answer_sources(chat_id, final_sources)
+            chat_service.save_answer_sources(chat_id, final_sources)
 
-    write_audit_log(
+    audit_service.write_audit_log(
         username=username,
         action="chat_query",
         entity_type="LichSuChat",
@@ -631,7 +933,7 @@ async def save_chat_turn(req: SaveChatRequest):
         if isinstance(d, dict) and d.get("security_level") == "confidential"
     ]
     if confidential_sources:
-        write_audit_log(
+        audit_service.write_audit_log(
             username=username,
             action="read_confidential",
             entity_type="LichSuChat",
@@ -647,13 +949,18 @@ async def save_chat_turn(req: SaveChatRequest):
     return {"ok": bool(chat_id), "chat_id": chat_id}
 
 
-@app.post("/chat/feedback", tags=["Chat History"], dependencies=[Depends(require_service_auth)])
+@router.post(
+    "/chat/feedback",
+    tags=["Chat History"],
+    dependencies=[
+        Depends(require_service_auth),
+        Depends(require_database_ready),
+    ],
+)
 async def save_chat_feedback(req: FeedbackRequest):
     """Persist like/dislike feedback for a saved chat answer."""
-    from mech_chatbot.services import update_chat_feedback
-
     profile = resolve_user_profile(req)
-    update_chat_feedback(
+    chat_service.update_chat_feedback(
         req.chat_id,
         1 if req.rating > 0 else -1,
         voter_username=profile.get("username"),
@@ -661,49 +968,82 @@ async def save_chat_feedback(req: FeedbackRequest):
     return {"ok": True}
 
 
-def _open_rag_stream(
+def _open_rag_events(
     req: ChatRequest,
     user_profile: Dict[str, Any],
-    trace_id: str | None = None,
-    cancel_event=None,
+    trace_id: str,
+    cancel_event,
+    *,
+    mode: str = "production",
+    runtime,
 ):
-    from mech_chatbot.rag.service import chat_with_rag
+    from mech_chatbot.rag.execution import (
+        AccessScope,
+        NEVER_CANCELLED,
+        RagInvocation,
+        RagRequest,
+    )
 
-    return chat_with_rag(
-        user_question=req.user_question,
+    request = RagRequest(
+        question=req.user_question,
         image_path=req.image_path,
-        chat_history=req.chat_history,
-        current_part_ids=req.current_part_ids,
-        user_department=user_profile.get("department"),
-        user_roles=user_profile.get("roles") or [],
-        allowed_departments=user_profile.get("allowed_departments") or [],
-        max_security_level=user_profile.get("max_security_level") or "public",
-        allowed_sites=user_profile.get("allowed_sites") or [],
-        response_language=req.response_language,
+        history=tuple(req.chat_history),
+        current_part_ids=tuple(req.current_part_ids),
+        access=AccessScope(
+            department=user_profile.get("department"),
+            roles=frozenset(user_profile.get("roles") or ()),
+            allowed_departments=frozenset(user_profile.get("allowed_departments") or ()),
+            max_security_level=user_profile.get("max_security_level") or "public",
+            allowed_sites=frozenset(user_profile.get("allowed_sites") or ()),
+        ),
+        response_language=req.response_language or "vi",
         conversation_context=req.conversation_context,
-        trace_id=trace_id,
-        cancel_event=cancel_event,
+    )
+    return runtime.executor.run(
+        request,
+        RagInvocation(trace_id=trace_id, mode=mode),
+        cancellation=cancel_event or NEVER_CANCELLED,
     )
 
 
-def _run_rag_sync(req: ChatRequest, user_profile: Dict[str, Any]) -> ChatResponse:
-    """Synchronous compatibility wrapper for the non-streaming endpoint."""
+def _run_rag_sync(
+    req: ChatRequest,
+    user_profile: Dict[str, Any],
+    runtime,
+) -> ChatResponse:
+    """Fold the public RAG event stream into the non-streaming response."""
+    from mech_chatbot.rag.execution import collect_rag_events
+
     request_trace_id = f"rag_{secrets.token_hex(8)}"
     debug_info: Dict[str, Any] = {}
+    ref_text = ""
+    ref_images: list[str] = []
+    new_part_ids: list[str] = []
+    chunks: list[str] = []
+    final_citations: list[dict[str, Any]] = []
     try:
-        with external_processing_context(
+        with bind_trace_runtime(
+            _trace_runtime(runtime)
+        ), external_processing_context(
             user_profile.get("username"),
             _is_admin(user_profile),
             request_trace_id,
         ):
-            stream, ref_text, ref_images, new_part_ids, debug_info = _open_rag_stream(
-                req, user_profile, trace_id=request_trace_id
+            result = collect_rag_events(
+                _open_rag_events(
+                    req,
+                    user_profile,
+                    trace_id=request_trace_id,
+                    cancel_event=None,
+                    runtime=runtime,
+                )
             )
-
-            # Consume the stream to get the full response text
-            chunks = []
-            for chunk in stream:
-                chunks.append(str(chunk))
+            ref_text = result.ref_text
+            ref_images = list(result.ref_images)
+            new_part_ids = list(result.new_part_ids)
+            chunks = [result.answer]
+            final_citations = [dict(item) for item in result.citations]
+            debug_info = dict(result.diagnostics)
     except Exception:
         _audit_admin_query(
             user_profile,
@@ -715,7 +1055,6 @@ def _run_rag_sync(req: ChatRequest, user_profile: Dict[str, Any]) -> ChatRespons
         raise
 
     answer = "".join(chunks)
-    final_citations = _final_stream_citations(debug_info, answer)
     if final_citations:
         reference_lines = []
         for item in final_citations:
@@ -743,19 +1082,87 @@ def _run_rag_sync(req: ChatRequest, user_profile: Dict[str, Any]) -> ChatRespons
     )
 
 
+def _run_rag_sync_with_repository(
+    req: ChatRequest,
+    user_profile: Dict[str, Any],
+    state: RagServerState,
+) -> ChatResponse:
+    """Rebind request-scoped repository dependencies inside the RAG worker."""
+
+    with _bind_rag_repository_runtime(state):
+        return _run_rag_sync(req, user_profile, state.runtime)
+
+
+def create_rag_app(
+    settings: Settings,
+    *,
+    runtime_builder: Callable[[Settings], Any] | None = None,
+    database_builder: Callable[[SqlSettings], Any] | None = None,
+) -> FastAPI:
+    """Create one RAG delivery adapter from an immutable settings snapshot."""
+
+    from mech_chatbot.composition.rag_runtime import (
+        build_rag_database_runtime,
+        build_rag_runtime,
+    )
+
+    process_settings = RagProcessSettings.from_settings(settings)
+    application = FastAPI(
+        title="RAG Chat API — Mechanical Engineering",
+        version="2.0.0",
+        description="FastAPI backend for the Mechanical Engineering RAG Chatbot",
+        lifespan=lifespan,
+    )
+    application.state.rag_server = RagServerState(
+        settings=settings,
+        process_settings=process_settings,
+        runtime_builder=runtime_builder or build_rag_runtime,
+        database_builder=database_builder or build_rag_database_runtime,
+    )
+
+    @application.middleware("http")
+    async def _bind_repository_dependencies(request: Request, call_next):
+        with _bind_rag_repository_runtime(
+            request.app.state.rag_server
+        ):
+            return await call_next(request)
+
+    if process_settings.cors_allow_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(process_settings.cors_allow_origins),
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    application.include_router(router)
+    return application
+
+
+app = create_rag_app(load_settings())
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info(f"Starting RAG Server on {RAG_SERVER_HOST}:{RAG_SERVER_PORT}")
-    logger.info(f"Max concurrent RAG requests: {MAX_CONCURRENT_RAG}")
+    process_settings = app.state.rag_server.process_settings
+    logger.info(
+        "Starting RAG Server on %s:%s",
+        process_settings.host,
+        process_settings.port,
+    )
+    logger.info(
+        "Max concurrent RAG requests: %s",
+        process_settings.max_concurrent_requests,
+    )
 
     uvicorn.run(
         "mech_chatbot.api.rag_server:app",
-        host=RAG_SERVER_HOST,
-        port=RAG_SERVER_PORT,
+        host=process_settings.host,
+        port=process_settings.port,
         log_level="info",
         reload=False,
         workers=1,  # Single worker — models are not fork-safe

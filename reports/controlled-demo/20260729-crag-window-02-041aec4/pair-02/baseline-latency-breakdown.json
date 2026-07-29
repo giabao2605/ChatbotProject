@@ -1,0 +1,148 @@
+{
+  "schema": "crag-latency-breakdown-v1",
+  "source": {
+    "sha256": "bcd0c437928a1c5f0bc9535c0146fe75de50cb66816cb028c6f2cd3dfad105be",
+    "git_sha": "041aec4fbb9846be5d2b3ce3baccf10222bbda42"
+  },
+  "filters": {
+    "start": "2026-07-29T03:07:33.129834Z",
+    "end": "2026-07-29T03:08:24.944111Z",
+    "execution_contexts": [
+      "evaluation"
+    ]
+  },
+  "query_count": 9,
+  "parse_errors": 0,
+  "estimated_cost": 0.0129475,
+  "stage_summary": {
+    "retrieval": {
+      "sample_count": 8,
+      "latency_p50_ms": 883,
+      "latency_p95_ms": 1999,
+      "latency_max_ms": 1999
+    },
+    "parent_context": {
+      "sample_count": 8,
+      "latency_p50_ms": 216,
+      "latency_p95_ms": 3609,
+      "latency_max_ms": 3609
+    },
+    "rerank": {
+      "sample_count": 3,
+      "latency_p50_ms": 620,
+      "latency_p95_ms": 1285,
+      "latency_max_ms": 1285
+    },
+    "generation": {
+      "sample_count": 8,
+      "latency_p50_ms": 2624,
+      "latency_p95_ms": 7212,
+      "latency_max_ms": 7212
+    },
+    "claim_repair": {
+      "sample_count": 1,
+      "latency_p50_ms": 0,
+      "latency_p95_ms": 0,
+      "latency_max_ms": 0
+    },
+    "total": {
+      "sample_count": 9,
+      "latency_p50_ms": 4933,
+      "latency_p95_ms": 8517,
+      "latency_max_ms": 8517
+    }
+  },
+  "traces": [
+    {
+      "trace_id_sha256": "8d9c5df40fe3b381d316b21a56a5a359d9e282d2aacd61011c2f0b30077549ad",
+      "stages_ms": {
+        "retrieval": 883,
+        "parent_context": 211,
+        "generation": 3076,
+        "total": 4933
+      },
+      "estimated_cost": 0.0009725
+    },
+    {
+      "trace_id_sha256": "1f607ed019fc5736f0bae9fb848fadff3351b7df3f71231e4c14cbde8e83cf06",
+      "stages_ms": {
+        "retrieval": 1050,
+        "parent_context": 3609,
+        "generation": 3033,
+        "total": 8259
+      },
+      "estimated_cost": 0.003555
+    },
+    {
+      "trace_id_sha256": "b8aeb02ffafd90d649472ccf8fec00c6ebe2ee10b9281d3b0252ef28aec6f1aa",
+      "stages_ms": {
+        "retrieval": 1999,
+        "parent_context": 230,
+        "generation": 0,
+        "total": 3400
+      },
+      "estimated_cost": 0.0
+    },
+    {
+      "trace_id_sha256": "cc70f2a5977463c9b2b010642b6f9482a76f31b24f84a265bdee20751e48a043",
+      "stages_ms": {
+        "retrieval": 633,
+        "parent_context": 2568,
+        "generation": 3261,
+        "total": 8029
+      },
+      "estimated_cost": 0.00364
+    },
+    {
+      "trace_id_sha256": "f7f6011e1ff732c8fcafdd1c776209dc1c85dd462015f6ad92201eb5034fa97e",
+      "stages_ms": {
+        "retrieval": 590,
+        "parent_context": 211,
+        "rerank": 620,
+        "generation": 2624,
+        "total": 4216
+      },
+      "estimated_cost": 0.0012825
+    },
+    {
+      "trace_id_sha256": "9a867bcaf3cbb7e6c2c1f640c7b7268124047a20896c13f22ebebe7fb285428a",
+      "stages_ms": {
+        "retrieval": 1016,
+        "parent_context": 218,
+        "rerank": 1285,
+        "generation": 2363,
+        "claim_repair": 0,
+        "total": 4916
+      },
+      "estimated_cost": 0.0008925
+    },
+    {
+      "trace_id_sha256": "36fb817127211f82956cdc86e299d8fb3d6f0a2b00cd02f2c071a98b19478620",
+      "stages_ms": {
+        "retrieval": 1260,
+        "parent_context": 211,
+        "rerank": 558,
+        "generation": 2515,
+        "total": 5248
+      },
+      "estimated_cost": 0.0013125
+    },
+    {
+      "trace_id_sha256": "361c4ad311c7890c70006105a3f9df4cd98068374131d2baa4b0bb13fcd52b28",
+      "stages_ms": {
+        "total": 4206
+      },
+      "estimated_cost": 0.0
+    },
+    {
+      "trace_id_sha256": "5e2b082abe20db7692fa09e333bddf282713d9845732c3d36b0cfc66f9b80060",
+      "stages_ms": {
+        "retrieval": 584,
+        "parent_context": 216,
+        "generation": 7212,
+        "total": 8517
+      },
+      "estimated_cost": 0.0012925
+    }
+  ]
+}

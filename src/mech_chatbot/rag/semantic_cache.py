@@ -4,26 +4,44 @@
 - TTL theo env; invalidation: kiem tra tai lieu nguon con hien hanh (IsCurrent + published) luc doc.
 - Do luong: hit-rate + tien tiet kiem (bang SemanticCacheStat).
 """
-import os
 import json
 import math
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 
-def enabled():
-    return os.getenv("SEMANTIC_CACHE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y", "on"}
+_REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
 
 
-def sim_threshold():
+@contextmanager
+def replay_cache_disabled(disabled=True):
+    """Disable cache reads/writes only for one pilot replay execution."""
+    token = _REPLAY_CACHE_DISABLED.set(bool(disabled))
     try:
-        return float(os.getenv("SEMANTIC_CACHE_SIM_THRESHOLD", "0.93"))
+        yield
+    finally:
+        _REPLAY_CACHE_DISABLED.reset(token)
+
+
+def enabled(configured=True, execution_context="production"):
+    if _REPLAY_CACHE_DISABLED.get():
+        return False
+    if configured is None and str(execution_context).strip().lower() == "evaluation":
+        return False
+    return bool(True if configured is None else configured)
+
+
+def sim_threshold(value=0.93):
+    try:
+        return float(value)
     except Exception:
         return 0.93
 
 
-def ttl_hours():
+def ttl_hours(value=24.0):
     try:
-        return float(os.getenv("SEMANTIC_CACHE_TTL_HOURS", "24"))
+        return float(value)
     except Exception:
         return 24.0
 
@@ -43,15 +61,46 @@ def cosine(a, b):
     return dot / (math.sqrt(na) * math.sqrt(nb))
 
 
-def scope_signature(user_department, allowed_departments, max_security_level, allowed_sites, user_roles):
+def _env_flag(name, environ=None):
+    env = {} if environ is None else environ
+    return "1" if str(env.get(name, "false")).strip().lower() in {"1", "true", "yes", "y", "on"} else "0"
+
+
+def pipeline_namespace(environ=None):
+    from mech_chatbot.rag.feature_activation import FEATURE_FLAGS, VERSION_FIELDS
+
+    env = {} if environ is None else environ
+    defaults = {
+        "RAG_PLANNER_VERSION": "planner-v1",
+        "RAG_LATE_INDEX_VERSION": "late-v2",
+        "RAG_GRAPH_SERVING_EPOCH": "graph-v1",
+        "RAG_COMMUNITY_SERVING_EPOCH": "community-v1",
+    }
+    versions = tuple(env.get(name, defaults[name]) for name in VERSION_FIELDS)
+    raw = "|".join(
+        [f"{name}={_env_flag(name, env)}" for name in FEATURE_FLAGS]
+        + list(versions)
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def scope_signature(
+    user_department,
+    allowed_departments,
+    max_security_level,
+    allowed_sites,
+    user_roles,
+    *,
+    pipeline_environment=None,
+):
     roles = sorted([str(r).lower() for r in (user_roles or [])])
     if "admin" in roles:
-        return "admin"
+        return "admin|pipe=" + pipeline_namespace(pipeline_environment)
     deps = sorted(set([str(d) for d in (allowed_departments or []) if d] +
                       ([str(user_department)] if user_department else [])))
     sites = sorted(set([str(s) for s in (allowed_sites or []) if s]))
     lvl = str(max_security_level or "public")
-    return "d=" + ",".join(deps) + "|lvl=" + lvl + "|s=" + ",".join(sites)
+    return "d=" + ",".join(deps) + "|lvl=" + lvl + "|s=" + ",".join(sites) + "|pipe=" + pipeline_namespace(pipeline_environment)
 
 
 def normalize_question(question):
@@ -75,7 +124,10 @@ def _snapshot(value):
 
 def _validated_cache_payload(best):
     """Return cache metadata only if its complete access basis remains valid."""
-    from mech_chatbot.db.repository import sc_delete, sc_docs_all_current
+    from mech_chatbot.db.repositories.semantic_cache import (
+        sc_delete,
+        sc_docs_all_current,
+    )
 
     try:
         doc_ids = json.loads(best.get("source_doc_ids") or "[]")
@@ -100,9 +152,9 @@ def _validated_cache_payload(best):
     return doc_ids, citations, evidence
 
 
-def lookup_exact(question, scope_sig):
+def lookup_exact(question, scope_sig, *, ttl=24.0):
     """Indexed fast path that avoids embeddings and interaction routing."""
-    from mech_chatbot.db.repository import (
+    from mech_chatbot.db.repositories.semantic_cache import (
         sc_delete,
         sc_docs_all_current,
         sc_get_exact,
@@ -114,7 +166,7 @@ def lookup_exact(question, scope_sig):
         scope_sig,
         question_hash(question),
         normalize_question(question),
-        ttl_hours(),
+        ttl_hours(ttl),
     )
     if not best:
         return None
@@ -153,12 +205,12 @@ def select_best(candidates, embedding, threshold):
     return None, best_s
 
 
-def lookup(question, embedding, scope_sig):
-    from mech_chatbot.db.repository import (
+def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93):
+    from mech_chatbot.db.repositories.semantic_cache import (
         sc_get_candidates, sc_docs_all_current, sc_record_lookup, sc_record_hit, sc_delete,
     )
     try:
-        cands = sc_get_candidates(scope_sig, ttl_hours())
+        cands = sc_get_candidates(scope_sig, ttl_hours(ttl))
     except Exception:
         cands = []
     parsed = []
@@ -170,7 +222,7 @@ def lookup(question, embedding, scope_sig):
                 parsed.append(c)
         except Exception:
             continue
-    best, score = select_best(parsed, embedding, sim_threshold())
+    best, score = select_best(parsed, embedding, sim_threshold(threshold))
     if not best:
         try:
             sc_record_lookup(False, 0.0)
@@ -226,8 +278,8 @@ def _looks_like_refusal(answer):
 
 
 def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, scope_sig, model, est_cost,
-          citation_snapshot=None, evidence_snapshot=None):
-    if not enabled() or not answer or not str(answer).strip():
+          citation_snapshot=None, evidence_snapshot=None, cache_enabled=True):
+    if not enabled(cache_enabled) or not answer or not str(answer).strip():
         return
     if _looks_like_refusal(answer):
         return
@@ -236,7 +288,7 @@ def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, sco
         # citations and a full access basis for history re-authorization.
         return
     try:
-        from mech_chatbot.db.repository import sc_put
+        from mech_chatbot.db.repositories.semantic_cache import sc_put
         sc_put(
             question=question,
             embedding=json.dumps([round(float(x), 6) for x in (embedding or [])]),
@@ -254,7 +306,8 @@ def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, sco
 
 def teeing_store_stream(inner, question, embedding, scope_sig, ref_text, ref_images,
                         source_doc_ids, model, input_char_len=0,
-                        citation_snapshot=None, evidence_snapshot=None):
+                        citation_snapshot=None, evidence_snapshot=None,
+                        cache_enabled=True):
     chunks = []
     completed = False
     try:
@@ -281,6 +334,7 @@ def teeing_store_stream(inner, question, embedding, scope_sig, ref_text, ref_ima
                     est,
                     citation_snapshot=citation_snapshot,
                     evidence_snapshot=evidence_snapshot,
+                    cache_enabled=cache_enabled,
                 )
             except Exception:
                 pass

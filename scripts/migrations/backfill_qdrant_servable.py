@@ -13,15 +13,15 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from qdrant_client import models  # noqa: E402
-from mech_chatbot.config.settings import QDRANT_COLLECTION  # noqa: E402
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime  # noqa: E402
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime  # noqa: E402
 from mech_chatbot.db.repositories.publication import backfill_qdrant_servable  # noqa: E402
-from mech_chatbot.db.repositories.qdrant import _get_qdrant_client  # noqa: E402
 
 
 def count_missing_servable() -> int:
-    client = _get_qdrant_client()
+    client, collection = current_qdrant_runtime()
     result = client.count(
-        collection_name=QDRANT_COLLECTION,
+        collection_name=collection,
         count_filter=models.Filter(
             must=[
                 models.IsEmptyCondition(
@@ -34,6 +34,7 @@ def count_missing_servable() -> int:
     return int(result.count or 0)
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--force", action="store_true")

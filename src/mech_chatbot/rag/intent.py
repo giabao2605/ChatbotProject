@@ -1,47 +1,95 @@
 # -*- coding: utf-8 -*-
 """Auto-split tu rag/service.py (P1.2 refactor). Giu nguyen logic goc; chi tach file + import."""
 
-import os
-import re
-import unicodedata
-from mech_chatbot.config.logging import logger, log_trace
-from qdrant_client import QdrantClient, models
-from langchain_core.messages import HumanMessage
+import concurrent.futures
 import json
-from mech_chatbot.llm.llm_client import cohere_invoke, get_cohere_llm, _is_cohere_rate_limit, get_llm_model_name
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+import re
+from typing import Any, Callable, Protocol
+import unicodedata
+
+from langchain_core.messages import HumanMessage
+from qdrant_client import models
+
+from mech_chatbot.config.logging import logger
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.llm.llm_client import cohere_invoke
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.rbac import (
-    compose_retrieval_filters,
-    create_rbac_filter,
+    LEVEL_ORDER,
+    _allowed_levels,
     _security_filter,
     _site_filter,
-    _allowed_levels,
-    LEVEL_ORDER,
+    compose_retrieval_filters,
+    create_rbac_filter,
 )
-import atexit
-import concurrent.futures
-from contextvars import copy_context
-from concurrent.futures import ThreadPoolExecutor
 
 # cross-module (owned) refs
 
 
-def env_bool(name, default=False):
-    raw = os.getenv(name)
+def env_bool(name, default=False, *, values=None):
+    """Parse an explicitly supplied environment-style mapping."""
+    raw = values.get(name) if values is not None else None
     if raw is None:
         return bool(default)
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
-_INTENT_MAX_WORKERS = int(os.getenv("INTENT_MAX_WORKERS", "8"))
+class IntentFuture(Protocol):
+    def result(self, timeout: float | None = None) -> Any: ...
+
+    def cancel(self) -> bool: ...
 
 
-_INTENT_TIMEOUT = float(os.getenv("INTENT_TIMEOUT", "6.0"))
+class IntentExecutor(Protocol):
+    def submit(self, function: Callable[..., Any], *args: Any) -> IntentFuture: ...
+
+    def shutdown(self, *, wait: bool, cancel_futures: bool) -> None: ...
 
 
-_INTENT_EXECUTOR = ThreadPoolExecutor(max_workers=_INTENT_MAX_WORKERS)
+@dataclass(frozen=True, slots=True)
+class IntentRuntime:
+    """Lifecycle-owned execution resources for intent and context calls."""
+
+    executor: IntentExecutor
+    intent_timeout: float = 6.0
+    context_timeout: float = 5.0
+    query_rewrite_enabled: bool = True
+    owns_executor: bool = False
+
+    def close(self) -> None:
+        if self.owns_executor:
+            self.executor.shutdown(wait=False, cancel_futures=True)
 
 
-atexit.register(lambda: _INTENT_EXECUTOR.shutdown(wait=False))
+def build_intent_runtime(
+    *,
+    max_workers: int = 8,
+    intent_timeout: float = 6.0,
+    context_timeout: float = 5.0,
+    query_rewrite_enabled: bool = True,
+    executor: IntentExecutor | None = None,
+) -> IntentRuntime:
+    """Create an explicit process-lifecycle dependency."""
+    owned = executor is None
+    active_executor = (
+        executor if executor is not None else ThreadPoolExecutor(max_workers=max_workers)
+    )
+    return IntentRuntime(
+        executor=active_executor,
+        intent_timeout=intent_timeout,
+        context_timeout=context_timeout,
+        query_rewrite_enabled=query_rewrite_enabled,
+        owns_executor=owned,
+    )
+
+
+def _runtime_for_call(runtime: IntentRuntime | None) -> tuple[IntentRuntime, bool]:
+    if runtime is not None:
+        return runtime, False
+    return build_intent_runtime(), True
 
 
 def serialize_qdrant_filter(f):
@@ -109,6 +157,22 @@ def _business_normalize(value):
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+_BOM_QUERY_TERMS = (
+    "vat tu", "bang ke", "bom", "danh sach", "chi tiet", "gom nhung gi",
+    "cau tao", "linh kien", "part list", "thanh phan", "chi tiet con",
+    "vat lieu", "cum nay", "ma nao",
+)
+
+
+def is_bom_lookup(question, *, query_type=""):
+    from mech_chatbot.rag.text_utils import remove_accents
+
+    normalized = remove_accents(str(question or "").lower())
+    return query_type == "bom_lookup" or any(
+        term in normalized for term in _BOM_QUERY_TERMS
+    )
+
+
 def deterministic_business_document_intent(question):
     """Recognize PO, contract and form requests without an LLM round trip."""
     raw = str(question or "")
@@ -154,7 +218,7 @@ def deterministic_business_document_intent(question):
     }
 
 
-def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False):
+def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False, trace_id=None, invoke_provider=None, runtime=None):
     """Phan tich cau hoi de lay danh sach ma doi tuong va intent versioning bang LLM (co timeout)."""
     if current_part_ids is None:
         current_part_ids = []
@@ -229,15 +293,20 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         logger.info("Fast intent: dung current_only/general_lookup, bo qua LLM intent.")
     else:
         def call_llm():
-            response = cohere_invoke(
-                [HumanMessage(content=prompt_intent)], surface="intent_routing"
+            provider = invoke_provider or cohere_invoke
+            response = provider(
+                [HumanMessage(content=prompt_intent)],
+                surface="intent_routing",
+                trace_id=trace_id,
             )
             return response.content
  
+        call_runtime, owns_runtime = _runtime_for_call(runtime)
+        future = None
         try:
             request_context = copy_context()
-            future = _INTENT_EXECUTOR.submit(request_context.run, call_llm)
-            raw_response = future.result(timeout=_INTENT_TIMEOUT)
+            future = call_runtime.executor.submit(request_context.run, call_llm)
+            raw_response = future.result(timeout=call_runtime.intent_timeout)
             clean_json = raw_response.replace('```json', '').replace('```', '').strip()
             parsed = json.loads(clean_json)
             intent_data["base_codes"] = [str(c) for c in parsed.get("base_codes", []) if c]
@@ -264,10 +333,16 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
                 if _m and _m not in intent_data["variant_codes"]:
                     intent_data["variant_codes"].append(_m)
         except concurrent.futures.TimeoutError:
-            future.cancel()
+            if future is not None:
+                future.cancel()
             logger.warning(f"LLM Intent Extraction bi timeout. Fallback ve Regex.")
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
+            raise
         except Exception as e:
             logger.warning(f"Loi LLM Intent Extraction: {e}. Fallback ve Regex.")
+        finally:
+            if owns_runtime:
+                call_runtime.close()
 
     det_policy, det_versions = deterministic_version_intent(question)
 
@@ -300,7 +375,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         intent_data["is_chitchat"] = True
         intent_data["base_codes"] = [c for c in intent_data["base_codes"] if str(c).strip().upper() != "CHITCHAT"]
 
-    from mech_chatbot.db.repository import normalize_base_code
+    from mech_chatbot.db.repositories._shared import normalize_base_code
     extracted_codes = [normalize_base_code(c) for c in intent_data["base_codes"] if c]
     
     # Co che cap nhat State
@@ -405,9 +480,10 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         qdrant_filter = models.Filter(must=must_conditions)
         return qdrant_filter, qdrant_filter, new_part_ids, is_inherited, False, intent_data
  
-    from mech_chatbot.rag.text_utils import remove_accents
-    q_norm = remove_accents(question.lower())
-    is_bom_query = intent_data["query_type"] == "bom_lookup" or any(kw in q_norm for kw in ["vat tu", "bang ke", "bom", "danh sach", "chi tiet", "gom nhung gi", "cau tao", "linh kien", "part list", "thanh phan", "chi tiet con", "vat lieu", "cum nay", "ma nao"])
+    is_bom_query = is_bom_lookup(
+        question,
+        query_type=intent_data["query_type"],
+    )
  
     # Ghep strict & broad qua MOT nguon duy nhat (rbac.py) -> chong noi quyen.
     strict_filter, broad_filter = compose_retrieval_filters(must_conditions, new_part_ids)
@@ -415,10 +491,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     return strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data
 
 
-_CONTEXT_TIMEOUT = float(os.getenv("CONTEXT_TIMEOUT", "5.0"))
-
-
-def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None):
+def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None, trace_id=None, invoke_provider=None, runtime=None):
     """P0-1: Phan doan ngu canh hoi thoai + query rewriting (1 LLM call, co timeout).
 
     Tra ve dict:
@@ -429,7 +502,7 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
     tat tinh nang, chua co ngu canh, loi parse hoac timeout.
     """
     fallback = {"context_action": "continue", "standalone_question": user_question, "llm_resolved": False}
-    if not env_bool("ENABLE_QUERY_REWRITE", True):
+    if runtime is not None and not runtime.query_rewrite_enabled:
         return fallback
     if not chat_history:
         return fallback
@@ -503,14 +576,19 @@ Quy tac:
               .replace("__QUESTION__", str(user_question)))
 
     def call_llm():
-        return cohere_invoke(
-            [HumanMessage(content=prompt)], surface="query_disambiguation"
+        provider = invoke_provider or cohere_invoke
+        return provider(
+            [HumanMessage(content=prompt)],
+            surface="query_disambiguation",
+            trace_id=trace_id,
         ).content
 
+    call_runtime, owns_runtime = _runtime_for_call(runtime)
+    future = None
     try:
         request_context = copy_context()
-        future = _INTENT_EXECUTOR.submit(request_context.run, call_llm)
-        raw_response = future.result(timeout=_CONTEXT_TIMEOUT)
+        future = call_runtime.executor.submit(request_context.run, call_llm)
+        raw_response = future.result(timeout=call_runtime.context_timeout)
         clean_json = raw_response.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(clean_json)
         action = parsed.get("context_action", "continue")
@@ -521,24 +599,27 @@ Quy tac:
             standalone = user_question
         return {"context_action": action, "standalone_question": standalone.strip(), "llm_resolved": True}
     except concurrent.futures.TimeoutError:
-        try:
+        if future is not None:
             future.cancel()
-        except Exception:
-            pass
         logger.warning("analyze_context bi timeout -> fallback continue + cau goc.")
         return fallback
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception as e:
         logger.warning(f"Loi analyze_context: {e} -> fallback continue + cau goc.")
         return fallback
+    finally:
+        if owns_runtime:
+            call_runtime.close()
 
 __all__ = [
-    '_INTENT_MAX_WORKERS',
-    '_INTENT_TIMEOUT',
-    '_INTENT_EXECUTOR',
+    'IntentRuntime',
+    'IntentExecutor',
+    'build_intent_runtime',
+    'env_bool',
     'serialize_qdrant_filter',
     'deterministic_version_intent',
     'extract_mechanical_codes',
     'extract_search_intent',
-    '_CONTEXT_TIMEOUT',
     'analyze_context',
 ]

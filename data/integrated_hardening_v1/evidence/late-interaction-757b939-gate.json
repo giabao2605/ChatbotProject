@@ -1,0 +1,44 @@
+{
+  "schema": "retrieval-intelligence-gate-v1",
+  "stage": "late_interaction",
+  "passed": false,
+  "checks": {
+    "wrong_answer_not_increased": true,
+    "leakage_zero": true,
+    "provider_retries_not_increased": true,
+    "voyage_baseline_valid": false,
+    "shadow_candidate_valid": true,
+    "rrf_reference_valid": true,
+    "snapshot_frozen_across_variants": true,
+    "provider_configuration_frozen": true,
+    "commit_frozen_across_variants": true,
+    "manifest_frozen_across_variants": true,
+    "readiness_artifact_valid": true,
+    "capability_passed": true,
+    "ready_for_serving": true,
+    "ndcg_relative_gain": false,
+    "recall_not_decreased": true,
+    "latency_within_budget": true,
+    "storage_within_budget": true,
+    "shadow_coverage_complete": true,
+    "governance_drift_zero": true,
+    "provenance_drift_zero": true,
+    "vector_schema_rejected_zero": true,
+    "orphan_points_zero": true
+  },
+  "limits": {
+    "min_ndcg_relative_gain": 0.05,
+    "max_latency_ratio": 1.25,
+    "max_storage_ratio": 25.0,
+    "max_voyage_fallback_rate": 0.1,
+    "max_shadow_fallback_rate": 0.0
+  },
+  "inputs": {
+    "baseline_eval_sha256": "48b3358daa465f9a762503dd678b90b074ba358ef809ed0f8201d757f98f4f6f",
+    "candidate_eval_sha256": "f069ecf419e33da869f0953cfa09142faeaa9802584836b6667ba712699974ca",
+    "baseline_trace_sha256": "64eb8a4341fa97fccc0971c531b20011d62394335bc179bb68b95885eba95615",
+    "candidate_trace_sha256": "fd721be59e611498efb4e2c17d3de2fd7dd156555183b106e1cf047d8af76f8b",
+    "reference_eval_sha256": "6e385725bd8ffeb42887a369afc0cc60ecb277d2186576cb69731fd48dc84f68",
+    "reference_trace_sha256": "e34a889fe7a36f44467995fdcd69853a8b7ad6660640ca7af9579bceece37f5f"
+  }
+}

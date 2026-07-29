@@ -1,0 +1,19 @@
+{
+  "schema": "decomposition-rollout-run-v1",
+  "git_sha": "937ec52e8b39b6cd16a88b58288cf3bb43ec35ec",
+  "manifest_sha256": "73863fbd10de021ab24dc039deb7bf28cf879b3880175349dcb396c4bf242d64",
+  "fixture_fingerprint": "2a145b86234a608d393c00832f4995dfcbbcc3c168101f56a254b3dad1fef5f5",
+  "baseline": {
+    "started_at": "2026-07-16T01:21:08.832613Z",
+    "completed_at": "2026-07-16T01:23:06.855011Z",
+    "runner_exit": 2
+  },
+  "candidate": {
+    "started_at": "2026-07-16T01:23:07.216876Z",
+    "completed_at": "2026-07-16T01:25:25.466023Z",
+    "runner_exit": 2
+  },
+  "gate_exit": 1,
+  "passed": false,
+  "rollout_pair_sha256": "405361bc21571320aad033da18d81d088822d007454ef87db52d4ae3435058a6"
+}

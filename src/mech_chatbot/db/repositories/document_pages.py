@@ -3,13 +3,16 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 from sqlalchemy import text
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
 from . import document as _r_document
 
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
+
 __all__ = [
     '_REINGEST_SNAPSHOT_TABLES',
-    '_reingest_snapshots',
     '_snapshot_document_children',
     'clear_reingest_snapshot',
     'get_technical_attributes_for_rag',
@@ -29,10 +32,6 @@ _REINGEST_SNAPSHOT_TABLES = {
     "DocumentPages": "PageID",
     "TechnicalAttributes": "AttributeID",
 }
-# Snapshot tam thoi (trong bo nho) de khoi phuc du lieu con cu neu re-ingest that bai giua chung.
-_reingest_snapshots = {}
-
-
 def _snapshot_document_children(conn, doc_id):
     """Chup lai cac dong con truoc khi xoa de co the restore neu ingest moi loi."""
     snap = {}
@@ -46,7 +45,15 @@ def _snapshot_document_children(conn, doc_id):
     return snap
 
 
-def reset_document_metadata(file_name, thu_muc, keep_snapshot=True):
+def reset_document_metadata(
+    file_name,
+    thu_muc,
+    keep_snapshot=True,
+    *,
+    db_engine=None,
+    snapshot_store=None,
+    classification_model=None,
+):
     """Fix #1: GOI MOT LAN truoc khi nap file. Xoa metadata cu, tra ve DocID dung chung.
 
     keep_snapshot=True: chup lai du lieu con cu (trong bo nho) TRUOC khi xoa, de
@@ -54,13 +61,26 @@ def reset_document_metadata(file_name, thu_muc, keep_snapshot=True):
     (tranh mat du lieu cu khi Vision/embedding loi). Goi clear_reingest_snapshot()
     khi ingest thanh cong.
     """
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
-            doc_id = _r_document._get_or_create_doc(conn, file_name, thu_muc)
+        with selected_engine.begin() as conn:
+            create_kwargs = (
+                {"classification_model": classification_model}
+                if classification_model is not None
+                else {}
+            )
+            doc_id = _r_document._get_or_create_doc(
+                conn,
+                file_name,
+                thu_muc,
+                **create_kwargs,
+            )
             if doc_id is not None:
-                if keep_snapshot:
-                    _reingest_snapshots[doc_id] = _snapshot_document_children(conn, doc_id)
+                if keep_snapshot and snapshot_store is not None:
+                    snapshot_store[doc_id] = _snapshot_document_children(
+                        conn,
+                        doc_id,
+                    )
                 conn.execute(text("DELETE FROM TaiLieuKyThuat WHERE DocID = :d"), {"d": doc_id})
                 conn.execute(text("DELETE FROM BangKeVatTu WHERE DocID = :d"), {"d": doc_id})
                 conn.execute(text("DELETE FROM DocumentPages WHERE DocID = :d"), {"d": doc_id})
@@ -73,13 +93,13 @@ def reset_document_metadata(file_name, thu_muc, keep_snapshot=True):
         return None
 
 
-def clear_reingest_snapshot(doc_id):
+def clear_reingest_snapshot(doc_id, *, snapshot_store=None):
     """Ingest thanh cong -> bo snapshot con cu (giai phong bo nho)."""
-    if doc_id is not None:
-        _reingest_snapshots.pop(doc_id, None)
+    if doc_id is not None and snapshot_store is not None:
+        snapshot_store.pop(doc_id, None)
 
 
-def restore_document_children(doc_id):
+def restore_document_children(doc_id, *, db_engine=None, snapshot_store=None):
     """Khoi phuc du lieu con cu tu snapshot khi re-ingest that bai (tranh mat data cu).
 
     Chi restore cho tung bang khi bang do hien dang RONG cho doc_id (ingest moi chua
@@ -87,13 +107,15 @@ def restore_document_children(doc_id):
     """
     if doc_id is None:
         return False
-    snap = _reingest_snapshots.pop(doc_id, None)
+    if snapshot_store is None:
+        return False
+    snap = snapshot_store.pop(doc_id, None)
     if not snap:
         return False
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     restored = 0
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             for tbl, id_col in _REINGEST_SNAPSHOT_TABLES.items():
                 rows = snap.get(tbl) or []
                 if not rows:
@@ -116,10 +138,20 @@ def restore_document_children(doc_id):
         logger.error(f"[reingest] restore_document_children loi doc_id={doc_id}: {e}", exc_info=True)
         return False
  
-def save_document_page(doc_id, file_name, page_no, text_extract, vision_summary, extraction_status, image_path):
-    _ensure_engine()
+def save_document_page(
+    doc_id,
+    file_name,
+    page_no,
+    text_extract,
+    vision_summary,
+    extraction_status,
+    image_path,
+    *,
+    db_engine=None,
+):
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             conn.execute(
                 text("""
                     INSERT INTO dbo.DocumentPages (
@@ -141,12 +173,19 @@ def save_document_page(doc_id, file_name, page_no, text_extract, vision_summary,
     except Exception as e:
         logger.error(f"Loi luu DocumentPages cho {file_name} trang {page_no}: {e}", exc_info=True)
 
-def save_technical_attributes(doc_id, file_name, page_no, attributes):
+def save_technical_attributes(
+    doc_id,
+    file_name,
+    page_no,
+    attributes,
+    *,
+    db_engine=None,
+):
     if not attributes:
         return
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             for attr in attributes:
                 conn.execute(
                     text("""
@@ -173,13 +212,13 @@ def save_technical_attributes(doc_id, file_name, page_no, attributes):
     except Exception as e:
         logger.error(f"Loi luu TechnicalAttributes cho {file_name}: {e}", exc_info=True)
 
-def save_document_attributes(doc_id, domain, attributes):
+def save_document_attributes(doc_id, domain, attributes, *, db_engine=None):
     """Luu metadata domain phi co khi vao DocumentAttributes (ke_toan, nhan_su, chung...)."""
     if not attributes:
         return
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             for attr in attributes:
                 conn.execute(
                     text("""
@@ -264,13 +303,31 @@ def get_technical_attributes_for_rag(file_name):
         logger.error(f"Loi get_technical_attributes_for_rag {file_name}: {e}", exc_info=True)
         return {}
 
-def save_page_metadata(file_name, thu_muc, info, doc_id=None):
+def save_page_metadata(
+    file_name,
+    thu_muc,
+    info,
+    doc_id=None,
+    *,
+    db_engine=None,
+    classification_model=None,
+):
     """Fix #1: Chi INSERT 1 dong cho 1 trang. KHONG xoa du lieu trang khac."""
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             if doc_id is None:
-                doc_id = _r_document._get_or_create_doc(conn, file_name, thu_muc)
+                create_kwargs = (
+                    {"classification_model": classification_model}
+                    if classification_model is not None
+                    else {}
+                )
+                doc_id = _r_document._get_or_create_doc(
+                    conn,
+                    file_name,
+                    thu_muc,
+                    **create_kwargs,
+                )
             p = _r_document._prepare_metadata_params(info)
             p["doc_id"] = doc_id
             conn.execute(
@@ -297,7 +354,29 @@ def save_page_metadata(file_name, thu_muc, info, doc_id=None):
         )
         return None
  
-def save_document_metadata(file_name, thu_muc, info):
+def save_document_metadata(
+    file_name,
+    thu_muc,
+    info,
+    *,
+    db_engine=None,
+    classification_model=None,
+):
     """Tuong thich nguoc cho file 1 trang (non-PDF): reset + insert mot lan."""
-    doc_id = reset_document_metadata(file_name, thu_muc)
-    return save_page_metadata(file_name, thu_muc, info, doc_id=doc_id)
+    runtime_kwargs = {}
+    if db_engine is not None:
+        runtime_kwargs["db_engine"] = db_engine
+    if classification_model is not None:
+        runtime_kwargs["classification_model"] = classification_model
+    doc_id = reset_document_metadata(
+        file_name,
+        thu_muc,
+        **runtime_kwargs,
+    )
+    return save_page_metadata(
+        file_name,
+        thu_muc,
+        info,
+        doc_id=doc_id,
+        **runtime_kwargs,
+    )

@@ -1,0 +1,43 @@
+{
+  "schema": "grounded-math-rollout-run-v1",
+  "git_sha": "d5ec3e1f8e592581f54d4e6fe695f00e4776408f",
+  "manifest_sha256": "a48cd1e03ddb1244daa6df31610e86f8f92b91a3a5bd50113e73baac688e5dee",
+  "fixture_fingerprint": "f8edf1b120ef96ac102e906c926fb5a685e1bc470dd3a942141165623041e11c",
+  "router_mode": "offline",
+  "baseline": {
+    "started_at": "2026-07-15T01:53:09.829700Z",
+    "completed_at": "2026-07-15T01:56:44.422088Z",
+    "runner_exit": 2
+  },
+  "candidate": {
+    "started_at": "2026-07-15T01:56:45.303201Z",
+    "completed_at": "2026-07-15T01:57:45.246320Z",
+    "runner_exit": 0
+  },
+  "gate_exit": 0,
+  "passed": true,
+  "rollout_pair_sha256": "74432022ed069b3c351e05de819a4b2d0e86e8f4609e34dafe69d183c163efcf",
+  "production_eligible": true,
+  "guardrail_checks": {
+    "schema_valid": true,
+    "run_id_present": true,
+    "stage_known": true,
+    "live_artifact": true,
+    "benchmark_conditions_match": true,
+    "benchmark_conditions_complete": true,
+    "evidence_identity_complete": true,
+    "evidence_artifacts_verified": true,
+    "evidence_artifact_schemas_valid": true,
+    "artifact_context_valid": true,
+    "baseline_candidate_artifacts_distinct": true,
+    "evidence_windows_valid": true,
+    "production_collection_not_mutated": true,
+    "gate_artifact_present": true,
+    "gate_schema_valid": true,
+    "gate_stage_valid": true,
+    "gate_inputs_bound": true,
+    "gate_result_consistent": true,
+    "safety_gate_passed": true,
+    "rollback_contract_valid": true
+  }
+}

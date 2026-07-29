@@ -3,8 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 from pathlib import Path
+
+
+def _valid_metric(value) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
 
 
 def compare_reports(
@@ -33,6 +44,11 @@ def compare_reports(
 
     baseline_wrong_refusal = baseline_outcomes.get("wrong_refusal", 0)
     candidate_wrong_refusal = candidate_outcomes.get("wrong_refusal", 0)
+    baseline_latency = baseline_system.get("latency_p95_ms")
+    candidate_latency = candidate_system.get("latency_p95_ms")
+    baseline_cost = baseline_system.get("estimated_cost")
+    candidate_cost = candidate_system.get("estimated_cost")
+    correction_error_count = candidate_system.get("correction_error_count")
     checks = {
         "candidate_cases_passed": (
             candidate_eval.get("total_cases", 0) > 0
@@ -47,6 +63,10 @@ def compare_reports(
         "repair_fixture_present": bool(required_repairs),
         "required_corrections_exercised": required_corrections <= correction_traces,
         "required_repairs_exercised": required_repairs <= repair_traces,
+        "correction_errors_zero": (
+            _valid_metric(correction_error_count)
+            and correction_error_count == 0
+        ),
         "wrong_refusal_reduced": (
             candidate_wrong_refusal < baseline_wrong_refusal
             if baseline_wrong_refusal > 0
@@ -54,11 +74,18 @@ def compare_reports(
         ),
         "wrong_answer_not_increased": candidate_outcomes.get("wrong_answer", 0)
         <= baseline_outcomes.get("wrong_answer", 0),
+        "refusal_types_correct": candidate_outcomes.get("wrong_refusal_type", 0) == 0,
         "leakage_zero": candidate_outcomes.get("leakage", 0) == 0,
-        "latency_within_budget": candidate_system.get("latency_p95_ms", float("inf"))
-        <= baseline_system.get("latency_p95_ms", 0) * max_latency_ratio,
-        "cost_within_budget": candidate_system.get("estimated_cost", float("inf"))
-        <= baseline_system.get("estimated_cost", 0) * max_cost_ratio,
+        "latency_within_budget": (
+            _valid_metric(baseline_latency)
+            and _valid_metric(candidate_latency)
+            and candidate_latency <= baseline_latency * max_latency_ratio
+        ),
+        "cost_within_budget": (
+            _valid_metric(baseline_cost)
+            and _valid_metric(candidate_cost)
+            and candidate_cost <= baseline_cost * max_cost_ratio
+        ),
         "correction_budget": (
             candidate_system.get("correction_rate", float("inf")) <= 1.0
             and candidate_system.get("max_corrections_per_query", 0) <= 1
@@ -84,6 +111,10 @@ def _read(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("baseline_eval", type=Path)
@@ -98,6 +129,12 @@ def main() -> int:
         _read(args.baseline_trace),
         _read(args.candidate_trace),
     )
+    report["inputs"] = {
+        "baseline_eval_sha256": _sha256(args.baseline_eval),
+        "candidate_eval_sha256": _sha256(args.candidate_eval),
+        "baseline_trace_sha256": _sha256(args.baseline_trace),
+        "candidate_trace_sha256": _sha256(args.candidate_trace),
+    }
     payload = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.write_text(payload, encoding="utf-8")

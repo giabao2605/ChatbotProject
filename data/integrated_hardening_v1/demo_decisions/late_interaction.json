@@ -1,0 +1,19 @@
+{
+  "schema": "milestone-decision-v2",
+  "milestone": "late_interaction",
+  "scope": "controlled_demo",
+  "decision": "rejected",
+  "source_commit": "757b9392275b22a826269959797c43d9d169bd8b",
+  "evidence": [
+    {
+      "path": "data/integrated_hardening_v1/evidence/late-interaction-controlled-demo-result.json",
+      "sha256": "2c034b2e59e516903a57082cd09e5c60c028c1f89e126ac66cde5682c5aaa2dc",
+      "schema": "controlled-demo-milestone-evidence-v1"
+    }
+  ],
+  "reason": "The measured candidate did not establish the required nDCG@10 gain, so Late Interaction remains available only as an offline research path and is disabled in the controlled demo.",
+  "reviewer_signoff": {
+    "reviewer": "bao.nguyen-plan-approval",
+    "signed_at": "2026-07-16T01:07:16Z"
+  }
+}

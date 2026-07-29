@@ -12,6 +12,7 @@ pytestmark = pytest.mark.unit
     "message",
     [
         "Error code: 503 service_unavailable no_capacity",
+        "Error code: 502 Bad Gateway",
         "429 too many requests",
         "provider temporarily unavailable",
         "request timeout",
@@ -39,12 +40,11 @@ def test_deterministic_evidence_gate_skips_second_llm_by_default(monkeypatch):
     assert quotes == []
 
 
-def test_evaluator_marks_missing_coverage_ambiguous_only_when_correction_enabled(monkeypatch):
-    monkeypatch.setenv("RAG_CRAG_ENABLED", "true")
-
+def test_evaluator_marks_missing_coverage_ambiguous_only_when_correction_enabled():
     decision = evidence_gate.evaluate_answerability(
         "Chi phí gia công là bao nhiêu?",
         "Tài liệu chỉ mô tả quy trình gồm ba bước chuẩn bị, gia công và kiểm tra.",
+        crag_enabled=True,
     )
 
     assert decision.state is evidence_gate.EvidenceState.AMBIGUOUS
@@ -65,16 +65,22 @@ def test_evaluator_reports_verifier_disabled(monkeypatch):
 
 
 def test_evaluator_accepts_ambiguous_state_from_verifier(monkeypatch):
-    monkeypatch.setenv("LLM_EVIDENCE_VERIFIER_ENABLED", "true")
+    calls = []
     monkeypatch.setattr(
         evidence_gate,
         "cohere_invoke",
-        lambda *_args, **_kwargs: SimpleNamespace(
+        lambda *_args, **kwargs: calls.append(kwargs) or SimpleNamespace(
             content='{"state":"AMBIGUOUS","reason":"coverage gap","evidence_quotes":[]}'
         ),
     )
 
-    decision = evidence_gate.evaluate_answerability("Quy định gì?", "Có một phần quy định.")
+    decision = evidence_gate.evaluate_answerability(
+        "Quy định gì?",
+        "Có một phần quy định.",
+        docs=[SimpleNamespace(metadata={})],
+        verifier_enabled=True,
+    )
 
     assert decision.state is evidence_gate.EvidenceState.AMBIGUOUS
     assert decision.telemetry_status == "verifier_block"
+    assert calls[0]["policies"] == ["internal_only"]

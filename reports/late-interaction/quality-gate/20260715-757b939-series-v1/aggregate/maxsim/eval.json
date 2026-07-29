@@ -1,0 +1,1417 @@
+{
+  "schema": "late-interaction-eval-v1",
+  "variant": "maxsim",
+  "run_metadata": {
+    "source_collection": "TaiLieuKyThuat_v2",
+    "source_point_count": 170,
+    "shadow_collection": "MechChatbot_LateInteraction_v1",
+    "shadow_index_version": "late-v2",
+    "snapshot_fingerprint": "13f1d267d6553bc1b065568017c1fc10c6d364da018e517249b851d3df5e8099",
+    "commit_sha": "757b9392275b22a826269959797c43d9d169bd8b",
+    "utc_start": "2026-07-15T02:40:01.031238+00:00",
+    "utc_end": "2026-07-15T02:41:48.328964+00:00",
+    "manifest": "data\\late_interaction_eval_v1\\manifest.jsonl",
+    "manifest_sha256": "d4f2582c1dbf5978f7fa49cfcb4219da8c8303c455e168ecc560815803c47aed",
+    "repetitions": 3,
+    "top_k": 20,
+    "provider_configuration": {
+      "dense_model": "BAAI/bge-m3",
+      "sparse_model": "Qdrant/bm25",
+      "voyage_model": "rerank-2.5-lite",
+      "voyage_endpoint": "https://api.voyageai.com/v1",
+      "voyage_timeout_seconds": 15.0,
+      "candidate_top_k": 20,
+      "provider_retry_policy": "none",
+      "fallback_policy": "preserve_rrf_closed_set"
+    },
+    "provider_configuration_sha256": "40a1907e9f60d0c22ad0aa8bcab068be3d0117d58cdfa9a9d12dbfb6ba131db7"
+  },
+  "ranked_retrieval": {
+    "recall_at_5": 1.0,
+    "ndcg_at_5": 0.5220664498658727,
+    "recall_at_10": 1.0,
+    "ndcg_at_10": 0.5220664498658727
+  },
+  "outcome_confusion": {
+    "wrong_answer": 0,
+    "leakage": 0
+  },
+  "latency_p50_ms": 2102.8309997636825,
+  "latency_p95_ms": 2828.7480999715626,
+  "provider_retries": 0,
+  "fallback_coverage": {
+    "fallback_count": 0,
+    "fallback_rate": 0.0,
+    "shadow_coverage": 1.0
+  },
+  "cases": [
+    {
+      "case_id": "li-exact-code",
+      "scenario": "exact_code",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.5,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.5,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 16435.29670010321,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-near-code-family",
+      "scenario": "near_code_family",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.7276545800191442,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.7276545800191442,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2828.7480999715626,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-rare-standard",
+      "scenario": "rare_term",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.38685280723454163,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.38685280723454163,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2174.331800080836,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "qualitycontrol_effective_process.md",
+          "doc_id": 171,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_process.md",
+          "doc_id": 171,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_reference.md",
+          "doc_id": 172,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_reference.md",
+          "doc_id": 172,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_core.md",
+          "doc_id": 170,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_core.md",
+          "doc_id": 170,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-alias-mismatch",
+      "scenario": "alias_mismatch",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.38685280723454163,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.38685280723454163,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2094.45060021244,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "iso_effective_reference.md",
+          "doc_id": 177,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_reference.md",
+          "doc_id": 177,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_process.md",
+          "doc_id": 176,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_process.md",
+          "doc_id": 176,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_core.md",
+          "doc_id": 175,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_core.md",
+          "doc_id": 175,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-ocr-noise",
+      "scenario": "ocr_noise",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.5,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.5,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2059.820600086823,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-near-meaning",
+      "scenario": "near_meaning",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.6310385047070085,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.6310385047070085,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2147.0441001001745,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-rbac-site-denial",
+      "scenario": "rbac_site_denial",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 1.0,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2147.5839000195265,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-lifecycle-negative",
+      "scenario": "lifecycle_negative",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 1.0,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 1991.4986002258956,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-exact-code",
+      "scenario": "exact_code",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.5,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.5,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 1821.385300019756,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-near-code-family",
+      "scenario": "near_code_family",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.7276545800191442,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.7276545800191442,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2250.228999881074,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-rare-standard",
+      "scenario": "rare_term",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.38685280723454163,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.38685280723454163,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 1934.9160999991,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "qualitycontrol_effective_process.md",
+          "doc_id": 171,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_process.md",
+          "doc_id": 171,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_reference.md",
+          "doc_id": 172,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_reference.md",
+          "doc_id": 172,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_core.md",
+          "doc_id": 170,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_core.md",
+          "doc_id": 170,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-alias-mismatch",
+      "scenario": "alias_mismatch",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.38685280723454163,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.38685280723454163,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2102.8309997636825,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "iso_effective_reference.md",
+          "doc_id": 177,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_reference.md",
+          "doc_id": 177,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_process.md",
+          "doc_id": 176,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_process.md",
+          "doc_id": 176,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_core.md",
+          "doc_id": 175,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_core.md",
+          "doc_id": 175,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-ocr-noise",
+      "scenario": "ocr_noise",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.5,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.5,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2069.28259995766,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-near-meaning",
+      "scenario": "near_meaning",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.6310385047070085,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.6310385047070085,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2128.374599851668,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-rbac-site-denial",
+      "scenario": "rbac_site_denial",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 1.0,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2215.0596000719815,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-lifecycle-negative",
+      "scenario": "lifecycle_negative",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 1.0,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2048.4736999496818,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-exact-code",
+      "scenario": "exact_code",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.5,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.5,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 1914.330800063908,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-near-code-family",
+      "scenario": "near_code_family",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.7276545800191442,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.7276545800191442,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2040.218299953267,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-rare-standard",
+      "scenario": "rare_term",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.38685280723454163,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.38685280723454163,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2050.323100062087,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "qualitycontrol_effective_process.md",
+          "doc_id": 171,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_process.md",
+          "doc_id": 171,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_reference.md",
+          "doc_id": 172,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_reference.md",
+          "doc_id": 172,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_core.md",
+          "doc_id": 170,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "qualitycontrol_effective_core.md",
+          "doc_id": 170,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-alias-mismatch",
+      "scenario": "alias_mismatch",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.38685280723454163,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.38685280723454163,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2278.1658000312746,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "iso_effective_reference.md",
+          "doc_id": 177,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_reference.md",
+          "doc_id": 177,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_process.md",
+          "doc_id": 176,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_process.md",
+          "doc_id": 176,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_core.md",
+          "doc_id": 175,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "iso_effective_core.md",
+          "doc_id": 175,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-ocr-noise",
+      "scenario": "ocr_noise",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.5,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.5,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2078.9524998981506,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-near-meaning",
+      "scenario": "near_meaning",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 0.6310385047070085,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 0.6310385047070085,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2238.053400302306,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-rbac-site-denial",
+      "scenario": "rbac_site_denial",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 1.0,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2438.8332997914404,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    },
+    {
+      "case_id": "li-lifecycle-negative",
+      "scenario": "lifecycle_negative",
+      "recall_at_5": 1.0,
+      "ndcg_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "ndcg_at_10": 1.0,
+      "wrong_answer": false,
+      "leakage": false,
+      "latency_ms": 2263.68370000273,
+      "coverage": 1.0,
+      "fallback_reason": null,
+      "ranked_sources": [
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_reference.md",
+          "doc_id": 41,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_process.md",
+          "doc_id": 40,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        },
+        {
+          "document": "technical_effective_core.md",
+          "doc_id": 32,
+          "page": 1,
+          "version": 1,
+          "source_id": ""
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Reranking qua Voyage API va cac helper sap xep context."""
 
-import os
 import hashlib
 import unicodedata
 from dataclasses import dataclass
@@ -10,7 +9,7 @@ import requests
 from functools import lru_cache
 from mech_chatbot.llm.external_ai import (
     audited_external_call,
-    get_provider_runtime,
+    external_error_metadata,
     normalize_rerank_result,
 )
 
@@ -18,13 +17,19 @@ from mech_chatbot.llm.external_ai import (
 _VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
 
 
-def _voyage_runtime():
-    return get_provider_runtime(
-        "voyage",
-        fallback_endpoint="https://api.voyageai.com/v1",
-        fallback_model=os.getenv("VOYAGE_RERANK_MODEL", "rerank-2.5-lite"),
-        fallback_secret_envs=("VOYAGE_API_KEY",),
-    )
+def voyage_failure_metadata(exc):
+    """Describe the fixed pilot policy: no retry, immediate local fallback."""
+    error = external_error_metadata(exc)
+    return {
+        "backend": "voyage",
+        "status": "error",
+        "fallback": True,
+        "fallback_backend": "local_fusion",
+        "fallback_reason": error.error_type,
+        "provider_status_code": error.status_code,
+        "retryable": error.retryable,
+        "retry_attempted": False,
+    }
 
 
 def _voyage_rerank_url(endpoint: str) -> str:
@@ -43,22 +48,19 @@ class RerankPolicy:
     """
 
     voyage_provider: str = "voyage"
+    enabled: bool = True
+    runtime: object | None = None
 
     def select_backend(self, candidates, user_context=None, data_policy=None) -> str:
         del user_context, data_policy
         policies = {
-            str((getattr(doc, "metadata", {}) or {}).get("external_processing_policy") or "all_external").strip().lower()
+            str((getattr(doc, "metadata", {}) or {}).get("external_processing_policy") or "internal_only").strip().lower()
             for doc in (candidates or [])
         }
         if policies and policies != {"all_external"}:
             return "local_fusion"
-        enabled = os.getenv("USE_VOYAGE_RERANK", "true").strip().lower() in {"1", "true", "yes", "on"}
-        if enabled:
-            try:
-                if _voyage_runtime().api_key:
-                    return self.voyage_provider
-            except Exception:
-                pass
+        if self.enabled and getattr(self.runtime, "api_key", None):
+            return self.voyage_provider
         return "local_fusion"
 
 
@@ -69,7 +71,15 @@ def tokenize_cached(text):
     return word_tokenize(text, format="text")
 
 
-def voyage_rerank_documents(documents, query, top_n=10, trace_id=None):
+def voyage_rerank_documents(
+    documents,
+    query,
+    top_n=10,
+    trace_id=None,
+    *,
+    runtime,
+    timeout_seconds=15.0,
+):
     """Rerank candidate documents bang Voyage ``rerank-2.5-lite``.
 
     Voyage tra ve index theo danh sach document dau vao; giu nguyen Document
@@ -79,7 +89,6 @@ def voyage_rerank_documents(documents, query, top_n=10, trace_id=None):
     if not docs:
         return []
 
-    runtime = _voyage_runtime()
     api_key = (runtime.api_key or "").strip()
     if not api_key:
         raise RuntimeError("VOYAGE_API_KEY chua resolve duoc tu secret reference cua Voyage")
@@ -87,7 +96,6 @@ def voyage_rerank_documents(documents, query, top_n=10, trace_id=None):
     top_n = max(1, min(int(top_n or 10), len(docs)))
     model = runtime.model
     rerank_url = _voyage_rerank_url(runtime.endpoint)
-    timeout_seconds = float(os.getenv("VOYAGE_RERANK_TIMEOUT_SECONDS", "15"))
     texts = [
         str((getattr(doc, "metadata", {}) or {}).get("noi_dung_goc")
             or getattr(doc, "page_content", "") or "")
@@ -99,7 +107,7 @@ def voyage_rerank_documents(documents, query, top_n=10, trace_id=None):
     ]
     policies = [
         (getattr(doc, "metadata", {}) or {}).get("external_processing_policy")
-        or "all_external"
+        or "internal_only"
         for doc in docs
     ]
 
@@ -290,6 +298,7 @@ def long_context_reorder(docs):
 
 __all__ = [
     'RerankPolicy',
+    'voyage_failure_metadata',
     'tokenize_cached',
     'voyage_rerank_documents',
     'prioritize_document_types',

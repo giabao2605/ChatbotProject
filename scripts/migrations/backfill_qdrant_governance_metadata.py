@@ -19,9 +19,10 @@ if str(SRC_ROOT) not in sys.path:
 from sqlalchemy import text  # noqa: E402
 from qdrant_client import models  # noqa: E402
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime  # noqa: E402
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime  # noqa: E402
 from mech_chatbot.db.engine import _ensure_engine, engine  # noqa: E402
-from mech_chatbot.db.repositories.qdrant import _get_qdrant_client, update_qdrant_metadata  # noqa: E402
-from mech_chatbot.config.settings import QDRANT_COLLECTION  # noqa: E402
+from mech_chatbot.db.repositories.qdrant import update_qdrant_metadata  # noqa: E402
 
 
 def _document_type(value):
@@ -40,8 +41,9 @@ def _has_qdrant_points(client, doc_id: int) -> bool:
     migration must not prevent application startup merely because those stale
     SQL rows cannot receive a payload update.
     """
+    _bound_client, collection = current_qdrant_runtime()
     result = client.count(
-        collection_name=QDRANT_COLLECTION,
+        collection_name=collection,
         count_filter=models.Filter(
             must=[
                 models.FieldCondition(
@@ -55,6 +57,7 @@ def _has_qdrant_points(client, doc_id: int) -> bool:
     return int(getattr(result, "count", 0) or 0) > 0
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def main() -> int:
     _ensure_engine()
     with engine.connect() as conn:
@@ -77,7 +80,7 @@ def main() -> int:
     updated = 0
     failed = []
     skipped_missing_points = []
-    client = _get_qdrant_client()
+    client, _collection = current_qdrant_runtime()
     for row in rows:
         doc_id = int(row["DocID"])
         try:
@@ -106,10 +109,6 @@ def main() -> int:
             updated += 1
         else:
             failed.append({"doc_id": doc_id, "reason": "payload_update_failed"})
-    try:
-        client.close()
-    except Exception:
-        pass
     print(json.dumps({
         "total_sql_vector_rows": len(rows),
         "updated": updated,

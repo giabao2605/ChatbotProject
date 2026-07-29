@@ -1,0 +1,31 @@
+{
+  "schema": "retrieval-intelligence-gate-v1",
+  "stage": "query_decomposition",
+  "passed": false,
+  "checks": {
+    "wrong_answer_not_increased": true,
+    "leakage_zero": true,
+    "provider_retries_not_increased": true,
+    "complex_answer_gain": false,
+    "simple_planner_calls_zero": true,
+    "branch_accuracy_complete": false,
+    "branch_citations_complete": false,
+    "request_budgets_respected": true,
+    "latency_within_budget": true,
+    "cost_within_budget": true
+  },
+  "limits": {
+    "min_complex_answer_gain": 0.1,
+    "max_latency_ratio": 1.5,
+    "max_cost_ratio": 1.5,
+    "max_subqueries": 3,
+    "max_corrections": 1,
+    "max_final_generations": 1
+  },
+  "inputs": {
+    "baseline_eval_sha256": "ed6f7ca159cf53f1c5536dc2542cc7117eeb3b3cf20cbaa83b1783860678a085",
+    "candidate_eval_sha256": "8f9963271d7b8d8eaebf37db0d1627180a06d1e3414652e62e23cbe26dffef55",
+    "baseline_trace_sha256": "63bdb8711c4b2e0fb0fbc8e496d43b6c4b2d17e7fc4f94c11429a2859076e92a",
+    "candidate_trace_sha256": "e4d15527b3792b772e9da5f287b5636eed20b7fb4fa6ff6c3704db6a21c46083"
+  }
+}

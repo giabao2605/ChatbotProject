@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 
@@ -11,11 +12,101 @@ from mech_chatbot.evaluation.outcomes import (
     classify_actual_outcome,
     classify_outcome,
     expected_outcome,
+    outcome_matches_expected,
     summarize_outcomes,
+)
+from mech_chatbot.evaluation.metrics import (
+    ranked_retrieval_audit,
+    ranked_retrieval_metrics,
 )
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_ranked_retrieval_metrics_reward_earlier_relevant_sources():
+    metrics = ranked_retrieval_metrics(
+        ["other.pdf", "target.pdf", "appendix.pdf"],
+        ["target.pdf"],
+        cutoffs=(2, 10),
+    )
+
+    assert metrics["recall_at_2"] == 1.0
+    assert metrics["recall_at_10"] == 1.0
+    assert metrics["ndcg_at_10"] == pytest.approx(0.6309297536)
+
+
+def test_ranked_retrieval_metrics_report_zero_when_source_is_missing():
+    metrics = ranked_retrieval_metrics(["other.pdf"], ["target.pdf"], cutoffs=(5, 10))
+
+    assert metrics == {
+        "recall_at_5": 0.0,
+        "ndcg_at_5": 0.0,
+        "recall_at_10": 0.0,
+        "ndcg_at_10": 0.0,
+        "mrr": 0.0,
+    }
+
+
+def test_ranked_retrieval_metrics_include_recall_at_twenty_and_mrr():
+    ranked = [f"other-{index}.pdf" for index in range(1, 12)] + ["target.pdf"]
+
+    metrics = ranked_retrieval_metrics(ranked, ["target.pdf"])
+    audit = ranked_retrieval_audit(ranked, ["target.pdf"])
+
+    assert metrics["recall_at_10"] == 0.0
+    assert metrics["recall_at_20"] == 1.0
+    assert metrics["mrr"] == pytest.approx(1 / 12)
+    assert audit[11] == {
+        "rank": 12,
+        "source": "target.pdf",
+        "identity": {
+            "document": "target.pdf", "doc_id": "", "page": "",
+            "version": "", "source_id": "",
+        },
+        "relevant": True,
+    }
+
+
+def test_ranked_retrieval_metrics_do_not_double_count_duplicate_document_chunks():
+    metrics = ranked_retrieval_metrics(
+        ["target.pdf", "target.pdf", "other.pdf"],
+        ["target.pdf"],
+        cutoffs=(3,),
+    )
+
+    assert metrics["recall_at_3"] == 1.0
+    assert metrics["ndcg_at_3"] == 1.0
+    assert 0.0 <= metrics["ndcg_at_3"] <= 1.0
+
+
+def test_ranked_retrieval_metrics_preserve_page_version_and_source_identity():
+    retrieved = [
+        {"file_goc": "manual.pdf", "doc_id": 7, "trang": 2,
+         "version_no": 3, "source_id": "D7P2"},
+        {"file_goc": "manual.pdf", "doc_id": 7, "trang": 1,
+         "version_no": 3, "source_id": "D7P1"},
+    ]
+    expected = [
+        {"document": "manual.pdf", "doc_id": 7, "page": 1,
+         "version": 3, "source_id": "D7P1"}
+    ]
+
+    metrics = ranked_retrieval_metrics(retrieved, expected, cutoffs=(1, 2))
+    audit = ranked_retrieval_audit(retrieved, expected)
+
+    assert metrics["recall_at_1"] == 0.0
+    assert metrics["recall_at_2"] == 1.0
+    assert metrics["mrr"] == 0.5
+    assert audit[0]["identity"]["page"] == "2"
+    assert audit[0]["relevant"] is False
+    assert audit[1]["relevant"] is True
+
+
+def test_eval_runner_keeps_twenty_sources_for_recall_at_twenty():
+    source = Path("scripts/eval/run_eval.py").read_text(encoding="utf-8")
+
+    assert 'debug.get("retrieved_docs", [])[:20]' in source
 
 
 def _load_script(module_name: str, relative_path: str):
@@ -51,6 +142,31 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records),
         encoding="utf-8",
     )
+
+
+def _run_benchmark_cli(
+    tmp_path,
+    monkeypatch,
+    *,
+    cases: list[dict],
+    build_measure_one,
+) -> dict:
+    questions_path = tmp_path / "questions.jsonl"
+    trace_path = tmp_path / "rag_trace.jsonl"
+    report_path = tmp_path / "report.json"
+    _write_jsonl(questions_path, cases)
+    trace_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(benchmark, "measure_one", build_measure_one(trace_path))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "benchmark_rag_concurrency.py", str(questions_path),
+            "--concurrency", "1", "--trace-jsonl", str(trace_path),
+            "--report", str(report_path),
+        ],
+    )
+    assert benchmark.main() == 0
+    return json.loads(report_path.read_text(encoding="utf-8"))
 
 
 def test_pilot_gate_accepts_complete_real_manifest_shape(tmp_path):
@@ -174,6 +290,253 @@ def test_benchmark_defaults_and_sse_trace_stage_summary():
     assert summary["stage_latency"]["stages"]["dense_retrieval"]["p95_ms"] == 22.0
 
 
+def test_benchmark_does_not_mix_sse_and_jsonl_stage_distributions():
+    samples = [
+        {
+            "ok": True,
+            "first_token_ms": 100,
+            "complete_ms": 300,
+            "stage_metrics": {"dense_retrieval": 12},
+        },
+        {
+            "ok": True,
+            "first_token_ms": 200,
+            "complete_ms": 500,
+            "stage_metrics": {"dense_retrieval": 22},
+        },
+    ]
+
+    summary = benchmark.summarize(
+        samples,
+        5,
+        trace_stage_metrics={
+            "dense_retrieval": [1200, 2200],
+            "bm25_retrieval": [40, 60],
+        },
+        trace_metadata={"correlation": "time_window_only"},
+    )
+    stage_latency = summary["stage_latency"]
+
+    assert stage_latency["stages"]["dense_retrieval"] == {
+        "source": "sse_trace_stages",
+        "samples": 2,
+        "p50_ms": 12.0,
+        "p95_ms": 22.0,
+    }
+    assert stage_latency["stages"]["bm25_retrieval"] == {
+        "source": "trace_jsonl_time_window",
+        "samples": 2,
+        "p50_ms": 40.0,
+        "p95_ms": 60.0,
+    }
+    assert stage_latency["source_summaries"]["trace_jsonl_time_window"][
+        "dense_retrieval"
+    ]["p95_ms"] == 2200.0
+
+
+def test_benchmark_trace_jsonl_matches_and_aggregates_each_request_once(tmp_path):
+    trace_path = tmp_path / "rag_trace.jsonl"
+    _write_jsonl(
+        trace_path,
+        [
+            {"ts": "2026-07-23T00:00:01Z", "trace_id": "t1", "event": "embed", "latency_ms": 4},
+            {"ts": "2026-07-23T00:00:02Z", "trace_id": "t1", "event": "embed", "latency_ms": 9},
+            {"ts": "2026-07-23T00:00:03Z", "trace_id": "t1", "event": "cache", "latency_ms": 3},
+            {"ts": "2026-07-23T00:00:04Z", "trace_id": "t1", "event": "cache", "latency_ms": 7},
+            {"ts": "2026-07-23T00:00:05Z", "trace_id": "t2", "event": "embed", "latency_ms": 5},
+            {"ts": "2026-07-23T00:00:06Z", "trace_id": "t2", "event": "embed", "latency_ms": 7},
+            {"ts": "2026-07-23T00:00:07Z", "trace_id": "other", "event": "embed", "latency_ms": 999},
+        ],
+    )
+
+    metrics, metadata = benchmark.read_trace_jsonl(
+        trace_path,
+        allowed_trace_ids={"t1", "t2"},
+    )
+
+    assert metrics == {"cache": [10.0], "embed": [9.0, 7.0]}
+    assert metadata["correlation"] == "exact_trace_id"
+    assert metadata["trace_count"] == 2
+    assert metadata["excluded_trace_events"] == 1
+    summary = benchmark.summarize(
+        [{"ok": True, "first_token_ms": 1, "complete_ms": 2}],
+        1,
+        trace_stage_metrics=metrics,
+        trace_metadata=metadata,
+    )
+    assert summary["stage_latency"]["sources"] == [
+        "trace_jsonl_exact_trace_id"
+    ]
+
+
+def test_benchmark_cli_uses_trace_id_for_correlation_but_redacts_report(
+    tmp_path, monkeypatch,
+):
+    raw_trace_id = "rag_private_trace_123"
+    def build_measure_one(trace_path):
+        def fake_measure_one(*_args, **_kwargs):
+            _write_jsonl(trace_path, [{
+                "ts": benchmark.datetime.now(benchmark.timezone.utc).isoformat(),
+                "trace_id": raw_trace_id,
+                "event": "dense_retrieval",
+                "latency_ms": 12,
+            }])
+            return {
+                "sample_id": "q0001-private", "ok": True,
+                "first_token_ms": 10, "complete_ms": 20,
+                "trace_id": raw_trace_id, "stage_metrics": {},
+            }
+        return fake_measure_one
+
+    report = _run_benchmark_cli(
+        tmp_path, monkeypatch,
+        cases=[{"question": "benchmark privacy", "username": "admin"}],
+        build_measure_one=build_measure_one,
+    )
+    assert raw_trace_id not in json.dumps(report)
+    assert report["results"][0]["samples"][0]["trace_id"] == "<redacted>"
+    stage_latency = report["results"][0]["summary"]["stage_latency"]
+    assert stage_latency["sources"] == ["trace_jsonl_exact_trace_id"]
+    assert stage_latency["trace_jsonl"]["source"] == "<trace-jsonl>"
+
+
+def test_benchmark_cli_does_not_use_time_window_when_trace_ids_are_missing(
+    tmp_path, monkeypatch,
+):
+    def build_measure_one(trace_path):
+        def fake_measure_one(*_args, **_kwargs):
+            _write_jsonl(trace_path, [{
+                "ts": benchmark.datetime.now(benchmark.timezone.utc).isoformat(),
+                "trace_id": "unrelated-request",
+                "event": "dense_retrieval",
+                "latency_ms": 999,
+            }])
+            return {
+                "sample_id": "q0001-no-trace", "ok": True,
+                "first_token_ms": 10, "complete_ms": 20,
+                "trace_id": None,
+                "stage_metrics": {"dense_retrieval": 12},
+            }
+        return fake_measure_one
+
+    report = _run_benchmark_cli(
+        tmp_path, monkeypatch,
+        cases=[{"question": "benchmark correlation", "username": "admin"}],
+        build_measure_one=build_measure_one,
+    )
+    stage_latency = report["results"][0]["summary"]["stage_latency"]
+    assert stage_latency["sources"] == ["sse_trace_stages"]
+    assert stage_latency["stages"]["dense_retrieval"]["p95_ms"] == 12.0
+    assert stage_latency["trace_jsonl"]["correlation"] == (
+        "unavailable_missing_trace_ids"
+    )
+    assert stage_latency["trace_jsonl"]["excluded_trace_events"] == 1
+
+
+def test_benchmark_cli_rejects_partial_trace_id_correlation(
+    tmp_path, monkeypatch,
+):
+    raw_trace_id = "rag_only_one_of_two"
+    def build_measure_one(trace_path):
+        def fake_measure_one(*_args, sample_index=0, **_kwargs):
+            if sample_index == 1:
+                _write_jsonl(trace_path, [{
+                    "ts": benchmark.datetime.now(benchmark.timezone.utc).isoformat(),
+                    "trace_id": raw_trace_id, "event": "dense_retrieval",
+                    "latency_ms": 12,
+                }])
+            return {
+                "sample_id": f"q{sample_index:04d}", "ok": True,
+                "first_token_ms": 10, "complete_ms": 20,
+                "trace_id": raw_trace_id if sample_index == 1 else None,
+                "stage_metrics": {},
+            }
+        return fake_measure_one
+
+    report = _run_benchmark_cli(
+        tmp_path, monkeypatch,
+        cases=[
+            {"question": "first", "username": "admin"},
+            {"question": "second", "username": "admin"},
+        ],
+        build_measure_one=build_measure_one,
+    )
+    trace_meta = report["results"][0]["summary"]["stage_latency"]["trace_jsonl"]
+    assert trace_meta["correlation"] == "unavailable_incomplete_trace_ids"
+    assert trace_meta["expected_trace_count"] == 2
+    assert trace_meta["provided_trace_count"] == 1
+
+
+def test_benchmark_cli_rejects_incomplete_trace_jsonl_events(
+    tmp_path, monkeypatch,
+):
+    def build_measure_one(trace_path):
+        def fake_measure_one(*_args, sample_index=0, **_kwargs):
+            trace_id = f"rag_trace_{sample_index}"
+            if sample_index == 1:
+                _write_jsonl(trace_path, [{
+                    "ts": benchmark.datetime.now(benchmark.timezone.utc).isoformat(),
+                    "trace_id": trace_id, "event": "dense_retrieval",
+                    "latency_ms": 12,
+                }])
+            return {
+                "sample_id": f"q{sample_index:04d}", "ok": True,
+                "first_token_ms": 10, "complete_ms": 20,
+                "trace_id": trace_id, "stage_metrics": {},
+            }
+        return fake_measure_one
+
+    report = _run_benchmark_cli(
+        tmp_path, monkeypatch,
+        cases=[
+            {"question": "first", "username": "admin"},
+            {"question": "second", "username": "admin"},
+        ],
+        build_measure_one=build_measure_one,
+    )
+    stage_latency = report["results"][0]["summary"]["stage_latency"]
+    trace_meta = stage_latency["trace_jsonl"]
+    assert stage_latency["sources"] == []
+    assert trace_meta["correlation"] == "unavailable_incomplete_trace_events"
+    assert trace_meta["expected_trace_count"] == 2
+    assert trace_meta["trace_count"] == 1
+
+
+def test_benchmark_preserves_server_identity_without_persisting_it_in_sample(tmp_path):
+    manifest = tmp_path / "cases.jsonl"
+    _write_jsonl(manifest, [{
+        "id": "case-1",
+        "question": "Cau hoi co identity",
+        "username": "eval-technical",
+        "user_department": "Technical",
+        "user_roles": ["viewer"],
+        "allowed_departments": ["Technical"],
+        "allowed_sites": ["HQ"],
+        "max_security_level": "internal",
+    }])
+
+    cases = benchmark.load_benchmark_cases(manifest)
+    payload = benchmark.build_chat_payload(cases[0])
+
+    assert payload["username"] == "eval-technical"
+    assert payload["user_question"] == "Cau hoi co identity"
+    sample = benchmark._sample_identity(cases[0], 1)
+    assert "username" not in sample
+    assert "question" not in sample
+    assert sample["sample_id"].startswith("q0001-")
+
+
+def test_benchmark_requires_identity_when_manifest_has_none(tmp_path):
+    manifest = tmp_path / "cases.jsonl"
+    _write_jsonl(manifest, [{"id": "case-1", "question": "Missing identity"}])
+
+    with pytest.raises(ValueError, match="username or user_id"):
+        benchmark.load_benchmark_cases(manifest)
+
+    cases = benchmark.load_benchmark_cases(manifest, default_username="eval-technical")
+    assert cases[0]["username"] == "eval-technical"
+
+
 def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
     assert expected_outcome({"should_refuse": True}) == "insufficient_evidence"
     assert classify_outcome("full_answer", "insufficient_evidence", answer_correct=False, leaked=False) == "wrong_refusal"
@@ -182,9 +545,88 @@ def test_outcome_metrics_separate_wrong_refusal_wrong_answer_and_leakage():
     assert classify_outcome("partial_answer", "full_answer", answer_correct=True, leaked=False) == "wrong_answer"
     assert classify_actual_outcome("Tôi trả lời được một phần; phần còn lại chưa đủ dữ kiện.") == "partial_answer"
     assert classify_actual_outcome("Bạn muốn so sánh với phiên bản nào? Vui lòng chỉ định.") == "clarification_required"
+    assert classify_actual_outcome("Tài liệu không công bố chi phí hoặc đơn giá.") == "insufficient_evidence"
+    assert classify_actual_outcome("Tài liệu không có trường đơn giá cho DEMO-PART-A.") == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Tài liệu CRAG-EVAL-BOM-001 không có tổng số lượng BOM được phê duyệt trong tài liệu này. "
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Tài liệu CRAG-EVAL-BOM-001 không có tổng BOM được phê duyệt trong tài liệu này. "
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Rất tiếc, mình không tìm thấy mã số 'secret-001' nào trong hệ thống bản vẽ hiện tại. "
+        "Vui lòng kiểm tra lại mã hoặc mô tả rõ hơn."
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Tài liệu không có tổng số lượng BOM được phê duyệt, nhưng tổng tính từ BOM là 999."
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Tài liệu không có tổng số lượng BOM được phê duyệt. Tổng số lượng là 999."
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Tài liệu không có tổng BOM được phê duyệt. "
+        "Tổng số lượng BOM, tính từ các dòng, là 999."
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Tài liệu không có tổng BOM được phê duyệt; kết quả kiểm tra là 0 lỗi."
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Tài liệu CRAG-EVAL-BOM-001 không có tổng BOM được phê duyệt trong tài liệu này, "
+        "nhưng tổng là 999."
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| PART-A | 2 |\n| PART-B | 3 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Tài liệu BOM `CRAG-EVAL-BOM-001` không có tổng số lượng BOM được phê duyệt "
+        "trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| PART-A | 2 |\n| PART-B | 3 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "insufficient_evidence"
+    assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này, nhưng tổng là 999.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| PART-A | 2 |\n| PART-B | 3 |"
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| Tổng | 5 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| Tổng cộng | 5 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Không có tổng BOM được phê duyệt trong tài liệu này.\n\n"
+        "| Mã | Số lượng |\n|---|---:|\n| Grand total | 5 |\n\n"
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D1P1]"
+    ) == "full_answer"
+    assert classify_actual_outcome(
+        "Mình không tìm thấy mã số cũ; mã thay thế là CRAG-EVAL-NEW-001."
+    ) == "full_answer"
+    assert classify_actual_outcome("Mình không thể hỗ trợ yêu cầu này do chính sách truy cập.") == "access_denied"
     assert summarize_outcomes([
         {"expected": "full_answer", "actual": "full_answer", "answer_correct": True, "legacy_admin_bypass": True}
     ])["legacy_admin_exception"] == 1
+
+
+@pytest.mark.parametrize(
+    ("expected", "actual"),
+    [
+        ("access_denied", "insufficient_evidence"),
+        ("insufficient_evidence", "access_denied"),
+        ("partial_answer", "full_answer"),
+        ("clarification_required", "full_answer"),
+    ],
+)
+def test_eval_outcome_contract_requires_the_exact_labeled_state(expected, actual):
+    assert outcome_matches_expected(expected, actual) is False
+    assert outcome_matches_expected(expected, expected) is True
 
 
 def test_benchmark_accepts_done_trace_stage_contract_and_safe_trace_jsonl(tmp_path):
@@ -231,13 +673,139 @@ def test_crag_rollout_gate_blocks_wrong_answers_leakage_and_excess_cost():
         ],
     }
     baseline_trace = {"system_metrics": {"latency_p95_ms": 1000, "estimated_cost": 1.0, "correction_rate": 0.0, "repair_rate": 0.0, "retry_rate": 0.0}}
-    candidate_trace = {"system_metrics": {"latency_p95_ms": 1200, "estimated_cost": 1.2, "correction_rate": 0.2, "repair_rate": 0.1, "retry_rate": 0.3, "correction_trace_ids": ["eval:candidate:ambiguous"], "repair_trace_ids": ["eval:candidate:repair"]}}
+    candidate_trace = {"system_metrics": {"latency_p95_ms": 1200, "estimated_cost": 1.2, "correction_rate": 0.2, "repair_rate": 0.1, "retry_rate": 0.3, "correction_trace_ids": ["eval:candidate:ambiguous"], "correction_error_count": 0, "repair_trace_ids": ["eval:candidate:repair"]}}
 
     report = crag_gate.compare_reports(baseline_eval, candidate_eval, baseline_trace, candidate_trace)
     assert report["passed"] is True
 
     candidate_eval["outcome_confusion"]["wrong_answer"] = 2
     assert crag_gate.compare_reports(baseline_eval, candidate_eval, baseline_trace, candidate_trace)["passed"] is False
+
+
+def test_crag_rollout_gate_fails_closed_when_metrics_are_null():
+    report = crag_gate.compare_reports(
+        {},
+        {},
+        {"system_metrics": {"latency_p95_ms": None, "estimated_cost": None}},
+        {"system_metrics": {"latency_p95_ms": None, "estimated_cost": None}},
+    )
+
+    assert report["checks"]["latency_within_budget"] is False
+    assert report["checks"]["cost_within_budget"] is False
+    assert report["passed"] is False
+
+
+def test_crag_rollout_gate_rejects_failed_correction_attempts():
+    baseline_eval = {
+        "outcome_confusion": {
+            "wrong_refusal": 1,
+            "wrong_answer": 0,
+            "leakage": 0,
+        }
+    }
+    candidate_eval = {
+        "outcome_confusion": {
+            "wrong_refusal": 0,
+            "wrong_answer": 0,
+            "leakage": 0,
+        },
+        "total_cases": 1,
+        "passed_cases": 1,
+        "feature_flags": {
+            "crag": "true",
+            "claim_repair": "true",
+            "semantic_cache": "false",
+        },
+        "cases": [
+            {
+                "trace_id": "eval:candidate:ambiguous",
+                "requires_correction": True,
+            }
+        ],
+    }
+    baseline_trace = {
+        "system_metrics": {
+            "latency_p95_ms": 100,
+            "estimated_cost": 1,
+        }
+    }
+    candidate_trace = {
+        "system_metrics": {
+            "latency_p95_ms": 100,
+            "estimated_cost": 1,
+            "correction_rate": 1,
+            "repair_rate": 0,
+            "retry_rate": 0,
+            "max_corrections_per_query": 1,
+            "max_repairs_per_query": 0,
+            "correction_trace_ids": ["eval:candidate:ambiguous"],
+            "repair_trace_ids": [],
+            "correction_error_count": 1,
+        }
+    }
+
+    report = crag_gate.compare_reports(
+        baseline_eval,
+        candidate_eval,
+        baseline_trace,
+        candidate_trace,
+    )
+
+    assert report["checks"]["correction_errors_zero"] is False
+    assert report["passed"] is False
+
+    del candidate_trace["system_metrics"]["correction_error_count"]
+    report = crag_gate.compare_reports(
+        baseline_eval,
+        candidate_eval,
+        baseline_trace,
+        candidate_trace,
+    )
+    assert report["checks"]["correction_errors_zero"] is False
+
+
+def test_crag_rollout_gate_rejects_malformed_numeric_metrics():
+    for invalid in (True, -1, float("nan"), float("inf")):
+        report = crag_gate.compare_reports(
+            {},
+            {},
+            {"system_metrics": {"latency_p95_ms": 1, "estimated_cost": 1}},
+            {
+                "system_metrics": {
+                    "latency_p95_ms": invalid,
+                    "estimated_cost": invalid,
+                }
+            },
+        )
+
+        assert report["checks"]["latency_within_budget"] is False
+        assert report["checks"]["cost_within_budget"] is False
+        assert report["passed"] is False
+
+
+def test_crag_rollout_gate_cli_binds_all_input_hashes(tmp_path, monkeypatch):
+    paths = {}
+    for name in ("baseline_eval", "candidate_eval", "baseline_trace", "candidate_trace"):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps({"name": name}), encoding="utf-8")
+        paths[name] = path
+    output = tmp_path / "gate.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "crag_rollout_gate.py",
+            str(paths["baseline_eval"]), str(paths["candidate_eval"]),
+            str(paths["baseline_trace"]), str(paths["candidate_trace"]),
+            "--output", str(output),
+        ],
+    )
+
+    assert crag_gate.main() == 1
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["inputs"] == {
+        f"{name}_sha256": hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in paths.items()
+    }
 
 
 def test_crag_rollout_gate_blocks_more_than_one_correction_or_repair_per_query():
@@ -255,8 +823,44 @@ def test_crag_rollout_gate_blocks_more_than_one_correction_or_repair_per_query()
         "latency_p95_ms": 100, "estimated_cost": 1, "correction_rate": 0.5,
         "repair_rate": 0.5, "retry_rate": 0, "max_corrections_per_query": 2,
         "max_repairs_per_query": 1, "correction_trace_ids": ["eval:candidate:ambiguous"],
-        "repair_trace_ids": ["eval:candidate:repair"],
+        "correction_error_count": 0, "repair_trace_ids": ["eval:candidate:repair"],
     }}
     report = crag_gate.compare_reports(eval_report, eval_report, baseline_trace, candidate_trace)
     assert report["checks"]["correction_budget"] is False
+    assert report["passed"] is False
+
+
+def test_crag_rollout_gate_blocks_wrong_refusal_type():
+    baseline_eval = {"outcome_confusion": {"wrong_refusal": 1, "wrong_answer": 0, "leakage": 0}}
+    candidate_eval = {
+        "outcome_confusion": {
+            "wrong_refusal": 0,
+            "wrong_refusal_type": 1,
+            "wrong_answer": 0,
+            "leakage": 0,
+        },
+        "total_cases": 1,
+        "passed_cases": 1,
+        "feature_flags": {"crag": "true", "claim_repair": "true", "semantic_cache": "false"},
+        "cases": [],
+    }
+    baseline_trace = {"system_metrics": {"latency_p95_ms": 100, "estimated_cost": 1}}
+    candidate_trace = {"system_metrics": {
+        "latency_p95_ms": 100,
+        "estimated_cost": 1,
+        "correction_rate": 0,
+        "repair_rate": 0,
+        "retry_rate": 0,
+        "max_corrections_per_query": 0,
+        "max_repairs_per_query": 0,
+    }}
+
+    report = crag_gate.compare_reports(
+        baseline_eval,
+        candidate_eval,
+        baseline_trace,
+        candidate_trace,
+    )
+
+    assert report["checks"]["refusal_types_correct"] is False
     assert report["passed"] is False

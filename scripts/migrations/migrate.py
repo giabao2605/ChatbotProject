@@ -21,6 +21,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime  # noqa: E402
 from mech_chatbot.db.engine import _ensure_engine, engine  # noqa: E402
 
 
@@ -135,6 +136,7 @@ def apply_migration(version: str, description: str, path: Path) -> int:
     return executed
 
 
+@with_configured_repository_runtime(include_qdrant=False)
 def main() -> int:
     parser = argparse.ArgumentParser(description="Apply pending SQL migrations")
     parser.add_argument("--target", help="Only apply through this version, e.g. V0019")

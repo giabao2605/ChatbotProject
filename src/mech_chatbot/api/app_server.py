@@ -1,220 +1,177 @@
-"""Browser-facing FastAPI app for the Vue migration.
+"""FastAPI composition root for the browser-facing Vue application.
 
-This service does not load RAG models. It authenticates browser users, proxies
-chat questions to the internal rag-server, owns SQL persistence/audit for chat,
-and serves protected files through SQL-backed RBAC checks.
+Feature HTTP handlers live in :mod:`mech_chatbot.api.routers`.  This module is
+limited to process lifecycle, application-runtime construction, router
+composition, health reporting, and SPA fallback wiring.  Compatibility aliases
+at the bottom keep older scripts able to import handlers from ``app_server``
+without registering those handlers twice.
 """
 from __future__ import annotations
 
-import json
-import mimetypes
-import os
-import re
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
-from uuid import uuid4
+from types import SimpleNamespace
+from typing import Any, Callable
 
-import bcrypt
 import requests
-from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
-from sqlalchemy import text
+from fastapi import FastAPI, Request
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.staticfiles import StaticFiles
 
 from mech_chatbot.api import app_security
+from mech_chatbot.api.dependencies import csrf_profile, current_profile, require_any_role
 from mech_chatbot.api.file_access import (
-    LEVEL_ORDER,
-    can_access_document,
     chat_image_path,
     data_raw_root,
-    normalize_security_level,
-    original_file_path,
     page_has_vision,
-    page_image_path,
 )
-from mech_chatbot.auth.core import authenticate_user, load_user_profile, update_user_preferred_language
-from mech_chatbot.auth.authorization import role_allows
-from mech_chatbot.config.logging import logger
-from mech_chatbot.db.engine import engine
-from mech_chatbot.llm.external_ai import invalidate_external_ai_provider_profiles
-from mech_chatbot.services import (
-    add_material_synonym,
-    add_regression_question,
-    archive_department,
-    archive_document,
-    bulk_delete_ingestion_jobs,
-    cancel_job,
-    classify_feedback_and_get_source,
-    clear_chat_history,
-    cleanup_dangling_records,
-    create_access_request,
-    count_pending_access_requests,
-    create_user_with_roles,
-    dashboard_by_department,
-    delete_feedback,
-    delete_document_completely,
-    delete_glossary_term,
-    delete_ingestion_job,
-    delete_material,
-    delete_material_synonym,
-    delete_user_account,
-    get_all_app_settings,
-    get_all_sessions,
-    get_department_summary,
-    get_department_rollout_readiness,
-    get_doc_quality_ranking,
-    get_grant_history,
-    get_chat_history,
-    get_dashboard_stats,
-    get_role_dashboard,
-    get_department_domain_profile,
-    get_department_knowledge_governance,
-    get_lifecycle_overview,
-    get_document_lifecycle_counts,
-    get_observability,
-    get_regression_runs,
-    get_user_access_requests,
-    get_user_clearance,
-    get_user_departments,
-    get_user_roles,
-    get_user_sites,
-    get_usage_analytics,
-    list_audit_logs,
-    list_access_requests,
-    list_bulk_action_jobs,
-    list_bulk_meta_departments,
-    list_docs_for_bulk_meta,
-    list_domain_glossary,
-    list_department_domain_profiles,
-    list_department_knowledge_governance,
-    list_external_ai_provider_profiles,
-    list_documents,
-    list_expiring_documents,
-    list_ingestion_jobs,
-    list_feedbacks,
-    list_known_departments,
-    list_known_sites,
-    list_materials,
-    list_missing_site_documents,
-    list_department_rollout_plans,
-    list_pending_review_docs,
-    list_recent_documents,
-    list_recent_failed_jobs,
-    list_regression_questions,
-    list_users_basic,
-    list_users_with_access,
-    mark_document_expired,
-    mark_document_reviewed,
-    mark_job_pending_review,
-    mark_job_published,
-    mark_job_rejected,
-    publish_document,
-    queue_eta_seconds,
-    reassign_department_data,
-    reconcile_serving_state,
-    record_department_evaluation_gate,
-    requeue_job,
-    recompute_doc_quality_scores,
-    reject_document,
-    reject_ingestion_job,
-    resolve_access_request,
-    refresh_expired_status,
-    revoke_user_clearance,
-    revoke_user_department,
-    save_answer_evidence,
-    save_answer_sources,
-    save_chat_history,
-    sc_stats,
-    set_app_setting,
-    set_department_status,
-    set_document_lifecycle,
-    set_glossary_active,
-    set_job_priority,
-    set_regression_question_active,
-    set_user_active_status,
-    set_user_clearance,
-    set_user_departments,
-    set_user_sites,
-    update_chat_feedback,
-    update_document_common_metadata,
-    update_document_governance_metadata,
-    update_user_active_and_roles,
-    update_user_password,
-    upsert_golden_answer,
-    upsert_external_ai_provider_profile,
-    upsert_department_domain_profile,
-    upsert_department_knowledge_governance,
-    upsert_department_rollout_plan,
-    upsert_department,
-    upsert_glossary_term,
-    upsert_material,
-    upsert_site,
-    ensure_regression_question,
-    write_audit_log,
-    validate_publish_contract,
-    validate_document_metadata_actor,
+from mech_chatbot.api.routers import (
+    auth_router,
+    chat_router,
+    documents_router,
+    files_router,
+    operations_router,
 )
+from mech_chatbot.api.routers import chat as _chat_routes
+from mech_chatbot.api.routers import documents as _document_routes
+from mech_chatbot.api.routers import operations as _operation_routes
+from mech_chatbot.adapters.pilot_replay import (
+    PilotReplayExecutor,
+    iter_sse_events as _iter_sse_events,
+    pilot_outcome as _pilot_outcome,
+    pilot_route as _pilot_route,
+)
+from mech_chatbot.adapters.qdrant_runtime import (
+    QdrantAdminRuntime,
+    build_qdrant_admin_runtime,
+)
+from mech_chatbot.composition.app_runtime import (
+    AppDatabaseRuntime,
+    build_app_database_runtime,
+    build_default_app_runtime,
+    production_create_ingestion_job,
+)
+from mech_chatbot.config.logging import LoggingConfig, configure_logging, logger
+from mech_chatbot.config.repository_runtime import bind_repository_runtime
+from mech_chatbot.config.settings import (
+    AppProcessSettings,
+    QdrantSettings,
+    RepositoryPolicySettings,
+    Settings,
+    SqlSettings,
+    load_settings,
+)
+import mech_chatbot.services.audit_service as audit_service
+import mech_chatbot.services.chat_service as chat_service
+import mech_chatbot.services.document_service as document_service
+import mech_chatbot.services.lifecycle_service as lifecycle_service
+import mech_chatbot.services.ui_query_service as ui_query_service
 
-load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Lifespan: raise anyio thread limiter so blocking def endpoints don't starve
-# ---------------------------------------------------------------------------
-_APP_THREAD_LIMIT = int(os.getenv("APP_THREAD_LIMIT", "60"))
+# These service aliases are dependencies of the composition-time runtime
+# factory.  Keeping the names local also preserves the historical monkeypatch
+# seams used by baseline-capture scripts without moving domain work back here.
+refresh_expired_status = lifecycle_service.refresh_expired_status
+save_chat_history = chat_service.save_chat_history
+save_answer_evidence = chat_service.save_answer_evidence
+save_answer_sources = chat_service.save_answer_sources
+write_audit_log = audit_service.write_audit_log
+reject_ingestion_job = ui_query_service.reject_ingestion_job
+mark_job_rejected = ui_query_service.mark_job_rejected
+reject_document = document_service.reject_document
+delete_document_completely = document_service.delete_document_completely
+delete_ingestion_job = ui_query_service.delete_ingestion_job
+publish_document = document_service.publish_document
+mark_job_published = ui_query_service.mark_job_published
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI):
+async def _lifespan(application: FastAPI):
     import asyncio
+
     import anyio
-    anyio.to_thread.current_default_thread_limiter().total_tokens = _APP_THREAD_LIMIT
-    logger.info("App server anyio thread limiter raised to %d", _APP_THREAD_LIMIT)
 
-    async def _reconcile_lifecycle_periodically():
-        interval = max(60, int(os.getenv("LIFECYCLE_RECONCILE_SECONDS", "300")))
-        while True:
-            try:
-                await anyio.to_thread.run_sync(refresh_expired_status)
-            except Exception:
-                logger.exception("Lifecycle reconciliation failed")
-            await asyncio.sleep(interval)
+    settings_snapshot = application.state.settings_snapshot
+    process = application.state.process_settings
+    pilot_replays = application.state.pilot_replays
+    configure_logging(LoggingConfig.from_settings(settings_snapshot))
+    database_runtime = application.state.database_builder(
+        SqlSettings.from_settings(settings_snapshot)
+    )
+    qdrant_runtime = None
+    lifecycle_task = None
+    pilot_started = False
+    try:
+        qdrant_runtime = application.state.qdrant_builder(
+            QdrantSettings.from_settings(settings_snapshot)
+        )
+        application.state.database_runtime = database_runtime
+        application.state.qdrant_runtime = qdrant_runtime
+        application.state.runtime = _build_default_app_runtime(
+            process,
+            pilot_replays,
+            post=application.state.post,
+            engine=database_runtime.engine,
+            strict_site_filter=RepositoryPolicySettings.from_settings(
+                settings_snapshot
+            ).strict_site_filter,
+            qdrant_client=qdrant_runtime.client,
+            collection_name=qdrant_runtime.collection_name,
+        )
+        refresh_lifecycle = lambda: refresh_expired_status(
+            db_engine=database_runtime.engine,
+            qdrant_client=qdrant_runtime.client,
+            collection_name=qdrant_runtime.collection_name,
+        )
+        anyio.to_thread.current_default_thread_limiter().total_tokens = (
+            process.thread_limit
+        )
+        logger.info(
+            "App server anyio thread limiter raised to %d",
+            process.thread_limit,
+        )
+        pilot_replays.start()
+        pilot_started = True
 
-    # Run once before accepting traffic, then reconcile periodically. Serving
-    # surfaces also validate dates directly, so a temporary sync failure cannot
-    # expose expired content.
-    try:
-        await anyio.to_thread.run_sync(refresh_expired_status)
-    except Exception:
-        logger.exception("Initial lifecycle reconciliation failed")
-    lifecycle_task = asyncio.create_task(_reconcile_lifecycle_periodically())
-    try:
+        async def _reconcile_lifecycle_periodically() -> None:
+            while True:
+                try:
+                    await anyio.to_thread.run_sync(refresh_lifecycle)
+                except Exception:
+                    logger.exception("Lifecycle reconciliation failed")
+                await asyncio.sleep(process.lifecycle_reconcile_seconds)
+
+        try:
+            await anyio.to_thread.run_sync(refresh_lifecycle)
+        except Exception:
+            logger.exception("Initial lifecycle reconciliation failed")
+        lifecycle_task = asyncio.create_task(
+            _reconcile_lifecycle_periodically()
+        )
         yield
     finally:
-        lifecycle_task.cancel()
-        try:
-            await lifecycle_task
-        except asyncio.CancelledError:
-            pass
+        if pilot_started:
+            pilot_replays.stop()
+        if lifecycle_task is not None:
+            lifecycle_task.cancel()
+            try:
+                await lifecycle_task
+            except asyncio.CancelledError:
+                pass
+        if qdrant_runtime is not None:
+            qdrant_runtime.close()
+        database_runtime.close()
+        application.state.database_runtime = None
+        application.state.qdrant_runtime = None
 
 
-app = FastAPI(title="Mech Chatbot App API", version="0.1.0", lifespan=_lifespan)
-
-
-@app.get("/api/health", tags=["system"])
-def app_health():
+def app_health(request: Request):
     db_status = "unavailable"
-    if engine is not None:
-        try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
+    try:
+        if request.app.state.runtime.app_support_queries.database_ready():
             db_status = "ok"
-        except Exception as exc:
-            logger.warning("App health DB probe failed: %s", exc)
+    except Exception as exc:
+        logger.warning("App health DB probe failed: %s", exc)
     return {
         "status": "ok" if db_status == "ok" else "degraded",
         "app": "mech-chatbot-app-api",
@@ -226,2141 +183,121 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _is_admin(profile: dict[str, Any]) -> bool:
-    return "admin" in [str(r).lower() for r in (profile.get("roles") or [])]
-
-
-def _publication_actor(profile: dict[str, Any]) -> dict[str, Any]:
-    """Bind a publish request to the server-loaded identity, never body data."""
-    return {
-        "reviewer": profile.get("username") or "System",
-        "reviewer_id": profile.get("user_id"),
-        "reviewer_roles": profile.get("roles") or [],
-    }
-
-
-def _publication_payload(result, response: Response | None = None) -> dict[str, Any]:
-    """Keep the HTTP result aligned with the durable serving transition."""
-    payload = result.to_dict()
-    if response is not None and result.ok and result.state != "published":
-        # A concurrent worker owns the outbox row.  The document is still
-        # unservable, so this is accepted/pending rather than publish success.
-        response.status_code = status.HTTP_202_ACCEPTED
-    return payload
-
-
-def _assert_metadata_actor(doc_id: int, profile: dict[str, Any]) -> None:
-    allowed, reason = validate_document_metadata_actor(
-        doc_id,
-        profile.get("user_id"),
-        profile.get("roles") or [],
-    )
-    if not allowed:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
-
-
-def _public_profile(profile: dict[str, Any], csrf: str | None = None) -> dict[str, Any]:
-    out = {
-        "user_id": profile.get("user_id"),
-        "username": profile.get("username"),
-        "display_name": profile.get("display_name"),
-        "department": profile.get("department"),
-        "roles": profile.get("roles") or [],
-        "allowed_departments": profile.get("allowed_departments") or [],
-        "max_security_level": profile.get("max_security_level") or "public",
-        "allowed_sites": profile.get("allowed_sites") or [],
-        "preferred_language": profile.get("preferred_language") or "vi",
-    }
-    if csrf is not None:
-        out["csrf_token"] = csrf
-    return out
-
-
-def _session_payload(request: Request) -> app_security.SessionPayload:
-    return app_security.verify_session_token(request.cookies.get(app_security.SESSION_COOKIE_NAME))
-
-
-def current_profile(request: Request) -> dict[str, Any]:
-    payload = _session_payload(request)
-    profile = load_user_profile(user_id=payload.user_id, username=payload.username)
-    if not profile:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or invalid")
-    return profile
-
-
-def csrf_profile(request: Request) -> dict[str, Any]:
-    payload = _session_payload(request)
-    app_security.require_csrf(request, payload)
-    profile = load_user_profile(user_id=payload.user_id, username=payload.username)
-    if not profile:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or invalid")
-    return profile
-
-
-def require_any_role(*roles: str):
-    def _dep(profile: dict[str, Any] = Depends(current_profile)) -> dict[str, Any]:
-        if not role_allows(profile.get("roles"), *roles):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-        return profile
-
-    return _dep
-
-
-def _rag_base_url() -> str:
-    return os.getenv("RAG_SERVER_URL", "http://127.0.0.1:8100").rstrip("/")
-
-
-def _rag_headers() -> dict[str, str]:
+def _rag_headers(process: AppProcessSettings) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    token = os.getenv("RAG_SERVICE_TOKEN", "").strip()
+    token = process.rag_service_token.strip()
     if token:
         headers["X-RAG-Service-Token"] = token
     return headers
 
 
-def _sse(event: str, data: Any) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+# The chat router owns these interfaces.  The explicit aliases keep the runtime
+# builder independent of HTTP module internals and preserve historical imports.
+_resolve_chat_citations = _chat_routes._resolve_chat_citations
+_chat_actor_profile = _chat_routes._chat_actor_profile
 
 
-def _iter_sse_events(response):
-    event = "message"
-    data_lines = []
-    for raw_line in response.iter_lines(decode_unicode=True):
-        line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else str(raw_line or "")
-        if not line:
-            if data_lines:
-                raw_data = "\n".join(data_lines)
-                try:
-                    payload = json.loads(raw_data)
-                except Exception:
-                    payload = {"message": raw_data}
-                yield event, payload
-            event = "message"
-            data_lines = []
-            continue
-        if line.startswith(":"):
-            continue
-        if line.startswith("event:"):
-            event = line[6:].strip() or "message"
-        elif line.startswith("data:"):
-            data_lines.append(line[5:].lstrip())
-    if data_lines:
-        raw_data = "\n".join(data_lines)
-        try:
-            payload = json.loads(raw_data)
-        except Exception:
-            payload = {"message": raw_data}
-        yield event, payload
-
-
-def _safe_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_json_obj(raw: str | None, field_name: str) -> dict[str, Any] | None:
-    if not raw:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"{field_name} không hợp lệ (JSON)")
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=400, detail=f"{field_name} phải là object JSON")
-    return {k: v for k, v in parsed.items() if v not in (None, "")} or None
-
-
-def _parse_json_list(raw: str | None, field_name: str) -> list[Any]:
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"{field_name} không hợp lệ (JSON)")
-    if not isinstance(parsed, list):
-        raise HTTPException(status_code=400, detail=f"{field_name} phải là array JSON")
-    return parsed
-
-
-def _split_csv(value: Any) -> list[str]:
-    if isinstance(value, list):
-        source = value
-    elif isinstance(value, str):
-        source = re.split(r"[\s,]+", value)
-    else:
-        source = []
-    return [str(x).strip() for x in source if str(x).strip()]
-
-
-def _parse_json_or_csv_list(raw: str | None, field_name: str) -> list[str]:
-    if not raw:
-        return []
-    stripped = raw.strip()
-    if stripped.startswith("["):
-        return _split_csv(_parse_json_list(stripped, field_name))
-    return _split_csv(stripped)
-
-
-def _assert_upload_department(profile: dict[str, Any], dept: str) -> None:
-    allowed = set(profile.get("allowed_departments") or [])
-    if dept not in allowed:
-        raise HTTPException(status_code=403, detail=f"Không có quyền upload vào phòng ban {dept}")
-
-
-def _store_upload_file(file: UploadFile, dept: str) -> tuple[str, str]:
-    allowed_ext = {
-        ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".csv", ".pptx",
-        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff",
-    }
-    original_name = file.filename or ""
-    ext = Path(original_name).suffix.lower()
-    if ext not in allowed_ext:
-        raise HTTPException(status_code=400, detail=f"Định dạng tệp không được hỗ trợ: {original_name}")
-    raw = file.file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail=f"Tệp rỗng: {original_name}")
-    if len(raw) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail=f"Tệp quá lớn (giới hạn 100MB): {original_name}")
-    safe_dept = re.sub(r"[^A-Za-z0-9_\-]", "_", (dept or "").strip()) or "CHUNG"
-    out_dir = data_raw_root() / "Uploads" / safe_dept
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stored_path = out_dir / f"{uuid4().hex}{ext}"
-    stored_path.write_bytes(raw)
-    return original_name, str(stored_path)
-
-
-def _row_to_json(row: Any) -> Any:
-    if hasattr(row, "_mapping"):
-        return dict(row._mapping)
-    if isinstance(row, dict):
-        return row
-    if isinstance(row, (list, tuple)):
-        return list(row)
-    return row
-
-
-def _rows_to_json(rows: Any) -> list[Any]:
-    return [_row_to_json(row) for row in (rows or [])]
-
-
-def _assert_any_role(profile: dict[str, Any], *roles: str) -> None:
-    if not role_allows(profile.get("roles"), *roles):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-
-
-def _citation_list(retrieved_docs: list[Any]) -> list[dict[str, Any]]:
-    seen: set[tuple[int, int]] = set()
-    citations: list[dict[str, Any]] = []
-    for item in retrieved_docs:
-        if not isinstance(item, dict):
-            continue
-        doc_id = _safe_int(item.get("doc_id"))
-        page_no = _safe_int(item.get("trang") or item.get("trang_so"))
-        if doc_id is None or page_no is None:
-            continue
-        key = (doc_id, page_no)
-        if key in seen:
-            continue
-        seen.add(key)
-        has_vision = page_has_vision(doc_id, page_no)
-        citation = {
-            "doc_id": doc_id,
-            "page_no": page_no,
-            "file_name": item.get("file_goc"),
-            "score": item.get("score"),
-            "source_id": item.get("source_id") or f"D{doc_id}P{page_no}",
-            "has_vision": has_vision,
-            "page_url": (
-                f"/api/files/documents/{doc_id}/pages/{page_no}"
-                if has_vision
-                else None
-            ),
-            "original_url": f"/api/files/documents/{doc_id}/original",
-        }
-        version_no = item.get("version_no")
-        if version_no is None:
-            version_no = item.get("version")
-        if version_no not in (None, ""):
-            citation["version_no"] = version_no
-        citations.append(citation)
-    return citations
-
-
-def _filter_citations_by_answer(
-    citations: list[dict[str, Any]],
-    answer: str,
+def _build_default_app_runtime(
+    process: AppProcessSettings,
+    pilot_replays: PilotReplayExecutor,
     *,
-    allow_legacy_fallback: bool = False,
-) -> list[dict[str, Any]]:
-    """Keep sources explicitly referenced by the generated answer.
+    post: Callable[..., Any],
+    engine: Any = None,
+    strict_site_filter: bool = True,
+    qdrant_client: Any = None,
+    collection_name: str | None = None,
+):
+    from mech_chatbot.evaluation.crag_pilot import assign_pilot_route, load_pilot_config
 
-    Live answers must cite canonical SourceIDs (`D<DocID>P<PageNo>`), so a
-    filename or DocID alone can never silently resolve to the wrong page.
-    Filename/DocID matching remains only for explicitly legacy history rows.
-    """
-    text_answer = str(answer or "").lower().replace("\\", "/")
-    cited_source_ids = {
-        value.upper() for value in re.findall(
-            r"(?:source[_ ]?id\s*[:#]?\s*|\[SRC:)(D\d+P\d+)",
-            text_answer,
-            flags=re.IGNORECASE,
-        )
-    }
-    if cited_source_ids:
-        return [
-            citation
-            for citation in citations or []
-            if str(citation.get("source_id") or "").upper() in cited_source_ids
-        ]
-    if not allow_legacy_fallback:
-        return []
-
-    cited_doc_ids = {
-        int(value) for value in re.findall(r"\bdocid\s*[:#]?\s*(\d+)\b", text_answer, flags=re.IGNORECASE)
-    }
-    matched = []
-    for citation in citations or []:
-        file_name = str(citation.get("file_name") or "").strip().lower().replace("\\", "/")
-        base_name = os.path.basename(file_name)
-        doc_id = _safe_int(citation.get("doc_id"))
-        source_id = str(citation.get("source_id") or "").upper()
-        if ((base_name and base_name in text_answer)
-                or (file_name and file_name in text_answer)
-                or (doc_id is not None and doc_id in cited_doc_ids)):
-            matched.append(citation)
-    if matched:
-        return matched
-    # Fail closed: an unattributed answer must not display unrelated retrieval
-    # candidates as if they supported it.
-    return []
-
-
-def _answer_body_without_reference_appendix(value: str) -> str:
-    """Remove the separately persisted legacy reference appendix.
-
-    Older chat rows stored `answer + ref_text` in TraLoi_Bot. Matching source
-    names against that full string would select every historical candidate,
-    because the polluted appendix itself contains all filenames.
-    """
-    body = str(value or "")
-    markers = (
-        "\n\n---\n**Nguồn tham chiếu:**",
-        "\n\n---\n**Nguon tham chieu:**",
-        "\n\n---\n**References:**",
-    )
-    positions = [body.find(marker) for marker in markers if body.find(marker) >= 0]
-    return body[: min(positions)].rstrip() if positions else body
-
-
-def _citation_ref_text(citations: list[dict[str, Any]]) -> str:
-    if not citations:
-        return ""
-    lines = []
-    for citation in citations:
-        name = citation.get("file_name") or f"Doc {citation.get('doc_id')}"
-        page = citation.get("page_no") or "?"
-        lines.append(f"- **{name}** (Trang {page})")
-    return "\n\n---\n**Nguồn tham chiếu:**\n" + "\n".join(lines)
-
-
-def _chat_image_id_from_path(raw_path: Any) -> str | None:
-    if not raw_path:
-        return None
-    name = os.path.basename(str(raw_path))
-    return name or None
-
-
-def _chat_image_url_from_path(raw_path: Any) -> str | None:
-    image_id = _chat_image_id_from_path(raw_path)
-    return f"/api/files/chat-images/{image_id}" if image_id else None
-
-
-def _sources_for_chat_ids(chat_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
-    if not chat_ids or engine is None:
-        return {}
-    keys, params = [], {}
-    for i, chat_id in enumerate(chat_ids):
-        key = f"cid_{i}"
-        keys.append(f":{key}")
-        params[key] = chat_id
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text(
-                """
-                SELECT a.ChatID, a.DocID, a.FileName, a.VersionNo, a.ChunkRef, a.Score,
-                       CASE WHEN NULLIF(LTRIM(RTRIM(p.VisionSummary)), '') IS NOT NULL
-                                  AND p.ImagePath IS NOT NULL
-                            THEN 1 ELSE 0 END AS HasVision
-                FROM dbo.AnswerSource a
-                LEFT JOIN dbo.DocumentPages p
-                  ON p.DocID = a.DocID
-                 AND p.PageNo = TRY_CONVERT(INT, a.ChunkRef)
-                WHERE a.ChatID IN (
-                """
-                + ", ".join(keys)
-                + ") ORDER BY a.ChatID, a.RankNo"
-            ),
-            params,
-        ).fetchall()
-    out: dict[int, list[dict[str, Any]]] = {}
-    for chat_id, doc_id, file_name, version_no, chunk_ref, score, has_vision in rows:
-        page_no = _safe_int(chunk_ref)
-        if doc_id is None or page_no is None:
-            continue
-        verified_vision = bool(has_vision) and page_has_vision(int(doc_id), page_no)
-        out.setdefault(int(chat_id), []).append(
-            {
-                "doc_id": int(doc_id),
-                "page_no": page_no,
-                "file_name": file_name,
-                "version_no": version_no,
-                "score": score,
-                "source_id": f"D{int(doc_id)}P{page_no}",
-                "has_vision": verified_vision,
-                "page_url": (
-                    f"/api/files/documents/{int(doc_id)}/pages/{page_no}"
-                    if verified_vision
-                    else None
-                ),
-                "original_url": f"/api/files/documents/{int(doc_id)}/original",
-            }
-        )
-    return out
-
-
-def _decorate_history_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    chat_ids = [int(m["chat_id"]) for m in messages if m.get("chat_id")]
-    sources = _sources_for_chat_ids(chat_ids)
-    for message in messages:
-        image_url = _chat_image_url_from_path(message.get("image"))
-        if image_url:
-            message["image_url"] = image_url
-        chat_id = message.get("chat_id")
-        if chat_id:
-            answer_body = _answer_body_without_reference_appendix(message.get("content") or "")
-            filtered = _filter_citations_by_answer(
-                sources.get(int(chat_id), []), answer_body, allow_legacy_fallback=True
-            )
-            message["content"] = answer_body
-            message["citations"] = filtered
-            message["ref_text"] = _citation_ref_text(filtered)
-        message.pop("ref_images", None)
-    return messages
-
-
-auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-
-class LoginRequest(BaseModel):
-    username: str = Field(..., min_length=1, max_length=255)
-    password: str = Field(..., min_length=1, max_length=255)
-
-
-@auth_router.post("/login")
-def login(req: LoginRequest, response: Response):
-    profile = authenticate_user(req.username.strip(), req.password)
-    if not profile:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sai tên đăng nhập hoặc mật khẩu")
-    token, payload = app_security.create_session_token(
-        user_id=int(profile["user_id"]),
-        username=str(profile["username"]),
-    )
-    app_security.set_session_cookie(response, token)
-    return {"ok": True, "user": _public_profile(profile, csrf=payload.csrf)}
-
-
-@auth_router.get("/me")
-def me(request: Request):
-    payload = _session_payload(request)
-    profile = load_user_profile(user_id=payload.user_id, username=payload.username)
-    if not profile:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or invalid")
-    return {"ok": True, "user": _public_profile(profile, csrf=payload.csrf)}
-
-
-@auth_router.post("/logout")
-def logout(request: Request, response: Response):
-    payload = _session_payload(request)
-    app_security.require_csrf(request, payload)
-    app_security.clear_session_cookie(response)
-    return {"ok": True}
-
-
-class LanguageRequest(BaseModel):
-    language: str
-
-
-@auth_router.patch("/me/preferences")
-def update_preferences(req: LanguageRequest, profile: dict[str, Any] = Depends(csrf_profile)):
-    if not update_user_preferred_language(profile.get("user_id"), req.language):
-        raise HTTPException(status_code=400, detail="Invalid language")
-    return {"ok": True}
-
-
-@auth_router.post("/refresh")
-def refresh_session(request: Request, response: Response):
-    """Xoay vong (rotate) session token dua tren cookie hien tai va tra ve
-    profile + csrf_token moi. Yeu cau CSRF de tranh bi lam dung tu cross-site.
-    Frontend goi dinh ky/khi gan het han de giu phien lien tuc."""
-    payload = _session_payload(request)
-    app_security.require_csrf(request, payload)
-    profile = load_user_profile(user_id=payload.user_id, username=payload.username)
-    if not profile:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or invalid")
-    token, new_payload = app_security.create_session_token(
-        user_id=int(profile["user_id"]),
-        username=str(profile["username"]),
-    )
-    app_security.set_session_cookie(response, token)
-    return {"ok": True, "user": _public_profile(profile, csrf=new_payload.csrf)}
-
-
-chat_router = APIRouter(prefix="/api/chat", tags=["chat"])
-
-
-class ChatMessageRequest(BaseModel):
-    session_id: str = Field(..., min_length=1, max_length=100)
-    question: str = Field(..., min_length=1, max_length=20000)
-    image_token: str | None = None
-    chat_history: list[dict[str, Any]] = Field(default_factory=list)
-    current_part_ids: list[str] = Field(default_factory=list)
-    conversation_context: dict[str, Any] | None = None
-
-
-def _sign_image_upload(user_id: int, image_id: str) -> str:
-    token, _ = app_security.create_session_token(user_id=user_id, username=f"image:{image_id}", ttl_seconds=15 * 60)
-    return token
-
-
-def _verify_image_upload(profile: dict[str, Any], image_token: str | None) -> str | None:
-    if not image_token:
-        return None
-    payload = app_security.verify_session_token(image_token)
-    if payload.user_id != int(profile.get("user_id")):
-        raise HTTPException(status_code=403, detail="Image token owner mismatch")
-    if not payload.username.startswith("image:"):
-        raise HTTPException(status_code=400, detail="Invalid image token")
-    image_id = payload.username.split(":", 1)[1]
-    path = chat_image_path(image_id)
-    if not path or not path.exists():
-        raise HTTPException(status_code=404, detail="Uploaded image not found")
-    return str(path)
-
-
-@chat_router.get("/sessions")
-def sessions(profile: dict[str, Any] = Depends(current_profile)):
-    return {
-        "sessions": get_all_sessions(
-            username=profile.get("username"),
-            is_admin=False,
-        )
-    }
-
-
-@chat_router.post("/history")
-def history(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    session_id = str(body.get("session_id") or "").strip()
-    if not session_id:
-        raise HTTPException(status_code=400, detail="Missing session_id")
-    messages = get_chat_history(
-        session_id,
-        username=profile.get("username"),
-        is_admin=_is_admin(profile),
-        user_clearance=profile.get("max_security_level", "public"),
-        allowed_departments=profile.get("allowed_departments") or [],
-        allowed_sites=profile.get("allowed_sites") or [],
-    )
-    return {"messages": _decorate_history_messages(messages)}
-
-
-@chat_router.delete("/sessions/{session_id}")
-def delete_session(session_id: str, profile: dict[str, Any] = Depends(csrf_profile)):
-    return {
-        "ok": True,
-        "deleted": clear_chat_history(
-            session_id,
-            username=profile.get("username"),
-            is_admin=False,
+    return build_default_app_runtime(
+        process,
+        post=post,
+        base_url=process.rag_base_url,
+        headers=_rag_headers(process),
+        timeout=(10, process.rag_chat_timeout_seconds),
+        save_chat_history=lambda **kwargs: save_chat_history(
+            **kwargs,
+            db_engine=engine,
         ),
-    }
-
-
-@chat_router.post("/upload-image")
-def upload_chat_image(
-    request: Request,
-    file: UploadFile = File(...),
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    allowed_ext = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
-    ext = Path(file.filename or "").suffix.lower()
-    if ext not in allowed_ext:
-        raise HTTPException(status_code=400, detail="Only image files are supported")
-    raw = file.file.read()
-    if len(raw) > 15 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File is too large")
-    out_dir = data_raw_root() / "Chat_Images"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    image_id = f"{uuid4().hex}{ext}"
-    path = out_dir / image_id
-    path.write_bytes(raw)
-    return {
-        "ok": True,
-        "image_id": image_id,
-        "image_token": _sign_image_upload(int(profile["user_id"]), image_id),
-        "file_name": file.filename,
-    }
-
-
-@chat_router.post("/message")
-def chat_message(req: ChatMessageRequest, profile: dict[str, Any] = Depends(csrf_profile)):
-    image_path = _verify_image_upload(profile, req.image_token)
-    lang = profile.get("preferred_language") or "vi"
-
-    def generate():
-        yield _sse("thinking", {"message": "Đang suy nghĩ"})
-        rag_payload = {
-            "user_id": profile.get("user_id"),
-            "username": profile.get("username"),
-            "user_question": req.question.strip(),
-            "image_path": image_path,
-            "chat_history": req.chat_history,
-            "current_part_ids": req.current_part_ids,
-            "response_language": lang,
-            "conversation_context": req.conversation_context,
-        }
-        try:
-            answer_parts = []
-            stream_metadata = {}
-            stream_done = None
-            streamed_citations = []
-            with requests.post(
-                f"{_rag_base_url()}/chat/stream",
-                headers=_rag_headers(),
-                json=rag_payload,
-                timeout=(10, int(os.getenv("APP_RAG_CHAT_TIMEOUT_SECONDS", "300"))),
-                stream=True,
-            ) as resp:
-                if not resp.ok:
-                    yield _sse(
-                        "error",
-                        {
-                            "message": "RAG server busy" if resp.status_code == 503 else f"RAG server error HTTP {resp.status_code}",
-                            "detail": resp.text,
-                            "status": resp.status_code,
-                        },
-                    )
-                    return
-                for event, payload in _iter_sse_events(resp):
-                    if event == "metadata" and isinstance(payload, dict):
-                        stream_metadata = payload
-                    elif event in {"token", "delta"}:
-                        token = str((payload or {}).get("text") or "")
-                        answer_parts.append(token)
-                        # Browser builds deployed before the v3 patch only
-                        # understand the legacy `delta` event. Keep the
-                        # internal RAG contract on `token`, but translate it at
-                        # the browser-facing compatibility boundary so an old
-                        # web-ui/dist does not silently drop the answer text.
-                        yield _sse("delta", {"text": token})
-                    elif event == "citation":
-                        # Internal RAG may provide candidate metadata early;
-                        # hold it until final-answer attribution is resolved.
-                        streamed_citations.append(payload or {})
-                    elif event == "error":
-                        yield _sse("error", payload)
-                        return
-                    elif event == "done":
-                        stream_done = payload
-
-            if stream_done is None:
-                yield _sse("error", {"message": "RAG stream ended without a done event"})
-                return
-
-            answer = "".join(answer_parts)
-            ref_text = stream_metadata.get("ref_text") or ""
-            ref_images = stream_metadata.get("ref_images") or []
-            debug = stream_metadata.get("debug_info") or {}
-            retrieved_docs = debug.get("retrieved_docs") if isinstance(debug, dict) else []
-            if not isinstance(retrieved_docs, list):
-                retrieved_docs = []
-            citation_docs = debug.get("citation_docs") if isinstance(debug, dict) else []
-            if not isinstance(citation_docs, list):
-                citation_docs = []
-            citations = _citation_list(citation_docs) or streamed_citations
-            citations = _filter_citations_by_answer(citations, answer)
-            # Keep the expandable text source list consistent with the visual
-            # citation cards; do not expose unrelated retrieval candidates.
-            ref_text = _citation_ref_text(citations)
-            for citation in citations:
-                yield _sse("citation", citation)
-
-            chat_id = None
-            try:
-                chat_id = save_chat_history(
-                    session_id=req.session_id,
-                    user_msg=req.question.strip(),
-                    bot_msg=answer + ref_text,
-                    image_path=image_path,
-                    ref_images=ref_images,
-                    username=profile.get("username"),
-                )
-                # Persist all document evidence independently of the small
-                # answer-attributed citation set.  History replay will fail
-                # closed if this manifest cannot later be re-authorized.
-                if chat_id:
-                    save_answer_evidence(chat_id, retrieved_docs)
-                if chat_id and citations:
-                    # Persist only final, answer-attributed sources. Historical
-                    # views must reconstruct the exact same cards, not every
-                    # retrieval candidate considered during generation.
-                    persisted_sources = [
-                        {
-                            "doc_id": citation.get("doc_id"),
-                            "file_goc": citation.get("file_name"),
-                            "version_no": citation.get("version_no"),
-                            "trang": citation.get("page_no"),
-                            "score": citation.get("score"),
-                            "source_id": citation.get("source_id"),
-                        }
-                        for citation in citations
-                    ]
-                    save_answer_sources(chat_id, persisted_sources)
-                write_audit_log(
-                    username=profile.get("username"),
-                    action="chat_query",
-                    entity_type="LichSuChat",
-                    entity_id=chat_id,
-                    details={"prompt": req.question.strip(), "session_id": req.session_id},
-                )
-                confidential = [
-                    d for d in retrieved_docs
-                    if isinstance(d, dict) and normalize_security_level(d.get("security_level")) == "confidential"
-                ]
-                if confidential:
-                    write_audit_log(
-                        username=profile.get("username"),
-                        action="read_confidential",
-                        entity_type="LichSuChat",
-                        entity_id=chat_id,
-                        details={
-                            "session_id": req.session_id,
-                            "prompt": req.question.strip(),
-                            "so_tai_lieu_mat": len(confidential),
-                        },
-                    )
-            except Exception as exc:
-                logger.error("Could not persist chat turn: %s", exc, exc_info=True)
-                yield _sse("warning", {"message": "Không lưu được lịch sử chat", "detail": str(exc)})
-
-            yield _sse(
-                "done",
-                {
-                    "chat_id": chat_id,
-                    "ref_text": ref_text,
-                    "citations": citations,
-                    "new_part_ids": stream_metadata.get("new_part_ids") or [],
-                    "conversation_context": debug.get("conversation_context") if isinstance(debug, dict) else None,
-                    "elapsed_ms": stream_done.get("elapsed_ms") if isinstance(stream_done, dict) else None,
-                },
+        save_answer_evidence=lambda *args: save_answer_evidence(
+            *args,
+            db_engine=engine,
+        ),
+        save_answer_sources=lambda *args: save_answer_sources(
+            *args,
+            db_engine=engine,
+        ),
+        write_audit_log=lambda *args, **kwargs: write_audit_log(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
+        load_pilot_config=load_pilot_config,
+        assign_pilot_route=assign_pilot_route,
+        pilot_outcome=lambda answer, debug, **kwargs: _pilot_outcome(
+            answer,
+            debug,
+            **kwargs,
+        ),
+        schedule_pilot_replay=lambda route, payload, outcome, trace_id, actor: (
+            pilot_replays.schedule(
+                route,
+                payload,
+                outcome,
+                trace_id,
+                _chat_actor_profile(actor),
             )
-        except Exception as exc:
-            logger.error("chat_message failed: %s", exc, exc_info=True)
-            yield _sse("error", {"message": str(exc)})
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        ),
+        citation_resolver=_resolve_chat_citations,
+        raw_root=data_raw_root,
+        create_ingestion_job=lambda **kwargs: production_create_ingestion_job(
+            **kwargs,
+            db_engine=engine,
+        ),
+        reject_ingestion_job=lambda *args, **kwargs: reject_ingestion_job(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
+        mark_job_rejected=lambda *args, **kwargs: mark_job_rejected(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
+        reject_document=lambda *args, **kwargs: reject_document(
+            *args,
+            **kwargs,
+            db_engine=engine,
+            qdrant_client=qdrant_client,
+            collection_name=collection_name,
+        ),
+        delete_document_completely=lambda *args, **kwargs: delete_document_completely(
+            *args,
+            **kwargs,
+            db_engine=engine,
+            qdrant_client=qdrant_client,
+            collection_name=collection_name,
+        ),
+        delete_ingestion_job=lambda *args, **kwargs: delete_ingestion_job(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
+        publish_document=lambda *args, **kwargs: publish_document(
+            *args,
+            **kwargs,
+            db_engine=engine,
+            qdrant_client=qdrant_client,
+            collection_name=collection_name,
+        ),
+        mark_job_published=lambda *args, **kwargs: mark_job_published(
+            *args,
+            **kwargs,
+            db_engine=engine,
+        ),
+        engine=engine,
+        strict_site_filter=strict_site_filter,
     )
-
-
-@chat_router.post("/feedback")
-def feedback(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    chat_id = _safe_int(body.get("chat_id"))
-    rating = _safe_int(body.get("rating"))
-    if not chat_id or not rating:
-        raise HTTPException(status_code=400, detail="Missing feedback data")
-    update_chat_feedback(chat_id, 1 if rating > 0 else -1, voter_username=profile.get("username"))
-    return {"ok": True}
-
-
-files_router = APIRouter(prefix="/api/files", tags=["files"])
-
-
-def _file_response(path: Path, filename: str | None = None) -> FileResponse:
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    media_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-    return FileResponse(path, media_type=media_type, filename=filename)
-
-
-@files_router.get("/documents/{doc_id}/pages/{page_no}")
-def citation_page(doc_id: int, page_no: int, profile: dict[str, Any] = Depends(current_profile)):
-    decision, record = can_access_document(profile, doc_id)
-    if not decision.allowed:
-        raise HTTPException(status_code=403, detail=decision.reason)
-    path = page_image_path(doc_id, page_no)
-    if _is_admin(profile) or normalize_security_level(decision.security_level) == "confidential":
-        write_audit_log(
-            profile.get("username"),
-            "admin_global_read_citation" if _is_admin(profile) else "view_citation_page",
-            "TaiLieu",
-            doc_id,
-            {
-                "page_no": page_no,
-                "security_level": decision.security_level,
-                "access_scope": decision.reason,
-                "source": "app-api",
-            },
-        )
-    if path is None:
-        # Word/Excel/CSV sources do not necessarily produce a rendered PNG.
-        # Return a harmless image placeholder instead of a broken <img>; the
-        # citation still links to the protected original document.
-        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
-<rect width="640" height="360" fill="#111827"/>
-<rect x="24" y="24" width="592" height="312" rx="16" fill="#1f2937" stroke="#475569"/>
-<text x="320" y="160" text-anchor="middle" fill="#cbd5e1" font-family="Arial,sans-serif" font-size="24">Không có ảnh xem trước</text>
-<text x="320" y="202" text-anchor="middle" fill="#94a3b8" font-family="Arial,sans-serif" font-size="18">Doc {int(doc_id)} · Trang {int(page_no)}</text>
-<text x="320" y="242" text-anchor="middle" fill="#64748b" font-family="Arial,sans-serif" font-size="15">Nhấn vào nguồn để mở tài liệu gốc</text>
-</svg>"""
-        return Response(
-            content=svg,
-            media_type="image/svg+xml",
-            headers={"Cache-Control": "private, no-store"},
-        )
-    return _file_response(path)
-
-
-@files_router.get("/documents/{doc_id}/original")
-def original_document(doc_id: int, profile: dict[str, Any] = Depends(current_profile)):
-    decision, record = can_access_document(profile, doc_id)
-    if not decision.allowed or record is None:
-        raise HTTPException(status_code=403, detail=decision.reason)
-    path = original_file_path(record)
-    if path is None:
-        raise HTTPException(status_code=404, detail="Original file not found")
-    write_audit_log(
-        profile.get("username"),
-        "admin_global_read_original" if _is_admin(profile) else "download_original",
-        "TaiLieu",
-        doc_id,
-        {
-            "file": record.ten_file,
-            "security_level": decision.security_level,
-            "access_scope": decision.reason,
-            "source": "app-api",
-        },
-    )
-    return _file_response(path, filename=record.ten_file or path.name)
-
-
-@files_router.get("/chat-images/{image_id}")
-def chat_image(image_id: str, profile: dict[str, Any] = Depends(current_profile)):
-    path = chat_image_path(image_id)
-    if path is None:
-        raise HTTPException(status_code=404, detail="Image not found")
-    if engine is None:
-        raise HTTPException(status_code=503, detail="Database is not ready")
-    query = """
-        SELECT TOP 1 ChatID
-        FROM dbo.LichSuChat
-        WHERE HinhAnhUpload LIKE :suffix
-    """
-    params: dict[str, Any] = {
-        "suffix": f"%{image_id}",
-        "username": profile.get("username"),
-    }
-    query += " AND Username = :username"
-    with engine.connect() as conn:
-        row = conn.execute(text(query), params).fetchone()
-    if not row:
-        raise HTTPException(status_code=403, detail="Image is not visible to this user")
-    return _file_response(path)
-
-
-data_router = APIRouter(prefix="/api", tags=["operations"])
-
-
-@data_router.get("/dashboard")
-def dashboard(profile: dict[str, Any] = Depends(current_profile)):
-    return get_role_dashboard(profile)
-
-
-@data_router.get("/documents")
-def documents(
-    dept: str | None = None,
-    domain: str | None = None,
-    sec: str | None = None,
-    eff_mode: str | None = None,
-    bucket: str | None = None,
-    soon_days: int = 30,
-    search: str | None = None,
-    profile: dict[str, Any] = Depends(current_profile),
-):
-    global_read_admin = _is_admin(profile)
-    legacy_bucket = {"con": "effective", "sap": "expiring_soon", "het": "expired"}.get(eff_mode)
-    requested_bucket = str(bucket or legacy_bucket or "").strip().lower().replace("-", "_") or None
-    if requested_bucket and requested_bucket not in {"effective", "expired", "expiring_soon", "needs_review"}:
-        raise HTTPException(status_code=422, detail="Invalid lifecycle bucket")
-    if requested_bucket and requested_bucket != "effective" and not role_allows(profile.get("roles"), "reviewer"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Lifecycle bucket requires reviewer access")
-    rows = list_documents(
-        allowed_departments=profile.get("allowed_departments") or [],
-        max_security_level=profile.get("max_security_level") or "public",
-        allowed_sites=profile.get("allowed_sites") or [],
-        dept=dept,
-        domain=domain,
-        sec=sec,
-        eff_mode=eff_mode,
-        bucket=requested_bucket,
-        soon_days=soon_days,
-        search_kw=search,
-        global_read_admin=global_read_admin,
-    )
-    if global_read_admin:
-        write_audit_log(
-            profile.get("username"),
-            "admin_global_read_catalog",
-            "TaiLieu",
-            None,
-            {
-                "result_count": len(rows),
-                "department_filter": dept,
-                "domain_filter": domain,
-                "security_filter": sec,
-                "effective_filter": eff_mode,
-                "has_search": bool(search),
-            },
-        )
-    return {"documents": [dict(row._mapping) if hasattr(row, "_mapping") else list(row) for row in rows]}
-
-
-@data_router.get("/documents/lifecycle-counts")
-def document_lifecycle_counts(soon_days: int = 30, profile: dict[str, Any] = Depends(current_profile)):
-    counts = get_document_lifecycle_counts(
-        allowed_departments=profile.get("allowed_departments") or [],
-        max_security_level=profile.get("max_security_level") or "public",
-        allowed_sites=profile.get("allowed_sites") or [],
-        global_read_admin=_is_admin(profile),
-        soon_days=soon_days,
-    )
-    if not role_allows(profile.get("roles"), "reviewer"):
-        counts = {"effective": counts.get("effective", 0)}
-    return {"counts": counts, "soon_days": max(0, min(int(soon_days), 365))}
-
-
-@data_router.post("/documents/upload")
-def documents_upload(
-    request: Request,
-    file: UploadFile = File(...),
-    thu_muc: str = Form(...),
-    domain: str | None = Form(None),
-    security_level: str | None = Form(None),
-    cong_doan: str | None = Form(None),
-    site: str | None = Form(None),
-    meta_json: str | None = Form(None),
-    extra_departments_json: str | None = Form(None),
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    """Nhan file tai len tu web-ui, luu vao Uploads/<thu_muc> va tao IngestionJob
-    (Status='pending') de worker xu ly. Yeu cau vai tro uploader/reviewer/admin
-    + CSRF. Tra ve job_id de UI dieu huong sang trang tien trinh ingest."""
-    _assert_any_role(profile, "uploader", "reviewer", "admin")
-    dept = (thu_muc or "").strip()
-    _assert_upload_department(profile, dept)
-    original_name, stored_path = _store_upload_file(file, dept)
-    from mech_chatbot.db.repositories.jobs import create_ingestion_job
-    upload_meta = _parse_json_obj(meta_json, "meta_json")
-    extra_departments = _parse_json_or_csv_list(extra_departments_json, "extra_departments_json")
-    phong_ban = [dept] + [d for d in extra_departments if d != dept]
-    job_id = create_ingestion_job(
-        file_name=original_name,
-        file_path=stored_path,
-        thu_muc=dept,
-        uploaded_by=profile.get("username"),
-        domain=domain,
-        security_level=security_level,
-        cong_doan=cong_doan,
-        site=site,
-        phong_ban=phong_ban,
-        upload_meta=upload_meta,
-    )
-    if not job_id:
-        try:
-            Path(stored_path).unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail="Không tạo được job (phòng ban có thể bị vô hiệu)")
-    return {"ok": True, "job_id": job_id, "file_name": original_name}
-
-
-@data_router.post("/documents/upload-batch")
-def documents_upload_batch(
-    files: list[UploadFile] = File(...),
-    thu_muc: str | None = Form(None),
-    domain: str | None = Form(None),
-    security_level: str | None = Form(None),
-    cong_doan: str | None = Form(None),
-    site: str | None = Form(None),
-    meta_json: str | None = Form(None),
-    extra_departments_json: str | None = Form(None),
-    assignments_json: str | None = Form(None),
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    _assert_any_role(profile, "uploader", "reviewer", "admin")
-    if not files:
-        raise HTTPException(status_code=400, detail="Chưa chọn tệp")
-    if len(files) > 50:
-        raise HTTPException(status_code=400, detail="Một lần upload tối đa 50 tệp")
-
-    from mech_chatbot.db.repositories.jobs import create_ingestion_job
-
-    upload_meta = _parse_json_obj(meta_json, "meta_json")
-    assignments = _parse_json_list(assignments_json, "assignments_json")
-    default_dept = (thu_muc or "").strip()
-    default_extra = _parse_json_or_csv_list(extra_departments_json, "extra_departments_json")
-    created: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-
-    for index, upload in enumerate(files):
-        assignment = assignments[index] if index < len(assignments) and isinstance(assignments[index], dict) else {}
-        dept = str(assignment.get("thu_muc") or default_dept).strip()
-        if not dept:
-            errors.append({"file_name": upload.filename, "error": "Thiếu phòng ban"})
-            continue
-        try:
-            _assert_upload_department(profile, dept)
-            original_name, stored_path = _store_upload_file(upload, dept)
-            extra = _split_csv(assignment.get("extra_departments") or default_extra)
-            phong_ban = [dept] + [d for d in extra if d != dept]
-            job_id = create_ingestion_job(
-                file_name=original_name,
-                file_path=stored_path,
-                thu_muc=dept,
-                uploaded_by=profile.get("username"),
-                domain=assignment.get("domain") or domain,
-                security_level=assignment.get("security_level") or security_level,
-                cong_doan=assignment.get("cong_doan") or cong_doan,
-                site=assignment.get("site") or site,
-                phong_ban=phong_ban,
-                upload_meta=upload_meta,
-            )
-            if not job_id:
-                Path(stored_path).unlink(missing_ok=True)
-                errors.append({"file_name": original_name, "error": "Không tạo được job"})
-            else:
-                created.append({"job_id": job_id, "file_name": original_name, "thu_muc": dept})
-        except HTTPException as exc:
-            errors.append({"file_name": upload.filename, "error": exc.detail})
-        except Exception as exc:
-            logger.exception("upload batch failed for %s", upload.filename)
-            errors.append({"file_name": upload.filename, "error": str(exc)})
-
-    return {"ok": not errors, "jobs": created, "errors": errors, "created": len(created), "failed": len(errors)}
-
-
-@data_router.get("/ingestion/jobs")
-def ingestion_jobs(status_value: str | None = None, profile: dict[str, Any] = Depends(current_profile)):
-    rows = list_ingestion_jobs(
-        status=status_value,
-        is_admin=False,
-        username=profile.get("username"),
-        allowed_departments=profile.get("allowed_departments") or [],
-    )
-    return {"jobs": _rows_to_json(rows)}
-
-
-@data_router.get("/analytics/usage")
-def usage(days: int = 30, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return get_usage_analytics(days=days)
-
-
-@data_router.get("/analytics/observability")
-def observability(days: int = 30, profile: dict[str, Any] = Depends(require_any_role("platform_admin"))):
-    return get_observability(days=days)
-
-
-@data_router.get("/audit")
-def audit(limit: int = 100, profile: dict[str, Any] = Depends(require_any_role("platform_admin"))):
-    rows = list_audit_logs(row_limit=limit)
-    return {"logs": _rows_to_json(rows)}
-
-
-@data_router.post("/access/request")
-def access_request(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    result = create_access_request(
-        user_id=profile.get("user_id"),
-        username=profile.get("username"),
-        request_type=str(body.get("request_type") or ""),
-        requested_level=body.get("requested_level"),
-        requested_dept=body.get("requested_dept"),
-        question_text=body.get("question_text"),
-        reason=body.get("reason"),
-    )
-    if not result:
-        raise HTTPException(status_code=400, detail="Could not create access request")
-    return result
-
-
-@data_router.get("/access/requests")
-def access_requests(
-    status_value: str = "pending",
-    limit: int = 200,
-    profile: dict[str, Any] = Depends(require_any_role("security_admin")),
-):
-    return {
-        "requests": _rows_to_json(list_access_requests(status=status_value, limit=limit)),
-        "pending_count": count_pending_access_requests(),
-    }
-
-
-@data_router.get("/access/my-requests")
-def my_access_requests(limit: int = 50, profile: dict[str, Any] = Depends(current_profile)):
-    return {"requests": _rows_to_json(get_user_access_requests(profile.get("user_id"), limit=limit))}
-
-
-@data_router.post("/access/requests/{request_id}/resolve")
-def access_request_resolve(request_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    result = resolve_access_request(
-        request_id=request_id,
-        decision=str(body.get("decision") or ""),
-        reviewer_username=profile.get("username"),
-        reviewer_id=profile.get("user_id"),
-        review_note=body.get("review_note"),
-    )
-    return {"ok": bool(result), "result": result}
-
-
-@data_router.get("/access/users")
-def access_users(limit: int = 1000, profile: dict[str, Any] = Depends(require_any_role("security_admin"))):
-    return {"users": _rows_to_json(list_users_with_access(limit=limit))}
-
-
-@data_router.get("/access/grants")
-def access_grants(limit: int = 100, profile: dict[str, Any] = Depends(require_any_role("security_admin"))):
-    return {"grants": _rows_to_json(get_grant_history(limit=limit))}
-
-
-@data_router.post("/access/users/{user_id}/revoke-clearance")
-def access_revoke_clearance(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    result = revoke_user_clearance(
-        user_id=user_id,
-        new_level=body.get("new_level") or "public",
-        actor_username=profile.get("username"),
-        actor_id=profile.get("user_id"),
-        reason=body.get("reason"),
-    )
-    return {"ok": bool(result), "result": result}
-
-
-@data_router.post("/access/users/{user_id}/revoke-department")
-def access_revoke_department(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    result = revoke_user_department(
-        user_id=user_id,
-        dept=str(body.get("department") or ""),
-        actor_username=profile.get("username"),
-        actor_id=profile.get("user_id"),
-        reason=body.get("reason"),
-    )
-    return {"ok": bool(result), "result": result}
-
-
-@data_router.get("/documents/pending-review")
-def documents_pending_review(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"documents": _rows_to_json(list_pending_review_docs())}
-
-
-@data_router.post("/documents/reconcile-serving")
-def documents_reconcile_serving(
-    body: dict[str, Any],
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    _assert_any_role(profile, "platform_admin")
-    return reconcile_serving_state(
-        limit=_safe_int(body.get("limit")) or 500,
-        worker_id=f"admin:{profile.get('username') or 'System'}",
-    )
-
-
-@data_router.get("/documents/expiring")
-def documents_expiring(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"documents": _rows_to_json(list_expiring_documents())}
-
-
-@data_router.get("/documents/bulk-meta")
-def documents_bulk_meta(
-    dept: str | None = None,
-    domain: str | None = None,
-    profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin")),
-):
-    if dept:
-        for suffix in (" (disabled)", " (archived)"):
-            if dept.endswith(suffix):
-                dept = dept[: -len(suffix)]
-                break
-    return {
-        "documents": _rows_to_json(list_docs_for_bulk_meta(dept=dept, domain=domain)),
-        "departments": list_bulk_meta_departments(),
-    }
-
-
-@data_router.patch("/documents/bulk-metadata")
-def documents_bulk_metadata(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    raw_ids = body.get("doc_ids") or []
-    metadata = body.get("metadata") or {}
-    if not isinstance(raw_ids, list) or not raw_ids:
-        raise HTTPException(status_code=400, detail="doc_ids không hợp lệ")
-    if not isinstance(metadata, dict) or not metadata:
-        raise HTTPException(status_code=400, detail="metadata không hợp lệ")
-    ok = 0
-    fail = 0
-    pending = 0
-    fields = {k: v for k, v in metadata.items() if k not in {"attributes", "domain"} and v not in (None, "")}
-    attrs = metadata.get("attributes")
-    domain = metadata.get("domain")
-    for raw_id in raw_ids:
-        doc_id = _safe_int(raw_id)
-        if not doc_id:
-            fail += 1
-            continue
-        try:
-            _assert_metadata_actor(doc_id, profile)
-            result = update_document_common_metadata(
-                doc_id,
-                reviewer=profile.get("username") or "System",
-                attributes=attrs,
-                domain=domain,
-                **fields,
-            )
-            ok += 1 if result else 0
-            fail += 0 if result else 1
-        except Exception:
-            logger.exception("bulk metadata update failed for doc_id=%s", doc_id)
-            fail += 1
-    return {"ok": fail == 0, "updated": ok, "failed": fail}
-
-
-@data_router.post("/documents/review/bulk")
-def documents_review_bulk(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    items = body.get("items") or []
-    action = str(body.get("action") or "").strip()
-    publish_mode = str(body.get("publish_mode") or "standalone").strip()
-    reason = str(body.get("reason") or "")
-    if not isinstance(items, list) or not items:
-        raise HTTPException(status_code=400, detail="items không hợp lệ")
-    if action not in {"publish", "reject", "delete"}:
-        raise HTTPException(status_code=400, detail="action không hợp lệ")
-    ok = 0
-    fail = 0
-    pending = 0
-    failures = []
-    reviewer = profile.get("username") or "System"
-    for item in items:
-        if not isinstance(item, dict):
-            fail += 1
-            continue
-        job_id = _safe_int(item.get("job_id"))
-        doc_id = _safe_int(item.get("doc_id"))
-        try:
-            if action == "publish":
-                if not doc_id or not job_id:
-                    raise RuntimeError("Thiếu DocID hoặc JobID")
-                mode = publish_mode if publish_mode in {"new_version", "new_variant"} else "standalone"
-                result = publish_document(
-                    doc_id,
-                    action=mode,
-                    **_publication_actor(profile),
-                )
-                if not result:
-                    failures.append(result.to_dict())
-                    raise RuntimeError(result.error or "Publish thất bại")
-                if result.state == "published":
-                    mark_job_published(job_id)
-                else:
-                    pending += 1
-                    failures.append(result.to_dict())
-                    continue
-            elif action == "reject":
-                if not job_id:
-                    raise RuntimeError("Thiếu JobID")
-                reject_ingestion_job(job_id, reason) or mark_job_rejected(job_id)
-                if doc_id:
-                    reject_document(doc_id, reviewer=reviewer)
-            elif action == "delete":
-                if doc_id:
-                    delete_document_completely(doc_id, reviewer=reviewer)
-                if job_id:
-                    delete_ingestion_job(job_id)
-            ok += 1
-        except Exception:
-            logger.exception("bulk review action failed: action=%s job_id=%s doc_id=%s", action, job_id, doc_id)
-            fail += 1
-    return {
-        "ok": fail == 0,
-        "updated": ok,
-        "pending": pending,
-        "failed": fail,
-        "failures": failures,
-    }
-
-
-@data_router.patch("/documents/{doc_id}/current")
-def document_set_current(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    # Directly flipping IsCurrent bypasses the publication contract and can
-    # expose a Qdrant/SQL mixed serving state.  Kept as an explicit response
-    # for older clients instead of silently retaining the unsafe operation.
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail="Dùng publish-new-version hoặc publish-standalone để đổi tài liệu hiện hành",
-    )
-
-
-@data_router.patch("/documents/{doc_id}/expired")
-def document_mark_expired(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    _assert_metadata_actor(doc_id, profile)
-    return {"ok": bool(mark_document_expired(doc_id, reviewer=profile.get("username") or "System"))}
-
-
-@data_router.patch("/documents/{doc_id}/metadata")
-def document_update_metadata(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_metadata_actor(doc_id, profile)
-    fields = {k: v for k, v in body.items() if k not in {"attributes", "domain"}}
-    result = update_document_common_metadata(
-        doc_id,
-        reviewer=profile.get("username") or "System",
-        attributes=body.get("attributes"),
-        domain=body.get("domain"),
-        **fields,
-    )
-    return {"ok": bool(result), "result": result}
-
-
-@data_router.get("/documents/{doc_id}/publish-contract")
-def document_publish_contract(
-    doc_id: int,
-    profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin")),
-):
-    return validate_publish_contract(doc_id).to_dict()
-
-
-@data_router.patch("/documents/{doc_id}/governance")
-def document_update_governance(
-    doc_id: int,
-    body: dict[str, Any],
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    _assert_any_role(profile, "platform_admin")
-    try:
-        result = update_document_governance_metadata(
-            doc_id,
-            knowledge_owner_user_id=body.get("knowledge_owner_user_id"),
-            knowledge_approver_user_id=body.get("knowledge_approver_user_id"),
-            taxonomy_version=body.get("taxonomy_version"),
-            parent_applicable=body.get("parent_applicable"),
-            parent_section=body.get("parent_section"),
-            parent_page=body.get("parent_page"),
-            updated_by=profile.get("username") or "System",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if not result:
-        raise HTTPException(status_code=404, detail="Khong tim thay tai lieu")
-    return {"ok": True}
-
-
-@data_router.patch("/documents/{doc_id}/site")
-def document_backfill_site(
-    doc_id: int,
-    body: dict[str, Any],
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    """Platform-only remediation for documents blocked by the strict site gate."""
-    _assert_any_role(profile, "platform_admin")
-    site = str(body.get("site") or "").strip()
-    if not site:
-        raise HTTPException(status_code=422, detail="site la bat buoc khi backfill")
-    result = update_document_common_metadata(
-        doc_id,
-        reviewer=profile.get("username") or "System",
-        site=site,
-    )
-    if not result:
-        raise HTTPException(status_code=404, detail="Khong cap nhat duoc site cho tai lieu")
-    return {"ok": True, "doc_id": doc_id, "site": site}
-
-
-@data_router.post("/documents/{doc_id}/publish-new-version")
-def document_publish_new_version(doc_id: int, response: Response, profile: dict[str, Any] = Depends(csrf_profile)):
-    result = publish_document(doc_id, action="new_version", **_publication_actor(profile))
-    return _publication_payload(result, response)
-
-
-@data_router.post("/documents/{doc_id}/publish-new-variant")
-def document_publish_new_variant(doc_id: int, response: Response, profile: dict[str, Any] = Depends(csrf_profile)):
-    result = publish_document(doc_id, action="new_variant", **_publication_actor(profile))
-    return _publication_payload(result, response)
-
-
-@data_router.post("/documents/{doc_id}/publish-standalone")
-def document_publish_standalone(doc_id: int, response: Response, profile: dict[str, Any] = Depends(csrf_profile)):
-    result = publish_document(doc_id, action="standalone", **_publication_actor(profile))
-    return _publication_payload(result, response)
-
-
-@data_router.post("/documents/{doc_id}/reject")
-def document_reject(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    return {"ok": bool(reject_document(doc_id, reviewer=profile.get("username") or "System"))}
-
-
-@data_router.post("/documents/{doc_id}/archive")
-def document_archive(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    return {"ok": bool(archive_document(doc_id, reviewer=profile.get("username") or "System"))}
-
-
-@data_router.delete("/documents/{doc_id}")
-def document_delete(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin")
-    return {"ok": bool(delete_document_completely(doc_id, reviewer=profile.get("username") or "System"))}
-
-
-@data_router.get("/ingestion/eta")
-def ingestion_eta(profile: dict[str, Any] = Depends(require_any_role("uploader", "reviewer", "admin"))):
-    eta = queue_eta_seconds()
-    if isinstance(eta, dict):
-        return eta
-    return {"pending": 0, "avg_seconds": 0, "eta_seconds": eta}
-
-
-@data_router.get("/ingestion/bulk-action-jobs")
-def ingestion_bulk_jobs(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"jobs": _rows_to_json(list_bulk_action_jobs())}
-
-
-@data_router.post("/ingestion/jobs/bulk-delete")
-def ingestion_bulk_delete(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin")
-    return {"ok": bool(bulk_delete_ingestion_jobs(body.get("ids") or []))}
-
-
-@data_router.patch("/ingestion/jobs/{job_id}/priority")
-def ingestion_set_priority(job_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    return {"ok": bool(set_job_priority(job_id, _safe_int(body.get("priority")) or 0))}
-
-
-@data_router.post("/ingestion/jobs/{job_id}/cancel")
-def ingestion_cancel(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "uploader", "reviewer", "admin")
-    return {"ok": bool(cancel_job(job_id, canceled_by=profile.get("username") or "System"))}
-
-
-@data_router.post("/ingestion/jobs/{job_id}/requeue")
-def ingestion_requeue(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    return {"ok": bool(requeue_job(job_id))}
-
-
-@data_router.post("/ingestion/jobs/{job_id}/pending-review")
-def ingestion_pending_review(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    return {"ok": bool(mark_job_pending_review(job_id))}
-
-
-@data_router.post("/ingestion/jobs/{job_id}/publish")
-def ingestion_publish(job_id: int, response: Response, profile: dict[str, Any] = Depends(csrf_profile)):
-    # Never let a queue row say "published" without passing the document
-    # contract and Qdrant serving transition.
-    with engine.connect() as conn:
-        row = conn.execute(text("""
-            SELECT TOP 1 d.DocID
-            FROM dbo.IngestionJobs j
-            JOIN dbo.TaiLieu d ON d.TenFile = j.TenFile AND d.ThuMuc = j.ThuMuc
-            WHERE j.JobID = :job_id
-            ORDER BY d.DocID DESC
-        """), {"job_id": job_id}).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu của ingestion job")
-    result = publish_document(int(row[0]), action="standalone", **_publication_actor(profile))
-    if result and result.state == "published":
-        mark_job_published(job_id)
-    return _publication_payload(result, response)
-
-
-@data_router.post("/ingestion/jobs/{job_id}/reject")
-def ingestion_reject(job_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    reason = str(body.get("reason") or "")
-    return {"ok": bool(reject_ingestion_job(job_id, reason) or mark_job_rejected(job_id))}
-
-
-@data_router.delete("/ingestion/jobs/{job_id}")
-def ingestion_delete(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin")
-    return {"ok": bool(delete_ingestion_job(job_id))}
-
-
-@data_router.get("/users")
-def users(profile: dict[str, Any] = Depends(require_any_role("security_admin"))):
-    return {"users": _rows_to_json(list_users_basic())}
-
-
-@data_router.get("/users/{user_id}")
-def user_detail(user_id: int, profile: dict[str, Any] = Depends(require_any_role("security_admin"))):
-    return {
-        "user_id": user_id,
-        "roles": get_user_roles(user_id),
-        "departments": get_user_departments(user_id),
-        "clearance": get_user_clearance(user_id),
-        "sites": get_user_sites(user_id),
-    }
-
-
-@data_router.post("/users")
-def user_create(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    password = str(body.get("password") or "")
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    result = create_user_with_roles(
-        username=str(body.get("username") or "").strip(),
-        password_hash=password_hash,
-        display_name=body.get("display_name"),
-        department=body.get("department"),
-        selected_roles=body.get("roles") or [],
-        depts=body.get("departments") or [],
-    )
-    if result:
-        user_id = _safe_int(result.get("user_id") if isinstance(result, dict) else result)
-        if user_id:
-            set_user_sites(user_id, body.get("sites") or [])
-            set_user_clearance(user_id, body.get("max_level") or "public")
-    return {"ok": bool(result), "result": result}
-
-
-@data_router.patch("/users/{user_id}/active")
-def user_active(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    return {
-        "ok": bool(
-            set_user_active_status(
-                user_id,
-                bool(body.get("is_active")),
-                actor_username=profile.get("username"),
-                actor_id=profile.get("user_id"),
-            )
-        )
-    }
-
-
-@data_router.patch("/users/{user_id}/roles")
-def user_roles(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    return {
-        "ok": bool(
-            update_user_active_and_roles(
-                user_id,
-                bool(body.get("is_active", True)),
-                body.get("add_roles") or [],
-                body.get("del_roles") or [],
-            )
-        )
-    }
-
-
-@data_router.patch("/users/{user_id}/departments")
-def user_departments(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    return {"ok": bool(set_user_departments(user_id, body.get("departments") or []))}
-
-
-@data_router.patch("/users/{user_id}/sites")
-def user_sites(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    return {"ok": bool(set_user_sites(user_id, body.get("sites") or []))}
-
-
-@data_router.patch("/users/{user_id}/clearance")
-def user_clearance(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    return {"ok": bool(set_user_clearance(user_id, body.get("max_level") or "public"))}
-
-
-@data_router.patch("/users/{user_id}/password")
-def user_password(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    password = str(body.get("password") or "")
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    return {"ok": bool(update_user_password(user_id, password_hash))}
-
-
-@data_router.delete("/users/{user_id}")
-def user_delete(user_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "security_admin")
-    return {
-        "ok": bool(
-            delete_user_account(
-                user_id,
-                actor_username=profile.get("username"),
-                actor_id=profile.get("user_id"),
-            )
-        )
-    }
-
-
-@data_router.get("/catalog/departments")
-def catalog_departments(active_only: bool = True, profile: dict[str, Any] = Depends(current_profile)):
-    return {"departments": list_known_departments(active_only=active_only)}
-
-
-@data_router.get("/catalog/missing-site-documents")
-def catalog_missing_site_documents(
-    limit: int = 500,
-    profile: dict[str, Any] = Depends(require_any_role("platform_admin")),
-):
-    return {"documents": list_missing_site_documents(limit=limit)}
-
-
-@data_router.get("/catalog/knowledge-governance")
-def catalog_knowledge_governance(
-    profile: dict[str, Any] = Depends(require_any_role("platform_admin")),
-):
-    return {"governance": list_department_knowledge_governance()}
-
-
-@data_router.get("/catalog/domain-profiles")
-def catalog_domain_profiles(
-    profile: dict[str, Any] = Depends(require_any_role("platform_admin")),
-):
-    return {"profiles": list_department_domain_profiles()}
-
-
-@data_router.get("/catalog/rollout/readiness")
-def catalog_rollout_readiness(
-    department_code: str | None = None,
-    profile: dict[str, Any] = Depends(require_any_role("platform_admin")),
-):
-    return {"departments": get_department_rollout_readiness(department_code)}
-
-
-@data_router.get("/catalog/rollout/plans")
-def catalog_rollout_plans(
-    profile: dict[str, Any] = Depends(require_any_role("platform_admin")),
-):
-    return {"plans": list_department_rollout_plans()}
-
-
-@data_router.put("/catalog/departments/{code}/rollout-plan")
-def catalog_rollout_plan_set(
-    code: str,
-    body: dict[str, Any],
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    _assert_any_role(profile, "platform_admin")
-    try:
-        plan = upsert_department_rollout_plan(
-            code,
-            wave_number=body.get("wave_number"),
-            rollout_status=body.get("rollout_status") or "planned",
-            evaluation_question_target=body.get("evaluation_question_target") or 75,
-            updated_by=profile.get("username") or "System",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"ok": True, "plan": plan}
-
-
-@data_router.post("/catalog/departments/{code}/evaluation-gate")
-def catalog_evaluation_gate_record(
-    code: str,
-    body: dict[str, Any],
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    _assert_any_role(profile, "platform_admin")
-    try:
-        gate = record_department_evaluation_gate(
-            code,
-            batch_id=body.get("batch_id"),
-            question_count=body.get("question_count"),
-            source_top5_rate=body.get("source_top5_rate"),
-            citation_or_refusal_rate=body.get("citation_or_refusal_rate"),
-            evidence_support_rate=body.get("evidence_support_rate"),
-            rbac_site_publication_leaks=body.get("rbac_site_publication_leaks", 0),
-            notes=body.get("notes"),
-            evaluated_by=profile.get("username") or "System",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"ok": True, "gate": gate}
-
-
-@data_router.get("/catalog/departments/{code}/knowledge-governance")
-def catalog_department_governance(
-    code: str,
-    profile: dict[str, Any] = Depends(require_any_role("platform_admin")),
-):
-    result = get_department_knowledge_governance(code)
-    if result is None:
-        raise HTTPException(status_code=404, detail="Khong tim thay knowledge governance cua phong ban")
-    return result
-
-
-@data_router.put("/catalog/departments/{code}/knowledge-governance")
-def catalog_department_governance_set(
-    code: str,
-    body: dict[str, Any],
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    _assert_any_role(profile, "platform_admin")
-    try:
-        saved = upsert_department_knowledge_governance(
-            code,
-            knowledge_owner_user_id=body.get("knowledge_owner_user_id"),
-            knowledge_approver_user_id=body.get("knowledge_approver_user_id"),
-            taxonomy_version=body.get("taxonomy_version"),
-            external_processing_policy=body.get("external_processing_policy") or "all_external",
-            is_active=bool(body.get("is_active", True)),
-            updated_by=profile.get("username") or "System",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"ok": True, "governance": saved}
-
-
-@data_router.get("/catalog/departments/{code}/domain-profile")
-def catalog_department_domain_profile(
-    code: str,
-    profile: dict[str, Any] = Depends(require_any_role("platform_admin")),
-):
-    result = get_department_domain_profile(code)
-    if result is None:
-        raise HTTPException(status_code=404, detail="Khong tim thay domain profile cua phong ban")
-    return result
-
-
-@data_router.put("/catalog/departments/{code}/domain-profile")
-def catalog_department_domain_profile_set(
-    code: str,
-    body: dict[str, Any],
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    _assert_any_role(profile, "platform_admin")
-    try:
-        saved = upsert_department_domain_profile(
-            code,
-            document_types=body.get("document_types") or [],
-            required_metadata=body.get("required_metadata") or [],
-            router_patterns=body.get("router_patterns") or [],
-            parent_context_enabled=bool(body.get("parent_context_enabled", True)),
-            is_active=bool(body.get("is_active", True)),
-            updated_by=profile.get("username") or "System",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"ok": True, "profile": saved}
-
-
-@data_router.get("/catalog/departments/{code}")
-def catalog_department(code: str, profile: dict[str, Any] = Depends(require_any_role("platform_admin"))):
-    return get_department_summary(code)
-
-
-@data_router.post("/catalog/departments")
-def catalog_department_upsert(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "platform_admin")
-    return {
-        "ok": bool(
-            upsert_department(
-                code=str(body.get("code") or ""),
-                name=body.get("name"),
-                domain=body.get("domain"),
-                site=body.get("site"),
-                is_active=bool(body.get("is_active", True)),
-                status=body.get("status"),
-            )
-        )
-    }
-
-
-@data_router.patch("/catalog/departments/{code}/status")
-def catalog_department_status(code: str, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "platform_admin")
-    return {
-        "ok": bool(
-            set_department_status(
-                code,
-                status=str(body.get("status") or ""),
-                actor=profile.get("username") or "System",
-                force=bool(body.get("force", False)),
-            )
-        )
-    }
-
-
-@data_router.post("/catalog/departments/{code}/archive")
-def catalog_department_archive(code: str, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "platform_admin")
-    return {
-        "ok": bool(
-            archive_department(
-                code,
-                actor=profile.get("username") or "System",
-                force=bool(body.get("force", False)),
-            )
-        )
-    }
-
-
-@data_router.post("/catalog/departments/reassign")
-def catalog_department_reassign(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "platform_admin")
-    return {
-        "ok": bool(
-            reassign_department_data(
-                source_code=str(body.get("source_code") or ""),
-                target_code=str(body.get("target_code") or ""),
-                actor=profile.get("username") or "System",
-                move_users=bool(body.get("move_users", True)),
-            )
-        )
-    }
-
-
-@data_router.get("/catalog/sites")
-def catalog_sites(active_only: bool = True, profile: dict[str, Any] = Depends(current_profile)):
-    return {"sites": list_known_sites(active_only=active_only)}
-
-
-@data_router.post("/catalog/sites")
-def catalog_site_upsert(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "platform_admin")
-    return {
-        "ok": bool(
-            upsert_site(
-                code=str(body.get("code") or ""),
-                name=body.get("name"),
-                is_active=bool(body.get("is_active", True)),
-            )
-        )
-    }
-
-
-@data_router.get("/glossary")
-def glossary(domain: str | None = None, active_only: bool = False, profile: dict[str, Any] = Depends(current_profile)):
-    return {"terms": _rows_to_json(list_domain_glossary(domain=domain, active_only=active_only))}
-
-
-@data_router.post("/glossary")
-def glossary_upsert(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin", "reviewer")
-    result = upsert_glossary_term(
-        term=str(body.get("term") or ""),
-        domain=body.get("domain"),
-        synonyms=body.get("synonyms"),
-        expansion=body.get("expansion"),
-        is_active=bool(body.get("is_active", True)),
-        glossary_id=body.get("glossary_id"),
-    )
-    # upsert_glossary_term tra ve dict {"ok": bool, ...}; bool(dict) luon True nen phai lay .get("ok").
-    if isinstance(result, dict):
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("message") or "Khong luu duoc thuat ngu")
-        return result
-    return {"ok": bool(result)}
-
-
-@data_router.patch("/glossary/{glossary_id}/active")
-def glossary_active(glossary_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(set_glossary_active(glossary_id, bool(body.get("is_active"))))}
-
-
-@data_router.delete("/glossary/{glossary_id}")
-def glossary_delete(glossary_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin")
-    return {"ok": bool(delete_glossary_term(glossary_id))}
-
-
-@data_router.get("/materials")
-def materials(profile: dict[str, Any] = Depends(current_profile)):
-    return {"materials": _rows_to_json(list_materials())}
-
-
-@data_router.post("/materials")
-def material_upsert(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin", "reviewer")
-    return {
-        "ok": bool(
-            upsert_material(
-                code=str(body.get("code") or ""),
-                display=body.get("display"),
-                category=body.get("category"),
-                is_active=bool(body.get("is_active", True)),
-                material_id=body.get("material_id"),
-            )
-        )
-    }
-
-
-@data_router.post("/materials/{material_id}/synonyms")
-def material_synonym_add(material_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(add_material_synonym(material_id, str(body.get("synonym") or "")))}
-
-
-@data_router.delete("/materials/{material_id}")
-def material_delete(material_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin")
-    return {"ok": bool(delete_material(material_id))}
-
-
-@data_router.delete("/materials/synonyms/{synonym_id}")
-def material_synonym_delete(synonym_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(delete_material_synonym(synonym_id))}
-
-
-@data_router.get("/lifecycle")
-def lifecycle_overview(soon_days: int = 30, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    result = {"expired": [], "expiring_soon": [], "needs_review": [], "counts": {}}
-    for bucket in ("expired", "expiring_soon", "needs_review"):
-        rows = list_documents(
-            allowed_departments=profile.get("allowed_departments") or [],
-            max_security_level=profile.get("max_security_level") or "public",
-            allowed_sites=profile.get("allowed_sites") or [],
-            global_read_admin=_is_admin(profile), bucket=bucket, soon_days=soon_days,
-        )
-        result[bucket] = _rows_to_json(rows)
-        result["counts"][bucket] = len(rows)
-    return result
-
-
-@data_router.post("/lifecycle/refresh-expired")
-def lifecycle_refresh(profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin")
-    return {"ok": bool(refresh_expired_status())}
-
-
-@data_router.patch("/lifecycle/documents/{doc_id}")
-def lifecycle_set_document(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    _assert_metadata_actor(doc_id, profile)
-    return {
-        "ok": bool(
-            set_document_lifecycle(
-                doc_id,
-                effective_date=body.get("effective_date"),
-                expiry_date=body.get("expiry_date"),
-                review_date=body.get("review_date"),
-                reviewer=profile.get("username") or "System",
-            )
-        )
-    }
-
-
-@data_router.post("/lifecycle/documents/{doc_id}/reviewed")
-def lifecycle_mark_reviewed(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    _assert_metadata_actor(doc_id, profile)
-    return {
-        "ok": bool(
-            mark_document_reviewed(
-                doc_id,
-                reviewer=profile.get("username") or "System",
-                next_review_days=_safe_int(body.get("next_review_days")) or 180,
-            )
-        )
-    }
-
-
-@data_router.get("/feedback")
-def feedbacks(only_pending: bool = False, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"feedbacks": _rows_to_json(list_feedbacks(only_pending=only_pending))}
-
-
-@data_router.post("/feedback/{feedback_id}/classify")
-def feedback_classify(feedback_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    correct_answer = body.get("correct_answer")
-    result = classify_feedback_and_get_source(
-        feedback_id,
-        failure_type=body.get("failure_type"),
-        correct_answer=correct_answer,
-        reviewer_note=body.get("reviewer_note"),
-    )
-    golden_hash = None
-    regression_qid = None
-    if correct_answer and str(correct_answer).strip():
-        with engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT Question, SourceDocID, Department, Site "
-                    "FROM FeedbackReview WHERE FeedbackID = :fid"
-                ),
-                {"fid": feedback_id},
-            ).fetchone()
-        if row:
-            question, source_doc_id, department, site = row
-            golden_hash = upsert_golden_answer(
-                question=question,
-                answer=correct_answer,
-                source_doc_id=source_doc_id,
-                department=department,
-                site=site,
-                created_by=profile.get("username") or "reviewer",
-                feedback_id=feedback_id,
-            )
-            regression_qid = ensure_regression_question(
-                question=question,
-                expected_doc_id=source_doc_id,
-                department=department,
-                site=site,
-                created_by=profile.get("username") or "reviewer",
-            )
-    return {"result": result, "golden_hash": golden_hash, "regression_qid": regression_qid}
-
-
-@data_router.delete("/feedback/{feedback_id}")
-def feedback_delete(feedback_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(delete_feedback(feedback_id))}
-
-
-@data_router.get("/regression/questions")
-def regression_questions(active_only: bool = True, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"questions": _rows_to_json(list_regression_questions(active_only=active_only))}
-
-
-@data_router.post("/regression/questions")
-def regression_question_add(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    result = add_regression_question(
-        question=str(body.get("question") or ""),
-        expected_doc_id=body.get("expected_doc_id"),
-        expected_keywords=body.get("expected_keywords"),
-        department=body.get("department"),
-        site=body.get("site"),
-        created_by=profile.get("username") or "System",
-    )
-    return {
-        "ok": result is not None,
-        "result": result,
-    }
-
-
-@data_router.patch("/regression/questions/{reg_qid}/active")
-def regression_question_active(reg_qid: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    return {"ok": bool(set_regression_question_active(reg_qid, bool(body.get("is_active"))))}
-
-
-@data_router.get("/regression/runs")
-def regression_runs(batch_id: str | None = None, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"runs": _rows_to_json(get_regression_runs(batch_id=batch_id))}
-
-
-@data_router.post("/regression/run")
-def regression_run(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "reviewer", "admin")
-    from mech_chatbot.rag.regression import run_regression_batch
-    raw_limit = body.get("limit")
-    limit = int(raw_limit) if raw_limit else None
-    summary = run_regression_batch(limit=limit, run_by=profile.get("username") or "System")
-    return {"ok": True, "summary": summary}
-
-
-@data_router.get("/quality/documents")
-def quality_documents(limit: int = 50, worst_first: bool = True, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"documents": _rows_to_json(get_doc_quality_ranking(limit=limit, worst_first=worst_first))}
-
-
-@data_router.post("/quality/recompute")
-def quality_recompute(profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "admin", "reviewer")
-    recomputed = recompute_doc_quality_scores()
-    return {"ok": recomputed is not None, "recomputed": recomputed}
-
-
-@data_router.post("/quality/cleanup")
-def quality_cleanup(profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "platform_admin")
-    return cleanup_dangling_records()
-
-
-@data_router.get("/analytics/departments")
-def analytics_departments(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return dashboard_by_department()
-
-
-@data_router.get("/analytics/cache")
-def analytics_cache(profile: dict[str, Any] = Depends(require_any_role("platform_admin"))):
-    return sc_stats()
-
-
-@data_router.get("/settings")
-def settings(profile: dict[str, Any] = Depends(require_any_role("platform_admin"))):
-    return {"settings": get_all_app_settings()}
-
-
-@data_router.get("/settings/external-ai-policy")
-def external_ai_policy(profile: dict[str, Any] = Depends(require_any_role("platform_admin"))):
-    """Metadata-only provider policy status for the admin settings screen."""
-    return {"profiles": list_external_ai_provider_profiles()}
-
-
-@data_router.put("/settings/external-ai-policy/{provider}")
-def external_ai_policy_set(
-    provider: str,
-    body: dict[str, Any],
-    profile: dict[str, Any] = Depends(csrf_profile),
-):
-    _assert_any_role(profile, "platform_admin")
-    try:
-        saved = upsert_external_ai_provider_profile(
-            provider,
-            endpoint=body.get("endpoint"),
-            default_model=body.get("default_model"),
-            secret_reference=body.get("secret_reference"),
-            allowed_surfaces=body.get("allowed_surfaces") or [],
-            retention_mode=body.get("retention_mode"),
-            policy_version=body.get("policy_version"),
-            approved_by=body.get("approved_by"),
-            risk_acceptance_ref=body.get("risk_acceptance_ref"),
-            review_expires_at=body.get("review_expires_at"),
-            is_active=bool(body.get("is_active", True)),
-            updated_by=profile.get("username") or "System",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    invalidate_external_ai_provider_profiles()
-    return {"ok": True, "profile": saved}
-
-
-@data_router.put("/settings/{key}")
-def setting_set(key: str, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    _assert_any_role(profile, "platform_admin")
-    return {"ok": bool(set_app_setting(key, body.get("value"), updated_by=profile.get("username") or "System"))}
-
-
-app.include_router(auth_router)
-app.include_router(chat_router)
-app.include_router(files_router)
-app.include_router(data_router)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -2379,23 +316,395 @@ class SPAStaticFiles(StaticFiles):
         raw_path_text = raw_path.decode("latin-1", errors="ignore").lower()
         if request_path == "/api" or request_path.startswith("/api/"):
             return False
-        if ".." in request_path or ".." in path or "%2f" in raw_path_text or "%5c" in raw_path_text:
+        if (
+            ".." in request_path
+            or ".." in path
+            or "%2f" in raw_path_text
+            or "%5c" in raw_path_text
+        ):
             return False
         leaf = path.rsplit("/", 1)[-1]
         return "." not in leaf
 
 
-static_dir = _project_root() / "web-ui" / "dist"
-if static_dir.exists():
-    app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="web")
+def _build_pilot_replays(
+    process: AppProcessSettings,
+    *,
+    post: Callable[..., Any],
+) -> PilotReplayExecutor:
+    return PilotReplayExecutor(
+        post=post,
+        headers=lambda: _rag_headers(process),
+        workers=lambda: process.pilot_replay_workers,
+        queue_size=lambda: process.pilot_replay_queue_size,
+        timeout_seconds=lambda: int(process.pilot_replay_timeout_seconds),
+    )
+
+
+def _install_http_surface(application: FastAPI) -> None:
+    application.add_api_route(
+        "/api/health",
+        app_health,
+        methods=["GET"],
+        tags=["system"],
+    )
+    application.include_router(auth_router)
+    application.include_router(chat_router)
+    application.include_router(files_router)
+    application.include_router(documents_router)
+    application.include_router(operations_router)
+
+    static_dir = _project_root() / "web-ui" / "dist"
+    if static_dir.exists():
+        application.mount(
+            "/",
+            SPAStaticFiles(directory=str(static_dir), html=True),
+            name="web",
+        )
+
+
+def create_app(
+    existing_settings: Settings | None = None,
+    *,
+    post: Callable[..., Any] = requests.post,
+    database_builder: Callable[[SqlSettings], AppDatabaseRuntime] = (
+        build_app_database_runtime
+    ),
+    qdrant_builder: Callable[[QdrantSettings], QdrantAdminRuntime] = (
+        build_qdrant_admin_runtime
+    ),
+) -> FastAPI:
+    """Build one browser API process from one immutable environment snapshot."""
+
+    settings_snapshot = existing_settings or load_settings()
+    process = AppProcessSettings.from_settings(settings_snapshot)
+    pilot_replays = _build_pilot_replays(process, post=post)
+    application = FastAPI(
+        title="Mech Chatbot App API",
+        version="0.1.0",
+        lifespan=_lifespan,
+    )
+    application.state.process_settings = process
+    application.state.settings_snapshot = settings_snapshot
+    application.state.pilot_replays = pilot_replays
+    application.state.post = post
+    application.state.database_builder = database_builder
+    application.state.qdrant_builder = qdrant_builder
+    application.state.database_runtime = None
+    application.state.qdrant_runtime = None
+    application.state.runtime = _build_default_app_runtime(
+        process,
+        pilot_replays,
+        post=post,
+        strict_site_filter=RepositoryPolicySettings.from_settings(
+            settings_snapshot
+        ).strict_site_filter,
+    )
+
+    @application.middleware("http")
+    async def _bind_security_settings(request: Request, call_next):
+        database_runtime = request.app.state.database_runtime
+        qdrant_runtime = request.app.state.qdrant_runtime
+        with (
+            app_security.bind_security_settings(
+                request.app.state.process_settings
+            ),
+            bind_repository_runtime(
+                policy=RepositoryPolicySettings.from_settings(
+                    request.app.state.settings_snapshot
+                ),
+                db_engine=getattr(database_runtime, "engine", None),
+                qdrant_client=getattr(qdrant_runtime, "client", None),
+                qdrant_collection=getattr(
+                    qdrant_runtime,
+                    "collection_name",
+                    None,
+                ),
+            ),
+        ):
+            return await call_next(request)
+
+    _install_http_surface(application)
+    return application
+
+
+app = create_app()
+
+
+# Compatibility export surface.  These are direct aliases to the feature
+# modules, not duplicate endpoint implementations, and therefore register no
+# additional routes.
+_CHAT_COMPAT_EXPORTS = (
+    "ChatMessageRequest",
+    "_citation_list",
+    "_filter_citations_by_answer",
+    "_answer_body_without_reference_appendix",
+    "_citation_ref_text",
+    "_decorate_history_messages",
+    "_sign_image_upload",
+    "_verify_image_upload",
+    "_chat_actor",
+    "_chat_event_sse",
+    "sessions",
+    "history",
+    "delete_session",
+    "upload_chat_image",
+    "chat_message",
+    "feedback",
+)
+_DOCUMENT_COMPAT_EXPORTS = (
+    "_document_actor",
+    "_read_upload_command",
+    "_raise_upload_failure",
+    "_upload_error_payload",
+    "_file_response",
+    "_resolve_protected_file",
+    "citation_page",
+    "original_document",
+    "chat_image",
+    "documents",
+    "document_lifecycle_counts",
+    "documents_upload",
+    "documents_upload_batch",
+    "ingestion_jobs",
+    "documents_pending_review",
+    "documents_reconcile_serving",
+    "documents_expiring",
+    "documents_bulk_meta",
+    "documents_bulk_metadata",
+    "_documents_review_bulk_impl",
+    "document_set_current",
+    "document_mark_expired",
+    "document_update_metadata",
+    "document_publish_contract",
+    "document_update_governance",
+    "document_backfill_site",
+    "document_publish_new_version",
+    "document_publish_new_variant",
+    "document_publish_standalone",
+    "document_reject",
+    "document_archive",
+    "document_delete",
+    "ingestion_eta",
+    "ingestion_bulk_jobs",
+    "ingestion_bulk_delete",
+    "ingestion_set_priority",
+    "ingestion_cancel",
+    "ingestion_requeue",
+    "ingestion_pending_review",
+    "ingestion_publish",
+    "ingestion_reject",
+    "ingestion_delete",
+    "lifecycle_overview",
+    "lifecycle_refresh",
+    "lifecycle_set_document",
+    "lifecycle_mark_reviewed",
+)
+_OPERATION_COMPAT_EXPORTS = (
+    "LoginRequest",
+    "LanguageRequest",
+    "login",
+    "me",
+    "logout",
+    "update_preferences",
+    "refresh_session",
+    "dashboard",
+    "usage",
+    "observability",
+    "audit",
+    "access_request",
+    "access_requests",
+    "my_access_requests",
+    "access_request_resolve",
+    "access_users",
+    "access_grants",
+    "access_revoke_clearance",
+    "access_revoke_department",
+    "users",
+    "user_detail",
+    "user_create",
+    "user_active",
+    "user_roles",
+    "user_departments",
+    "user_sites",
+    "user_clearance",
+    "user_password",
+    "user_delete",
+    "catalog_departments",
+    "catalog_missing_site_documents",
+    "catalog_knowledge_governance",
+    "catalog_domain_profiles",
+    "catalog_rollout_readiness",
+    "catalog_rollout_plans",
+    "catalog_rollout_plan_set",
+    "catalog_evaluation_gate_record",
+    "catalog_department_governance",
+    "catalog_department_governance_set",
+    "catalog_department_domain_profile",
+    "catalog_department_domain_profile_set",
+    "catalog_department",
+    "catalog_department_upsert",
+    "catalog_department_status",
+    "catalog_department_archive",
+    "catalog_department_reassign",
+    "catalog_sites",
+    "catalog_site_upsert",
+    "glossary",
+    "glossary_upsert",
+    "glossary_active",
+    "glossary_delete",
+    "materials",
+    "material_upsert",
+    "material_synonym_add",
+    "material_delete",
+    "material_synonym_delete",
+    "feedbacks",
+    "feedback_classify",
+    "feedback_delete",
+    "regression_questions",
+    "regression_question_add",
+    "regression_question_active",
+    "regression_runs",
+    "regression_run",
+    "quality_documents",
+    "quality_recompute",
+    "quality_cleanup",
+    "analytics_departments",
+    "analytics_cache",
+    "settings",
+    "external_ai_policy",
+    "external_ai_policy_set",
+    "setting_set",
+    "graph_proposals",
+    "_review_graph_proposal_endpoint",
+    "graph_proposal_approve",
+    "graph_proposal_reject",
+    "community_summaries",
+    "_review_community_summary_endpoint",
+    "community_summary_approve",
+    "community_summary_reject",
+)
+
+for _name in _CHAT_COMPAT_EXPORTS:
+    globals()[_name] = getattr(_chat_routes, _name)
+for _name in _DOCUMENT_COMPAT_EXPORTS:
+    globals()[_name] = getattr(_document_routes, _name)
+for _name in _OPERATION_COMPAT_EXPORTS:
+    globals().setdefault(_name, getattr(_operation_routes, _name))
+
+# Historical spelling retained for external imports.
+data_router = operations_router
+bcrypt = _operation_routes.bcrypt
+HTTPException = _operation_routes.HTTPException
+
+
+def documents_review_bulk(body: dict[str, Any], profile: dict[str, Any]):
+    """Compatibility call-through for the former non-route helper."""
+
+    return _document_routes._documents_review_bulk_impl(body, profile, app.state.runtime)
+
+
+def _compat_request() -> Any:
+    return SimpleNamespace(app=app)
+
+
+def _sources_for_chat_ids(chat_ids: list[int]):
+    return _chat_routes._sources_for_chat_ids(chat_ids, app.state.runtime)
+
+
+def _decorate_history_messages(messages: list[dict[str, Any]]):
+    return _chat_routes._decorate_history_messages(messages, app.state.runtime)
+
+
+def history(body: dict[str, Any], profile: dict[str, Any]):
+    return _chat_routes.history(body, _compat_request(), profile)
+
+
+def upload_chat_image(request: Any, file: Any, profile: dict[str, Any]):
+    del request
+    return _chat_routes.upload_chat_image(file, profile)
+
+
+def citation_page(doc_id: int, page_no: int, profile: dict[str, Any]):
+    return _document_routes.citation_page(doc_id, page_no, _compat_request(), profile)
+
+
+def original_document(doc_id: int, profile: dict[str, Any]):
+    return _document_routes.original_document(doc_id, _compat_request(), profile)
+
+
+def chat_image(image_id: str, profile: dict[str, Any]):
+    return _document_routes.chat_image(image_id, _compat_request(), profile)
+
+
+def documents_upload_batch(
+    files: list[Any],
+    thu_muc: str | None,
+    domain: str | None,
+    security_level: str | None,
+    cong_doan: str | None,
+    site: str | None,
+    meta_json: str | None,
+    extra_departments_json: str | None,
+    assignments_json: str | None,
+    profile: dict[str, Any],
+):
+    return _document_routes.documents_upload_batch(
+        _compat_request(),
+        files,
+        thu_muc,
+        domain,
+        security_level,
+        cong_doan,
+        site,
+        meta_json,
+        extra_departments_json,
+        assignments_json,
+        profile,
+    )
+
+
+def document_publish_new_version(doc_id: int, response: Any, profile: dict[str, Any]):
+    return _document_routes.document_publish_new_version(
+        doc_id, _compat_request(), response, profile
+    )
+
+
+def document_publish_new_variant(doc_id: int, response: Any, profile: dict[str, Any]):
+    return _document_routes.document_publish_new_variant(
+        doc_id, _compat_request(), response, profile
+    )
+
+
+def document_publish_standalone(doc_id: int, response: Any, profile: dict[str, Any]):
+    return _document_routes.document_publish_standalone(
+        doc_id, _compat_request(), response, profile
+    )
+
+
+def ingestion_publish(job_id: int, response: Any, profile: dict[str, Any]):
+    return _document_routes.ingestion_publish(
+        job_id, _compat_request(), response, profile
+    )
+
+
+def feedback_classify(
+    feedback_id: int,
+    body: dict[str, Any],
+    profile: dict[str, Any],
+):
+    return _operation_routes.feedback_classify(
+        feedback_id, body, _compat_request(), profile
+    )
 
 
 if __name__ == "__main__":
     import uvicorn
 
+    process = AppProcessSettings.from_settings(load_settings())
     uvicorn.run(
         "mech_chatbot.api.app_server:app",
-        host=os.getenv("APP_SERVER_HOST", "0.0.0.0"),
-        port=int(os.getenv("APP_SERVER_PORT", "8080")),
+        host=process.server_host,
+        port=process.server_port,
         reload=False,
     )

@@ -14,8 +14,12 @@ Bat bien can bao ve:
 Luu y an toan:
 - Test chi READ SQL/Qdrant, khong sua du lieu.
 - Mac dinh sample 50 doc moi nhat; co the doi bang CONSISTENCY_SAMPLE_LIMIT.
+- Mac dinh doi chieu SourceSystem=upload trong collection chinh; fixture eval
+  dung collection rieng va khong duoc tron vao snapshot nay.
 """
 import os
+import json
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -23,14 +27,30 @@ from sqlalchemy import text
 pytestmark = [pytest.mark.integration, pytest.mark.security]
 
 
+def _pinned_snapshot():
+    raw_path = os.getenv("CONSISTENCY_SNAPSHOT_PATH", "").strip()
+    if not raw_path:
+        return None
+    payload = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+    if payload.get("schema") != "phase3-ingestion-consistency-snapshot-v1":
+        raise AssertionError("invalid ingestion consistency snapshot schema")
+    return payload
+
+
 @pytest.fixture(scope="module")
 def engine():
     if os.getenv("RUN_DB_TESTS") != "1":
         pytest.skip("Can SQL Server that: dat RUN_DB_TESTS=1")
-    from mech_chatbot.db.repository import engine as _engine
-    if _engine is None:
-        pytest.skip("engine=None: kiem tra SQL_SERVER/SQL_DATABASE trong .env")
-    return _engine
+    from mech_chatbot.config.settings import SqlSettings, load_settings
+    from mech_chatbot.db.engine import build_database_runtime
+
+    runtime = build_database_runtime(
+        SqlSettings.from_settings(load_settings())
+    )
+    try:
+        yield runtime.engine
+    finally:
+        runtime.close()
 
 
 @pytest.fixture(scope="module")
@@ -38,10 +58,18 @@ def qdrant():
     if os.getenv("RUN_QDRANT_TESTS") != "1":
         pytest.skip("Can Qdrant that: dat RUN_QDRANT_TESTS=1")
     qc = pytest.importorskip("qdrant_client")
-    url = os.getenv("QDRANT_URL")
-    if not url:
-        pytest.skip("Thieu QDRANT_URL")
-    return qc.QdrantClient(url=url, api_key=os.getenv("QDRANT_API_KEY"), timeout=60)
+    from mech_chatbot.config.settings import QdrantSettings, load_settings
+
+    settings = QdrantSettings.from_settings(load_settings())
+    client = qc.QdrantClient(
+        url=settings.url,
+        api_key=settings.api_key,
+        timeout=60,
+    )
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 @pytest.fixture(scope="module")
@@ -51,15 +79,26 @@ def qmodels():
 
 
 def _sample_vectorized_docs(engine):
-    limit = int(os.getenv("CONSISTENCY_SAMPLE_LIMIT", "50"))
+    snapshot = _pinned_snapshot()
+    expected_documents = (snapshot or {}).get("documents") or []
+    requested_limit = max(
+        int(os.getenv("CONSISTENCY_SAMPLE_LIMIT", "50")),
+        len(expected_documents),
+    )
+    limit = max(1, min(500, requested_limit))
+    source_system = str(
+        (snapshot or {}).get("source_system")
+        or os.getenv("CONSISTENCY_SOURCE_SYSTEM", "upload")
+    ).strip()
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                f"""
-                SELECT TOP ({limit})
+                """
+                SELECT TOP (:limit)
                     DocID,
                     TenFile,
                     ThuMuc,
+                    SourceSystem,
                     Domain,
                     SecurityLevel,
                     Site,
@@ -70,11 +109,29 @@ def _sample_vectorized_docs(engine):
                 FROM TaiLieu
                 WHERE TrangThaiVector = 1
                   AND (LifecycleStatus IS NULL OR LifecycleStatus <> 'deleting')
+                  AND COALESCE(SourceSystem, 'upload') = :source_system
                 ORDER BY DocID DESC
                 """
-            )
+            ),
+            {"limit": limit, "source_system": source_system},
         ).mappings().all()
+    if snapshot is not None:
+        expected = {
+            int(item["doc_id"]): str(item["file_name"])
+            for item in expected_documents
+        }
+        actual = {int(row["DocID"]): str(row["TenFile"]) for row in rows}
+        assert {
+            doc_id: actual.get(doc_id) for doc_id in expected
+        } == expected, "SQL document identity drifted from pinned Phase 3 snapshot"
+        rows = [row for row in rows if int(row["DocID"]) in expected]
     return rows
+
+
+def _assert_snapshot_collection(collection):
+    snapshot = _pinned_snapshot()
+    if snapshot is not None:
+        assert snapshot.get("collection") == collection
 
 
 def _document_departments(engine, doc_id, fallback_dept):
@@ -124,15 +181,17 @@ def _csv_tokens(value):
 
 
 def test_every_vectorized_doc_has_qdrant_points(engine, qdrant, qmodels):
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
+    from mech_chatbot.config.settings import load_settings
 
+    collection = load_settings().QDRANT_COLLECTION
+    _assert_snapshot_collection(collection)
     docs = _sample_vectorized_docs(engine)
     if not docs:
         pytest.skip("Khong co TaiLieu.TrangThaiVector=1 de doi chieu")
 
     missing = []
     for doc in docs:
-        points = _scroll_points_for_doc(qdrant, qmodels, QDRANT_COLLECTION, doc["DocID"], limit=1)
+        points = _scroll_points_for_doc(qdrant, qmodels, collection, doc["DocID"], limit=1)
         if not points:
             missing.append({"DocID": doc["DocID"], "TenFile": doc["TenFile"], "ThuMuc": doc["ThuMuc"]})
 
@@ -140,15 +199,17 @@ def test_every_vectorized_doc_has_qdrant_points(engine, qdrant, qmodels):
 
 
 def test_qdrant_payload_matches_sql_rbac_metadata(engine, qdrant, qmodels):
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
+    from mech_chatbot.config.settings import load_settings
 
+    collection = load_settings().QDRANT_COLLECTION
+    _assert_snapshot_collection(collection)
     docs = _sample_vectorized_docs(engine)
     if not docs:
         pytest.skip("Khong co TaiLieu.TrangThaiVector=1 de doi chieu")
 
     mismatches = []
     for doc in docs:
-        points = _scroll_points_for_doc(qdrant, qmodels, QDRANT_COLLECTION, doc["DocID"], limit=1)
+        points = _scroll_points_for_doc(qdrant, qmodels, collection, doc["DocID"], limit=1)
         if not points:
             # Test tren se bao missing; bo qua tai day de thong bao ro rang hon.
             continue

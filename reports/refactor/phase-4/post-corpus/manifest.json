@@ -1,0 +1,212 @@
+{
+  "schema": "phase-4-post-corpus-manifest-v2",
+  "captured_on": "2026-07-24",
+  "status": "golden_gate_passed_stage_latency_gate_unchanged_failed",
+  "git": {
+    "baseline_runtime_sha": "316b8fc26d34e72f934416fdcb6dc76da5cbc69c",
+    "candidate_rag_code_sha": "eeb89f139bcb32957c91e693599060800d814d65",
+    "golden_fixture_commit_sha": "b5145d2b3b40669a4ade44129a55c77d652e0e07",
+    "benchmark_harness_sha": "5bc0956cff44e28e7845bfac7da2cbfec2aea70a",
+    "branch": "codex/codebase-layer-refactor"
+  },
+  "runtime": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "python_version": "3.12.3",
+    "dependency_lock_sha256": "b3b13bb2ed4dfad3f03d7d59dd6c39eccd39424a098013961755fe2609992662"
+  },
+  "settings": {
+    "execution_context": "production",
+    "collection": "TaiLieuKyThuat_v2",
+    "database_scope": "main configured demo SQL database",
+    "qdrant_scope": "main configured Qdrant collection",
+    "service_auth_required": true,
+    "feature_flags": {
+      "RAG_CRAG_ENABLED": false,
+      "RAG_CLAIM_REPAIR_ENABLED": false,
+      "RAG_GROUNDED_MATH_ENABLED": false,
+      "RAG_LATE_INTERACTION_ENABLED": false,
+      "RAG_QUERY_DECOMPOSITION_ENABLED": false,
+      "RAG_GRAPH_RETRIEVAL_ENABLED": false,
+      "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": false
+    },
+    "provider_configuration": {
+      "embedding_provider": "local_cpu",
+      "embedding_model": "BAAI/bge-m3",
+      "llm_provider": "proxyllm",
+      "llm_model": "gpt-5.4",
+      "reranker_provider": "voyage",
+      "reranker_model": "rerank-2.5-lite"
+    }
+  },
+  "source_snapshot": {
+    "snapshot_id": "phase4-post-corpus-20260724",
+    "source_pdf_count": 14,
+    "source_directories": [
+      "9.3.03844",
+      "9.3.03951"
+    ],
+    "ownership": "user-provided local source; intentionally not staged or committed",
+    "visual_preflight": "14 one-page PDFs rendered and inspected; temporary PNGs deleted after validation",
+    "sha256": {
+      "9.3.03844/9.3.03844(975-123)-ver03-Model.pdf": "c465ac76f874e24d015bbcf7b10f70dcb77438eadcd5ca163a68f878f89e3549",
+      "9.3.03844/9.3.03844(975-123)-ver03-Model1.pdf": "9feef57c2e8976cd243f9fe661c83bf5ff0e41801c90385d4f260467bc3a7633",
+      "9.3.03844/9.3.03844(975-123)-ver03-Model2.pdf": "54ad96a9940998e5faf7d9b06326ed49db65bf4f777b9eb48a5b2c48815e2875",
+      "9.3.03844/9.3.03844(975-123)-ver03-Model3.pdf": "89684feb17fb1287611edad2772afacf681e44e06c39cc7a6af79b6555c37d35",
+      "9.3.03844/9.3.03844(975-123)-ver03-Model4.pdf": "234702feec68f64852157b67faa0061d7251945dc37584eec2bec5ae1acb128f",
+      "9.3.03951/9.3.03951(HCP7235-STK)-ver03-Model.pdf": "26778f8946ec87b28dc24ca85762c1e04566b402404c90f709a17b1b9ca97f13",
+      "9.3.03951/9.3.03951(HCP7235-STK)-ver03-Model1.pdf": "ec5f40a57387ba442301a46bd5d3f8d25efe9140d6ce338f6fd255482bb6c0bf",
+      "9.3.03951/9.3.03951(HCP7235-STK)-ver03-Model2.pdf": "66eaf43d429d2f2f2643be63d5316faa86991742fa9f5dec558ddeec67f19b00",
+      "9.3.03951/9.3.03951(HCP7235-STK)-ver03-Model3.pdf": "5b47a97182648ba33d004cf353d97198472e3ee3eb57e4666ba900609716333e",
+      "9.3.03951/9.3.03951(HCP7235-STK)-ver03-Model4.pdf": "b78fd8786248d99679fb98c66b9cb289ff568b5ede0629212134493e5342b89f",
+      "9.3.03951/9.3.03951(HCP7235-STK)-ver03-Model5.pdf": "873ba6b48f97a4443dc17235b4cdc2a5caa2a5601e4c39ff1c09fb9cff9c232e",
+      "9.3.03951/9.3.03951(HCP7235-STK)-ver03-Model6.pdf": "2a3f675435f82d049ddd80c67054e207e49c38784a68e25acb2b26faf8e20228",
+      "9.3.03951/9.3.03951(HCP7235-STK)-ver03-Model7.pdf": "ecdc92a99a4e8d1584079a8828290c4514c9dce5b84d1233a0069101c8714034",
+      "9.3.03951/9.3.03951(HCP7235-STK)-ver03-Model8.pdf": "50813ca795f0a8d242cb275a9e6cf39e7799b39577a1613be3609dda71969d41"
+    }
+  },
+  "ingestion": {
+    "path": "DocumentUpload -> RepositoryIngestionJobStore -> IngestionRunner -> PublicationCoordinator",
+    "job_ids": "56-69",
+    "doc_ids": "56-69",
+    "jobs_published_quality_100": 14,
+    "documents_published_servable_vectorized": 14,
+    "documents_with_version_3_label_ver03": 14,
+    "total_non_deleting_documents_after_ingest": 51,
+    "review_corrections": [
+      {
+        "doc_id": 59,
+        "fields": {
+          "BaseCode": "9.3.03844",
+          "VariantCode": "Model3",
+          "VersionNo": 3,
+          "VersionLabel": "ver03"
+        }
+      },
+      {
+        "doc_id": 69,
+        "fields": {
+          "BaseCode": "9.3.03951",
+          "VariantCode": "Model8"
+        }
+      }
+    ]
+  },
+  "golden_contract": {
+    "expectation_changed": true,
+    "reason": "The previous expectations contradicted the authoritative PDFs; the new cases use exact filenames, exact page assertions, and source-backed values.",
+    "cases": [
+      {
+        "source": "9.3.03951(HCP7235-STK)-ver03-Model1.pdf",
+        "page": 1,
+        "expected": [
+          "Inox 201"
+        ]
+      },
+      {
+        "source": "9.3.03844(975-123)-ver03-Model.pdf",
+        "page": 1,
+        "expected": [
+          "±0.2",
+          "±0.5"
+        ]
+      }
+    ],
+    "baseline_result": "5 passed; JUnit suite time 0.266s",
+    "candidate_result": "5 passed; JUnit suite time 0.311s",
+    "quality_delta": "no regression"
+  },
+  "execution_provenance": {
+    "working_tree_before_evidence_commit": {
+      "head": "b5145d2b3b40669a4ade44129a55c77d652e0e07",
+      "modified": [
+        "docs/codebase-layer-refactor-plan.md"
+      ],
+      "untracked_evidence": [
+        "reports/refactor/phase-4/post-corpus/"
+      ],
+      "untracked_user_sources_excluded_from_commit": [
+        "9.3.03844/",
+        "9.3.03951/"
+      ]
+    },
+    "commands": {
+      "candidate_golden": "$env:PYTHONPATH='src'; $env:RUN_EVAL_TESTS='1'; $env:RAG_SERVER_URL='http://127.0.0.1:8100'; .\\chat_env\\Scripts\\python.exe -m pytest tests/eval/test_golden_questions.py -q --junitxml=reports/refactor/phase-4/post-corpus/candidate-golden.xml",
+      "baseline_golden": "$env:PYTHONPATH='src'; $env:RUN_EVAL_TESTS='1'; $env:RAG_SERVER_URL='http://127.0.0.1:8100'; .\\chat_env\\Scripts\\python.exe -m pytest tests/eval/test_golden_questions.py -q --junitxml=reports/refactor/phase-4/post-corpus/baseline-golden.xml",
+      "sql_qdrant_consistency": "$env:PYTHONPATH='src'; $env:RUN_DB_TESTS='1'; $env:RUN_QDRANT_TESTS='1'; .\\chat_env\\Scripts\\python.exe -m pytest tests/integration/test_sql_qdrant_consistency.py -q -v --junitxml=reports/refactor/phase-4/post-corpus/sql-qdrant-consistency.xml",
+      "default_backend_suite": ".\\chat_env\\Scripts\\python.exe -m pytest -q --junitxml=reports/refactor/phase-4/post-corpus/backend.xml"
+    },
+    "runtime_notes": {
+      "candidate_server": "current branch runtime on port 8100 with the repository .env",
+      "baseline_server": "detached worktree at baseline_runtime_sha on port 8100, started with the current chat_env and repository .env; the golden command ran only after /health reported status=ok and rag_loaded=true",
+      "service_token": "read from the environment and redacted by the test fixture; never stored in an artifact"
+    }
+  },
+  "validation_artifacts": {
+    "candidate_golden": {
+      "path": "reports/refactor/phase-4/post-corpus/candidate-golden.xml",
+      "sha256": "c5c0c31b23211c7225f6e5f259e974c806f41763b82b639c8bc2935b0c3efec0",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "suite_time_seconds": 0.311
+    },
+    "baseline_golden": {
+      "path": "reports/refactor/phase-4/post-corpus/baseline-golden.xml",
+      "sha256": "a0572765aec790421a88f1a6006aedec4d5f153c33be9e1469c2965af892a12f",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "suite_time_seconds": 0.266
+    },
+    "sql_qdrant_consistency": {
+      "path": "reports/refactor/phase-4/post-corpus/sql-qdrant-consistency.xml",
+      "sha256": "04b1f044b897f33c499791f47ad1d0f8756dec2f7c0cb130a339cc576260aaf1",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "suite_time_seconds": 16.944
+    },
+    "default_backend_suite": {
+      "path": "reports/refactor/phase-4/post-corpus/backend.xml",
+      "sha256": "d6f87c01b40922abbd1ce0602b76b01e81d69b87466cbac94a0391cfba3829ad",
+      "tests": 2063,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 22,
+      "suite_time_seconds": 69.054
+    }
+  },
+  "validation": {
+    "sql_qdrant_consistency": "2 passed; JUnit suite time 16.944s",
+    "default_backend_suite": "2063 collected; 2041 passed and 22 opt-in live/integration tests skipped; one known StarletteDeprecationWarning",
+    "golden_offline_contract_tests": "3 passed",
+    "code_review": "phase4_final_code_review reported no P0-P2 findings after fixes",
+    "security_review": "phase4_security_review reported no P0-P2 findings; pytest header repr is redacted",
+    "pip_audit": "not run because pip-audit is not installed in chat_env or PATH"
+  },
+  "performance_decision": {
+    "authoritative_artifact": "reports/refactor/phase-4/final-cache-off/benchmark-summary.json",
+    "stage_latency_gate": "fail",
+    "code_regression_confirmed": false,
+    "full_matrix_rerun": false,
+    "reason": "No retrieval/provider hot-path regression or duplicate call was found. Rerunning without a legitimate code fix would violate the locked no-cherry-picking policy.",
+    "diagnostic_summary": {
+      "unchanged_hot_paths": [
+        "_explicit_hybrid_rrf",
+        "_retrieve",
+        "hydrate_parent_context",
+        "parent_context_max_workers",
+        "external AI/provider timers"
+      ],
+      "sparse_stage_samples": {
+        "parent_context_per_run": "12-15 candidate, 13-14 baseline",
+        "retrieval_per_run": "11-13 candidate, 11-16 baseline",
+        "llm_generation_per_run": "3 candidate, 2-4 baseline"
+      },
+      "interpretation": "Tail variance and sparse or provider-dependent populations explain the observations better than a stable candidate slowdown, but this is not a waiver."
+    }
+  }
+}

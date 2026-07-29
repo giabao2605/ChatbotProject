@@ -3,9 +3,13 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 from sqlalchemy import text
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
 from . import audit as _r_audit
+
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
 
 __all__ = [
     'cancel_job',
@@ -25,7 +29,8 @@ __all__ = [
 # ==========================================
 def create_ingestion_job(file_name, file_path, thu_muc, uploaded_by=None,
                          domain=None, security_level=None, cong_doan=None,
-                         site=None, phong_ban=None, upload_meta=None):
+                         site=None, phong_ban=None, upload_meta=None, *,
+                         db_engine=None):
     """Tao IngestionJob. GD4: luu kem phan loai chon tu form upload
     (domain / security_level / cong_doan / site / phong_ban) de worker dung
     lam override thay vi chi suy tu folder. Cac tham so nay deu optional;
@@ -35,13 +40,13 @@ def create_ingestion_job(file_name, file_path, thu_muc, uploaded_by=None,
     luu JSON vao IngestionJobs.UploadMetaJson de worker ap xuong TaiLieu.
     """
     import json as _json
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
 
     # P0.2 / P4.1: Server-side guard — block phong ban disabled HOAC archived.
     # Phan biet ro "bang chua co" (legacy OK) vs "DB loi thuc su" (nen block).
     # Check Status truoc (mo hinh moi), fallback IsActive (mo hinh cu).
     try:
-        with engine.connect() as _chk:
+        with selected_engine.connect() as _chk:
             _dept_row = _chk.execute(
                 text("SELECT IsActive, Status FROM dbo.Departments WHERE DeptCode = :c"),
                 {"c": thu_muc},
@@ -72,7 +77,7 @@ def create_ingestion_job(file_name, file_path, thu_muc, uploaded_by=None,
 
     _upload_meta_json = (_json.dumps(upload_meta, ensure_ascii=False) if upload_meta else None)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             result = conn.execute(
                 text(
                     """
@@ -94,20 +99,25 @@ def create_ingestion_job(file_name, file_path, thu_muc, uploaded_by=None,
             row = result.fetchone()
             job_id = row[0] if row else None
             if job_id:
+                audit_kwargs = (
+                    {"db_engine": selected_engine}
+                    if db_engine is not None
+                    else {}
+                )
                 _r_audit.write_audit_log(uploaded_by or "System", "upload", "IngestionJobs", job_id, {
                     "file_name": file_name, "thu_muc": thu_muc,
                     "domain": domain, "security_level": security_level,
                     "cong_doan": cong_doan, "site": site, "phong_ban": phong_ban or thu_muc,
-                })
+                }, **audit_kwargs)
             return job_id
     except Exception as e:
         logger.error(f"Loi tao IngestionJob: {e}", exc_info=True)
         return None
 
-def update_ingestion_job(job_id, status, error_message=None):
-    _ensure_engine()
+def update_ingestion_job(job_id, status, error_message=None, *, db_engine=None):
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             conn.execute(
                 text(
                     """
@@ -123,11 +133,11 @@ def update_ingestion_job(job_id, status, error_message=None):
     except Exception as e:
         logger.error(f"Loi cap nhat IngestionJob {job_id}: {e}", exc_info=True)
 
-def update_ingestion_report(job_id, report):
-    _ensure_engine()
+def update_ingestion_report(job_id, report, *, db_engine=None):
+    selected_engine = resolve_engine(db_engine)
     try:
         import json
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             conn.execute(text("""
                 UPDATE dbo.IngestionJobs
                 SET ExtractionReport = :report,
@@ -145,10 +155,10 @@ def update_ingestion_report(job_id, report):
     except Exception as e:
         logger.error(f"Loi cap nhat report cho job {job_id}: {e}", exc_info=True)
         return False
-def get_pending_job(worker_id="worker-1"):
-    _ensure_engine()
+def get_pending_job(worker_id="worker-1", *, db_engine=None):
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             # Atomic picking:
             # - READPAST: bỏ qua job đang bị worker khác lock
             # - UPDLOCK: giữ update lock cho dòng được chọn
@@ -241,8 +251,7 @@ def get_pending_job(worker_id="worker-1"):
         logger.error(f"Loi lay pending job: {e}", exc_info=True)
         return None
 
-def mark_job_failed(job_id, error_message):
-    _ensure_engine()
+def mark_job_failed(job_id, error_message, *, db_engine=None):
     lower_msg = str(error_message).lower()
     if (
         "[quota_exceeded]" in lower_msg
@@ -250,9 +259,11 @@ def mark_job_failed(job_id, error_message):
         or "resource_exhausted" in lower_msg
         or "free_tier_requests" in lower_msg
     ):
-        return mark_job_waiting_quota(job_id, error_message)
+        quota_kwargs = {"db_engine": db_engine} if db_engine is not None else {}
+        return mark_job_waiting_quota(job_id, error_message, **quota_kwargs)
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             conn.execute(text("""
                 UPDATE dbo.IngestionJobs
                 SET RetryCount = ISNULL(RetryCount, 0) + 1,
@@ -271,10 +282,10 @@ def mark_job_failed(job_id, error_message):
     except Exception as e:
         logger.error(f"Loi danh dau job fail {job_id}: {e}", exc_info=True)
 
-def mark_job_waiting_quota(job_id, error_message, retry_after_hours=24):
-    _ensure_engine()
+def mark_job_waiting_quota(job_id, error_message, retry_after_hours=24, *, db_engine=None):
+    selected_engine = resolve_engine(db_engine)
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             conn.execute(text("""
                 UPDATE dbo.IngestionJobs
                 SET Status = 'waiting_quota',

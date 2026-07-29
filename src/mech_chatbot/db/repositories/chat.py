@@ -3,11 +3,14 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 import json
-import os
 from sqlalchemy import text
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
-from ._shared import MAX_BOT_MSG_LEN, MAX_USER_MSG_LEN, _cap_len
+from ._shared import _cap_len
+
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
 
 __all__ = [
     'clear_chat_history',
@@ -24,17 +27,40 @@ __all__ = [
 # CHAT HISTORY
 # ==========================================
 
-def save_chat_history(session_id, user_msg, bot_msg, image_path=None, ref_images=None, username=None):
-    _ensure_engine()
+def save_chat_history(
+    session_id,
+    user_msg,
+    bot_msg,
+    image_path=None,
+    ref_images=None,
+    username=None,
+    *,
+    db_engine=None,
+    max_user_message_length=None,
+    max_bot_message_length=None,
+):
+    selected_engine = resolve_engine(db_engine)
+    if max_user_message_length is None or max_bot_message_length is None:
+        from mech_chatbot.config.repository_runtime import (
+            current_repository_policy,
+        )
+
+        policy = current_repository_policy()
+        max_user_message_length = (
+            max_user_message_length or policy.max_user_message_length
+        )
+        max_bot_message_length = (
+            max_bot_message_length or policy.max_bot_message_length
+        )
     try:
         ref_images_json = json.dumps(ref_images or [], ensure_ascii=False)
         session_id  = _cap_len(session_id, 100)
-        user_msg    = _cap_len(user_msg, MAX_USER_MSG_LEN)
-        bot_msg     = _cap_len(bot_msg, MAX_BOT_MSG_LEN)
+        user_msg = _cap_len(user_msg, int(max_user_message_length))
+        bot_msg = _cap_len(bot_msg, int(max_bot_message_length))
         image_path  = _cap_len(image_path, 500)
         username    = _cap_len(username, 255)
 
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             result = conn.execute(
                 text("""
                     INSERT INTO LichSuChat
@@ -58,11 +84,11 @@ def save_chat_history(session_id, user_msg, bot_msg, image_path=None, ref_images
         return None
 
 
-def save_answer_sources(chat_id, retrieved_docs):
+def save_answer_sources(chat_id, retrieved_docs, *, db_engine=None):
     """P3-1: Luu cac tai lieu/chunk RAG da dung de sinh cau tra loi (truy vet nguon)."""
     if not chat_id or not retrieved_docs:
         return
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
 
     def _to_int(v):
         try:
@@ -77,7 +103,7 @@ def save_answer_sources(chat_id, retrieved_docs):
             return None
 
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             for rank_no, d in enumerate(retrieved_docs, start=1):
                 if not isinstance(d, dict):
                     continue
@@ -105,7 +131,7 @@ def save_answer_sources(chat_id, retrieved_docs):
         logger.error(f"Loi khi luu nguon cau tra loi (AnswerSource): {e}", exc_info=True)
 
 
-def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None):
+def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *, db_engine=None):
     """Persist the complete access basis separately from display citations.
 
     ``AnswerSource`` intentionally contains only the citations attributed in
@@ -115,7 +141,7 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None):
     """
     if not chat_id:
         return False
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
 
     def _to_int(value):
         try:
@@ -164,7 +190,7 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None):
         complete = False
 
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             conn.execute(
                 text("DELETE FROM dbo.AnswerEvidence WHERE ChatID = :chat_id"),
                 {"chat_id": int(chat_id)},
@@ -265,6 +291,7 @@ def _history_source_redactions(
     allowed_departments,
     allowed_sites,
     is_global_read_admin=False,
+    strict_site_filter=True,
 ):
     """Return chat IDs whose complete evidence basis is no longer readable."""
     if not chat_ids:
@@ -274,9 +301,7 @@ def _history_source_redactions(
     clearance = levels.get(str(user_clearance or "public").strip().lower(), 0)
     departments = sorted({str(value).strip() for value in (allowed_departments or []) if str(value).strip()})
     sites = {str(value).strip() for value in (allowed_sites or []) if str(value).strip()}
-    strict_site = str(os.getenv("RBAC_STRICT_SITE_FILTER", "true")).strip().lower() in {
-        "1", "true", "yes", "on"
-    }
+    strict_site = bool(strict_site_filter)
 
     chat_keys = []
     params = {}
@@ -394,6 +419,7 @@ def get_chat_history(
     user_clearance="confidential",
     allowed_departments=None,
     allowed_sites=None,
+    strict_site_filter=True,
 ):
     """Return only the caller's own chat session with evidence re-authorization."""
     _ensure_engine()
@@ -425,6 +451,7 @@ def get_chat_history(
                         allowed_departments=allowed_departments,
                         allowed_sites=allowed_sites,
                         is_global_read_admin=bool(is_admin),
+                        strict_site_filter=strict_site_filter,
                     )
                 except Exception as _e:
                     # History is a data-read surface. A failed authorization

@@ -1,0 +1,344 @@
+from pathlib import Path
+
+import pytest
+
+from mech_chatbot.domain.graph_policy import (
+    expand_seed_keys,
+    validate_graph_proposal,
+)
+from mech_chatbot.rag import graph_ontology as legacy_graph_ontology
+from mech_chatbot.rag.graph_retrieval import (
+    attach_served_graph_context, filter_servable_edges,
+    hydrate_graph_edges,
+    select_graph_seeds, should_attempt_graph,
+)
+
+
+pytestmark = pytest.mark.unit
+
+
+def test_graph_ontology_compatibility_surface_delegates_to_domain_policy():
+    assert legacy_graph_ontology.validate_graph_proposal is validate_graph_proposal
+
+
+def test_graph_proposal_ontology_rejects_historical_ambiguous_relation_seed():
+    decision = validate_graph_proposal(
+        "RELATED_COMPONENT",
+        evidence={"source_quote": "Assembly A contains part P-100."},
+    )
+
+    assert decision.accepted is False
+    assert decision.reason == "ambiguous_or_redundant_relation"
+
+
+def test_graph_proposal_ontology_requires_source_quote():
+    decision = validate_graph_proposal(
+        "USES_MATERIAL",
+        evidence={"extractor": "graph-v1"},
+    )
+
+    assert decision.accepted is False
+    assert decision.reason == "source_quote_required"
+
+
+def test_graph_proposal_ontology_accepts_supported_relation_with_quote():
+    decision = validate_graph_proposal(
+        "USES_MATERIAL",
+        evidence={"source_quote": "Part P-100 uses material SS304."},
+    )
+
+    assert decision.accepted is True
+    assert decision.relation_type == "USES_MATERIAL"
+
+
+def test_graph_proposal_ontology_rejects_relation_outside_whitelist():
+    decision = validate_graph_proposal(
+        "LIKELY_CONNECTED_TO",
+        evidence={"source_quote": "A may be connected to B."},
+    )
+
+    assert decision.accepted is False
+    assert decision.reason == "relation_not_in_ontology"
+
+
+@pytest.mark.parametrize("question", [
+    "Tài liệu A supersedes tài liệu nào?",
+    "Assembly X contains part nào?",
+    "Vật tư P dùng vật liệu gì?",
+    "Mối quan hệ giữa DOC-A và DOC-B là gì?",
+])
+def test_graph_router_accepts_relational_queries(question):
+    assert should_attempt_graph(question) is True
+
+
+@pytest.mark.parametrize("question", [
+    "Chu kỳ bảo trì là bao nhiêu?",
+    "Xin chào",
+    "Tóm tắt tài liệu DOC-A",
+])
+def test_graph_router_keeps_simple_queries_on_regular_retrieval(question):
+    assert should_attempt_graph(question) is False
+
+
+def test_graph_seeds_keep_explicit_query_code_when_retrieval_has_other_entities():
+    seeds = select_graph_seeds(
+        "GRAPH-EVAL-ASM-001 chứa bộ phận nào?", ["GRAPH-EVAL-PART-B"]
+    )
+
+    assert seeds == ["GRAPH-EVAL-ASM-001", "GRAPH-EVAL-PART-B"]
+
+
+def edge(**overrides):
+    value = {
+        "edge_id": 1,
+        "origin": "deterministic",
+        "serving_status": "approved",
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+        "is_current": True,
+        "servable": True,
+        "department": "Technical",
+        "site": "HQ",
+        "security_level": "internal",
+        "source_quote": "Assembly A contains part P-100.",
+    }
+    value.update(overrides)
+    return value
+
+
+def test_graph_evidence_is_fail_closed_for_review_lifecycle_and_rbac():
+    access = {
+        "roles": ["viewer"],
+        "allowed_departments": ["Technical"],
+        "allowed_sites": ["HQ"],
+        "max_security_level": "internal",
+    }
+    candidates = [
+        edge(edge_id=1),
+        edge(edge_id=2, serving_status="pending", origin="llm"),
+        edge(edge_id=3, publication_state="draft"),
+        edge(edge_id=4, department="Finance"),
+        edge(edge_id=5, security_level="confidential"),
+    ]
+
+    assert [item["edge_id"] for item in filter_servable_edges(candidates, access)] == [1]
+
+
+def test_graph_evidence_rejects_serving_edge_without_source_quote():
+    access = {
+        "roles": ["viewer"],
+        "allowed_departments": ["Technical"],
+        "allowed_sites": ["HQ"],
+        "max_security_level": "internal",
+    }
+
+    assert filter_servable_edges([edge(source_quote="")], access) == []
+
+
+def test_graph_edge_requires_exact_qdrant_page_hydration():
+    from types import SimpleNamespace
+
+    candidate = edge(
+        edge_id=1, doc_id=7, page=3, version=2, file_goc="approved.pdf",
+        source_name="A", target_name="B", relation_type="USES_MATERIAL",
+    )
+
+    class Client:
+        def scroll(self, **kwargs):
+            return ([SimpleNamespace(payload={
+                "page_content": "Approved source text",
+                "metadata": {"doc_id": 7, "trang_so": 3, "version_no": 2},
+            })], None)
+
+    docs = hydrate_graph_edges([candidate], Client(), "shadow")
+
+    assert len(docs) == 1
+    assert "Approved source text" in docs[0].page_content
+    assert docs[0].metadata["graph_edge_id"] == 1
+
+
+def test_graph_context_survives_when_regular_retrieval_already_has_same_page():
+    from langchain_core.documents import Document
+
+    regular = Document(
+        page_content="Approved source text",
+        metadata={
+            "doc_id": 7, "trang_so": 3, "version_no": 2,
+            "noi_dung_goc": "Approved source text",
+        },
+    )
+    relation = Document(
+        page_content="Quan he duoc duyet: A --USES_MATERIAL--> B\n\nApproved source text",
+        metadata={
+            "doc_id": 7, "trang_so": 3, "version_no": 2,
+            "graph_edge_id": 1,
+        },
+    )
+
+    merged, served_evidence = attach_served_graph_context([regular], [relation])
+
+    assert len(merged) == 1
+    assert merged[0].page_content.startswith("Quan he duoc duyet: A --USES_MATERIAL--> B")
+    assert merged[0].page_content.endswith("Approved source text")
+    assert merged[0].metadata["noi_dung_goc"].startswith(
+        "Quan he duoc duyet: A --USES_MATERIAL--> B"
+    )
+    assert merged[0].metadata.get("graph_edge_id") is None
+    assert served_evidence == [relation]
+
+
+def test_graph_context_does_not_cross_document_versions():
+    from langchain_core.documents import Document
+
+    old_version = Document(
+        page_content="Old source text",
+        metadata={"doc_id": 7, "trang_so": 3, "version_no": 1},
+    )
+    current_relation = Document(
+        page_content="Quan he duoc duyet: A --SUPERSEDES--> B\n\nCurrent text",
+        metadata={
+            "doc_id": 7, "trang_so": 3, "version_no": 2,
+            "graph_edge_id": 2,
+        },
+    )
+
+    merged, served_evidence = attach_served_graph_context(
+        [old_version], [current_relation]
+    )
+
+    assert merged == [old_version]
+    assert served_evidence == []
+
+
+def test_graph_migration_defines_proposals_separately_from_serving_edges():
+    migration = Path("database/migrations/V0033__governed_knowledge_graph.sql").read_text(encoding="utf-8")
+
+    assert "KnowledgeGraphNode" in migration
+    assert "KnowledgeGraphEdge" in migration
+    assert "GraphExtractionProposal" in migration
+    assert "ServingStatus" in migration
+    assert "pending" in migration
+
+
+def test_graph_seed_keys_cover_canonical_part_and_material_forms():
+    assert expand_seed_keys(["CRAG-EVAL-PART-A"]) == [
+        "crag-eval-part-a",
+        "material:crag-eval-part-a",
+        "part:crag-eval-part-a",
+    ]
+
+
+def test_deterministic_seed_is_deduplicated_and_includes_version_relations():
+    seed_source = Path("scripts/graph/seed_deterministic.py").read_text(encoding="utf-8")
+
+    assert "ROW_NUMBER() OVER" in seed_source
+    assert "document_family" in seed_source
+    assert "HAS_VERSION" in seed_source
+    assert "SUPERSEDES" in seed_source
+
+
+def test_graph_repository_filters_every_traversed_edge_and_only_returns_two_hops():
+    source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
+
+    assert "EligibleEdges AS" in source
+    assert "e.SourceNodeID = w.NodeID OR e.TargetNodeID = w.NodeID" in source
+    assert "THEN e.TargetNodeID ELSE e.SourceNodeID END" in source
+    assert "WHERE w.Depth < :max_hops" in source
+
+
+def test_llm_edge_producer_only_inserts_pending_proposals():
+    source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
+
+    producer = source[source.index("def propose_graph_edge"):source.index("def list_graph_proposals")]
+    assert "GraphExtractionProposal" in producer
+    assert "'pending'" in producer
+    assert "INSERT dbo.KnowledgeGraphEdge" not in producer
+    assert "duplicate_serving_edge" in producer
+    assert "validate_graph_proposal" in producer
+    duplicate_query = producer[producer.index("SELECT TOP (1) e.EdgeID"):producer.index("if duplicate")]
+    assert "e.SourceDocID=:doc_id" not in duplicate_query
+    assert "e.SourcePage=:page" not in duplicate_query
+    assert "e.SourceVersion=:version" not in duplicate_query
+    assert "t.VersionNo=:version" in producer
+    assert ":page > 0" in producer
+
+
+def test_graph_traversal_hydrates_reviewed_proposal_source_quote():
+    source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
+    assert "COALESCE(e.SourceQuote, proposal.source_quote) AS source_quote" in source
+    assert "JSON_VALUE(p.EvidenceJson, '$.source_quote')" in source
+
+
+def test_approved_llm_edge_persists_the_proposal_source_quote():
+    source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(
+        encoding="utf-8",
+    )
+    reviewer = source[
+        source.index("def review_graph_proposal"):
+        source.index("def traverse_knowledge_graph")
+    ]
+
+    assert "JSON_VALUE(p.EvidenceJson, '$.source_quote') AS SourceQuote" in reviewer
+    assert "SourceQuote=:source_quote" in reviewer
+    assert "Site, SecurityLevel, SourceQuote, ReviewedBy, ReviewedAt" in reviewer
+    assert "invalid_provenance" in reviewer
+
+
+def test_graph_deterministic_edges_have_a_persisted_provenance_contract():
+    migration = Path("database/migrations/V0038__graph_edge_source_evidence.sql").read_text(encoding="utf-8")
+    seed_source = Path("scripts/graph/seed_deterministic.py").read_text(encoding="utf-8")
+    repository = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
+
+    assert "SourceQuote" in migration
+    assert "TextExtract" in migration
+    assert "RawRowJson" in migration
+    assert "SET SourceQuote = CONCAT" not in migration
+    assert "Approved deterministic relation" not in seed_source
+    assert "COALESCE(e.SourceQuote, proposal.source_quote) AS source_quote" in repository
+
+
+@pytest.mark.parametrize("role", ["knowledge_approver", "reviewer", "admin"])
+def test_graph_review_endpoint_allows_governed_review_roles_and_audits_without_prompt(monkeypatch, role):
+    from mech_chatbot.api.routers import operations as operation_routes
+
+    with pytest.raises(operation_routes.HTTPException) as denied:
+        operation_routes.graph_proposal_approve(7, {}, {"roles": ["viewer"], "username": "alice"})
+    assert denied.value.status_code == 403
+
+    audits = []
+    monkeypatch.setattr(
+        operation_routes.graph_service,
+        "review_graph_proposal",
+        lambda proposal_id, action, reviewer, note=None: {
+            "ok": True, "proposal_id": proposal_id, "status": "approved"
+        },
+    )
+    monkeypatch.setattr(
+        operation_routes.audit_service,
+        "write_audit_log",
+        lambda **kwargs: audits.append(kwargs),
+    )
+
+    result = operation_routes.graph_proposal_approve(
+        7, {"note": "verified"}, {"roles": [role], "username": "bob", "user_id": 9}
+    )
+
+    assert result["status"] == "approved"
+    assert audits[0]["entity_id"] == 7
+    assert "prompt" not in str(audits[0]).lower()
+
+
+def test_graph_proposal_listing_rejects_viewer_even_when_called_directly(monkeypatch):
+    from mech_chatbot.api.routers import operations as operation_routes
+
+    monkeypatch.setattr(
+        operation_routes.graph_service,
+        "list_graph_proposals",
+        lambda **_kwargs: [],
+    )
+
+    with pytest.raises(operation_routes.HTTPException) as denied:
+        operation_routes.graph_proposals(profile={"roles": ["viewer"]})
+
+    assert denied.value.status_code == 403
