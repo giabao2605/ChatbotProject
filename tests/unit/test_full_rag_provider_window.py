@@ -256,6 +256,8 @@ def test_window_runs_predeclared_orders_paces_voyage_and_writes_authorization(
     monkeypatch.setattr(runner, "require_clean_worktree", lambda: None)
     monkeypatch.setattr(runner, "require_source_commit", lambda _sha: None)
     monkeypatch.setattr(runner, "_git_sha", lambda: "commit-sha")
+    declaration = tmp_path / "window-declaration.json"
+    monkeypatch.setattr(runner, "DECLARATION_PATH", declaration)
     events = []
     now = [0.0]
 
@@ -349,6 +351,9 @@ def test_window_runs_predeclared_orders_paces_voyage_and_writes_authorization(
     assert "VOYAGE_SECRET" not in serialized
     assert "JINA_SECRET" not in serialized
     assert "Giá trị định mức" not in serialized
+    assert json.loads(declaration.read_text(encoding="utf-8"))["status"] == (
+        "accepted"
+    )
 
 
 def test_window_stops_after_first_failed_pair(monkeypatch, tmp_path):
@@ -356,6 +361,8 @@ def test_window_stops_after_first_failed_pair(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "require_clean_worktree", lambda: None)
     monkeypatch.setattr(runner, "require_source_commit", lambda _sha: None)
     monkeypatch.setattr(runner, "_git_sha", lambda: "commit-sha")
+    declaration = tmp_path / "window-declaration.json"
+    monkeypatch.setattr(runner, "DECLARATION_PATH", declaration)
     events = []
     arm_runner = _fake_arm_runner(events, runner._sha(MANIFEST))
 
@@ -389,6 +396,17 @@ def test_window_stops_after_first_failed_pair(monkeypatch, tmp_path):
     assert report["pair_count"] == 1
     assert (tmp_path / "window" / "run.json").exists()
     assert not (tmp_path / "window" / "authorization.json").exists()
+    assert json.loads(declaration.read_text(encoding="utf-8"))["status"] == (
+        "rejected"
+    )
+    with pytest.raises(RuntimeError, match="already declared"):
+        runner.run_window(
+            MANIFEST,
+            tmp_path / "prettier-window",
+            approval_ref=APPROVAL_REF,
+            provider_smoke_artifact=_smoke(tmp_path),
+            profile_configurations=_profiles(),
+        )
 
 
 def test_window_rejects_arm_nonzero_exit(monkeypatch, tmp_path):
@@ -396,6 +414,8 @@ def test_window_rejects_arm_nonzero_exit(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "require_clean_worktree", lambda: None)
     monkeypatch.setattr(runner, "require_source_commit", lambda _sha: None)
     monkeypatch.setattr(runner, "_git_sha", lambda: "commit-sha")
+    declaration = tmp_path / "window-declaration.json"
+    monkeypatch.setattr(runner, "DECLARATION_PATH", declaration)
     events = []
     arm_runner = _fake_arm_runner(events, runner._sha(MANIFEST))
 
@@ -419,6 +439,9 @@ def test_window_rejects_arm_nonzero_exit(monkeypatch, tmp_path):
                 f"2026-07-29T00:00:{index:02d}Z" for index in range(10)
             ).__next__,
         )
+    assert json.loads(declaration.read_text(encoding="utf-8"))["status"] == (
+        "declared"
+    )
 
 
 def test_window_refuses_missing_opt_in_dirty_output_and_manifest_drift(

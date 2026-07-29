@@ -27,6 +27,7 @@ from mech_chatbot.composition.maintenance_runtime import (
 )
 from mech_chatbot.config.settings import load_settings
 from mech_chatbot.evaluation.full_rag_provider import (
+    ARM_ORDERS,
     build_provider_technical_authorization,
     compare_full_rag_provider_reports,
 )
@@ -59,10 +60,12 @@ APPROVED_MANIFEST_SHA256 = (
 APPROVAL_REF = (
     "codex-thread:019fab5f-2aa9-71d2-9bc1-0ecaf3b6d931"
 )
-ARM_ORDERS = (
-    "baseline-first",
-    "candidate-first",
-    "baseline-first",
+WINDOW_ID = "full-rag-provider-019fab5f-v1"
+DECLARATION_PATH = (
+    ROOT
+    / "reports"
+    / "rerank-provider-full-rag"
+    / f"{WINDOW_ID}-declaration.json"
 )
 PROVIDERS = {"baseline": "voyage", "candidate": "jina"}
 MIN_VOYAGE_ARM_INTERVAL_SECONDS = 61.0
@@ -105,6 +108,20 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
         json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def _declare_window(value: Mapping[str, Any]) -> None:
+    DECLARATION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    )
+    try:
+        with DECLARATION_PATH.open("x", encoding="utf-8") as stream:
+            stream.write(payload)
+    except FileExistsError as exc:
+        raise RuntimeError(
+            f"window {WINDOW_ID} is already declared; rerun is forbidden"
+        ) from exc
 
 
 def require_approved_manifest(path: Path) -> None:
@@ -243,6 +260,10 @@ def run_window(
     ):
         raise ValueError(f"refusing to overwrite non-empty output: {output}")
     require_clean_worktree()
+    if DECLARATION_PATH.exists():
+        raise RuntimeError(
+            f"window {WINDOW_ID} is already declared; rerun is forbidden"
+        )
     configurations = (
         dict(profile_configurations)
         if profile_configurations is not None
@@ -261,6 +282,19 @@ def run_window(
     generation_sha256 = str(
         configurations["voyage"]["generation_provider_sha256"]
     )
+    declaration = {
+        "schema": "rerank-provider-full-rag-window-declaration-v1",
+        "window_id": WINDOW_ID,
+        "source_commit": source_commit,
+        "manifest_sha256": manifest_sha256,
+        "provider_smoke_sha256": smoke_sha256,
+        "approval_ref": approval_ref,
+        "output_path": str(output.resolve()),
+        "status": "declared",
+        "production_authorized": False,
+        "release_authorized": False,
+    }
+    _declare_window(declaration)
 
     for pair_index, arm_order in enumerate(ARM_ORDERS, 1):
         pair_dir = output / f"pair-{pair_index:02d}"
@@ -407,6 +441,12 @@ def run_window(
         "authorization_artifact": authorization_reference,
         "provider_smoke": _artifact_reference(provider_smoke_artifact),
     }
+    declaration = {
+        **declaration,
+        "status": "accepted" if passed else "rejected",
+    }
+    _write_json(DECLARATION_PATH, declaration)
+    report["window_declaration"] = _artifact_reference(DECLARATION_PATH)
     _write_json(output / "run.json", report)
     return report
 
