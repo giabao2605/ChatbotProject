@@ -16,6 +16,13 @@ MANIFEST = ROOT / "data" / "rerank_provider_full_rag_v1" / "eval_manifest.jsonl"
 APPROVAL_REF = "codex-thread:019fab5f-2aa9-71d2-9bc1-0ecaf3b6d931"
 
 
+def test_followup_window_has_a_new_declaration_identity():
+    assert runner.WINDOW_ID == "full-rag-provider-019fab5f-v2"
+    assert runner.DECLARATION_PATH.name == (
+        "full-rag-provider-019fab5f-v2-declaration.json"
+    )
+
+
 def _eval_report(
     *,
     provider: str,

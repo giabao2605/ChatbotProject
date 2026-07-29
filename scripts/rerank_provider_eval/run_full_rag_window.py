@@ -59,7 +59,7 @@ APPROVED_MANIFEST_SHA256 = (
 APPROVAL_REF = (
     "codex-thread:019fab5f-2aa9-71d2-9bc1-0ecaf3b6d931"
 )
-WINDOW_ID = "full-rag-provider-019fab5f-v1"
+WINDOW_ID = "full-rag-provider-019fab5f-v2"
 DECLARATION_PATH = (
     ROOT
     / "reports"
