@@ -906,11 +906,13 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
             "successful_requests": 5,
             "failed_requests": 0,
             "provider_retries": 0,
+            "completed_at": "2026-07-18T00:00:00Z",
             "provider_configuration_sha256": provider_sha,
             "provider_outcome": {"provider_blocked": False},
         }),
         encoding="utf-8",
     )
+    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-18T00:01:00Z")
     monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
     monkeypatch.setattr(
         rollout.subprocess,
@@ -966,6 +968,57 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
     )
 
     assert report["provider_configuration_sha256"] == provider_sha
+
+
+def test_crag_rollout_rejects_stale_provider_smoke_before_eval(monkeypatch, tmp_path):
+    from mech_chatbot.config import settings as settings_module
+    from mech_chatbot.config.settings import Settings
+
+    rollout = _load("crag_rollout_stale_smoke", "scripts/crag_eval/run_rollout.py")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "rollout"
+    provider_sha = (
+        "26e3767de31a51ce116fe21158fc060e9348b1a0ab766892467204504f751f2c"
+    )
+    smoke = tmp_path / "provider-smoke.json"
+    smoke.write_text(
+        json.dumps({
+            "schema": "provider-smoke-v1",
+            "passed": True,
+            "request_count": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+            "provider_retries": 0,
+            "completed_at": "2026-07-18T00:00:00Z",
+            "provider_configuration_sha256": provider_sha,
+            "provider_outcome": {"provider_blocked": False},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+    monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
+    monkeypatch.setattr(
+        settings_module,
+        "load_settings",
+        lambda: Settings.from_env({
+            "PROXYLLM_API_KEY": "test-provider-key",
+            "PROXYLLM_BASE_URL": "https://provider.example/v1",
+            "GPT_MODEL_NAME": "snapshot-model",
+            "MAX_CONCURRENT_RAG": "7",
+        }),
+    )
+    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-18T00:31:00Z")
+    monkeypatch.setattr(
+        rollout,
+        "_run",
+        lambda *args, **kwargs: pytest.fail("evaluation started with stale smoke"),
+    )
+
+    with pytest.raises(ValueError, match="older than 30 minutes"):
+        rollout.run_rollout(manifest, output, trace, provider_smoke_artifact=smoke)
 
 
 def test_rollout_rejects_dirty_tracked_worktree(monkeypatch):
