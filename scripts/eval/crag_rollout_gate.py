@@ -49,7 +49,17 @@ def compare_reports(
     baseline_cost = baseline_system.get("estimated_cost")
     candidate_cost = candidate_system.get("estimated_cost")
     correction_error_count = candidate_system.get("correction_error_count")
+    baseline_provider_failures = sum(
+        bool(row.get("provider_failure"))
+        for row in baseline_eval.get("cases", [])
+    )
+    candidate_provider_failures = sum(
+        bool(row.get("provider_failure"))
+        for row in candidate_cases
+    )
     checks = {
+        "baseline_provider_failures_zero": baseline_provider_failures == 0,
+        "candidate_provider_failures_zero": candidate_provider_failures == 0,
         "candidate_cases_passed": (
             candidate_eval.get("total_cases", 0) > 0
             and candidate_eval.get("passed_cases") == candidate_eval.get("total_cases")

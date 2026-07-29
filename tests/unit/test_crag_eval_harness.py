@@ -464,6 +464,104 @@ def test_eval_artifact_preserves_provider_retries_when_generation_stream_fails(t
         }
 
 
+def _provider_generation_errors():
+    import httpx
+    from openai import (
+        APIConnectionError,
+        APITimeoutError,
+        InternalServerError,
+    )
+
+    request = httpx.Request("POST", "https://provider.invalid")
+    response = httpx.Response(500, request=request)
+    return (
+        TimeoutError("generation timed out"),
+        APITimeoutError(request),
+        APIConnectionError(request=request),
+        InternalServerError("provider failed", response=response, body=None),
+    )
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    _provider_generation_errors(),
+    ids=lambda error: type(error).__name__,
+)
+def test_eval_artifact_marks_generation_provider_errors_inconclusive(
+    tmp_path,
+    provider_error,
+):
+    runner = _load(
+        f"run_eval_provider_error_{type(provider_error).__name__}",
+        "scripts/eval/run_eval.py",
+    )
+    manifest = tmp_path / "cases.jsonl"
+    manifest.write_text(json.dumps(_case(
+        failure_family="PROVIDER_FAILURE",
+        seed_case_id="case-1",
+        expected_policy={
+            "outcome": "full_answer",
+            "evidence_state": "SUFFICIENT",
+            "correction_allowed": False,
+        },
+        invariants=["leakage_zero"],
+        mutation_axes=[],
+        holdout=False,
+    )) + "\n", encoding="utf-8")
+
+    def failed_stream():
+        raise provider_error
+        yield "unreachable"
+
+    report, passed = runner.run_evaluation(
+        [manifest],
+        tmp_path / "output",
+        "candidate",
+        preflight=False,
+        intent_extractor=lambda *args, **kwargs: (
+            None, None, None, None, None, {"version_policy": "current_only"}
+        ),
+        rag_chat=lambda *args, **kwargs: (
+            failed_stream(), "", [], [], {"generation_metrics": {}}
+        ),
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is False
+    assert report["cases"][0]["provider_failure"] is True
+    assert report["provider_failure_count"] == 1
+    assert report["outcome_confusion"].get("wrong_refusal", 0) == 0
+    assert report["failure_family_evaluation"]["provider_failure_count"] == 1
+    assert report["failure_family_evaluation"]["decision"] == "inconclusive"
+
+
+def test_eval_does_not_hide_non_rag_timeout_as_provider_failure(tmp_path):
+    runner = _load(
+        "run_eval_non_rag_timeout",
+        "scripts/eval/run_eval.py",
+    )
+    manifest = tmp_path / "cases.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+
+    def failed_intent(*args, **kwargs):
+        raise TimeoutError("intent regression")
+
+    report, passed = runner.run_evaluation(
+        [manifest],
+        tmp_path / "output",
+        "candidate",
+        preflight=False,
+        intent_extractor=failed_intent,
+        rag_chat=lambda *args, **kwargs: (),
+        number_normalizer=lambda _value: set(),
+    )
+
+    assert passed is False
+    assert report["cases"][0]["provider_failure"] is False
+    assert report["provider_failure_count"] == 0
+    assert report["outcome_confusion"]["wrong_refusal"] == 1
+
+
 def test_eval_artifact_reports_failure_family_seed_and_holdout_coverage(tmp_path):
     runner = _load("run_eval_failure_families", "scripts/eval/run_eval.py")
     manifest = tmp_path / "failure-family.jsonl"

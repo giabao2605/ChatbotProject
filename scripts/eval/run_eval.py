@@ -13,6 +13,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from openai import APIConnectionError, APITimeoutError, InternalServerError
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -45,6 +47,16 @@ VALID_EXPECTED_OUTCOMES = {
 }
 RUN_LABELS = ("baseline", "candidate")
 EVALUATION_EXECUTION_MODE = "evaluation"
+PROVIDER_FAILURE_TYPES = (
+    TimeoutError,
+    APITimeoutError,
+    APIConnectionError,
+    InternalServerError,
+)
+PROVIDER_FAILURE_MARKERS = (
+    "no_capacity", "service_unavailable", "provider unavailable",
+    "provider timeout", "rate limit", "http 429", "http 503",
+)
 
 
 def _utc_now() -> str:
@@ -71,6 +83,20 @@ def _git_sha() -> str | None:
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
+
+
+def _is_provider_failure(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if (
+            isinstance(current, PROVIDER_FAILURE_TYPES)
+            or any(marker in str(current).casefold() for marker in PROVIDER_FAILURE_MARKERS)
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _execution_metrics(debug: dict, *, calculation_count: int | None = None) -> dict:
@@ -355,6 +381,7 @@ def run_evaluation(
         debug: dict = {}
         completion_outcome = None
         refusal_reason = None
+        rag_runtime_active = False
         try:
             intent = intent_extractor(
                 case["question"], [], case["user_department"], roles,
@@ -374,6 +401,7 @@ def run_evaluation(
                         os.environ.pop(name, None)
                     else:
                         os.environ[name] = str(value)
+                rag_runtime_active = True
                 if rag_chat is not None:
                     stream, ref_text, _, _, debug = rag_chat(
                         case["question"], None, [], [], case["user_department"], roles,
@@ -417,6 +445,7 @@ def run_evaluation(
                     answer = terminal.answer
                     completion_outcome = terminal.outcome
                     refusal_reason = terminal.refusal_reason
+                rag_runtime_active = False
             finally:
                 for name, value in previous_env.items():
                     if value is None:
@@ -627,11 +656,13 @@ def run_evaluation(
         except Exception as exc:
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
             latencies.append(latency_ms)
-            error_actual = "full_answer" if should_refuse else "insufficient_evidence"
-            outcome_rows.append({
-                "expected": expected, "actual": error_actual, "answer_correct": False,
-                "leaked": False, "legacy_admin_bypass": False,
-            })
+            provider_failure = rag_runtime_active and _is_provider_failure(exc)
+            if not provider_failure:
+                error_actual = "full_answer" if should_refuse else "insufficient_evidence"
+                outcome_rows.append({
+                    "expected": expected, "actual": error_actual, "answer_correct": False,
+                    "leaked": False, "legacy_admin_bypass": False,
+                })
             row = {
                 "id": case["id"], "passed": False, "expected_outcome": expected,
                 "actual_outcome": "error", "latency_ms": latency_ms,
@@ -660,13 +691,7 @@ def run_evaluation(
                 "failure_family": case.get("failure_family"),
                 "seed_case_id": case.get("seed_case_id"),
                 "holdout": bool(case.get("holdout")),
-                "provider_failure": any(
-                    marker in str(exc).casefold()
-                    for marker in (
-                        "no_capacity", "service_unavailable", "provider unavailable",
-                        "provider timeout", "rate limit", "http 429", "http 503",
-                    )
-                ),
+                "provider_failure": provider_failure,
                 **_execution_metrics(debug),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
@@ -782,6 +807,9 @@ def run_evaluation(
             },
         },
         "total_cases": len(cases), "passed_cases": sum(row["passed"] for row in rows),
+        "provider_failure_count": sum(
+            bool(row.get("provider_failure")) for row in rows
+        ),
         "outcome_confusion": summarize_outcomes(outcome_rows),
         "retrieval_recall_at_5": {
             "numerator": sum(bool(row.get("retrieval_passed")) for row in retrieval_rows),

@@ -695,6 +695,53 @@ def test_crag_rollout_gate_fails_closed_when_metrics_are_null():
     assert report["passed"] is False
 
 
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+def test_crag_rollout_gate_rejects_provider_failure_in_either_arm(arm):
+    baseline_eval = {
+        "outcome_confusion": {"wrong_refusal": 1, "wrong_answer": 0, "leakage": 0},
+        "cases": [{"provider_failure": arm == "baseline"}],
+    }
+    candidate_eval = {
+        "outcome_confusion": {"wrong_refusal": 0, "wrong_answer": 0, "leakage": 0},
+        "total_cases": 1,
+        "passed_cases": 1,
+        "feature_flags": {
+            "crag": "true",
+            "claim_repair": "true",
+            "semantic_cache": "false",
+        },
+        "cases": [{
+            "trace_id": "eval:candidate:case-1",
+            "provider_failure": arm == "candidate",
+        }],
+    }
+    baseline_trace = {
+        "system_metrics": {"latency_p95_ms": 100, "estimated_cost": 1}
+    }
+    candidate_trace = {
+        "system_metrics": {
+            "latency_p95_ms": 100,
+            "estimated_cost": 1,
+            "correction_rate": 0,
+            "repair_rate": 0,
+            "retry_rate": 0,
+            "max_corrections_per_query": 0,
+            "max_repairs_per_query": 0,
+            "correction_error_count": 0,
+        }
+    }
+
+    report = crag_gate.compare_reports(
+        baseline_eval,
+        candidate_eval,
+        baseline_trace,
+        candidate_trace,
+    )
+
+    assert report["checks"][f"{arm}_provider_failures_zero"] is False
+    assert report["passed"] is False
+
+
 def test_crag_rollout_gate_rejects_failed_correction_attempts():
     baseline_eval = {
         "outcome_confusion": {
