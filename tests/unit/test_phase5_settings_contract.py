@@ -252,6 +252,7 @@ def test_external_ai_projection_snapshots_local_policy_without_secrets():
             "APP_ENV": "development",
             "EXTERNAL_AI_LOCAL_DEVELOPMENT": "true",
             "EXTERNAL_PROCESSING_POLICY": "internal_only",
+            "RAG_EXECUTION_CONTEXT": "evaluation",
         }
     )
 
@@ -260,6 +261,7 @@ def test_external_ai_projection_snapshots_local_policy_without_secrets():
     assert external_ai.application_environment == "development"
     assert external_ai.local_development is True
     assert external_ai.processing_policy == "internal_only"
+    assert external_ai.execution_context == "evaluation"
     assert not hasattr(external_ai, "LLM_API_KEY")
 
 

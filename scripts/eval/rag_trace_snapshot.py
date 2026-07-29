@@ -20,6 +20,7 @@ from mech_chatbot.evaluation.metrics import nearest_rank
 
 
 DEFAULT_EXCLUDED_REASONS = {"client_cancelled"}
+RERANK_PROVIDERS = ("jina", "voyage")
 
 
 def _parse_timestamp(value: str | None):
@@ -67,10 +68,10 @@ def build_snapshot(
     retries_by_trace: Counter[str] = Counter()
     external_ai_latencies: dict[str, list[float]] = defaultdict(list)
     external_ai_statuses: dict[str, Counter[str]] = defaultdict(Counter)
-    voyage_statuses: Counter[str] = Counter()
-    voyage_fallbacks = 0
-    voyage_status_codes: Counter[str] = Counter()
-    voyage_retry_attempts = 0
+    rerank_statuses = {provider: Counter() for provider in RERANK_PROVIDERS}
+    rerank_fallbacks: Counter[str] = Counter()
+    rerank_status_codes = {provider: Counter() for provider in RERANK_PROVIDERS}
+    rerank_retry_attempts: Counter[str] = Counter()
     for raw in path.read_text(encoding="utf-8").splitlines():
         try:
             event = json.loads(raw)
@@ -117,12 +118,13 @@ def build_snapshot(
                 latency = 0.0
             external_ai_latencies[surface].append(latency)
             external_ai_statuses[surface][str(event.get("status") or "unknown")] += 1
-        if event.get("event") == "rerank" and event.get("backend") == "voyage":
-            voyage_statuses[str(event.get("status") or "unknown")] += 1
-            voyage_fallbacks += int(bool(event.get("fallback")))
+        provider = str(event.get("backend") or "")
+        if event.get("event") == "rerank" and provider in RERANK_PROVIDERS:
+            rerank_statuses[provider][str(event.get("status") or "unknown")] += 1
+            rerank_fallbacks[provider] += int(bool(event.get("fallback")))
             if event.get("provider_status_code") is not None:
-                voyage_status_codes[str(event.get("provider_status_code"))] += 1
-            voyage_retry_attempts += int(bool(event.get("retry_attempted")))
+                rerank_status_codes[provider][str(event.get("provider_status_code"))] += 1
+            rerank_retry_attempts[provider] += int(bool(event.get("retry_attempted")))
         if event.get("event") != "rag_end":
             continue
         query_count += 1
@@ -158,7 +160,21 @@ def build_snapshot(
             "latency_p95_ms": nearest_rank(ordered, 0.95),
             "latency_max_ms": max(ordered, default=None),
         }
-    voyage_calls = sum(voyage_statuses.values())
+    rerank_by_provider = {}
+    for provider in RERANK_PROVIDERS:
+        statuses = rerank_statuses[provider]
+        calls = sum(statuses.values())
+        fallbacks = rerank_fallbacks[provider]
+        rerank_by_provider[provider] = {
+            "call_count": calls,
+            "success_count": statuses.get("success", 0),
+            "error_count": statuses.get("error", 0),
+            "fallback_count": fallbacks,
+            "error_rate": statuses.get("error", 0) / calls if calls else 0.0,
+            "fallback_rate": fallbacks / calls if calls else 0.0,
+            "status_codes": dict(sorted(rerank_status_codes[provider].items())),
+            "retry_attempt_count": rerank_retry_attempts[provider],
+        }
     return {
         "schema": "rag-refusal-snapshot-v1",
         "source": {
@@ -183,18 +199,8 @@ def build_snapshot(
         "legacy_reason_events": legacy_reason_events,
         "event_counts": dict(sorted(event_counts.items())),
         "external_ai_latency": external_ai_latency,
-        "voyage_rerank": {
-            "call_count": voyage_calls,
-            "success_count": voyage_statuses.get("success", 0),
-            "error_count": voyage_statuses.get("error", 0),
-            "fallback_count": voyage_fallbacks,
-            "error_rate": (
-                voyage_statuses.get("error", 0) / voyage_calls if voyage_calls else 0.0
-            ),
-            "fallback_rate": voyage_fallbacks / voyage_calls if voyage_calls else 0.0,
-            "status_codes": dict(sorted(voyage_status_codes.items())),
-            "retry_attempt_count": voyage_retry_attempts,
-        },
+        "rerank_by_provider": rerank_by_provider,
+        "voyage_rerank": rerank_by_provider["voyage"],
         "system_metrics": {
             "query_count": query_count,
             "latency_p50_ms": nearest_rank(ordered_latencies, 0.50),
@@ -222,6 +228,9 @@ def build_snapshot(
 
 
 def render_markdown(report: dict) -> str:
+    rerank_by_provider = report.get("rerank_by_provider") or {
+        "voyage": report.get("voyage_rerank", {})
+    }
     lines = [
         "# RAG refusal snapshot",
         "",
@@ -230,7 +239,11 @@ def render_markdown(report: dict) -> str:
         f"- Denominator: {report['denominator']}",
         f"- Observed range: `{report['observed_range']['first']}` to `{report['observed_range']['last']}`",
         f"- Filters: `{json.dumps(report['filters'], ensure_ascii=False)}`",
-        f"- Voyage rerank: `{json.dumps(report.get('voyage_rerank', {}), ensure_ascii=False)}`",
+        *[
+            f"- {provider.title()} rerank: "
+            f"`{json.dumps(metrics, ensure_ascii=False)}`"
+            for provider, metrics in rerank_by_provider.items()
+        ],
         "",
         "| Refusal reason | Count |",
         "|---|---:|",

@@ -232,6 +232,80 @@ def test_snapshot_reports_voyage_error_and_local_fallback_rate(tmp_path):
         "status_codes": {"429": 1},
         "retry_attempt_count": 0,
     }
+    assert report["rerank_by_provider"]["jina"] == {
+        "call_count": 0,
+        "success_count": 0,
+        "error_count": 0,
+        "fallback_count": 0,
+        "error_rate": 0.0,
+        "fallback_rate": 0.0,
+        "status_codes": {},
+        "retry_attempt_count": 0,
+    }
+
+
+def test_snapshot_separates_supported_rerank_providers_and_preserves_voyage_summary(
+    tmp_path,
+):
+    snapshot = _load_snapshot_module()
+    path = tmp_path / "trace.jsonl"
+    events = [
+        {
+            "event": "rerank",
+            "execution_context": "evaluation",
+            "backend": "voyage",
+            "status": "success",
+            "fallback": False,
+            "provider_status_code": 200,
+        },
+        {
+            "event": "rerank",
+            "execution_context": "evaluation",
+            "backend": "jina",
+            "status": "error",
+            "fallback": True,
+            "provider_status_code": 429,
+            "retry_attempted": True,
+        },
+        {
+            "event": "rerank",
+            "execution_context": "evaluation",
+            "backend": "local_fusion",
+            "status": "success",
+            "fallback": False,
+        },
+    ]
+    path.write_text("\n".join(json.dumps(item) for item in events), encoding="utf-8")
+
+    report = snapshot.build_snapshot(path, execution_contexts={"evaluation"})
+
+    assert report["rerank_by_provider"] == {
+        "jina": {
+            "call_count": 1,
+            "success_count": 0,
+            "error_count": 1,
+            "fallback_count": 1,
+            "error_rate": 1.0,
+            "fallback_rate": 1.0,
+            "status_codes": {"429": 1},
+            "retry_attempt_count": 1,
+        },
+        "voyage": {
+            "call_count": 1,
+            "success_count": 1,
+            "error_count": 0,
+            "fallback_count": 0,
+            "error_rate": 0.0,
+            "fallback_rate": 0.0,
+            "status_codes": {"200": 1},
+            "retry_attempt_count": 0,
+        },
+    }
+    assert report["voyage_rerank"] == report["rerank_by_provider"]["voyage"]
+    assert "local_fusion" not in report["rerank_by_provider"]
+    markdown = snapshot.render_markdown(report)
+    assert "Jina" in markdown
+    assert "Voyage" in markdown
 
 
 def test_snapshot_emits_observed_event_and_request_budget_metrics(tmp_path):

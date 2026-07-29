@@ -125,6 +125,7 @@ DEFAULT_EXTERNAL_AI_SETTINGS = ExternalAiSettings(
     application_environment="",
     local_development=False,
     processing_policy=ALL_EXTERNAL,
+    execution_context="production",
 )
 
 
@@ -398,6 +399,15 @@ def _assert_profile_allows(
 ) -> None:
     if not profile.is_active:
         raise ExternalProcessingDenied(f"Provider '{profile.provider}' dang bi tat")
+    if (
+        str(profile.policy_version).strip().casefold().startswith(
+            "evaluation-only-"
+        )
+        and str(settings.execution_context).strip().casefold() != "evaluation"
+    ):
+        raise ExternalProcessingDenied(
+            f"Provider '{profile.provider}' chi duoc phep trong evaluation context"
+        )
     if profile.review_expires_at is None and not _is_explicit_local_development(
         settings
     ):

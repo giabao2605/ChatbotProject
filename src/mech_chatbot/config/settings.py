@@ -657,6 +657,7 @@ class ExternalAiSettings:
     application_environment: str
     local_development: bool
     processing_policy: str
+    execution_context: str = "production"
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "ExternalAiSettings":
@@ -664,6 +665,7 @@ class ExternalAiSettings:
             application_environment=settings.APP_ENV,
             local_development=settings.EXTERNAL_AI_LOCAL_DEVELOPMENT,
             processing_policy=settings.EXTERNAL_PROCESSING_POLICY,
+            execution_context=settings.RAG_EXECUTION_CONTEXT,
         )
 
 

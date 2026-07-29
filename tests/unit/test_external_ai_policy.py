@@ -15,11 +15,13 @@ def _external_settings(
     environment: str = "",
     local: bool = False,
     policy: str = "all_external",
+    execution_context: str = "production",
 ) -> ExternalAiSettings:
     return ExternalAiSettings(
         application_environment=environment,
         local_development=local,
         processing_policy=policy,
+        execution_context=execution_context,
     )
 
 
@@ -28,7 +30,13 @@ def _provider_profile_test_boundary():
     yield
 
 
-def _profile(provider="proxyllm", surfaces=("generation", "vision_ocr"), *, expires_in_days=30):
+def _profile(
+    provider="proxyllm",
+    surfaces=("generation", "vision_ocr"),
+    *,
+    expires_in_days=30,
+    policy_version="test-v1",
+):
     return external_ai.ExternalAIProviderProfile(
         provider=provider,
         endpoint="https://provider.example/v1",
@@ -36,7 +44,7 @@ def _profile(provider="proxyllm", surfaces=("generation", "vision_ocr"), *, expi
         secret_reference="env:TEST_API_KEY",
         allowed_surfaces=tuple(surfaces),
         retention_mode="test-retention",
-        policy_version="test-v1",
+        policy_version=policy_version,
         approved_by="tester",
         risk_acceptance_ref="test:risk-acceptance",
         review_expires_at=datetime.now() + timedelta(days=expires_in_days),
@@ -163,6 +171,69 @@ def test_inactive_profile_fails_closed():
         client.prepare_call(model="model-test", surface="generation")
 
 
+def test_evaluation_only_profile_is_allowed_only_in_evaluation_context():
+    profile = _profile(
+        "jina",
+        ("reranking",),
+        policy_version="evaluation-only-v1",
+    )
+
+    spec = external_ai.make_external_call_spec(
+        provider="jina",
+        model="jina-reranker-v3",
+        surface="reranking",
+        profile=profile,
+        settings=_external_settings(execution_context="evaluation"),
+    )
+
+    assert spec.policy_version == "evaluation-only-v1"
+
+
+@pytest.mark.parametrize("execution_context", ["production", "local", "test", ""])
+def test_evaluation_only_profile_fails_closed_outside_evaluation(
+    execution_context,
+):
+    profile = _profile(
+        "jina",
+        ("reranking",),
+        policy_version="evaluation-only-v1",
+    )
+
+    with pytest.raises(
+        external_ai.ExternalProcessingDenied,
+        match="evaluation",
+    ):
+        external_ai.make_external_call_spec(
+            provider="jina",
+            model="jina-reranker-v3",
+            surface="reranking",
+            profile=profile,
+            settings=_external_settings(execution_context=execution_context),
+        )
+
+
+def test_inactive_evaluation_only_profile_fails_closed_in_evaluation():
+    profile = external_ai.ExternalAIProviderProfile(
+        **{
+            **_profile(
+                "jina",
+                ("reranking",),
+                policy_version="evaluation-only-v1",
+            ).__dict__,
+            "is_active": False,
+        }
+    )
+
+    with pytest.raises(external_ai.ExternalProcessingDenied, match="dang bi tat"):
+        external_ai.make_external_call_spec(
+            provider="jina",
+            model="jina-reranker-v3",
+            surface="reranking",
+            profile=profile,
+            settings=_external_settings(execution_context="evaluation"),
+        )
+
+
 def test_missing_managed_profile_fails_closed_outside_local_development(monkeypatch):
     monkeypatch.setattr(external_ai, "_load_managed_provider_profile", lambda _provider: None)
 
@@ -253,6 +324,42 @@ def test_jina_evaluation_profile_migration_is_additive_metadata_only_and_audited
     assert "019fab5f-2aa9-71d2-9bc1-0ecaf3b6d931" in migration
     assert "external_ai_jina_evaluation_profile_created" in migration
     assert "UPDATE dbo.ExternalAIProviderProfile" not in migration
+    assert "JINA_API_KEY=" not in migration
+    assert "release_decisions" not in migration
+
+
+def test_jina_evaluation_activation_migration_is_exact_fail_closed_and_idempotent():
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "database"
+        / "migrations"
+        / "V0041__activate_evaluation_only_jina_profile.sql"
+    ).read_text(encoding="utf-8")
+
+    for exact_value in (
+        "https://api.jina.ai/v1",
+        "jina-reranker-v3",
+        "env:JINA_API_KEY",
+        'N\'["reranking"]\'',
+        "provider_default_no_training",
+        "evaluation-only-v1",
+        "technical-evaluation-only",
+        "codex-thread:019fab5f-2aa9-71d2-9bc1-0ecaf3b6d931",
+        "V0040 migration",
+        "codex-eval-closeout",
+    ):
+        assert exact_value in migration
+    assert "ReviewExpiresAt > GETDATE()" in migration
+    assert "ReviewExpiresAt <= DATEADD(day, 30, GETDATE())" in migration
+    assert "IsActive = 0" in migration
+    assert "AND UpdatedBy = 'V0040 migration'" in migration
+    assert "OR (IsActive = 0 AND UpdatedBy = 'codex-eval-closeout')" in migration
+    assert "OR (IsActive = 1 AND UpdatedBy = 'V0041 migration')" in migration
+    assert "SET IsActive = 1" in migration
+    assert "THROW" in migration
+    assert "@jina_profile_activated = 1" in migration
+    assert "external_ai_jina_evaluation_profile_activated" in migration
+    assert "NOT EXISTS" in migration
     assert "JINA_API_KEY=" not in migration
     assert "release_decisions" not in migration
 
