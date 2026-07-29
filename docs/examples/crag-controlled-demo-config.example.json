@@ -3,7 +3,7 @@
   "experiment_id": "crag-controlled-demo-v1",
   "git_sha": "REPLACE_WITH_CLEAN_COMMIT",
   "start_at": "REPLACE_WITH_UTC_START",
-  "end_at": "REPLACE_WITH_UTC_START_PLUS_7_TO_14_DAYS",
+  "end_at": "REPLACE_WITH_UTC_START_PLUS_MAX_3_DAYS",
   "eligible_cohort": {
     "department": "Technical",
     "site": "HQ",
@@ -16,11 +16,12 @@
     "maximum_users": 10
   },
   "checkpoint_matched_pairs": 20,
-  "target_matched_pairs": 100,
+  "target_matched_pairs": 20,
   "assignment_version": "hmac-sha256-v1",
   "sampling_version": "sha256-25pct-v1",
   "snapshot_fingerprint": "REPLACE_WITH_TAILIEUKYTHUAT_V2_SNAPSHOT",
   "collection": "TaiLieuKyThuat_v2",
+  "max_concurrent_rag": 4,
   "activation_bundle": {
     "path": "REPLACE_WITH_CONTROLLED_DEMO_BUNDLE_PATH",
     "sha256": "REPLACE_WITH_BUNDLE_SHA256"

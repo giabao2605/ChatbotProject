@@ -12,6 +12,7 @@ from pathlib import Path
 from mech_chatbot.governance.artifact_references import load_json_reference
 from mech_chatbot.governance.provider_smoke import (
     provider_smoke_artifact_valid,
+    provider_smoke_fresh_for_baseline,
 )
 
 
@@ -198,6 +199,13 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         )
     except (TypeError, ValueError):
         provider_smoke_precedes_pair = False
+    provider_smoke_fresh_for_pair = (
+        provider_smoke_valid
+        and provider_smoke_fresh_for_baseline(
+            provider_smoke,
+            baseline_started_at=baseline.get("started_at"),
+        )
+    )
     gate = pair.get("gate") or {}
     gate_artifact = _load_verified_artifact(gate, root=root)
     gate_schema_valid = (
@@ -264,6 +272,7 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         "production_collection_not_mutated": production_collection_not_mutated,
         "provider_smoke_artifact_valid": provider_smoke_valid,
         "provider_smoke_precedes_pair": provider_smoke_precedes_pair,
+        "provider_smoke_fresh_for_pair": provider_smoke_fresh_for_pair,
         "gate_artifact_present": gate_artifact is not None,
         "gate_schema_valid": gate_schema_valid,
         "gate_stage_valid": gate_stage_valid,

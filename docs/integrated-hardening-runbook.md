@@ -132,10 +132,10 @@ collections inside one pair:
 .\chat_env\Scripts\python.exe -m scripts.graph_eval.run_rollout ...
 ```
 
-Every runner requires `--provider-smoke-artifact` from a fresh 5/5 smoke for
-that pair. The runner binds its hash and provider identity into
-`rollout_pair.json`; a missing, stale-order, failed or mismatched smoke makes
-the pair ineligible.
+Every runner requires `--provider-smoke-artifact` from a fresh 5/5 smoke
+completed no more than 30 minutes before that pair. The runner binds its hash
+and provider identity into `rollout_pair.json`; a missing, expired,
+stale-order, failed or mismatched smoke makes the pair ineligible.
 
 For every combination, preserve the same manifest, SQL/Qdrant snapshot,
 provider configuration, commit and concurrency between baseline and candidate.

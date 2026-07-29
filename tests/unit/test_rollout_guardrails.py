@@ -177,6 +177,23 @@ def test_rollout_pair_rejects_malformed_provider_outcome(tmp_path):
     assert report["production_eligible"] is False
 
 
+def test_rollout_pair_rejects_provider_smoke_older_than_thirty_minutes(tmp_path):
+    pair = _pair(tmp_path)
+    smoke_path = Path(pair["provider_smoke"]["artifact_path"])
+    smoke = json.loads(smoke_path.read_text(encoding="utf-8"))
+    smoke["completed_at"] = "2026-07-13T23:29:59Z"
+    smoke_path.write_text(json.dumps(smoke), encoding="utf-8")
+    pair["provider_smoke"]["artifact_sha256"] = hashlib.sha256(
+        smoke_path.read_bytes()
+    ).hexdigest()
+
+    report = evaluate_rollout_pair(pair)
+
+    assert report["checks"]["provider_smoke_precedes_pair"] is True
+    assert report["checks"]["provider_smoke_fresh_for_pair"] is False
+    assert report["production_eligible"] is False
+
+
 def test_rollout_pair_requires_identical_baseline_and_candidate_conditions(tmp_path):
     candidate = _context(
         tmp_path, arm="candidate", provider_configuration_sha256="provider-v2"

@@ -256,6 +256,7 @@ class HealthResponse(BaseModel):
     deployment_id: Optional[str] = None
     git_sha: Optional[str] = None
     snapshot_fingerprint: Optional[str] = None
+    qdrant_collection: Optional[str] = None
     feature_flags: Dict[str, bool] = Field(default_factory=dict)
     feature_versions: Dict[str, str] = Field(default_factory=dict)
     activation_scope: str = "default_rollout"
@@ -416,6 +417,7 @@ async def health_check(
     activation = _activation_for(server_state)
     environment = _environment_snapshot(server_state.settings)
     semaphore = getattr(server_state.runtime, "semaphore", None)
+    retrieval = getattr(server_state.runtime, "retrieval", None)
 
     return HealthResponse(
         status="ok" if server_state.ready and activation.valid else "degraded",
@@ -426,6 +428,11 @@ async def health_check(
         deployment_id=process.deployment_id,
         git_sha=process.deployment_git_sha,
         snapshot_fingerprint=process.snapshot_fingerprint,
+        qdrant_collection=getattr(
+            retrieval,
+            "collection_name",
+            server_state.settings.QDRANT_COLLECTION,
+        ),
         feature_flags=feature_flags(environment),
         feature_versions=feature_versions(environment),
         activation_scope=activation.scope,

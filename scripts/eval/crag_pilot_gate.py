@@ -20,6 +20,100 @@ from mech_chatbot.evaluation.crag_pilot import (
 )
 
 
+CHECKPOINT_CHECKS = (
+    "time_range_valid",
+    "matched_pairs_unique",
+    "matched_pair_payload_complete",
+    "pair_timestamps_in_window",
+    "both_arms_observed",
+    "all_pairs_adjudicated",
+    "cohort_immutable",
+    "assignment_events_unique",
+    "pair_assignment_consistent",
+    "owners_assigned",
+    "reviewer_signoff_complete",
+    "review_governance_valid",
+    "daily_sampling_complete",
+    "sampled_pairs_complete",
+    "assignment_timestamps_in_window",
+    "isolated_deployments",
+    "feature_flags_correct",
+    "deployment_preflight_passed",
+    "assignment_version_pinned",
+    "sampling_version_pinned",
+    "snapshot_pinned",
+    "voyage_policy_pinned",
+    "wrong_refusal_reduced",
+    "wrong_answer_not_increased",
+    "leakage_zero",
+    "latency_within_budget",
+    "cost_within_budget",
+    "correction_budget",
+    "repair_budget",
+    "claim_precision_at_least_99",
+    "citation_accuracy_at_least_99",
+    "no_abort_condition",
+)
+
+
+def build_checkpoint_artifact(
+    artifact: dict, *, required_pairs: int = 20, maximum_days: float = 3.0,
+) -> dict:
+    checks = artifact.get("checks") or {}
+    missing = [
+        name for name in CHECKPOINT_CHECKS
+        if checks.get(name) is not True and checks.get(name) is not False
+    ]
+    failed = [
+        name for name in CHECKPOINT_CHECKS
+        if checks.get(name) is False
+    ]
+    abort = artifact.get("abort") or {}
+    matched_pairs = int(artifact.get("matched_pair_count") or 0)
+    duration_days = float(artifact.get("duration_days") or 0.0)
+    if abort.get("triggered") is True:
+        decision = "aborted"
+    elif duration_days > maximum_days:
+        decision = "rejected"
+    elif failed:
+        decision = "rejected"
+    elif missing or artifact.get("decision") not in {"running", "accepted"}:
+        decision = "inconclusive"
+    elif matched_pairs >= required_pairs:
+        decision = "checkpoint_go"
+    elif duration_days >= maximum_days:
+        decision = "inconclusive"
+    else:
+        decision = "running"
+    return {
+        "schema": "crag-controlled-demo-checkpoint-v1",
+        "source_pilot_schema": artifact.get("schema"),
+        "source_pilot_sha256": canonical_artifact_sha256(artifact),
+        "source_pilot_decision": artifact.get("decision"),
+        "decision": decision,
+        "passed": decision in {"running", "checkpoint_go"},
+        "matched_pair_count": matched_pairs,
+        "required_matched_pairs": required_pairs,
+        "duration_days": duration_days,
+        "maximum_duration_days": maximum_days,
+        "abort": abort,
+        "failed_checks": failed,
+        "missing_checks": missing,
+        "checks": {name: checks.get(name) for name in CHECKPOINT_CHECKS},
+    }
+
+
+def pilot_exit_code(artifact: dict, *, checkpoint: bool) -> int:
+    """Return success only for a final pass or a safe controlled-demo checkpoint."""
+    if not checkpoint:
+        return 0 if artifact.get("passed") is True else 2
+    return 0 if (
+        artifact.get("schema") == "crag-controlled-demo-checkpoint-v1"
+        and artifact.get("decision") in {"running", "checkpoint_go"}
+        and artifact.get("passed") is True
+    ) else 2
+
+
 def _read_jsonl(path: Path) -> list[dict]:
     rows = []
     for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -98,6 +192,11 @@ def main(argv: list[str] | None = None) -> int:
         "--candidate-latency-breakdown", type=Path, action="append", required=True
     )
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--checkpoint",
+        action="store_true",
+        help="Allow a safe in-progress pilot while preserving all abort checks.",
+    )
     args = parser.parse_args(argv)
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         raise ValueError(f"refusing to overwrite non-empty output: {args.output_dir}")
@@ -186,6 +285,13 @@ def main(argv: list[str] | None = None) -> int:
         assignment_events=_read_jsonl(args.assignments),
         monitoring_windows=_read_jsonl(args.windows),
     )
+    checkpoint_marker = None
+    if args.checkpoint:
+        required_pairs = int(config.get("checkpoint_matched_pairs") or 20)
+        checkpoint_marker = build_checkpoint_artifact(
+            artifact,
+            required_pairs=required_pairs,
+        )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "pilot.json").write_text(
         json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -193,7 +299,15 @@ def main(argv: list[str] | None = None) -> int:
     (args.output_dir / "pilot.md").write_text(
         _render_markdown(artifact), encoding="utf-8"
     )
-    return 0 if artifact["passed"] else 2
+    if checkpoint_marker is not None:
+        (args.output_dir / "checkpoint.json").write_text(
+            json.dumps(checkpoint_marker, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return pilot_exit_code(
+        checkpoint_marker if checkpoint_marker is not None else artifact,
+        checkpoint=args.checkpoint,
+    )
 
 
 if __name__ == "__main__":

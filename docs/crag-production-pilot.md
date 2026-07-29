@@ -132,6 +132,14 @@ chat_env\Scripts\python.exe -m scripts.eval.crag_pilot_gate `
   --output-dir reports\crag-pilot\decision
 ```
 
+Trong controlled demo, chạy cùng lệnh với `--checkpoint` và một `--output-dir`
+mới sau mỗi attended window. Lệnh giữ nguyên `pilot.json` theo schema production
+pilot và ghi thêm `checkpoint.json`. Checkpoint an toàn trước ngưỡng có decision
+`running`; đủ 20 matched pair thì có `checkpoint_go`; hết ba ngày mà chưa đủ
+thì `inconclusive`. Abort, check thiếu hoặc check fail đều trả exit code khác
+`0` và bắt buộc dừng gateway, candidate rồi control. Checkpoint không thay thế
+final gate 100 pair/7–14 ngày.
+
 The gate hashes assignments, pairs, monitoring windows, preflight, both raw arm
 traces and every latency artifact into the decision artifact, and binds each file
 hash to a canonical content digest. The two arms must use distinct trace,

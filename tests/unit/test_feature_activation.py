@@ -519,7 +519,7 @@ def test_default_rollout_allows_historical_rejection_only_for_late_interaction(
 
 def test_controlled_demo_rejects_accepted_decision_when_gate_failed(tmp_path):
     bundle_path, bundle_sha = _controlled_crag_bundle(
-        tmp_path, evidence_passed=False,
+        tmp_path, evidence_passed=False, single_owner=True, bind_governance=True,
     )
     result = activation_status(
         _environment(
@@ -542,7 +542,9 @@ def test_controlled_demo_rejects_accepted_decision_when_gate_failed(tmp_path):
 
 
 def test_controlled_demo_crag_uses_pre_pilot_authorization_not_pilot_outcome(tmp_path):
-    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    bundle_path, bundle_sha = _controlled_crag_bundle(
+        tmp_path, single_owner=True, bind_governance=True,
+    )
 
     result = activation_status(
         _environment(
@@ -568,7 +570,9 @@ def test_controlled_demo_crag_uses_pre_pilot_authorization_not_pilot_outcome(tmp
 
 
 def test_controlled_demo_crag_rechecks_nested_provider_smoke_hashes(tmp_path):
-    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    bundle_path, bundle_sha = _controlled_crag_bundle(
+        tmp_path, single_owner=True, bind_governance=True,
+    )
     smoke_path = tmp_path / "provider-smoke-2.json"
     smoke = json.loads(smoke_path.read_text(encoding="utf-8"))
     smoke["provider_retries"] = 1
@@ -591,7 +595,9 @@ def test_controlled_demo_crag_rechecks_nested_provider_smoke_hashes(tmp_path):
 
 
 def test_controlled_demo_crag_rechecks_pair_eval_trace_chain(tmp_path):
-    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    bundle_path, bundle_sha = _controlled_crag_bundle(
+        tmp_path, single_owner=True, bind_governance=True,
+    )
     eval_path = tmp_path / "pair-2-candidate-eval.json"
     evaluation = json.loads(eval_path.read_text(encoding="utf-8"))
     evaluation["snapshot_fingerprint"] = "tampered-snapshot"
@@ -614,7 +620,9 @@ def test_controlled_demo_crag_rechecks_pair_eval_trace_chain(tmp_path):
 
 
 def test_controlled_demo_crag_rechecks_evaluation_foundation_reference(tmp_path):
-    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    bundle_path, bundle_sha = _controlled_crag_bundle(
+        tmp_path, single_owner=True, bind_governance=True,
+    )
     foundation_path = tmp_path / "evaluation-foundation.json"
     _write_json(
         foundation_path,
@@ -655,6 +663,37 @@ def test_crag_demo_authorization_rejects_smoke_run_after_pair_started(tmp_path):
 
     assert artifact["passed"] is False
     assert artifact["checks"]["provider_smokes_precede_pairs"] is False
+    assert artifact["checks"]["provider_smokes_fresh_for_pairs"] is False
+    assert validate_crag_demo_authorization(artifact, root=tmp_path)["passed"] is False
+
+
+def test_crag_demo_authorization_requires_smokes_bound_to_pairs(tmp_path):
+    _controlled_crag_bundle(tmp_path)
+    substitute_smoke = tmp_path / "provider-smoke-2-substitute.json"
+    _write_json(substitute_smoke, {
+        "schema": "provider-smoke-v1",
+        "completed_at": "2026-07-20T01:59:30Z",
+        "request_count": 5,
+        "successful_requests": 5,
+        "failed_requests": 0,
+        "provider_retries": 0,
+        "provider_configuration_sha256": "provider-v1",
+        "provider_outcome": {"provider_blocked": False},
+        "passed": True,
+    })
+
+    artifact = build_crag_demo_authorization(
+        series_path=tmp_path / "crag-series.json",
+        provider_smoke_paths=[
+            tmp_path / "provider-smoke-1.json",
+            substitute_smoke,
+            tmp_path / "provider-smoke-3.json",
+        ],
+        root=tmp_path,
+    )
+
+    assert artifact["passed"] is False
+    assert artifact["checks"]["provider_smokes_bound_to_pairs"] is False
     assert validate_crag_demo_authorization(artifact, root=tmp_path)["passed"] is False
 
 
@@ -932,6 +971,48 @@ def test_controlled_bundle_builder_rejects_failed_gate_and_unbound_single_owner(
             output=tmp_path / "ungoverned-owner-bundle.json",
             root=tmp_path,
         )
+
+
+def test_controlled_bundle_builder_requires_review_governance_for_feature_on(
+    tmp_path,
+):
+    _controlled_crag_bundle(tmp_path)
+
+    with pytest.raises(ValueError, match="requires review governance"):
+        build_activation_bundle(
+            scope="controlled_demo",
+            profile="crag_claim",
+            source_commit="a" * 40,
+            decision_ledger=tmp_path / "controlled-demo-decisions.json",
+            output=tmp_path / "ungoverned-controlled-bundle.json",
+            root=tmp_path,
+        )
+
+
+def test_controlled_demo_runtime_rejects_feature_on_bundle_without_governance(
+    tmp_path,
+):
+    bundle_path, bundle_sha = _controlled_crag_bundle(
+        tmp_path, single_owner=True, bind_governance=True,
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle.pop("review_governance", None)
+    bundle_sha = _write_json(bundle_path, bundle)
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.reason == "review_governance_missing"
 
 
 def test_health_reports_complete_activation_contract(monkeypatch):

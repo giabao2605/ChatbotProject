@@ -534,6 +534,13 @@ def _resolve_activation_review_mode(
 ) -> tuple[ActivationStatus | None, str]:
     review_mode = "multi_reviewer"
     if bundle.get("review_governance") is None:
+        if scope == "controlled_demo" and enabled:
+            return _activation_evidence_failure(
+                scope, "review_governance_missing", enabled,
+                profile=profile,
+                source_commit=source_commit,
+                digest=digest,
+            ), review_mode
         return None, review_mode
     governance_artifact = load_json_reference(
         bundle.get("review_governance"), root=project_root,

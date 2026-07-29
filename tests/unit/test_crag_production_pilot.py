@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import asyncio
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -315,6 +317,8 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
         "assignment_version": "hmac-sha256-v1",
         "sampling_version": "sha256-25pct-v1",
         "snapshot_fingerprint": "snapshot-v1",
+        "collection": "TaiLieuKyThuat_v2",
+        "max_concurrent_rag": 4,
         "runtime_contract": {
             "execution_context": "production",
             "evaluation_force_ambiguous": False,
@@ -346,6 +350,8 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
             "passed": True,
             "git_sha": "c155670",
             "snapshot_fingerprint": "snapshot-v1",
+            "collection": "TaiLieuKyThuat_v2",
+            "max_concurrent_rag": 4,
             "runtime_contract": {
                 "execution_context": "production",
                 "evaluation_force_ambiguous": False,
@@ -354,6 +360,8 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
             "deployments": {
                 "control": {
                     "id": "control-c155670",
+                    "qdrant_collection": "TaiLieuKyThuat_v2",
+                    "max_concurrent": 4,
                     "feature_flags": {
                         "RAG_CRAG_ENABLED": False,
                         "RAG_CLAIM_REPAIR_ENABLED": False,
@@ -366,6 +374,8 @@ def _pilot_inputs(*, pair_count=100, duration_days=8):
                 },
                 "candidate": {
                     "id": "candidate-c155670",
+                    "qdrant_collection": "TaiLieuKyThuat_v2",
+                    "max_concurrent": 4,
                     "feature_flags": {
                         "RAG_CRAG_ENABLED": True,
                         "RAG_CLAIM_REPAIR_ENABLED": True,
@@ -713,6 +723,26 @@ def test_pilot_is_inconclusive_after_fourteen_days_without_enough_pairs():
     assert artifact["checks"]["minimum_matched_pairs"] is False
 
 
+def test_twenty_pair_controlled_demo_checkpoint_goes_without_rollout_prerequisites():
+    config, pairs, assignments, windows = _pilot_inputs(pair_count=20, duration_days=2)
+    artifact = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+    script = Path("scripts/eval/crag_pilot_gate.py")
+    spec = importlib.util.spec_from_file_location("crag_pilot_gate_checkpoint", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    checkpoint = module.build_checkpoint_artifact(artifact)
+
+    assert artifact["decision"] == "running"
+    assert artifact["checks"]["minimum_seven_days"] is False
+    assert artifact["checks"]["minimum_matched_pairs"] is False
+    assert checkpoint["decision"] == "checkpoint_go"
+    assert checkpoint["passed"] is True
+
+
 def test_pilot_artifact_rejects_raw_prompt_or_credentials():
     config, pairs, assignments, windows = _pilot_inputs()
     pairs[0]["raw_prompt"] = "secret question"
@@ -905,6 +935,8 @@ def test_deployment_preflight_requires_same_commit_snapshot_and_opposite_flags()
     config = {
         "git_sha": "c155670",
         "snapshot_fingerprint": "snapshot-v1",
+        "collection": "TaiLieuKyThuat_v2",
+        "max_concurrent_rag": 4,
         "runtime_contract": {
             "execution_context": "production",
             "evaluation_force_ambiguous": False,
@@ -918,6 +950,8 @@ def test_deployment_preflight_requires_same_commit_snapshot_and_opposite_flags()
     control = {
         "status": "ok", "deployment_id": "control-1", "git_sha": "c155670",
         "snapshot_fingerprint": "snapshot-v1",
+        "qdrant_collection": "TaiLieuKyThuat_v2",
+        "max_concurrent": 4,
         "feature_flags": {
             "RAG_CRAG_ENABLED": False, "RAG_CLAIM_REPAIR_ENABLED": False,
         },
@@ -928,6 +962,8 @@ def test_deployment_preflight_requires_same_commit_snapshot_and_opposite_flags()
     candidate = {
         "status": "ok", "deployment_id": "candidate-1", "git_sha": "c155670",
         "snapshot_fingerprint": "snapshot-v1",
+        "qdrant_collection": "TaiLieuKyThuat_v2",
+        "max_concurrent": 4,
         "feature_flags": {
             "RAG_CRAG_ENABLED": True, "RAG_CLAIM_REPAIR_ENABLED": True,
         },
@@ -964,6 +1000,26 @@ def test_deployment_preflight_requires_same_commit_snapshot_and_opposite_flags()
         {**control, "request_deadline_seconds": "120.0"},
         candidate,
     )
+    missing_collection = validate_deployment_contract(
+        {key: value for key, value in config.items() if key != "collection"},
+        control,
+        candidate,
+    )
+    wrong_collection = validate_deployment_contract(
+        {**config, "collection": "OtherCollection"},
+        control,
+        candidate,
+    )
+    mismatched_collection = validate_deployment_contract(
+        config,
+        control,
+        {**candidate, "qdrant_collection": "OtherCollection"},
+    )
+    wrong_concurrency = validate_deployment_contract(
+        config,
+        {**control, "max_concurrent": 2},
+        candidate,
+    )
     candidate["snapshot_fingerprint"] = "different"
     failed = validate_deployment_contract(config, control, candidate)
 
@@ -976,7 +1032,37 @@ def test_deployment_preflight_requires_same_commit_snapshot_and_opposite_flags()
     assert unpinned_deadline["checks"]["runtime_contract_pinned"] is False
     assert canonical_deadline["passed"] is True
     assert canonical_deadline["runtime_contract"]["request_deadline_seconds"] == 120.0
+    assert missing_collection["checks"]["collection_pinned"] is False
+    assert wrong_collection["checks"]["collection_pinned"] is False
+    assert mismatched_collection["checks"]["collection_pinned"] is False
+    assert wrong_concurrency["checks"]["concurrency_pinned"] is False
     assert failed["passed"] is False
+
+
+def test_deployment_preflight_cli_rejects_nonlocal_arms(tmp_path, monkeypatch):
+    script = Path("scripts/eval/crag_pilot_preflight.py")
+    spec = importlib.util.spec_from_file_location("crag_pilot_preflight", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "deployment_urls": {
+            "control": "https://spoof.example/control",
+            "candidate": "https://spoof.example/candidate",
+        },
+    }), encoding="utf-8")
+    monkeypatch.setattr(
+        module.requests,
+        "get",
+        lambda *args, **kwargs: pytest.fail("must reject before any HTTP request"),
+    )
+
+    with pytest.raises(ValueError, match="pinned to local arms"):
+        module.main([
+            "--config", str(config_path),
+            "--output", str(tmp_path / "preflight.json"),
+        ])
 
 
 def test_health_reports_runtime_contract_used_by_requests(monkeypatch):
@@ -987,13 +1073,66 @@ def test_health_reports_runtime_contract_used_by_requests(monkeypatch):
     monkeypatch.setenv("RAG_REQUEST_DEADLINE_SECONDS", "90")
 
     application = rag_server.create_rag_app(Settings.from_env())
-    health = asyncio.run(
-        rag_server.health_check(server_state=application.state.rag_server)
+    configured_state = application.state.rag_server
+    runtime = SimpleNamespace(
+        runtime_contract=SimpleNamespace(
+            to_dict=lambda: {
+                "execution_context": "production",
+                "evaluation_force_ambiguous": False,
+                "request_deadline_seconds": 90.0,
+            }
+        ),
+        retrieval=SimpleNamespace(collection_name="runtime-collection"),
+        semaphore=SimpleNamespace(_value=4),
     )
+    health = asyncio.run(rag_server.health_check(
+        server_state=replace(configured_state, runtime=runtime)
+    ))
 
     assert health.execution_context == "production"
     assert health.evaluation_force_ambiguous is False
     assert health.request_deadline_seconds == 90.0
+    assert health.qdrant_collection == "runtime-collection"
+
+
+def test_controlled_demo_launcher_pins_collection_and_concurrency():
+    launcher = Path("scripts/ops/start_crag_controlled_demo.ps1").read_text(
+        encoding="utf-8"
+    )
+    enable = Path("scripts/ops/enable_crag_controlled_demo.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert '$demoConfig.collection -ne "TaiLieuKyThuat_v2"' in launcher
+    assert "$demoConfig.max_concurrent_rag -ne 4" in launcher
+    assert "QDRANT_COLLECTION = [string]$demoConfig.collection" in launcher
+    assert "MAX_CONCURRENT_RAG = [string]$demoConfig.max_concurrent_rag" in launcher
+    assert '$pinnedControlUrl = "http://127.0.0.1:8101"' in launcher
+    assert '$pinnedCandidateUrl = "http://127.0.0.1:8102"' in launcher
+    assert "deployment_urls phai pin" in launcher
+    assert "RAG_SERVER_URL = $pinnedControlUrl" in enable
+    assert "CRAG_PILOT_CANDIDATE_URL = $pinnedCandidateUrl" in enable
+
+
+def test_deployment_preflight_cli_rejects_unpinned_urls(tmp_path):
+    script = Path("scripts/eval/crag_pilot_preflight.py")
+    spec = importlib.util.spec_from_file_location("crag_pilot_preflight", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "deployment_urls": {
+            "control": "http://127.0.0.1:8101",
+            "candidate": "http://example.test:8102",
+        },
+    }), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="pinned to local arms"):
+        module.main([
+            "--config", str(config_path),
+            "--output", str(tmp_path / "preflight.json"),
+        ])
 
 
 def test_confusion_is_canonical_for_safety_gate_and_conflicts_fail_closed():
@@ -1139,6 +1278,41 @@ def test_deployment_preflight_is_bound_to_runtime_contract():
 
     assert artifact["checks"]["deployment_preflight_passed"] is False
     assert artifact["passed"] is False
+
+
+def test_final_artifact_requires_pinned_collection_and_concurrency():
+    config, pairs, assignments, windows = _pilot_inputs()
+    config["deployment_preflight"]["deployments"]["candidate"][
+        "qdrant_collection"
+    ] = "OtherCollection"
+
+    mismatched = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    config, pairs, assignments, windows = _pilot_inputs()
+    config["collection"] = "OtherCollection"
+    config["deployment_preflight"]["collection"] = "OtherCollection"
+    for arm in ("control", "candidate"):
+        config["deployment_preflight"]["deployments"][arm][
+            "qdrant_collection"
+        ] = "OtherCollection"
+    wrong_collection = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    config, pairs, assignments, windows = _pilot_inputs()
+    config["max_concurrent_rag"] = 2
+    config["deployment_preflight"]["max_concurrent_rag"] = 2
+    for arm in ("control", "candidate"):
+        config["deployment_preflight"]["deployments"][arm]["max_concurrent"] = 2
+    wrong_concurrency = build_pilot_artifact(
+        config, pairs, assignment_events=assignments, monitoring_windows=windows
+    )
+
+    assert mismatched["checks"]["deployment_preflight_passed"] is False
+    assert wrong_collection["checks"]["deployment_preflight_passed"] is False
+    assert wrong_concurrency["checks"]["deployment_preflight_passed"] is False
 
 
 def test_final_artifact_canonicalizes_and_requires_120_second_runtime_contract():

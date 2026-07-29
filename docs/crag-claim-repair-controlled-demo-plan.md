@@ -9,7 +9,7 @@ bộ. Control và candidate chạy thành hai process riêng trên ports 8101/81
 
 Grounded Math, Late Interaction, Query Decomposition, GraphRAG và Community
 Summaries tiếp tục tắt trong lần này. Mốc 20 matched pair là checkpoint demo;
-sau đó tiếp tục đến 100 matched pair trong 7–14 ngày để tạo bằng chứng pilot.
+sau đó dừng gateway. Pilot 100 matched pair/7–14 ngày là kế hoạch riêng.
 
 Nếu chỉ có `bao.nguyen` review, artifact phải ghi `single_owner`,
 `owner_review` và `risk_accepted=true`; tuyệt đối không ghi thành independent
@@ -32,17 +32,18 @@ chỉ được xét sau artifact pilot 100 pair và các checklist tương ứng
 | Ba staging baseline/candidate pairs | Codex chạy lệnh; SQL/Qdrant/provider phải sẵn sàng | Chưa đạt trên runtime commit `da8a2f3`: pair 01 và 03 đạt; pair 02 fail latency do query rewrite gặp một `InternalServerError`, retry một lần, làm P95 ratio `2.11 > 1.25`. Series `passed=false`, `production_eligible=false` | Evidence: `reports/controlled-demo/20260718-crag-approved-rewrite/staging-offline-pair-01`, `staging-offline-pair-02`, `staging-offline-pair-03-completion` và `crag-series-guardrail.json` |
 | Main-collection evaluation và CRAG high-risk review pack | Codex tạo pack; con người điền review | Bị hoãn đúng fail-closed vì staging series hiện tại chưa đạt. Pack 6 case dưới run `20260718-crag-controlled-demo-readiness` chỉ là evidence lịch sử của commit `3e297cb` | Chỉ chạy lại main-collection và tạo pack mới sau khi một series mới trên cùng runtime commit đạt; manifest vẫn cần đủ 20 case và human review |
 | Chọn 2–10 tài khoản Technical/HQ và xác nhận được phép tham gia | Con người | Chưa làm | Có cohort hash; không ghi username vào artifact |
-| Xác nhận snapshot `TaiLieuKyThuat_v2` không đổi trong cửa sổ 7–14 ngày | Con người vận hành | Chưa làm | Điền snapshot fingerprint vào config trước khi start |
+| Xác nhận snapshot `TaiLieuKyThuat_v2` không đổi trong cửa sổ tối đa ba ngày | Con người vận hành | Chưa làm | Điền snapshot fingerprint vào config trước khi start |
 | Phê duyệt mở browser gateway sau deployment preflight | Con người | Chưa làm | Người vận hành đọc `deployment-preflight.json` rồi chạy script enable riêng |
-| Gửi câu hỏi thật để tạo 100 matched pairs | Cohort 2–10 tài khoản | Chưa làm | Review checkpoint ở 20 pair, tiếp tục đủ 100 pair trong 7–14 ngày |
+| Gửi câu hỏi thật để tạo 20 matched pairs | Cohort 2–10 tài khoản | Chưa làm | Review toàn bộ 20 pair rồi dừng controlled demo; pilot 100 pair là đợt riêng |
 | Review câu trả lời/citation/refusal | `bao.nguyen` | Chưa làm | Điền toàn bộ review pack; không sửa field ngoài `human_review` |
 | Theo dõi leakage, wrong-answer, latency và cost | Con người + artifact tự động | Chưa làm | Abort ngay khi chạm điều kiện dừng bên dưới |
-| Ký quyết định pilot | `bao.nguyen` | Chưa làm | Ghi `single_owner` nếu review một người; accepted/rejected theo gate thật, không tự bật default rollout |
+| Ký quyết định controlled demo | `bao.nguyen` | Chưa làm | Ghi `single_owner` nếu review một người; accepted/rejected theo gate thật, không tự bật default rollout |
 
 ## Các bước Codex có thể tự chạy sau khi code được commit
 
-1. Chạy provider smoke ngay trước từng pair. Nếu bất kỳ smoke nào không đạt 5/5
-   hoặc có retry, dừng tại đó và ghi `inconclusive`; không chạy eval tốn chi phí.
+1. Chạy provider smoke không quá 30 phút trước từng pair. Nếu bất kỳ smoke nào
+   không đạt 5/5, có retry hoặc quá hạn, dừng tại đó và ghi `inconclusive`;
+   không chạy eval tốn chi phí.
 2. Tạo rollback evidence gắn với commit sạch mới.
 3. Chạy ba baseline/candidate pair độc lập trên fixture `crag-eval-v1`, giữ cùng
    commit, fixture fingerprint, provider configuration và concurrency.
@@ -53,8 +54,8 @@ chỉ được xét sau artifact pilot 100 pair và các checklist tương ứng
 6. Tạo decision `controlled_demo=accepted` tham chiếu authorization trên cùng
    commit, rồi tạo activation bundle bất biến. Đây chỉ là quyền bắt đầu pilot,
    chưa phải kết quả pilot hoặc quyền bật mặc định.
-7. Mở controlled demo để lấy checkpoint 20 pair và tiếp tục đủ 100 pair trong
-   7–14 ngày; 20 pair đầu không phải review lại.
+7. Mở controlled demo tối đa ba ngày để lấy checkpoint 20 pair, sau đó dừng
+   gateway và hai arm. Chỉ mở pilot 100 pair/7–14 ngày bằng kế hoạch riêng.
 
 Provider smoke tooling đã được sửa để unwrap exception cuối từ Tenacity nhưng chỉ
 lưu root exception type, HTTP status và error category. Nhờ đó lỗi capacity 503
@@ -63,10 +64,11 @@ không chứa raw error message, prompt, response hoặc secret.
 
 Sau typed-event-facade hardening, hai serving arm của controlled demo phải pin
 runtime contract trong config: `execution_context=production`,
-`evaluation_force_ambiguous=false` và `request_deadline_seconds=120`. Hai arm phải
-báo đúng cùng contract qua `/health`; deployment preflight fail nếu thiếu, lệch
-hoặc deadline chỉ là một giá trị dương khác 120. Staging baseline/candidate chạy
-qua evaluator typed vẫn dùng `execution_context=evaluation`.
+`evaluation_force_ambiguous=false`, `request_deadline_seconds=120`,
+`collection=TaiLieuKyThuat_v2` và `max_concurrent_rag=4`. Hai arm phải báo đúng
+cùng contract, collection và concurrency qua `/health`; deployment preflight
+fail nếu thiếu hoặc lệch. Staging baseline/candidate chạy qua evaluator typed
+vẫn dùng `execution_context=evaluation`.
 
 ## Các bước bắt buộc con người làm
 
@@ -116,7 +118,9 @@ chat_env\Scripts\python.exe -m scripts.eval.crag_demo_authorization `
 Decision `controlled_demo` của CRAG phải là `accepted` và tham chiếu đúng
 authorization trên clean commit. Nếu decision vẫn là `inconclusive`, launcher
 sẽ fail-closed; không đổi flag thủ công để bỏ qua bước này. Tạo decision bằng
-CLI, sau đó cập nhật reference/hash của mục `crag` trong controlled-demo ledger:
+CLI, sau đó tạo bản copy run-local của controlled-demo ledger dưới
+`reports/controlled-demo/<run-id>` và cập nhật reference/hash của mục `crag`
+trong bản copy đó:
 
 ```powershell
 chat_env\Scripts\python.exe -m scripts.eval.milestone_decision build `
@@ -138,7 +142,7 @@ chat_env\Scripts\python.exe -m scripts.ops.build_activation_bundle `
   --scope controlled_demo `
   --profile crag_claim `
   --source-commit (git rev-parse HEAD) `
-  --decision-ledger data\integrated_hardening_v1\demo_decisions.json `
+  --decision-ledger reports\controlled-demo\<run-id>\demo-decisions.json `
   --review-governance reports\controlled-demo\<run-id>\review-governance.json `
   --output reports\controlled-demo\<run-id>\activation-bundle.json
 ```
@@ -201,8 +205,8 @@ lần, hoặc hai cửa sổ liên tiếp vi phạm latency/cost. Thứ tự d�
 candidate, rồi control; script stop dùng đúng PID đã lưu và từ chối dừng PID đã
 bị process khác tái sử dụng.
 
-Khi đủ 20 pair: hoàn tất checkpoint đầu và quyết định tiếp tục hay abort; 20 pair
-này được tính thẳng vào bộ 100 pair, không review lại. Khi đủ 100 pair hoặc hết
-cửa sổ 7–14 ngày: dừng gateway và hai arm, hoàn tất review pack, tạo pilot
-decision theo gate thật. Mọi default release flag vẫn giữ OFF cho đến khi
-default-rollout ledger và activation bundle riêng được chấp nhận.
+Khi đủ 20 pair hoặc hết ba ngày: dừng gateway và hai arm, hoàn tất review toàn
+bộ 20 pair rồi ghi `checkpoint_go`, `aborted`, `rejected` hoặc `inconclusive`
+theo gate thật. `checkpoint_go` chỉ cho phép lập kế hoạch pilot 100 pair/7–14
+ngày; mọi default release flag vẫn giữ OFF cho đến khi default-rollout ledger và
+activation bundle riêng được chấp nhận.

@@ -11,6 +11,7 @@ from mech_chatbot.governance.artifact_references import (
 )
 from mech_chatbot.governance.provider_smoke import (
     provider_smoke_artifact_valid,
+    provider_smoke_fresh_for_baseline,
 )
 from mech_chatbot.governance.rollout_guardrails import evaluate_rollout_series
 
@@ -19,6 +20,15 @@ SCHEMA = "crag-controlled-demo-authorization-v1"
 SERIES_SCHEMA = "rollout-guardrail-series-v1"
 SMOKE_SCHEMA = "provider-smoke-v1"
 REVIEW_MODES = {"multi_reviewer", "single_owner"}
+
+
+def _reference_identity(reference: object) -> tuple[str, str]:
+    if not isinstance(reference, dict):
+        return ("", "")
+    return (
+        str(reference.get("sha256") or reference.get("artifact_sha256") or ""),
+        str(reference.get("schema") or reference.get("artifact_schema") or ""),
+    )
 
 
 def _utc(value: object) -> datetime | None:
@@ -95,6 +105,18 @@ def _checks(artifact: dict, *, root: Path) -> dict[str, bool]:
         [load_json_reference(item, root=root) for item in smoke_references]
         if smoke_references_valid else []
     )
+    smoke_references_bound_to_pairs = (
+        len(pairs) == 3
+        and isinstance(smoke_references, list)
+        and [
+            _reference_identity(item)
+            for item in smoke_references
+        ] == [
+            _reference_identity(pair.get("provider_smoke"))
+            for pair in pairs
+            if isinstance(pair, dict)
+        ]
+    )
     source_commit = str(artifact.get("source_commit") or "")
     series_windows = (series or {}).get("pair_windows")
     timing_valid = (
@@ -116,6 +138,21 @@ def _checks(artifact: dict, *, root: Path) -> dict[str, bool]:
             and smoke_time <= pair_time
             for smoke_time, pair_time in zip(smoke_times, pair_times, strict=True)
         )
+    freshness_valid = (
+        len(smokes) == 3
+        and all(smokes)
+        and isinstance(series_windows, list)
+        and len(series_windows) == 3
+        and all(
+            provider_smoke_fresh_for_baseline(
+                smoke,
+                baseline_started_at=window.get("baseline_started_at"),
+            )
+            for smoke, window in zip(smokes, series_windows, strict=True)
+            if isinstance(window, dict)
+        )
+        and all(isinstance(window, dict) for window in series_windows)
+    )
     provider_hash = str((series or {}).get("provider_configuration_sha256") or "")
     run_ids = (series or {}).get("run_ids")
     run_ids_valid = (
@@ -169,6 +206,7 @@ def _checks(artifact: dict, *, root: Path) -> dict[str, bool]:
             ) is True
         ),
         "provider_smoke_references_valid": smoke_references_valid and all(smokes),
+        "provider_smokes_bound_to_pairs": smoke_references_bound_to_pairs,
         "provider_smokes_passed": (
             len(smokes) == 3
             and all(
@@ -190,6 +228,7 @@ def _checks(artifact: dict, *, root: Path) -> dict[str, bool]:
             )
         ),
         "provider_smokes_precede_pairs": timing_valid,
+        "provider_smokes_fresh_for_pairs": freshness_valid,
         "source_artifacts_bound": source_artifacts == expected_source_artifacts,
     }
 

@@ -159,6 +159,8 @@ def validate_deployment_contract(
     deployments = config.get("deployments") or {}
     expected_git = config.get("git_sha")
     expected_snapshot = config.get("snapshot_fingerprint")
+    expected_collection = config.get("collection")
+    expected_concurrency = config.get("max_concurrent_rag")
     expected_runtime = _runtime_contract(config.get("runtime_contract"))
     control_runtime = _runtime_contract(control_health)
     candidate_runtime = _runtime_contract(candidate_health)
@@ -186,6 +188,12 @@ def validate_deployment_contract(
         "snapshot_pinned": bool(expected_snapshot)
         and control_health.get("snapshot_fingerprint") == expected_snapshot
         and candidate_health.get("snapshot_fingerprint") == expected_snapshot,
+        "collection_pinned": expected_collection == "TaiLieuKyThuat_v2"
+        and control_health.get("qdrant_collection") == expected_collection
+        and candidate_health.get("qdrant_collection") == expected_collection,
+        "concurrency_pinned": expected_concurrency == 4
+        and control_health.get("max_concurrent") == expected_concurrency
+        and candidate_health.get("max_concurrent") == expected_concurrency,
         "control_flags_disabled": control_flags.get("RAG_CRAG_ENABLED") is False
         and control_flags.get("RAG_CLAIM_REPAIR_ENABLED") is False,
         "candidate_flags_enabled": candidate_flags.get("RAG_CRAG_ENABLED") is True
@@ -201,10 +209,14 @@ def validate_deployment_contract(
         "checks": checks,
         "git_sha": expected_git,
         "snapshot_fingerprint": expected_snapshot,
+        "collection": expected_collection,
+        "max_concurrent_rag": expected_concurrency,
         "runtime_contract": runtime_contract,
         "deployments": {
             "control": {
                 "id": control_health.get("deployment_id"),
+                "qdrant_collection": control_health.get("qdrant_collection"),
+                "max_concurrent": control_health.get("max_concurrent"),
                 "feature_flags": control_flags,
                 "runtime_contract": control_runtime.to_dict()
                 if control_runtime is not None
@@ -212,6 +224,8 @@ def validate_deployment_contract(
             },
             "candidate": {
                 "id": candidate_health.get("deployment_id"),
+                "qdrant_collection": candidate_health.get("qdrant_collection"),
+                "max_concurrent": candidate_health.get("max_concurrent"),
                 "feature_flags": candidate_flags,
                 "runtime_contract": candidate_runtime.to_dict()
                 if candidate_runtime is not None
@@ -1036,6 +1050,8 @@ def build_pilot_artifact(
         else {}
     )
     preflight_deployments = deployment_preflight.get("deployments") or {}
+    pilot_collection = config.get("collection")
+    pilot_concurrency = config.get("max_concurrent_rag")
     preflight_control_runtime = _runtime_contract(
         (preflight_deployments.get("control") or {}).get("runtime_contract")
     )
@@ -1256,6 +1272,11 @@ def build_pilot_artifact(
             and deployment_preflight.get("git_sha") == config.get("git_sha")
             and deployment_preflight.get("snapshot_fingerprint")
             == config.get("snapshot_fingerprint")
+            and pilot_collection == "TaiLieuKyThuat_v2"
+            and deployment_preflight.get("collection") == pilot_collection
+            and pilot_concurrency == 4
+            and deployment_preflight.get("max_concurrent_rag")
+            == pilot_concurrency
             and preflight_runtime_contract == runtime_contract
             and (preflight_deployments.get("control") or {}).get("id")
             == (deployments.get("control") or {}).get("id")
@@ -1265,6 +1286,22 @@ def build_pilot_artifact(
             == control_flags
             and (preflight_deployments.get("candidate") or {}).get("feature_flags")
             == candidate_flags
+            and (preflight_deployments.get("control") or {}).get(
+                "qdrant_collection"
+            )
+            == pilot_collection
+            and (preflight_deployments.get("candidate") or {}).get(
+                "qdrant_collection"
+            )
+            == pilot_collection
+            and (preflight_deployments.get("control") or {}).get(
+                "max_concurrent"
+            )
+            == pilot_concurrency
+            and (preflight_deployments.get("candidate") or {}).get(
+                "max_concurrent"
+            )
+            == pilot_concurrency
             and preflight_control_runtime == runtime_model
             and preflight_candidate_runtime == runtime_model
         ),

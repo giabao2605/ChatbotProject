@@ -18,6 +18,21 @@ if str(SRC) not in sys.path:
 from mech_chatbot.evaluation.crag_pilot import validate_deployment_contract
 
 
+PINNED_DEPLOYMENT_URLS = {
+    "control": "http://127.0.0.1:8101",
+    "candidate": "http://127.0.0.1:8102",
+}
+
+
+def _pinned_deployment_url(deployment_urls: dict, arm: str) -> str:
+    value = str(deployment_urls.get(arm) or "").rstrip("/")
+    if value != PINNED_DEPLOYMENT_URLS[arm]:
+        raise ValueError(
+            "controlled-demo deployment_urls must be pinned to local arms"
+        )
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
@@ -28,10 +43,14 @@ def main(argv: list[str] | None = None) -> int:
     deployment_urls = config.get("deployment_urls") or {}
     if not deployment_urls.get("control") or not deployment_urls.get("candidate"):
         raise ValueError("config requires control and candidate deployment_urls")
+    pinned_urls = {
+        arm: _pinned_deployment_url(deployment_urls, arm)
+        for arm in ("control", "candidate")
+    }
 
     def health(arm):
         response = requests.get(
-            f"{str(deployment_urls[arm]).rstrip('/')}/health",
+            f"{pinned_urls[arm]}/health",
             timeout=args.timeout_seconds,
         )
         response.raise_for_status()

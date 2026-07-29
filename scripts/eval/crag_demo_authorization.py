@@ -18,7 +18,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--review-mode",
         choices=("multi_reviewer", "single_owner"),
-        default="multi_reviewer",
+        required=True,
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--root", type=Path, default=Path.cwd())

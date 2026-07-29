@@ -96,6 +96,10 @@ def build_activation_bundle(
             raise ValueError(
                 "controlled_demo requires a verified controlled-demo decision ledger"
             )
+        if profile != "all_off" and governance_reference is None:
+            raise ValueError(
+                "controlled_demo feature-on activation requires review governance"
+            )
     bundle = {
         "schema": "rag-activation-bundle-v1",
         "scope": scope,

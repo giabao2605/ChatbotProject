@@ -25,7 +25,15 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $state.preflight).Hash.ToLowerI
 }
 $demoConfig = Get-Content -Raw -LiteralPath $state.config | ConvertFrom-Json
 $preflight = Get-Content -Raw -LiteralPath $state.preflight | ConvertFrom-Json
+$pinnedControlUrl = "http://127.0.0.1:8101"
+$pinnedCandidateUrl = "http://127.0.0.1:8102"
 if (!$preflight.passed) { throw "Deployment preflight khong passed; tu choi enable gateway." }
+if (
+    ([string]$demoConfig.deployment_urls.control).TrimEnd('/') -ne $pinnedControlUrl -or
+    ([string]$demoConfig.deployment_urls.candidate).TrimEnd('/') -ne $pinnedCandidateUrl
+) {
+    throw "deployment_urls da lech khoi local control/candidate da preflight."
+}
 if ([string]$demoConfig.eligible_cohort.department -ne "Technical") {
     throw "Controlled demo chi cho phep department Technical."
 }
@@ -63,7 +71,7 @@ foreach ($item in $state.processes) {
 
 $appEnv = @{
     APP_SERVER_PORT = "8080"
-    RAG_SERVER_URL = [string]$demoConfig.deployment_urls.control
+    RAG_SERVER_URL = $pinnedControlUrl
     RAG_TRACE_LOG_FILE = Join-Path $logsDir "gateway-trace.jsonl"
     CRAG_PILOT_ENABLED = "true"
     CRAG_PILOT_EXPERIMENT_ID = [string]$demoConfig.experiment_id
@@ -72,8 +80,8 @@ $appEnv = @{
     CRAG_PILOT_SITE = [string]$demoConfig.eligible_cohort.site
     CRAG_PILOT_ALLOWED_ACTOR_HASHES = ($actorHashes -join ',')
     CRAG_PILOT_COHORT_SHA256 = [string]$demoConfig.eligible_cohort.sha256
-    CRAG_PILOT_CONTROL_URL = [string]$demoConfig.deployment_urls.control
-    CRAG_PILOT_CANDIDATE_URL = [string]$demoConfig.deployment_urls.candidate
+    CRAG_PILOT_CONTROL_URL = $pinnedControlUrl
+    CRAG_PILOT_CANDIDATE_URL = $pinnedCandidateUrl
     CRAG_PILOT_CONTROL_DEPLOYMENT_ID = [string]$demoConfig.deployments.control.id
     CRAG_PILOT_CANDIDATE_DEPLOYMENT_ID = [string]$demoConfig.deployments.candidate.id
     CRAG_PILOT_SNAPSHOT_FINGERPRINT = [string]$demoConfig.snapshot_fingerprint

@@ -23,9 +23,13 @@ if ([string]::IsNullOrWhiteSpace($env:CRAG_PILOT_ASSIGNMENT_SALT)) {
 }
 
 $demoConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+$pinnedControlUrl = "http://127.0.0.1:8101"
+$pinnedCandidateUrl = "http://127.0.0.1:8102"
 $required = @(
     $demoConfig.git_sha,
     $demoConfig.snapshot_fingerprint,
+    $demoConfig.collection,
+    $demoConfig.max_concurrent_rag,
     $demoConfig.experiment_id,
     $demoConfig.eligible_cohort.department,
     $demoConfig.eligible_cohort.sha256,
@@ -33,6 +37,8 @@ $required = @(
     $demoConfig.runtime_contract.request_deadline_seconds,
     $demoConfig.deployments.control.id,
     $demoConfig.deployments.candidate.id,
+    $demoConfig.deployment_urls.control,
+    $demoConfig.deployment_urls.candidate,
     $demoConfig.activation_bundle.path,
     $demoConfig.activation_bundle.sha256
 )
@@ -44,6 +50,17 @@ if ([string]$demoConfig.runtime_contract.execution_context -ne "production") {
 }
 if ($demoConfig.runtime_contract.evaluation_force_ambiguous -ne $false) {
     throw "runtime_contract.evaluation_force_ambiguous phai la false."
+}
+if ($demoConfig.collection -ne "TaiLieuKyThuat_v2") {
+    throw "collection phai la TaiLieuKyThuat_v2."
+}
+if ($demoConfig.max_concurrent_rag -ne 4) {
+    throw "max_concurrent_rag phai dung bang 4."
+}
+$configControlUrl = ([string]$demoConfig.deployment_urls.control).TrimEnd('/')
+$configCandidateUrl = ([string]$demoConfig.deployment_urls.candidate).TrimEnd('/')
+if ($configControlUrl -ne $pinnedControlUrl -or $configCandidateUrl -ne $pinnedCandidateUrl) {
+    throw "deployment_urls phai pin vao http://127.0.0.1:8101 va http://127.0.0.1:8102."
 }
 
 $bundlePathValue = [string]$demoConfig.activation_bundle.path
@@ -130,6 +147,8 @@ $common = @{
     RAG_REQUEST_DEADLINE_SECONDS = $requestDeadline.ToString(
         [Globalization.CultureInfo]::InvariantCulture
     )
+    QDRANT_COLLECTION = [string]$demoConfig.collection
+    MAX_CONCURRENT_RAG = [string]$demoConfig.max_concurrent_rag
     PARENT_CONTEXT_MAX_WORKERS = "4"
 }
 $common.Keys | ForEach-Object {
@@ -152,10 +171,8 @@ try {
         "mech_chatbot.api.rag_server" (Join-Path $logsDir "candidate.out.log") `
         (Join-Path $logsDir "candidate.err.log")
 
-    $controlUrl = ([string]$demoConfig.deployment_urls.control).TrimEnd('/')
-    $candidateUrl = ([string]$demoConfig.deployment_urls.candidate).TrimEnd('/')
-    Wait-CragDemoHttpHealth "$controlUrl/health" 60 "Control RAG deployment khong healthy."
-    Wait-CragDemoHttpHealth "$candidateUrl/health" 60 "Candidate RAG deployment khong healthy."
+    Wait-CragDemoHttpHealth "$pinnedControlUrl/health" 60 "Control RAG deployment khong healthy."
+    Wait-CragDemoHttpHealth "$pinnedCandidateUrl/health" 60 "Candidate RAG deployment khong healthy."
 
     $preflightPath = Join-Path (Split-Path -Parent $configPath) "deployment-preflight.json"
     & $pythonExe -m scripts.eval.crag_pilot_preflight `
