@@ -223,3 +223,99 @@ def test_inventory_binds_pair_to_prepared_milestone_manifest(tmp_path):
     manifest.write_text('{"changed":true}\n', encoding="utf-8")
     with pytest.raises(ValueError, match="inventory"):
         validate_manifest_inventory(inventory, "crag", manifest)
+
+
+def test_feature_pair_rejects_stale_provider_smoke_before_eval(
+    monkeypatch,
+    tmp_path,
+):
+    import hashlib
+
+    from mech_chatbot.config import settings as settings_module
+    from mech_chatbot.config.settings import Settings
+    from scripts.controlled_demo_eval import run_feature_pair as rollout
+    from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
+
+    snapshot = Settings.from_env({})
+    provider_sha = provider_configuration_sha256_for_settings(snapshot)
+    manifest = tmp_path / "crag.jsonl"
+    manifest.write_text("{}\n", encoding="utf-8")
+    manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    aliases = tmp_path / "aliases.json"
+    aliases.write_text("{}", encoding="utf-8")
+    preflight = tmp_path / "preflight.json"
+    preflight.write_text(json.dumps({
+        "schema": "controlled-demo-main-preflight-v1",
+        "passed": True,
+        "collection": "TaiLieuKyThuat_v2",
+        "checked_cases": 44,
+        "failures": [],
+        "fixture_fingerprint": "snapshot",
+    }), encoding="utf-8")
+    smoke = tmp_path / "provider-smoke.json"
+    smoke.write_text(json.dumps({
+        "schema": "provider-smoke-v1",
+        "passed": True,
+        "request_count": 5,
+        "successful_requests": 5,
+        "failed_requests": 0,
+        "provider_retries": 0,
+        "completed_at": "2026-07-28T00:00:00Z",
+        "provider_configuration_sha256": provider_sha,
+        "provider_outcome": {"provider_blocked": False},
+    }), encoding="utf-8")
+    inventory = tmp_path / "inventory.json"
+    inventory.write_text(json.dumps({
+        "schema": "controlled-demo-manifest-inventory-v1",
+        "source_case_count": 44,
+        "source_manifests": [{"path": "source.jsonl", "sha256": "source-sha"}],
+        "groups": {
+            "factual": {"case_count": 12},
+            "insufficient_evidence": {"case_count": 3},
+            "access_denied": {"case_count": 3},
+            "grounded_math": {"case_count": 10},
+            "complex": {"case_count": 9},
+            "graphrag": {"case_count": 6},
+            "global": {"case_count": 1},
+        },
+        "milestones": {
+            "crag": {
+                "path": str(manifest.resolve()),
+                "case_count": 18,
+                "minimum_cases": 20,
+                "sha256": manifest_sha,
+            },
+        },
+    }), encoding="utf-8")
+
+    monkeypatch.setenv("CONTROLLED_DEMO_LIVE_OPT_IN", "1")
+    monkeypatch.setenv("CONTROLLED_DEMO_FIXTURE_ALIASES", str(aliases))
+    monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
+    monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
+    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-28T00:31:00Z")
+    monkeypatch.setattr(
+        rollout.subprocess,
+        "check_output",
+        lambda *args, **kwargs: "abc123\n",
+    )
+    monkeypatch.setattr(
+        rollout,
+        "_run_arm",
+        lambda *args, **kwargs: pytest.fail(
+            "evaluation started with stale smoke"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="older than 30 minutes"):
+        rollout.run_feature_pair(
+            "crag",
+            manifest,
+            tmp_path / "rollout",
+            trace,
+            collection="TaiLieuKyThuat_v2",
+            full_preflight_artifact=preflight,
+            provider_smoke_artifact=smoke,
+            manifest_inventory_artifact=inventory,
+        )

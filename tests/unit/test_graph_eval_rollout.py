@@ -73,7 +73,10 @@ def test_graph_rollout_records_runtime_provider_hash(monkeypatch, tmp_path):
         ):
             (run_dir / name).write_text(json.dumps(payload), encoding="utf-8")
         return {
-            "started_at": "2026-07-28T00:00:00Z",
+            "started_at": kwargs.get(
+                "started_at",
+                "2026-07-28T00:00:00Z",
+            ),
             "completed_at": "2026-07-28T00:01:00Z",
             "runner_exit": 0,
         }
@@ -111,6 +114,7 @@ def test_graph_rollout_records_runtime_provider_hash(monkeypatch, tmp_path):
 
     assert pair["baseline"]["provider_configuration_sha256"] == expected
     assert pair["candidate"]["provider_configuration_sha256"] == expected
+    assert pair["baseline"]["started_at"] == "2026-07-28T00:01:00Z"
     assert pair["baseline"]["trace_schema"] == "rag-refusal-snapshot-v1"
     assert pair["candidate"]["trace_schema"] == "rag-refusal-snapshot-v1"
     assert report["passed"] is False

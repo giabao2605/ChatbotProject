@@ -190,6 +190,7 @@ def _run(
     provider_configuration_sha256: str,
     governance_scope_sha256_value: str,
     provider_environment: dict[str, str] | None = None,
+    started_at: str | None = None,
 ) -> dict:
     env = build_evaluation_environment(enabled=enabled, router_mode=router_mode)
     env.update(provider_environment or {})
@@ -199,7 +200,7 @@ def _run(
         "RAG_EVAL_CONCURRENCY": "1",
         "RAG_TRACE_LOG_FILE": str(trace),
     })
-    started_at = _utc_now()
+    started_at = started_at or _utc_now()
     eval_result = subprocess.run([
         sys.executable, "-m", "scripts.eval.run_eval",
         "--manifest", str(manifest), "--output-dir", str(output), "--run-label", label,
@@ -244,16 +245,18 @@ def run_rollout(
     provider_config_sha = provider_configuration_sha256_for_settings(settings)
     provider_environment = provider_environment_for_settings(settings)
     governance_sha = governance_scope_sha256(manifest)
+    baseline_started_at = _utc_now()
     validate_provider_smoke_for_baseline(
         provider_smoke_artifact,
         expected_provider_sha256=provider_config_sha,
-        baseline_started_at=_utc_now(),
+        baseline_started_at=baseline_started_at,
     )
     baseline = _run(
         "baseline", manifest, output, trace, enabled=False, router_mode=router_mode,
         provider_configuration_sha256=provider_config_sha,
         governance_scope_sha256_value=governance_sha,
         provider_environment=provider_environment,
+        started_at=baseline_started_at,
     )
     require_clean_worktree()
     if _sha(manifest) != manifest_sha:

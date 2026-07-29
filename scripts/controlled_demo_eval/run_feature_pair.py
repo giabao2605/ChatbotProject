@@ -165,6 +165,7 @@ def _run_arm(
     provider_sha256: str,
     governance_sha256: str,
     provider_environment: dict[str, str] | None = None,
+    started_at: str | None = None,
 ) -> dict:
     environment = build_feature_environment(
         stage, candidate=label == "candidate", collection=collection,
@@ -175,7 +176,7 @@ def _run_arm(
         "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_sha256,
         "RAG_EVAL_CONCURRENCY": "1",
     })
-    started_at = _utc_now()
+    started_at = started_at or _utc_now()
     result = subprocess.run(
         [
             sys.executable,
@@ -319,16 +320,18 @@ def run_feature_pair(
     manifest_sha256 = inventory_binding["manifest_sha256"]
     governance_sha256 = governance_scope_sha256(manifest)
 
+    baseline_started_at = _utc_now()
     validate_provider_smoke_for_baseline(
         provider_smoke_artifact,
         expected_provider_sha256=provider_sha256,
-        baseline_started_at=_utc_now(),
+        baseline_started_at=baseline_started_at,
     )
     baseline = _run_arm(
         stage, "baseline", manifest, output_dir, trace_path,
         collection=collection, provider_sha256=provider_sha256,
         governance_sha256=governance_sha256,
         provider_environment=provider_environment,
+        started_at=baseline_started_at,
     )
     require_clean_worktree()
     if _sha(manifest) != manifest_sha256:

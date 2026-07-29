@@ -312,3 +312,61 @@ def test_decomposition_rollout_rejects_mismatched_provider_smoke(
             trace,
             provider_smoke_artifact=smoke,
         )
+
+
+def test_decomposition_rollout_rejects_stale_provider_smoke_before_eval(
+    monkeypatch,
+    tmp_path,
+):
+    from mech_chatbot.config import settings as settings_module
+    from mech_chatbot.config.settings import Settings
+    from scripts.decomposition_eval import run_rollout as rollout
+    from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("{}\n", encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    snapshot = Settings.from_env({})
+    smoke = tmp_path / "provider-smoke.json"
+    smoke.write_text(
+        json.dumps({
+            "schema": "provider-smoke-v1",
+            "passed": True,
+            "request_count": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+            "provider_retries": 0,
+            "completed_at": "2026-07-28T00:00:00Z",
+            "provider_configuration_sha256": (
+                provider_configuration_sha256_for_settings(snapshot)
+            ),
+            "provider_outcome": {"provider_blocked": False},
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+    monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
+    monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
+    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-28T00:31:00Z")
+    monkeypatch.setattr(
+        rollout.subprocess,
+        "check_output",
+        lambda *args, **kwargs: "abc123\n",
+    )
+    monkeypatch.setattr(
+        rollout,
+        "_run",
+        lambda *args, **kwargs: pytest.fail(
+            "evaluation started with stale smoke"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="older than 30 minutes"):
+        rollout.run_rollout(
+            manifest,
+            tmp_path / "rollout",
+            trace,
+            provider_smoke_artifact=smoke,
+        )

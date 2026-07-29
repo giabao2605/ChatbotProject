@@ -72,6 +72,7 @@ def _run(
     collection,
     fixture_batch,
     provider_environment=None,
+    started_at=None,
 ):
     environment = build_evaluation_environment(
         enabled=enabled,
@@ -84,7 +85,7 @@ def _run(
         "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_sha,
         "RAG_EVAL_CONCURRENCY": "1",
     })
-    started_at = _utc_now()
+    started_at = started_at or _utc_now()
     result = subprocess.run([sys.executable, "-m", "scripts.eval.run_eval", "--manifest", str(manifest), "--output-dir", str(output), "--run-label", label], cwd=ROOT, env=environment, check=False)
     completed_at = _utc_now()
     run_dir = output / label
@@ -123,10 +124,11 @@ def run_rollout(
     provider_sha = provider_configuration_sha256_for_settings(settings)
     provider_environment = provider_environment_for_settings(settings)
     governance_sha = governance_scope_sha256(manifest)
+    baseline_started_at = _utc_now()
     validate_provider_smoke_for_baseline(
         provider_smoke_artifact,
         expected_provider_sha256=provider_sha,
-        baseline_started_at=_utc_now(),
+        baseline_started_at=baseline_started_at,
     )
     baseline = _run(
         "baseline",
@@ -139,6 +141,7 @@ def run_rollout(
         collection=collection,
         fixture_batch=fixture_batch,
         provider_environment=provider_environment,
+        started_at=baseline_started_at,
     )
     require_clean_worktree()
     if _sha(manifest) != manifest_sha:
