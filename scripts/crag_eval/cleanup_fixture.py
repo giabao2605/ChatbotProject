@@ -45,7 +45,18 @@ def cleanup_fixture(asset_root: Path = DEFAULT_OUTPUT) -> dict:
             text("SELECT DocID FROM dbo.TaiLieu WHERE SourceSystem=:batch ORDER BY DocID DESC"),
             {"batch": FIXTURE_BATCH},
         ).all()]
-    deleted = sum(bool(delete_document_completely(doc_id, reviewer="crag-eval-cleanup")) for doc_id in doc_ids)
+    deleted = sum(
+        bool(
+            delete_document_completely(
+                doc_id,
+                reviewer="crag-eval-cleanup",
+                db_engine=engine,
+                qdrant_client=client,
+                collection_name=collection,
+            )
+        )
+        for doc_id in doc_ids
+    )
     if deleted != len(doc_ids):
         raise RuntimeError(f"deleted {deleted}/{len(doc_ids)} fixture documents; collection and assets retained")
     collection_existed = client.collection_exists(FIXTURE_COLLECTION)

@@ -22,9 +22,13 @@ def test_crag_fixture_ingest_publish_retrieval_and_denial(tmp_path):
     from scripts.crag_eval.ingest_fixture import ingest_fixture
     from scripts.crag_eval.preflight import run_live_preflight
     from scripts.eval.run_eval import load_manifest_files
+    from mech_chatbot.composition.maintenance_runtime import (
+        configured_repository_runtime,
+    )
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+    from mech_chatbot.config.settings import load_settings
     from mech_chatbot.rag.execution import (
         AccessScope,
-        DefaultRagExecutor,
         RagInvocation,
         RagRequest,
         collect_rag_events,
@@ -32,7 +36,7 @@ def test_crag_fixture_ingest_publish_retrieval_and_denial(tmp_path):
 
     def run_case(case):
         result = collect_rag_events(
-            DefaultRagExecutor().run(
+            runtime.executor.run(
                 RagRequest(
                     question=case["question"],
                     access=AccessScope(
@@ -56,37 +60,68 @@ def test_crag_fixture_ingest_publish_retrieval_and_denial(tmp_path):
 
     # The live scripts intentionally use the fixed workspace asset root so cleanup can prove scope.
     from scripts.crag_eval.constants import DEFAULT_OUTPUT
-    generate_fixture(DEFAULT_OUTPUT)
-    try:
-        result = ingest_fixture(DEFAULT_OUTPUT)
-        assert result["completed"] + result["skipped"] == 5
-        cases = load_manifest_files([DEFAULT_OUTPUT / "eval_manifest.jsonl"])
-        assert run_live_preflight(cases)["passed"] is True
+    settings = load_settings().model_copy(
+        update={
+            "RAG_CRAG_ENABLED": True,
+            "RAG_CLAIM_REPAIR_ENABLED": True,
+        }
+    )
+    with configured_repository_runtime(settings, include_qdrant=True):
+        runtime = build_rag_runtime(settings)
+        try:
+            generate_fixture(DEFAULT_OUTPUT)
+            try:
+                result = ingest_fixture(DEFAULT_OUTPUT)
+                assert result["completed"] + result["skipped"] == 5
+                cases = load_manifest_files(
+                    [DEFAULT_OUTPUT / "eval_manifest.jsonl"]
+                )
+                assert run_live_preflight(cases)["passed"] is True
 
-        allowed = next(case for case in cases if case["id"] == "crag-number-thousands")
-        answer, _ = run_case(allowed)
-        assert "1,500" in answer
+                allowed = next(
+                    case
+                    for case in cases
+                    if case["id"] == "crag-number-thousands"
+                )
+                answer, _ = run_case(allowed)
+                assert "1,500" in answer
 
-        alias = next(case for case in cases if case["id"] == "crag-alias-correction")
-        answer, debug = run_case(alias)
-        assert "90 ngày" in answer
-        assert debug.get("correction_count") == 1
-        assert any(
-            doc.get("file_goc") == alias["expected_document"]
-            for doc in debug.get("citation_docs", [])
-        )
-        assert "CRAG-EVAL-SECRET-RED" not in answer
-        assert all(
-            "crag_eval_restricted_v1.md"
-            not in str(doc.get("file_goc", "")).lower()
-            for doc in debug.get("retrieved_docs", [])
-        )
+                alias = next(
+                    case
+                    for case in cases
+                    if case["id"] == "crag-alias-correction"
+                )
+                answer, debug = run_case(alias)
+                assert "90 ngày" in answer
+                assert debug.get("correction_count") == 1
+                assert any(
+                    doc.get("file_goc") == alias["expected_document"]
+                    for doc in debug.get("citation_docs", [])
+                )
+                assert "CRAG-EVAL-SECRET-RED" not in answer
+                assert all(
+                    "crag_eval_restricted_v1.md"
+                    not in str(doc.get("file_goc", "")).lower()
+                    for doc in debug.get("retrieved_docs", [])
+                )
 
-        denied = next(case for case in cases if case["id"] == "crag-restricted-denial")
-        answer, debug = run_case(denied)
-        assert "chưa đủ quyền truy cập" in answer
-        assert (debug.get("access_hint") or {}).get("restricted") is True
-        assert "CRAG-EVAL-SECRET-RED" not in answer
-        assert all("crag_eval_restricted_v1.md" not in str(doc.get("file_goc", "")).lower() for doc in debug.get("retrieved_docs", []))
-    finally:
-        cleanup_fixture(DEFAULT_OUTPUT)
+                denied = next(
+                    case
+                    for case in cases
+                    if case["id"] == "crag-restricted-denial"
+                )
+                answer, debug = run_case(denied)
+                assert "chưa đủ quyền truy cập" in answer
+                assert (debug.get("access_hint") or {}).get(
+                    "restricted"
+                ) is True
+                assert "CRAG-EVAL-SECRET-RED" not in answer
+                assert all(
+                    "crag_eval_restricted_v1.md"
+                    not in str(doc.get("file_goc", "")).lower()
+                    for doc in debug.get("retrieved_docs", [])
+                )
+            finally:
+                cleanup_fixture(DEFAULT_OUTPUT)
+        finally:
+            runtime.close()
