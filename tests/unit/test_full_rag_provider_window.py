@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 from pathlib import Path
 
 import pytest
 
+from mech_chatbot.config.settings import Settings
 from scripts.rerank_provider_eval import run_full_rag_window as runner
 
 
@@ -246,6 +248,52 @@ def test_manifest_is_exact_locked_three_case_governed_fixture():
         "crag-no-cost-refusal",
         "crag-restricted-denial",
     ]
+
+
+def test_profile_configuration_projects_pydantic_settings_to_evaluation(
+    monkeypatch,
+):
+    original = Settings(RAG_EXECUTION_CONTEXT="production")
+    observed = []
+    monkeypatch.setattr(runner, "load_settings", lambda _path: original)
+    monkeypatch.setattr(
+        runner,
+        "configured_repository_runtime",
+        lambda settings, **_kwargs: nullcontext(),
+    )
+
+    def profiles(settings):
+        observed.append(settings.RAG_EXECUTION_CONTEXT)
+        return {}, {
+            "voyage": {
+                "provider": "voyage",
+                "model": "rerank-2.5-lite",
+                "profile_sha256": "a" * 64,
+            },
+            "jina": {
+                "provider": "jina",
+                "model": "jina-reranker-v3",
+                "profile_sha256": "b" * 64,
+            },
+        }
+
+    monkeypatch.setattr(runner, "_real_provider_calls", profiles)
+    monkeypatch.setattr(
+        runner,
+        "provider_environment_for_settings",
+        lambda _settings: {},
+    )
+    monkeypatch.setattr(
+        runner,
+        "provider_configuration_sha256_for_settings",
+        lambda _settings: "c" * 64,
+    )
+
+    configurations = runner.load_profile_configurations()
+
+    assert observed == ["evaluation"]
+    assert original.RAG_EXECUTION_CONTEXT == "production"
+    assert configurations["jina"]["generation_provider_sha256"] == "c" * 64
 
 
 def test_window_runs_predeclared_orders_paces_voyage_and_writes_authorization(

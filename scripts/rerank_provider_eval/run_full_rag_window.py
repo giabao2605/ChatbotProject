@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -150,9 +149,8 @@ def _validate_profiles(
 
 def load_profile_configurations() -> dict[str, dict[str, Any]]:
     """Resolve managed profiles without calling either rerank API."""
-    settings = replace(
-        load_settings(ROOT / ".env"),
-        RAG_EXECUTION_CONTEXT="evaluation",
+    settings = load_settings(ROOT / ".env").model_copy(
+        update={"RAG_EXECUTION_CONTEXT": "evaluation"},
     )
     with configured_repository_runtime(settings, include_qdrant=False):
         _, metadata = _real_provider_calls(settings)
