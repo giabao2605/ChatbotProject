@@ -912,7 +912,10 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
         }),
         encoding="utf-8",
     )
-    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-18T00:01:00Z")
+    timestamps = iter(
+        ("2026-07-18T00:01:00Z", "2026-07-18T00:03:00Z")
+    )
+    monkeypatch.setattr(rollout, "_utc_now", lambda: next(timestamps))
     monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
     monkeypatch.setattr(
         rollout.subprocess,
@@ -920,7 +923,10 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
         lambda *args, **kwargs: "abc123\n",
     )
 
-    def fake_arm(label, *args, **kwargs):
+    labels = []
+
+    def fake_arm(label, *args, started_at, **kwargs):
+        labels.append(label)
         run_dir = output / label
         run_dir.mkdir(parents=True)
         (run_dir / "eval.json").write_text(
@@ -937,8 +943,12 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
         )
         return {
             "label": label,
-            "started_at": "2026-07-18T00:00:00Z",
-            "completed_at": "2026-07-18T00:01:00Z",
+            "started_at": started_at,
+            "completed_at": (
+                "2026-07-18T00:02:00Z"
+                if label == "candidate"
+                else "2026-07-18T00:04:00Z"
+            ),
             "runner_exit": 0,
         }
 
@@ -965,12 +975,30 @@ def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
         output,
         trace,
         provider_smoke_artifact=smoke,
+        arm_order="candidate-first",
     )
 
+    pair = json.loads((output / "rollout_pair.json").read_text(encoding="utf-8"))
+    assert labels == ["candidate", "baseline"]
     assert report["provider_configuration_sha256"] == provider_sha
+    assert report["arm_order"] == "candidate-first"
+    assert pair["arm_order"] == "candidate-first"
 
 
-def test_crag_rollout_rejects_stale_provider_smoke_before_eval(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("timestamps", "expected_labels"),
+    [
+        (("2026-07-18T00:00:00Z",), []),
+        (("2026-07-18T00:31:00Z",), []),
+        (
+            ("2026-07-18T00:01:00Z", "2026-07-18T00:31:00Z"),
+            ["baseline"],
+        ),
+    ],
+)
+def test_crag_rollout_rejects_stale_provider_smoke_at_each_arm(
+    monkeypatch, tmp_path, timestamps, expected_labels
+):
     from mech_chatbot.config import settings as settings_module
     from mech_chatbot.config.settings import Settings
 
@@ -1010,15 +1038,25 @@ def test_crag_rollout_rejects_stale_provider_smoke_before_eval(monkeypatch, tmp_
             "MAX_CONCURRENT_RAG": "7",
         }),
     )
-    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-18T00:31:00Z")
-    monkeypatch.setattr(
-        rollout,
-        "_run",
-        lambda *args, **kwargs: pytest.fail("evaluation started with stale smoke"),
-    )
+    timestamp_values = iter(timestamps)
+    monkeypatch.setattr(rollout, "_utc_now", lambda: next(timestamp_values))
+    labels = []
+
+    def fake_arm(label, *args, started_at, **kwargs):
+        labels.append(label)
+        return {
+            "label": label,
+            "started_at": started_at,
+            "completed_at": "2026-07-18T00:30:00Z",
+            "runner_exit": 0,
+        }
+
+    monkeypatch.setattr(rollout, "_run", fake_arm)
 
     with pytest.raises(ValueError, match="older than 30 minutes"):
         rollout.run_rollout(manifest, output, trace, provider_smoke_artifact=smoke)
+
+    assert labels == expected_labels
 
 
 def test_rollout_rejects_dirty_tracked_worktree(monkeypatch):

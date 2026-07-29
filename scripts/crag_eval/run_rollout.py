@@ -15,7 +15,7 @@ from scripts.crag_eval.constants import FIXTURE_COLLECTION, LIVE_OPT_IN
 from scripts.eval.provider_smoke import (
     provider_configuration_sha256_for_settings,
     provider_environment_for_settings,
-    validate_provider_smoke_for_baseline,
+    validate_provider_smoke_for_arms,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -83,7 +83,10 @@ def build_rollout_pair(
     candidate_evidence: dict,
     gate_artifact: Path,
     rollback_test_artifact: Path | None = None,
+    arm_order: str = "baseline-first",
 ) -> dict:
+    if arm_order not in {"baseline-first", "candidate-first"}:
+        raise ValueError(f"unsupported arm order: {arm_order}")
     rollback_tested = False
     if rollback_test_artifact is not None:
         evidence = json.loads(rollback_test_artifact.read_text(encoding="utf-8"))
@@ -111,6 +114,7 @@ def build_rollout_pair(
         "source_commit": git_sha,
         "run_id": run_id,
         "stage": "crag",
+        "arm_order": arm_order,
         "evidence_type": "staging_evaluation",
         "baseline": {**context, **baseline_evidence},
         "candidate": {**context, **candidate_evidence},
@@ -228,11 +232,14 @@ def run_rollout(
     provider_smoke_artifact: Path,
     router_mode: str = "offline",
     rollback_test_artifact: Path | None = None,
+    arm_order: str = "baseline-first",
 ) -> dict:
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before running live staging evaluation")
     if not manifest.is_file() or not trace.is_file():
         raise ValueError("manifest and trace files must exist")
+    if arm_order not in {"baseline-first", "candidate-first"}:
+        raise ValueError(f"unsupported arm order: {arm_order}")
     require_clean_worktree()
     for label in ("baseline", "candidate"):
         run_dir = output / label
@@ -245,33 +252,39 @@ def run_rollout(
     provider_config_sha = provider_configuration_sha256_for_settings(settings)
     provider_environment = provider_environment_for_settings(settings)
     governance_sha = governance_scope_sha256(manifest)
-    baseline_started_at = _utc_now()
-    validate_provider_smoke_for_baseline(
-        provider_smoke_artifact,
-        expected_provider_sha256=provider_config_sha,
-        baseline_started_at=baseline_started_at,
+    arm_specs = (
+        (("baseline", False), ("candidate", True))
+        if arm_order == "baseline-first"
+        else (("candidate", True), ("baseline", False))
     )
-    baseline = _run(
-        "baseline", manifest, output, trace, enabled=False, router_mode=router_mode,
-        provider_configuration_sha256=provider_config_sha,
-        governance_scope_sha256_value=governance_sha,
-        provider_environment=provider_environment,
-        started_at=baseline_started_at,
-    )
-    require_clean_worktree()
-    if _sha(manifest) != manifest_sha:
-        raise RuntimeError("manifest changed after baseline")
-    require_source_commit(git_sha)
-    candidate = _run(
-        "candidate", manifest, output, trace, enabled=True, router_mode=router_mode,
-        provider_configuration_sha256=provider_config_sha,
-        governance_scope_sha256_value=governance_sha,
-        provider_environment=provider_environment,
-    )
-    require_clean_worktree()
-    if _sha(manifest) != manifest_sha:
-        raise RuntimeError("manifest changed after candidate")
-    require_source_commit(git_sha)
+    arm_results = {}
+    arm_starts = []
+    for label, enabled in arm_specs:
+        started_at = _utc_now()
+        arm_starts.append(started_at)
+        validate_provider_smoke_for_arms(
+            provider_smoke_artifact,
+            expected_provider_sha256=provider_config_sha,
+            arm_started_at=tuple(arm_starts),
+        )
+        arm_results[label] = _run(
+            label,
+            manifest,
+            output,
+            trace,
+            enabled=enabled,
+            router_mode=router_mode,
+            provider_configuration_sha256=provider_config_sha,
+            governance_scope_sha256_value=governance_sha,
+            provider_environment=provider_environment,
+            started_at=started_at,
+        )
+        require_clean_worktree()
+        if _sha(manifest) != manifest_sha:
+            raise RuntimeError(f"manifest changed after {label}")
+        require_source_commit(git_sha)
+    baseline = arm_results["baseline"]
+    candidate = arm_results["candidate"]
     baseline_preflight = json.loads((output / "baseline" / "preflight.json").read_text(encoding="utf-8"))
     candidate_preflight = json.loads((output / "candidate" / "preflight.json").read_text(encoding="utf-8"))
     if baseline_preflight["fixture_fingerprint"] != candidate_preflight["fixture_fingerprint"]:
@@ -310,6 +323,7 @@ def run_rollout(
             },
             gate_artifact=gate_path,
             rollback_test_artifact=rollback_test_artifact,
+            arm_order=arm_order,
         ),
         "provider_smoke": _artifact_reference(provider_smoke_artifact),
     }
@@ -324,6 +338,7 @@ def run_rollout(
         "provider_configuration_sha256": provider_config_sha, "concurrency": 1,
         "fixture_fingerprint": baseline_preflight["fixture_fingerprint"],
         "router_mode": router_mode,
+        "arm_order": arm_order,
         "baseline": baseline, "candidate": candidate, "gate_exit": gate_result.returncode,
         "passed": bool(gate["passed"]) and bool(pair_guardrail["production_eligible"]),
         "rollout_pair_sha256": _sha(pair_path),
@@ -341,6 +356,11 @@ def main() -> int:
     parser.add_argument("--trace", type=Path, default=ROOT / "logs" / "rag_trace.jsonl")
     parser.add_argument("--provider-smoke-artifact", type=Path, required=True)
     parser.add_argument("--router-mode", choices=("offline", "provider"), default="offline")
+    parser.add_argument(
+        "--arm-order",
+        choices=("baseline-first", "candidate-first"),
+        default="baseline-first",
+    )
     parser.add_argument("--rollback-test-artifact", type=Path)
     args = parser.parse_args()
     report = run_rollout(
@@ -350,6 +370,7 @@ def main() -> int:
         provider_smoke_artifact=args.provider_smoke_artifact,
         router_mode=args.router_mode,
         rollback_test_artifact=args.rollback_test_artifact,
+        arm_order=args.arm_order,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["passed"] else 1

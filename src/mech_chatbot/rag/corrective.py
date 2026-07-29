@@ -5,7 +5,11 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from qdrant_client import models
+
+from mech_chatbot.domain.serving_state import is_currently_servable
 from mech_chatbot.rag.answer_policy import AnswerDecision
+from mech_chatbot.rag.context_builders import _payload_document
 
 
 MAX_CORRECTION_PASSES = 1
@@ -49,8 +53,8 @@ def _shares_query_phrase(question, document):
     )
 
 
-def metadata_correction_query(question, documents):
-    """Expand a query with the top governed result's stable document code."""
+def metadata_correction_code(question, documents):
+    """Return the top governed result's safe, query-relevant document code."""
     docs = list(documents or [])
     if not docs:
         return None
@@ -62,7 +66,76 @@ def metadata_correction_query(question, documents):
         or not _shares_query_phrase(question, docs[0])
     ):
         return None
+    return code
+
+
+def metadata_correction_query(question, documents):
+    """Expand a query with the top governed result's stable document code."""
+    code = metadata_correction_code(question, documents)
+    if code is None:
+        return None
     return f"{str(question or '').strip()} {code}".strip()
+
+
+def load_metadata_corrected_documents(
+    *,
+    client,
+    collection_name,
+    strict_filter,
+    base_code,
+):
+    """Load a bounded, payload-only correction without relaxing governance."""
+    code = str(base_code or "").strip()
+    if not _SAFE_CORRECTION_CODE.fullmatch(code):
+        raise ValueError("invalid corrective base code")
+    if client is None or not str(collection_name or "").strip():
+        raise RuntimeError("corrective Qdrant runtime is not configured")
+    if strict_filter is None:
+        raise RuntimeError("corrective strict filter is not configured")
+
+    def sort_number(value):
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    points, _ = client.scroll(
+        collection_name=collection_name,
+        scroll_filter=models.Filter(
+            must=[
+                strict_filter,
+                models.FieldCondition(
+                    key="metadata.base_code",
+                    match=models.MatchValue(value=code),
+                ),
+            ]
+        ),
+        limit=30,
+        with_payload=True,
+        with_vectors=False,
+        timeout=3,
+    )
+    documents = []
+    for point in points or ():
+        payload = getattr(point, "payload", None) or {}
+        metadata = dict(payload.get("metadata") or {})
+        if not is_currently_servable(metadata, require_current=True):
+            continue
+        document = _payload_document(payload)
+        if document is not None:
+            documents.append((
+                (
+                    str(metadata.get("doc_id") or ""),
+                    sort_number(
+                        metadata.get("trang_so") or metadata.get("page_no")
+                    ),
+                    sort_number(metadata.get("chunk_index")),
+                    str(getattr(point, "id", "")),
+                ),
+                document,
+            ))
+    documents.sort(key=lambda item: item[0])
+    return [document for _, document in documents]
 
 
 def _document_key(document):
@@ -70,6 +143,9 @@ def _document_key(document):
     doc_id = metadata.get("doc_id")
     page = metadata.get("trang_so") or metadata.get("page_no")
     if doc_id is not None and page is not None:
+        chunk = metadata.get("chunk_index")
+        if chunk is not None:
+            return ("chunk", str(doc_id), str(page), str(chunk))
         return ("source", str(doc_id), str(page))
     return ("content", str(getattr(document, "page_content", ""))[:500])
 

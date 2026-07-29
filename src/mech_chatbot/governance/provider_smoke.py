@@ -48,18 +48,38 @@ def provider_smoke_fresh_for_baseline(
     baseline_started_at: object,
 ) -> bool:
     """Return whether a smoke completed no more than 30 minutes before baseline."""
+    return provider_smoke_fresh_for_arms(
+        artifact,
+        arm_started_at=(baseline_started_at,),
+    )
+
+
+def provider_smoke_fresh_for_arms(
+    artifact: object,
+    *,
+    arm_started_at: tuple[object, ...],
+) -> bool:
+    """Return whether smoke is fresh at every declared arm start."""
     if not isinstance(artifact, dict):
         return False
     smoke_completed_at = _aware_datetime(artifact.get("completed_at"))
-    baseline_started = _aware_datetime(baseline_started_at)
-    if smoke_completed_at is None or baseline_started is None:
+    arm_starts = tuple(_aware_datetime(value) for value in arm_started_at)
+    if (
+        smoke_completed_at is None
+        or not arm_starts
+        or any(value is None for value in arm_starts)
+    ):
         return False
-    age = baseline_started - smoke_completed_at
-    return timedelta(0) <= age <= PROVIDER_SMOKE_MAX_AGE
+    return all(
+        timedelta(0) < start - smoke_completed_at <= PROVIDER_SMOKE_MAX_AGE
+        for start in arm_starts
+        if start is not None
+    )
 
 
 __all__ = [
     "PROVIDER_SMOKE_MAX_AGE",
     "provider_smoke_artifact_valid",
+    "provider_smoke_fresh_for_arms",
     "provider_smoke_fresh_for_baseline",
 ]

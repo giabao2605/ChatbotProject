@@ -132,6 +132,7 @@ def _pair(tmp_path, **overrides):
         "source_commit": "abc123",
         "run_id": run_id,
         "stage": stage,
+        "arm_order": "baseline-first",
         "evidence_type": "staging_evaluation",
         "provider_smoke": provider_smoke,
         "baseline": baseline,
@@ -182,6 +183,75 @@ def test_rollout_pair_rejects_provider_smoke_older_than_thirty_minutes(tmp_path)
     smoke_path = Path(pair["provider_smoke"]["artifact_path"])
     smoke = json.loads(smoke_path.read_text(encoding="utf-8"))
     smoke["completed_at"] = "2026-07-13T23:29:59Z"
+    smoke_path.write_text(json.dumps(smoke), encoding="utf-8")
+    pair["provider_smoke"]["artifact_sha256"] = hashlib.sha256(
+        smoke_path.read_bytes()
+    ).hexdigest()
+
+    report = evaluate_rollout_pair(pair)
+
+    assert report["checks"]["provider_smoke_precedes_pair"] is True
+    assert report["checks"]["provider_smoke_fresh_for_pair"] is False
+    assert report["production_eligible"] is False
+
+
+def test_rollout_pair_accepts_candidate_first_and_checks_both_arm_starts(tmp_path):
+    candidate = _context(
+        tmp_path,
+        arm="candidate",
+        started_at="2026-07-14T00:00:00Z",
+        completed_at="2026-07-14T00:01:00Z",
+    )
+    baseline = _context(
+        tmp_path,
+        arm="baseline",
+        started_at="2026-07-14T00:02:00Z",
+        completed_at="2026-07-14T00:03:00Z",
+    )
+    pair = _pair(
+        tmp_path,
+        arm_order="candidate-first",
+        baseline=baseline,
+        candidate=candidate,
+    )
+
+    report = evaluate_rollout_pair(pair)
+
+    assert report["checks"]["arm_order_valid"] is True
+    assert report["checks"]["evidence_windows_valid"] is True
+    assert report["checks"]["provider_smoke_fresh_for_pair"] is True
+    assert report["production_eligible"] is True
+
+    pair["arm_order"] = "baseline-first"
+    mismatched = evaluate_rollout_pair(pair)
+
+    assert mismatched["checks"]["arm_order_valid"] is False
+    assert mismatched["checks"]["evidence_windows_valid"] is False
+    assert mismatched["production_eligible"] is False
+
+
+def test_rollout_pair_rejects_smoke_stale_at_later_arm_start(tmp_path):
+    candidate = _context(
+        tmp_path,
+        arm="candidate",
+        started_at="2026-07-14T00:00:00Z",
+        completed_at="2026-07-14T00:01:00Z",
+    )
+    baseline = _context(
+        tmp_path,
+        arm="baseline",
+        started_at="2026-07-14T00:11:00Z",
+        completed_at="2026-07-14T00:12:00Z",
+    )
+    pair = _pair(
+        tmp_path,
+        arm_order="candidate-first",
+        baseline=baseline,
+        candidate=candidate,
+    )
+    smoke_path = Path(pair["provider_smoke"]["artifact_path"])
+    smoke = json.loads(smoke_path.read_text(encoding="utf-8"))
+    smoke["completed_at"] = "2026-07-13T23:40:00Z"
     smoke_path.write_text(json.dumps(smoke), encoding="utf-8")
     pair["provider_smoke"]["artifact_sha256"] = hashlib.sha256(
         smoke_path.read_bytes()

@@ -12,7 +12,7 @@ from pathlib import Path
 from mech_chatbot.governance.artifact_references import load_json_reference
 from mech_chatbot.governance.provider_smoke import (
     provider_smoke_artifact_valid,
-    provider_smoke_fresh_for_baseline,
+    provider_smoke_fresh_for_arms,
 )
 
 
@@ -160,10 +160,15 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         candidate_end = datetime.fromisoformat(
             str(candidate.get("completed_at")).replace("Z", "+00:00")
         )
-        evidence_windows_valid = (
+        arm_order = pair.get("arm_order", "baseline-first")
+        arm_order_valid = arm_order in {"baseline-first", "candidate-first"} and (
             baseline_start < baseline_end <= candidate_start < candidate_end
+            if arm_order == "baseline-first"
+            else candidate_start < candidate_end <= baseline_start < baseline_end
         )
+        evidence_windows_valid = arm_order_valid
     except (TypeError, ValueError):
+        arm_order_valid = False
         evidence_windows_valid = False
     evidence_type = pair.get("evidence_type")
     data_plane = pair.get("data_plane") or {}
@@ -188,22 +193,24 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         ),
     )
     try:
+        earliest_arm_start = min(baseline_start, candidate_start)
         provider_smoke_precedes_pair = (
             provider_smoke_valid
             and datetime.fromisoformat(
                 str(provider_smoke.get("completed_at")).replace("Z", "+00:00")
             )
-            <= datetime.fromisoformat(
-                str(baseline.get("started_at")).replace("Z", "+00:00")
-            )
+            < earliest_arm_start
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, UnboundLocalError):
         provider_smoke_precedes_pair = False
     provider_smoke_fresh_for_pair = (
         provider_smoke_valid
-        and provider_smoke_fresh_for_baseline(
+        and provider_smoke_fresh_for_arms(
             provider_smoke,
-            baseline_started_at=baseline.get("started_at"),
+            arm_started_at=(
+                baseline.get("started_at"),
+                candidate.get("started_at"),
+            ),
         )
     )
     gate = pair.get("gate") or {}
@@ -268,6 +275,7 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         "evidence_artifact_schemas_valid": evidence_artifact_schemas_valid,
         "artifact_context_valid": artifact_context_valid,
         "baseline_candidate_artifacts_distinct": artifacts_distinct,
+        "arm_order_valid": arm_order_valid,
         "evidence_windows_valid": evidence_windows_valid,
         "production_collection_not_mutated": production_collection_not_mutated,
         "provider_smoke_artifact_valid": provider_smoke_valid,

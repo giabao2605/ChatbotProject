@@ -495,9 +495,23 @@ def test_crag_force_ambiguous_override_is_request_local(monkeypatch):
 def test_crag_uses_local_metadata_correction_without_provider_round_trip(monkeypatch):
     from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
     from mech_chatbot.rag.phases import retrieval_enrichment as enrichment_phase
+    from qdrant_client import models
 
     request = _prepared_request(question="Mắt cú xanh kiểm tra khi nào?")
-    decision = _route_decision(request, part_ids=(), crag_enabled=True)
+    governance_filter = models.Filter(
+        must=[
+            models.FieldCondition(
+                key="metadata.site",
+                match=models.MatchValue(value="HQ"),
+            )
+        ]
+    )
+    decision = _route_decision(
+        request,
+        part_ids=(),
+        crag_enabled=True,
+        strict_filter=governance_filter,
+    )
     base_document = Document(
         page_content="Mắt cú xanh là alias đã phê duyệt.",
         metadata={
@@ -512,6 +526,11 @@ def test_crag_uses_local_metadata_correction_without_provider_round_trip(monkeyp
             "doc_id": 8,
             "trang_so": 1,
             "base_code": "crag-eval-alias-001",
+            "servable": True,
+            "publication_state": "published",
+            "lifecycle_status": "published",
+            "review_status": "approved",
+            "is_current": True,
         },
     )
     primary = PrimaryRetrievalOutcome(
@@ -534,6 +553,21 @@ def test_crag_uses_local_metadata_correction_without_provider_round_trip(monkeyp
         correction_estimated_cost=0.0,
     )
     retrieval_calls = []
+    scroll_calls = []
+    trace_events = []
+
+    class Client:
+        def scroll(self, **kwargs):
+            scroll_calls.append(kwargs)
+            return [
+                SimpleNamespace(
+                    id="corrected-point",
+                    payload={
+                        "page_content": corrected_document.page_content,
+                        "metadata": corrected_document.metadata,
+                    },
+                )
+            ], None
 
     monkeypatch.setattr(
         enrichment_phase,
@@ -553,17 +587,21 @@ def test_crag_uses_local_metadata_correction_without_provider_round_trip(monkeyp
             reason="missing coverage",
         ),
     )
+    monkeypatch.setattr(
+        enrichment_phase,
+        "log_trace",
+        lambda event, trace_id, **fields: trace_events.append(
+            {"event": event, "trace_id": trace_id, **fields}
+        ),
+    )
 
     outcome = _run_phase(
         lambda state: enrichment_phase.enrich_retrieval(decision, primary, state),
         retrieval=_retrieval_adapter(
-            retrieve=lambda **kwargs: retrieval_calls.append(kwargs) or (
-                [corrected_document],
-                5,
-                "corrected",
-                time.time(),
-                object(),
+            retrieve=lambda **kwargs: retrieval_calls.append(kwargs) or pytest.fail(
+                "metadata correction must not run embedding or hybrid retrieval"
             ),
+            client=Client(),
             crag_enabled=True,
         ),
         provider=SimpleNamespace(
@@ -575,17 +613,95 @@ def test_crag_uses_local_metadata_correction_without_provider_round_trip(monkeyp
 
     assert corrected_document in outcome.documents
     assert outcome.correction_estimated_cost == 0
-    assert len(retrieval_calls) == 1
-    assert retrieval_calls[0]["query_to_search"].endswith(
-        "crag-eval-alias-001"
-    )
-    assert retrieval_calls[0]["strict_filter"] is decision.strict_filter
-    assert retrieval_calls[0]["broad_filter"] is decision.broad_filter
-    assert retrieval_calls[0]["rbac_filter"] is decision.rbac_filter
+    assert retrieval_calls == []
+    assert len(scroll_calls) == 1
+    assert governance_filter in scroll_calls[0]["scroll_filter"].must
 
+    correction_events = [
+        event
+        for event in trace_events
+        if event["event"] == "corrective_retrieval"
+    ]
+    assert correction_events[0]["backend"] == "metadata_filter"
+    assert correction_events[0]["fallback_reason"] is None
+    assert not {"query", "base_code", "payload"} & correction_events[0].keys()
+
+
+@pytest.mark.parametrize("metadata_result", ["empty", "timeout"])
+def test_crag_metadata_lookup_falls_back_to_hybrid_once(
+    monkeypatch,
+    metadata_result,
+):
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval_enrichment as enrichment_phase
+    from qdrant_client import models
+
+    request = _prepared_request(question="Mắt cú xanh kiểm tra khi nào?")
+    decision = _route_decision(
+        request,
+        part_ids=(),
+        crag_enabled=True,
+        strict_filter=models.Filter(must=[]),
+    )
+    base_document = Document(
+        page_content="Mắt cú xanh là alias đã phê duyệt.",
+        metadata={
+            "doc_id": 7,
+            "trang_so": 1,
+            "base_code": "crag-eval-alias-001",
+        },
+    )
+    corrected_document = Document(
+        page_content="Chu kỳ kiểm tra là 90 ngày.",
+        metadata={"doc_id": 8, "trang_so": 1},
+    )
+    primary = PrimaryRetrievalOutcome(
+        documents=(base_document,),
+        base_k=5,
+        retrieval_mode="hybrid",
+        started_at=time.time(),
+        active_filter=SimpleNamespace(kind="active"),
+        has_active_filter=True,
+        decomposition_notice="",
+        decomposition_states=(),
+        decomposition_branches=(),
+        decomposition_intents=(),
+        decomposition_intent_coverage=(),
+        decomposition_used_fallback=False,
+        decomposition_intent_overflow=False,
+        auxiliary_input_tokens=0,
+        auxiliary_output_tokens=0,
+        planner_estimated_cost=0.0,
+        correction_estimated_cost=0.0,
+    )
+    retrieval_calls = []
+    correction_counts = []
     trace_events = []
-    failed_retrieval_calls = []
-    failed_correction_counts = []
+
+    class Client:
+        def scroll(self, **_kwargs):
+            if metadata_result == "timeout":
+                raise TimeoutError("qdrant timeout")
+            return [], None
+
+    monkeypatch.setattr(
+        enrichment_phase,
+        "_disambiguate",
+        lambda **kwargs: (None, kwargs["retrieved_docs"]),
+    )
+    monkeypatch.setattr(
+        enrichment_phase,
+        "_assemble_context",
+        lambda docs, _query: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        enrichment_phase,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.AMBIGUOUS,
+            reason="missing coverage",
+        ),
+    )
     monkeypatch.setattr(
         enrichment_phase,
         "log_trace",
@@ -593,50 +709,45 @@ def test_crag_uses_local_metadata_correction_without_provider_round_trip(monkeyp
             {"event": event, "trace_id": trace_id, **fields}
         ),
     )
-    def run_failed_correction(state):
-        outcome = enrichment_phase.enrich_retrieval(
-            decision,
-            primary,
-            state,
-        )
-        failed_correction_counts.append(state.budget.corrections)
+
+    def run_correction(state):
+        outcome = enrichment_phase.enrich_retrieval(decision, primary, state)
+        correction_counts.append(state.budget.corrections)
         return outcome
 
-    failed_outcome = _run_phase(
-        run_failed_correction,
+    outcome = _run_phase(
+        run_correction,
         retrieval=_retrieval_adapter(
-            retrieve=lambda **kwargs: failed_retrieval_calls.append(kwargs)
-            or ([], 5, "corrected", time.time(), object()),
+            retrieve=lambda **kwargs: retrieval_calls.append(kwargs) or (
+                [corrected_document],
+                5,
+                "corrected",
+                time.time(),
+                object(),
+            ),
+            client=Client(),
             crag_enabled=True,
         ),
         provider=SimpleNamespace(
             invoke=lambda *_args, **_kwargs: pytest.fail(
-                "failed local metadata correction must not call the provider"
+                "metadata fallback must not call the provider"
             )
         ),
     )
 
-    correction_events = [
-        event
-        for event in trace_events
-        if event["event"] == "corrective_retrieval"
-    ]
-    assert failed_outcome.documents == (base_document,)
-    assert len(failed_retrieval_calls) == 1
-    assert failed_correction_counts == [1]
-    assert correction_events == [
-        {
-            "event": "corrective_retrieval",
-            "trace_id": "phase-feature-contract",
-            "latency_ms": correction_events[0]["latency_ms"],
-            "strategy": "metadata_expansion",
-            "attempt": 1,
-            "before_docs": 1,
-            "after_docs": 1,
-            "evaluator_state": "AMBIGUOUS",
-            "error": "ValueError",
-        }
-    ]
+    assert corrected_document in outcome.documents
+    assert len(retrieval_calls) == 1
+    assert correction_counts == [1]
+    correction_event = next(
+        event for event in trace_events if event["event"] == "corrective_retrieval"
+    )
+    assert correction_event["backend"] == "hybrid_fallback"
+    assert correction_event["fallback_reason"] == (
+        "metadata_empty"
+        if metadata_result == "empty"
+        else "metadata_unavailable"
+    )
+    assert not {"query", "base_code", "payload"} & correction_event.keys()
 
 
 def test_executor_runs_graph_bom_image_and_corrective_enrichment(monkeypatch):

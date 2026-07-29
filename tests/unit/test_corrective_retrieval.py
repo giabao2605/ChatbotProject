@@ -1,11 +1,14 @@
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.documents import Document
+from qdrant_client import models
 
 from mech_chatbot.rag.corrective import (
     correction_enabled,
+    load_metadata_corrected_documents,
     metadata_correction_query,
     merge_corrected_documents,
     run_corrected_retrieval,
@@ -62,6 +65,19 @@ def test_corrected_documents_are_deduplicated_without_changing_metadata():
 
     assert merged == [original, added]
     assert merged[1].metadata["site"] == "HQ"
+
+
+def test_corrected_documents_keep_distinct_chunks_on_the_same_page():
+    first = Document(
+        page_content="first",
+        metadata={"doc_id": 1, "trang_so": 2, "chunk_index": 0},
+    )
+    second = Document(
+        page_content="second",
+        metadata={"doc_id": 1, "trang_so": 2, "chunk_index": 1},
+    )
+
+    assert merge_corrected_documents([], [first, second]) == [first, second]
 
 
 def test_metadata_correction_query_adds_top_governed_document_code_locally():
@@ -147,6 +163,97 @@ def test_corrected_retrieval_reuses_governance_filters_unchanged():
     assert observed["strict_filter"] is strict_filter
     assert observed["broad_filter"] is broad_filter
     assert observed["rbac_filter"] is rbac_filter
+
+
+def test_metadata_corrected_retrieval_narrows_strict_filter_and_returns_servable_payloads():
+    strict_filter = models.Filter(
+        must=[
+            models.FieldCondition(
+                key="metadata.site",
+                match=models.MatchValue(value="HQ"),
+            )
+        ]
+    )
+    observed = {}
+
+    class Client:
+        def scroll(self, **kwargs):
+            observed.update(kwargs)
+            return [
+                SimpleNamespace(
+                    id="point-2",
+                    payload={
+                        "page_content": "second",
+                        "metadata": {
+                            "doc_id": 1,
+                            "trang_so": 2,
+                            "chunk_index": 1,
+                            "base_code": "crag-eval-alias-001",
+                            "servable": True,
+                            "publication_state": "published",
+                            "lifecycle_status": "published",
+                            "review_status": "approved",
+                            "is_current": True,
+                        },
+                    },
+                ),
+                SimpleNamespace(
+                    id="point-expired",
+                    payload={
+                        "page_content": "expired",
+                        "metadata": {
+                            "doc_id": 1,
+                            "trang_so": 1,
+                            "base_code": "crag-eval-alias-001",
+                            "servable": True,
+                            "publication_state": "published",
+                            "lifecycle_status": "published",
+                            "review_status": "approved",
+                            "is_current": False,
+                        },
+                    },
+                ),
+                SimpleNamespace(
+                    id="point-1",
+                    payload={
+                        "page_content": "first",
+                        "metadata": {
+                            "doc_id": 1,
+                            "trang_so": 10,
+                            "chunk_index": 0,
+                            "base_code": "crag-eval-alias-001",
+                            "servable": True,
+                            "publication_state": "published",
+                            "lifecycle_status": "published",
+                            "review_status": "approved",
+                            "is_current": True,
+                        },
+                    },
+                ),
+            ], None
+
+    documents = load_metadata_corrected_documents(
+        client=Client(),
+        collection_name="test-knowledge",
+        strict_filter=strict_filter,
+        base_code="crag-eval-alias-001",
+    )
+
+    assert [document.page_content for document in documents] == ["second", "first"]
+    assert observed["collection_name"] == "test-knowledge"
+    assert observed["limit"] == 30
+    assert observed["with_payload"] is True
+    assert observed["with_vectors"] is False
+    assert observed["timeout"] == 3
+    assert strict_filter in observed["scroll_filter"].must
+    exact_conditions = [
+        condition
+        for condition in observed["scroll_filter"].must
+        if isinstance(condition, models.FieldCondition)
+    ]
+    assert len(exact_conditions) == 1
+    assert exact_conditions[0].key == "metadata.base_code"
+    assert exact_conditions[0].match.value == "crag-eval-alias-001"
 
 
 def test_corrective_query_rewrites_use_approved_disambiguation_surface():

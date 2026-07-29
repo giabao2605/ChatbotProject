@@ -1,0 +1,155 @@
+{
+  "schema": "crag-latency-breakdown-v1",
+  "source": {
+    "sha256": "bcd0c437928a1c5f0bc9535c0146fe75de50cb66816cb028c6f2cd3dfad105be",
+    "git_sha": "041aec4fbb9846be5d2b3ce3baccf10222bbda42"
+  },
+  "filters": {
+    "start": "2026-07-29T03:08:51.593270Z",
+    "end": "2026-07-29T03:09:44.095281Z",
+    "execution_contexts": [
+      "evaluation"
+    ]
+  },
+  "query_count": 9,
+  "parse_errors": 0,
+  "estimated_cost": 0.012725,
+  "stage_summary": {
+    "retrieval": {
+      "sample_count": 8,
+      "latency_p50_ms": 658,
+      "latency_p95_ms": 1271,
+      "latency_max_ms": 1271
+    },
+    "parent_context": {
+      "sample_count": 8,
+      "latency_p50_ms": 228,
+      "latency_p95_ms": 5231,
+      "latency_max_ms": 5231
+    },
+    "rerank": {
+      "sample_count": 3,
+      "latency_p50_ms": 563,
+      "latency_p95_ms": 668,
+      "latency_max_ms": 668
+    },
+    "generation": {
+      "sample_count": 8,
+      "latency_p50_ms": 2609,
+      "latency_p95_ms": 7154,
+      "latency_max_ms": 7154
+    },
+    "correction": {
+      "sample_count": 1,
+      "latency_p50_ms": 2110,
+      "latency_p95_ms": 2110,
+      "latency_max_ms": 2110
+    },
+    "claim_repair": {
+      "sample_count": 1,
+      "latency_p50_ms": 0,
+      "latency_p95_ms": 0,
+      "latency_max_ms": 0
+    },
+    "total": {
+      "sample_count": 9,
+      "latency_p50_ms": 4063,
+      "latency_p95_ms": 13390,
+      "latency_max_ms": 13390
+    }
+  },
+  "traces": [
+    {
+      "trace_id_sha256": "ef62abf6525aa32a12bf68ea015940b25f278df76f444f21585d38d097705f76",
+      "stages_ms": {
+        "retrieval": 673,
+        "parent_context": 222,
+        "generation": 4952,
+        "total": 6432
+      },
+      "estimated_cost": 0.0009725
+    },
+    {
+      "trace_id_sha256": "f315f1a7ba81a1be7b80c8a8765a542e50412b016a9ca04c46e9210807741df2",
+      "stages_ms": {
+        "retrieval": 1250,
+        "parent_context": 2321,
+        "generation": 7154,
+        "correction": 2110,
+        "total": 13390
+      },
+      "estimated_cost": 0.003555
+    },
+    {
+      "trace_id_sha256": "fe9556f8a8716bb18c74466e6e885bf8bea4e59ab078d6387cc37f09ebf8a734",
+      "stages_ms": {
+        "retrieval": 1271,
+        "parent_context": 234,
+        "generation": 0,
+        "total": 2037
+      },
+      "estimated_cost": 0.0
+    },
+    {
+      "trace_id_sha256": "9ae0f586c8be562800ee8046aa2e331765af50d57962a3ec65c958881e738722",
+      "stages_ms": {
+        "retrieval": 620,
+        "parent_context": 5231,
+        "generation": 2900,
+        "total": 9473
+      },
+      "estimated_cost": 0.0034175
+    },
+    {
+      "trace_id_sha256": "e01e7a032e7649a81c141746eb8dfb18274c6cd03b3323df65d903fcfaf0ef3c",
+      "stages_ms": {
+        "retrieval": 658,
+        "parent_context": 218,
+        "rerank": 563,
+        "generation": 2444,
+        "total": 4063
+      },
+      "estimated_cost": 0.0012825
+    },
+    {
+      "trace_id_sha256": "7de4e0f6c60e15d0c386c894677c680109e96bc3ad625129b9395be321ed5b8d",
+      "stages_ms": {
+        "retrieval": 624,
+        "parent_context": 228,
+        "rerank": 552,
+        "generation": 2609,
+        "claim_repair": 0,
+        "total": 4045
+      },
+      "estimated_cost": 0.0008925
+    },
+    {
+      "trace_id_sha256": "86bd73b920c42ff1ba978cc2ebe2f998deef78b18f550b2b255ce46beb633566",
+      "stages_ms": {
+        "retrieval": 896,
+        "parent_context": 226,
+        "rerank": 668,
+        "generation": 4702,
+        "total": 7096
+      },
+      "estimated_cost": 0.0013125
+    },
+    {
+      "trace_id_sha256": "53a7e805f47ca08a8e6a102f9bee7aa77a3bb1e4a099175b74a42ff3b5f56d25",
+      "stages_ms": {
+        "total": 2224
+      },
+      "estimated_cost": 0.0
+    },
+    {
+      "trace_id_sha256": "dc07ceb7612803f2da4fd1572fd059e8ff5a40e1ad0709d8fb2d6e62d8e29752",
+      "stages_ms": {
+        "retrieval": 615,
+        "parent_context": 231,
+        "generation": 2254,
+        "total": 3669
+      },
+      "estimated_cost": 0.0012925
+    }
+  ]
+}

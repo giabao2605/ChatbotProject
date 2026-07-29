@@ -43,7 +43,13 @@ def test_crag_fixture_ingest_publish_retrieval_and_denial(tmp_path):
                         allowed_sites=frozenset(case["allowed_sites"]),
                     ),
                 ),
-                RagInvocation(trace_id="", mode="evaluation"),
+                RagInvocation(
+                    trace_id="",
+                    mode="evaluation",
+                    evaluation_force_ambiguous=bool(
+                        case.get("evaluation_force_ambiguous")
+                    ),
+                ),
             )
         )
         return result.answer, dict(result.diagnostics)
@@ -60,6 +66,21 @@ def test_crag_fixture_ingest_publish_retrieval_and_denial(tmp_path):
         allowed = next(case for case in cases if case["id"] == "crag-number-thousands")
         answer, _ = run_case(allowed)
         assert "1,500" in answer
+
+        alias = next(case for case in cases if case["id"] == "crag-alias-correction")
+        answer, debug = run_case(alias)
+        assert "90 ngày" in answer
+        assert debug.get("correction_count") == 1
+        assert any(
+            doc.get("file_goc") == alias["expected_document"]
+            for doc in debug.get("citation_docs", [])
+        )
+        assert "CRAG-EVAL-SECRET-RED" not in answer
+        assert all(
+            "crag_eval_restricted_v1.md"
+            not in str(doc.get("file_goc", "")).lower()
+            for doc in debug.get("retrieved_docs", [])
+        )
 
         denied = next(case for case in cases if case["id"] == "crag-restricted-denial")
         answer, debug = run_case(denied)

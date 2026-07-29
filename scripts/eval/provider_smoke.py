@@ -23,7 +23,7 @@ from mech_chatbot.evaluation.milestone_decisions import classify_provider_outcom
 from mech_chatbot.config.settings import Settings
 from mech_chatbot.governance.provider_smoke import (
     provider_smoke_artifact_valid,
-    provider_smoke_fresh_for_baseline,
+    provider_smoke_fresh_for_arms,
 )
 
 
@@ -164,13 +164,26 @@ def validate_provider_smoke_for_baseline(
     expected_provider_sha256: str,
     baseline_started_at: object,
 ) -> dict[str, object]:
+    return validate_provider_smoke_for_arms(
+        path,
+        expected_provider_sha256=expected_provider_sha256,
+        arm_started_at=(baseline_started_at,),
+    )
+
+
+def validate_provider_smoke_for_arms(
+    path: str | Path,
+    *,
+    expected_provider_sha256: str,
+    arm_started_at: tuple[object, ...],
+) -> dict[str, object]:
     artifact = validate_provider_smoke_artifact(
         path,
         expected_provider_sha256=expected_provider_sha256,
     )
-    if not provider_smoke_fresh_for_baseline(
+    if not provider_smoke_fresh_for_arms(
         artifact,
-        baseline_started_at=baseline_started_at,
+        arm_started_at=arm_started_at,
     ):
         raise ValueError("provider smoke artifact is older than 30 minutes")
     return artifact
