@@ -47,8 +47,9 @@ qua public interface, không khóa private implementation.
   hiện `passed=false`, `technical_authorized=false`, `release_authorized=false`.
 - `release_decisions.json` đang `incomplete`. Chỉ Late Interaction có quyết định
   `rejected`; các feature live khác chưa có quyết định.
-- CRAG window mới nhất `20260729-crag-window-03-7d8cfa2` là `inconclusive`; pair
-  đầu thất bại quality/provider checks và không tạo authorization/bundle.
+- CRAG window `20260729-crag-window-04-9b6f3ec` là `inconclusive`; candidate
+  đạt `9/9`, không provider failure, đã exercise correction/repair, nhưng P95
+  ratio `1.5426 > 1.25`. Pair 02/03 không chạy và không tạo authorization/bundle.
 - Grounded Math đã có series kỹ thuật tốt hơn nhưng chưa thể live vì CRAG và human
   decision còn thiếu.
 - Query Decomposition có evidence chia đôi: một pair đạt, hai pair không đạt.
@@ -263,6 +264,25 @@ không bật default rollout.
 - Leakage bằng 0, wrong-answer không tăng, correction/repair không quá một.
 - P95 không quá 1.25x, cost không quá 1.5x, retry đúng policy.
 - Rollback chỉ cần tắt hai flag và đã được test trên cùng commit.
+
+### Trạng thái thực thi 2026-07-29
+
+- Sửa evaluator trên commit `9b6f3ec`: timeout/connection/server error trong
+  RAG runtime được phân loại là provider failure, không còn biến thành
+  `wrong_refusal`; timeout ngoài RAG runtime vẫn là quality error.
+- CRAG rollout gate mới fail-closed khi baseline hoặc candidate có provider
+  failure. `104` test liên quan đạt và review độc lập không còn blocker.
+- Window `20260729-crag-window-04-9b6f3ec` preflight fixture đạt `9/9`, rollback
+  hai flag đạt, provider smoke evaluation đạt `5/5`, `0` retry.
+- Pair 01 chạy `candidate-first`: baseline `8/9`, candidate `9/9`; provider
+  failure `0/0`, wrong-refusal giảm `1 -> 0`, correction `1`, repair `1`, cost
+  ratio `0.9989`.
+- Gate chỉ fail `latency_within_budget`: P95 `5568 -> 8589 ms`, ratio `1.5426`.
+  Candidate-first cũng có retrieval/provider P95 cao hơn trên các case không
+  correction/repair, nhưng đây chỉ là chẩn đoán variance, không được dùng để
+  nới gate.
+- Dừng pair 02/03 đúng predeclaration. Không tạo series, authorization,
+  activation bundle và không bật live flag.
 
 ## Ticket 6: Hoàn tất Grounded Math
 
