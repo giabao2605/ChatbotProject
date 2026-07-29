@@ -924,3 +924,10 @@ Khi toàn bộ checklist trên được đóng bằng artifact hoặc quyết đ
 - GraphRAG đã apply migration additive `V0037` và `V0038`, ingest 27 node/21 approved edge, source evidence 21/21 và structured coverage 100%. Quality gate vẫn fail vì relational gain và thiếu independent review 20 edge; flag tiếp tục tắt.
 - CRAG rollout mới nhất vẫn fail latency gate; không nới ngưỡng và không bật flag.
 - Bốn mutation pack deterministic đã compile với hash/commit provenance; failure-family gate và integrated live matrix chưa chạy vì chưa có pair evidence tương ứng.
+
+### Cập nhật thực thi 2026-07-29
+
+- Commit runtime `041aec4` buộc CRAG, Grounded Math, Query Decomposition, Graph và main-collection controlled-demo runner từ chối provider smoke quá 30 phút ngay trước baseline. Focused suite đạt 75 test; GitHub Actions run `30418136033` đạt cả `unit` và `frontend`. Sau khi window dừng, commit `3b884a3` khóa đúng cùng một timestamp cho freshness check và baseline artifact; focused suite đạt 78 test nhưng evaluation không được chạy lại sau khi đã thấy kết quả fail.
+- Evaluation window `20260729-crag-window-02-041aec4` được khai báo trước, pin commit, manifest, fixture fingerprint, provider hash, ba pair và stop rule. Preflight fixture đạt 9/9; rollback xác nhận CRAG/Claim Repair đều tắt; provider smoke của pair 01 và 02 đều đạt 5/5, không retry.
+- Pair 01 đạt toàn bộ gate. Pair 02 candidate đạt 9/9, P50 thấp hơn baseline, cost ratio `0.983`, retry 0 nhưng P95 ratio `1.568 > 1.25`; outlier là case correction có corrective retrieval `2110 ms` và generation provider `7145 ms` so với baseline `3024 ms`. Pair 03 không chạy theo stop rule; không tạo series, authorization hoặc activation bundle.
+- Trạng thái CRAG/Claim Repair tiếp tục `inconclusive`, hai flag giữ tắt. Không loại outlier, không hạ threshold và không dùng staging evidence để tuyên bố controlled demo hay default rollout đã được phép mở.
