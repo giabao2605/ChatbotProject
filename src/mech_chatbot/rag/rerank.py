@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import requests
 from functools import lru_cache
 from mech_chatbot.llm.external_ai import (
+    DEFAULT_EXTERNAL_AI_SETTINGS,
     audited_external_call,
     external_error_metadata,
     normalize_rerank_result,
@@ -15,13 +16,13 @@ from mech_chatbot.llm.external_ai import (
 
 
 _VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
+_JINA_RERANK_URL = "https://api.jina.ai/v1/rerank"
 
 
-def voyage_failure_metadata(exc):
-    """Describe the fixed pilot policy: no retry, immediate local fallback."""
+def _rerank_failure_metadata(exc, provider):
     error = external_error_metadata(exc)
     return {
-        "backend": "voyage",
+        "backend": provider,
         "status": "error",
         "fallback": True,
         "fallback_backend": "local_fusion",
@@ -32,9 +33,28 @@ def voyage_failure_metadata(exc):
     }
 
 
+def voyage_failure_metadata(exc):
+    """Describe the fixed pilot policy: no retry, immediate local fallback."""
+    return _rerank_failure_metadata(exc, "voyage")
+
+
+def jina_failure_metadata(exc):
+    """Describe the Jina policy: no retry, immediate local fallback."""
+    return _rerank_failure_metadata(exc, "jina")
+
+
 def _voyage_rerank_url(endpoint: str) -> str:
     base = str(endpoint or _VOYAGE_RERANK_URL).rstrip("/")
     return base if base.endswith("/rerank") else base + "/rerank"
+
+
+def _jina_rerank_url(endpoint: str) -> str:
+    base = str(endpoint or _JINA_RERANK_URL).rstrip("/")
+    return base if base.endswith("/rerank") else base + "/rerank"
+
+
+def _runtime_external_settings(runtime):
+    return getattr(runtime, "settings", None) or DEFAULT_EXTERNAL_AI_SETTINGS
 
 
 @dataclass(frozen=True)
@@ -47,7 +67,7 @@ class RerankPolicy:
     ranking scale.
     """
 
-    voyage_provider: str = "voyage"
+    provider: str = "voyage"
     enabled: bool = True
     runtime: object | None = None
 
@@ -59,8 +79,13 @@ class RerankPolicy:
         }
         if policies and policies != {"all_external"}:
             return "local_fusion"
-        if self.enabled and getattr(self.runtime, "api_key", None):
-            return self.voyage_provider
+        provider = str(self.provider or "").strip().lower()
+        if (
+            provider in {"voyage", "jina"}
+            and self.enabled
+            and getattr(self.runtime, "api_key", None)
+        ):
+            return provider
         return "local_fusion"
 
 
@@ -122,6 +147,8 @@ def voyage_rerank_documents(
         policies=policies,
         input_chars=len(str(query or "")) + sum(len(value) for value in texts),
         input_bytes=len(str(query or "").encode("utf-8")) + sum(len(value.encode("utf-8")) for value in texts),
+        profile=getattr(runtime, "profile", None),
+        settings=_runtime_external_settings(runtime),
     ):
         response = requests.post(
             rerank_url,
@@ -170,6 +197,105 @@ def voyage_rerank_documents(
 
     if not ranked:
         raise ValueError("Voyage rerank response khong co index document hop le")
+    return ranked
+
+
+def jina_rerank_documents(
+    documents,
+    query,
+    top_n=10,
+    trace_id=None,
+    *,
+    runtime,
+    timeout_seconds=15.0,
+):
+    """Rerank one governed candidate set through Jina."""
+    docs = list(documents or [])
+    if not docs:
+        return []
+
+    api_key = (getattr(runtime, "api_key", None) or "").strip()
+    if not api_key:
+        raise RuntimeError(
+            "JINA_API_KEY chua resolve duoc tu secret reference cua Jina"
+        )
+
+    top_n = max(1, min(int(top_n or 10), len(docs)))
+    model = runtime.model
+    texts = [
+        str(
+            (getattr(doc, "metadata", {}) or {}).get("noi_dung_goc")
+            or getattr(doc, "page_content", "")
+            or ""
+        )
+        for doc in docs
+    ]
+    metadata = [getattr(doc, "metadata", {}) or {} for doc in docs]
+
+    with audited_external_call(
+        provider="jina",
+        model=model,
+        endpoint=runtime.endpoint,
+        surface="reranking",
+        trace_id=trace_id,
+        doc_ids=[item.get("doc_id") for item in metadata],
+        security_levels=[item.get("security_level") for item in metadata],
+        policies=[
+            item.get("external_processing_policy") or "internal_only"
+            for item in metadata
+        ],
+        input_chars=len(str(query or "")) + sum(len(value) for value in texts),
+        input_bytes=len(str(query or "").encode("utf-8"))
+        + sum(len(value.encode("utf-8")) for value in texts),
+        profile=getattr(runtime, "profile", None),
+        settings=_runtime_external_settings(runtime),
+    ):
+        response = requests.post(
+            _jina_rerank_url(runtime.endpoint),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": str(query or ""),
+                "documents": texts,
+                "model": model,
+                "top_n": top_n,
+                "return_documents": False,
+            },
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    results = normalize_rerank_result(
+        payload,
+        provider="jina",
+        model=model,
+    ).items
+    ranked = []
+    seen = set()
+    for item in results:
+        try:
+            index = int(item["index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if index < 0 or index >= len(docs) or index in seen:
+            continue
+        seen.add(index)
+        doc = docs[index]
+        try:
+            doc.metadata["relevance_score"] = float(
+                item.get("relevance_score", 0.0)
+            )
+        except (AttributeError, TypeError, ValueError):
+            pass
+        ranked.append(doc)
+        if len(ranked) == top_n:
+            break
+
+    if not ranked:
+        raise ValueError("Jina rerank response khong co index document hop le")
     return ranked
 
 

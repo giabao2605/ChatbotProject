@@ -88,6 +88,7 @@ class ExternalAIProviderRuntime:
     model: str
     api_key: str | None
     profile: ExternalAIProviderProfile
+    settings: ExternalAiSettings | None = None
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,19 @@ def _fallback_provider_profile(provider: str) -> ExternalAIProviderProfile | Non
             policy_version="risk-accepted-v3",
             approved_by="documented-risk-acceptance",
             risk_acceptance_ref="notion:92459b78-3e54-4c47-8322-d44ab2b65664",
+            review_expires_at=None,
+        )
+    if normalized == "jina":
+        return ExternalAIProviderProfile(
+            provider="jina",
+            endpoint="https://api.jina.ai/v1",
+            default_model="jina-reranker-v3",
+            secret_reference="env:JINA_API_KEY",
+            allowed_surfaces=("reranking",),
+            retention_mode="provider_default_no_training",
+            policy_version="local-evaluation-v1",
+            approved_by="local-development-only",
+            risk_acceptance_ref="local-evaluation-only",
             review_expires_at=None,
         )
     return None
@@ -341,6 +355,7 @@ def get_provider_runtime(
         model=model,
         api_key=api_key,
         profile=profile,
+        settings=settings,
     )
 
 

@@ -33,12 +33,13 @@ NUMERIC_INT = [
 NUMERIC_FLOAT = [
     "GPT_TEMPERATURE", "GPT_TIMEOUT_SECONDS", "GPT_MIN_INTERVAL_SECONDS",
     "INTENT_TIMEOUT", "GPT_VISION_TEMPERATURE", "VOYAGE_RERANK_TIMEOUT_SECONDS",
+    "JINA_RERANK_TIMEOUT_SECONDS",
 ]
 
 # Cac key la BI MAT -> KHONG BAO GIO log gia tri that
 SECRET_KEYS = {
     "QDRANT_API_KEY", "PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY",
-    "SQL_PASSWORD", "RAG_SERVICE_TOKEN", "VOYAGE_API_KEY",
+    "SQL_PASSWORD", "RAG_SERVICE_TOKEN", "VOYAGE_API_KEY", "JINA_API_KEY",
 }
 
 # Cac key dung de in summary (khong bao gom secret value)
@@ -49,8 +50,9 @@ _SUMMARY_KEYS = (
         "SQL_TRUSTED_CONNECTION", "SQL_PASSWORD",
         "QDRANT_COLLECTION", "GPT_MODEL_NAME", "MAX_CONCURRENT_RAG",
         "RAG_SERVER_HOST", "RAG_SERVER_PORT", "RAG_REQUIRE_SERVICE_AUTH",
-        "RAG_SERVICE_TOKEN", "USE_VOYAGE_RERANK", "VOYAGE_RERANK_MODEL",
-        "VOYAGE_RERANK_TIMEOUT_SECONDS", "VOYAGE_API_KEY",
+        "RAG_SERVICE_TOKEN", "RERANK_PROVIDER", "USE_VOYAGE_RERANK",
+        "VOYAGE_RERANK_MODEL", "VOYAGE_RERANK_TIMEOUT_SECONDS", "VOYAGE_API_KEY",
+        "JINA_RERANK_MODEL", "JINA_RERANK_TIMEOUT_SECONDS", "JINA_API_KEY",
         "APP_ENV", "EXTERNAL_AI_LOCAL_DEVELOPMENT",
         "STRICT_ANSWER_MODE", "STRICT_REALTIME_STREAMING",
     ]
@@ -127,6 +129,12 @@ def validate_config(env=None, *, require_qdrant=True, require_llm=True,
     if _truthy(_get(env, "EXTERNAL_AI_LOCAL_DEVELOPMENT")) and app_env not in {"development", "local"}:
         errors.append(
             "EXTERNAL_AI_LOCAL_DEVELOPMENT chi duoc dung khi APP_ENV=development hoac local"
+        )
+
+    rerank_provider = _get(env, "RERANK_PROVIDER").lower() or "voyage"
+    if rerank_provider not in {"voyage", "jina", "local_fusion"}:
+        errors.append(
+            "RERANK_PROVIDER phai la voyage, jina hoac local_fusion"
         )
 
     # Character holdback cannot prove the prefix is factual.  Keep the pilot

@@ -106,6 +106,10 @@ class RagRetrievalRuntime:
     voyage_runtime: Any = field(default=None, repr=False)
     voyage_enabled: bool = True
     voyage_timeout_seconds: float = 15.0
+    rerank_provider: str = "voyage"
+    rerank_runtime: Any = field(default=None, repr=False)
+    rerank_enabled: bool = True
+    rerank_timeout_seconds: float = 15.0
     rerank_max_chunks_per_document: int = 4
     rerank_max_chunks_per_section: int = 1
     rerank_candidate_cap: int = 20
@@ -235,7 +239,10 @@ def _build_intent_dependency(settings, process, builder):
 
 
 def _build_voyage_dependency(settings, builder):
-    if not settings.USE_VOYAGE_RERANK:
+    if (
+        settings.RERANK_PROVIDER != "voyage"
+        or not settings.USE_VOYAGE_RERANK
+    ):
         return None
     from mech_chatbot.config.settings import ExternalAiSettings
     from mech_chatbot.llm.external_ai import (
@@ -250,6 +257,27 @@ def _build_voyage_dependency(settings, builder):
             fallback_model=settings.VOYAGE_RERANK_MODEL,
             settings=ExternalAiSettings.from_settings(settings),
             resolved_secrets={"VOYAGE_API_KEY": settings.VOYAGE_API_KEY},
+        )
+    except ExternalProcessingDenied:
+        return None
+
+
+def _build_jina_dependency(settings, builder):
+    if settings.RERANK_PROVIDER != "jina":
+        return None
+    from mech_chatbot.config.settings import ExternalAiSettings
+    from mech_chatbot.llm.external_ai import (
+        ExternalProcessingDenied,
+        get_provider_runtime,
+    )
+
+    try:
+        return (builder or get_provider_runtime)(
+            "jina",
+            fallback_endpoint="https://api.jina.ai/v1",
+            fallback_model=settings.JINA_RERANK_MODEL,
+            settings=ExternalAiSettings.from_settings(settings),
+            resolved_secrets={"JINA_API_KEY": settings.JINA_API_KEY},
         )
     except ExternalProcessingDenied:
         return None
@@ -314,7 +342,29 @@ def _retrieval_limit_settings(settings, process):
     }
 
 
-def _retrieval_policy_settings(settings, process, voyage_runtime):
+def _retrieval_policy_settings(
+    settings,
+    process,
+    voyage_runtime,
+    jina_runtime,
+):
+    rerank_runtime = (
+        jina_runtime
+        if settings.RERANK_PROVIDER == "jina"
+        else voyage_runtime
+    )
+    rerank_enabled = (
+        settings.RERANK_PROVIDER == "jina" and jina_runtime is not None
+    ) or (
+        settings.RERANK_PROVIDER == "voyage"
+        and settings.USE_VOYAGE_RERANK
+        and voyage_runtime is not None
+    )
+    rerank_timeout = (
+        settings.JINA_RERANK_TIMEOUT_SECONDS
+        if settings.RERANK_PROVIDER == "jina"
+        else settings.VOYAGE_RERANK_TIMEOUT_SECONDS
+    )
     return {
         "planner_version": settings.RAG_PLANNER_VERSION,
         "community_serving_epoch": settings.RAG_COMMUNITY_SERVING_EPOCH,
@@ -336,6 +386,10 @@ def _retrieval_policy_settings(settings, process, voyage_runtime):
         "voyage_runtime": voyage_runtime,
         "voyage_enabled": settings.USE_VOYAGE_RERANK,
         "voyage_timeout_seconds": settings.VOYAGE_RERANK_TIMEOUT_SECONDS,
+        "rerank_provider": settings.RERANK_PROVIDER,
+        "rerank_runtime": rerank_runtime,
+        "rerank_enabled": rerank_enabled,
+        "rerank_timeout_seconds": rerank_timeout,
     }
 
 
@@ -349,6 +403,7 @@ def _build_default_adapters(
     late_encoder_builder: Callable[[Any], Any] | None = None,
     intent_runtime_builder: Callable[..., Any] | None = None,
     voyage_runtime_builder: Callable[..., Any] | None = None,
+    jina_runtime_builder: Callable[..., Any] | None = None,
 ) -> tuple[RagRetrievalRuntime, RagProviderAdapter]:
     """Construct external adapters only when the composition root is called."""
     process = RagProcessSettings.from_settings(settings)
@@ -362,6 +417,7 @@ def _build_default_adapters(
         settings, process, intent_runtime_builder
     )
     voyage_runtime = _build_voyage_dependency(settings, voyage_runtime_builder)
+    jina_runtime = _build_jina_dependency(settings, jina_runtime_builder)
     composed_retrieve = partial(
         retrieve_function,
         vectorstore=vector_runtime.vector_store,
@@ -380,7 +436,12 @@ def _build_default_adapters(
             intent_runtime=intent_runtime,
             **_retrieval_feature_settings(settings, process),
             **_retrieval_limit_settings(settings, process),
-            **_retrieval_policy_settings(settings, process, voyage_runtime),
+            **_retrieval_policy_settings(
+                settings,
+                process,
+                voyage_runtime,
+                jina_runtime,
+            ),
         ),
         provider,
     )
@@ -400,6 +461,7 @@ def build_rag_runtime(
     late_encoder_builder: Callable[[Any], Any] | None = None,
     intent_runtime_builder: Callable[..., Any] | None = None,
     voyage_runtime_builder: Callable[..., Any] | None = None,
+    jina_runtime_builder: Callable[..., Any] | None = None,
     trace_persist: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> RagRuntime:
     """Build RAG dependencies without a singleton or service locator.
@@ -436,6 +498,7 @@ def build_rag_runtime(
             late_encoder_builder=late_encoder_builder,
             intent_runtime_builder=intent_runtime_builder,
             voyage_runtime_builder=voyage_runtime_builder,
+            jina_runtime_builder=jina_runtime_builder,
         )
         resolved_retrieval = retrieval or default_retrieval
         resolved_provider = provider or default_provider

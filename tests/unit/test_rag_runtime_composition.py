@@ -182,6 +182,74 @@ def test_rag_runtime_composes_provider_vector_and_vision_adapters_explicitly():
     runtime.close()
 
 
+def test_rag_runtime_resolves_explicit_jina_provider_without_exposing_key():
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+
+    secret = "jina-" + "runtime-value"
+    observed = {}
+    qdrant_runtime = SimpleNamespace(
+        qdrant_client=SimpleNamespace(close=lambda: None),
+        vector_store=object(),
+        collection_name="knowledge",
+    )
+    settings = Settings.from_env(
+        {
+            "QDRANT_URL": "https://qdrant.invalid",
+            "QDRANT_API_KEY": "qdrant-value",
+            "LLM_BASE_URL": "https://llm.invalid",
+            "LLM_API_KEY": "llm-value",
+            "RERANK_PROVIDER": "jina",
+            "JINA_API_KEY": secret,
+        }
+    )
+
+    def build_jina(provider_name, **kwargs):
+        observed["provider_name"] = provider_name
+        observed.update(kwargs)
+        return SimpleNamespace(
+            api_key=kwargs["resolved_secrets"]["JINA_API_KEY"],
+            model=kwargs["fallback_model"],
+            endpoint=kwargs["fallback_endpoint"],
+            settings=kwargs["settings"],
+        )
+
+    runtime = build_rag_runtime(
+        settings,
+        execute_pipeline=lambda state: state.prepared((iter(()), "", [], [], {})),
+        qdrant_builder=lambda _settings: qdrant_runtime,
+        llm_builder=lambda _settings: SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: None
+        ),
+        vision_builder=lambda _settings: object(),
+        intent_runtime_builder=lambda **_kwargs: None,
+        jina_runtime_builder=build_jina,
+    )
+
+    assert observed["provider_name"] == "jina"
+    assert observed["fallback_endpoint"] == "https://api.jina.ai/v1"
+    assert observed["fallback_model"] == "jina-reranker-v3"
+    assert observed["resolved_secrets"] == {"JINA_API_KEY": secret}
+    assert runtime.retrieval.rerank_provider == "jina"
+    assert runtime.retrieval.rerank_runtime.api_key == secret
+    assert runtime.retrieval.rerank_runtime.settings.processing_policy == "all_external"
+    assert secret not in repr(runtime)
+    assert secret not in repr(runtime.retrieval)
+
+    runtime.close()
+
+
+def test_rag_runtime_rerank_provider_defaults_to_voyage_and_can_disable_external():
+    assert Settings().RERANK_PROVIDER == "voyage"
+
+    local_settings = Settings(
+        RERANK_PROVIDER="local_fusion",
+        VOYAGE_API_KEY="unused",
+        JINA_API_KEY="unused",
+    )
+
+    assert local_settings.RERANK_PROVIDER == "local_fusion"
+
+
 def test_rag_runtime_loads_late_encoder_only_when_both_activation_flags_are_on():
     from mech_chatbot.composition.rag_runtime import build_rag_runtime
 

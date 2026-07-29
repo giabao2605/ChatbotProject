@@ -20,6 +20,8 @@ from mech_chatbot.rag.prompt import _t_rag
 from mech_chatbot.rag.rerank import (
     RerankPolicy,
     diversify_candidates,
+    jina_failure_metadata,
+    jina_rerank_documents,
     long_context_reorder,
     prioritize_document_types,
     rerank_docs,
@@ -141,7 +143,7 @@ def _voyage_top_n(
     return min(int(cap), target_top_n)
 
 
-def _voyage_rerank(
+def _provider_rerank(
     real_docs: list[Any],
     effective_question: str,
     user_question: str,
@@ -149,6 +151,7 @@ def _voyage_rerank(
     new_part_ids: list[Any],
     input_count: int,
     runtime: Any,
+    provider: str,
 ) -> list[Any]:
     try:
         top_n = _voyage_top_n(
@@ -158,18 +161,33 @@ def _voyage_rerank(
             cap=getattr(runtime, "rerank_top_n_cap", 20),
         )
         logger.info(
-            "Dang su dung Voyage Rerank de filter %s tai lieu (top_n=%s)...",
+            "Dang su dung %s rerank de filter %s tai lieu (top_n=%s)...",
+            provider,
             len(real_docs),
             top_n,
         )
         started = time.time()
-        result = voyage_rerank_documents(
+        adapter = (
+            jina_rerank_documents
+            if provider == "jina"
+            else voyage_rerank_documents
+        )
+        provider_runtime = getattr(
+            runtime,
+            "rerank_runtime",
+            getattr(runtime, "voyage_runtime", None),
+        )
+        result = adapter(
             real_docs,
             effective_question,
             top_n=top_n,
             trace_id=trace_id,
-            runtime=getattr(runtime, "voyage_runtime", None),
-            timeout_seconds=getattr(runtime, "voyage_timeout_seconds", 15.0),
+            runtime=provider_runtime,
+            timeout_seconds=getattr(
+                runtime,
+                "rerank_timeout_seconds",
+                getattr(runtime, "voyage_timeout_seconds", 15.0),
+            ),
         )
         scores = [
             {
@@ -186,7 +204,7 @@ def _voyage_rerank(
             input_docs=input_count,
             output_docs=len(result),
             scores=scores,
-            backend="voyage",
+            backend=provider,
             status="success",
             fallback=False,
             retry_attempted=False,
@@ -195,9 +213,18 @@ def _voyage_rerank(
     except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise
     except Exception as exc:
-        logger.error("Loi khi su dung Voyage Rerank: %s. Fallback to manual rerank.", exc)
+        logger.error(
+            "Loi khi su dung %s rerank: %s. Fallback to manual rerank.",
+            provider,
+            exc,
+        )
         result = rerank_docs(real_docs)
-        log_trace("rerank", trace_id, **voyage_failure_metadata(exc))
+        failure_metadata = (
+            jina_failure_metadata
+            if provider == "jina"
+            else voyage_failure_metadata
+        )
+        log_trace("rerank", trace_id, **failure_metadata(exc))
         return result
 
 
@@ -215,12 +242,23 @@ def _apply_rerank_backend(
         "late_interaction"
         if late_used
         else RerankPolicy(
-            enabled=bool(getattr(runtime, "voyage_enabled", True)),
-            runtime=getattr(runtime, "voyage_runtime", None),
+            provider=getattr(runtime, "rerank_provider", "voyage"),
+            enabled=bool(
+                getattr(
+                    runtime,
+                    "rerank_enabled",
+                    getattr(runtime, "voyage_enabled", True),
+                )
+            ),
+            runtime=getattr(
+                runtime,
+                "rerank_runtime",
+                getattr(runtime, "voyage_runtime", None),
+            ),
         ).select_backend(real_docs)
     )
-    if real_docs and backend == "voyage":
-        return _voyage_rerank(
+    if real_docs and backend in {"voyage", "jina"}:
+        return _provider_rerank(
             real_docs,
             effective_question,
             user_question,
@@ -228,6 +266,7 @@ def _apply_rerank_backend(
             new_part_ids,
             input_count,
             runtime,
+            backend,
         )
     if backend == "late_interaction":
         logger.info("Dung late_interaction cho rerank candidate set")

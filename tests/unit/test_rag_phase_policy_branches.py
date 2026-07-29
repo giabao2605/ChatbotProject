@@ -618,6 +618,61 @@ def test_rerank_voyage_path_keeps_image_graph_and_community_context(monkeypatch)
     assert outcome.served_graph_documents == (graph,)
 
 
+def test_rerank_jina_path_uses_jina_adapter_and_reports_backend(monkeypatch):
+    from mech_chatbot.rag.phases import retrieval_rerank
+
+    first = Document(
+        page_content="first",
+        metadata={"doc_id": 1, "external_processing_policy": "all_external"},
+    )
+    second = Document(
+        page_content="second",
+        metadata={"doc_id": 2, "external_processing_policy": "all_external"},
+    )
+    calls = []
+    traces = []
+    state = _state()
+    state.retrieval_adapter.rerank_provider = "jina"
+    state.retrieval_adapter.rerank_enabled = True
+    state.retrieval_adapter.rerank_runtime = SimpleNamespace(api_key="configured")
+    state.retrieval_adapter.rerank_timeout_seconds = 15.0
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "jina_rerank_documents",
+        lambda docs, *_args, **_kwargs: calls.append(True) or list(reversed(docs)),
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "log_trace",
+        lambda event, _trace_id, **metadata: traces.append((event, metadata)),
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "hydrate_parent_context",
+        lambda docs, **_kwargs: docs,
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "long_context_reorder",
+        lambda docs: docs,
+    )
+
+    outcome = retrieval_rerank.rerank_retrieval(
+        _decision(),
+        _enrichment([first, second]),
+        state,
+    )
+
+    assert calls == [True]
+    assert outcome.documents == (second, first)
+    assert any(
+        event == "rerank"
+        and metadata["backend"] == "jina"
+        and metadata["status"] == "success"
+        for event, metadata in traces
+    )
+
+
 def test_decomposed_evidence_skips_redundant_voyage_rerank(monkeypatch):
     from mech_chatbot.rag.phases import retrieval_rerank
 

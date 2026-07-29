@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -89,10 +89,14 @@ class Settings(BaseModel):
     # --- RAG core (rag/*) -------------------------------------------------
     RERANK_PER_PART: int = 8
     RERANK_TOP_N_CAP: int = 20
+    RERANK_PROVIDER: Literal["voyage", "jina", "local_fusion"] = "voyage"
     VOYAGE_API_KEY: Optional[str] = None
     VOYAGE_RERANK_MODEL: str = "rerank-2.5-lite"
     VOYAGE_RERANK_TIMEOUT_SECONDS: float = 15.0
     USE_VOYAGE_RERANK: bool = True
+    JINA_API_KEY: Optional[str] = None
+    JINA_RERANK_MODEL: str = "jina-reranker-v3"
+    JINA_RERANK_TIMEOUT_SECONDS: float = 15.0
     STRICT_ANSWER_MODE: bool = True
     STRICT_REALTIME_STREAMING: bool = False
     HYDE_ENABLED: bool = True
@@ -303,10 +307,14 @@ class Settings(BaseModel):
             # RAG core
             RERANK_PER_PART=_int("RERANK_PER_PART", 8),
             RERANK_TOP_N_CAP=_int("RERANK_TOP_N_CAP", 20),
+            RERANK_PROVIDER=_str("RERANK_PROVIDER", "voyage"),
             VOYAGE_API_KEY=_str("VOYAGE_API_KEY"),
             VOYAGE_RERANK_MODEL=_str("VOYAGE_RERANK_MODEL", "rerank-2.5-lite"),
             VOYAGE_RERANK_TIMEOUT_SECONDS=_float("VOYAGE_RERANK_TIMEOUT_SECONDS", 15.0),
             USE_VOYAGE_RERANK=_bool("USE_VOYAGE_RERANK", True, _TRUTHY_5),
+            JINA_API_KEY=_str("JINA_API_KEY"),
+            JINA_RERANK_MODEL=_str("JINA_RERANK_MODEL", "jina-reranker-v3"),
+            JINA_RERANK_TIMEOUT_SECONDS=_float("JINA_RERANK_TIMEOUT_SECONDS", 15.0),
             STRICT_ANSWER_MODE=_bool("STRICT_ANSWER_MODE", True, _TRUTHY_5),
             STRICT_REALTIME_STREAMING=_bool("STRICT_REALTIME_STREAMING", False, _TRUTHY_5),
             HYDE_ENABLED=_bool("HYDE_ENABLED", True, _TRUTHY_5),
