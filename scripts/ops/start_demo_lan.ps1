@@ -49,7 +49,7 @@ finally {
 }
 
 Write-Output "Dang kiem tra va cap nhat schema database..."
-& $pythonExe "scripts\migrations\migrate.py" --target V0032
+& $pythonExe "scripts\migrations\migrate.py"
 if ($LASTEXITCODE -ne 0) {
     throw "Migration database that bai. Khong khoi dong service de tranh chay sai schema."
 }
@@ -70,6 +70,12 @@ Write-Output "Dang dong bo Qdrant governance metadata..."
 & $pythonExe "scripts\migrations\backfill_qdrant_governance_metadata.py"
 if ($LASTEXITCODE -ne 0) {
     throw "Dong bo Qdrant governance metadata that bai."
+}
+
+Write-Output "Dang chay production preflight read-only..."
+& $pythonExe "scripts\ops\production_preflight.py" --skip-health
+if ($LASTEXITCODE -ne 0) {
+    throw "Production preflight khong dat. Khong khoi dong service."
 }
 
 function Get-DotEnvValue {
@@ -93,36 +99,25 @@ $serviceToken = Get-DotEnvValue -Path $envPath -Key "RAG_SERVICE_TOKEN"
 $sessionSecret = Get-DotEnvValue -Path $envPath -Key "APP_SESSION_SECRET"
 $bridgeSecret = Get-DotEnvValue -Path $envPath -Key "CHAT_BRIDGE_SECRET"
 $ragServerUrl = Get-DotEnvValue -Path $envPath -Key "RAG_SERVER_URL"
+$appMode = $env:APP_ENV
+if (!$appMode) { $appMode = Get-DotEnvValue -Path $envPath -Key "APP_ENV" }
+$appTrustedHosts = $env:APP_TRUSTED_HOSTS
+if (!$appTrustedHosts) {
+    $appTrustedHosts = Get-DotEnvValue -Path $envPath -Key "APP_TRUSTED_HOSTS"
+}
 if (!$ragServerUrl) { $ragServerUrl = "http://127.0.0.1:8100" }
 if (!$serviceToken) { $serviceToken = "" }
 if (!$sessionSecret -and !$bridgeSecret -and !$serviceToken) {
     throw "Thieu APP_SESSION_SECRET, CHAT_BRIDGE_SECRET hoac RAG_SERVICE_TOKEN trong .env. Tao bang: python -c ""import secrets; print(secrets.token_urlsafe(48))"""
 }
 
-function Stop-ProcessesOnPort {
+function Assert-PortsAvailable {
     param([int[]]$Ports)
     foreach ($port in $Ports) {
         $listeners = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
         if ($listeners) {
             $pids = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
-            foreach ($processId in $pids) {
-                Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-}
-
-function Stop-ProcessesByCommandLine {
-    param([string[]]$Patterns)
-    $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
-    foreach ($proc in $procs) {
-        if ($proc.ProcessId -eq $PID) { continue }
-        if (-not $proc.CommandLine) { continue }
-        foreach ($pattern in $Patterns) {
-            if ($proc.CommandLine -match $pattern) {
-                Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
-                break
-            }
+            throw "Port $port dang duoc su dung boi PID $($pids -join ','). Launcher khong dung process dang chay."
         }
     }
 }
@@ -189,9 +184,7 @@ function Wait-WebOk {
     return $false
 }
 
-Stop-ProcessesOnPort -Ports @(8100, 8080)
-Stop-ProcessesByCommandLine -Patterns @('mech_chatbot\.api\.rag_server', 'mech_chatbot\.api\.app_server', 'run_worker\.py')
-Start-Sleep -Seconds 2
+Assert-PortsAvailable -Ports @(8100, 8080)
 
 $lanIp = $null
 try {
@@ -209,6 +202,8 @@ catch {
 }
 if (!$lanIp) { $lanIp = "localhost" }
 
+$ownedProcesses = @()
+try {
 $ragProc = Start-ProcessWithEnv `
     -FilePath $pythonExe `
     -ArgumentList @("-m", "mech_chatbot.api.rag_server") `
@@ -216,6 +211,7 @@ $ragProc = Start-ProcessWithEnv `
     -RedirectStandardOutput $ragOutLog `
     -RedirectStandardError $ragErrLog `
     -Environment @{ PYTHONPATH = "src"; OMP_NUM_THREADS = "4" }
+$ownedProcesses += $ragProc
 
 $workerProc = Start-ProcessWithEnv `
     -FilePath $pythonExe `
@@ -224,13 +220,28 @@ $workerProc = Start-ProcessWithEnv `
     -RedirectStandardOutput $workerOutLog `
     -RedirectStandardError $workerErrLog `
     -Environment @{ PYTHONPATH = "src" }
+$ownedProcesses += $workerProc
 
-$appEnv = @{
+$baseAppEnv = @{
     PYTHONPATH       = "src"
     APP_SERVER_HOST  = "0.0.0.0"
     APP_SERVER_PORT  = "8080"
     RAG_SERVER_URL   = $ragServerUrl
     RAG_SERVICE_TOKEN = $serviceToken
+}
+if ($appMode -in @("prod", "production")) {
+    $configuredTrustedHosts = @(
+        $appTrustedHosts -split "," |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ }
+    )
+    $trustedHosts = @("localhost", "127.0.0.1", $lanIp) + $configuredTrustedHosts
+    $appEnv = $baseAppEnv + @{
+        APP_TRUSTED_HOSTS = ($trustedHosts | Sort-Object -Unique) -join ","
+    }
+}
+else {
+    $appEnv = $baseAppEnv
 }
 $appProc = Start-ProcessWithEnv `
     -FilePath $pythonExe `
@@ -239,9 +250,19 @@ $appProc = Start-ProcessWithEnv `
     -RedirectStandardOutput $appOutLog `
     -RedirectStandardError $appErrLog `
     -Environment $appEnv
+$ownedProcesses += $appProc
 
 $ragHealth = Wait-RestMethod -Uri "http://127.0.0.1:8100/health" -TimeoutSeconds 90
+& $pythonExe "scripts\ops\production_preflight.py" `
+    --health-only `
+    --rag-health-url "http://127.0.0.1:8100/health"
+if ($LASTEXITCODE -ne 0) {
+    throw "RAG readiness khong dat contract production."
+}
 $appOk = Wait-WebOk -Uri "http://127.0.0.1:8080" -TimeoutSeconds 30
+if (!$appOk) {
+    throw "App API khong dat readiness. Kiem tra app-api.err.log."
+}
 
 Write-Output ("RAG PID: {0}" -f $ragProc.Id)
 Write-Output ("Worker PID: {0}" -f $workerProc.Id)
@@ -249,3 +270,12 @@ Write-Output ("App API PID: {0}" -f $appProc.Id)
 Write-Output ("RAG Health: {0}" -f ($(if ($ragHealth) { ($ragHealth | ConvertTo-Json -Compress) } else { "UNAVAILABLE" })))
 Write-Output ("App Ready: {0}" -f $appOk)
 Write-Output ("==> LINK DEMO (mo tren cac may cung LAN): http://{0}:8080" -f $lanIp)
+}
+catch {
+    foreach ($ownedProcess in $ownedProcesses) {
+        if ($ownedProcess -and !$ownedProcess.HasExited) {
+            Stop-Process -Id $ownedProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+    throw
+}

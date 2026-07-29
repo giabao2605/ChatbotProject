@@ -173,7 +173,7 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
     assert rag.safety_extra_abuse == ("custom abuse",)
 
 
-def test_app_security_projection_preserves_secret_fallback_and_clamps_values():
+def test_app_security_projection_preserves_local_fallback_and_clamps_values():
     settings = Settings.from_env(
         {
             "CHAT_BRIDGE_SECRET": "bridge-secret",
@@ -186,9 +186,22 @@ def test_app_security_projection_preserves_secret_fallback_and_clamps_values():
     app = AppProcessSettings.from_settings(settings)
 
     assert app.session_secret == "bridge-secret"
+    assert settings.APP_SESSION_SECRET_EXPLICIT is False
     assert app.cookie_secure is True
     assert app.cookie_samesite == "lax"
     assert app.session_ttl_seconds == 86400
+
+
+def test_external_processing_defaults_internal_and_tracks_explicit_opt_in():
+    defaults = Settings.from_env({})
+    explicit = Settings.from_env(
+        {"EXTERNAL_PROCESSING_POLICY": "all_external"}
+    )
+
+    assert defaults.EXTERNAL_PROCESSING_POLICY == "internal_only"
+    assert defaults.EXTERNAL_PROCESSING_POLICY_EXPLICIT is False
+    assert explicit.EXTERNAL_PROCESSING_POLICY == "all_external"
+    assert explicit.EXTERNAL_PROCESSING_POLICY_EXPLICIT is True
 
 
 def test_adapter_projections_expose_only_their_required_configuration():

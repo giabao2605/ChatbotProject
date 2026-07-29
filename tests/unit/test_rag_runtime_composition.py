@@ -200,6 +200,7 @@ def test_rag_runtime_resolves_explicit_jina_provider_without_exposing_key():
             "LLM_API_KEY": "llm-value",
             "RERANK_PROVIDER": "jina",
             "JINA_API_KEY": secret,
+            "EXTERNAL_PROCESSING_POLICY": "all_external",
         }
     )
 

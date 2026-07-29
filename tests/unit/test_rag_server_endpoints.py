@@ -137,6 +137,36 @@ def test_service_token_is_required_before_chat_is_processed(rag_client, monkeypa
     assert opened == []
 
 
+@pytest.mark.parametrize("path", ["/chat", "/chat/stream"])
+def test_rag_chat_rate_limit_runs_before_the_pipeline(
+    path,
+    rag_client,
+    monkeypatch,
+):
+    monkeypatch.setattr(rag_server, "RAG_REQUESTS_PER_WINDOW", 1)
+    opened = []
+    monkeypatch.setattr(
+        rag_server,
+        "_open_rag_events",
+        lambda *_args, **_kwargs: opened.append(True) or _successful_rag_events(),
+    )
+
+    first = rag_client.post(
+        path,
+        headers=SERVICE_HEADERS,
+        json={"username": "rate-limit-user", "user_question": "First"},
+    )
+    limited = rag_client.post(
+        path,
+        headers=SERVICE_HEADERS,
+        json={"username": "rate-limit-user", "user_question": "Second"},
+    )
+
+    assert first.status_code == 200
+    assert limited.status_code == 429
+    assert opened == [True]
+
+
 def test_service_auth_fails_closed_when_the_server_token_is_missing(
     rag_client,
     monkeypatch,

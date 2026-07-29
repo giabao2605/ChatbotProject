@@ -227,7 +227,7 @@ def test_chat_image_upload_validates_content_and_returns_owner_token(
     )
 
     assert invalid_type.status_code == 400
-    assert oversized.status_code == 400
+    assert oversized.status_code == 413
     assert uploaded.status_code == 200
     body = uploaded.json()
     token_payload = app_server.app_security.verify_session_token(

@@ -75,7 +75,8 @@ class Settings(BaseModel):
     GPT_MIN_INTERVAL_SECONDS: float = 0.0
     APP_ENV: str = ""
     EXTERNAL_AI_LOCAL_DEVELOPMENT: bool = False
-    EXTERNAL_PROCESSING_POLICY: str = "all_external"
+    EXTERNAL_PROCESSING_POLICY: str = "internal_only"
+    EXTERNAL_PROCESSING_POLICY_EXPLICIT: bool = False
 
     # --- Vision (llm/vision_client, ingestion/pdf/vision) -----------------
     GPT_VISION_MODEL_NAME: str = "gpt-5.4"  # goc: GPT_VISION_MODEL_NAME or GPT_MODEL_NAME or gpt-5.4
@@ -194,7 +195,11 @@ class Settings(BaseModel):
     APP_RAG_CHAT_TIMEOUT_SECONDS: int = 300
     APP_SERVER_HOST: str = "0.0.0.0"
     APP_SERVER_PORT: int = 8080
+    APP_TRUSTED_HOSTS: tuple[str, ...] = ("localhost", "127.0.0.1")
+    APP_TRUSTED_HOSTS_EXPLICIT: bool = False
     APP_SESSION_SECRET: str = ""
+    APP_SESSION_SECRET_EXPLICIT: bool = False
+    CHAT_BRIDGE_SECRET: str = ""
     APP_COOKIE_SECURE: bool = False
     APP_COOKIE_SAMESITE: str = "lax"
     APP_SESSION_TTL_SECONDS: int = 2700
@@ -292,7 +297,10 @@ class Settings(BaseModel):
             ),
             EXTERNAL_PROCESSING_POLICY=_str(
                 "EXTERNAL_PROCESSING_POLICY",
-                "all_external",
+                "internal_only",
+            ),
+            EXTERNAL_PROCESSING_POLICY_EXPLICIT=(
+                "EXTERNAL_PROCESSING_POLICY" in source
             ),
             # Vision
             GPT_VISION_MODEL_NAME=_first(
@@ -497,12 +505,20 @@ class Settings(BaseModel):
             ),
             APP_SERVER_HOST=_str("APP_SERVER_HOST", "0.0.0.0"),
             APP_SERVER_PORT=_int("APP_SERVER_PORT", 8080),
+            APP_TRUSTED_HOSTS=(
+                _csv("APP_TRUSTED_HOSTS") or ("localhost", "127.0.0.1")
+            ),
+            APP_TRUSTED_HOSTS_EXPLICIT=bool(_csv("APP_TRUSTED_HOSTS")),
             APP_SESSION_SECRET=_first(
                 "APP_SESSION_SECRET",
                 "CHAT_BRIDGE_SECRET",
                 "RAG_SERVICE_TOKEN",
                 default="",
             ),
+            APP_SESSION_SECRET_EXPLICIT=bool(
+                str(source.get("APP_SESSION_SECRET") or "").strip()
+            ),
+            CHAT_BRIDGE_SECRET=_str("CHAT_BRIDGE_SECRET", ""),
             APP_COOKIE_SECURE=_bool(
                 "APP_COOKIE_SECURE",
                 False,

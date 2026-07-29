@@ -17,6 +17,7 @@ import requests
 from fastapi import FastAPI, Request
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from mech_chatbot.api import app_security
 from mech_chatbot.api.dependencies import csrf_profile, current_profile, require_any_role
@@ -25,6 +26,7 @@ from mech_chatbot.api.file_access import (
     data_raw_root,
     page_has_vision,
 )
+from mech_chatbot.api.request_limits import RequestBodyLimitMiddleware
 from mech_chatbot.api.routers import (
     auth_router,
     chat_router,
@@ -61,6 +63,7 @@ from mech_chatbot.config.settings import (
     SqlSettings,
     load_settings,
 )
+from mech_chatbot.config.validate import assert_app_security_valid
 import mech_chatbot.services.audit_service as audit_service
 import mech_chatbot.services.chat_service as chat_service
 import mech_chatbot.services.document_service as document_service
@@ -94,6 +97,7 @@ async def _lifespan(application: FastAPI):
     settings_snapshot = application.state.settings_snapshot
     process = application.state.process_settings
     pilot_replays = application.state.pilot_replays
+    assert_app_security_valid(settings_snapshot)
     configure_logging(LoggingConfig.from_settings(settings_snapshot))
     database_runtime = application.state.database_builder(
         SqlSettings.from_settings(settings_snapshot)
@@ -400,6 +404,31 @@ def create_app(
             settings_snapshot
         ).strict_site_filter,
     )
+    multipart_overhead = 2 * 1024 * 1024
+    application.add_middleware(
+        RequestBodyLimitMiddleware,
+        limits={
+            "/api/chat/upload-image": (
+                _chat_routes.CHAT_IMAGE_MAX_BYTES + multipart_overhead
+            ),
+            "/api/documents/upload": (
+                _document_routes.DOCUMENT_UPLOAD_MAX_BYTES
+                + multipart_overhead
+            ),
+            "/api/documents/upload-batch": (
+                _document_routes.DOCUMENT_BATCH_MAX_BYTES
+                + multipart_overhead
+            ),
+        },
+    )
+    production = (
+        settings_snapshot.APP_ENV.strip().lower() in {"prod", "production"}
+    )
+    if production:
+        application.add_middleware(
+            TrustedHostMiddleware,
+            allowed_hosts=list(settings_snapshot.APP_TRUSTED_HOSTS),
+        )
 
     @application.middleware("http")
     async def _bind_security_settings(request: Request, call_next):
@@ -422,7 +451,15 @@ def create_app(
                 ),
             ),
         ):
-            return await call_next(request)
+            response = await call_next(request)
+        if production:
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
+        return response
 
     _install_http_surface(application)
     return application
@@ -621,8 +658,7 @@ def history(body: dict[str, Any], profile: dict[str, Any]):
 
 
 def upload_chat_image(request: Any, file: Any, profile: dict[str, Any]):
-    del request
-    return _chat_routes.upload_chat_image(file, profile)
+    return _chat_routes.upload_chat_image(request, file, profile)
 
 
 def citation_page(doc_id: int, page_no: int, profile: dict[str, Any]):

@@ -1059,6 +1059,25 @@ def test_health_is_degraded_when_live_flags_lack_an_accepted_bundle(monkeypatch)
     assert health.activation_reason == "activation_bundle_missing"
 
 
+def test_health_is_degraded_when_activation_is_valid_but_not_live_authorized(
+    monkeypatch,
+):
+    from mech_chatbot.api import rag_server
+
+    for name in FEATURE_FLAGS:
+        monkeypatch.setenv(name, "false")
+    monkeypatch.setenv("RAG_ACTIVATION_SCOPE", "evaluation")
+    monkeypatch.setenv("RAG_EXECUTION_CONTEXT", "evaluation")
+    application = rag_server.create_rag_app(Settings.from_env())
+    state = replace(application.state.rag_server, ready=True)
+
+    health = asyncio.run(rag_server.health_check(server_state=state))
+
+    assert health.activation_valid is True
+    assert health.live_authorized is False
+    assert health.status == "degraded"
+
+
 def test_profile_launcher_environment_uses_canonical_flags_and_isolated_scopes(tmp_path):
     evaluation = build_profile_environment(
         profile="graph_retrieval", scope="evaluation",

@@ -28,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
+from mech_chatbot.api.request_limits import enforce_request_rate_limit
 from mech_chatbot.config.logging import (
     TraceRuntime,
     bind_trace_runtime,
@@ -48,6 +49,8 @@ from mech_chatbot.config.settings import (
 from mech_chatbot.governance.feature_activation import ActivationStatus
 import mech_chatbot.services.audit_service as audit_service
 import mech_chatbot.services.chat_service as chat_service
+
+RAG_REQUESTS_PER_WINDOW = 30
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +423,13 @@ async def health_check(
     retrieval = getattr(server_state.runtime, "retrieval", None)
 
     return HealthResponse(
-        status="ok" if server_state.ready and activation.valid else "degraded",
+        status=(
+            "ok"
+            if server_state.ready
+            and activation.valid
+            and activation.live_authorized
+            else "degraded"
+        ),
         rag_loaded=server_state.ready,
         max_concurrent=process.max_concurrent_requests,
         # Semaphore._value gives remaining permits (CPython implementation detail)
@@ -451,6 +460,7 @@ async def health_check(
 @router.post("/chat", response_model=ChatResponse, tags=["RAG"], dependencies=[Depends(require_service_auth)])
 async def chat_endpoint(
     req: ChatRequest,
+    request: Request,
     server_state: RagServerState = Depends(get_rag_server_state),
 ):
     """
@@ -471,6 +481,12 @@ async def chat_endpoint(
         )
 
     user_profile = resolve_user_profile(req)
+    enforce_request_rate_limit(
+        request,
+        user_profile,
+        scope="rag-chat",
+        limit=RAG_REQUESTS_PER_WINDOW,
+    )
 
     # Try to acquire semaphore with timeout
     try:
@@ -538,6 +554,7 @@ def _final_stream_citations(debug_info: dict[str, Any] | None, answer: str) -> l
 @router.post("/chat/stream", tags=["RAG"], dependencies=[Depends(require_service_auth)])
 async def chat_stream_endpoint(
     req: ChatRequest,
+    request: Request,
     x_rag_pilot_replay: Optional[str] = Header(
         default=None, alias="X-RAG-Pilot-Replay"
     ),
@@ -617,6 +634,12 @@ async def chat_stream_endpoint(
             signature=str(x_rag_pilot_replay_signature or ""),
         ) or actual_payload_sha256 != x_rag_pilot_payload_sha256:
             raise HTTPException(status_code=403, detail="Invalid CRAG pilot replay signature")
+    enforce_request_rate_limit(
+        request,
+        user_profile,
+        scope="rag-chat",
+        limit=RAG_REQUESTS_PER_WINDOW,
+    )
     try:
         await asyncio.wait_for(
             server_state.runtime.semaphore.acquire(),

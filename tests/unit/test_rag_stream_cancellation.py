@@ -16,6 +16,13 @@ from mech_chatbot.rag.execution import RagCancelled, RagCompleted, RagPrepared, 
 pytestmark = pytest.mark.unit
 
 
+def _request():
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+
+
 def _stream_state(executor, semaphore, **settings_overrides):
     application = rag_server.create_rag_app(Settings(**settings_overrides))
     state = application.state.rag_server
@@ -112,6 +119,7 @@ def test_client_disconnect_cancels_stream_and_releases_rag_permit(monkeypatch):
     async def scenario():
         response = await rag_server.chat_stream_endpoint(
             rag_server.ChatRequest(user_question="test disconnect", username="admin-test"),
+            request=_request(),
             server_state=server_state,
         )
         iterator = response.body_iterator
@@ -176,6 +184,7 @@ def test_stream_done_exposes_numeric_trace_stages_for_benchmark(monkeypatch):
     async def scenario():
         response = await rag_server.chat_stream_endpoint(
             rag_server.ChatRequest(user_question="test trace", username="viewer-test"),
+            request=_request(),
             server_state=server_state,
         )
         done = None
@@ -267,6 +276,7 @@ def test_pilot_replay_header_disables_cache_inside_worker(monkeypatch):
     async def scenario():
         response = await rag_server.chat_stream_endpoint(
             rag_server.ChatRequest(user_question="replay", username="viewer-test"),
+            request=_request(),
             x_rag_pilot_replay="true",
             x_rag_pilot_experiment_id="exp-1",
             x_rag_matched_pair_id=route.matched_pair_id,

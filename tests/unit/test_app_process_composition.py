@@ -12,6 +12,7 @@ from mech_chatbot.application.chat_turn import (
     RagStreamRequest,
 )
 from mech_chatbot.config.settings import Settings
+from mech_chatbot.config.validate import ConfigError
 
 
 pytestmark = pytest.mark.unit
@@ -27,7 +28,7 @@ def test_create_app_captures_typed_process_settings_without_starting_resources()
                 "RAG_SERVER_URL": "http://rag.internal/",
                 "RAG_SERVICE_TOKEN": "service-secret",
                 "APP_RAG_CHAT_TIMEOUT_SECONDS": "45",
-                "APP_SESSION_SECRET": "session-secret",
+                "APP_SESSION_SECRET": "session-secret-with-at-least-32-bytes",
                 "CRAG_PILOT_REPLAY_WORKERS": "3",
                 "CRAG_PILOT_REPLAY_QUEUE_SIZE": "5",
                 "CRAG_PILOT_REPLAY_TIMEOUT_SECONDS": "90",
@@ -183,3 +184,92 @@ def test_app_lifespan_closes_sql_when_qdrant_startup_fails():
             pass
 
     assert closed == ["sql"]
+
+
+def test_production_app_lifespan_validates_security_before_resources_start():
+    from mech_chatbot.api import app_server
+
+    built = []
+    sentinel = "shared-sensitive-value-that-must-stay-masked"
+    application = app_server.create_app(
+        Settings.from_env(
+            {
+                "APP_ENV": "production",
+                "APP_SESSION_SECRET": sentinel,
+                "CHAT_BRIDGE_SECRET": sentinel,
+                "RAG_SERVICE_TOKEN": "rag-secret",
+                "APP_COOKIE_SECURE": "true",
+                "APP_COOKIE_SAMESITE": "strict",
+                "APP_TRUSTED_HOSTS": "app.example.com",
+                "EXTERNAL_PROCESSING_POLICY": "internal_only",
+            }
+        ),
+        database_builder=lambda _settings: built.append("sql"),
+        qdrant_builder=lambda _settings: built.append("qdrant"),
+    )
+
+    with pytest.raises(ConfigError) as exc:
+        with TestClient(application):
+            pass
+
+    assert built == []
+    assert "APP_SESSION_SECRET" in str(exc.value)
+    assert sentinel not in str(exc.value)
+
+
+def test_production_app_adds_security_headers_and_rejects_untrusted_hosts(
+    monkeypatch,
+):
+    from mech_chatbot.api import app_server
+
+    class DatabaseRuntime:
+        engine = object()
+
+        def close(self):
+            pass
+
+    class QdrantRuntime:
+        client = object()
+        collection_name = "KnowledgeBase"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        app_server,
+        "refresh_expired_status",
+        lambda **_kwargs: {},
+    )
+    application = app_server.create_app(
+        Settings.from_env(
+            {
+                "APP_ENV": "production",
+                "APP_SESSION_SECRET": "session-secret-with-at-least-32-bytes",
+                "CHAT_BRIDGE_SECRET": "bridge-secret",
+                "RAG_SERVICE_TOKEN": "rag-secret",
+                "APP_COOKIE_SECURE": "true",
+                "APP_COOKIE_SAMESITE": "strict",
+                "APP_TRUSTED_HOSTS": "app.example.com",
+                "EXTERNAL_PROCESSING_POLICY": "internal_only",
+            }
+        ),
+        database_builder=lambda _settings: DatabaseRuntime(),
+        qdrant_builder=lambda _settings: QdrantRuntime(),
+    )
+
+    with TestClient(
+        application,
+        base_url="https://app.example.com",
+    ) as client:
+        response = client.get("/api/health")
+        rejected = client.get(
+            "/api/health",
+            headers={"Host": "attacker.example"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "max-age=" in response.headers["strict-transport-security"]
+    assert rejected.status_code == 400

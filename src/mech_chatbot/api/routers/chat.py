@@ -20,6 +20,11 @@ from pydantic import BaseModel, Field
 from mech_chatbot.api import app_security
 from mech_chatbot.api.dependencies import csrf_profile, current_profile
 from mech_chatbot.api.file_access import chat_image_path, data_raw_root, page_has_vision
+from mech_chatbot.api.request_limits import (
+    UploadTooLarge,
+    enforce_request_rate_limit,
+    read_upload_limited,
+)
 from mech_chatbot.api.transport_utils import safe_int
 from mech_chatbot.application.chat_citations import (
     build_citation_list,
@@ -46,6 +51,9 @@ from mech_chatbot.services.chat_service import (
 
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+CHAT_IMAGE_MAX_BYTES = 15 * 1024 * 1024
+CHAT_IMAGE_UPLOADS_PER_WINDOW = 10
+CHAT_REQUESTS_PER_WINDOW = 30
 
 
 class ChatMessageRequest(BaseModel):
@@ -340,6 +348,7 @@ def delete_session(
 
 @router.post("/upload-image")
 def upload_chat_image(
+    request: Request,
     file: UploadFile = File(...),
     profile: dict[str, Any] = Depends(csrf_profile),
 ):
@@ -356,9 +365,16 @@ def upload_chat_image(
     ext = Path(file.filename or "").suffix.lower()
     if ext not in allowed_ext:
         raise HTTPException(status_code=400, detail="Only image files are supported")
-    raw = file.file.read()
-    if len(raw) > 15 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File is too large")
+    enforce_request_rate_limit(
+        request,
+        profile,
+        scope="chat-image-upload",
+        limit=CHAT_IMAGE_UPLOADS_PER_WINDOW,
+    )
+    try:
+        raw = read_upload_limited(file.file, CHAT_IMAGE_MAX_BYTES)
+    except UploadTooLarge:
+        raise HTTPException(status_code=413, detail="File is too large")
     out_dir = data_raw_root() / "Chat_Images"
     out_dir.mkdir(parents=True, exist_ok=True)
     image_id = f"{uuid4().hex}{ext}"
@@ -379,6 +395,12 @@ def chat_message(
     profile: dict[str, Any] = Depends(csrf_profile),
 ):
     image_path = _verify_image_upload(profile, req.image_token)
+    enforce_request_rate_limit(
+        request,
+        profile,
+        scope="browser-chat",
+        limit=CHAT_REQUESTS_PER_WINDOW,
+    )
     command = ChatTurnCommand(
         request_id=f"{req.session_id}|{uuid4().hex}",
         session_id=req.session_id,

@@ -10,9 +10,20 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Resp
 from fastapi.responses import FileResponse
 
 from mech_chatbot.application.document_review import PublicationCommand, PublicationOutcome, ReviewDocumentsCommand, ReviewItem, normalize_publish_mode
-from mech_chatbot.application.document_upload import DocumentActor, UploadDocumentCommand, UploadFailure, UploadRejected
+from mech_chatbot.application.document_upload import (
+    MAX_UPLOAD_BYTES as DOCUMENT_UPLOAD_MAX_BYTES,
+    DocumentActor,
+    UploadDocumentCommand,
+    UploadFailure,
+    UploadRejected,
+)
 from mech_chatbot.application.protected_files import ProtectedFileActor, ProtectedFileError, ProtectedFileReference
 from mech_chatbot.api.dependencies import csrf_profile, current_profile, require_any_role
+from mech_chatbot.api.request_limits import (
+    UploadTooLarge,
+    enforce_request_rate_limit,
+    read_upload_limited,
+)
 from mech_chatbot.api.transport_utils import (
     assert_any_role as _assert_any_role,
     parse_json_list as _parse_json_list,
@@ -68,6 +79,8 @@ from mech_chatbot.services.ui_query_service import (
 
 router = APIRouter(prefix="/api", tags=["operations"])
 files_router = APIRouter(prefix="/api/files", tags=["files"])
+DOCUMENT_BATCH_MAX_BYTES = 200 * 1024 * 1024
+DOCUMENT_UPLOADS_PER_WINDOW = 20
 
 
 def _is_admin(profile: dict[str, Any]) -> bool:
@@ -105,10 +118,15 @@ def _assert_metadata_actor(doc_id: int, profile: dict[str, Any]) -> None:
 def _read_upload_command(
     file: UploadFile, *, owner_department: str, shared_departments: tuple[str, ...], domain: str | None,
     security_level: str | None, process_stage: str | None, site: str | None,
-    upload_metadata: Mapping[str, Any] | None,
+    upload_metadata: Mapping[str, Any] | None, max_bytes: int | None = None,
 ) -> UploadDocumentCommand:
     return UploadDocumentCommand(
-        file_name=file.filename or "", content=file.file.read(), owner_department=owner_department,
+        file_name=file.filename or "",
+        content=read_upload_limited(
+            file.file,
+            DOCUMENT_UPLOAD_MAX_BYTES if max_bytes is None else max_bytes,
+        ),
+        owner_department=owner_department,
         shared_departments=shared_departments, domain=domain, security_level=security_level,
         process_stage=process_stage, site=site, upload_metadata=upload_metadata,
     )
@@ -216,6 +234,12 @@ def documents_upload(
     (Status='pending') de worker xu ly. Yeu cau vai tro uploader/reviewer/admin
     + CSRF. Tra ve job_id de UI dieu huong sang trang tien trinh ingest."""
     _assert_any_role(profile, "uploader", "reviewer", "admin")
+    enforce_request_rate_limit(
+        request,
+        profile,
+        scope="document-upload",
+        limit=DOCUMENT_UPLOADS_PER_WINDOW,
+    )
     dept = (thu_muc or "").strip()
     upload_meta = _parse_json_obj(meta_json, "meta_json")
     extra_departments = _parse_json_or_csv_list(extra_departments_json, "extra_departments_json")
@@ -225,10 +249,16 @@ def documents_upload(
     )
     if failure is not None:
         _raise_upload_failure(failure)
-    command = _read_upload_command(
-        file, owner_department=dept, shared_departments=tuple(extra_departments), domain=domain,
-        security_level=security_level, process_stage=cong_doan, site=site, upload_metadata=upload_meta,
-    )
+    try:
+        command = _read_upload_command(
+            file, owner_department=dept, shared_departments=tuple(extra_departments), domain=domain,
+            security_level=security_level, process_stage=cong_doan, site=site, upload_metadata=upload_meta,
+        )
+    except UploadTooLarge:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Tệp quá lớn (giới hạn 100MB): {file.filename or ''}",
+        )
     try:
         receipt = request.app.state.runtime.document_upload.enqueue(command, actor)
     except UploadRejected as exc:
@@ -249,12 +279,19 @@ def documents_upload_batch(
         raise HTTPException(status_code=400, detail="Chưa chọn tệp")
     if len(files) > 50:
         raise HTTPException(status_code=400, detail="Một lần upload tối đa 50 tệp")
+    enforce_request_rate_limit(
+        request,
+        profile,
+        scope="document-upload",
+        limit=DOCUMENT_UPLOADS_PER_WINDOW,
+    )
     upload_meta = _parse_json_obj(meta_json, "meta_json")
     assignments = _parse_json_list(assignments_json, "assignments_json")
     default_dept = (thu_muc or "").strip()
     default_extra = _parse_json_or_csv_list(extra_departments_json, "extra_departments_json")
     errors: list[dict[str, Any]] = []
     commands: list[UploadDocumentCommand] = []
+    total_bytes = 0
     actor = _document_actor(profile)
     for index, upload in enumerate(files):
         assignment = assignments[index] if index < len(assignments) and isinstance(assignments[index], dict) else {}
@@ -269,13 +306,34 @@ def documents_upload_batch(
             errors.append(_upload_error_payload(failure))
             continue
         extra = _split_csv(assignment.get("extra_departments") or default_extra)
-        commands.append(_read_upload_command(
-            upload, owner_department=dept, shared_departments=tuple(extra),
-            domain=assignment.get("domain") or domain,
-            security_level=assignment.get("security_level") or security_level,
-            process_stage=assignment.get("cong_doan") or cong_doan,
-            site=assignment.get("site") or site, upload_metadata=upload_meta,
-        ))
+        remaining_bytes = DOCUMENT_BATCH_MAX_BYTES - total_bytes
+        try:
+            command = _read_upload_command(
+                upload, owner_department=dept, shared_departments=tuple(extra),
+                domain=assignment.get("domain") or domain,
+                security_level=assignment.get("security_level") or security_level,
+                process_stage=assignment.get("cong_doan") or cong_doan,
+                site=assignment.get("site") or site, upload_metadata=upload_meta,
+                max_bytes=min(DOCUMENT_UPLOAD_MAX_BYTES, remaining_bytes),
+            )
+        except UploadTooLarge:
+            if remaining_bytes < DOCUMENT_UPLOAD_MAX_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Tổng dung lượng upload vượt quá giới hạn 200MB",
+                )
+            errors.append(
+                {
+                    "file_name": upload.filename,
+                    "error": (
+                        "Tệp quá lớn (giới hạn 100MB): "
+                        f"{upload.filename or ''}"
+                    ),
+                }
+            )
+            continue
+        total_bytes += len(command.content)
+        commands.append(command)
     result = request.app.state.runtime.document_upload.enqueue_batch(tuple(commands), actor)
     created = [{"job_id": item.job_id, "file_name": item.file_name, "thu_muc": item.owner_department} for item in result.jobs]
     errors.extend(_upload_error_payload(failure) for failure in result.errors)

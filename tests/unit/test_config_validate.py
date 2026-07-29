@@ -8,6 +8,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from mech_chatbot.config import validate as cfg  # noqa: E402
+from mech_chatbot.config.settings import Settings  # noqa: E402
 
 
 def _full_env():
@@ -142,6 +143,8 @@ class TestSecretMasking:
     def test_summary_never_leaks_secret_value(self):
         env = _full_env()
         env["VOYAGE_API_KEY"] = "secret-voyage-key-999"
+        env["APP_SESSION_SECRET"] = "secret-app-session-111"
+        env["CHAT_BRIDGE_SECRET"] = "secret-chat-bridge-222"
         summary = cfg.safe_config_summary(env)
         blob = str(summary)
         # Gia tri secret that KHONG duoc xuat hien
@@ -149,6 +152,8 @@ class TestSecretMasking:
         assert "secret-llm-key-456" not in blob
         assert "secret-rag-token-789" not in blob
         assert "secret-voyage-key-999" not in blob
+        assert "secret-app-session-111" not in blob
+        assert "secret-chat-bridge-222" not in blob
         # Nhung phai bao la da SET
         assert "SET(" in summary["QDRANT_API_KEY"]
         assert "SET(" in summary["VOYAGE_API_KEY"]
@@ -158,3 +163,116 @@ class TestSecretMasking:
         del env["QDRANT_API_KEY"]
         summary = cfg.safe_config_summary(env)
         assert summary["QDRANT_API_KEY"] == "MISSING"
+
+
+class TestAppSecurityConfig:
+    def test_production_rejects_insecure_settings_without_leaking_secrets(self):
+        sentinel = "shared-sensitive-production-value"
+        settings = Settings.from_env(
+            {
+                "APP_ENV": "production",
+                "APP_SESSION_SECRET": sentinel,
+                "CHAT_BRIDGE_SECRET": sentinel,
+                "RAG_SERVICE_TOKEN": sentinel,
+                "APP_COOKIE_SECURE": "false",
+                "APP_COOKIE_SAMESITE": "none",
+            }
+        )
+
+        errors = cfg.validate_app_security(settings)
+        message = "\n".join(errors)
+
+        assert "APP_SESSION_SECRET" in message
+        assert "APP_COOKIE_SECURE" in message
+        assert "APP_COOKIE_SAMESITE" in message
+        assert "APP_TRUSTED_HOSTS" in message
+        assert "EXTERNAL_PROCESSING_POLICY" in message
+        assert sentinel not in message
+
+    def test_production_accepts_distinct_explicit_secure_settings(self):
+        settings = Settings.from_env(
+            {
+                "APP_ENV": "production",
+                "APP_SESSION_SECRET": "session-secret-with-at-least-32-bytes",
+                "CHAT_BRIDGE_SECRET": "bridge-secret",
+                "RAG_SERVICE_TOKEN": "rag-secret",
+                "APP_COOKIE_SECURE": "true",
+                "APP_COOKIE_SAMESITE": "strict",
+                "APP_TRUSTED_HOSTS": "app.example.com",
+                "EXTERNAL_PROCESSING_POLICY": "internal_only",
+            }
+        )
+
+        assert cfg.validate_app_security(settings) == []
+
+    def test_production_rejects_short_session_secret(self):
+        settings = Settings.from_env(
+            {
+                "APP_ENV": "production",
+                "APP_SESSION_SECRET": "too-short",
+                "APP_COOKIE_SECURE": "true",
+                "APP_COOKIE_SAMESITE": "strict",
+                "APP_TRUSTED_HOSTS": "app.example.com",
+                "EXTERNAL_PROCESSING_POLICY": "internal_only",
+            }
+        )
+
+        assert any(
+            "32" in error for error in cfg.validate_app_security(settings)
+        )
+
+    def test_production_rejects_blank_trusted_host_allowlist(self):
+        settings = Settings.from_env(
+            {
+                "APP_ENV": "production",
+                "APP_SESSION_SECRET": "session-secret-with-at-least-32-bytes",
+                "APP_COOKIE_SECURE": "true",
+                "APP_COOKIE_SAMESITE": "strict",
+                "APP_TRUSTED_HOSTS": "  ",
+                "EXTERNAL_PROCESSING_POLICY": "internal_only",
+            }
+        )
+
+        assert any(
+            "APP_TRUSTED_HOSTS" in error
+            for error in cfg.validate_app_security(settings)
+        )
+
+    def test_production_rejects_wildcard_trusted_hosts(self):
+        settings = Settings.from_env(
+            {
+                "APP_ENV": "production",
+                "APP_SESSION_SECRET": "session-secret-with-at-least-32-bytes",
+                "APP_COOKIE_SECURE": "true",
+                "APP_COOKIE_SAMESITE": "strict",
+                "APP_TRUSTED_HOSTS": "*.example.com",
+                "EXTERNAL_PROCESSING_POLICY": "internal_only",
+            }
+        )
+
+        assert any(
+            "APP_TRUSTED_HOSTS" in error
+            for error in cfg.validate_app_security(settings)
+        )
+
+    def test_production_rejects_local_session_secret_fallback(self):
+        sentinel = "local-bridge-value-that-must-stay-masked"
+        settings = Settings.from_env(
+            {
+                "APP_ENV": "production",
+                "CHAT_BRIDGE_SECRET": sentinel,
+                "RAG_SERVICE_TOKEN": "rag-secret",
+                "APP_COOKIE_SECURE": "true",
+                "APP_COOKIE_SAMESITE": "strict",
+                "APP_TRUSTED_HOSTS": "app.example.com",
+                "EXTERNAL_PROCESSING_POLICY": "internal_only",
+            }
+        )
+
+        message = "\n".join(cfg.validate_app_security(settings))
+
+        assert "APP_SESSION_SECRET" in message
+        assert sentinel not in message
+
+    def test_local_app_keeps_current_insecure_http_defaults(self):
+        assert cfg.validate_app_security(Settings.from_env({})) == []

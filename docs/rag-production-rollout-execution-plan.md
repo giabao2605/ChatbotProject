@@ -57,7 +57,7 @@ qua public interface, không khóa private implementation.
 - Late Interaction giữ tắt theo quyết định rejected.
 - Jina giữ evaluation-only; pair 02 full-RAG vượt latency ratio `1.443 > 1.25`.
 - LAN launcher chỉ migrate đến `V0032`, trong khi repo có migration đến `V0041`.
-- Docker healthcheck chỉ kiểm HTTP 200 nên có thể chấp nhận JSON `status=degraded`.
+- Đường triển khai đã khóa là Windows LAN/local.
 - App startup chưa có cùng fail-fast config validation như RAG/worker.
 - Repo chưa có Playwright E2E chạy tự động.
 
@@ -116,7 +116,7 @@ production chưa hợp lệ.
    nhất được discover.
 2. GREEN: dùng migration CLI canonical, không tạo source-of-truth thứ hai.
 3. RED: readiness phải fail với `status=degraded` dù HTTP endpoint còn sống.
-4. GREEN: tách liveness/readiness hoặc thêm checker JSON strict cho Docker.
+4. GREEN: dùng checker JSON strict cho Windows LAN.
 5. RED: app production startup từ chối thiếu/reuse `APP_SESSION_SECRET`, cookie
    không secure, external-processing policy không explicit.
 6. GREEN: gọi config validation tại app lifespan; error phải mask secret.
@@ -127,9 +127,8 @@ production chưa hợp lệ.
 11. RED/GREEN: thêm rate limit tối thiểu cho chat/RAG/upload trước provider work.
 12. RED/GREEN: thêm security headers và allowlist trusted host cho production.
 
-### Docker/LAN parity
+### Windows LAN readiness
 
-- Docker phải chạy hoặc yêu cầu explicit migration/Qdrant preflight trước runtime.
 - Healthcheck phải xác nhận `status=ok`, `rag_loaded=true`,
   `activation_valid=true`, `live_authorized` phù hợp scope.
 - LAN launcher không được tự dừng process ngoài đúng PID/port ownership contract.
@@ -138,8 +137,21 @@ production chưa hợp lệ.
 
 - Clean migration chạy hai lần trên disposable DB.
 - App/RAG/worker config tests xanh.
-- Docker config validation và strict readiness test xanh.
+- PowerShell parser và strict LAN readiness test xanh.
 - Security regression suite, dependency audit và secret scan sạch.
+
+### Trạng thái thực thi 2026-07-29
+
+- Clean database `Mech_Chatbot_Test_RAG_20260729_T2A` bootstrap V0001-V0041 và
+  chạy migration lần hai thành công; database test được giữ lại, không cleanup.
+- 177 test tập trung đạt; full fast backend suite đạt với line coverage
+  `92.234594%` và branch coverage `84.905989%`.
+- Frontend 32 test đạt, production build đạt; architecture 18 test đạt.
+- `npm audit`, `pip-audit`, high-confidence secret scan và security review không
+  còn finding chưa xử lý.
+- Preflight thật đạt migration, Qdrant và activation profile `all_off`; production
+  vẫn fail-closed vì account seed `admin` còn active. Không tự vô hiệu hóa account
+  này khi chưa có phê duyệt tác động tài khoản.
 
 ## Ticket 3: Tạo cohort tài khoản test an toàn
 

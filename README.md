@@ -108,7 +108,8 @@ ChatBotProject/
 │   │   ├── V0029__wave4_rollout_profiles.sql
 │   │   ├── V0030__rollout_invariants_and_profile_hygiene.sql
 │   │   ├── V0031__wave1_domain_profiles.sql
-│   │   └── V0032__rollout_wave_status_guard.sql
+│   │   ├── V0032__rollout_wave_status_guard.sql
+│   │   └── V0033 - V0041                 # Feature governance and provider profiles
 │   └── MIGRATIONS.md                     # Migration documentation
 │
 ├── scripts/
@@ -311,6 +312,7 @@ The important runtime values are:
 APP_ENV=production
 APP_SESSION_SECRET=<long-random-secret>
 APP_COOKIE_SECURE=true
+APP_TRUSTED_HOSTS=localhost,127.0.0.1,<deployed-hostname-or-ip>
 EXTERNAL_AI_LOCAL_DEVELOPMENT=false
 EXTERNAL_PROCESSING_POLICY=internal_only
 
@@ -408,7 +410,8 @@ smoke do not authorize enabling them.
 Use a distinct random `APP_SESSION_SECRET`; do not reuse the RAG service or
 chat bridge secret. Keep `APP_COOKIE_SECURE=true` behind HTTPS. A local or LAN
 HTTP-only demo may set it to `false`, but that exception must not be copied to
-an HTTPS deployment.
+an HTTPS deployment. Set `APP_TRUSTED_HOSTS` to the exact hostnames or IP
+addresses users put in the browser; wildcard hosts are rejected in production.
 
 For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QDRANT_API_KEY`, `SQL_SERVER`, `SQL_DATABASE`, `SQL_USERNAME`, `SQL_PASSWORD`, `OPENAI_API_KEY`.
 
@@ -423,15 +426,18 @@ For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QD
 # Step 1: Create the base schema
 #   Run: database/schema/01_baseline.sql on your SQL Server instance
 
-# Step 2: Apply versioned migrations in order (currently V0001 -> V0032)
+# Step 2: Apply all discovered versioned migrations in order
 python scripts/migrations/migrate.py
 # or run each file in database/migrations/ manually
 
 # Step 3: Initialize Qdrant collections
 python scripts/create_qdrant_indexes.py
+
+# Step 4: Verify migration, Qdrant, all-off activation and account safety
+python scripts/ops/production_preflight.py --skip-health
 ```
 
-> **Security note:** Migrations seed example accounts (`admin`, `reviewer1`, `viewer1`, `uploader1`). Change or remove default credentials before any production deployment.
+> **Security note:** Migrations seed example accounts (`admin`, `reviewer1`, `viewer1`, `uploader1`). Keep them only for local bootstrap and make them inactive before any production deployment. The preflight reports only the active account count and fails until those seeded accounts are inactive; it never changes or deletes an account.
 
 ### 4. Running the Application
 
@@ -441,10 +447,11 @@ python scripts/create_qdrant_indexes.py
 powershell -ExecutionPolicy Bypass -File .\scripts\ops\start_demo_lan.ps1
 ```
 
-The script applies migrations through `V0032`, starts the RAG server on
+The script applies every discovered pending migration, starts the RAG server on
 `127.0.0.1:8100`, and exposes the browser application on the configured LAN
-address. Stop the processes with `Ctrl+C`; rerun the same command to start the
-demo again.
+address. It prints the three owned process IDs; stop only those IDs with
+`Stop-Process -Id <rag-pid>,<worker-pid>,<app-pid>` before rerunning the
+launcher.
 
 **Option B: Local Development**
 
