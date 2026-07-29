@@ -469,6 +469,47 @@ def test_external_ai_upsert_never_persists_raw_secret_and_returns_profile(monkey
     assert audit_calls and "raw-key" not in repr(audit_calls)
 
 
+def test_external_ai_upsert_binds_microsecond_iso_expiry_as_datetime(monkeypatch):
+    monkeypatch.setattr(external_ai._r_audit, "write_audit_log", lambda *_args: None)
+    conn = _install(monkeypatch, external_ai, _Result(), _Result(row=_provider_row()))
+
+    external_ai.upsert_external_ai_provider_profile(
+        "jina", endpoint="https://api.jina.ai/v1", default_model="jina-reranker-v3",
+        secret_reference="env:JINA_API_KEY", allowed_surfaces=["reranking"],
+        retention_mode="provider_default_no_training", policy_version="evaluation-only-v1",
+        approved_by="workspace-owner", risk_acceptance_ref="evaluation",
+        review_expires_at="2026-07-29T15:04:05.123456",
+    )
+
+    assert conn.calls[0][1]["review_expires_at"] == datetime(2026, 7, 29, 15, 4, 5, 123456)
+
+
+def test_external_ai_upsert_rejects_timezone_and_invalid_expiry(monkeypatch):
+    monkeypatch.setattr(external_ai._r_audit, "write_audit_log", lambda *_args: None)
+    conn = _install(monkeypatch, external_ai, _Result(), _Result(row=_provider_row()))
+    fields = {
+        "endpoint": "https://api.jina.ai/v1",
+        "default_model": "jina-reranker-v3",
+        "secret_reference": "env:JINA_API_KEY",
+        "allowed_surfaces": ["reranking"],
+        "retention_mode": "provider_default_no_training",
+        "policy_version": "evaluation-only-v1",
+        "approved_by": "workspace-owner",
+        "risk_acceptance_ref": "evaluation",
+    }
+
+    with pytest.raises(ValueError, match="khong kem timezone"):
+        external_ai.upsert_external_ai_provider_profile(
+            "jina", review_expires_at="2026-07-29T22:04:05.123456+07:00", **fields
+        )
+
+    with pytest.raises(ValueError, match="ISO 8601"):
+        external_ai.upsert_external_ai_provider_profile(
+            "jina", review_expires_at="not-a-date", **fields
+        )
+    assert conn.calls == []
+
+
 def test_lifecycle_classification_and_overview_are_fail_closed(monkeypatch):
     today = date(2026, 7, 20)
     assert lifecycle.classify_lifecycle("2026-07-19", None, today) == "expired"

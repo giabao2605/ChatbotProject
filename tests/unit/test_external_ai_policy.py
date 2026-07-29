@@ -233,6 +233,30 @@ def test_claim_repair_profile_migration_is_additive_and_audited():
     assert verification < audit
 
 
+def test_jina_evaluation_profile_migration_is_additive_metadata_only_and_audited():
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "database"
+        / "migrations"
+        / "V0040__managed_jina_rerank_profile.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "IF NOT EXISTS (SELECT 1 FROM dbo.ExternalAIProviderProfile WHERE Provider = 'jina')" in migration
+    assert "https://api.jina.ai/v1" in migration
+    assert "jina-reranker-v3" in migration
+    assert "env:JINA_API_KEY" in migration
+    assert 'N\'["reranking"]\'' in migration
+    assert "provider_default_no_training" in migration
+    assert "DATEADD(day, 30, GETDATE())" in migration
+    assert "DATEADD(day, 30, GETDATE()), 0" in migration
+    assert "evaluation-only" in migration
+    assert "019fab5f-2aa9-71d2-9bc1-0ecaf3b6d931" in migration
+    assert "external_ai_jina_evaluation_profile_created" in migration
+    assert "UPDATE dbo.ExternalAIProviderProfile" not in migration
+    assert "JINA_API_KEY=" not in migration
+    assert "release_decisions" not in migration
+
+
 def test_audit_unavailable_blocks_before_external_call_body(monkeypatch):
     monkeypatch.setattr(external_ai, "_record_external_call", lambda *args, **kwargs: False)
     called = False

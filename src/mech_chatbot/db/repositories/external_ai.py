@@ -128,7 +128,7 @@ def upsert_external_ai_provider_profile(
     policy_version: str,
     approved_by: str,
     risk_acceptance_ref: str,
-    review_expires_at: str,
+    review_expires_at: str | datetime,
     is_active: bool = True,
     updated_by: str = "System",
 ) -> dict[str, Any]:
@@ -156,6 +156,21 @@ def upsert_external_ai_provider_profile(
         raise ValueError("Profile phai cho phep it nhat mot external surface")
     if not str(secret_reference).strip().startswith(("env:", "secret://")):
         raise ValueError("SecretReference phai la env:... hoac secret://..., khong phai API key")
+    try:
+        parsed_review_expiry = (
+            review_expires_at
+            if isinstance(review_expires_at, datetime)
+            else datetime.fromisoformat(str(review_expires_at).strip())
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ReviewExpiresAt phai la ISO 8601 hop le") from exc
+    if (
+        parsed_review_expiry.tzinfo is not None
+        and parsed_review_expiry.utcoffset() is not None
+    ):
+        raise ValueError(
+            "ReviewExpiresAt phai dung wall-clock local, khong kem timezone"
+        )
 
     _ensure_engine()
     if engine is None:
@@ -170,7 +185,7 @@ def upsert_external_ai_provider_profile(
         "policy_version": str(policy_version).strip()[:100],
         "approved_by": str(approved_by).strip()[:200],
         "risk_acceptance_ref": str(risk_acceptance_ref).strip()[:500],
-        "review_expires_at": str(review_expires_at).strip(),
+        "review_expires_at": parsed_review_expiry,
         "is_active": 1 if is_active else 0,
         "updated_by": str(updated_by or "System").strip()[:100],
     }
@@ -190,7 +205,7 @@ def upsert_external_ai_provider_profile(
                     PolicyVersion = :policy_version,
                     ApprovedBy = :approved_by,
                     RiskAcceptanceRef = :risk_acceptance_ref,
-                    ReviewExpiresAt = TRY_CONVERT(DATETIME, :review_expires_at),
+                    ReviewExpiresAt = :review_expires_at,
                     IsActive = :is_active,
                     UpdatedAt = GETDATE(),
                     UpdatedBy = :updated_by
@@ -203,7 +218,7 @@ def upsert_external_ai_provider_profile(
                     :provider, :endpoint, :default_model, :secret_reference,
                     :allowed_surfaces, :retention_mode, :policy_version,
                     :approved_by, :risk_acceptance_ref,
-                    TRY_CONVERT(DATETIME, :review_expires_at), :is_active, :updated_by
+                    :review_expires_at, :is_active, :updated_by
                 );
                 """
             ),
