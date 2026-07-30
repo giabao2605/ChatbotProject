@@ -257,6 +257,14 @@ def test_manifest_is_exact_locked_three_case_governed_fixture():
     ]
 
 
+def test_manifest_lock_accepts_windows_line_endings(tmp_path):
+    copy = tmp_path / "eval_manifest.jsonl"
+    content = MANIFEST.read_bytes().replace(b"\r\n", b"\n")
+    copy.write_bytes(content.replace(b"\n", b"\r\n"))
+
+    runner.require_approved_manifest(copy)
+
+
 def test_profile_configuration_projects_pydantic_settings_to_evaluation(
     monkeypatch,
 ):

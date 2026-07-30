@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -124,7 +125,13 @@ def _declare_window(value: Mapping[str, Any]) -> None:
 
 
 def require_approved_manifest(path: Path) -> None:
-    if not path.is_file() or _sha(path) != APPROVED_MANIFEST_SHA256:
+    if not path.is_file():
+        raise ValueError("full-RAG provider window requires the approved manifest")
+    with path.open("r", encoding="utf-8", newline=None) as stream:
+        canonical_sha256 = hashlib.sha256(
+            stream.read().encode("utf-8")
+        ).hexdigest()
+    if canonical_sha256 != APPROVED_MANIFEST_SHA256:
         raise ValueError("full-RAG provider window requires the approved manifest")
 
 
