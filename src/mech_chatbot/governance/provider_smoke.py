@@ -3,9 +3,35 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import hashlib
+import json
 
 
 PROVIDER_SMOKE_MAX_AGE = timedelta(minutes=30)
+
+
+def provider_configuration_for_settings(settings) -> dict[str, object]:
+    from mech_chatbot.config.settings import LlmSettings
+    from mech_chatbot.llm.llm_client import get_llm_endpoint
+
+    llm_settings = LlmSettings.from_settings(settings)
+    return {
+        "endpoint": str(llm_settings.base_url or get_llm_endpoint()).strip(),
+        "model": str(llm_settings.model_name).strip(),
+        "max_concurrent_rag": settings.MAX_CONCURRENT_RAG,
+    }
+
+
+def provider_configuration_sha256(configuration: dict[str, object]) -> str:
+    return hashlib.sha256(
+        json.dumps(configuration, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def provider_configuration_sha256_for_settings(settings) -> str:
+    return provider_configuration_sha256(
+        provider_configuration_for_settings(settings)
+    )
 
 
 def _aware_datetime(value: object) -> datetime | None:
@@ -79,6 +105,9 @@ def provider_smoke_fresh_for_arms(
 
 __all__ = [
     "PROVIDER_SMOKE_MAX_AGE",
+    "provider_configuration_for_settings",
+    "provider_configuration_sha256",
+    "provider_configuration_sha256_for_settings",
     "provider_smoke_artifact_valid",
     "provider_smoke_fresh_for_arms",
     "provider_smoke_fresh_for_baseline",

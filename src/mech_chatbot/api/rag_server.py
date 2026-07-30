@@ -47,6 +47,9 @@ from mech_chatbot.config.settings import (
     load_settings,
 )
 from mech_chatbot.governance.feature_activation import ActivationStatus
+from mech_chatbot.governance.provider_smoke import (
+    provider_configuration_sha256_for_settings,
+)
 import mech_chatbot.services.audit_service as audit_service
 import mech_chatbot.services.chat_service as chat_service
 
@@ -259,6 +262,7 @@ class HealthResponse(BaseModel):
     deployment_id: Optional[str] = None
     git_sha: Optional[str] = None
     snapshot_fingerprint: Optional[str] = None
+    provider_configuration_sha256: Optional[str] = None
     qdrant_collection: Optional[str] = None
     feature_flags: Dict[str, bool] = Field(default_factory=dict)
     feature_versions: Dict[str, str] = Field(default_factory=dict)
@@ -437,6 +441,9 @@ async def health_check(
         deployment_id=process.deployment_id,
         git_sha=process.deployment_git_sha,
         snapshot_fingerprint=process.snapshot_fingerprint,
+        provider_configuration_sha256=(
+            provider_configuration_sha256_for_settings(server_state.settings)
+        ),
         qdrant_collection=getattr(
             retrieval,
             "collection_name",

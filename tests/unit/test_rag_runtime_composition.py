@@ -382,6 +382,7 @@ def test_rag_app_lifespan_builds_reports_and_closes_one_runtime(monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert response.json()["rag_loaded"] is True
+    assert len(response.json()["provider_configuration_sha256"]) == 64
     assert binding_response.json() == {"bound": True}
     assert observed_settings == [settings]
     assert len(observed_sql_settings) == 1

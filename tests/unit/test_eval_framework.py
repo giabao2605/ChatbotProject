@@ -6,6 +6,7 @@ import importlib.util
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from mech_chatbot.evaluation.outcomes import (
@@ -157,6 +158,19 @@ def _run_benchmark_cli(
     _write_jsonl(questions_path, cases)
     trace_path.write_text("", encoding="utf-8")
     monkeypatch.setattr(benchmark, "measure_one", build_measure_one(trace_path))
+    monkeypatch.setattr(
+        benchmark,
+        "_runtime_identity",
+        lambda _args: {
+            "deployment_id": "benchmark-test",
+            "git_sha": "a" * 40,
+            "snapshot_fingerprint": "b" * 64,
+            "provider_configuration_sha256": "c" * 64,
+            "collection": "fixture",
+            "execution_context": "evaluation",
+            "pipeline_configuration": {"flags": {}, "versions": {}},
+        },
+    )
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -394,10 +408,88 @@ def test_benchmark_cli_uses_trace_id_for_correlation_but_redacts_report(
         build_measure_one=build_measure_one,
     )
     assert raw_trace_id not in json.dumps(report)
+    assert report["runtime_identity"]["deployment_id"] == "benchmark-test"
     assert report["results"][0]["samples"][0]["trace_id"] == "<redacted>"
     stage_latency = report["results"][0]["summary"]["stage_latency"]
     assert stage_latency["sources"] == ["trace_jsonl_exact_trace_id"]
     assert stage_latency["trace_jsonl"]["source"] == "<trace-jsonl>"
+
+
+def test_benchmark_runtime_identity_requires_health_provenance(monkeypatch):
+    payload = {
+        "rag_loaded": True,
+        "deployment_id": "candidate-1",
+        "git_sha": "a" * 40,
+        "snapshot_fingerprint": "b" * 64,
+        "provider_configuration_sha256": "c" * 64,
+        "qdrant_collection": "fixture",
+        "execution_context": "evaluation",
+        "feature_flags": {"RAG_CRAG_ENABLED": True},
+        "feature_versions": {"RAG_PLANNER_VERSION": "planner-v1"},
+    }
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return dict(payload)
+
+    monkeypatch.setattr(benchmark.requests, "get", lambda *_args, **_kwargs: Response())
+    identity = benchmark._runtime_identity(
+        SimpleNamespace(base_url="http://127.0.0.1:8100", timeout=30)
+    )
+    assert identity["provider_configuration_sha256"] == "c" * 64
+    payload["snapshot_fingerprint"] = None
+    with pytest.raises(RuntimeError, match="runtime identity"):
+        benchmark._runtime_identity(
+            SimpleNamespace(base_url="http://127.0.0.1:8100", timeout=30)
+        )
+
+
+def test_benchmark_cli_rejects_runtime_identity_drift(tmp_path, monkeypatch):
+    questions = tmp_path / "questions.jsonl"
+    report = tmp_path / "report.json"
+    _write_jsonl(
+        questions,
+        [{"question": "benchmark identity", "username": "admin"}],
+    )
+    identity = {
+        "deployment_id": "benchmark-test",
+        "git_sha": "a" * 40,
+        "snapshot_fingerprint": "b" * 64,
+        "provider_configuration_sha256": "c" * 64,
+        "collection": "fixture",
+        "execution_context": "evaluation",
+        "pipeline_configuration": {"flags": {}, "versions": {}},
+    }
+    identities = iter([
+        identity,
+        identity,
+        {**identity, "snapshot_fingerprint": "d" * 64},
+    ])
+    monkeypatch.setattr(
+        benchmark, "_runtime_identity", lambda _args: next(identities)
+    )
+    monkeypatch.setattr(
+        benchmark,
+        "measure_one",
+        lambda *_args, **_kwargs: {
+            "sample_id": "q0001", "ok": True,
+            "first_token_ms": 10, "complete_ms": 20,
+            "trace_id": "trace-1", "stage_metrics": {},
+        },
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "benchmark_rag_concurrency.py", str(questions),
+            "--concurrency", "1", "--report", str(report),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="runtime identity changed"):
+        benchmark.main()
 
 
 def test_benchmark_cli_does_not_use_time_window_when_trace_ids_are_missing(

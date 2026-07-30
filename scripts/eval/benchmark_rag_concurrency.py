@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import statistics
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,14 @@ from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+for import_root in (ROOT, SRC):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
+
+from scripts.crag_eval.run_rollout import governance_scope_sha256
 
 
 DEFAULT_CONCURRENCY = (1, 5, 10)
@@ -87,6 +96,49 @@ def _safe_base_url(raw: str) -> str:
     if parts.port:
         host = f"{host}:{parts.port}"
     return urlunsplit((parts.scheme, host, parts.path.rstrip("/"), "", ""))
+
+
+def _runtime_identity(args: argparse.Namespace) -> dict[str, Any]:
+    response = requests.get(
+        f"{str(args.base_url).rstrip('/')}/health",
+        timeout=min(args.timeout, 10),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    required = (
+        "deployment_id",
+        "git_sha",
+        "snapshot_fingerprint",
+        "provider_configuration_sha256",
+        "qdrant_collection",
+        "execution_context",
+    )
+    if (
+        not isinstance(payload, dict)
+        or payload.get("rag_loaded") is not True
+        or any(
+            not isinstance(payload.get(field), str)
+            or not payload[field].strip()
+            for field in required
+        )
+        or not isinstance(payload.get("feature_flags"), dict)
+        or not isinstance(payload.get("feature_versions"), dict)
+    ):
+        raise RuntimeError("RAG health is missing benchmark runtime identity")
+    return {
+        "deployment_id": payload["deployment_id"],
+        "git_sha": payload["git_sha"],
+        "snapshot_fingerprint": payload["snapshot_fingerprint"],
+        "provider_configuration_sha256": payload[
+            "provider_configuration_sha256"
+        ],
+        "collection": payload["qdrant_collection"],
+        "execution_context": payload["execution_context"],
+        "pipeline_configuration": {
+            "flags": dict(payload["feature_flags"]),
+            "versions": dict(payload["feature_versions"]),
+        },
+    }
 
 
 def _as_latency_ms(value: Any) -> float | None:
@@ -700,10 +752,12 @@ def _build_report_payload(
     cases: list[dict[str, Any]],
     levels: list[int],
     results: list[dict[str, Any]],
+    runtime_identity: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "schema": "rag-concurrency-benchmark-v1",
         "base_url": _safe_base_url(args.base_url),
+        "runtime_identity": runtime_identity,
         "concurrency_levels": levels,
         "question_count": len(cases),
         "stage_metric_contract": {
@@ -741,11 +795,27 @@ def main() -> int:
     args = _argument_parser().parse_args()
     cases, levels = _load_runtime_inputs(args)
     token = os.getenv(args.token_env, "")
-    results = [
-        _measure_level(cases, level=level, args=args, token=token)
-        for level in levels
-    ]
-    payload = _build_report_payload(args, cases, levels, results)
+    deployed_runtime = _runtime_identity(args)
+    runtime_identity = {
+        **deployed_runtime,
+        "manifest_sha256s": [
+            hashlib.sha256(args.questions.read_bytes()).hexdigest()
+        ],
+        "governance_scope_sha256": governance_scope_sha256(args.questions),
+    }
+    results = []
+    for level in levels:
+        if _runtime_identity(args) != deployed_runtime:
+            raise RuntimeError("benchmark runtime identity changed before level")
+        result = _measure_level(
+            cases, level=level, args=args, token=token
+        )
+        if _runtime_identity(args) != deployed_runtime:
+            raise RuntimeError("benchmark runtime identity changed during level")
+        results.append(result)
+    payload = _build_report_payload(
+        args, cases, levels, results, runtime_identity
+    )
     _write_report(args.report, payload, results)
     return 0
 

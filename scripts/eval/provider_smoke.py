@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
-import hashlib
 import json
 import re
 import statistics
@@ -23,6 +22,9 @@ for value in (ROOT, SRC):
 from mech_chatbot.evaluation.milestone_decisions import classify_provider_outcome
 from mech_chatbot.config.settings import Settings
 from mech_chatbot.governance.provider_smoke import (
+    provider_configuration_for_settings,
+    provider_configuration_sha256,
+    provider_configuration_sha256_for_settings,
     provider_smoke_artifact_valid,
     provider_smoke_fresh_for_arms,
 )
@@ -96,46 +98,13 @@ def resolve_provider_configuration(
     adapter: _ProviderAdapter | None = None,
 ) -> ProviderConfiguration:
     """Resolve provider identity from one explicit process settings snapshot."""
-    from mech_chatbot.config.settings import LlmSettings
-    from mech_chatbot.llm.llm_client import get_llm_endpoint
-
-    llm_settings = LlmSettings.from_settings(settings)
-    endpoint = (
-        str(adapter.settings.base_url).strip()
-        if adapter is not None
-        else (
-            str(llm_settings.base_url).strip()
-            if llm_settings.base_url
-            else get_llm_endpoint()
-        )
-    )
-    model = (
-        str(adapter.settings.model_name).strip()
-        if adapter is not None
-        else str(llm_settings.model_name).strip()
-    )
-
+    if adapter is None:
+        return provider_configuration_for_settings(settings)
     return {
-        "endpoint": endpoint,
-        "model": model,
+        "endpoint": str(adapter.settings.base_url).strip(),
+        "model": str(adapter.settings.model_name).strip(),
         "max_concurrent_rag": settings.MAX_CONCURRENT_RAG,
     }
-
-
-def provider_configuration_sha256(
-    configuration: ProviderConfiguration,
-) -> str:
-    return hashlib.sha256(
-        json.dumps(configuration, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-
-
-def provider_configuration_sha256_for_settings(settings: Settings) -> str:
-    """Hash the normalized provider identity from one settings snapshot."""
-
-    return provider_configuration_sha256(
-        resolve_provider_configuration(settings)
-    )
 
 
 def provider_environment_for_settings(settings: Settings) -> dict[str, str]:

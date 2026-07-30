@@ -8,6 +8,18 @@ import json
 from pathlib import Path
 
 
+_RUNTIME_IDENTITY_FIELDS = (
+    "git_sha",
+    "manifest_sha256s",
+    "snapshot_fingerprint",
+    "provider_configuration_sha256",
+    "governance_scope_sha256",
+    "collection",
+    "execution_context",
+    "pipeline_configuration",
+)
+
+
 def _select_summary(benchmark: dict, concurrency: int) -> dict:
     if benchmark.get("schema") != "rag-concurrency-benchmark-v1":
         raise ValueError("benchmark schema must be rag-concurrency-benchmark-v1")
@@ -35,8 +47,20 @@ def build_integrated_load_report(
     case_count = int(evaluation.get("case_count") or len(evaluation.get("cases") or []))
     if evaluation.get("schema") != "rag-labeled-eval-v4" or case_count <= 0:
         raise ValueError("evaluation must be a non-empty rag-labeled-eval-v4 artifact")
+    identity = benchmark.get("runtime_identity")
+    if (
+        not isinstance(identity, dict)
+        or not isinstance(identity.get("deployment_id"), str)
+        or not identity["deployment_id"].strip()
+        or any(
+            identity.get(field) != evaluation.get(field)
+            for field in _RUNTIME_IDENTITY_FIELDS
+        )
+    ):
+        raise ValueError("benchmark runtime identity does not match evaluation")
     return {
         "schema": "integrated-load-report-v1",
+        "runtime_identity": dict(identity),
         "concurrency": int(summary.get("concurrency") or 0),
         "requests": int(summary.get("requests") or 0),
         "successful_requests": int(summary.get("successful_requests") or 0),

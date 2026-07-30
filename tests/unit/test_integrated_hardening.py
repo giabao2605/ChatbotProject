@@ -474,6 +474,20 @@ def test_integrated_results_aggregate_budget_and_security_without_raw_prompts():
 
 
 def test_load_report_joins_latency_with_cost_retry_and_fallback_metrics():
+    identity = {
+        "deployment_id": "candidate-1",
+        "git_sha": "a" * 40,
+        "manifest_sha256s": ["b" * 64],
+        "snapshot_fingerprint": "c" * 64,
+        "provider_configuration_sha256": "d" * 64,
+        "governance_scope_sha256": "e" * 64,
+        "collection": "fixture",
+        "execution_context": "evaluation",
+        "pipeline_configuration": {
+            "flags": {"RAG_CRAG_ENABLED": True},
+            "versions": {"RAG_PLANNER_VERSION": "planner-v1"},
+        },
+    }
     summary = {
         "concurrency": 5, "requests": 30, "successful_requests": 30,
         "first_token_p50_ms": 100, "first_token_p95_ms": 200,
@@ -481,12 +495,14 @@ def test_load_report_joins_latency_with_cost_retry_and_fallback_metrics():
     }
     benchmark = {
         "schema": "rag-concurrency-benchmark-v1",
+        "runtime_identity": dict(identity),
         "results": [{"summary": summary, "samples": []}],
     }
     evaluation = {
         "schema": "rag-labeled-eval-v4", "case_count": 30,
         "total_estimated_cost": 0.3, "provider_retries": 3,
         "fallback_coverage": {"fallback_rate": 0.05},
+        **{key: value for key, value in identity.items() if key != "deployment_id"},
     }
     report = build_integrated_load_report(benchmark, evaluation, concurrency=5)
     assert report["schema"] == "integrated-load-report-v1"
@@ -495,6 +511,12 @@ def test_load_report_joins_latency_with_cost_retry_and_fallback_metrics():
     assert report["fallback_rate"] == pytest.approx(0.05)
     with pytest.raises(ValueError, match="concurrency 10"):
         build_integrated_load_report(benchmark, evaluation, concurrency=10)
+    benchmark["runtime_identity"] = {
+        **identity,
+        "snapshot_fingerprint": "f" * 64,
+    }
+    with pytest.raises(ValueError, match="runtime identity"):
+        build_integrated_load_report(benchmark, evaluation, concurrency=5)
 
 
 def test_clean_worktree_contract_fails_closed():
@@ -977,6 +999,9 @@ def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
                  "completed_at": "2026-01-01T00:00:04Z", "total_cases": 1,
                  "outcome_confusion": {"wrong_answer": 0, "leakage": 0},
                  "claim_evaluation": metric, "citation_evaluation": citation}
+    initial_pipeline = {"flags": {}, "versions": {}}
+    baseline["pipeline_configuration"] = initial_pipeline
+    candidate["pipeline_configuration"] = initial_pipeline
     budget_case = {
         "id": "budget", "combination_id": "crag_claim",
         "planner_count": 0, "subquery_count": 0, "correction_count": 0,
@@ -1037,12 +1062,31 @@ def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
             for concurrency in (1, 5)
         ],
     }
+    identity_fields = (
+        "git_sha", "manifest_sha256s", "snapshot_fingerprint",
+        "provider_configuration_sha256", "governance_scope_sha256",
+        "collection", "execution_context", "pipeline_configuration",
+    )
+    baseline_benchmark = {
+        **benchmark,
+        "runtime_identity": {
+            "deployment_id": "baseline-1",
+            **{field: baseline[field] for field in identity_fields},
+        },
+    }
+    candidate_benchmark = {
+        **benchmark,
+        "runtime_identity": {
+            "deployment_id": "candidate-1",
+            **{field: candidate[field] for field in identity_fields},
+        },
+    }
     artifacts = {
         "baseline_eval": baseline, "candidate_eval": candidate,
         "baseline_trace": baseline_trace,
         "candidate_trace": candidate_trace,
-        "baseline_benchmark": json.loads(json.dumps(benchmark)),
-        "candidate_benchmark": json.loads(json.dumps(benchmark)),
+        "baseline_benchmark": json.loads(json.dumps(baseline_benchmark)),
+        "candidate_benchmark": json.loads(json.dumps(candidate_benchmark)),
         "baseline_load": load, "candidate_load": candidate_load,
         "results": {"passed": True, "source_eval_sha256s": ["candidate_eval"],
                     "budget_report": {"combination_ids": ["crag_claim"]}},
@@ -1093,6 +1137,12 @@ def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
     artifacts["candidate_eval"]["pipeline_configuration"] = {
         "flags": dict(expected["flags"]), "versions": dict(expected["versions"]),
     }
+    artifacts["baseline_benchmark"]["runtime_identity"][
+        "pipeline_configuration"
+    ] = artifacts["baseline_eval"]["pipeline_configuration"]
+    artifacts["candidate_benchmark"]["runtime_identity"][
+        "pipeline_configuration"
+    ] = artifacts["candidate_eval"]["pipeline_configuration"]
     assert evaluate_combination_evidence(
         "crag_claim", artifacts, digests, expected_configuration=expected
     )["passed"] is True
