@@ -3,9 +3,9 @@
   "as_of": "2026-07-30",
   "scope": "governed_rag_feature_activation",
   "deployment_path": "windows_lan_no_docker",
-  "source_head_commit": "2bd0a343a4c036076698b90090d2bd8482b204c4",
+  "source_head_commit": "5f7b98b81565eb7c04db4f45be39e0f44ed85786",
   "authoritative_for_live_activation": false,
-  "worktree_clean": false,
+  "worktree_clean": true,
   "evidence_worktree_clean": true,
   "owner_signature": "pending",
   "release_gate": {
@@ -22,9 +22,9 @@
       "release decision ledger is incomplete and owner signature is pending",
       "integrated live matrix is blocked by incomplete prerequisites and release decisions",
       "CRAG and Claim Repair failed the declared latency gate",
-      "Grounded Math provider smoke failed 0 of 5 requests, so quality was not evaluated",
-      "Query Decomposition has no current three-pair series or completed owner review",
-      "Graph Retrieval has 0 of 20 independent edge reviews",
+      "Grounded Math passed three technical pairs but remains blocked by the CRAG dependency and 0 of 10 human reviews",
+      "Query Decomposition stopped after pair 02 exceeded the declared cost ratio limit",
+      "Graph Retrieval has only 20 of 22 approved edges with complete current provenance and 0 of 20 independent reviews",
       "Community Summaries remains blocked by Graph Retrieval and has no reviewed summaries",
       "runtime provenance has not been recaptured after launcher and preflight hardening",
       "backup and restore drill has not run on a disposable target"
@@ -40,6 +40,15 @@
     "feature_activation_authorized": false,
     "provenance_enforcement_implemented": true,
     "provenance_recaptured": false,
+    "observed_demo_runtime": {
+      "health_status": "ok",
+      "git_sha": "00906394bce762d0d3cfd7812ed944d53617cf16",
+      "deployment_id": "windows-lan-dirty-00906394bce7",
+      "activation_profile": "all_off",
+      "all_governed_flags_disabled": true,
+      "matches_source_head": false,
+      "release_evidence": false
+    },
     "production_preflight": {
       "evidence_state": "stale_after_provenance_hardening",
       "pre_provenance_hardening": {
@@ -76,31 +85,45 @@
     }
   },
   "verification": {
-    "backend_full_suite": "2455 passed, 1 skipped, 21 deselected on 2bd0a34; live integration and eval excluded",
-    "frontend_unit": "32/32 passed",
-    "frontend_production_build": "passed on 2bd0a34",
-    "architecture": "18/18 passed",
-    "browser_e2e": "3/3 passed",
-    "security_targeted": "101/101 passed",
-    "rollback_cache_stream_preflight": "75/75 passed",
-    "security_subagent_review": {
+    "backend_full_suite": "2467 passed, 1 skipped, 0 failed on 5f7b98b; live integration and eval excluded",
+    "backend_coverage": {
+      "line_percent": 92.286356,
+      "branch_percent": 84.991334,
+      "minimum_percent": 80,
+      "path": ".local/integrated-hardening/5f7b98b/coverage-backend.json",
+      "sha256": "fcdd9a828552a279debe0699cd404210b0f2f20cb25cdd0e881dbac668281f7e"
+    },
+    "frontend_unit": "32/32 passed on 5f7b98b",
+    "frontend_production_build": "passed on 5f7b98b",
+    "architecture": "18/18 passed on 5f7b98b",
+    "browser_e2e": "3/3 passed before provenance hardening; not current live evidence",
+    "security_targeted": "current integrated security matrix 15/15 passed with leakage 0",
+    "rollback_cache_stream_preflight": "63/63 passed on 5f7b98b",
+    "scoped_runtime_hardening_subagent_review": {
       "remaining_high_or_medium_blockers": 0,
       "focused_tests": "45 passed",
       "provider_or_live_service_calls": false
     },
+    "final_review": {
+      "standards_findings": 0,
+      "spec_findings": 0,
+      "blocking_security_findings": 0,
+      "provider_or_live_mutations": false
+    },
     "integrated_offline": {
-      "source_commit": "2bd0a343a4c036076698b90090d2bd8482b204c4",
+      "source_commit": "5f7b98b81565eb7c04db4f45be39e0f44ed85786",
       "passed": true,
       "feature_flags_default_disabled": true,
       "cache_isolation_passed": true,
       "strict_stream_passed": true,
       "rollback_passed": true,
-      "path": ".local/integrated-hardening/2bd0a34/offline.json",
-      "sha256": "cf502f5ddbd259eba867005f92a47c96036760f8b299190f80b3e118932b728f"
+      "path": ".local/integrated-hardening/5f7b98b/offline.json",
+      "sha256": "c30da40c23d881dd39a9f131b6bfcfb2d9edc8fe06fbd4763cc9f0d0773c5b02"
     },
     "integrated_preflight": {
-      "source_commit": "2bd0a343a4c036076698b90090d2bd8482b204c4",
+      "source_commit": "5f7b98b81565eb7c04db4f45be39e0f44ed85786",
       "capability_passed": true,
+      "ready_for_demo_matrix": true,
       "ready_for_live_matrix": false,
       "security_cases": 15,
       "leakage_count": 0,
@@ -108,18 +131,25 @@
         "prerequisite_milestones_incomplete",
         "release_decisions_incomplete"
       ],
-      "path": ".local/integrated-hardening/2bd0a34/preflight.json",
-      "sha256": "a3c486162c991b0e26e07928a8bc2762ef8c4cac6745d404311c28aa73062333"
+      "path": ".local/integrated-hardening/5f7b98b/preflight.json",
+      "sha256": "8bb633c1bf8cdc34bce48b00c45948bd916e938a009e48cfaa154df639025908"
     },
     "restore_drill": {
       "tooling_implemented": true,
       "executed": false,
+      "deferred_while_corpus_is_demo_only": true,
+      "gate_satisfied": false,
       "automatic_cleanup": false,
       "sql_backup_set_identity_required": true,
       "qdrant_snapshot_checksum_required": true,
       "runtime_state_recaptured_after_migrations": false
     },
-    "python_dependency_consistency": "passed",
+    "dependency_audit": {
+      "active_python_environment": "no known vulnerabilities",
+      "frontend_production_dependencies": "no known vulnerabilities",
+      "requirements_lock": "non-canonical local snapshot: stale if audited, but intentionally not used by documented install or CI paths",
+      "rollout_blocker": false
+    },
     "docker_used": false
   },
   "features": [
@@ -161,28 +191,34 @@
         "RAG_GROUNDED_MATH_ENABLED"
       ],
       "implemented": true,
-      "measured": false,
+      "measured": true,
       "reviewed": false,
       "disposition": "inconclusive",
       "recommendation": "re_evaluate",
       "failed_checks": [
-        "provider_readiness"
+        "crag_dependency_incomplete",
+        "human_review_incomplete"
       ],
       "metrics": {
         "fixture_cases_passed": 16,
         "fixture_cases_total": 16,
-        "provider_successful_requests": 0,
-        "provider_requests": 5,
-        "provider_retries": 0
+        "technical_pairs_passed": 3,
+        "technical_pairs_total": 3,
+        "candidate_cases_passed_per_pair": 16,
+        "candidate_cases_total_per_pair": 16,
+        "provider_failures": 0,
+        "provider_retries": 0,
+        "reviewed_cases": 0,
+        "required_reviewed_cases": 10
       },
       "evidence": {
-        "source_commit": "c36e9cbc71c32e679d6325cecf288d34b54eb928",
+        "source_commit": "fa8dc16c26eb13333d8ef978d75cba8d7101ebf0",
         "collection": "MechChatbot_GroundedMath_Eval_v1",
         "fixture_fingerprint": "79d3f99524512476a15cf306297ea4bcf9c035c3f85e97bab5462e275b7acec6",
-        "path": "reports/grounded-math/20260730-window-02-c36e9cb/window-outcome.json",
-        "sha256": "aa55c99f560653905ff9e4a8c59e78c06a4d00c8fca9a2fdb5d944380856e982"
+        "path": "reports/grounded-math/20260730-window-04-fa8dc16/window-outcome.json",
+        "sha256": "7cd852717a68e2a3455f8c018bf4d116bde3049a80bada46193fe34a2e9b5a6a"
       },
-      "next_gate": "wait for a fresh 5 of 5 provider smoke, then run the predeclared pairs and human review"
+      "next_gate": "preserve this completed window; require accepted CRAG evidence and project-owner review of all 10 cases"
     },
     {
       "id": "late_interaction",
@@ -207,26 +243,39 @@
         "RAG_QUERY_DECOMPOSITION_ENABLED"
       ],
       "implemented": true,
-      "measured": false,
+      "measured": true,
       "reviewed": false,
       "disposition": "inconclusive",
       "recommendation": "re_evaluate",
       "failed_checks": [
-        "current_three_pair_series_missing",
+        "cost_within_budget",
         "owner_review_incomplete"
       ],
       "metrics": {
         "fixture_cases_passed": 13,
-        "fixture_cases_total": 13
+        "fixture_cases_total": 13,
+        "pair_01_status": "passed",
+        "pair_01_cost_ratio": 1.47852,
+        "pair_02_status": "failed",
+        "pair_02_cost_ratio": 1.554088,
+        "cost_ratio_limit": 1.5,
+        "pair_03_status": "not_run",
+        "reviewed_cases": 0,
+        "required_reviewed_cases": 10
       },
       "evidence": {
-        "source_commit": "b92992069707be151e7d680fa2615af3d4f36d0f",
+        "source_commit": "fa8dc16c26eb13333d8ef978d75cba8d7101ebf0",
         "collection": "MechChatbot_CRAG_Eval_v1",
         "fixture_fingerprint": "b4066ab6ce9005715192d312c4ffa10b73512a027c5cf88858dea6bf71d1f90e",
-        "path": "reports/decomposition/20260730-diagnostic-9366271-dirty/preflight-source-aligned-final.json",
-        "sha256": "edd0e9ecbb1dadcc02381aad87cb7d5ccdcd11713e78dc7a3c5c1791abd8d797"
+        "path": "reports/decomposition/20260730-window-01-fa8dc16/window-outcome.json",
+        "sha256": "4efb93b6167448f78d8102f27d60636069983cf27b92f8617a933fc01adb5e22"
       },
-      "next_gate": "run three immutable pairs after provider recovery and complete owner review of all cases"
+      "excluded_evidence": {
+        "path": "reports/decomposition/20260730-window-01-5f7b98b/evidence-invalidation.json",
+        "sha256": "e5d4f75ba0eb33803cb22caa5047af952128691a7930fba690953e91e3c7f416",
+        "reason": "undeclared rerun after a failed window; invalid for rollout decisions"
+      },
+      "next_gate": "preserve the stopped window, diagnose candidate token and cost overhead, then predeclare a new window without relaxing the 1.5 limit"
     },
     {
       "id": "graph_retrieval",
@@ -239,24 +288,28 @@
       "disposition": "inconclusive",
       "recommendation": "re_evaluate",
       "failed_checks": [
+        "approved_edge_provenance_incomplete",
         "independent_edge_review_missing"
       ],
       "metrics": {
-        "fixture_cases_passed": 13,
-        "fixture_cases_total": 13,
+        "preflight_checked_cases": 13,
+        "preflight_passed": false,
         "approved_edges": 22,
+        "provenance_complete_edges": 20,
         "reviewed_edges": 0,
         "required_reviewed_edges": 20,
-        "provenance_completeness": 1.0
+        "provenance_completeness": 0.909091
       },
       "evidence": {
-        "source_commit": "b92992069707be151e7d680fa2615af3d4f36d0f",
+        "source_commit": "fa8dc16c26eb13333d8ef978d75cba8d7101ebf0",
         "collection": "MechChatbot_Graph_Eval_v1",
-        "fixture_fingerprint": "dacde9addba6b330ee47c425382c00db071a44488351809e4aa777a16f8b2e4a",
-        "path": "reports/graph/20260730-diagnostic-b929920-dirty/independent-review-queue.jsonl",
-        "sha256": "8948f1892034bf852cad254bb0894b0557db363e89be84a8713892994a1336c1"
+        "fixture_fingerprint": "96e911b9c3fd35f2d12459d167ec3d9c5047b4b95aeb9e575a3094448be11883",
+        "path": "reports/graph/20260730-gate-fa8dc16/gate-disposition.json",
+        "sha256": "5b61eb4300efd4935d671d91758bca894de5057039259028664f37a326902951",
+        "review_queue_path": "reports/graph/20260730-gate-fa8dc16/independent-review-queue.jsonl",
+        "review_queue_sha256": "8948f1892034bf852cad254bb0894b0557db363e89be84a8713892994a1336c1"
       },
-      "next_gate": "obtain at least 20 independent labels and at least 95 percent reviewed-edge precision"
+      "next_gate": "correct the two invalid approved staging edges without weakening provenance validation, then obtain at least 20 independent labels and at least 95 percent precision"
     },
     {
       "id": "community_summaries",
@@ -270,19 +323,20 @@
       "recommendation": "re_evaluate",
       "failed_checks": [
         "graph_retrieval_not_accepted",
-        "reviewed_summaries_missing"
+        "reviewed_summaries_missing",
+        "global_evaluation_not_run"
       ],
       "metrics": {
-        "detected_communities": 6,
+        "detection_run": false,
+        "detected_communities": 0,
         "source_edges": 22,
-        "provenance_completeness": 1.0,
         "summaries_generated": 0,
         "persisted": false
       },
       "evidence": {
-        "source_commit": "b92992069707be151e7d680fa2615af3d4f36d0f",
-        "path": "reports/community-summaries/20260730-diagnostic-b929920-dirty/detection.json",
-        "sha256": "6a7b28993f4593399fdfa09d7b5a67133cd87fd543c515cedd24dcb0ba8dcb50"
+        "source_commit": "fa8dc16c26eb13333d8ef978d75cba8d7101ebf0",
+        "path": "reports/graph/20260730-gate-fa8dc16/gate-disposition.json",
+        "sha256": "5b61eb4300efd4935d671d91758bca894de5057039259028664f37a326902951"
       },
       "next_gate": "finish Graph Retrieval first, then generate, review, and evaluate community summaries"
     }

@@ -56,7 +56,8 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
   ratio `1.5426 > 1.25`. Pair 02/03 không chạy và không tạo authorization/bundle.
 - Grounded Math đã có series kỹ thuật tốt hơn nhưng chưa thể live vì CRAG và human
   decision còn thiếu.
-- Query Decomposition có evidence chia đôi: một pair đạt, hai pair không đạt.
+- Query Decomposition có evidence chia đôi: Pair 01 đạt, Pair 02 fail cost,
+  Pair 03 không chạy theo stop rule.
 - GraphRAG chưa có tối thiểu 20 edge được independent review.
 - Community Summaries phụ thuộc GraphRAG và corpus/eval hiện chưa đủ.
 - Late Interaction giữ tắt theo quyết định rejected.
@@ -71,14 +72,17 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 ### Mốc Git và phạm vi bằng chứng
 
 - Branch thực thi: `codex/codebase-layer-refactor`.
-- Commit code được dùng để chạy clean evidence:
-  `2bd0a343a4c036076698b90090d2bd8482b204c4`.
-- Commit cập nhật decision pack gần nhất: `c7ad3e8`.
-- Primary worktree vẫn có thay đổi Part ID/chat/retrieval ngoài phạm vi của chuỗi
-  hardening này. Các thay đổi đó được giữ nguyên, không stage, không revert và
-  không dùng làm nguồn cho clean evidence.
-- Clean evidence được chạy trong detached worktree riêng, cùng đúng commit
-  `2bd0a34`; không trộn artifact từ primary dirty worktree.
+- Commit feature-evaluation sạch:
+  `fa8dc16c26eb13333d8ef978d75cba8d7101ebf0`.
+- HEAD dùng cho integrated verification:
+  `5f7b98b81565eb7c04db4f45be39e0f44ed85786`.
+- Grounded Math, Query Decomposition và Graph/Community disposition được chạy
+  trong detached worktree sạch tại `fa8dc16`; integrated offline, full suite,
+  coverage, frontend và architecture được chạy trên primary worktree sạch tại
+  `5f7b98b`.
+- Window Query Decomposition không khai báo ở `5f7b98b` được giữ làm tombstone
+  nhưng bị loại khỏi mọi rollout decision; không trộn kết quả của window này
+  với window hợp lệ ở `fa8dc16`.
 - Đường triển khai đã chốt là Windows LAN/local, không dùng Docker. Không có
   Docker command, image, container hoặc Docker artifact nào được tạo/chỉnh sửa
   trong chuỗi thực thi này.
@@ -92,10 +96,10 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 | 3. Cohort tài khoản test | Đã hoàn tất, không tạo/xóa account | Reuse 33 account `demo_...`; viewer/uploader/reviewer login và profile đúng; credential không vào Git/report | Chỉ bổ sung account nếu một future matrix thiếu actor; cần phê duyệt riêng |
 | 4. Browser E2E và baseline all-off | Đã đo baseline | Browser `3/3`, golden `5/5`, frontend `32/32`, load c1/c5 không lỗi; mọi governed flag OFF | Chạy lại health/browser smoke sau hardened launcher để thay evidence pre-hardening |
 | 5. CRAG + Claim Repair | Dừng đúng stop rule, disposition `inconclusive` | Pair 01 candidate `9/9`, correction/repair được exercise, provider failure `0`; gate bắt đúng latency ratio `1.5426 > 1.25` | Cửa sổ ba pair mới khi provider ổn định; không nới latency gate |
-| 6. Grounded Math | Dừng đúng provider gate, disposition `inconclusive` | Fixture/preflight `16/16`, rollback `2/2`; provider smoke ghi đúng `0/5` timeout và không chạy pair | Fresh provider smoke `5/5`, immutable pairs và human review |
-| 7. Query Decomposition | Fixture/evaluator đã harden; formal series chưa chạy | Fixture additive, không delete/update; preflight `13/13`; source row/provenance khớp; test decomposition/evaluator đạt | Ba immutable pair trên cùng runtime identity và owner review toàn bộ pack |
-| 8. GraphRAG và Community Summaries | Provenance code hoàn tất; blocked bởi independent review | Graph quote/page/version/endpoints/governance được bind với nguồn hiện hành; queue có 22 edge; community detection read-only tạo 6 community | Tối thiểu 20 independent label, precision tối thiểu 95%; sau đó mới generate/review summary |
-| 9. Integrated matrix, rollback và production audit | Offline capability hoàn tất; live matrix/restore thật chưa chạy | Backend/frontend/build xanh; offline gate đạt; security matrix 15 case, leakage 0; restore tooling fail-closed; security review không còn HIGH/MEDIUM | Restore drill trên disposable targets, hardened all-off runtime, provider-ready matrix c1/c5 và rollback smoke |
+| 6. Grounded Math | Ba pair kỹ thuật đạt; disposition vẫn `inconclusive` | Fixture `16/16`, rollback `2/2`, ba pair candidate đều `16/16`; quality/safety/latency/cost/rollback xanh | CRAG phải accepted và owner review đủ `10/10`; không chạy lại window đã hoàn tất |
+| 7. Query Decomposition | Dừng đúng stop rule, disposition `inconclusive` | Pair 01 đạt; Pair 02 giữ quality/latency nhưng cost ratio `1.554088 > 1.5`; Pair 03 không chạy | Chẩn đoán cost/token overhead, predeclare window mới và owner review; không dùng rerun không khai báo |
+| 8. GraphRAG và Community Summaries | Blocked bởi provenance và independent review | Queue có 22 edge; validator hiện hành chỉ xác minh `20/22`; `0/20` label độc lập; Community không chạy | Sửa hai approved staging edge sai, rồi tối thiểu 20 label và precision 95%; chỉ sau Graph accepted mới chạy Community |
+| 9. Integrated matrix, rollback và production audit | Offline capability hoàn tất; live matrix/restore thật chưa chạy | HEAD `5f7b98b`: offline `63/63`, security `15/15`, leakage 0, backend `2467` pass, coverage line/branch `92.29%/84.99%`, frontend/build và architecture xanh | Restore drill trên disposable targets, hardened all-off runtime, live matrix c1/c5 và browser rollback smoke |
 | 10. Decision pack cuối | Deliverable đã có; chưa được chủ dự án ký | JSON decision pack máy đọc được, fail-closed; từng feature có disposition/next gate; hash evidence khớp | Owner signature và release decisions đầy đủ; chỉ sau đó mới tạo feature-on activation bundle |
 
 ### Những thay đổi đã implement và commit
@@ -118,6 +122,9 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 | `3065b98` | Bind Graph source quote với current document/page/BOM, semantic endpoints và governance |
 | `2bd0a34` | Bind launcher với restore receipt và fingerprint trạng thái SQL/Qdrant thực sau migration |
 | `c7ad3e8` | Refresh decision pack và bằng chứng production hiện hành |
+| `0090639` | Chuẩn hóa Part ID và đọc đúng quantity/unit trong bảng Markdown |
+| `fa8dc16` | Giữ Grounded Math deterministic và sửa typed partial outcome/cross-document scope |
+| `5f7b98b` | Cho phép dirty worktree chỉ khi demo launcher được gọi explicit; production mặc định vẫn fail-closed |
 
 ### Chi tiết hardening đã hoàn thành
 
@@ -172,21 +179,33 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 
 ### Bằng chứng kiểm thử authoritative hiện hành
 
-- Clean backend offline tại `2bd0a34`:
-  `2455 passed, 1 skipped, 21 deselected`; live integration và eval bị loại đúng
-  marker.
-- Frontend tại cùng commit: `32/32` unit test và production build đạt.
+- Clean backend offline tại `5f7b98b`:
+  `2467 passed, 1 skipped, 0 failed`; SQL integration bị skip đúng vì
+  `RUN_DB_TESTS` chưa bật, live integration và eval bị loại đúng marker.
+- Coverage canonical theo CI tại cùng commit: line `92.286356%`, branch
+  `84.991334%`; cả hai vượt ngưỡng `80%`.
+- Frontend tại cùng commit: `32/32` unit test và production build đạt;
+  architecture `18/18`.
 - Integrated offline artifact:
-  `.local/integrated-hardening/2bd0a34/offline.json`,
+  `.local/integrated-hardening/5f7b98b/offline.json`,
   SHA-256
-  `cf502f5ddbd259eba867005f92a47c96036760f8b299190f80b3e118932b728f`.
+  `c30da40c23d881dd39a9f131b6bfcfb2d9edc8fe06fbd4763cc9f0d0773c5b02`.
   Kết quả: `63/63`, flags default OFF, cache isolation/strict stream/rollback đạt.
 - Integrated preflight artifact:
-  `.local/integrated-hardening/2bd0a34/preflight.json`,
+  `.local/integrated-hardening/5f7b98b/preflight.json`,
   SHA-256
-  `a3c486162c991b0e26e07928a8bc2762ef8c4cac6745d404311c28aa73062333`.
-  Kết quả: capability đạt, security `15/15`, leakage `0`, nhưng
+  `8bb633c1bf8cdc34bce48b00c45948bd916e938a009e48cfaa154df639025908`.
+  Kết quả: capability và controlled-demo fallback đạt, security `15/15`,
+  leakage `0`; mọi effective release flag OFF và
   `ready_for_live_matrix=false`.
+- Local demo health vẫn `status=ok` và cả 7 governed flag OFF, nhưng deployment
+  là `windows-lan-dirty-00906394bce7`, Git SHA `0090639`, không khớp source HEAD
+  `5f7b98b`; quan sát này không phải release evidence và không được dùng thay
+  hardened launcher preflight.
+- `npm audit --omit=dev` và `pip-audit` trên active environment không tìm thấy
+  advisory. `requirements.lock.txt` là snapshot local không canonical, đã được
+  loại khỏi install/CI path từ `6ac5557`; audit của file này có 27 advisory/5
+  package nhưng không được dùng làm rollout gate hoặc nguồn cài production.
 - Security subagent đã chạy negative probes cho runtime drift, same-count
   Qdrant mutation, `TaiLieuKyThuat`, SQL backup identity, path/checksum và Graph
   endpoint/governance; kết luận không còn blocker HIGH/MEDIUM trong phạm vi.
@@ -206,6 +225,11 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 
 ### Phần chưa chạy và thứ tự gated tiếp theo
 
+Chủ dự án đã chọn hoãn backup/restore khi SQL/Qdrant hiện chỉ chứa corpus demo.
+Quyết định này tránh tạo bản sao không cần thiết nhưng không làm gate restore
+thành đạt; trước khi ingest dữ liệu thật vẫn phải chốt disposable targets và thu
+restore evidence mới.
+
 1. Chủ dự án xác nhận cho phép tạo disposable restore targets và chốt:
    SQL backup path, SQL data directory, target database, Qdrant snapshot
    URL/name/checksum và target collection.
@@ -215,8 +239,8 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
    Bước này có migration/backfill live nên cần quyền vận hành rõ ràng.
 4. Thu hardened all-off `/health`, production preflight và browser smoke mới;
    bằng chứng pre-hardening `5/5` không được dùng thay thế.
-5. Khi provider sẵn sàng, chạy fresh smoke và các feature window theo dependency:
-   CRAG → Grounded Math → Query Decomposition → Graph → Community.
+5. Giữ nguyên Grounded Math window đã hoàn tất; chẩn đoán CRAG latency và Query
+   Decomposition cost trước khi predeclare bất kỳ window mới nào.
 6. Dừng ngay ở failed pair/gate đầu tiên; không rerun window để chọn số đẹp và
    không nới threshold.
 7. Thu independent Graph labels và owner review cho các pack bắt buộc.
@@ -227,8 +251,9 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 ### Những hành động chưa được thực hiện
 
 - Chưa chạy restore thật hoặc tạo disposable SQL/Qdrant target.
-- Chưa chạy hardened Windows launcher sau commit `2bd0a34`.
-- Chưa chạy provider smoke/window mới.
+- Chưa chạy hardened Windows launcher trên current HEAD sau provenance hardening.
+- Đã chạy provider smoke/window mới cho Grounded Math và Query Decomposition;
+  kết quả vẫn fail-closed theo gate nêu dưới.
 - Chưa chạy integrated live matrix c1/c5.
 - Chưa thay đổi account, credential hoặc release decision.
 - Chưa bật bất kỳ governed RAG feature nào.
@@ -478,16 +503,20 @@ không bật default rollout.
 
 ### Kết quả cửa sổ hiện tại
 
-- Commit `c36e9cb` giới hạn provider readiness smoke ở đúng một attempt,
-  timeout tối đa 30 giây/request và không thay đổi retry của production.
-- Window `20260730-window-02-c36e9cb` dùng lại fixture hiện hữu, không ingest:
-  preflight đạt `16/16`, fingerprint không đổi; rollback đạt `2/2` và xác nhận
-  `RAG_GROUNDED_MATH_ENABLED=false`.
-- Provider smoke không đạt: `0/5` request thành công, `5/5`
-  `APITimeoutError`, `0` retry. Pair 01 không được bắt đầu theo stop rule.
-- Kết quả là `inconclusive`, chưa đánh giá quality. Không tạo series,
-  activation bundle hoặc thay đổi live flag; chỉ được mở cửa sổ mới khi provider
-  sẵn sàng.
+- Root fix ở `fa8dc16` giữ pure deterministic math không gọi generation LLM
+  thừa, giữ cross-document operands và phát đúng typed partial outcome.
+- Window hợp lệ `20260730-window-04-fa8dc16` dùng fixture hiện hữu, không ingest:
+  preflight đạt `16/16`, rollback đạt `2/2`; ba provider smoke đều `5/5`.
+- Cả ba immutable pair đều đạt toàn bộ 23 gate. Candidate đạt `16/16` ở mỗi
+  pair; provider failure/retry/leakage đều bằng `0`; latency ratio lần lượt
+  `0.164652`, `0.255974`, `0.150771`.
+- Series vẫn `production_eligible=false` vì CRAG chưa accepted và owner review
+  mới `0/10`. Outcome:
+  `reports/grounded-math/20260730-window-04-fa8dc16/window-outcome.json`,
+  SHA-256
+  `7cd852717a68e2a3455f8c018bf4d116bde3049a80bada46193fe34a2e9b5a6a`.
+- Không tạo authorization/bundle và không bật flag. Window đã hoàn tất được giữ
+  nguyên; không rerun để thay số.
 
 ## Ticket 7: Hoàn tất Query Decomposition
 
@@ -522,9 +551,24 @@ Giải quyết evidence chia đôi và chứng minh gain trên truy vấn phức
   `b4066ab6ce9005715192d312c4ffa10b73512a027c5cf88858dea6bf71d1f90e`;
   manifest hash là
   `1ab4ec403f6501858d25f40ea329d96246f677a63044692632178d1ee95eb24e`.
-- `143` test decomposition/evaluator/gate/provider contract đạt. Ba pair chính
-  thức chưa chạy vì tracked worktree có thay đổi ngoài scope và provider smoke
-  gần nhất không sẵn sàng. Disposition tiếp tục `inconclusive`, flag giữ tắt.
+- Window hợp lệ `20260730-window-01-fa8dc16` được predeclare và pin cùng commit,
+  fixture, provider profile và execution context. Preflight đạt `13/13`;
+  rollback và hai provider smoke đạt.
+- Pair 01 đạt mọi gate: candidate complex pass rate `0.7`, branch/citation
+  accuracy `1.0`, simple planner call `0`, latency ratio `0.902172`, cost ratio
+  `1.47852`.
+- Pair 02 giữ nguyên quality, branch/citation, safety và latency nhưng fail đúng
+  `cost_within_budget`: `1.554088 > 1.5`. Pair 03 không chạy theo stop rule.
+  Human review hiện `0/10`; disposition `inconclusive`, flag giữ tắt.
+- Outcome authoritative:
+  `reports/decomposition/20260730-window-01-fa8dc16/window-outcome.json`,
+  SHA-256
+  `4efb93b6167448f78d8102f27d60636069983cf27b92f8617a933fc01adb5e22`.
+- Window xanh về sau ở `5f7b98b` không có declaration, chạy sau khi đã thấy
+  Pair 02 fail và commit không chứa Query Decomposition cost fix. Artifact được
+  giữ nhưng tombstone
+  `reports/decomposition/20260730-window-01-5f7b98b/evidence-invalidation.json`
+  cấm dùng cho authorization/release decision; không xóa hoặc ghi đè.
 
 ## Ticket 8: Hoàn tất GraphRAG và Community Summaries
 
@@ -550,18 +594,22 @@ Chỉ mở Graph/Community khi provenance và independent review đạt.
 
 ### Kết quả hiện tại
 
-- Graph preflight read-only đạt `13/13`, `0` failure; có `22` approved edge,
-  structured coverage và provenance completeness đều `1.0`, workflow fixture
-  đạt và pending-serving edge bằng `0`.
-- Queue hiện tại có `22` edge duy nhất, đủ source quote, toàn bộ reviewer/label
+- Validator hiện hành ở `fa8dc16` kiểm tra read-only `13` case và fail đúng
+  `approved_edge_provenance_incomplete`: chỉ `20/22` approved edge đủ current
+  provenance. Edge 2 dùng document superseded/non-servable; edge 24 có relation
+  `APPLIES_TO` chưa thuộc verified source-evidence contract.
+- Queue hiện tại có `22` edge duy nhất, đủ source quote; toàn bộ reviewer/label
   để trống đúng independent-review contract. Artifact local:
-  `reports/graph/20260730-diagnostic-b929920-dirty/independent-review-queue.jsonl`,
+  `reports/graph/20260730-gate-fa8dc16/independent-review-queue.jsonl`,
   SHA-256
   `8948f1892034bf852cad254bb0894b0557db363e89be84a8713892994a1336c1`.
-- Community detection read-only tạo `6` community từ queue, provenance `1.0`,
-  `persisted=false`, `summaries_generated=0`. Không chạy generation/serving
-  readiness vì Graph vẫn có `0/20` independent review và precision chưa biết.
+- Không tự sửa/xóa staging data và không nới validator. Community detection,
+  generation và serving readiness đều không chạy vì Graph chưa đạt semantic
+  provenance và vẫn có `0/20` independent review.
 - GraphRAG và Community Summaries tiếp tục `inconclusive`; cả hai flag giữ tắt.
+  Disposition:
+  `reports/graph/20260730-gate-fa8dc16/gate-disposition.json`, SHA-256
+  `5b61eb4300efd4935d671d91758bca894de5057039259028664f37a326902951`.
 
 ## Ticket 9: Integrated matrix, rollback và production audit
 
@@ -590,9 +638,11 @@ Chứng minh tổ hợp cuối không phá security/performance và có thể kh
 
 ### Kết quả hiện tại
 
-- Full backend suite, frontend `32/32`, production build, architecture `18/18`
-  và browser E2E `3/3` đều đạt. Security matrix mục tiêu đạt `101/101`;
-  rollback/cache/strict-stream/production-preflight đạt `75/75`.
+- Baseline trước provenance hardening từng đạt full backend, frontend `32/32`,
+  production build, architecture `18/18` và browser E2E `3/3`; security
+  targeted `101/101` và rollback/cache/strict-stream/preflight `75/75`.
+  Các số này chỉ là historical evidence, không thay kết quả current HEAD bên
+  dưới.
 - Production preflight Windows trước provenance hardening đạt `5/5`: migration
   current, Qdrant ready, activation `all_off` hợp lệ, không có seeded dev
   account active và RAG health ready. Kết quả này không còn là live evidence
@@ -605,20 +655,28 @@ Chứng minh tổ hợp cuối không phá security/performance và có thể kh
   trong transaction `SERIALIZABLE`; Qdrant payload/vector/config được hash hai
   lượt và fail nếu drift. Runtime chưa được restart và recapture provenance,
   nên hardened live preflight vẫn chưa đạt.
-- Offline integrated runner đã chạy trên worktree sạch tại commit `2bd0a34`:
+- Offline integrated runner đã chạy lại trên worktree sạch tại commit `5f7b98b`:
   `63/63` test cache/strict-stream/rollback đạt; security matrix `15/15`,
   leakage `0`. Capability đạt nhưng `ready_for_live_matrix=false` vì
   prerequisites và release decisions vẫn chưa hoàn tất.
-- Full backend offline đạt `2455 passed, 1 skipped, 21 deselected`; frontend
-  `32/32` và production build đều đạt trên cùng commit. Security subagent không
-  còn blocker HIGH/MEDIUM sau negative probes.
+- Effective release matrix giữ cả 7 governed flag OFF. Controlled-demo fallback
+  đạt `ready_for_demo_matrix=true`; trạng thái này không cấp quyền live.
+- Full backend offline đạt `2467 passed, 1 skipped, 0 failed`; coverage line
+  `92.286356%`, branch `84.991334%`; frontend `32/32`, production build và
+  architecture `18/18` đều đạt trên cùng commit.
+- Active Python environment và frontend production dependencies audit sạch.
+  `requirements.lock.txt` là snapshot local không canonical và vẫn bị loại khỏi
+  install/CI path; không mở lại dependency-lock scope trong rollout này.
+- Final review độc lập có `0` Standards finding, `0` Spec finding và `0`
+  blocking security finding; reviewer không gọi provider hoặc mutate live data.
 - Restore drill fail-closed đã bind SQL BackupSetGUID/LSN và Qdrant snapshot
   checksum, không `REPLACE`, không xóa và không auto-cleanup. Drill thật chưa
   chạy vì chưa có disposable target cùng backup/snapshot location được xác
   nhận; không dùng dữ liệu hiện hữu để thử.
-- Production audit cho phạm vi bật governed RAG feature là `49/100`, trạng thái
-  `blocked`. Baseline all-off hoạt động, nhưng chưa đủ provenance, quyết định và
-  review để bật feature.
+- Production audit cho phạm vi bật governed RAG feature giữ ở `49/100`, trạng
+  thái `blocked`. Baseline all-off và offline capability hoạt động, nhưng chưa
+  đủ restore/runtime provenance, live matrix, quyết định và review để bật
+  feature.
 - Không dùng Docker, không sửa/xóa Docker artifact và không coi Docker là điều
   kiện triển khai trong đường Windows/LAN này.
 
@@ -648,11 +706,11 @@ JSON máy đọc được nằm tại
 | Feature | Disposition hiện tại | Khuyến nghị | Gate kế tiếp |
 | --- | --- | --- | --- |
 | CRAG + Claim Repair | Inconclusive; pair 01 fail latency `1.5426x > 1.25x` | `keep_off` | Cửa sổ ba pair mới, không nới latency gate |
-| Grounded Math | Inconclusive; provider smoke `0/5` | `re_evaluate` | Provider smoke `5/5`, pairs và human review |
+| Grounded Math | Inconclusive; 3/3 pair kỹ thuật đạt, CRAG và review `0/10` còn thiếu | `re_evaluate` | CRAG accepted và owner review đủ 10 case; không rerun window |
 | Late Interaction | Rejected | `keep_off` | Chỉ mở lại khi thiết kế mới vượt quality gate |
-| Query Decomposition | Inconclusive; preflight `13/13`, chưa có current series/review | `re_evaluate` | Ba immutable pair và owner review đầy đủ |
-| Graph Retrieval | Inconclusive; `0/20` independent edge review | `re_evaluate` | Tối thiểu 20 label, precision tối thiểu 95% |
-| Community Summaries | Inconclusive; Graph chưa accepted, chưa sinh summary | `re_evaluate` | Hoàn tất Graph rồi generation/review/global eval |
+| Query Decomposition | Inconclusive; Pair 02 fail cost `1.554088 > 1.5`, Pair 03 không chạy | `re_evaluate` | Chẩn đoán overhead, predeclare window mới và owner review |
+| Graph Retrieval | Inconclusive; provenance `20/22`, review `0/20` | `re_evaluate` | Sửa 2 invalid edge; tối thiểu 20 label, precision tối thiểu 95% |
+| Community Summaries | Inconclusive; không chạy vì Graph chưa accepted | `re_evaluate` | Hoàn tất Graph rồi mới detection/generation/review/global eval |
 
 Kết luận kỹ thuật hiện tại: giữ activation profile `all_off`,
 `ready_for_live_matrix=false`, không cập nhật release ledger và không tạo
