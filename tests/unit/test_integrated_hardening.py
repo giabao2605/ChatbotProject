@@ -30,7 +30,10 @@ from mech_chatbot.evaluation.milestone_decisions import (
 )
 from scripts.integrated_eval.results import build_results
 from scripts.integrated_eval.contracts import assert_clean_status
-from scripts.integrated_eval.compose_gate_metadata import evaluate_combination_evidence
+from scripts.integrated_eval.compose_gate_metadata import (
+    _expected_configurations,
+    evaluate_combination_evidence,
+)
 from scripts.eval.rag_trace_snapshot import build_snapshot
 from scripts.eval.milestone_decision import build_decision_artifact
 from scripts.eval.provider_smoke import run_provider_smoke
@@ -166,6 +169,32 @@ def test_release_matrix_fails_closed_for_missing_decisions():
         "RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED",
     ]
     assert resolved["decisions_complete"] is False
+
+
+def test_integrated_evidence_uses_effective_release_flags():
+    matrix = _json("data/integrated_hardening_v1/matrix.json")
+    decisions = {
+        name: {"decision": "accepted"}
+        for name in FEATURE_FLAGS
+    }
+    decisions["RAG_GROUNDED_MATH_ENABLED"] = {"decision": "rejected"}
+
+    configurations = _expected_configurations(
+        matrix,
+        {
+            "schema": "integrated-release-decisions-v1",
+            "decisions": decisions,
+        },
+    )
+
+    assert configurations["grounded_math"]["flags"][
+        "RAG_GROUNDED_MATH_ENABLED"
+    ] is False
+    assert configurations["grounded_math"]["versions"] == next(
+        row["versions"]
+        for row in matrix["combinations"]
+        if row["id"] == "grounded_math"
+    )
 
 
 def test_repository_release_ledger_records_late_interaction_as_rejected():

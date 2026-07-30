@@ -94,7 +94,11 @@ def _matrix_evidence_recomputed(integrity, expected):
         reference for reference in references
         if reference.get("schema") == "integrated-feature-matrix-v1"
     ]
-    if len(matrices) != 1:
+    decisions = [
+        reference for reference in references
+        if reference.get("schema") == "integrated-release-decisions-v1"
+    ]
+    if len(matrices) != 1 or len(decisions) != 1:
         return False
     try:
         from scripts.integrated_eval.compose_gate_metadata import load_matrix_evidence
@@ -104,8 +108,14 @@ def _matrix_evidence_recomputed(integrity, expected):
         feature_matrix = json.loads(
             Path(matrices[0]["path"]).read_text(encoding="utf-8")
         )
+        release_decisions = json.loads(
+            Path(decisions[0]["path"]).read_text(encoding="utf-8")
+        )
         actual, _ = load_matrix_evidence(
-            manifest, feature_matrix=feature_matrix, root=path.parent
+            manifest,
+            feature_matrix=feature_matrix,
+            release_decisions=release_decisions,
+            root=path.parent,
         )
     except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
         return False

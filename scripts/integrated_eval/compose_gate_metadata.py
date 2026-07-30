@@ -23,6 +23,7 @@ from mech_chatbot.evaluation.integrated_hardening import (
     compare_load_reports,
     evaluate_request_budgets,
 )
+from mech_chatbot.evaluation.milestone_decisions import build_release_matrix
 from mech_chatbot.rag.feature_activation import validate_release_decision_ledger
 from scripts.integrated_eval.contracts import (
     read_json_artifact,
@@ -158,8 +159,20 @@ def _metric_not_decreased(baseline, candidate, section, metric) -> bool:
     return before is not None and after is not None and float(after) >= float(before)
 
 
-def _enabled(value) -> bool:
-    return str(value).strip().casefold() in {"1", "true", "yes", "y", "on"}
+def _expected_configurations(feature_matrix: dict, release_decisions: dict) -> dict:
+    decisions = (
+        release_decisions.get("decisions") or {}
+        if release_decisions.get("schema") == "integrated-release-decisions-v1"
+        else {}
+    )
+    release_matrix = build_release_matrix(feature_matrix, decisions)
+    return {
+        row["id"]: {
+            "flags": dict(row["effective_flags"]),
+            "versions": dict(row["versions"]),
+        }
+        for row in release_matrix["combinations"]
+    }
 
 
 def evaluate_combination_evidence(
@@ -253,18 +266,13 @@ def evaluate_combination_evidence(
 
 
 def load_matrix_evidence(
-    manifest: dict, *, feature_matrix: dict, root: Path = ROOT,
+    manifest: dict, *, feature_matrix: dict, release_decisions: dict,
+    root: Path = ROOT,
 ) -> tuple[dict, list]:
     matrix_validation = validate_combination_matrix(feature_matrix)
     if not matrix_validation["passed"]:
         raise ValueError("feature matrix is invalid")
-    matrix_by_id = {
-        row["id"]: {
-            "flags": {name: _enabled(value) for name, value in row["flags"].items()},
-            "versions": row["versions"],
-        }
-        for row in feature_matrix["combinations"]
-    }
+    matrix_by_id = _expected_configurations(feature_matrix, release_decisions)
     rows = manifest.get("combinations") or []
     ids = [str(row.get("id") or "") for row in rows]
     reports = []
@@ -424,6 +432,7 @@ def main(argv=None):
     references.append(_reference(args.feature_matrix, feature_matrix, digest))
     matrix_report, nested_references = load_matrix_evidence(
         matrix_manifest, feature_matrix=feature_matrix,
+        release_decisions=top["decisions"],
         root=args.matrix_evidence.parent,
     )
     references.extend(nested_references)

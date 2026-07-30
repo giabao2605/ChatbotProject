@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -557,6 +558,59 @@ def test_integrated_hardening_gate_requires_every_control_plane_report(tmp_path,
     metadata["combination_matrix_evidence"]["combination_results"][0]["passed"] = False
     failed = gate.compare("integrated_hardening", baseline, candidate, metadata)
     assert failed["checks"]["all_combination_quality_gates_passed"] is False
+
+
+def test_integrated_gate_recomputes_matrix_with_release_decisions(
+    tmp_path,
+    monkeypatch,
+):
+    gate = _module()
+    manifest = tmp_path / "manifest.json"
+    matrix = tmp_path / "matrix.json"
+    decisions = tmp_path / "decisions.json"
+    manifest.write_text("{}", encoding="utf-8")
+    matrix.write_text("{}", encoding="utf-8")
+    decisions.write_text(
+        json.dumps({
+            "schema": "integrated-release-decisions-v1",
+            "decisions": {"RAG_CRAG_ENABLED": {"decision": "rejected"}},
+        }),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_load(manifest_payload, **kwargs):
+        captured.update(kwargs)
+        return {"passed": True}, []
+
+    monkeypatch.setattr(
+        "scripts.integrated_eval.compose_gate_metadata.load_matrix_evidence",
+        fake_load,
+    )
+    expected = {"passed": True}
+    integrity = {
+        "artifact_references": [
+            {
+                "path": str(manifest),
+                "schema": "integrated-matrix-evidence-v1",
+            },
+            {
+                "path": str(matrix),
+                "schema": "integrated-feature-matrix-v1",
+            },
+            {
+                "path": str(decisions),
+                "schema": "integrated-release-decisions-v1",
+            },
+        ],
+    }
+
+    assert gate._matrix_evidence_recomputed(integrity, expected) is True
+    assert captured["release_decisions"]["decisions"][
+        "RAG_CRAG_ENABLED"
+    ]["decision"] == "rejected"
+    integrity["artifact_references"].pop()
+    assert gate._matrix_evidence_recomputed(integrity, expected) is False
 
 
 def test_grounded_math_gate_uses_observed_per_query_calculation_budget():
