@@ -1,15 +1,77 @@
 import json
+from contextlib import contextmanager
 from decimal import Decimal
 
 import pytest
 
+from mech_chatbot.config.repository_runtime import bind_repository_runtime
 from scripts.decomposition_eval.constants import BOM_ROWS, FIXTURE_COLLECTION
 from scripts.decomposition_eval.generate_manifest import cases
 from scripts.decomposition_eval.preflight import check_fixture_cases, validate_manifest_scope
+from scripts.decomposition_eval.prepare_fixture import prepare_fixture
 from scripts.decomposition_eval.run_rollout import build_evaluation_environment
 
 
 pytestmark = pytest.mark.unit
+
+
+def _fixture_bom_row(**overrides):
+    row = {
+        "MaHang": "CRAG-EVAL-PART-A",
+        "SoLuong": Decimal("2"),
+        "Unit": "cái",
+        "SourceTableIndex": 1,
+        "RawRowJson": json.dumps(BOM_ROWS[0]),
+    }
+    row.update(overrides)
+    return row
+
+
+class _PrepareResult:
+    def __init__(self, value, existing):
+        self.value = value
+        self.existing = existing
+
+    def scalar_one(self):
+        return self.value
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self.existing
+
+
+class _PrepareConnection:
+    def __init__(self, existing, executed):
+        self.existing = existing
+        self.executed = executed
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        self.executed.append((sql, params))
+        value = 12 if "SELECT TOP 1 DocID" in sql else None
+        return _PrepareResult(value, self.existing)
+
+
+class _PrepareEngine:
+    def __init__(self, existing, executed):
+        self.connection = _PrepareConnection(existing, executed)
+
+    @contextmanager
+    def begin(self):
+        yield self.connection
+
+
+def _prepare_with_rows(tmp_path, monkeypatch, existing, executed):
+    monkeypatch.setenv("RUN_DECOMPOSITION_EVAL_FIXTURE", "1")
+    monkeypatch.setenv("RUN_CRAG_EVAL_FIXTURE", "1")
+    with bind_repository_runtime(
+        db_engine=_PrepareEngine(existing, executed),
+        qdrant_client=object(),
+        qdrant_collection=FIXTURE_COLLECTION,
+    ):
+        return prepare_fixture(tmp_path)
 
 
 def _document(doc_id, filename, version=1, *, site="CRAG-EVAL-HQ", security="internal"):
@@ -140,6 +202,44 @@ def test_preflight_fails_closed_when_bom_provenance_is_missing():
 
     assert report["passed"] is False
     assert any(item["reason"] == "bom_source_row_missing" for item in report["failures"])
+
+
+def test_prepare_fixture_adds_only_missing_bom_rows(tmp_path, monkeypatch):
+    executed = []
+    report = _prepare_with_rows(
+        tmp_path, monkeypatch, [_fixture_bom_row()], executed
+    )
+
+    assert report["bom_rows_inserted"] == 1
+    assert all("DELETE" not in sql.upper() for sql, _params in executed)
+    inserted = next(
+        params for sql, params in executed if "INSERT INTO dbo.BangKeVatTu" in sql
+    )
+    assert [json.loads(row["raw"])["row_key"] for row in inserted] == [
+        "decomp-row-b"
+    ]
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        [_fixture_bom_row(SoLuong=Decimal("99"))],
+        [_fixture_bom_row(), _fixture_bom_row()],
+        [_fixture_bom_row(RawRowJson="{")],
+    ],
+    ids=("conflicting", "duplicate", "unkeyed"),
+)
+def test_prepare_fixture_rejects_ambiguous_existing_bom_rows(
+    tmp_path, monkeypatch, existing
+):
+    executed = []
+    with pytest.raises(RuntimeError):
+        _prepare_with_rows(tmp_path, monkeypatch, existing, executed)
+    assert all(
+        command not in sql.upper()
+        for sql, _params in executed
+        for command in ("DELETE", "INSERT")
+    )
 
 
 def test_rollout_toggles_only_decomposition_between_arms(monkeypatch):
