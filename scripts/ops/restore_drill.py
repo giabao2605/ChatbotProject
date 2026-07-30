@@ -28,11 +28,14 @@ from mech_chatbot.config.settings import (
 from mech_chatbot.db.engine import build_database_runtime
 from scripts.eval.verify_failure_family_rollback import clean_git_sha
 _DISPOSABLE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,120}$")
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+_GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class PartialRestoreError(RuntimeError):
-    def __init__(self, message: str, *, details: dict):
+    def __init__(self, message: str, *, section: str, details: dict):
         super().__init__(message)
+        self.section = section
         self.details = dict(details)
 
 
@@ -52,8 +55,14 @@ def validate_disposable_name(name: str, *, source_name: str) -> str:
 
 def _server_path(value: str, *, suffix: str | None = None) -> PureWindowsPath:
     path = PureWindowsPath(str(value or "").strip())
-    if not path.is_absolute() or ".." in path.parts:
-        raise ValueError("SQL Server path must be absolute and traversal-free")
+    if (
+        not path.is_absolute()
+        or str(path.drive).startswith("\\\\")
+        or ".." in path.parts
+    ):
+        raise ValueError(
+            "SQL Server path must be local, absolute and traversal-free"
+        )
     if suffix and path.suffix.casefold() != suffix:
         raise ValueError(f"SQL Server path must end with {suffix}")
     return path
@@ -69,6 +78,33 @@ def _database_id(connection, target_database: str):
 def _assert_sql_target_absent(connection, target_database: str) -> None:
     if _database_id(connection, target_database) is not None:
         raise ValueError(f"target database already exists: {target_database}")
+
+
+def _backup_set_identity(header: dict) -> str:
+    fields = (
+        "DatabaseName",
+        "BackupSetGUID",
+        "FirstLSN",
+        "LastLSN",
+        "CheckpointLSN",
+        "DatabaseBackupLSN",
+        "BackupType",
+        "Position",
+    )
+    identity = {
+        field: str(header.get(field) or "").strip()
+        for field in fields
+    }
+    if (
+        any(not identity[field] for field in fields)
+        or identity["BackupType"] != "1"
+    ):
+        raise ValueError("SQL backup-set identity is incomplete or not full")
+    return _sha256_text(json.dumps(
+        identity,
+        sort_keys=True,
+        separators=(",", ":"),
+    ))
 
 
 def _destination_files(rows, *, target_database: str, data_dir: PureWindowsPath):
@@ -120,6 +156,7 @@ def restore_sql_backup(
         != str(source_database).strip().casefold()
     ):
         raise ValueError("backup does not match the configured source database")
+    backup_set_identity = _backup_set_identity(headers[0])
     rows = connection.execute(
         text("RESTORE FILELISTONLY FROM DISK = :backup_path"),
         {"backup_path": str(backup)},
@@ -136,17 +173,29 @@ def restore_sql_backup(
         parameters[f"physical_{index}"] = physical_path
         moves.append(f"MOVE :logical_{index} TO :physical_{index}")
     _assert_sql_target_absent(connection, target)
-    connection.execute(
-        text(
-            f"RESTORE DATABASE [{target}] FROM DISK = :backup_path WITH "
-            + ", ".join((*moves, "RECOVERY"))
-        ),
-        parameters,
-    )
-    if _database_id(connection, target) is None:
-        raise RuntimeError("restored database is not visible")
+    try:
+        connection.execute(
+            text(
+                f"RESTORE DATABASE [{target}] FROM DISK = :backup_path WITH "
+                + ", ".join((*moves, "RECOVERY"))
+            ),
+            parameters,
+        )
+        if _database_id(connection, target) is None:
+            raise RuntimeError("restored database is not visible")
+    except Exception as error:
+        raise PartialRestoreError(
+            "SQL restore may have created the target",
+            section="sql",
+            details={
+                "target_database": target,
+                "recovery_attempted": True,
+                "target_may_exist": True,
+            },
+        ) from error
     return {
         "target_database": target,
+        "backup_set_identity_sha256": backup_set_identity,
         "logical_file_count": len(destinations),
         "restored": True,
     }
@@ -158,7 +207,9 @@ def restore_qdrant_snapshot(
     source_collection: str,
     target_collection: str,
     snapshot_name: str,
+    snapshot_checksum: str,
     snapshot_location: str,
+    allowed_snapshot_origin: str,
 ) -> dict:
     target = validate_disposable_name(
         target_collection,
@@ -166,27 +217,66 @@ def restore_qdrant_snapshot(
     )
     location = str(snapshot_location or "").strip()
     snapshot = str(snapshot_name or "").strip()
-    if not snapshot or not location:
-        raise ValueError("snapshot name and location are required")
+    checksum = str(snapshot_checksum or "").strip().casefold()
+    if not snapshot or not location or not _SHA256.fullmatch(checksum):
+        raise ValueError("snapshot name, checksum and location are required")
     parsed_location = urlsplit(location)
-    location_path = (
-        parsed_location.path
-        if parsed_location.scheme and parsed_location.netloc
-        else location
-    )
+    parsed_origin = urlsplit(str(allowed_snapshot_origin or "").strip())
+    if (
+        parsed_location.scheme not in {"http", "https"}
+        or parsed_location.scheme.casefold() != parsed_origin.scheme.casefold()
+        or parsed_location.hostname is None
+        or parsed_origin.hostname is None
+        or parsed_location.hostname.casefold() != parsed_origin.hostname.casefold()
+        or parsed_location.port != parsed_origin.port
+        or parsed_location.username is not None
+        or parsed_location.password is not None
+        or parsed_location.query
+        or parsed_location.fragment
+    ):
+        raise ValueError("snapshot origin must match the configured Qdrant origin")
+    location_parts = [
+        unquote(part)
+        for part in parsed_location.path.replace("\\", "/").split("/")
+        if part
+    ]
+    origin_parts = [
+        unquote(part)
+        for part in parsed_origin.path.replace("\\", "/").split("/")
+        if part
+    ]
+    if location_parts != [
+        *origin_parts,
+        "collections",
+        source_collection,
+        "snapshots",
+        snapshot,
+    ]:
+        raise ValueError(
+            "snapshot location must be the source collection snapshot endpoint"
+        )
     location_name = (
-        unquote(location_path).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        unquote(parsed_location.path)
+        .replace("\\", "/")
+        .rstrip("/")
+        .rsplit("/", 1)[-1]
     )
     if location_name != snapshot:
         raise ValueError("snapshot location must end with snapshot name")
     if not client.collection_exists(source_collection):
         raise ValueError("source collection does not exist")
-    source_snapshots = {
-        str(getattr(item, "name", "") or "").strip()
+    source_snapshots = [
+        item
         for item in client.list_snapshots(source_collection)
-    }
-    if snapshot not in source_snapshots:
+        if str(getattr(item, "name", "") or "").strip() == snapshot
+    ]
+    if len(source_snapshots) != 1:
         raise ValueError("snapshot does not belong to the source collection")
+    source_checksum = str(
+        getattr(source_snapshots[0], "checksum", "") or ""
+    ).strip().casefold()
+    if source_checksum != checksum:
+        raise ValueError("snapshot checksum does not match the source snapshot")
     if client.collection_exists(target):
         raise ValueError(f"target collection already exists: {target}")
     source_points = int(client.count(source_collection, exact=True).count)
@@ -203,6 +293,7 @@ def restore_qdrant_snapshot(
         recovered = client.recover_snapshot(
             collection_name=target,
             location=location,
+            checksum=checksum,
             wait=True,
         )
         if recovered is False or not client.collection_exists(target):
@@ -213,12 +304,14 @@ def restore_qdrant_snapshot(
     except Exception as error:
         raise PartialRestoreError(
             "Qdrant restore may have created the target",
+            section="qdrant",
             details=partial_details,
         ) from error
     return {
         "source_collection": source_collection,
         "target_collection": target,
         "snapshot_name": snapshot,
+        "snapshot_checksum": checksum,
         "source_points": source_points,
         "target_points": target_points,
         "restored": True,
@@ -229,6 +322,119 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def build_restore_snapshot_fingerprint(
+    *,
+    git_sha: str,
+    source_database: str,
+    sql_backup_set_identity_sha256: str,
+    source_collection: str,
+    snapshot_name: str,
+    snapshot_checksum: str,
+    snapshot_location_sha256: str,
+) -> str:
+    values = {
+        "git_sha": str(git_sha).casefold(),
+        "source_database": str(source_database),
+        "sql_backup_set_identity_sha256": str(
+            sql_backup_set_identity_sha256
+        ).casefold(),
+        "source_collection": str(source_collection),
+        "snapshot_name": str(snapshot_name),
+        "snapshot_checksum": str(snapshot_checksum).casefold(),
+        "snapshot_location_sha256": str(snapshot_location_sha256).casefold(),
+    }
+    if (
+        not _GIT_SHA.fullmatch(values["git_sha"])
+        or any(
+            not _SHA256.fullmatch(values[field])
+            for field in (
+                "sql_backup_set_identity_sha256",
+                "snapshot_checksum",
+                "snapshot_location_sha256",
+            )
+        )
+        or not values["source_database"].strip()
+        or not values["source_collection"].strip()
+        or not values["snapshot_name"].strip()
+    ):
+        raise ValueError("restore snapshot fingerprint inputs are invalid")
+    return _sha256_text(json.dumps(
+        values,
+        sort_keys=True,
+        separators=(",", ":"),
+    ))
+
+
+def verify_restore_evidence(
+    path: Path,
+    *,
+    expected_sha256: str,
+    current_git_sha: str,
+    source_database: str,
+    source_collection: str,
+    allowed_root: Path,
+) -> str:
+    evidence_path = Path(path).resolve()
+    evidence_root = Path(allowed_root).resolve()
+    if not evidence_path.is_relative_to(evidence_root) or not evidence_path.is_file():
+        raise ValueError("restore evidence must be an existing local artifact")
+    expected_digest = str(expected_sha256 or "").strip().casefold()
+    if (
+        not _SHA256.fullmatch(expected_digest)
+        or hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+        != expected_digest
+    ):
+        raise ValueError("restore evidence SHA-256 does not match")
+    artifact = json.loads(evidence_path.read_text(encoding="utf-8"))
+    sql = artifact.get("sql") if isinstance(artifact, dict) else None
+    qdrant = artifact.get("qdrant") if isinstance(artifact, dict) else None
+    if (
+        not isinstance(sql, dict)
+        or not isinstance(qdrant, dict)
+        or artifact.get("schema") != "backup-restore-drill-v1"
+        or artifact.get("passed") is not True
+        or artifact.get("automatic_cleanup") is not False
+        or artifact.get("error_type") is not None
+        or artifact.get("git_sha") != current_git_sha
+        or artifact.get("source_database") != source_database
+        or artifact.get("source_collection") != source_collection
+        or sql.get("restored") is not True
+        or qdrant.get("restored") is not True
+        or sql.get("target_database") != artifact.get("target_database")
+        or qdrant.get("target_collection") != artifact.get("target_collection")
+        or qdrant.get("snapshot_name") != artifact.get("qdrant_snapshot_name")
+        or qdrant.get("snapshot_checksum")
+        != str(artifact.get("qdrant_snapshot_checksum") or "").casefold()
+        or sql.get("backup_set_identity_sha256")
+        != artifact.get("sql_backup_set_identity_sha256")
+    ):
+        raise ValueError("restore evidence does not match the current commit")
+    validate_disposable_name(
+        artifact["target_database"],
+        source_name=source_database,
+    )
+    validate_disposable_name(
+        artifact["target_collection"],
+        source_name=source_collection,
+    )
+    fingerprint = build_restore_snapshot_fingerprint(
+        git_sha=artifact["git_sha"],
+        source_database=artifact["source_database"],
+        sql_backup_set_identity_sha256=artifact[
+            "sql_backup_set_identity_sha256"
+        ],
+        source_collection=artifact["source_collection"],
+        snapshot_name=artifact["qdrant_snapshot_name"],
+        snapshot_checksum=artifact["qdrant_snapshot_checksum"],
+        snapshot_location_sha256=artifact[
+            "qdrant_snapshot_location_sha256"
+        ],
+    )
+    if artifact.get("snapshot_fingerprint") != fingerprint:
+        raise ValueError("restore evidence snapshot fingerprint does not match")
+    return fingerprint
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sql-backup-path", required=True)
@@ -236,6 +442,7 @@ def main(argv=None) -> int:
     parser.add_argument("--sql-target-database", required=True)
     parser.add_argument("--qdrant-snapshot-location", required=True)
     parser.add_argument("--qdrant-snapshot-name", required=True)
+    parser.add_argument("--qdrant-snapshot-checksum", required=True)
     parser.add_argument("--qdrant-target-collection", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--execute", action="store_true")
@@ -264,15 +471,18 @@ def main(argv=None) -> int:
         "source_collection": settings.QDRANT_COLLECTION,
         "target_collection": qdrant_target,
         "sql_backup_path_sha256": _sha256_text(args.sql_backup_path),
+        "sql_backup_set_identity_sha256": None,
         "qdrant_snapshot_location_sha256": _sha256_text(
             args.qdrant_snapshot_location
         ),
         "qdrant_snapshot_name": args.qdrant_snapshot_name,
+        "qdrant_snapshot_checksum": args.qdrant_snapshot_checksum,
         "passed": False,
         "sql": None,
         "qdrant": None,
         "error_type": None,
         "automatic_cleanup": False,
+        "snapshot_fingerprint": None,
     }
     master_runtime = None
     qdrant_runtime = None
@@ -299,18 +509,38 @@ def main(argv=None) -> int:
                 backup_path=args.sql_backup_path,
                 data_dir=args.sql_data_dir,
             )
+            report["sql_backup_set_identity_sha256"] = report["sql"][
+                "backup_set_identity_sha256"
+            ]
             report["qdrant"] = restore_qdrant_snapshot(
                 qdrant_runtime.client,
                 source_collection=settings.QDRANT_COLLECTION,
                 target_collection=qdrant_target,
                 snapshot_name=args.qdrant_snapshot_name,
+                snapshot_checksum=args.qdrant_snapshot_checksum,
                 snapshot_location=args.qdrant_snapshot_location,
+                allowed_snapshot_origin=settings.QDRANT_URL,
+            )
+            report["snapshot_fingerprint"] = (
+                build_restore_snapshot_fingerprint(
+                    git_sha=git_sha,
+                    source_database=settings.SQL_DATABASE,
+                    sql_backup_set_identity_sha256=report[
+                        "sql_backup_set_identity_sha256"
+                    ],
+                    source_collection=settings.QDRANT_COLLECTION,
+                    snapshot_name=args.qdrant_snapshot_name,
+                    snapshot_checksum=args.qdrant_snapshot_checksum,
+                    snapshot_location_sha256=report[
+                        "qdrant_snapshot_location_sha256"
+                    ],
+                )
             )
             report["passed"] = True
     except Exception as error:
         report["error_type"] = type(error).__name__
         if isinstance(error, PartialRestoreError):
-            report["qdrant"] = dict(error.details)
+            report[error.section] = dict(error.details)
     finally:
         if qdrant_runtime is not None:
             qdrant_runtime.close()

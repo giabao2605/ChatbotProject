@@ -229,13 +229,24 @@ def test_lan_launcher_pins_runtime_provenance():
         encoding="utf-8"
     )
 
-    assert "$snapshotFingerprint = $env:RAG_SNAPSHOT_FINGERPRINT" in launcher
-    assert 'Get-DotEnvValue -Path $envPath -Key "RAG_SNAPSHOT_FINGERPRINT"' in launcher
+    assert "$restoreEvidencePath = $env:RAG_RESTORE_EVIDENCE_PATH" in launcher
+    assert 'Get-DotEnvValue -Path $envPath -Key "RAG_RESTORE_EVIDENCE_PATH"' in launcher
+    assert "$restoreEvidenceSha256 = $env:RAG_RESTORE_EVIDENCE_SHA256" in launcher
+    assert '"scripts\\ops\\verify_restore_evidence.py"' in launcher
+    assert '"scripts\\ops\\capture_runtime_state.py"' in launcher
+    assert "$snapshotFingerprint = $env:RAG_SNAPSHOT_FINGERPRINT" not in launcher
     assert "& git status --porcelain" in launcher
     assert "RAG_DEPLOYMENT_ID = $deploymentId" in launcher
     assert "RAG_DEPLOYMENT_GIT_SHA = $head" in launcher
     assert "RAG_SNAPSHOT_FINGERPRINT = $snapshotFingerprint" in launcher
     runtime_start = launcher.index("$ragProc = Start-ProcessWithEnv")
+    assert launcher.index('"scripts\\ops\\verify_restore_evidence.py"') < (
+        launcher.index('"scripts\\migrations\\migrate.py"')
+    )
+    assert launcher.index('"scripts\\ops\\capture_runtime_state.py"') > (
+        launcher.index('"scripts\\ops\\production_preflight.py" --skip-health')
+    )
+    assert launcher.index('"scripts\\ops\\capture_runtime_state.py"') < runtime_start
     assert launcher.rindex("& git status --porcelain") < runtime_start
     assert launcher.rindex("& git status --porcelain") > launcher.index(
         '"scripts\\ops\\production_preflight.py" --skip-health'

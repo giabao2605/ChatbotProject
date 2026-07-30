@@ -29,6 +29,49 @@ if ($LASTEXITCODE -ne 0 -or $initialStatus) {
 }
 $deploymentId = "windows-lan-$($head.Substring(0, 12))"
 
+function Get-DotEnvValue {
+    param([string]$Path, [string]$Key)
+    if (!(Test-Path $Path)) { return $null }
+    foreach ($line in Get-Content $Path) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq "" -or $trimmed.StartsWith("#")) { continue }
+        $idx = $trimmed.IndexOf("=")
+        if ($idx -lt 1) { continue }
+        $k = $trimmed.Substring(0, $idx).Trim()
+        if ($k -eq $Key) {
+            return $trimmed.Substring($idx + 1).Trim().Trim('"')
+        }
+    }
+    return $null
+}
+
+$envPath = Join-Path $projectRoot ".env"
+$restoreEvidencePath = $env:RAG_RESTORE_EVIDENCE_PATH
+if (!$restoreEvidencePath) {
+    $restoreEvidencePath = Get-DotEnvValue -Path $envPath -Key "RAG_RESTORE_EVIDENCE_PATH"
+}
+$restoreEvidenceSha256 = $env:RAG_RESTORE_EVIDENCE_SHA256
+if (!$restoreEvidenceSha256) {
+    $restoreEvidenceSha256 = Get-DotEnvValue -Path $envPath -Key "RAG_RESTORE_EVIDENCE_SHA256"
+}
+if (
+    [string]::IsNullOrWhiteSpace($restoreEvidencePath) -or
+    [string]::IsNullOrWhiteSpace($restoreEvidenceSha256)
+) {
+    throw "Thieu restore evidence path/SHA-256 da duoc xac minh."
+}
+$restoreReceiptFingerprint = (
+    & $pythonExe "scripts\ops\verify_restore_evidence.py" `
+        --evidence $restoreEvidencePath `
+        --sha256 $restoreEvidenceSha256
+).Trim()
+if (
+    $LASTEXITCODE -ne 0 -or
+    $restoreReceiptFingerprint -notmatch "^[0-9a-f]{64}$"
+) {
+    throw "Restore evidence khong hop le; khong khoi dong runtime."
+}
+
 # Build Vue sources before starting the static app server. Without this step,
 # start_demo_lan.ps1 would keep serving an old web-ui/dist even after source
 # files were overwritten by a patch.
@@ -88,34 +131,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "Production preflight khong dat. Khong khoi dong service."
 }
 
-function Get-DotEnvValue {
-    param([string]$Path, [string]$Key)
-    if (!(Test-Path $Path)) { return $null }
-    foreach ($line in Get-Content $Path) {
-        $trimmed = $line.Trim()
-        if ($trimmed -eq "" -or $trimmed.StartsWith("#")) { continue }
-        $idx = $trimmed.IndexOf("=")
-        if ($idx -lt 1) { continue }
-        $k = $trimmed.Substring(0, $idx).Trim()
-        if ($k -eq $Key) {
-            return $trimmed.Substring($idx + 1).Trim().Trim('"')
-        }
-    }
-    return $null
-}
-
-$envPath = Join-Path $projectRoot ".env"
 $serviceToken = Get-DotEnvValue -Path $envPath -Key "RAG_SERVICE_TOKEN"
 $sessionSecret = Get-DotEnvValue -Path $envPath -Key "APP_SESSION_SECRET"
 $bridgeSecret = Get-DotEnvValue -Path $envPath -Key "CHAT_BRIDGE_SECRET"
 $ragServerUrl = Get-DotEnvValue -Path $envPath -Key "RAG_SERVER_URL"
-$snapshotFingerprint = $env:RAG_SNAPSHOT_FINGERPRINT
-if (!$snapshotFingerprint) {
-    $snapshotFingerprint = Get-DotEnvValue -Path $envPath -Key "RAG_SNAPSHOT_FINGERPRINT"
-}
-if ([string]::IsNullOrWhiteSpace($snapshotFingerprint)) {
-    throw "Thieu RAG_SNAPSHOT_FINGERPRINT cua snapshot SQL/Qdrant da duoc xac minh."
-}
 $appMode = $env:APP_ENV
 if (!$appMode) { $appMode = Get-DotEnvValue -Path $envPath -Key "APP_ENV" }
 $appTrustedHosts = $env:APP_TRUSTED_HOSTS
@@ -230,6 +249,14 @@ if (
 $currentStatus = & git status --porcelain
 if ($LASTEXITCODE -ne 0 -or $currentStatus) {
     throw "Worktree da thay doi trong luc chuan bi runtime."
+}
+
+Write-Output "Dang bam van tay trang thai SQL/Qdrant hien tai..."
+$snapshotFingerprint = (
+    & $pythonExe "scripts\ops\capture_runtime_state.py"
+).Trim()
+if ($LASTEXITCODE -ne 0 -or $snapshotFingerprint -notmatch "^[0-9a-f]{64}$") {
+    throw "Khong bam duoc van tay runtime sau migration; khong khoi dong service."
 }
 
 $ownedProcesses = @()

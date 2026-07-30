@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import datetime as _dt
 
@@ -106,7 +107,7 @@ def backup_qdrant():
     return name
 
 
-def cleanup_old(sql_dir, keep_days):
+def cleanup_old(sql_dir, keep_days, *, database):
     """Xoa file backup .bak/.trn cu hon keep_days (chay tren may co the truy cap sql_dir)."""
     if keep_days is None:
         return
@@ -114,17 +115,22 @@ def cleanup_old(sql_dir, keep_days):
         raise ValueError("keep_days must be a positive integer")
     if not sql_dir or not os.path.isdir(sql_dir):
         return
+    database_name = str(database or "").strip()
+    if not database_name:
+        raise ValueError("database is required for scoped backup cleanup")
+    owned_backup = re.compile(
+        rf"^{re.escape(database_name)}_(?:"
+        r"full_\d{8}_\d{6}\.bak|log_\d{8}_\d{6}\.trn)$",
+        re.IGNORECASE,
+    )
     cutoff = _dt.datetime.now() - _dt.timedelta(days=keep_days)
     for f in os.listdir(sql_dir):
-        if not (f.endswith(".bak") or f.endswith(".trn")):
+        if not owned_backup.fullmatch(f):
             continue
         fp = os.path.join(sql_dir, f)
-        try:
-            if _dt.datetime.fromtimestamp(os.path.getmtime(fp)) < cutoff:
-                os.remove(fp)
-                print(f"[cleanup] da xoa backup cu: {fp}")
-        except Exception as e:
-            print(f"[cleanup] bo qua {fp}: {e}")
+        if _dt.datetime.fromtimestamp(os.path.getmtime(fp)) < cutoff:
+            os.remove(fp)
+            print(f"[cleanup] da xoa backup cu: {fp}")
 
 
 @with_configured_repository_runtime(include_qdrant=True)
@@ -143,7 +149,11 @@ def main():
         try:
             backup_sql(args.sql_dir)
             if args.sql_dir and args.keep_days is not None:
-                cleanup_old(args.sql_dir, args.keep_days)
+                cleanup_old(
+                    args.sql_dir,
+                    args.keep_days,
+                    database=load_settings().SQL_DATABASE,
+                )
         except Exception as e:
             errors.append(f"SQL backup loi: {e}")
             print(f"[SQL] LOI: {e}")
