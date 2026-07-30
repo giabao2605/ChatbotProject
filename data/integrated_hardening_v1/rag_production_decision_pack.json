@@ -1,0 +1,244 @@
+{
+  "schema": "rag-production-decision-pack-v1",
+  "as_of": "2026-07-30",
+  "scope": "governed_rag_feature_activation",
+  "deployment_path": "windows_lan_no_docker",
+  "source_head_commit": "3fb13f2bab8bd38833d4908cba885c08ecc7b0b9",
+  "authoritative_for_live_activation": false,
+  "worktree_clean": false,
+  "owner_signature": "pending",
+  "release_gate": {
+    "ready_for_live_matrix": false,
+    "release_decisions_complete": false,
+    "runtime_profile": "all_off",
+    "all_governed_flags_disabled": true,
+    "recommendation": "keep_all_governed_features_off"
+  },
+  "production_audit": {
+    "score": 49,
+    "band": "blocked",
+    "blockers": [
+      "release decision ledger is incomplete and owner signature is pending",
+      "formal commit-pinned integrated runners reject the dirty worktree",
+      "CRAG and Claim Repair failed the declared latency gate",
+      "Grounded Math provider smoke failed 0 of 5 requests, so quality was not evaluated",
+      "Query Decomposition has no current three-pair series or completed owner review",
+      "Graph Retrieval has 0 of 20 independent edge reviews",
+      "Community Summaries remains blocked by Graph Retrieval and has no reviewed summaries",
+      "runtime deployment_id, git_sha, and snapshot_fingerprint are unset",
+      "backup and restore drill has not run on a disposable target"
+    ]
+  },
+  "runtime_evidence": {
+    "collection": "TaiLieuKyThuat_v2",
+    "execution_context": "production",
+    "activation_scope": "default_rollout",
+    "activation_profile": "all_off",
+    "activation_valid": true,
+    "live_authorized": true,
+    "production_preflight": {
+      "passed": true,
+      "checks_passed": 5,
+      "checks_total": 5,
+      "migration_current": true,
+      "qdrant_ready": true,
+      "seeded_dev_account_count": 0,
+      "rag_health_ready": true
+    },
+    "hot_cache_load_smoke": {
+      "concurrency_1": {
+        "requests": 8,
+        "successful": 8,
+        "busy": 0,
+        "other_errors": 0,
+        "completion_p95_ms": 70
+      },
+      "concurrency_5": {
+        "requests": 8,
+        "successful": 8,
+        "busy": 0,
+        "other_errors": 0,
+        "completion_p95_ms": 100
+      },
+      "quality_scored": false,
+      "release_evidence": false
+    }
+  },
+  "verification": {
+    "backend_full_suite": "passed",
+    "frontend_unit": "32/32 passed",
+    "frontend_production_build": "passed",
+    "architecture": "18/18 passed",
+    "browser_e2e": "3/3 passed",
+    "security_targeted": "101/101 passed",
+    "rollback_cache_stream_preflight": "75/75 passed",
+    "python_dependency_consistency": "passed",
+    "docker_used": false
+  },
+  "features": [
+    {
+      "id": "crag_claim_repair",
+      "flags": [
+        "RAG_CRAG_ENABLED",
+        "RAG_CLAIM_REPAIR_ENABLED"
+      ],
+      "implemented": true,
+      "measured": true,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "keep_off",
+      "failed_checks": [
+        "latency_within_budget"
+      ],
+      "metrics": {
+        "baseline_passed_cases": 8,
+        "candidate_passed_cases": 9,
+        "baseline_p95_ms": 5568,
+        "candidate_p95_ms": 8589,
+        "p95_latency_ratio": 1.5426,
+        "max_latency_ratio": 1.25,
+        "leakage_count": 0
+      },
+      "evidence": {
+        "source_commit": "9b6f3ec63867e619dd288a8adbf6d14964a5e464",
+        "collection": "MechChatbot_CRAG_Eval_v1",
+        "fixture_fingerprint": "9592deb0e747ac9a14d42bf3fe14471baa3b145ad752bdd53fdc491dde3dea7f",
+        "path": "reports/controlled-demo/20260729-crag-window-04-9b6f3ec/window-outcome.json",
+        "sha256": "a0ee36c3e456a32f1d4e99c6b97b1eebefb4b3dab63776ee820493c8d27de071"
+      },
+      "next_gate": "open a new predeclared provider-ready three-pair window without relaxing the latency limit"
+    },
+    {
+      "id": "grounded_math",
+      "flags": [
+        "RAG_GROUNDED_MATH_ENABLED"
+      ],
+      "implemented": true,
+      "measured": false,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "re_evaluate",
+      "failed_checks": [
+        "provider_readiness"
+      ],
+      "metrics": {
+        "fixture_cases_passed": 16,
+        "fixture_cases_total": 16,
+        "provider_successful_requests": 0,
+        "provider_requests": 5,
+        "provider_retries": 0
+      },
+      "evidence": {
+        "source_commit": "c36e9cbc71c32e679d6325cecf288d34b54eb928",
+        "collection": "MechChatbot_GroundedMath_Eval_v1",
+        "fixture_fingerprint": "79d3f99524512476a15cf306297ea4bcf9c035c3f85e97bab5462e275b7acec6",
+        "path": "reports/grounded-math/20260730-window-02-c36e9cb/window-outcome.json",
+        "sha256": "aa55c99f560653905ff9e4a8c59e78c06a4d00c8fca9a2fdb5d944380856e982"
+      },
+      "next_gate": "wait for a fresh 5 of 5 provider smoke, then run the predeclared pairs and human review"
+    },
+    {
+      "id": "late_interaction",
+      "flags": [
+        "RAG_LATE_INTERACTION_ENABLED"
+      ],
+      "implemented": true,
+      "measured": true,
+      "reviewed": true,
+      "disposition": "rejected",
+      "recommendation": "keep_off",
+      "evidence": {
+        "source_commit": "757b9392275b22a826269959797c43d9d169bd8b",
+        "path": "data/integrated_hardening_v1/evidence/late-interaction-757b939-gate.json",
+        "sha256": "9a73154fa9b34b6e3f0232dbad785290052d76e67830ff6d0b8be26f76de235a"
+      },
+      "next_gate": "reopen only after a new measured retrieval design beats the rejected quality gate"
+    },
+    {
+      "id": "query_decomposition",
+      "flags": [
+        "RAG_QUERY_DECOMPOSITION_ENABLED"
+      ],
+      "implemented": true,
+      "measured": false,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "re_evaluate",
+      "failed_checks": [
+        "current_three_pair_series_missing",
+        "owner_review_incomplete"
+      ],
+      "metrics": {
+        "fixture_cases_passed": 13,
+        "fixture_cases_total": 13
+      },
+      "evidence": {
+        "source_commit": "b92992069707be151e7d680fa2615af3d4f36d0f",
+        "collection": "MechChatbot_CRAG_Eval_v1",
+        "fixture_fingerprint": "b4066ab6ce9005715192d312c4ffa10b73512a027c5cf88858dea6bf71d1f90e",
+        "path": "reports/decomposition/20260730-diagnostic-9366271-dirty/preflight-source-aligned-final.json",
+        "sha256": "edd0e9ecbb1dadcc02381aad87cb7d5ccdcd11713e78dc7a3c5c1791abd8d797"
+      },
+      "next_gate": "run three immutable pairs after provider recovery and complete owner review of all cases"
+    },
+    {
+      "id": "graph_retrieval",
+      "flags": [
+        "RAG_GRAPH_RETRIEVAL_ENABLED"
+      ],
+      "implemented": true,
+      "measured": false,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "re_evaluate",
+      "failed_checks": [
+        "independent_edge_review_missing"
+      ],
+      "metrics": {
+        "fixture_cases_passed": 13,
+        "fixture_cases_total": 13,
+        "approved_edges": 22,
+        "reviewed_edges": 0,
+        "required_reviewed_edges": 20,
+        "provenance_completeness": 1.0
+      },
+      "evidence": {
+        "source_commit": "b92992069707be151e7d680fa2615af3d4f36d0f",
+        "collection": "MechChatbot_Graph_Eval_v1",
+        "fixture_fingerprint": "dacde9addba6b330ee47c425382c00db071a44488351809e4aa777a16f8b2e4a",
+        "path": "reports/graph/20260730-diagnostic-b929920-dirty/independent-review-queue.jsonl",
+        "sha256": "8948f1892034bf852cad254bb0894b0557db363e89be84a8713892994a1336c1"
+      },
+      "next_gate": "obtain at least 20 independent labels and at least 95 percent reviewed-edge precision"
+    },
+    {
+      "id": "community_summaries",
+      "flags": [
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"
+      ],
+      "implemented": true,
+      "measured": false,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "re_evaluate",
+      "failed_checks": [
+        "graph_retrieval_not_accepted",
+        "reviewed_summaries_missing"
+      ],
+      "metrics": {
+        "detected_communities": 6,
+        "source_edges": 22,
+        "provenance_completeness": 1.0,
+        "summaries_generated": 0,
+        "persisted": false
+      },
+      "evidence": {
+        "source_commit": "b92992069707be151e7d680fa2615af3d4f36d0f",
+        "path": "reports/community-summaries/20260730-diagnostic-b929920-dirty/detection.json",
+        "sha256": "6a7b28993f4593399fdfa09d7b5a67133cd87fd543c515cedd24dcb0ba8dcb50"
+      },
+      "next_gate": "finish Graph Retrieval first, then generate, review, and evaluate community summaries"
+    }
+  ],
+  "owner_action": "keep the current all_off profile; sign only after the missing gates are completed and the decision ledger is updated on a clean commit"
+}

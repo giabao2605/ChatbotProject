@@ -416,6 +416,28 @@ Chứng minh tổ hợp cuối không phá security/performance và có thể kh
 - Không severe wrong-answer; P95/cost trong budget.
 - Restore/rollback drill có artifact và không tác động dữ liệu production.
 
+### Kết quả hiện tại
+
+- Full backend suite, frontend `32/32`, production build, architecture `18/18`
+  và browser E2E `3/3` đều đạt. Security matrix mục tiêu đạt `101/101`;
+  rollback/cache/strict-stream/production-preflight đạt `75/75`.
+- Production preflight Windows đạt `5/5`: migration current, Qdrant ready,
+  activation `all_off` hợp lệ, không có seeded dev account active và RAG health
+  ready.
+- All-off hot-cache smoke đạt `8/8` ở concurrency 1 và `8/8` ở concurrency 5,
+  không busy/error; completion P95 lần lượt khoảng `70 ms` và `100 ms`. Đây
+  không phải cold-path benchmark và không chấm correctness.
+- Runtime hiện có đủ bảy flag OFF và collection `TaiLieuKyThuat_v2`, nhưng
+  `deployment_id`, `git_sha` và `snapshot_fingerprint` vẫn null.
+- Formal integrated runner chưa chạy được vì tracked worktree có thay đổi ngoài
+  scope. Backup/restore drill cũng chưa chạy vì chưa có disposable target;
+  không dùng dữ liệu hiện hữu để thử restore.
+- Production audit cho phạm vi bật governed RAG feature là `49/100`, trạng thái
+  `blocked`. Baseline all-off hoạt động, nhưng chưa đủ provenance, quyết định và
+  review để bật feature.
+- Không dùng Docker, không sửa/xóa Docker artifact và không coi Docker là điều
+  kiện triển khai trong đường Windows/LAN này.
+
 ## Ticket 10: Bảng quyết định cuối cho chủ dự án
 
 ### Deliverable
@@ -433,6 +455,24 @@ Một Markdown/JSON decision pack, mỗi feature có:
 Chỉ chủ dự án ký quyết định cuối. Sau chữ ký, mới cập nhật
 `release_decisions.json`, tạo activation bundle cùng commit và bật đúng activation
 profile. Không tự suy diễn controlled-demo acceptance thành default rollout.
+
+### Decision pack hiện tại
+
+JSON máy đọc được nằm tại
+`data/integrated_hardening_v1/rag_production_decision_pack.json`.
+
+| Feature | Disposition hiện tại | Khuyến nghị | Gate kế tiếp |
+| --- | --- | --- | --- |
+| CRAG + Claim Repair | Inconclusive; pair 01 fail latency `1.5426x > 1.25x` | `keep_off` | Cửa sổ ba pair mới, không nới latency gate |
+| Grounded Math | Inconclusive; provider smoke `0/5` | `re_evaluate` | Provider smoke `5/5`, pairs và human review |
+| Late Interaction | Rejected | `keep_off` | Chỉ mở lại khi thiết kế mới vượt quality gate |
+| Query Decomposition | Inconclusive; preflight `13/13`, chưa có current series/review | `re_evaluate` | Ba immutable pair và owner review đầy đủ |
+| Graph Retrieval | Inconclusive; `0/20` independent edge review | `re_evaluate` | Tối thiểu 20 label, precision tối thiểu 95% |
+| Community Summaries | Inconclusive; Graph chưa accepted, chưa sinh summary | `re_evaluate` | Hoàn tất Graph rồi generation/review/global eval |
+
+Kết luận kỹ thuật hiện tại: giữ activation profile `all_off`,
+`ready_for_live_matrix=false`, không cập nhật release ledger và không tạo
+feature-on activation bundle trước chữ ký của chủ dự án.
 
 ## Decisions so far
 
