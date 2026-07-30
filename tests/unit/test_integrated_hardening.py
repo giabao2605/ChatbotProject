@@ -953,6 +953,7 @@ def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
         "provider_configuration_sha256": "provider",
         "governance_scope_sha256": "scope", "benchmark_concurrency": 5,
         "collection": "staging", "execution_context": "evaluation",
+        "fallback_coverage": {"fallback_rate": 0},
     }
     load = {
         "schema": "integrated-load-report-v1", "concurrency": 5, "requests": 1,
@@ -1019,17 +1020,41 @@ def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
         **load, "source_eval_sha256": "candidate_eval",
         "source_benchmark_sha256": "candidate_benchmark",
     }
+    benchmark = {
+        "schema": "rag-concurrency-benchmark-v1",
+        "results": [
+            {
+                "summary": {
+                    "concurrency": concurrency,
+                    "requests": 1,
+                    "successful_requests": 1,
+                    "first_token_p50_ms": 10,
+                    "first_token_p95_ms": 10,
+                    "complete_p50_ms": 20,
+                    "complete_p95_ms": 20,
+                },
+            }
+            for concurrency in (1, 5)
+        ],
+    }
     artifacts = {
         "baseline_eval": baseline, "candidate_eval": candidate,
         "baseline_trace": baseline_trace,
         "candidate_trace": candidate_trace,
-        "baseline_benchmark": {}, "candidate_benchmark": {},
+        "baseline_benchmark": json.loads(json.dumps(benchmark)),
+        "candidate_benchmark": json.loads(json.dumps(benchmark)),
         "baseline_load": load, "candidate_load": candidate_load,
         "results": {"passed": True, "source_eval_sha256s": ["candidate_eval"],
                     "budget_report": {"combination_ids": ["crag_claim"]}},
     }
     report = evaluate_combination_evidence("crag_claim", artifacts, digests)
     assert report["passed"] is True
+    baseline_results = artifacts["baseline_benchmark"]["results"]
+    artifacts["baseline_benchmark"]["results"] = baseline_results[1:]
+    assert evaluate_combination_evidence(
+        "crag_claim", artifacts, digests
+    )["passed"] is False
+    artifacts["baseline_benchmark"]["results"] = baseline_results
     artifacts["candidate_eval"]["snapshot_fingerprint"] = "other"
     assert evaluate_combination_evidence("crag_claim", artifacts, digests)["passed"] is False
     artifacts["candidate_eval"]["snapshot_fingerprint"] = "snapshot"

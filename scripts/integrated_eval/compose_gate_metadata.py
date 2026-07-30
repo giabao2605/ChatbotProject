@@ -181,6 +181,28 @@ def evaluate_combination_evidence(
     baseline = artifacts["baseline_eval"]
     candidate = artifacts["candidate_eval"]
     results = artifacts["results"]
+    try:
+        required_load_concurrencies_passed = all(
+            compare_load_reports(
+                build_integrated_load_report(
+                    artifacts["baseline_benchmark"],
+                    baseline,
+                    concurrency=concurrency,
+                    source_benchmark_sha256=digests["baseline_benchmark"],
+                    source_eval_sha256=digests["baseline_eval"],
+                ),
+                build_integrated_load_report(
+                    artifacts["candidate_benchmark"],
+                    candidate,
+                    concurrency=concurrency,
+                    source_benchmark_sha256=digests["candidate_benchmark"],
+                    source_eval_sha256=digests["candidate_eval"],
+                ),
+            )["passed"]
+            for concurrency in (1, 5)
+        )
+    except (KeyError, TypeError, ValueError):
+        required_load_concurrencies_passed = False
     checks = {
         "benchmark_conditions_match": _conditions_match(baseline, candidate),
         "baseline_trace_bound": _trace_matches(artifacts["baseline_trace"], baseline),
@@ -230,6 +252,7 @@ def evaluate_combination_evidence(
         "load_passed": compare_load_reports(
             artifacts["baseline_load"], artifacts["candidate_load"]
         )["passed"],
+        "required_load_concurrencies_passed": required_load_concurrencies_passed,
         "wrong_answer_not_increased": int(
             (candidate.get("outcome_confusion") or {}).get("wrong_answer") or 0
         ) <= int(
