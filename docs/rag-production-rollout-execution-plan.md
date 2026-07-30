@@ -337,6 +337,23 @@ Giải quyết evidence chia đôi và chứng minh gain trên truy vấn phức
 - Planner tối đa ba subquery, một correction, một final generation.
 - Branch/citation accuracy đạt gate; rollback và leakage xanh.
 
+### Kết quả hiện tại
+
+- Commit `7e240cc` loại đường `DELETE`/shared ingest khỏi fixture prepare:
+  chỉ chèn row thật sự thiếu; row xung đột, duplicate hoặc mất identity đều
+  fail-closed trước write.
+- Commit `b929920` khớp manifest với nguồn thật: dùng
+  `source_row_id=table-1-row-1/2`, không bịa đơn vị `cái`, và giữ calculation
+  `2 + 3 = 5`. Prepare trên staging ghi `bom_rows_inserted=0`; không
+  INSERT/UPDATE/DELETE dữ liệu.
+- Preflight hiện tại đạt `13/13`, `0` failure, fingerprint
+  `b4066ab6ce9005715192d312c4ffa10b73512a027c5cf88858dea6bf71d1f90e`;
+  manifest hash là
+  `1ab4ec403f6501858d25f40ea329d96246f677a63044692632178d1ee95eb24e`.
+- `143` test decomposition/evaluator/gate/provider contract đạt. Ba pair chính
+  thức chưa chạy vì tracked worktree có thay đổi ngoài scope và provider smoke
+  gần nhất không sẵn sàng. Disposition tiếp tục `inconclusive`, flag giữ tắt.
+
 ## Ticket 8: Hoàn tất GraphRAG và Community Summaries
 
 ### Mục tiêu
@@ -358,6 +375,21 @@ Chỉ mở Graph/Community khi provenance và independent review đạt.
 - Graph edge review đủ count/precision và provenance.
 - Relational answer gain đạt, không leakage/pending-serving escape.
 - Community summaries có reviewer approval, global gain và rollback evidence.
+
+### Kết quả hiện tại
+
+- Graph preflight read-only đạt `13/13`, `0` failure; có `22` approved edge,
+  structured coverage và provenance completeness đều `1.0`, workflow fixture
+  đạt và pending-serving edge bằng `0`.
+- Queue hiện tại có `22` edge duy nhất, đủ source quote, toàn bộ reviewer/label
+  để trống đúng independent-review contract. Artifact local:
+  `reports/graph/20260730-diagnostic-b929920-dirty/independent-review-queue.jsonl`,
+  SHA-256
+  `8948f1892034bf852cad254bb0894b0557db363e89be84a8713892994a1336c1`.
+- Community detection read-only tạo `6` community từ queue, provenance `1.0`,
+  `persisted=false`, `summaries_generated=0`. Không chạy generation/serving
+  readiness vì Graph vẫn có `0/20` independent review và precision chưa biết.
+- GraphRAG và Community Summaries tiếp tục `inconclusive`; cả hai flag giữ tắt.
 
 ## Ticket 9: Integrated matrix, rollback và production audit
 
