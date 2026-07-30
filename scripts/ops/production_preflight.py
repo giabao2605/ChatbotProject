@@ -140,7 +140,16 @@ def check_seeded_dev_accounts(
     }
 
 
-def check_rag_health(url: str) -> dict:
+def check_rag_health(url: str, *, expected_git_sha: str | None = None) -> dict:
+    if expected_git_sha is None:
+        try:
+            expected_git_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=PROJECT_ROOT,
+                text=True,
+            ).strip()
+        except Exception:
+            return {"status": "failed", "reason": "rag_health_contract_failed"}
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
             payload = json.load(response)
@@ -154,6 +163,11 @@ def check_rag_health(url: str) -> dict:
         and payload.get("rag_loaded") is True
         and payload.get("activation_valid") is True
         and payload.get("live_authorized") is True
+        and isinstance(payload.get("deployment_id"), str)
+        and bool(payload["deployment_id"].strip())
+        and payload.get("git_sha") == expected_git_sha
+        and isinstance(payload.get("snapshot_fingerprint"), str)
+        and bool(payload["snapshot_fingerprint"].strip())
     )
     return {
         "status": "passed" if ready else "failed",

@@ -78,17 +78,55 @@ def test_health_preflight_rejects_degraded_http_200_without_echoing_payload():
 
 
 def test_health_preflight_accepts_the_full_ready_contract():
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
     result = _run_health_preflight(
         {
             "status": "ok",
             "rag_loaded": True,
             "activation_valid": True,
             "live_authorized": True,
+            "deployment_id": "lan-runtime",
+            "git_sha": git_sha,
+            "snapshot_fingerprint": "snapshot-v1",
         }
     )
 
     assert result.returncode == 0
     assert json.loads(result.stdout)["passed"] is True
+
+
+def test_health_preflight_rejects_missing_or_stale_runtime_provenance():
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    for update in (
+        {"deployment_id": None},
+        {"git_sha": None},
+        {"git_sha": "stale"},
+        {"snapshot_fingerprint": None},
+    ):
+        result = _run_health_preflight({
+            "status": "ok",
+            "rag_loaded": True,
+            "activation_valid": True,
+            "live_authorized": True,
+            "deployment_id": "lan-runtime",
+            "git_sha": git_sha,
+            "snapshot_fingerprint": "snapshot-v1",
+            **update,
+        })
+
+        assert result.returncode == 1
+        assert json.loads(result.stdout)["checks"]["rag_health"] == {
+            "status": "failed",
+            "reason": "rag_health_contract_failed",
+        }
 
 
 def test_migration_preflight_rejects_pending_versions_without_leaking_cli_output():
@@ -184,6 +222,25 @@ def test_lan_runs_full_preflight_before_starting_runtime_processes():
     runtime_start = launcher.index("$ragProc = Start-ProcessWithEnv")
 
     assert pythonpath < preflight < runtime_start
+
+
+def test_lan_launcher_pins_runtime_provenance():
+    launcher = (ROOT / "scripts" / "ops" / "start_demo_lan.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "$snapshotFingerprint = $env:RAG_SNAPSHOT_FINGERPRINT" in launcher
+    assert 'Get-DotEnvValue -Path $envPath -Key "RAG_SNAPSHOT_FINGERPRINT"' in launcher
+    assert "& git status --porcelain" in launcher
+    assert "RAG_DEPLOYMENT_ID = $deploymentId" in launcher
+    assert "RAG_DEPLOYMENT_GIT_SHA = $head" in launcher
+    assert "RAG_SNAPSHOT_FINGERPRINT = $snapshotFingerprint" in launcher
+    runtime_start = launcher.index("$ragProc = Start-ProcessWithEnv")
+    assert launcher.rindex("& git status --porcelain") < runtime_start
+    assert launcher.rindex("& git status --porcelain") > launcher.index(
+        '"scripts\\ops\\production_preflight.py" --skip-health'
+    )
+    assert "$currentHead -ne $head" in launcher
 
 
 def test_qdrant_schema_checker_rejects_missing_indexes_and_backfill_fields():

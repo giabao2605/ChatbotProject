@@ -19,6 +19,15 @@ if (!(Test-Path $pythonExe)) {
 if (!(Test-Path $logsDir)) {
     New-Item -ItemType Directory -Path $logsDir | Out-Null
 }
+$head = (& git rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($head)) {
+    throw "Khong doc duoc git commit hien tai."
+}
+$initialStatus = & git status --porcelain
+if ($LASTEXITCODE -ne 0 -or $initialStatus) {
+    throw "Worktree phai sach truoc khi khoi dong runtime production."
+}
+$deploymentId = "windows-lan-$($head.Substring(0, 12))"
 
 # Build Vue sources before starting the static app server. Without this step,
 # start_demo_lan.ps1 would keep serving an old web-ui/dist even after source
@@ -100,6 +109,13 @@ $serviceToken = Get-DotEnvValue -Path $envPath -Key "RAG_SERVICE_TOKEN"
 $sessionSecret = Get-DotEnvValue -Path $envPath -Key "APP_SESSION_SECRET"
 $bridgeSecret = Get-DotEnvValue -Path $envPath -Key "CHAT_BRIDGE_SECRET"
 $ragServerUrl = Get-DotEnvValue -Path $envPath -Key "RAG_SERVER_URL"
+$snapshotFingerprint = $env:RAG_SNAPSHOT_FINGERPRINT
+if (!$snapshotFingerprint) {
+    $snapshotFingerprint = Get-DotEnvValue -Path $envPath -Key "RAG_SNAPSHOT_FINGERPRINT"
+}
+if ([string]::IsNullOrWhiteSpace($snapshotFingerprint)) {
+    throw "Thieu RAG_SNAPSHOT_FINGERPRINT cua snapshot SQL/Qdrant da duoc xac minh."
+}
 $appMode = $env:APP_ENV
 if (!$appMode) { $appMode = Get-DotEnvValue -Path $envPath -Key "APP_ENV" }
 $appTrustedHosts = $env:APP_TRUSTED_HOSTS
@@ -203,6 +219,19 @@ catch {
 }
 if (!$lanIp) { $lanIp = "localhost" }
 
+$currentHead = (& git rev-parse HEAD).Trim()
+if (
+    $LASTEXITCODE -ne 0 `
+    -or [string]::IsNullOrWhiteSpace($currentHead) `
+    -or $currentHead -ne $head
+) {
+    throw "Git commit da thay doi trong luc chuan bi runtime."
+}
+$currentStatus = & git status --porcelain
+if ($LASTEXITCODE -ne 0 -or $currentStatus) {
+    throw "Worktree da thay doi trong luc chuan bi runtime."
+}
+
 $ownedProcesses = @()
 try {
 $ragProc = Start-ProcessWithEnv `
@@ -211,7 +240,13 @@ $ragProc = Start-ProcessWithEnv `
     -WorkingDirectory $projectRoot `
     -RedirectStandardOutput $ragOutLog `
     -RedirectStandardError $ragErrLog `
-    -Environment @{ PYTHONPATH = "src"; OMP_NUM_THREADS = "4" }
+    -Environment @{
+        PYTHONPATH = "src"
+        OMP_NUM_THREADS = "4"
+        RAG_DEPLOYMENT_ID = $deploymentId
+        RAG_DEPLOYMENT_GIT_SHA = $head
+        RAG_SNAPSHOT_FINGERPRINT = $snapshotFingerprint
+    }
 $ownedProcesses += $ragProc
 
 $workerProc = Start-ProcessWithEnv `
