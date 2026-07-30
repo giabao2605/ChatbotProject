@@ -24,7 +24,8 @@ Lich dinh ky: dung Windows Task Scheduler chay hang ngay (full + log nhieu lan/n
        FROM DISK = N'<duong_dan>\\Mech_Chatbot_DB_full_YYYYMMDD_HHMMSS.bak'
        WITH MOVE 'Mech_Chatbot_DB' TO N'D:\\Data\\Mech_Chatbot_DB_TEST.mdf',
             MOVE 'Mech_Chatbot_DB_log' TO N'D:\\Data\\Mech_Chatbot_DB_TEST_log.ldf',
-            RECOVERY, REPLACE;
+            RECOVERY;
+     Target phai chua ton tai; khong dung WITH REPLACE.
   2) Qdrant: tao collection moi tu snapshot (recover_snapshot) roi so sanh so points.
 """
 from __future__ import annotations
