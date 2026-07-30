@@ -3,7 +3,7 @@ r"""P1.8 — Backup tu dong: SQL Server (full + log) + snapshot Qdrant.
 Chuc nang:
   - SQL: chay BACKUP DATABASE (full) va BACKUP LOG (neu recovery model = FULL).
   - Qdrant: tao snapshot cho collection (client.create_snapshot).
-  - Ghi log ket qua + don backup cu hon --keep-days ngay.
+  - Ghi log ket qua; chi don backup cu khi truyen --keep-days.
 
 LUU Y QUAN TRONG:
   - SQL Server ghi file backup len MAY CHU SQL (duong dan local cua dich vu SQL),
@@ -107,6 +107,10 @@ def backup_qdrant():
 
 def cleanup_old(sql_dir, keep_days):
     """Xoa file backup .bak/.trn cu hon keep_days (chay tren may co the truy cap sql_dir)."""
+    if keep_days is None:
+        return
+    if keep_days <= 0:
+        raise ValueError("keep_days must be a positive integer")
     if not sql_dir or not os.path.isdir(sql_dir):
         return
     cutoff = _dt.datetime.now() - _dt.timedelta(days=keep_days)
@@ -128,7 +132,7 @@ def main():
     parser.add_argument("--sql-dir", default=None, help="Thu muc backup tren MAY CHU SQL (vd D:\\Backups).")
     parser.add_argument("--skip-sql", action="store_true")
     parser.add_argument("--skip-qdrant", action="store_true")
-    parser.add_argument("--keep-days", type=int, default=14, help="Don file backup cu hon N ngay (chi khi sql_dir truy cap duoc cuc bo).")
+    parser.add_argument("--keep-days", type=int, help="Opt-in: don file backup cu hon N ngay (chi khi sql_dir truy cap duoc cuc bo).")
     args = parser.parse_args()
 
     print(f"=== Backup he thong @ {_timestamp()} ===")
@@ -137,7 +141,7 @@ def main():
     if not args.skip_sql:
         try:
             backup_sql(args.sql_dir)
-            if args.sql_dir:
+            if args.sql_dir and args.keep_days is not None:
                 cleanup_old(args.sql_dir, args.keep_days)
         except Exception as e:
             errors.append(f"SQL backup loi: {e}")
