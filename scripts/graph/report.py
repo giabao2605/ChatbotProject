@@ -13,6 +13,10 @@ def _relation_identity(value):
     )
 
 
+def _has_provenance_value(value):
+    return bool(value.strip()) if isinstance(value, str) else value is not None
+
+
 def validate_review_samples(
     samples, *, require_independent=False, allowed_edge_ids=None,
     allowed_proposal_ids=None,
@@ -75,9 +79,12 @@ def build_graph_report(
     node_domains = {str(node.get("department") or "") for node in nodes or ()}
     edge_domains = {str(edge.get("department") or "") for edge in approved_edges}
     domains = list(dict.fromkeys(str(value) for value in expected_domains or ()))
-    provenance_fields = ("doc_id", "page", "version", "department", "site", "security_level")
+    provenance_fields = (
+        "doc_id", "page", "version", "department", "site", "security_level",
+        "source_quote",
+    )
     provenance_complete = sum(
-        all(edge.get(field) not in (None, "") for field in provenance_fields)
+        all(_has_provenance_value(edge.get(field)) for field in provenance_fields)
         for edge in approved_edges
     )
     return {

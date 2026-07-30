@@ -13,6 +13,7 @@ from scripts.graph_eval.constants import FIXTURE_BATCH, FIXTURE_COLLECTION
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
+REQUIRED_GRAPH_MIGRATIONS = frozenset({"V0033", "V0034", "V0037", "V0038"})
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
@@ -57,8 +58,10 @@ def check_graph_fixture(
     if collection != expected_collection:
         raise ValueError(f"collection must equal {expected_collection}")
     failures = []
-    required_versions = {"V0033", "V0034"}
-    missing_versions = sorted(required_versions - {str(value).upper() for value in applied_versions})
+    missing_versions = sorted(
+        REQUIRED_GRAPH_MIGRATIONS
+        - {str(value).upper() for value in applied_versions}
+    )
     if missing_versions:
         failures.append({"reason": "migration_missing", "versions": missing_versions})
     if int(pending_serving_edge_count or 0):
@@ -221,6 +224,15 @@ def check_graph_fixture(
         expected_domains=["Technical", "Production", "Maintenance"],
         review_sample_source=review_sample_source,
     )
+    if (
+        graph_report["provenance_complete_count"]
+        != graph_report["approved_edge_count"]
+    ):
+        failures = [*failures, {
+            "reason": "approved_edge_provenance_incomplete",
+            "complete_count": graph_report["provenance_complete_count"],
+            "approved_edge_count": graph_report["approved_edge_count"],
+        }]
     graph_report["pending_serving_edges"] = int(pending_serving_edge_count or 0)
     graph_report["workflow_fixture_passed"] = bool(workflow_fixture_passed)
     return {
@@ -236,7 +248,7 @@ def check_graph_fixture(
 def run_live_preflight(cases):
     if os.getenv("RUN_GRAPH_EVAL_FIXTURE") != "1":
         raise RuntimeError("set RUN_GRAPH_EVAL_FIXTURE=1 to access graph-eval-v1")
-    from sqlalchemy import text
+    from sqlalchemy import bindparam, text
     from qdrant_client import models
     from mech_chatbot.config.repository_runtime import current_qdrant_runtime
     from mech_chatbot.db.engine import _ensure_engine, engine
@@ -245,9 +257,24 @@ def run_live_preflight(cases):
         raise RuntimeError(f"QDRANT_COLLECTION must equal {FIXTURE_COLLECTION}")
     _ensure_engine()
     with engine.connect() as connection:
-        versions = {str(row[0]).upper() for row in connection.execute(text(
-            "SELECT Version FROM dbo._SchemaVersions WHERE Version IN ('V0033','V0034')"
-        )).all()}
+        version_query = text(
+            "SELECT Version FROM dbo._SchemaVersions WHERE Version IN :versions"
+        ).bindparams(bindparam("versions", expanding=True))
+        versions = {
+            str(row[0]).upper()
+            for row in connection.execute(
+                version_query,
+                {"versions": sorted(REQUIRED_GRAPH_MIGRATIONS)},
+            ).all()
+        }
+        if REQUIRED_GRAPH_MIGRATIONS - versions:
+            blocked = check_graph_fixture(
+                [], [], [], [],
+                applied_versions=versions,
+                pending_serving_edge_count=0,
+                collection=collection,
+            )
+            return {**blocked, "checked_cases": len(cases or ())}
         documents = [dict(row) for row in connection.execute(text("""
             SELECT DocID, FamilyID, TenFile, VersionNo, LifecycleStatus, ReviewStatus,
                    PublicationState, IsCurrent, Servable, EffectiveStatus, SourceSystem,
@@ -260,7 +287,8 @@ def run_live_preflight(cases):
                    sn.CanonicalKey source_key, tn.CanonicalKey target_key,
                    e.Origin origin, e.ServingStatus serving_status,
                    e.SourceDocID doc_id, e.SourcePage page, e.SourceVersion version,
-                   e.Department department, e.Site site, e.SecurityLevel security_level
+                   e.Department department, e.Site site, e.SecurityLevel security_level,
+                   e.SourceQuote source_quote
             FROM dbo.KnowledgeGraphEdge e
             JOIN dbo.KnowledgeGraphNode sn ON sn.NodeID=e.SourceNodeID
             JOIN dbo.KnowledgeGraphNode tn ON tn.NodeID=e.TargetNodeID

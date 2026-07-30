@@ -3,7 +3,11 @@ import json
 import pytest
 
 from scripts.graph.report import build_graph_report, validate_review_samples
-from scripts.graph_eval.preflight import check_graph_fixture
+from scripts.graph_eval.preflight import (
+    REQUIRED_GRAPH_MIGRATIONS,
+    check_graph_fixture,
+    run_live_preflight,
+)
 from scripts.graph_eval.cleanup_fixture import (
     build_cleanup_plan,
     fixture_only_community_versions,
@@ -76,7 +80,7 @@ def _edge(edge_id=1, **overrides):
         "department": "Technical", "site": "GRAPH-EVAL-HQ",
         "security_level": "internal", "publication_state": "published",
         "lifecycle_status": "published", "review_status": "approved",
-        "is_current": True, "servable": True,
+        "is_current": True, "servable": True, "source_quote": "verified source text",
     }
     value.update(overrides)
     return value
@@ -102,6 +106,23 @@ def test_graph_report_uses_explicit_relation_denominator_and_review_labels():
     assert report["reviewed_edge_precision"] == 0.5
     assert report["coverage_denominator"] == 2
     assert report["domain_coverage"] == {"Technical": True, "Production": False, "Maintenance": False}
+
+
+def test_graph_report_counts_source_quote_as_required_provenance():
+    report = build_graph_report(
+        nodes=[],
+        edges=[
+            _edge(source_quote="verified source text"),
+            _edge(edge_id=2, source_quote=""),
+        ],
+        proposals=[],
+        expected_relations=[],
+        review_samples=[],
+        expected_domains=[],
+    )
+
+    assert report["provenance_complete_count"] == 1
+    assert report["provenance_completeness"] == 0.5
 
 
 def test_independent_review_samples_require_unique_identity_and_reviewer():
@@ -166,12 +187,12 @@ def test_graph_preflight_resolves_relations_and_fails_closed_on_pending_edge():
 
     passed = check_graph_fixture(
         [case], [_document()], [_edge()], [point],
-        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=0,
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS, pending_serving_edge_count=0,
         collection="MechChatbot_Graph_Eval_v1",
     )
     blocked = check_graph_fixture(
         [case], [_document()], [_edge(serving_status="pending")], [point],
-        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=1,
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS, pending_serving_edge_count=1,
         collection="MechChatbot_Graph_Eval_v1",
     )
 
@@ -181,6 +202,74 @@ def test_graph_preflight_resolves_relations_and_fails_closed_on_pending_edge():
     assert {failure["reason"] for failure in blocked["failures"]} >= {
         "expected_relation_missing", "pending_edge_in_serving_table",
     }
+
+
+def test_graph_preflight_requires_source_evidence_migrations():
+    report = check_graph_fixture(
+        [], [], [], [],
+        applied_versions={"V0033", "V0034"},
+        pending_serving_edge_count=0,
+        collection="MechChatbot_Graph_Eval_v1",
+    )
+
+    assert report["passed"] is False
+    assert report["failures"] == [{
+        "reason": "migration_missing",
+        "versions": ["V0037", "V0038"],
+    }]
+
+
+def test_graph_preflight_rejects_approved_edge_without_source_quote():
+    report = check_graph_fixture(
+        [], [], [_edge(source_quote="   ")], [],
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS,
+        pending_serving_edge_count=0,
+        collection="MechChatbot_Graph_Eval_v1",
+    )
+
+    assert report["passed"] is False
+    assert report["failures"] == [{
+        "reason": "approved_edge_provenance_incomplete",
+        "complete_count": 0,
+        "approved_edge_count": 1,
+    }]
+
+
+def test_graph_live_preflight_stops_before_source_quote_query_when_migration_is_missing(
+    monkeypatch,
+):
+    from mech_chatbot.config.repository_runtime import bind_repository_runtime
+    from mech_chatbot.db import engine as engine_module
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, *_args, **_kwargs):
+            assert "_SchemaVersions" in str(statement)
+            return type("Rows", (), {"all": lambda self: [("V0033",), ("V0034",)]})()
+
+    fake_engine = type("Engine", (), {"connect": lambda self: Connection()})()
+    monkeypatch.setenv("RUN_GRAPH_EVAL_FIXTURE", "1")
+    monkeypatch.setattr(engine_module, "_ensure_engine", lambda: None)
+    monkeypatch.setattr(engine_module, "engine", fake_engine)
+
+    with bind_repository_runtime(
+        db_engine=fake_engine,
+        qdrant_client=object(),
+        qdrant_collection="MechChatbot_Graph_Eval_v1",
+    ):
+        report = run_live_preflight([{"id": "blocked-by-migration"}])
+
+    assert report["passed"] is False
+    assert report["checked_cases"] == 1
+    assert report["failures"] == [{
+        "reason": "migration_missing",
+        "versions": ["V0037", "V0038"],
+    }]
 
 
 def test_graph_preflight_resolves_and_verifies_every_multi_relation():
@@ -228,7 +317,7 @@ def test_graph_preflight_resolves_and_verifies_every_multi_relation():
         [_document(FixtureKey="assembly_v2")],
         edges,
         [point],
-        applied_versions={"V0033", "V0034"},
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS,
         pending_serving_edge_count=0,
         collection="MechChatbot_Graph_Eval_v1",
     )
@@ -272,7 +361,7 @@ def test_graph_preflight_resolves_canonical_part_and_material_symbols():
 
     report = check_graph_fixture(
         [case], [_document(FixtureKey="assembly_v2")], [edge], [point],
-        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=0,
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS, pending_serving_edge_count=0,
         collection="MechChatbot_Graph_Eval_v1",
     )
 
@@ -320,7 +409,7 @@ def test_graph_preflight_can_validate_an_explicit_non_default_staging_scope():
 
     report = check_graph_fixture(
         [case], [document], [edge], [point],
-        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=0,
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS, pending_serving_edge_count=0,
         collection="MechChatbot_Controlled_Demo_v2",
         expected_batch="controlled-demo-v2",
         expected_collection="MechChatbot_Controlled_Demo_v2",
@@ -332,7 +421,7 @@ def test_graph_preflight_can_validate_an_explicit_non_default_staging_scope():
     changed_case = {**case, "question": "Changed controlled-demo question"}
     changed_report = check_graph_fixture(
         [changed_case], [document], [edge], [point],
-        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=0,
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS, pending_serving_edge_count=0,
         collection="MechChatbot_Controlled_Demo_v2",
         expected_batch="controlled-demo-v2",
         expected_collection="MechChatbot_Controlled_Demo_v2",
@@ -355,7 +444,7 @@ def test_graph_preflight_reports_unresolved_relation_symbol_explicitly():
 
     report = check_graph_fixture(
         [case], [_document(FixtureKey="assembly_v2")], [], [],
-        applied_versions={"V0033", "V0034"}, pending_serving_edge_count=0,
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS, pending_serving_edge_count=0,
         collection="MechChatbot_Graph_Eval_v1",
     )
 
