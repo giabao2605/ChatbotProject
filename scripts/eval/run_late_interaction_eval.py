@@ -334,6 +334,9 @@ def main(argv=None):
                         "shadow_hits": result.shadow_hits,
                         "coverage": result.coverage if variant == "maxsim" else 1.0,
                         "fallback_reason": result.fallback_reason,
+                        "provider_failure": (
+                            variant == "voyage" and bool(result.fallback_reason)
+                        ),
                     }
                     pair_rows[variant].append(row)
                     rows_by_variant[variant].append(row)

@@ -146,6 +146,24 @@ def test_report_uses_worked_graded_ndcg_and_flags_forbidden_source():
     assert report["outcome_confusion"]["leakage"] == 1
     assert report["latency_p95_ms"] == 100
     assert report["fallback_coverage"]["shadow_coverage"] == 1.0
+    assert report["provider_failure_count"] == 0
+    assert report["cases"][0]["provider_failure"] is False
+
+
+def test_report_preserves_provider_failure_telemetry():
+    rows = [{
+        "case": _case(),
+        "ranked_sources": [],
+        "latency_ms": 10,
+        "coverage": 1.0,
+        "fallback_reason": "provider_error",
+        "provider_failure": True,
+    }]
+
+    report = build_report(rows, variant="voyage", run_metadata={})
+
+    assert report["provider_failure_count"] == 1
+    assert report["cases"][0]["provider_failure"] is True
 
 
 def test_report_breaks_quality_out_by_query_family_and_hard_negative_coverage():

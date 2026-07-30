@@ -32,6 +32,27 @@ def _group_rate(report, name):
     return float((report.get("evaluation_groups", {}).get(name) or {}).get("pass_rate") or 0.0)
 
 
+def _provider_failure_evidence(report):
+    if not isinstance(report, dict):
+        return False, 1
+    explicit = report.get("provider_failure_count")
+    cases = report.get("cases")
+    if (
+        not isinstance(explicit, int)
+        or isinstance(explicit, bool)
+        or explicit < 0
+        or not isinstance(cases, list)
+        or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("provider_failure"), bool)
+            for row in cases
+        )
+    ):
+        return False, 1
+    observed = sum(row["provider_failure"] for row in cases)
+    return explicit == observed, max(explicit, observed)
+
+
 def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -125,7 +146,28 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
     metadata = metadata or {}
     baseline_outcomes = baseline.get("outcome_confusion", {})
     candidate_outcomes = candidate.get("outcome_confusion", {})
+    baseline_provider_valid, baseline_provider_failures = (
+        _provider_failure_evidence(baseline)
+    )
+    candidate_provider_valid, candidate_provider_failures = (
+        _provider_failure_evidence(candidate)
+    )
+    candidate_cases = candidate.get("cases")
+    candidate_case_rows = (
+        candidate_cases
+        if isinstance(candidate_cases, list)
+        and all(isinstance(row, dict) for row in candidate_cases)
+        else ()
+    )
     common = {
+        "baseline_provider_telemetry_valid": baseline_provider_valid,
+        "candidate_provider_telemetry_valid": candidate_provider_valid,
+        "baseline_provider_failures_zero": (
+            baseline_provider_valid and baseline_provider_failures == 0
+        ),
+        "candidate_provider_failures_zero": (
+            candidate_provider_valid and candidate_provider_failures == 0
+        ),
         "wrong_answer_not_increased": candidate_outcomes.get("wrong_answer", 0)
         <= baseline_outcomes.get("wrong_answer", 0),
         "leakage_zero": candidate_outcomes.get("leakage", 0) == 0,
@@ -134,7 +176,7 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
     }
     if stage == "grounded_math":
         max_calculations = max(
-            (int(row.get("calculation_count") or 0) for row in candidate.get("cases", [])),
+            (int(row.get("calculation_count") or 0) for row in candidate_case_rows),
             default=0,
         )
         baseline_rate = _group_rate(baseline, "grounded_math")
@@ -182,6 +224,9 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         }
     elif stage == "late_interaction":
         reference = reference or {}
+        reference_provider_valid, reference_provider_failures = (
+            _provider_failure_evidence(reference)
+        )
         b_ranked = baseline.get("ranked_retrieval", {})
         c_ranked = candidate.get("ranked_retrieval", {})
         baseline_ndcg = float(b_ranked.get("ndcg_at_10") or 0.0)
@@ -230,6 +275,10 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         )
         checks = {
             **common,
+            "reference_provider_telemetry_valid": reference_provider_valid,
+            "reference_provider_failures_zero": (
+                reference_provider_valid and reference_provider_failures == 0
+            ),
             "voyage_baseline_valid": (
                 baseline.get("variant") == "voyage" and baseline_fallback <= 0.10
             ),

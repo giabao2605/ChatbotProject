@@ -22,6 +22,7 @@ def report(*, wrong=0, leakage=0, p95=100, cost=1, recall10=1, ndcg10=0.5, group
         "total_estimated_cost": cost,
         "ranked_retrieval": {"recall_at_10": recall10, "ndcg_at_10": ndcg10},
         "evaluation_groups": groups or {},
+        "provider_failure_count": 0,
         "provider_retries": 0,
         "citation_evaluation": {
             "applicable_cases": 1,
@@ -38,6 +39,7 @@ def report(*, wrong=0, leakage=0, p95=100, cost=1, recall10=1, ndcg10=0.5, group
                 )
             },
         },
+        "cases": [],
     }
 
 
@@ -88,6 +90,37 @@ def test_late_gate_enforces_quality_latency_and_storage():
 
     assert passed["passed"] is True
     assert failed["checks"]["storage_within_budget"] is False
+
+
+def test_late_gate_rejects_provider_failure_in_reference():
+    gate = _module()
+    reference = late_arm(report(ndcg10=0.49), "rrf")
+    reference["provider_failure_count"] = 1
+    reference["cases"] = [{"provider_failure": True}]
+    baseline = late_arm(report(ndcg10=0.50), "voyage")
+    candidate = late_arm(report(ndcg10=0.53, p95=120), "maxsim")
+    readiness = {
+        "schema": "late-interaction-readiness-v1",
+        "capability_passed": True,
+        "ready_for_serving": True,
+        "shadow_storage_ratio": 20,
+        "shadow_coverage": 1.0,
+        "governance_drift": 0,
+        "provenance_drift": 0,
+        "vector_schema_rejected": 0,
+        "orphan_points": 0,
+    }
+
+    result = gate.compare(
+        "late_interaction",
+        baseline,
+        candidate,
+        readiness,
+        reference,
+    )
+
+    assert result["checks"]["reference_provider_failures_zero"] is False
+    assert result["passed"] is False
 
 
 def test_late_gate_rejects_missing_or_non_serving_readiness_artifact():
@@ -530,7 +563,10 @@ def test_grounded_math_gate_uses_observed_per_query_calculation_budget():
     gate = _module()
     baseline = report(groups={"grounded_math": {"pass_rate": 0.0}})
     candidate = report(groups={"grounded_math": {"pass_rate": 1.0}})
-    candidate["cases"] = [{"calculation_count": 2}]
+    candidate["cases"] = [{
+        "calculation_count": 2,
+        "provider_failure": False,
+    }]
 
     result = gate.compare("grounded_math", baseline, candidate)
 
@@ -538,15 +574,114 @@ def test_grounded_math_gate_uses_observed_per_query_calculation_budget():
     assert result["passed"] is False
 
 
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+def test_grounded_math_gate_rejects_provider_failure_in_either_arm(arm):
+    gate = _module()
+    baseline = report(groups={"grounded_math": {"pass_rate": 0.5}})
+    candidate = report(groups={"grounded_math": {"pass_rate": 1.0}})
+    baseline["cases"] = [{"provider_failure": arm == "baseline"}]
+    candidate["cases"] = [{
+        "calculation_count": 1,
+        "provider_failure": arm == "candidate",
+    }]
+
+    result = gate.compare("grounded_math", baseline, candidate)
+
+    assert result["checks"][f"{arm}_provider_failures_zero"] is False
+    assert result["passed"] is False
+
+
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        "missing_count",
+        "negative_count",
+        "fractional_count",
+        "missing_cases",
+        "null_cases",
+        "invalid_row",
+        "missing_row_flag",
+    ],
+)
+def test_grounded_math_gate_fails_closed_on_malformed_provider_telemetry(
+    arm,
+    malformed,
+):
+    gate = _module()
+    baseline = report(groups={"grounded_math": {"pass_rate": 0.5}})
+    candidate = report(groups={"grounded_math": {"pass_rate": 1.0}})
+    candidate["cases"] = [{
+        "calculation_count": 1,
+        "provider_failure": False,
+    }]
+    target = baseline if arm == "baseline" else candidate
+    if malformed == "missing_count":
+        target.pop("provider_failure_count")
+    elif malformed == "negative_count":
+        target["provider_failure_count"] = -1
+    elif malformed == "fractional_count":
+        target["provider_failure_count"] = 0.5
+    elif malformed == "missing_cases":
+        target.pop("cases")
+    elif malformed == "null_cases":
+        target["cases"] = None
+    elif malformed == "invalid_row":
+        target["cases"] = [None]
+    else:
+        target["cases"] = [{}]
+
+    result = gate.compare("grounded_math", baseline, candidate)
+
+    assert result["checks"][f"{arm}_provider_telemetry_valid"] is False
+    assert result["passed"] is False
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "grounded_math",
+        "late_interaction",
+        "query_decomposition",
+        "graph_retrieval",
+        "community_summaries",
+        "integrated_hardening",
+    ],
+)
+def test_every_retrieval_gate_requires_provider_telemetry(stage):
+    gate = _module()
+    baseline = report()
+    baseline.pop("provider_failure_count")
+    candidate = report()
+    reference = report() if stage == "late_interaction" else None
+
+    result = gate.compare(
+        stage,
+        baseline,
+        candidate,
+        metadata={},
+        reference=reference,
+    )
+
+    assert result["checks"]["baseline_provider_telemetry_valid"] is False
+    assert result["passed"] is False
+
+
 def test_grounded_math_gate_enforces_exactness_provenance_citations_latency_and_cost():
     gate = _module()
     baseline = report(groups={"grounded_math": {"pass_rate": 0.5}}, p95=100, cost=1)
     candidate = report(groups={"grounded_math": {"pass_rate": 1.0}}, p95=125, cost=1.5)
-    candidate["cases"] = [{"calculation_count": 1}]
+    candidate["cases"] = [{
+        "calculation_count": 1,
+        "provider_failure": False,
+    }]
 
     passed = gate.compare("grounded_math", baseline, candidate)
     bad_provenance = report(groups={"grounded_math": {"pass_rate": 1.0}}, p95=125, cost=1.5)
-    bad_provenance["cases"] = [{"calculation_count": 1}]
+    bad_provenance["cases"] = [{
+        "calculation_count": 1,
+        "provider_failure": False,
+    }]
     bad_provenance["grounded_math_evaluation"]["check_totals"]["provenance"]["passed"] = 0
     failed = gate.compare("grounded_math", baseline, bad_provenance)
 
@@ -560,7 +695,10 @@ def test_grounded_math_gate_rejects_unsupported_numbers_and_regressions():
     gate = _module()
     baseline = report(groups={"grounded_math": {"pass_rate": 0.5}}, p95=100, cost=1)
     candidate = report(groups={"grounded_math": {"pass_rate": 1.0}}, p95=126, cost=1.51)
-    candidate["cases"] = [{"calculation_count": 1}]
+    candidate["cases"] = [{
+        "calculation_count": 1,
+        "provider_failure": False,
+    }]
     candidate["grounded_math_evaluation"]["unsupported_number_count"] = 1
     candidate["citation_evaluation"]["citation_accuracy"]["value"] = 0.9
 

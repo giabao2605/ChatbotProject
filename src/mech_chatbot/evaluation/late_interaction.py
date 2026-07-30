@@ -271,6 +271,7 @@ def build_report(
             "latency_ms": latency,
             "coverage": coverage,
             "fallback_reason": row.get("fallback_reason"),
+            "provider_failure": bool(row.get("provider_failure")),
             "ranked_sources": ranked,
         }
         case_rows.append(case_result)
@@ -313,6 +314,9 @@ def build_report(
         "outcome_confusion": {"wrong_answer": wrong_answers, "leakage": leakage},
         "latency_p50_ms": nearest_rank(latencies, 0.50) or 0.0,
         "latency_p95_ms": nearest_rank(latencies, 0.95) or 0.0,
+        "provider_failure_count": sum(
+            bool(row.get("provider_failure")) for row in case_rows
+        ),
         "provider_retries": int(run_metadata.get("provider_retries") or 0),
         "fallback_coverage": {
             "fallback_count": fallback_count,
