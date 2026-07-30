@@ -87,6 +87,27 @@ class LlmAdapter:
             adapter=self,
         )
 
+    def invoke_once(
+        self,
+        messages,
+        surface: str = "generation",
+        trace_id: str | None = None,
+        doc_ids=None,
+        security_levels=None,
+        policies=None,
+        retry_counter=None,
+    ):
+        return gpt_invoke.retry_with(stop=stop_after_attempt(1))(
+            messages,
+            surface=surface,
+            trace_id=trace_id,
+            doc_ids=doc_ids,
+            security_levels=security_levels,
+            policies=policies,
+            retry_counter=retry_counter,
+            adapter=self,
+        )
+
 
 def build_llm_adapter(
     settings: LlmSettings,

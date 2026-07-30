@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from mech_chatbot.config.settings import Settings
+from mech_chatbot.config.settings import ExternalAiSettings, LlmSettings, Settings
 from mech_chatbot.config.repository_runtime import (
     bind_repository_runtime,
     current_repository_engine,
@@ -44,9 +44,12 @@ class _FakeAdapter:
     settings: _FakeAdapterSettings
     calls: list
 
-    def invoke(self, _messages, **kwargs):
+    def invoke_once(self, _messages, **kwargs):
         self.calls.append(kwargs)
         return "OK"
+
+    def invoke(self, _messages, **kwargs):
+        raise AssertionError("provider smoke must not use the retrying invoke path")
 
 
 def test_provider_configuration_uses_snapshot_without_building_client(monkeypatch):
@@ -153,9 +156,40 @@ def test_configured_smoke_builds_and_uses_snapshot_owned_adapter():
 
     assert artifact["passed"] is True
     assert len(adapter.calls) == 5
+    assert artifact["max_attempts_per_request"] == 1
+    assert artifact["request_timeout_seconds"] == 30.0
     assert configuration["model"] == "snapshot-model"
     assert captured["llm_settings"].api_key == "test-provider-key"
+    assert captured["llm_settings"].max_output_tokens == 16
+    assert captured["llm_settings"].timeout_seconds == 30.0
     assert captured["external_ai_settings"].application_environment == settings.APP_ENV
+
+
+def test_llm_adapter_invoke_once_disables_tenacity_retries(monkeypatch):
+    from mech_chatbot.llm import llm_client
+
+    captured = {}
+
+    class FakeRetryingInvoke:
+        def retry_with(self, *, stop):
+            captured["max_attempts"] = stop.max_attempt_number
+
+            def invoke(*args, **kwargs):
+                captured["adapter"] = kwargs["adapter"]
+                return "OK"
+
+            return invoke
+
+    monkeypatch.setattr(llm_client, "gpt_invoke", FakeRetryingInvoke())
+    settings = _settings_snapshot()
+    adapter = llm_client.LlmAdapter(
+        settings=LlmSettings.from_settings(settings),
+        external_ai_settings=ExternalAiSettings.from_settings(settings),
+        client=object(),
+    )
+
+    assert adapter.invoke_once([("human", "probe")]) == "OK"
+    assert captured == {"max_attempts": 1, "adapter": adapter}
 
 
 def test_cli_repository_runtime_uses_the_supplied_settings_snapshot(monkeypatch):

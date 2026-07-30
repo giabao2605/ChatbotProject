@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import hashlib
 import json
 import re
@@ -31,6 +32,8 @@ _SMOKE_MESSAGES = [
     ("system", "Return only the word OK."),
     ("human", "Provider readiness probe."),
 ]
+_SMOKE_REQUEST_TIMEOUT_SECONDS = 30.0
+_SMOKE_MAX_OUTPUT_TOKENS = 16
 
 
 class ProviderConfiguration(TypedDict):
@@ -48,6 +51,7 @@ class _ProviderAdapter(Protocol):
     settings: _ProviderAdapterSettings
 
     def invoke(self, *args: Any, **kwargs: Any) -> object: ...
+    def invoke_once(self, *args: Any, **kwargs: Any) -> object: ...
 
 
 def _root_exception(exc: Exception) -> Exception:
@@ -267,12 +271,26 @@ def run_configured_provider_smoke(
     from mech_chatbot.llm.llm_client import build_llm_adapter
 
     builder = adapter_builder or build_llm_adapter
-    adapter = builder(
+    smoke_settings = replace(
         LlmSettings.from_settings(settings),
+        max_output_tokens=min(
+            int(settings.GPT_MAX_OUTPUT_TOKENS),
+            _SMOKE_MAX_OUTPUT_TOKENS,
+        ),
+        timeout_seconds=min(
+            float(settings.GPT_TIMEOUT_SECONDS),
+            _SMOKE_REQUEST_TIMEOUT_SECONDS,
+        ),
+    )
+    adapter = builder(
+        smoke_settings,
         external_ai_settings=ExternalAiSettings.from_settings(settings),
     )
     configuration = resolve_provider_configuration(settings, adapter)
-    return run_provider_smoke(adapter.invoke), configuration
+    artifact = run_provider_smoke(adapter.invoke_once)
+    artifact["max_attempts_per_request"] = 1
+    artifact["request_timeout_seconds"] = smoke_settings.timeout_seconds
+    return artifact, configuration
 
 
 def main(argv=None):
