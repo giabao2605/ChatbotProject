@@ -179,10 +179,11 @@ def test_lan_runs_full_preflight_before_starting_runtime_processes():
         encoding="utf-8"
     )
 
+    pythonpath = launcher.index('$env:PYTHONPATH = "src"')
     preflight = launcher.index('"scripts\\ops\\production_preflight.py" --skip-health')
     runtime_start = launcher.index("$ragProc = Start-ProcessWithEnv")
 
-    assert preflight < runtime_start
+    assert pythonpath < preflight < runtime_start
 
 
 def test_qdrant_schema_checker_rejects_missing_indexes_and_backfill_fields():

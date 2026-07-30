@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $projectRoot
+$env:PYTHONPATH = "src"
 
 $pythonExe = Join-Path $projectRoot "chat_env\Scripts\python.exe"
 $logsDir = Join-Path $projectRoot "logs"
