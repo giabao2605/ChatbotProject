@@ -43,9 +43,10 @@ def test_intent_pure_detectors_cover_version_and_business_branches():
     )
     assert intent.deterministic_version_intent("xem rev 7") == ("specific_version", [7])
     assert intent.deterministic_version_intent("tài liệu hiện hành") == (None, [])
-    assert intent.extract_mechanical_codes("AB-12 9.3.03844 123-456") == [
-        "123-456", "9.3.03844", "AB-12"
+    assert intent.extract_mechanical_codes("AB-12 9.3.03844 123-456 DEMO-PART-C") == [
+        "123-456", "9.3.03844", "AB-12", "DEMO-PART-C"
     ]
+    assert entity_resolver.has_explicit_code("mã DEMO-PART-C")
     result = intent.deterministic_business_document_intent("PO-12, contract-3, BM-44")
     assert result["document_types"] == ["purchase_order", "contract", "form"]
     assert result["document_references"] == ["PO-12", "BM-44"]
@@ -182,6 +183,56 @@ def test_answer_checks_cover_parsing_units_and_citations():
     assert answer_checks.has_valid_source_citation(good, docs)
     assert answer_checks.source_id_for_evidence_quote("evidence", docs) == "D3P2"
     assert answer_checks.extract_source_ids("[src: D3P2]") == {"D3P2"}
+
+
+def test_answer_checks_accept_quantity_and_unit_split_across_markdown_columns():
+    context = """
+    | Số lượng | Đơn vị |
+    | --- | --- |
+    | 7.25 | kg |
+    """
+
+    assert answer_checks.has_unsupported_units_symbols(
+        "Khối lượng là 7.25 kg",
+        context,
+        "",
+    ) == (False, [])
+    assert answer_checks.has_unsupported_units_symbols(
+        "Khối lượng là 8.25 kg",
+        context,
+        "",
+    ) == (True, ["8.25KG"])
+
+    unrelated_columns = """
+    | Mã tham chiếu | Ghi chú |
+    | --- | --- |
+    | 7.25 | kg |
+    """
+    assert answer_checks.has_unsupported_units_symbols(
+        "Khối lượng là 7.25 kg",
+        unrelated_columns,
+        "",
+    ) == (True, ["7.25KG"])
+
+
+@pytest.mark.parametrize("unit", ["piece", "cái"])
+def test_answer_checks_accept_demo_quantity_units_from_markdown_columns(unit):
+    context = f"""
+    | Số lượng | Đơn vị |
+    | --- | --- |
+    | 12.50 | {unit} |
+    """
+
+    assert answer_checks.has_unsupported_units_symbols(
+        f"Số lượng là 12.50 {unit}",
+        context,
+        "",
+    ) == (False, [])
+    assert answer_checks.has_unsupported_units_symbols(
+        f"Số lượng là 13.50 {unit}",
+        context,
+        "",
+    ) == (True, [f"13.50{unit}".upper()])
 
 
 def test_interaction_router_and_query_decomposition_policy_branches(monkeypatch):

@@ -142,7 +142,7 @@ def test_http_adapter_maps_busy_without_starting_persistence_contract():
     assert response.closed is True
 
 
-def test_http_adapter_hides_transport_exception_details():
+def test_http_adapter_reports_unresponsive_rag_service_without_transport_details():
     adapter = HttpRagStreamAdapter(
         post=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             RuntimeError("internal proxy host")
@@ -152,7 +152,11 @@ def test_http_adapter_hides_transport_exception_details():
 
     events = list(adapter.stream(RagStreamRequest(command(), actor()), None))
 
-    assert events == [RagStreamError(message="Không kết nối được RAG server")]
+    assert events == [
+        RagStreamError(
+            message="Dịch vụ RAG/AI không phản hồi kịp. Vui lòng thử lại."
+        )
+    ]
 
 
 def test_repository_store_persists_turn_evidence_and_final_sources():

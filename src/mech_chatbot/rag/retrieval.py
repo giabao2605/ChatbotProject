@@ -4,7 +4,7 @@
 from mech_chatbot.config.logging import logger, log_trace
 from qdrant_client import models
 from mech_chatbot.rag.rbac import (
-    PART_ID_KEYS_BROAD,
+    _part_id_should_filter,
     compose_retrieval_filters,
     create_rbac_filter,
     LEVEL_ORDER,
@@ -79,13 +79,7 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
         }
         governance = current_published_filter()
         must = list(governance.must or ()) + [
-            models.Filter(should=[
-                models.FieldCondition(
-                    key=key,
-                    match=models.MatchAny(any=exact_ids),
-                )
-                for key in PART_ID_KEYS_BROAD
-            ]),
+            _part_id_should_filter(exact_ids, broad=True),
         ]
         probe_filter = models.Filter(must=must, must_not=governance.must_not)
         points, _ = client.scroll(

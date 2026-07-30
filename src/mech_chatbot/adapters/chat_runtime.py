@@ -162,7 +162,9 @@ class HttpRagStreamAdapter:
             # Transport exceptions are typed at this boundary.  The runner
             # then applies the same no-persistence/error behavior as provider
             # error SSE events without exposing a raw traceback to the client.
-            yield RagStreamError(message="Không kết nối được RAG server")
+            yield RagStreamError(
+                message="Dịch vụ RAG/AI không phản hồi kịp. Vui lòng thử lại."
+            )
 
 
 def _status_code(response: Any) -> int | None:

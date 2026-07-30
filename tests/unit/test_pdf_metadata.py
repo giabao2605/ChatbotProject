@@ -78,10 +78,10 @@ def test_extract_metadata_smart_uses_folder_and_inline_dimension_fallbacks():
 def test_extract_metadata_smart_merges_llm_codes_fields_and_unique_warnings(monkeypatch):
     llm_payload = """```json
 {
-  "ma_chinh": ["MAIN-1000"],
-  "ma_btp": ["BTP-2000"],
-  "ma_vat_tu": ["MAT-3000"],
-  "ma_lien_quan": ["MAIN-1000", "REL-4000"],
+  "ma_chinh": ["Main-1000"],
+  "ma_btp": ["Btp-2000"],
+  "ma_vat_tu": ["Mat-3000"],
+  "ma_lien_quan": ["Main-1000", "Rel-4000"],
   "ten_tai_lieu": "Cum truyen dong",
   "loai_tai_lieu": "Ban ve lap",
   "vat_lieu": "Thep C45",

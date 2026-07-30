@@ -4,6 +4,7 @@
 import re
 import json
 from mech_chatbot.config.logging import logger
+from mech_chatbot.domain.part_ids import canonical_part_id_updates
 from mech_chatbot.llm.vision_client import describe_vision_error, is_retryable_error
 
 # cross-module (owned) imports
@@ -241,7 +242,7 @@ def extract_metadata_smart(
             if quality_warnings is not None:
                 quality_warnings.append(msg)
  
-    return result
+    return {**result, **canonical_part_id_updates(result)}
 
 __all__ = [
     'extract_metadata_smart',

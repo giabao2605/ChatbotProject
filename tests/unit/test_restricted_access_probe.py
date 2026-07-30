@@ -62,6 +62,7 @@ def test_probe_uses_exact_code_governance_filter_and_payload_only(monkeypatch):
     ]
     assert request["with_vectors"] is False
     assert "restricted-fixture" in serialized_filter
+    assert "RESTRICTED-FIXTURE" in serialized_filter
     assert "metadata.phong_ban_quyen" not in serialized_filter
     assert "metadata.effective_status" in serialized_filter
 

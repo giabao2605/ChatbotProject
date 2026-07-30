@@ -16,6 +16,7 @@ from qdrant_client import models
 from mech_chatbot.config.logging import logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.llm.llm_client import cohere_invoke
+from mech_chatbot.rag.entity_resolver import extract_explicit_codes
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.rbac import (
     LEVEL_ORDER,
@@ -140,15 +141,7 @@ def deterministic_version_intent(question):
 
 
 def extract_mechanical_codes(question):
-    patterns = [
-        r"\b\d+\.\d+\.\d+\b",
-        r"\b[A-Z]{2,}[A-Z0-9-]*\d+[A-Z0-9-]*\b",
-        r"\b\d{3}-\d{3}\b",
-    ]
-    codes = []
-    for pattern in patterns:
-        codes.extend(re.findall(pattern, question, re.IGNORECASE))
-    return sorted(set(codes))
+    return extract_explicit_codes(question)
 
 
 def _business_normalize(value):
@@ -343,6 +336,17 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         finally:
             if owns_runtime:
                 call_runtime.close()
+
+    seen_codes = {
+        str(code).strip().casefold()
+        for code in intent_data["base_codes"]
+        if str(code).strip()
+    }
+    for code in regex_codes:
+        normalized = str(code).strip().casefold()
+        if normalized and normalized not in seen_codes:
+            intent_data["base_codes"].append(code)
+            seen_codes.add(normalized)
 
     det_policy, det_versions = deterministic_version_intent(question)
 

@@ -179,6 +179,25 @@ def test_search_intent_provider_failure_falls_back_to_current_state(monkeypatch,
         assert executor.future.cancelled is True
 
 
+@pytest.mark.parametrize(
+    "error",
+    [ValueError("invalid JSON"), concurrent.futures.TimeoutError()],
+)
+def test_search_intent_provider_failure_keeps_explicit_codes_and_version(error):
+    executor = _ImmediateExecutor(error=error)
+
+    _, _, part_ids, inherited, is_bom, data = intent.extract_search_intent(
+        "BOM Version 2 của DEMO-ASM-001, DEMO-PART-C có gì?",
+        runtime=_runtime(executor),
+    )
+
+    assert part_ids == ["demo-asm-001", "demo-part-c"]
+    assert inherited is False
+    assert is_bom is True
+    assert data["detected_versions"] == [2]
+    assert data["version_policy"] == "specific_version"
+
+
 def test_search_intent_broad_question_drops_inherited_part_ids(monkeypatch):
     monkeypatch.setattr(
         intent,

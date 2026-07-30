@@ -113,6 +113,12 @@ if ($LASTEXITCODE -ne 0) {
     throw "Khoi tao Qdrant payload indexes that bai."
 }
 
+Write-Output "Dang chuan hoa chu hoa/chu thuong cua ma tai lieu tren Qdrant..."
+& $pythonExe "scripts\migrations\backfill_qdrant_part_id_case.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "Chuan hoa ma tai lieu tren Qdrant that bai."
+}
+
 Write-Output "Dang kiem tra Qdrant serving metadata..."
 & $pythonExe "scripts\migrations\backfill_qdrant_servable.py"
 if ($LASTEXITCODE -ne 0) {

@@ -9,6 +9,7 @@ Logic giu NGUYEN BAN tu service.py (khong doi hanh vi).
 from qdrant_client import models
 
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
+from mech_chatbot.domain.part_ids import canonical_part_id
 
 LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
 
@@ -135,9 +136,15 @@ def create_rbac_filter(
 def _part_id_should_filter(new_part_ids, broad=False):
     """Dieu kien should match ma chi tiet (part id) tren cac key metadata."""
     keys = PART_ID_KEYS_BROAD if broad else PART_ID_KEYS_STRICT
+    part_ids = [str(part_id).strip() for part_id in (new_part_ids or []) if str(part_id).strip()]
+    match_values = list(dict.fromkeys(
+        value
+        for part_id in part_ids
+        for value in (part_id, canonical_part_id(part_id), part_id.lower())
+    ))
     return models.Filter(
         should=[
-            models.FieldCondition(key=k, match=models.MatchAny(any=new_part_ids))
+            models.FieldCondition(key=k, match=models.MatchAny(any=match_values))
             for k in keys
         ]
     )
