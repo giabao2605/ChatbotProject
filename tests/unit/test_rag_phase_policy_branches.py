@@ -435,6 +435,43 @@ def test_evidence_treats_a_grounded_negative_decomposition_branch_as_partial(
     assert outcome.answer_policy.outcome is AnswerOutcome.PARTIAL_ANSWER
 
 
+def test_evidence_marks_an_invalid_grounded_calculation_as_partial(monkeypatch):
+    from mech_chatbot.rag.phases import evidence
+
+    document = Document(
+        page_content="BOM row found but one operand is missing.",
+        metadata={
+            "doc_id": 7,
+            "trang_so": 1,
+            "file_goc": "bom.md",
+            "version_no": 1,
+            "calculation_provenance": {"status": "missing_operand"},
+        },
+    )
+    primary = _primary()
+    enrichment = _enrichment([document], grounded_math_enabled=True)
+    reranked = RerankOutcome((document,), (), reason_code="reranked")
+    monkeypatch.setattr(
+        evidence,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = evidence.evaluate_evidence(
+        _decision(),
+        primary,
+        enrichment,
+        reranked,
+        _state(),
+    )
+
+    assert isinstance(outcome, EvidenceOutcome)
+    assert outcome.answer_policy.outcome is AnswerOutcome.PARTIAL_ANSWER
+
+
 def test_grounded_calculation_supersedes_only_the_missing_bom_total_notice(
     monkeypatch,
 ):
@@ -860,6 +897,28 @@ def test_grounded_generation_targets_only_the_remaining_non_bom_branch():
         primary,
         documents,
     ) == "Phiên bản hiện hành của P-2 là gì?"
+
+
+def test_grounded_generation_has_no_remaining_question_for_pure_math():
+    from mech_chatbot.rag.phases.generation import (
+        _effective_generation_question,
+    )
+
+    decision = _decision()
+    primary = _primary()
+    documents = [
+        Document(
+            page_content="BOM",
+            metadata={"calculation_provenance": {"status": "valid"}},
+        ),
+        Document(page_content="unrelated retrieval result", metadata={}),
+    ]
+
+    assert _effective_generation_question(
+        decision,
+        primary,
+        documents,
+    ) == ""
 
 
 def test_grounded_generation_drops_compare_verb_after_math_is_done():

@@ -41,9 +41,12 @@ def _search_bom_rows(
 ) -> Sequence[Any]:
     request = context.decision.request
 
-    def find(codes: Sequence[str]) -> Sequence[Any]:
+    def find(
+        codes: Sequence[str],
+        scoped_document_ids: Sequence[int],
+    ) -> Sequence[Any]:
         return search_bom_facts(
-            part_codes=list(codes), document_ids=list(document_ids),
+            part_codes=list(codes), document_ids=list(scoped_document_ids),
             version_policy=context.decision.intent_data.get("version_policy", "current_only"),
             detected_versions=context.decision.intent_data.get("detected_versions"),
             user_department=request.user_department, user_roles=list(context.user_roles),
@@ -52,10 +55,10 @@ def _search_bom_rows(
             allowed_sites=list(context.allowed_sites),
         )
 
-    rows = find(part_ids)
+    rows = find(part_ids, ()) if part_ids else find((), document_ids)
     if rows or not (part_ids and document_ids):
         return rows
-    return find(())
+    return find((), document_ids)
 
 
 def _group_bom_rows(

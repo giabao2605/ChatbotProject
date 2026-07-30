@@ -74,7 +74,7 @@ def _effective_generation_question(
         and not branch.get("bom_lookup")
         and str(branch.get("subquery") or "").strip()
     ]
-    return " và ".join(remaining) or decision.effective_question
+    return " và ".join(remaining)
 
 
 def _generation_plan(

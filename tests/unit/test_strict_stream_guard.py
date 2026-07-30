@@ -380,6 +380,13 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
             "file_goc": "bom-v12.pdf",
             "security_level": "internal",
         }),
+        SimpleNamespace(metadata={
+            "doc_id": 99,
+            "trang_so": 1,
+            "version_no": 1,
+            "file_goc": "unrelated.pdf",
+            "security_level": "internal",
+        }),
     ]
 
     events = _run_through_executor(
@@ -388,6 +395,7 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
         question="Cộng PART-A và PART-B",
         docs=docs,
         runtime=runtime,
+        effective_question="",
     )
     emitted = [event.text for event in events if isinstance(event, RagToken)]
 
@@ -407,6 +415,7 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
             docs=docs,
             cancel_event=cancelled,
             runtime=runtime,
+            effective_question="",
         ))
 
 

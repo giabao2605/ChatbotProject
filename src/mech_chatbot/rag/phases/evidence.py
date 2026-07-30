@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.rag.answer_policy import (
+    AnswerOutcome,
     PolicyEvidence,
     decide_answer_policy,
     explicit_negative_evidence_quote,
     render_cited_explicit_negative_answer,
 )
 from mech_chatbot.rag.evidence_gate import (
+    EvidenceState,
     evaluate_answerability,
     make_insufficient_evidence_message,
 )
@@ -165,6 +167,23 @@ def _decide_evidence_policy(
         ),
         {},
     )
+    if (
+        answer_policy.outcome is AnswerOutcome.FULL_ANSWER
+        and any(
+            isinstance(
+                provenance := document.metadata.get("calculation_provenance"),
+                dict,
+            )
+            and provenance.get("status") != "valid"
+            for document in documents
+        )
+    ):
+        answer_policy = replace(
+            answer_policy,
+            outcome=AnswerOutcome.PARTIAL_ANSWER,
+            evidence_state=EvidenceState.AMBIGUOUS,
+            reason="grounded_calculation_partial",
+        )
     return (
         answer_policy,
         evidence_decision,

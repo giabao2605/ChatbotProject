@@ -960,7 +960,42 @@ def test_bom_lookup_falls_back_to_the_governed_document_scope():
         ["CRAG-EVAL-BOM-001"],
         [],
     ]
-    assert all(call["document_ids"] == [43] for call in calls)
+    assert [call["document_ids"] for call in calls] == [[], [43]]
+
+
+def test_bom_lookup_does_not_scope_explicit_operands_to_one_document():
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import (
+        _search_bom_rows,
+    )
+
+    calls = []
+
+    def search_bom_facts(**kwargs):
+        calls.append(kwargs)
+        return ["row-a", "row-b"] if not kwargs["document_ids"] else ["row-b"]
+
+    context = SimpleNamespace(
+        decision=SimpleNamespace(
+            request=SimpleNamespace(
+                user_department="Technical",
+                max_security_level="internal",
+            ),
+            intent_data={"version_policy": "current_only"},
+        ),
+        user_roles=("viewer",),
+        allowed_departments=("Technical",),
+        allowed_sites=("HQ",),
+    )
+
+    rows = _search_bom_rows(
+        context,
+        ["PART-A-100", "OTHER-A-700"],
+        [49],
+        search_bom_facts,
+    )
+
+    assert rows == ["row-a", "row-b"]
+    assert calls[0]["document_ids"] == []
 
 
 def test_bom_lookup_resolves_the_retrieved_document_even_when_a_code_was_parsed(

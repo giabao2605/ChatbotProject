@@ -652,7 +652,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 rag_end["refusal_reason"] = "grounded_math_post_check"
             log_trace("rag_end", trace_id, **rag_end)
 
-        if violation or not remaining_docs:
+        if violation or not remaining_docs or not str(effective_question or "").strip():
             return grounded_math_stream()
         grounded_prefix = answer
         context_text = _assemble_context(remaining_docs, user_question)
