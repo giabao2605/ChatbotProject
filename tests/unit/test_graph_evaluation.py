@@ -1,4 +1,5 @@
 import json
+import inspect
 
 import pytest
 
@@ -81,6 +82,7 @@ def _edge(edge_id=1, **overrides):
         "security_level": "internal", "publication_state": "published",
         "lifecycle_status": "published", "review_status": "approved",
         "is_current": True, "servable": True, "source_quote": "verified source text",
+        "source_evidence_matches": True,
     }
     value.update(overrides)
     return value
@@ -123,6 +125,35 @@ def test_graph_report_counts_source_quote_as_required_provenance():
 
     assert report["provenance_complete_count"] == 1
     assert report["provenance_completeness"] == 0.5
+
+
+def test_graph_report_rejects_source_evidence_that_no_longer_matches():
+    report = build_graph_report(
+        nodes=[],
+        edges=[_edge(source_evidence_matches=False)],
+        proposals=[],
+        expected_relations=[],
+        review_samples=[],
+        expected_domains=[],
+    )
+
+    assert report["provenance_complete_count"] == 0
+    assert report["provenance_completeness"] == 0.0
+
+
+def test_live_graph_source_match_binds_endpoints_and_governance():
+    source = inspect.getsource(run_live_preflight)
+    contains_branch = source[
+        source.index("(e.RelationType = 'CONTAINS_PART'"):
+        source.index("(e.RelationType = 'USES_MATERIAL'")
+    ]
+
+    assert "sn.CanonicalKey" in contains_branch
+    assert "'document:' + CAST(" in contains_branch
+    assert "e.SourceDocID AS NVARCHAR(30)" in contains_branch
+    assert "e.Department = t.ThuMuc" in source
+    assert "e.Site = t.Site" in source
+    assert "ISNULL(t.SecurityLevel, 'confidential')" in source
 
 
 def test_independent_review_samples_require_unique_identity_and_reviewer():

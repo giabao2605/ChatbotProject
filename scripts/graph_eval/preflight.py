@@ -288,7 +288,111 @@ def run_live_preflight(cases):
                    e.Origin origin, e.ServingStatus serving_status,
                    e.SourceDocID doc_id, e.SourcePage page, e.SourceVersion version,
                    e.Department department, e.Site site, e.SecurityLevel security_level,
-                   e.SourceQuote source_quote
+                   e.SourceQuote source_quote,
+                   CAST(CASE
+                     WHEN e.SourceVersion = t.VersionNo
+                      AND t.IsCurrent = 1 AND t.Servable = 1
+                      AND t.PublicationState = 'published'
+                      AND t.LifecycleStatus = 'published'
+                      AND t.ReviewStatus = 'approved'
+                      AND e.Department = t.ThuMuc
+                      AND e.Site = t.Site
+                      AND e.SecurityLevel =
+                        ISNULL(t.SecurityLevel, 'confidential')
+                      AND (
+                        ((
+                           (e.RelationType = 'HAS_VERSION'
+                            AND t.FamilyID IS NOT NULL
+                            AND sn.CanonicalKey =
+                              'family:' + CAST(t.FamilyID AS NVARCHAR(30))
+                            AND tn.CanonicalKey =
+                              'document:' + CAST(e.SourceDocID AS NVARCHAR(30)))
+                           OR
+                           (e.RelationType = 'SUPERSEDES'
+                            AND t.SupersedesDocID IS NOT NULL
+                            AND sn.CanonicalKey =
+                              'document:' + CAST(e.SourceDocID AS NVARCHAR(30))
+                            AND tn.CanonicalKey =
+                              'document:' + CAST(t.SupersedesDocID AS NVARCHAR(30)))
+                           OR
+                           (e.RelationType = 'HAS_PAGE'
+                            AND sn.CanonicalKey =
+                              'document:' + CAST(e.SourceDocID AS NVARCHAR(30))
+                            AND tn.CanonicalKey =
+                              'page:' + CAST(e.SourceDocID AS NVARCHAR(30))
+                              + ':' + CAST(e.SourcePage AS NVARCHAR(30)))
+                         )
+                         AND EXISTS (
+                           SELECT 1 FROM dbo.DocumentPages source_page
+                           WHERE source_page.DocID = e.SourceDocID
+                             AND source_page.PageNo = e.SourcePage
+                             AND e.SourceQuote = LEFT(COALESCE(
+                               NULLIF(LTRIM(RTRIM(source_page.TextExtract)), N''),
+                               NULLIF(LTRIM(RTRIM(source_page.LocalOCRText)), N''),
+                               NULLIF(LTRIM(RTRIM(source_page.VisionSummary)), N'')
+                             ), 2000)
+                         ))
+                        OR
+                        (e.RelationType IN ('HAS_VERSION', 'SUPERSEDES')
+                         AND (
+                           (e.RelationType = 'HAS_VERSION'
+                            AND t.FamilyID IS NOT NULL
+                            AND sn.CanonicalKey =
+                              'family:' + CAST(t.FamilyID AS NVARCHAR(30))
+                            AND tn.CanonicalKey =
+                              'document:' + CAST(e.SourceDocID AS NVARCHAR(30)))
+                           OR
+                           (e.RelationType = 'SUPERSEDES'
+                            AND t.SupersedesDocID IS NOT NULL
+                            AND sn.CanonicalKey =
+                              'document:' + CAST(e.SourceDocID AS NVARCHAR(30))
+                            AND tn.CanonicalKey =
+                              'document:' + CAST(t.SupersedesDocID AS NVARCHAR(30)))
+                         )
+                         AND EXISTS (
+                           SELECT 1 FROM dbo.BangKeVatTu version_bom
+                           WHERE version_bom.DocID = e.SourceDocID
+                             AND version_bom.TrangSo = e.SourcePage
+                             AND e.SourceQuote = LEFT(
+                               NULLIF(
+                                 LTRIM(RTRIM(version_bom.RawRowJson)), N''
+                               ),
+                               2000
+                             )
+                         ))
+                        OR
+                        (e.RelationType IN ('CONTAINS_PART', 'USES_MATERIAL')
+                         AND EXISTS (
+                           SELECT 1 FROM dbo.BangKeVatTu bom
+                           WHERE bom.DocID = e.SourceDocID
+                             AND bom.TrangSo = e.SourcePage
+                             AND e.SourceQuote = LEFT(
+                               NULLIF(LTRIM(RTRIM(bom.RawRowJson)), N''), 2000
+                             )
+                             AND (
+                               (e.RelationType = 'CONTAINS_PART'
+                                AND sn.CanonicalKey =
+                                  'document:' + CAST(
+                                    e.SourceDocID AS NVARCHAR(30)
+                                  )
+                                AND tn.CanonicalKey =
+                                  'part:' + LOWER(LTRIM(RTRIM(bom.MaHang))))
+                               OR
+                               (e.RelationType = 'USES_MATERIAL'
+                                AND sn.CanonicalKey =
+                                  'part:' + LOWER(LTRIM(RTRIM(bom.MaHang)))
+                                AND tn.CanonicalKey =
+                                  'material:' + LOWER(LTRIM(RTRIM(
+                                    COALESCE(
+                                      NULLIF(bom.NormalizedMaterial, ''),
+                                      bom.VatLieu
+                                    )
+                                  ))))
+                             )
+                         ))
+                      )
+                     THEN 1 ELSE 0
+                   END AS bit) source_evidence_matches
             FROM dbo.KnowledgeGraphEdge e
             JOIN dbo.KnowledgeGraphNode sn ON sn.NodeID=e.SourceNodeID
             JOIN dbo.KnowledgeGraphNode tn ON tn.NodeID=e.TargetNodeID

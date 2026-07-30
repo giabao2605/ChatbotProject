@@ -14,6 +14,8 @@ def _relation_identity(value):
 
 
 def _has_provenance_value(value):
+    if isinstance(value, bool):
+        return value
     return bool(value.strip()) if isinstance(value, str) else value is not None
 
 
@@ -81,7 +83,7 @@ def build_graph_report(
     domains = list(dict.fromkeys(str(value) for value in expected_domains or ()))
     provenance_fields = (
         "doc_id", "page", "version", "department", "site", "security_level",
-        "source_quote",
+        "source_quote", "source_evidence_matches",
     )
     provenance_complete = sum(
         all(_has_provenance_value(edge.get(field)) for field in provenance_fields)
