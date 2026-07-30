@@ -33,6 +33,9 @@ ROLLBACK_TEST_PROFILES = {
         "-m", "pytest", "tests/unit/test_graph_rag.py",
         "tests/unit/test_graph_evaluation.py", "-q",
     ),
+    frozenset({"RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"}): (
+        "-m", "pytest", "tests/unit/test_community_summaries.py", "-q",
+    ),
 }
 
 

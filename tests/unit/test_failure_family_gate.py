@@ -31,6 +31,9 @@ def valid_rollback(tmp_path):
             "-m", "pytest", "tests/unit/test_graph_rag.py",
             "tests/unit/test_graph_evaluation.py", "-q",
         ],
+        ("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",): [
+            "-m", "pytest", "tests/unit/test_community_summaries.py", "-q",
+        ],
     }
     paths = []
     for index, (flags, command) in enumerate(evidence_groups.items()):

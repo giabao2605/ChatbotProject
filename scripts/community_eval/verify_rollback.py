@@ -4,30 +4,39 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scripts.eval.verify_failure_family_rollback import (
+    ROLLBACK_TEST_PROFILES,
+    clean_git_sha,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def verify(output):
-    git_sha = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-    ).strip()
-    command = [
-        sys.executable, "-m", "pytest",
-        "tests/unit/test_community_summaries.py", "-q",
-    ]
+    git_sha = clean_git_sha(ROOT)
+    flags = frozenset({"RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"})
+    command = [sys.executable, *ROLLBACK_TEST_PROFILES[flags]]
+    rollback_environment = os.environ.copy()
+    rollback_environment["RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"] = "false"
     result = subprocess.run(
-        command, cwd=ROOT, check=False, capture_output=True, text=True
+        command, cwd=ROOT, check=False, capture_output=True, text=True,
+        env=rollback_environment,
     )
+    if clean_git_sha(ROOT) != git_sha:
+        raise RuntimeError("repository commit changed during rollback verification")
     report = {
         "schema": "rollback-test-evidence-v1",
         "git_sha": git_sha,
-        "flags": ["RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"],
+        "flags": sorted(flags),
+        "verified_flag_state": {
+            "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": False,
+        },
         "passed": result.returncode == 0,
         "tested_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "command": command[1:],

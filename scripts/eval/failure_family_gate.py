@@ -24,13 +24,7 @@ _PAIR_FIELDS = (
     "execution_context",
 )
 
-_REQUIRED_ROLLBACK_FLAGS = frozenset({
-    "RAG_CLAIM_REPAIR_ENABLED",
-    "RAG_CRAG_ENABLED",
-    "RAG_GRAPH_RETRIEVAL_ENABLED",
-    "RAG_GROUNDED_MATH_ENABLED",
-    "RAG_QUERY_DECOMPOSITION_ENABLED",
-})
+_REQUIRED_ROLLBACK_FLAGS = frozenset().union(*ROLLBACK_TEST_PROFILES)
 
 
 def _flags(value) -> frozenset[str] | None:

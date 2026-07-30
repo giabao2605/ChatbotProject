@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import scripts.community_eval.verify_rollback as community_rollback
 import scripts.decomposition_eval.verify_rollback as decomposition_rollback
 import scripts.eval.verify_failure_family_rollback as rollback_verifier
 import scripts.graph_eval.verify_rollback as graph_rollback
@@ -37,6 +38,9 @@ def _evidence(*flags: str, passed: bool = True, git_sha: str = "a" * 40):
             "-m", "pytest", "tests/unit/test_graph_rag.py",
             "tests/unit/test_graph_evaluation.py", "-q",
         ],
+        frozenset({"RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"}): [
+            "-m", "pytest", "tests/unit/test_community_summaries.py", "-q",
+        ],
     }
     return {
         "schema": "rollback-test-evidence-v1",
@@ -59,6 +63,7 @@ def test_composes_commit_pinned_feature_rollback_verification(tmp_path):
         _evidence("RAG_GROUNDED_MATH_ENABLED"),
         _evidence("RAG_QUERY_DECOMPOSITION_ENABLED"),
         _evidence("RAG_GRAPH_RETRIEVAL_ENABLED"),
+        _evidence("RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"),
     )):
         path = tmp_path / f"rollback-{index}.json"
         path.write_text(json.dumps(evidence), encoding="utf-8")
@@ -71,6 +76,7 @@ def test_composes_commit_pinned_feature_rollback_verification(tmp_path):
     assert report["flags"] == [
         "RAG_CLAIM_REPAIR_ENABLED",
         "RAG_CRAG_ENABLED",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
         "RAG_GRAPH_RETRIEVAL_ENABLED",
         "RAG_GROUNDED_MATH_ENABLED",
         "RAG_QUERY_DECOMPOSITION_ENABLED",
@@ -143,6 +149,7 @@ def test_clean_git_sha_rejects_uncommitted_changes(monkeypatch, tmp_path):
         (grounded_math_rollback, "RAG_GROUNDED_MATH_ENABLED"),
         (decomposition_rollback, "RAG_QUERY_DECOMPOSITION_ENABLED"),
         (graph_rollback, "RAG_GRAPH_RETRIEVAL_ENABLED"),
+        (community_rollback, "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"),
     ],
 )
 def test_single_flag_verifiers_force_disabled_environment(
