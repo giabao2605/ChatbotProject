@@ -42,6 +42,10 @@ qua public interface, không khóa private implementation.
 
 ## Trạng thái hiện tại tại lúc lập kế hoạch
 
+Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative mới hơn nằm
+ở mục `Tiến độ thực thi cập nhật 2026-07-30` ngay bên dưới và trong
+`data/integrated_hardening_v1/rag_production_decision_pack.json`.
+
 - Branch `codex/codebase-layer-refactor` sạch và đang trước remote 7 commit.
 - HEAD `c542eca` chứa 4.281 dòng thêm cho Jina/rerank evaluation; artifact full-RAG
   hiện `passed=false`, `technical_authorized=false`, `release_authorized=false`.
@@ -61,6 +65,174 @@ qua public interface, không khóa private implementation.
 - Đường triển khai đã khóa là Windows LAN/local.
 - App startup chưa có cùng fail-fast config validation như RAG/worker.
 - Repo chưa có Playwright E2E chạy tự động.
+
+## Tiến độ thực thi cập nhật 2026-07-30
+
+### Mốc Git và phạm vi bằng chứng
+
+- Branch thực thi: `codex/codebase-layer-refactor`.
+- Commit code được dùng để chạy clean evidence:
+  `2bd0a343a4c036076698b90090d2bd8482b204c4`.
+- Commit cập nhật decision pack gần nhất: `c7ad3e8`.
+- Primary worktree vẫn có thay đổi Part ID/chat/retrieval ngoài phạm vi của chuỗi
+  hardening này. Các thay đổi đó được giữ nguyên, không stage, không revert và
+  không dùng làm nguồn cho clean evidence.
+- Clean evidence được chạy trong detached worktree riêng, cùng đúng commit
+  `2bd0a34`; không trộn artifact từ primary dirty worktree.
+- Đường triển khai đã chốt là Windows LAN/local, không dùng Docker. Không có
+  Docker command, image, container hoặc Docker artifact nào được tạo/chỉnh sửa
+  trong chuỗi thực thi này.
+
+### Tổng quan theo ticket
+
+| Ticket | Trạng thái | Đã chứng minh | Còn thiếu để đóng ticket |
+| --- | --- | --- | --- |
+| 1. Release candidate và provenance | Đã hoàn tất nền tảng | Git/evidence được pin theo commit; provider manifest và runtime artifact có hash; clean worktree verifier hoạt động | Khi mở cửa sổ eval mới vẫn phải pin lại commit/snapshot/provider theo đúng window |
+| 2. Deployment và security fail-fast | Đã hoàn tất code; live recapture chưa chạy | Windows launcher fail nếu worktree bẩn, restore evidence sai, migration/preflight lỗi hoặc runtime-state drift; health có deployment/runtime identity | Chạy launcher thật trên restore evidence hợp lệ và thu hardened live preflight mới |
+| 3. Cohort tài khoản test | Đã hoàn tất, không tạo/xóa account | Reuse 33 account `demo_...`; viewer/uploader/reviewer login và profile đúng; credential không vào Git/report | Chỉ bổ sung account nếu một future matrix thiếu actor; cần phê duyệt riêng |
+| 4. Browser E2E và baseline all-off | Đã đo baseline | Browser `3/3`, golden `5/5`, frontend `32/32`, load c1/c5 không lỗi; mọi governed flag OFF | Chạy lại health/browser smoke sau hardened launcher để thay evidence pre-hardening |
+| 5. CRAG + Claim Repair | Dừng đúng stop rule, disposition `inconclusive` | Pair 01 candidate `9/9`, correction/repair được exercise, provider failure `0`; gate bắt đúng latency ratio `1.5426 > 1.25` | Cửa sổ ba pair mới khi provider ổn định; không nới latency gate |
+| 6. Grounded Math | Dừng đúng provider gate, disposition `inconclusive` | Fixture/preflight `16/16`, rollback `2/2`; provider smoke ghi đúng `0/5` timeout và không chạy pair | Fresh provider smoke `5/5`, immutable pairs và human review |
+| 7. Query Decomposition | Fixture/evaluator đã harden; formal series chưa chạy | Fixture additive, không delete/update; preflight `13/13`; source row/provenance khớp; test decomposition/evaluator đạt | Ba immutable pair trên cùng runtime identity và owner review toàn bộ pack |
+| 8. GraphRAG và Community Summaries | Provenance code hoàn tất; blocked bởi independent review | Graph quote/page/version/endpoints/governance được bind với nguồn hiện hành; queue có 22 edge; community detection read-only tạo 6 community | Tối thiểu 20 independent label, precision tối thiểu 95%; sau đó mới generate/review summary |
+| 9. Integrated matrix, rollback và production audit | Offline capability hoàn tất; live matrix/restore thật chưa chạy | Backend/frontend/build xanh; offline gate đạt; security matrix 15 case, leakage 0; restore tooling fail-closed; security review không còn HIGH/MEDIUM | Restore drill trên disposable targets, hardened all-off runtime, provider-ready matrix c1/c5 và rollback smoke |
+| 10. Decision pack cuối | Deliverable đã có; chưa được chủ dự án ký | JSON decision pack máy đọc được, fail-closed; từng feature có disposition/next gate; hash evidence khớp | Owner signature và release decisions đầy đủ; chỉ sau đó mới tạo feature-on activation bundle |
+
+### Những thay đổi đã implement và commit
+
+| Commit | Nội dung đã hoàn thành |
+| --- | --- |
+| `7e240cc` | Fixture Query Decomposition chỉ thêm row thiếu; loại đường delete/shared destructive ingest |
+| `b929920` | Khớp decomposition manifest với source row/provenance thật |
+| `3fb13f2` | Ghi disposition hiện hành cho từng retrieval/RAG feature |
+| `b7e8c11` | Tạo production decision pack fail-closed |
+| `573cfb7` | Bắt buộc Graph edge có source provenance |
+| `a1413c7` | Bind integrated gate với release flags/decisions thay vì chỉ capability |
+| `912fa59` | Bắt buộc load evidence ở concurrency 1 và 5 |
+| `a94a812` | Bổ sung rollback contract cho Community Summaries |
+| `a886a8f` | Pin Windows runtime bằng deployment ID, Git SHA và snapshot fingerprint |
+| `f1c65a3` | Backup cleanup chuyển thành opt-in và fail-closed |
+| `24d35c4` | Thêm guarded SQL/Qdrant restore drill, không `REPLACE`, không auto-cleanup |
+| `ace0944` | Canonicalize line ending khi verify provider manifest; runtime artifact vẫn raw-hash |
+| `5b1f4bb` | Bind benchmark/load report với runtime identity; kiểm identity trước/sau từng concurrency level |
+| `3065b98` | Bind Graph source quote với current document/page/BOM, semantic endpoints và governance |
+| `2bd0a34` | Bind launcher với restore receipt và fingerprint trạng thái SQL/Qdrant thực sau migration |
+| `c7ad3e8` | Refresh decision pack và bằng chứng production hiện hành |
+
+### Chi tiết hardening đã hoàn thành
+
+1. Runtime và benchmark provenance:
+   - RAG `/health` trả `deployment_id`, `git_sha`, `snapshot_fingerprint`,
+     `provider_configuration_sha256`, collection, execution context, flags và
+     versions.
+   - Benchmark đọc identity trước và sau từng level; runtime restart/config drift
+     giữa c1/c5 làm window fail thay vì gắn identity cũ.
+   - Integrated load report chỉ nhận benchmark/eval có cùng Git SHA, snapshot,
+     provider hash, governance scope, collection, execution context và pipeline
+     configuration.
+
+2. Windows launcher provenance:
+   - Từ chối primary worktree bẩn hoặc commit đổi trong lúc chuẩn bị.
+   - Không nhận `RAG_SNAPSHOT_FINGERPRINT` tự khai báo.
+   - Bắt buộc restore evidence nằm trong `.local/restore-drill`, đúng SHA-256,
+     đúng current commit, source database/collection và disposable target.
+   - Sau migration, Qdrant index/backfill và production preflight, launcher mới
+     hash trạng thái live SQL/Qdrant ngay trước `Start-Process`.
+   - SQL serving tables được đọc hai lượt trong transaction `SERIALIZABLE`.
+     Qdrant payload, vectors và collection config được hash hai lượt; same-count
+     mutation hoặc digest drift đều làm startup fail.
+
+3. Restore/backup safety:
+   - SQL restore bắt buộc target có dạng source-prefixed `RestoreTest`, target
+     chưa tồn tại, backup đúng source database và có BackupSetGUID/LSN đầy đủ.
+   - Không dùng `WITH REPLACE`, không `DROP DATABASE`, không cleanup tự động.
+   - SQL UNC/traversal path bị từ chối; partial restore ghi rõ
+     `target_may_exist=true`.
+   - Qdrant restore chỉ nhận exact configured origin/path, snapshot thuộc source
+     collection và checksum khớp; target phải chưa tồn tại.
+   - Backup cleanup chỉ xóa đúng filename do current database tạo theo mẫu
+     timestamp; prefix collision của database khác không còn bị xóa nhầm.
+
+4. Graph provenance:
+   - Approved edge phải có source doc/page/version/quote và
+     `source_evidence_matches=true`.
+   - Quote phải khớp exact current `DocumentPages` hoặc `BangKeVatTu.RawRowJson`.
+   - `HAS_VERSION`, `SUPERSEDES`, `HAS_PAGE`, `CONTAINS_PART` và
+     `USES_MATERIAL` bind canonical source/target endpoints.
+   - Department, site và security level của edge phải khớp `TaiLieu` hiện hành.
+   - Missing migration, stale quote, stale version, wrong endpoint hoặc stale
+     governance đều fail provenance completeness.
+
+5. Restore/runtime fingerprint:
+   - SQL backup receipt dùng BackupSetGUID, First/Last/Checkpoint/DatabaseBackup
+     LSN, BackupType và Position; không dùng hash chuỗi path làm identity.
+   - Runtime fingerprint bao phủ core document/BOM/attribute/material/graph/
+     community tables, RBAC serving metadata và toàn bộ Qdrant point payload,
+     vectors, payload schema và collection configuration.
+
+### Bằng chứng kiểm thử authoritative hiện hành
+
+- Clean backend offline tại `2bd0a34`:
+  `2455 passed, 1 skipped, 21 deselected`; live integration và eval bị loại đúng
+  marker.
+- Frontend tại cùng commit: `32/32` unit test và production build đạt.
+- Integrated offline artifact:
+  `.local/integrated-hardening/2bd0a34/offline.json`,
+  SHA-256
+  `cf502f5ddbd259eba867005f92a47c96036760f8b299190f80b3e118932b728f`.
+  Kết quả: `63/63`, flags default OFF, cache isolation/strict stream/rollback đạt.
+- Integrated preflight artifact:
+  `.local/integrated-hardening/2bd0a34/preflight.json`,
+  SHA-256
+  `a3c486162c991b0e26e07928a8bc2762ef8c4cac6745d404311c28aa73062333`.
+  Kết quả: capability đạt, security `15/15`, leakage `0`, nhưng
+  `ready_for_live_matrix=false`.
+- Security subagent đã chạy negative probes cho runtime drift, same-count
+  Qdrant mutation, `TaiLieuKyThuat`, SQL backup identity, path/checksum và Graph
+  endpoint/governance; kết luận không còn blocker HIGH/MEDIUM trong phạm vi.
+- PowerShell parser, Python compile và `git diff --check` đều đạt.
+
+### Trạng thái fail-closed hiện tại
+
+- `authoritative_for_live_activation=false`.
+- `ready_for_live_matrix=false`.
+- `feature_activation_authorized=false`.
+- `release_decisions.json` vẫn `status=incomplete`.
+- Late Interaction là feature duy nhất có quyết định `rejected`.
+- CRAG, Claim Repair, Grounded Math, Query Decomposition, Graph Retrieval và
+  Community Summaries chưa có accepted/rejected owner decision.
+- Activation profile phải giữ `all_off`; không tạo feature-on bundle và không
+  bật live flag từ các kết quả offline/capability.
+
+### Phần chưa chạy và thứ tự gated tiếp theo
+
+1. Chủ dự án xác nhận cho phép tạo disposable restore targets và chốt:
+   SQL backup path, SQL data directory, target database, Qdrant snapshot
+   URL/name/checksum và target collection.
+2. Chạy `scripts/ops/restore_drill.py --execute` đúng một lần trên các target đã
+   xác nhận. Giữ nguyên target/artifact để review; không cleanup tự động.
+3. Xác minh restore artifact hash và chạy Windows launcher trên clean commit.
+   Bước này có migration/backfill live nên cần quyền vận hành rõ ràng.
+4. Thu hardened all-off `/health`, production preflight và browser smoke mới;
+   bằng chứng pre-hardening `5/5` không được dùng thay thế.
+5. Khi provider sẵn sàng, chạy fresh smoke và các feature window theo dependency:
+   CRAG → Grounded Math → Query Decomposition → Graph → Community.
+6. Dừng ngay ở failed pair/gate đầu tiên; không rerun window để chọn số đẹp và
+   không nới threshold.
+7. Thu independent Graph labels và owner review cho các pack bắt buộc.
+8. Chỉ khi prerequisites, human decisions, restore/rollback và matrix c1/c5 đều
+   đạt mới hoàn tất `release_decisions.json`, ký decision pack và tạo activation
+   bundle.
+
+### Những hành động chưa được thực hiện
+
+- Chưa chạy restore thật hoặc tạo disposable SQL/Qdrant target.
+- Chưa chạy hardened Windows launcher sau commit `2bd0a34`.
+- Chưa chạy provider smoke/window mới.
+- Chưa chạy integrated live matrix c1/c5.
+- Chưa thay đổi account, credential hoặc release decision.
+- Chưa bật bất kỳ governed RAG feature nào.
+- Chưa push branch, mở PR hoặc deploy ra hệ thống ngoài.
 
 ## Bản đồ phụ thuộc
 
