@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 
 
@@ -183,6 +185,12 @@ def build_runtime_state_identity(
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--git-sha")
+    args = parser.parse_args()
+    if args.git_sha and not re.fullmatch(r"[0-9a-f]{40}-dirty-demo", args.git_sha):
+        parser.error("--git-sha must be a commit SHA suffixed with -dirty-demo")
+
     settings = load_settings()
     sql_runtime = build_database_runtime(
         SqlSettings.from_settings(settings)
@@ -199,7 +207,7 @@ def main() -> int:
                 identity = build_runtime_state_identity(
                     connection,
                     qdrant_runtime.client,
-                    git_sha=clean_git_sha(ROOT),
+                    git_sha=args.git_sha or clean_git_sha(ROOT),
                     database=settings.SQL_DATABASE,
                     collection=settings.QDRANT_COLLECTION,
                 )

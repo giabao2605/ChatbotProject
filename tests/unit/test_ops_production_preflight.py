@@ -254,6 +254,18 @@ def test_lan_launcher_pins_runtime_provenance():
     assert "$currentHead -ne $head" in launcher
 
 
+def test_lan_launcher_allows_explicit_dirty_demo_without_weakening_default():
+    launcher = (ROOT / "scripts" / "ops" / "start_demo_lan.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "param([switch]$AllowDirtyWorktree)" in launcher
+    assert "!$AllowDirtyWorktree -and $initialStatus" in launcher
+    assert "!$AllowDirtyWorktree -and $currentStatus" in launcher
+    assert "if (!$AllowDirtyWorktree) {\n    $restoreEvidencePath" in launcher
+    assert '$captureArgs += @("--git-sha", "$head-dirty-demo")' in launcher
+
+
 def test_qdrant_schema_checker_rejects_missing_indexes_and_backfill_fields():
     from scripts.create_qdrant_indexes import REQUIRED_INDEXES
     from scripts.diagnostics.check_qdrant_schema import readiness_failures

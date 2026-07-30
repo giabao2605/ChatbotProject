@@ -1,3 +1,5 @@
+param([switch]$AllowDirtyWorktree)
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -24,10 +26,11 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($head)) {
     throw "Khong doc duoc git commit hien tai."
 }
 $initialStatus = & git status --porcelain
-if ($LASTEXITCODE -ne 0 -or $initialStatus) {
+if ($LASTEXITCODE -ne 0 -or (!$AllowDirtyWorktree -and $initialStatus)) {
     throw "Worktree phai sach truoc khi khoi dong runtime production."
 }
-$deploymentId = "windows-lan-$($head.Substring(0, 12))"
+$deploymentMode = if ($AllowDirtyWorktree) { "dirty" } else { "clean" }
+$deploymentId = "windows-lan-$deploymentMode-$($head.Substring(0, 12))"
 
 function Get-DotEnvValue {
     param([string]$Path, [string]$Key)
@@ -46,30 +49,32 @@ function Get-DotEnvValue {
 }
 
 $envPath = Join-Path $projectRoot ".env"
-$restoreEvidencePath = $env:RAG_RESTORE_EVIDENCE_PATH
-if (!$restoreEvidencePath) {
-    $restoreEvidencePath = Get-DotEnvValue -Path $envPath -Key "RAG_RESTORE_EVIDENCE_PATH"
-}
-$restoreEvidenceSha256 = $env:RAG_RESTORE_EVIDENCE_SHA256
-if (!$restoreEvidenceSha256) {
-    $restoreEvidenceSha256 = Get-DotEnvValue -Path $envPath -Key "RAG_RESTORE_EVIDENCE_SHA256"
-}
-if (
-    [string]::IsNullOrWhiteSpace($restoreEvidencePath) -or
-    [string]::IsNullOrWhiteSpace($restoreEvidenceSha256)
-) {
-    throw "Thieu restore evidence path/SHA-256 da duoc xac minh."
-}
-$restoreReceiptFingerprint = (
-    & $pythonExe "scripts\ops\verify_restore_evidence.py" `
-        --evidence $restoreEvidencePath `
-        --sha256 $restoreEvidenceSha256
-).Trim()
-if (
-    $LASTEXITCODE -ne 0 -or
-    $restoreReceiptFingerprint -notmatch "^[0-9a-f]{64}$"
-) {
-    throw "Restore evidence khong hop le; khong khoi dong runtime."
+if (!$AllowDirtyWorktree) {
+    $restoreEvidencePath = $env:RAG_RESTORE_EVIDENCE_PATH
+    if (!$restoreEvidencePath) {
+        $restoreEvidencePath = Get-DotEnvValue -Path $envPath -Key "RAG_RESTORE_EVIDENCE_PATH"
+    }
+    $restoreEvidenceSha256 = $env:RAG_RESTORE_EVIDENCE_SHA256
+    if (!$restoreEvidenceSha256) {
+        $restoreEvidenceSha256 = Get-DotEnvValue -Path $envPath -Key "RAG_RESTORE_EVIDENCE_SHA256"
+    }
+    if (
+        [string]::IsNullOrWhiteSpace($restoreEvidencePath) -or
+        [string]::IsNullOrWhiteSpace($restoreEvidenceSha256)
+    ) {
+        throw "Thieu restore evidence path/SHA-256 da duoc xac minh."
+    }
+    $restoreReceiptFingerprint = (
+        & $pythonExe "scripts\ops\verify_restore_evidence.py" `
+            --evidence $restoreEvidencePath `
+            --sha256 $restoreEvidenceSha256
+    ).Trim()
+    if (
+        $LASTEXITCODE -ne 0 -or
+        $restoreReceiptFingerprint -notmatch "^[0-9a-f]{64}$"
+    ) {
+        throw "Restore evidence khong hop le; khong khoi dong runtime."
+    }
 }
 
 # Build Vue sources before starting the static app server. Without this step,
@@ -253,13 +258,17 @@ if (
     throw "Git commit da thay doi trong luc chuan bi runtime."
 }
 $currentStatus = & git status --porcelain
-if ($LASTEXITCODE -ne 0 -or $currentStatus) {
+if ($LASTEXITCODE -ne 0 -or (!$AllowDirtyWorktree -and $currentStatus)) {
     throw "Worktree da thay doi trong luc chuan bi runtime."
 }
 
 Write-Output "Dang bam van tay trang thai SQL/Qdrant hien tai..."
+$captureArgs = @("scripts\ops\capture_runtime_state.py")
+if ($AllowDirtyWorktree) {
+    $captureArgs += @("--git-sha", "$head-dirty-demo")
+}
 $snapshotFingerprint = (
-    & $pythonExe "scripts\ops\capture_runtime_state.py"
+    & $pythonExe $captureArgs
 ).Trim()
 if ($LASTEXITCODE -ne 0 -or $snapshotFingerprint -notmatch "^[0-9a-f]{64}$") {
     throw "Khong bam duoc van tay runtime sau migration; khong khoi dong service."
