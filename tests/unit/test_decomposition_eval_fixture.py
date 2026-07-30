@@ -19,7 +19,7 @@ def _fixture_bom_row(**overrides):
     row = {
         "MaHang": "CRAG-EVAL-PART-A",
         "SoLuong": Decimal("2"),
-        "Unit": "cái",
+        "Unit": BOM_ROWS[0]["unit"],
         "SourceTableIndex": 1,
         "RawRowJson": json.dumps(BOM_ROWS[0]),
     }
@@ -158,6 +158,18 @@ def test_manifest_labels_every_case_that_runs_grounded_math():
     assert len(math_cases) == 3
     assert all(case.get("expected_calculation") for case in math_cases)
     assert all(
+        case["expected_calculation"]["formula"] == "2 + 3 = 5"
+        and case["expected_calculation"]["unit"] == ""
+        for case in math_cases
+    )
+    assert all(
+        next(
+            claim for claim in case["expected_claims"]
+            if claim["id"] == "bom-total"
+        )["required_terms"] == ["5"]
+        for case in math_cases
+    )
+    assert all(
         [source["source_row_key"] for source in case["expected_calculation"]["sources"]]
         == ["decomp-row-a", "decomp-row-b"]
         for case in math_cases
@@ -196,12 +208,58 @@ def test_preflight_resolves_grounded_math_row_sources():
     assert "1,500" in mixed_math["allowed_numbers"]
 
 
+def test_preflight_resolves_ingested_source_row_ids_without_inventing_a_unit():
+    documents, _rows, points = _fixture()
+    rows = [{
+        "ID": 148 + index,
+        "DocID": 12,
+        "TrangSo": 1,
+        "SoLuong": Decimal(value),
+        "Unit": None,
+        "RawRowJson": json.dumps({
+            "source_row_id": f"table-1-row-{index + 1}",
+            "source_table_index": 1,
+            "source_row_index": index + 1,
+            "quantity_decimal": value,
+        }),
+    } for index, value in enumerate(("2", "3"))]
+
+    report = check_fixture_cases(
+        cases(), documents, rows, points, collection=FIXTURE_COLLECTION
+    )
+
+    assert report["passed"] is True
+    sources = report["case_resolutions"]["decomp-sql-bom-doc"][
+        "expected_calculation"
+    ]["sources"]
+    assert [(source["source_id"], source["unit"]) for source in sources] == [
+        ("BOM-148", ""),
+        ("BOM-149", ""),
+    ]
+
+
 def test_preflight_fails_closed_when_bom_provenance_is_missing():
     documents, rows, points = _fixture()
     report = check_fixture_cases(cases(), documents, rows[:-1], points, collection=FIXTURE_COLLECTION)
 
     assert report["passed"] is False
     assert any(item["reason"] == "bom_source_row_missing" for item in report["failures"])
+
+
+def test_preflight_fails_closed_on_duplicate_bom_source_identity():
+    documents, rows, points = _fixture()
+    duplicate = {**rows[0], "ID": 999}
+
+    report = check_fixture_cases(
+        cases(), documents, [*rows, duplicate], points,
+        collection=FIXTURE_COLLECTION,
+    )
+
+    assert report["passed"] is False
+    assert any(
+        item["reason"] == "bom_source_row_duplicate"
+        for item in report["failures"]
+    )
 
 
 def test_prepare_fixture_adds_only_missing_bom_rows(tmp_path, monkeypatch):

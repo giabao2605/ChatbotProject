@@ -58,7 +58,7 @@ def _bom_calculation():
     } for row in BOM_ROWS]
     return {
         "operation": "sum", "status": "valid",
-        "formula": "2 + 3 = 5 cái", "unit": "cái",
+        "formula": "2 + 3 = 5", "unit": "",
         "exact_value": "5", "display_value": "5",
         "allowed_numbers": ["2", "3"], "sources": sources,
     }
@@ -85,7 +85,7 @@ def cases():
     version = _claim(
         "version", ["phiên bản", "CRAG-EVAL-NUM-001", "12"], "numbers"
     )
-    bom = _claim("bom-total", ["5", "cái"], "bom")
+    bom = _claim("bom-total", ["5"], "bom")
     install = _claim("install", ["quy trình", "lắp", "CRAG-EVAL-PART-C"], "no_cost")
     alias_version = _claim(
         "alias-version",

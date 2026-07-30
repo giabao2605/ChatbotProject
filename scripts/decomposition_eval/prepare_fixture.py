@@ -26,11 +26,17 @@ from mech_chatbot.composition.maintenance_runtime import with_configured_reposit
 def _missing_bom_rows(existing):
     expected = {row["row_key"]: row for row in BOM_ROWS}
     expected_parts = {row["part"]: row["row_key"] for row in BOM_ROWS}
+    expected_source_rows = {
+        row["source_row_id"]: row["row_key"] for row in BOM_ROWS
+    }
     actual = {}
     for row in existing:
         try:
+            payload = json.loads(row.get("RawRowJson") or "{}")
             row_key = str(
-                json.loads(row.get("RawRowJson") or "{}").get("row_key") or ""
+                payload.get("row_key")
+                or expected_source_rows.get(payload.get("source_row_id"))
+                or ""
             )
         except (TypeError, json.JSONDecodeError):
             row_key = ""
@@ -65,7 +71,7 @@ def _missing_bom_rows(existing):
         if not all((
             current.get("MaHang") == wanted["part"],
             quantity_matches,
-            current.get("Unit") == wanted["unit"],
+            str(current.get("Unit") or "") == wanted["unit"],
             index_matches,
         )):
             raise RuntimeError(f"conflicting decomposition BOM row: {row_key}")

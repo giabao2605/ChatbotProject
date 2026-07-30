@@ -23,7 +23,8 @@ from mech_chatbot.composition.maintenance_runtime import with_configured_reposit
 
 def _row_key(row):
     try:
-        return str(json.loads(row.get("RawRowJson") or "{}").get("row_key") or "")
+        payload = json.loads(row.get("RawRowJson") or "{}")
+        return str(payload.get("row_key") or payload.get("source_row_id") or "")
     except (TypeError, json.JSONDecodeError):
         return ""
 
@@ -115,7 +116,31 @@ def check_fixture_cases(
         points_by_doc.setdefault(int(point.get("doc_id") or 0), []).append(point)
     failures = []
     resolutions = {}
-    actual_rows = {_row_key(row): row for row in bom_rows if _row_key(row)}
+    actual_rows = {}
+    for row in bom_rows:
+        row_key = _row_key(row)
+        if not row_key:
+            continue
+        if row_key in actual_rows:
+            failures.append({
+                "case_id": "decomp-sql-bom-doc",
+                "reason": "bom_source_row_duplicate",
+                "row_key": row_key,
+            })
+            continue
+        actual_rows[row_key] = row
+    for expected in BOM_ROWS:
+        source_row_id = expected.get("source_row_id")
+        keyed = actual_rows.get(expected["row_key"])
+        sourced = actual_rows.get(source_row_id)
+        if keyed and sourced and keyed.get("ID") != sourced.get("ID"):
+            failures.append({
+                "case_id": "decomp-sql-bom-doc",
+                "reason": "bom_source_row_duplicate",
+                "row_key": expected["row_key"],
+            })
+        elif not keyed and sourced:
+            actual_rows[expected["row_key"]] = sourced
     bom_document = documents.get(BOM_DOCUMENT.casefold())
     for case in cases:
         referenced = {
@@ -242,7 +267,7 @@ def check_fixture_cases(
                 })
             elif (
                 _decimal(row.get("SoLuong")) != _decimal(expected["value"])
-                or str(row.get("Unit")) != expected["unit"]
+                or str(row.get("Unit") or "") != expected["unit"]
             ):
                 failures.append({
                     "case_id": "decomp-sql-bom-doc",
