@@ -3,9 +3,10 @@
   "as_of": "2026-07-30",
   "scope": "governed_rag_feature_activation",
   "deployment_path": "windows_lan_no_docker",
-  "source_head_commit": "3fb13f2bab8bd38833d4908cba885c08ecc7b0b9",
+  "source_head_commit": "2bd0a343a4c036076698b90090d2bd8482b204c4",
   "authoritative_for_live_activation": false,
   "worktree_clean": false,
+  "evidence_worktree_clean": true,
   "owner_signature": "pending",
   "release_gate": {
     "ready_for_live_matrix": false,
@@ -19,13 +20,13 @@
     "band": "blocked",
     "blockers": [
       "release decision ledger is incomplete and owner signature is pending",
-      "formal commit-pinned integrated runners reject the dirty worktree",
+      "integrated live matrix is blocked by incomplete prerequisites and release decisions",
       "CRAG and Claim Repair failed the declared latency gate",
       "Grounded Math provider smoke failed 0 of 5 requests, so quality was not evaluated",
       "Query Decomposition has no current three-pair series or completed owner review",
       "Graph Retrieval has 0 of 20 independent edge reviews",
       "Community Summaries remains blocked by Graph Retrieval and has no reviewed summaries",
-      "runtime deployment_id, git_sha, and snapshot_fingerprint are unset",
+      "runtime provenance has not been recaptured after launcher and preflight hardening",
       "backup and restore drill has not run on a disposable target"
     ]
   },
@@ -35,15 +36,25 @@
     "activation_scope": "default_rollout",
     "activation_profile": "all_off",
     "activation_valid": true,
-    "live_authorized": true,
+    "all_off_runtime_health_authorized": true,
+    "feature_activation_authorized": false,
+    "provenance_enforcement_implemented": true,
+    "provenance_recaptured": false,
     "production_preflight": {
-      "passed": true,
-      "checks_passed": 5,
-      "checks_total": 5,
-      "migration_current": true,
-      "qdrant_ready": true,
-      "seeded_dev_account_count": 0,
-      "rag_health_ready": true
+      "evidence_state": "stale_after_provenance_hardening",
+      "pre_provenance_hardening": {
+        "passed": true,
+        "checks_passed": 5,
+        "checks_total": 5,
+        "migration_current": true,
+        "qdrant_ready": true,
+        "seeded_dev_account_count": 0,
+        "rag_health_ready": true
+      },
+      "current_hardened_preflight": {
+        "executed": false,
+        "passed": false
+      }
     },
     "hot_cache_load_smoke": {
       "concurrency_1": {
@@ -65,13 +76,49 @@
     }
   },
   "verification": {
-    "backend_full_suite": "passed",
+    "backend_full_suite": "2455 passed, 1 skipped, 21 deselected on 2bd0a34; live integration and eval excluded",
     "frontend_unit": "32/32 passed",
-    "frontend_production_build": "passed",
+    "frontend_production_build": "passed on 2bd0a34",
     "architecture": "18/18 passed",
     "browser_e2e": "3/3 passed",
     "security_targeted": "101/101 passed",
     "rollback_cache_stream_preflight": "75/75 passed",
+    "security_subagent_review": {
+      "remaining_high_or_medium_blockers": 0,
+      "focused_tests": "45 passed",
+      "provider_or_live_service_calls": false
+    },
+    "integrated_offline": {
+      "source_commit": "2bd0a343a4c036076698b90090d2bd8482b204c4",
+      "passed": true,
+      "feature_flags_default_disabled": true,
+      "cache_isolation_passed": true,
+      "strict_stream_passed": true,
+      "rollback_passed": true,
+      "path": ".local/integrated-hardening/2bd0a34/offline.json",
+      "sha256": "cf502f5ddbd259eba867005f92a47c96036760f8b299190f80b3e118932b728f"
+    },
+    "integrated_preflight": {
+      "source_commit": "2bd0a343a4c036076698b90090d2bd8482b204c4",
+      "capability_passed": true,
+      "ready_for_live_matrix": false,
+      "security_cases": 15,
+      "leakage_count": 0,
+      "blockers": [
+        "prerequisite_milestones_incomplete",
+        "release_decisions_incomplete"
+      ],
+      "path": ".local/integrated-hardening/2bd0a34/preflight.json",
+      "sha256": "a3c486162c991b0e26e07928a8bc2762ef8c4cac6745d404311c28aa73062333"
+    },
+    "restore_drill": {
+      "tooling_implemented": true,
+      "executed": false,
+      "automatic_cleanup": false,
+      "sql_backup_set_identity_required": true,
+      "qdrant_snapshot_checksum_required": true,
+      "runtime_state_recaptured_after_migrations": false
+    },
     "python_dependency_consistency": "passed",
     "docker_used": false
   },

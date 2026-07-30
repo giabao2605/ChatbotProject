@@ -421,17 +421,29 @@ Chứng minh tổ hợp cuối không phá security/performance và có thể kh
 - Full backend suite, frontend `32/32`, production build, architecture `18/18`
   và browser E2E `3/3` đều đạt. Security matrix mục tiêu đạt `101/101`;
   rollback/cache/strict-stream/production-preflight đạt `75/75`.
-- Production preflight Windows đạt `5/5`: migration current, Qdrant ready,
-  activation `all_off` hợp lệ, không có seeded dev account active và RAG health
-  ready.
+- Production preflight Windows trước provenance hardening đạt `5/5`: migration
+  current, Qdrant ready, activation `all_off` hợp lệ, không có seeded dev
+  account active và RAG health ready. Kết quả này không còn là live evidence
+  hiện hành sau `a886a8f`.
 - All-off hot-cache smoke đạt `8/8` ở concurrency 1 và `8/8` ở concurrency 5,
   không busy/error; completion P95 lần lượt khoảng `70 ms` và `100 ms`. Đây
   không phải cold-path benchmark và không chấm correctness.
-- Runtime hiện có đủ bảy flag OFF và collection `TaiLieuKyThuat_v2`, nhưng
-  `deployment_id`, `git_sha` và `snapshot_fingerprint` vẫn null.
-- Formal integrated runner chưa chạy được vì tracked worktree có thay đổi ngoài
-  scope. Backup/restore drill cũng chưa chạy vì chưa có disposable target;
-  không dùng dữ liệu hiện hữu để thử restore.
+- Launcher và health preflight Windows đã bắt buộc `deployment_id`, current
+  `git_sha` và fingerprint từ trạng thái SQL/Qdrant sau migration. SQL được đọc
+  trong transaction `SERIALIZABLE`; Qdrant payload/vector/config được hash hai
+  lượt và fail nếu drift. Runtime chưa được restart và recapture provenance,
+  nên hardened live preflight vẫn chưa đạt.
+- Offline integrated runner đã chạy trên worktree sạch tại commit `2bd0a34`:
+  `63/63` test cache/strict-stream/rollback đạt; security matrix `15/15`,
+  leakage `0`. Capability đạt nhưng `ready_for_live_matrix=false` vì
+  prerequisites và release decisions vẫn chưa hoàn tất.
+- Full backend offline đạt `2455 passed, 1 skipped, 21 deselected`; frontend
+  `32/32` và production build đều đạt trên cùng commit. Security subagent không
+  còn blocker HIGH/MEDIUM sau negative probes.
+- Restore drill fail-closed đã bind SQL BackupSetGUID/LSN và Qdrant snapshot
+  checksum, không `REPLACE`, không xóa và không auto-cleanup. Drill thật chưa
+  chạy vì chưa có disposable target cùng backup/snapshot location được xác
+  nhận; không dùng dữ liệu hiện hữu để thử.
 - Production audit cho phạm vi bật governed RAG feature là `49/100`, trạng thái
   `blocked`. Baseline all-off hoạt động, nhưng chưa đủ provenance, quyết định và
   review để bật feature.
