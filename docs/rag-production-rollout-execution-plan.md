@@ -304,6 +304,19 @@ không bật default rollout.
 - Formula, unit, provenance và citation đúng.
 - Wrong-answer/leakage không tăng; rollback flag xanh.
 
+### Kết quả cửa sổ hiện tại
+
+- Commit `c36e9cb` giới hạn provider readiness smoke ở đúng một attempt,
+  timeout tối đa 30 giây/request và không thay đổi retry của production.
+- Window `20260730-window-02-c36e9cb` dùng lại fixture hiện hữu, không ingest:
+  preflight đạt `16/16`, fingerprint không đổi; rollback đạt `2/2` và xác nhận
+  `RAG_GROUNDED_MATH_ENABLED=false`.
+- Provider smoke không đạt: `0/5` request thành công, `5/5`
+  `APITimeoutError`, `0` retry. Pair 01 không được bắt đầu theo stop rule.
+- Kết quả là `inconclusive`, chưa đánh giá quality. Không tạo series,
+  activation bundle hoặc thay đổi live flag; chỉ được mở cửa sổ mới khi provider
+  sẵn sàng.
+
 ## Ticket 7: Hoàn tất Query Decomposition
 
 ### Mục tiêu
