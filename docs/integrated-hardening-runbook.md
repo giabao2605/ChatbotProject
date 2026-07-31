@@ -71,6 +71,10 @@ Rejected and inconclusive features are disabled in `demo_matrix.effective_flags`
 Run those rows to verify the fallback path; do not restore the requested flag
 just to make the matrix look complete.
 
+Independent Graph review uses `multi_reviewer` governance and requires at
+least two distinct reviewer IDs. A single reviewer must use the explicit
+`single_owner` exception below and cannot label the review as independent.
+
 For a single-owner review, copy
 `docs/examples/rag-single-owner-governance.example.json`, replace every
 placeholder, set `risk_accepted=true`, and sign the RAG, Security/QA and

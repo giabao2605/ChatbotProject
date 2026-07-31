@@ -324,6 +324,8 @@ def test_graph_report_uses_explicit_relation_denominator_and_review_labels():
 
     assert report["structured_coverage"] == 0.5
     assert report["reviewed_edge_precision"] == 0.5
+    assert report["reviewer_count"] == 2
+    assert report["review_mode"] == "multi_reviewer"
     assert report["coverage_denominator"] == 2
     assert report["domain_coverage"] == {"Technical": True, "Production": False, "Maintenance": False}
 
@@ -447,6 +449,26 @@ def test_independent_review_samples_require_unique_identity_and_reviewer():
             "edge_id": 1, "reviewer": "alice", "review_source": "independent",
             "expected_correct": False, "decision": "rejected",
         }], require_independent=True, allowed_edge_ids={1})
+
+
+def test_independent_review_samples_require_two_distinct_reviewers():
+    samples = [
+        {
+            "edge_id": edge_id,
+            "reviewer": "alice" if edge_id == 1 else "ALICE",
+            "review_source": "independent",
+            "expected_correct": True,
+            "decision": "approved",
+        }
+        for edge_id in (1, 2)
+    ]
+
+    with pytest.raises(ValueError, match="distinct reviewers"):
+        validate_review_samples(
+            samples,
+            require_independent=True,
+            allowed_edge_ids={1, 2},
+        )
 
 
 def test_graph_review_exercise_counts_only_audits_from_the_current_run():

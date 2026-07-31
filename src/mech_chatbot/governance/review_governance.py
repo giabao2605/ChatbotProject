@@ -8,6 +8,7 @@ from typing import Mapping
 
 
 REVIEW_ROLES = ("rag", "security_qa", "operations")
+MIN_INDEPENDENT_REVIEWERS = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,4 +98,9 @@ def review_governance_status(
     )
 
 
-__all__ = ["REVIEW_ROLES", "ReviewGovernance", "review_governance_status"]
+__all__ = [
+    "MIN_INDEPENDENT_REVIEWERS",
+    "REVIEW_ROLES",
+    "ReviewGovernance",
+    "review_governance_status",
+]

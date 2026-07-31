@@ -9,7 +9,10 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from mech_chatbot.evaluation.review_governance import review_governance_status
+from mech_chatbot.governance.review_governance import (
+    MIN_INDEPENDENT_REVIEWERS,
+    review_governance_status,
+)
 from scripts.controlled_demo_eval.review_pack import (
     HUMAN_REVIEW_TEMPLATE,
     review_contract_sha256,
@@ -176,14 +179,18 @@ def evaluate_graph_review(
         if not row_valid:
             invalid_edge_ids.append(edge_id)
             continue
-        reviewers.add(reviewer)
+        reviewers.add(reviewer.casefold())
         correct += int(expected_correct)
     sample_count = len(reviewed)
     precision = _rate(correct, sample_count)
+    reviewer_diversity_valid = (
+        governance.mode != "multi_reviewer"
+        or len(reviewers) >= MIN_INDEPENDENT_REVIEWERS
+    )
     validation_passed = all((
         anchor_matches, bool(source), bool(reviewed), not source_duplicates,
         not reviewed_duplicates, not source_blank, not reviewed_blank,
-        not invalid_edge_ids, governance.valid,
+        not invalid_edge_ids, governance.valid, reviewer_diversity_valid,
     ))
     review_complete = validation_passed and sample_count >= int(minimum_sample)
     return {
@@ -204,6 +211,7 @@ def evaluate_graph_review(
             and precision >= float(minimum_precision)
         ),
         "reviewer_count": len(reviewers),
+        "reviewer_diversity_valid": reviewer_diversity_valid,
         "invalid_edge_ids": sorted(set(invalid_edge_ids)),
         "immutable_mismatch_edge_ids": sorted(set(mismatch_edge_ids)),
     }

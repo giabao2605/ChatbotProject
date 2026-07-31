@@ -20,6 +20,9 @@ from mech_chatbot.evaluation.integrated_hardening import (
     REQUIRED_COMBINATIONS,
     REQUIRED_PREREQUISITES,
 )
+from mech_chatbot.governance.review_governance import (
+    MIN_INDEPENDENT_REVIEWERS,
+)
 
 
 def _ratio(candidate, baseline):
@@ -371,8 +374,15 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         review_mode = metadata.get("review_mode") or (
             "multi_reviewer" if review_source == "independent" else None
         )
+        reviewer_count = int(metadata.get("reviewer_count") or 0)
+        reviewer_diversity_valid = (
+            review_mode != "multi_reviewer"
+            or reviewer_count >= MIN_INDEPENDENT_REVIEWERS
+        )
         review_governance_valid = (
-            review_mode == "multi_reviewer" and review_source == "independent"
+            review_mode == "multi_reviewer"
+            and review_source == "independent"
+            and reviewer_diversity_valid
         ) or (
             review_mode == "single_owner"
             and review_source == "owner_review"
@@ -388,6 +398,7 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "reviewed_edge_precision": float(metadata.get("reviewed_edge_precision", 0.0)) >= 0.95,
             "review_workflow_fixture_passed": metadata.get("workflow_fixture_passed") is True,
             "review_sample_governance_valid": review_governance_valid,
+            "independent_reviewer_diversity": reviewer_diversity_valid,
             "review_sample_size_sufficient": int(metadata.get("review_sample_count", 0)) >= 20,
             "approved_edge_pool_sufficient": int(metadata.get("approved_edge_count", 0)) >= 20,
             "structured_coverage": float(metadata.get("structured_coverage", 0.0)) >= 0.80,

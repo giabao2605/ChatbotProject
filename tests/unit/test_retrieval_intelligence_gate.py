@@ -306,7 +306,8 @@ def test_graph_gate_requires_coverage_precision_provenance_and_budgets():
         "schema": "graph-readiness-v1", "structured_coverage": 0.8,
         "reviewed_edge_precision": 0.95, "provenance_completeness": 1.0,
         "workflow_fixture_passed": True, "review_sample_source": "independent",
-        "review_sample_count": 20, "approved_edge_count": 20,
+        "review_sample_count": 20, "reviewer_count": 2,
+        "approved_edge_count": 20,
         "pending_serving_edges": 0,
         "domain_coverage": {"Technical": True, "Production": True, "Maintenance": True},
     }
@@ -314,6 +315,41 @@ def test_graph_gate_requires_coverage_precision_provenance_and_budgets():
     result = gate.compare("graph_retrieval", baseline, candidate, metadata)
 
     assert result["passed"] is True
+
+
+def test_graph_gate_rejects_one_independent_reviewer():
+    gate = _module()
+    baseline = report(groups={"relational": {"pass_rate": 0.50}})
+    candidate = report(groups={"relational": {"pass_rate": 0.61}}, p95=150)
+    baseline["graph_evaluation"] = {"relational_answer_accuracy": 0.50}
+    candidate["graph_evaluation"] = {
+        "relational_answer_accuracy": 0.61,
+        "budget_violations": 0,
+        "non_relational_graph_calls": 0,
+    }
+    metadata = {
+        "schema": "graph-readiness-v1",
+        "structured_coverage": 0.8,
+        "reviewed_edge_precision": 0.95,
+        "provenance_completeness": 1.0,
+        "workflow_fixture_passed": True,
+        "review_sample_source": "independent",
+        "review_sample_count": 20,
+        "reviewer_count": 1,
+        "approved_edge_count": 20,
+        "pending_serving_edges": 0,
+        "domain_coverage": {
+            "Technical": True,
+            "Production": True,
+            "Maintenance": True,
+        },
+    }
+
+    result = gate.compare("graph_retrieval", baseline, candidate, metadata)
+
+    assert result["checks"]["review_sample_governance_valid"] is False
+    assert result["checks"]["independent_reviewer_diversity"] is False
+    assert result["passed"] is False
 
 
 def test_graph_gate_accepts_explicit_single_owner_governance():

@@ -173,9 +173,15 @@ def test_controlled_review_rejects_rehashed_pack_and_unknown_review_field():
 
 def test_graph_review_requires_immutable_edges_and_ninety_five_percent_precision():
     source = [_graph_row(index) for index in range(1, 21)]
-    reviewed = [dict(row) for row in source]
-    reviewed = [{**row, "reviewer": "bob", "expected_correct": True,
-                 "review_note": "source evidence checked"} for row in reviewed]
+    reviewed = [
+        {
+            **row,
+            "reviewer": "alice" if index % 2 else "bob",
+            "expected_correct": True,
+            "review_note": "source evidence checked",
+        }
+        for index, row in enumerate(source)
+    ]
     reviewed[-1]["expected_correct"] = False
 
     report = evaluate_graph_review(
@@ -188,7 +194,9 @@ def test_graph_review_requires_immutable_edges_and_ninety_five_percent_precision
     assert report["review_sample_count"] == 20
     assert report["reviewed_edge_precision"] == 0.95
     assert report["ready_for_graph_quality_gate"] is True
-    assert report["reviewer_count"] == 1
+    assert report["reviewer_count"] == 2
+    assert report["reviewer_diversity_valid"] is True
+    assert "alice" not in json.dumps(report)
     assert "bob" not in json.dumps(report)
 
     reviewed[0]["source_key"] = "part:tampered"
@@ -211,10 +219,43 @@ def test_graph_review_requires_immutable_edges_and_ninety_five_percent_precision
     assert unknown["validation_passed"] is False
 
 
+def test_graph_review_rejects_one_independent_reviewer():
+    source = [_graph_row(index) for index in range(1, 21)]
+    reviewed = [
+        {
+            **row,
+            "reviewer": "alice",
+            "expected_correct": True,
+            "review_note": "source evidence checked",
+        }
+        for row in source
+    ]
+
+    report = evaluate_graph_review(
+        source,
+        reviewed,
+        anchor={"source_sha256": "q" * 64, "edge_count": 20},
+        source_sha256="q" * 64,
+    )
+
+    assert report["validation_passed"] is False
+    assert report["review_complete"] is False
+    assert report["ready_for_graph_quality_gate"] is False
+    assert report["reviewer_count"] == 1
+    assert report["reviewer_diversity_valid"] is False
+
+
 def test_graph_review_under_minimum_sample_is_not_ready():
     source = [_graph_row(index) for index in range(1, 20)]
-    reviewed = [{**row, "reviewer": "bob", "expected_correct": True,
-                 "review_note": "checked"} for row in source]
+    reviewed = [
+        {
+            **row,
+            "reviewer": "alice" if index % 2 else "bob",
+            "expected_correct": True,
+            "review_note": "checked",
+        }
+        for index, row in enumerate(source)
+    ]
 
     report = evaluate_graph_review(
         source, reviewed,
@@ -297,9 +338,13 @@ def test_combined_finalization_never_unlocks_community_before_graph_gate():
     controlled = evaluate_controlled_review(pack, rows, anchor=_pack_anchor(pack))
     graph_source = [_graph_row(index) for index in range(1, 21)]
     graph_reviewed = [
-        {**row, "reviewer": "bob", "expected_correct": True,
-         "review_note": "checked"}
-        for row in graph_source
+        {
+            **row,
+            "reviewer": "alice" if index % 2 else "bob",
+            "expected_correct": True,
+            "review_note": "checked",
+        }
+        for index, row in enumerate(graph_source)
     ]
     graph = evaluate_graph_review(
         graph_source, graph_reviewed,

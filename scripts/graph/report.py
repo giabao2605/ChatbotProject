@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from collections import Counter
 
+from mech_chatbot.governance.review_governance import (
+    MIN_INDEPENDENT_REVIEWERS,
+)
+
 
 def _relation_identity(value):
     return (
@@ -25,6 +29,7 @@ def validate_review_samples(
 ):
     validated = []
     identities = set()
+    reviewers = set()
     for index, sample in enumerate(samples or ()):
         identity_type = "edge_id" if sample.get("edge_id") is not None else "proposal_id"
         identity = sample.get(identity_type)
@@ -37,7 +42,8 @@ def validate_review_samples(
         allowed = allowed_edge_ids if identity_type == "edge_id" else allowed_proposal_ids
         if allowed is not None and str(identity) not in {str(value) for value in allowed}:
             raise ValueError(f"review sample references unknown {identity_type}={identity}")
-        if not str(sample.get("reviewer") or "").strip():
+        reviewer = str(sample.get("reviewer") or "").strip()
+        if not reviewer:
             raise ValueError(f"review sample {index} requires reviewer")
         if not isinstance(sample.get("expected_correct"), bool):
             raise ValueError(f"review sample {index} expected_correct must be boolean")
@@ -50,7 +56,16 @@ def validate_review_samples(
             raise ValueError(f"review sample {index} must reference an approved edge_id")
         if require_independent and decision != "approved":
             raise ValueError(f"review sample {index} decision must match approved serving state")
+        reviewers.add(reviewer.casefold())
         validated.append({**sample, "decision": decision})
+    if (
+        require_independent
+        and validated
+        and len(reviewers) < MIN_INDEPENDENT_REVIEWERS
+    ):
+        raise ValueError(
+            "independent review requires at least two distinct reviewers"
+        )
     return validated
 
 
@@ -108,6 +123,15 @@ def build_graph_report(
         "structured_coverage": len(matched) / len(expected) if expected else 0.0,
         "review_sample_count": len(reviewed),
         "review_sample_source": review_sample_source,
+        "review_mode": (
+            "multi_reviewer"
+            if review_sample_source == "independent"
+            else None
+        ),
+        "reviewer_count": len({
+            str(sample.get("reviewer") or "").strip().casefold()
+            for sample in reviewed
+        }),
         "reviewed_edge_precision": correct_reviews / len(reviewed) if reviewed else 0.0,
         "provenance_complete_count": provenance_complete,
         "provenance_completeness": provenance_complete / len(approved_edges) if approved_edges else 0.0,
