@@ -144,7 +144,6 @@ def restore_sql_backup(
     )
     backup = _server_path(backup_path, suffix=".bak")
     destination_root = _server_path(data_dir)
-    connection = connection.execution_options(isolation_level="AUTOCOMMIT")
     _assert_sql_target_absent(connection, target)
     headers = connection.execute(
         text("RESTORE HEADERONLY FROM DISK = :backup_path"),

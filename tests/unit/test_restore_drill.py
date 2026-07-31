@@ -7,6 +7,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import InvalidRequestError
 
 from scripts.ops.restore_drill import (
     PartialRestoreError,
@@ -95,6 +96,23 @@ class _PartialSqlConnection(_Connection):
     def execute(self, statement, parameters=None):
         if "RESTORE DATABASE" in str(statement):
             raise RuntimeError("connection lost after restore started")
+        return super().execute(statement, parameters)
+
+
+class _AutobeginSensitiveConnection(_Connection):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.transaction_started = False
+
+    def execution_options(self, **_kwargs):
+        if self.transaction_started:
+            raise InvalidRequestError(
+                "isolation_level may not be altered after autobegin"
+            )
+        return self
+
+    def execute(self, statement, parameters=None):
+        self.transaction_started = True
         return super().execute(statement, parameters)
 
 
@@ -209,6 +227,26 @@ def test_sql_restore_requires_absent_target_and_never_replaces():
             backup_path=r"\\fileserver\backups\source.bak",
             data_dir=r"D:\SqlData",
         )
+
+
+def test_sql_restore_reuses_autocommit_connection_after_precheck():
+    connection = _AutobeginSensitiveConnection(
+        database_ids=(None, None, None, 42),
+    )
+    connection.execute(
+        "SELECT DB_ID(:target_database)",
+        {"target_database": "Mech_Chatbot_DB_RestoreTest_Prechecked"},
+    )
+
+    report = restore_sql_backup(
+        connection,
+        source_database="Mech_Chatbot_DB",
+        target_database="Mech_Chatbot_DB_RestoreTest_Prechecked",
+        backup_path=r"D:\Backups\source.bak",
+        data_dir=r"D:\SqlData",
+    )
+
+    assert report["restored"] is True
 
 
 def test_sql_partial_restore_reports_target_may_exist():
