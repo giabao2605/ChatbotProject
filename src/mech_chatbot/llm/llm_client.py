@@ -136,6 +136,7 @@ def _is_gpt_rate_limit(exc):
         or "resource_exhausted" in msg
         or "no_capacity" in msg
         or "service_unavailable" in msg
+        or "service unavailable" in msg
         or "overloaded" in msg
         or "quá tải" in msg
         or "temporarily unavailable" in msg

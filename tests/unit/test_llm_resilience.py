@@ -15,6 +15,7 @@ pytestmark = pytest.mark.unit
         "Error code: 502 Bad Gateway",
         "429 too many requests",
         "provider temporarily unavailable",
+        "Service unavailable",
         "request timeout",
     ],
 )

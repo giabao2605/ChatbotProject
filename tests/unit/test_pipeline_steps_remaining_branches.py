@@ -675,6 +675,70 @@ def test_normal_streaming_retries_rate_limit_before_emitting(load_steps, monkeyp
     assert metrics["provider_retries"] == 1
 
 
+def test_guarded_generation_retries_split_provider_error_text(load_steps, monkeypatch):
+    steps = load_steps()
+    provider = _prepare_provider(
+        steps,
+        monkeypatch,
+        [
+            [
+                "",
+                "[",
+                "Error] Our servers are currently ",
+                "overloaded. Please try again later.",
+            ],
+            ["[Error] Error code: 5", "03 Service Unavailable"],
+            ["Recovered answer."],
+        ],
+    )
+    metrics = {}
+
+    answer = "".join(
+        steps.generate_answer(
+            _plan(steps, provider=provider),
+            metrics=metrics,
+        )
+    )
+
+    assert answer == "Recovered answer."
+    assert metrics["provider_retries"] == 2
+
+
+def test_normal_streaming_rejects_split_provider_error_before_emitting(
+    load_steps,
+    monkeypatch,
+):
+    steps = load_steps(strict=False)
+    provider = _prepare_provider(
+        steps,
+        monkeypatch,
+        [["[", "Error] Service un", "available."]],
+    )
+    stream = steps.generate_answer(
+        _plan(
+            steps,
+            provider=provider,
+            runtime_overrides={"stream_max_attempts": 1},
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        next(stream)
+
+
+def test_normal_streaming_allows_valid_error_document_text(load_steps, monkeypatch):
+    steps = load_steps(strict=False)
+    provider = _prepare_provider(
+        steps,
+        monkeypatch,
+        [["[Error] là tiền tố được mô tả trong tài liệu vận hành."]],
+    )
+
+    answer = "".join(steps.generate_answer(_plan(steps, provider=provider)))
+
+    assert answer == "[Error] là tiền tố được mô tả trong tài liệu vận hành."
+
+
 def test_normal_streaming_does_not_retry_non_retryable_provider_failure(
     load_steps,
     monkeypatch,

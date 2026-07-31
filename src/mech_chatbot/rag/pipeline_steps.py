@@ -65,6 +65,53 @@ _RETRIEVE_UNSET = object()
 _QDRANT_SEARCH_TIMEOUT_SECONDS = 3
 _BM25_SEARCH_TIMEOUT_SECONDS = _QDRANT_SEARCH_TIMEOUT_SECONDS
 
+_PROVIDER_ERROR_PREFIXES = (
+    "[error] our servers are currently overloaded",
+    "[error] service unavailable",
+    "[error] service_unavailable",
+    "[error] no_capacity",
+    "[error] error code: 5",
+    "our servers are currently overloaded. please try again later",
+)
+
+
+def _normalized_provider_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def _is_provider_error_text(value: Any) -> bool:
+    text = _normalized_provider_text(value)
+    return any(text.startswith(prefix) for prefix in _PROVIDER_ERROR_PREFIXES)
+
+
+def _could_be_provider_error_prefix(value: Any) -> bool:
+    text = _normalized_provider_text(value)
+    return any(prefix.startswith(text) for prefix in _PROVIDER_ERROR_PREFIXES)
+
+
+def _guard_provider_error_chunks(chunks, *, before_chunk=None):
+    buffered = []
+    prefix = ""
+    checking = True
+    for chunk in chunks:
+        if before_chunk is not None:
+            before_chunk()
+        if not checking:
+            yield chunk
+            continue
+        buffered.append(chunk)
+        prefix += str(chunk)
+        if _is_provider_error_text(prefix):
+            raise RuntimeError("provider unavailable: service unavailable response")
+        if not _could_be_provider_error_prefix(prefix):
+            checking = False
+            yield from buffered
+            buffered.clear()
+    if checking:
+        if _is_provider_error_text(prefix):
+            raise RuntimeError("provider unavailable: service unavailable response")
+        yield from buffered
+
 
 @dataclass(slots=True)
 class GenerationOutcome:
@@ -746,8 +793,10 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     chunks.clear()
                     try:
                         with audited_external_call(**_external_call_args):
-                            for chunk in chain.stream(stream_input):
-                                _raise_if_cancelled()
+                            for chunk in _guard_provider_error_chunks(
+                                chain.stream(stream_input),
+                                before_chunk=_raise_if_cancelled,
+                            ):
                                 chunks.append(chunk)
                         break
                     except Exception as stream_error:
@@ -955,8 +1004,10 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     _raise_if_cancelled()
                     try:
                         with audited_external_call(**_external_call_args):
-                            for chunk in chain.stream(stream_input):
-                                _raise_if_cancelled()
+                            for chunk in _guard_provider_error_chunks(
+                                chain.stream(stream_input),
+                                before_chunk=_raise_if_cancelled,
+                            ):
                                 chunks.append(chunk)
                                 if _strict_realtime:
                                     pending += chunk
