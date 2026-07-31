@@ -463,9 +463,30 @@ def test_qdrant_snapshot_download_rejects_redirect(monkeypatch):
             pass
 
 
+def test_qdrant_restore_waits_for_point_count_to_settle(monkeypatch):
+    monkeypatch.setattr(restore_module.time, "sleep", lambda _seconds: None)
+
+    restored_points = restore_module._wait_for_restored_collection(
+        _Qdrant(target_exists=True, counts=(0, 7)),
+        "TaiLieuKyThuat_v2_RestoreTest_Settling",
+        7,
+    )
+
+    assert restored_points == 7
+
+
 def test_qdrant_partial_restore_reports_target_may_exist(monkeypatch):
     payload = b"snapshot"
     checksum = hashlib.sha256(payload).hexdigest()
+    monotonic = iter((0, 0, 121))
+    monkeypatch.setattr(
+        restore_module,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: next(monotonic),
+            sleep=lambda _seconds: None,
+        ),
+    )
     monkeypatch.setattr(
         restore_module,
         "requests",

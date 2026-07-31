@@ -161,13 +161,15 @@ def _verified_snapshot_file(*, location: str, api_key: str, checksum: str):
 
 def _wait_for_restored_collection(client, target: str, source_points: int) -> int:
     deadline = time.monotonic() + 120
+    target_points = None
     while time.monotonic() < deadline:
         if client.collection_exists(target):
             target_points = int(client.count(target, exact=True).count)
-            if target_points != source_points:
-                raise RuntimeError("Qdrant restored point count does not match")
-            return target_points
+            if target_points == source_points:
+                return target_points
         time.sleep(2)
+    if target_points is not None:
+        raise RuntimeError("Qdrant restored point count does not match")
     raise RuntimeError("Qdrant restored collection did not become available")
 
 
