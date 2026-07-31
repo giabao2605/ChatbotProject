@@ -1,9 +1,10 @@
-# ADR 0002: CRAG pilot isolation and Voyage fallback
+# ADR 0002: CRAG pilot isolation and rerank fallback
 
 ## Status
 
-Accepted for a controlled production pilot. The pilot remains disabled until
-the deployment preflight passes and the named owners approve the window.
+Accepted for a controlled production pilot; provider order and Jina production
+authorization amended 2026-07-31. The governed RAG feature flags remain
+disabled until their deployment preflight and named-owner gates pass.
 
 ## Decision
 
@@ -20,12 +21,16 @@ the deployment preflight passes and the named owners approve the window.
   pilot-specific HMAC signature bound to the payload hash, original trace,
   target deployment, expiry and single-use nonce; the app uses a bounded replay queue and drops
   queued work when the pilot is disabled or its pinned contract changes.
-- Voyage reranking is not retried inside a user request. Any error, including
-  HTTP 429, immediately uses the existing deterministic local-fusion fallback.
-  Telemetry records provider status, fallback backend and that no retry was
-  attempted.
-- Abort when Voyage rerank errors exceed 5 percent in a completed 50-call
-  window, or when any other abort rule in roadmap 2.3 fires.
+- Jina is the primary reranker. A Jina error attempts Voyage once; a Voyage
+  error immediately uses the existing deterministic local-fusion fallback.
+  Neither external provider is retried. Telemetry records each provider
+  status, fallback backend and that no retry was attempted.
+- Migration `V0042` promotes only the exact governed `V0041` Jina profile to
+  `risk-accepted-v1-jina-production` for the `reranking` surface. Authorization
+  remains fail-closed for a missing key, inactive/expired profile or disallowed
+  document policy.
+- Abort when external rerank fallback exceeds 5 percent in a completed
+  50-call window, or when any other abort rule in roadmap 2.3 fires.
 - Derive daily sampling, eligible-traffic balance and matched-pair completeness
   from a hashed assignment-event artifact. Runtime samples all risk cases and
   targets 25 percent of normal answers to keep the observed daily floor at 20

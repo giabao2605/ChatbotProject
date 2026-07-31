@@ -726,6 +726,149 @@ def test_rerank_jina_path_uses_jina_adapter_and_reports_backend(monkeypatch):
     )
 
 
+def test_rerank_jina_failure_uses_voyage_fallback_before_local(monkeypatch):
+    from mech_chatbot.rag.phases import retrieval_rerank
+
+    first = Document(
+        page_content="first",
+        metadata={"doc_id": 1, "external_processing_policy": "all_external"},
+    )
+    second = Document(
+        page_content="second",
+        metadata={"doc_id": 2, "external_processing_policy": "all_external"},
+    )
+    calls = []
+    traces = []
+    state = _state()
+    state.retrieval_adapter.rerank_provider = "jina"
+    state.retrieval_adapter.rerank_enabled = True
+    state.retrieval_adapter.rerank_runtime = SimpleNamespace(api_key="jina")
+    state.retrieval_adapter.rerank_timeout_seconds = 15.0
+    state.retrieval_adapter.voyage_enabled = True
+    state.retrieval_adapter.voyage_runtime = SimpleNamespace(api_key="voyage")
+    state.retrieval_adapter.voyage_timeout_seconds = 15.0
+
+    def fail_jina(*_args, **_kwargs):
+        calls.append("jina")
+        raise RuntimeError("jina unavailable")
+
+    monkeypatch.setattr(retrieval_rerank, "jina_rerank_documents", fail_jina)
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "voyage_rerank_documents",
+        lambda docs, *_args, **_kwargs: calls.append("voyage")
+        or list(reversed(docs)),
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "rerank_docs",
+        lambda docs: calls.append("local_fusion") or docs,
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "log_trace",
+        lambda event, _trace_id, **metadata: traces.append((event, metadata)),
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "hydrate_parent_context",
+        lambda docs, **_kwargs: docs,
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "long_context_reorder",
+        lambda docs: docs,
+    )
+
+    outcome = retrieval_rerank.rerank_retrieval(
+        _decision(),
+        _enrichment([first, second]),
+        state,
+    )
+
+    assert calls == ["jina", "voyage"]
+    assert outcome.documents == (second, first)
+    assert any(
+        event == "rerank"
+        and metadata["backend"] == "jina"
+        and metadata["status"] == "error"
+        and metadata["fallback_backend"] == "voyage"
+        and metadata["retry_attempted"] is False
+        for event, metadata in traces
+    )
+    assert any(
+        event == "rerank"
+        and metadata["backend"] == "voyage"
+        and metadata["status"] == "success"
+        for event, metadata in traces
+    )
+
+
+def test_rerank_jina_and_voyage_failure_uses_local_fallback(monkeypatch):
+    from mech_chatbot.rag.phases import retrieval_rerank
+
+    document = Document(
+        page_content="first",
+        metadata={"doc_id": 1, "external_processing_policy": "all_external"},
+    )
+    calls = []
+    traces = []
+    state = _state()
+    state.retrieval_adapter.rerank_provider = "jina"
+    state.retrieval_adapter.rerank_enabled = True
+    state.retrieval_adapter.rerank_runtime = SimpleNamespace(api_key="jina")
+    state.retrieval_adapter.voyage_enabled = True
+    state.retrieval_adapter.voyage_runtime = SimpleNamespace(api_key="voyage")
+
+    def fail(provider):
+        def raise_error(*_args, **_kwargs):
+            calls.append(provider)
+            raise RuntimeError(f"{provider} unavailable")
+
+        return raise_error
+
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "jina_rerank_documents",
+        fail("jina"),
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "voyage_rerank_documents",
+        fail("voyage"),
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "rerank_docs",
+        lambda docs: calls.append("local_fusion") or docs,
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "log_trace",
+        lambda event, _trace_id, **metadata: traces.append((event, metadata)),
+    )
+    monkeypatch.setattr(
+        retrieval_rerank,
+        "hydrate_parent_context",
+        lambda docs, **_kwargs: docs,
+    )
+    monkeypatch.setattr(retrieval_rerank, "long_context_reorder", lambda docs: docs)
+
+    outcome = retrieval_rerank.rerank_retrieval(
+        _decision(),
+        _enrichment([document]),
+        state,
+    )
+
+    assert calls == ["jina", "voyage", "local_fusion"]
+    assert outcome.documents == (document,)
+    assert [
+        (metadata["backend"], metadata["fallback_backend"])
+        for event, metadata in traces
+        if event == "rerank" and metadata["status"] == "error"
+    ] == [("jina", "voyage"), ("voyage", "local_fusion")]
+
+
 def test_decomposed_evidence_skips_redundant_voyage_rerank(monkeypatch):
     from mech_chatbot.rag.phases import retrieval_rerank
 

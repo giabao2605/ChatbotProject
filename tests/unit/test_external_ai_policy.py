@@ -364,6 +364,36 @@ def test_jina_evaluation_activation_migration_is_exact_fail_closed_and_idempoten
     assert "release_decisions" not in migration
 
 
+def test_jina_production_activation_migration_is_exact_fail_closed_and_audited():
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "database"
+        / "migrations"
+        / "V0042__authorize_jina_production_reranking.sql"
+    ).read_text(encoding="utf-8")
+
+    for exact_value in (
+        "https://api.jina.ai/v1",
+        "jina-reranker-v3",
+        "env:JINA_API_KEY",
+        'N\'["reranking"]\'',
+        "provider_default_no_training",
+        "risk-accepted-v1-jina-production",
+        "owner-production-approval",
+        "owner-decision:2026-07-31:jina-primary-voyage-fallback",
+        "V0041 migration",
+        "V0042 migration",
+    ):
+        assert exact_value in migration
+    assert "Expected exactly one Jina profile" in migration
+    assert "evaluation-only-v1" in migration
+    assert "ReviewExpiresAt = DATEADD(day, 90, GETDATE())" in migration
+    assert "SET PolicyVersion = 'risk-accepted-v1-jina-production'" in migration
+    assert "external_ai_jina_production_authorized" in migration
+    assert "JINA_API_KEY=" not in migration
+    assert "release_decisions" not in migration
+
+
 def test_audit_unavailable_blocks_before_external_call_body(monkeypatch):
     monkeypatch.setattr(external_ai, "_record_external_call", lambda *args, **kwargs: False)
     called = False

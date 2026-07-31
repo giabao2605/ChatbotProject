@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -185,7 +186,8 @@ def test_rag_runtime_composes_provider_vector_and_vision_adapters_explicitly():
 def test_rag_runtime_resolves_explicit_jina_provider_without_exposing_key():
     from mech_chatbot.composition.rag_runtime import build_rag_runtime
 
-    secret = "jina-" + "runtime-value"
+    jina_secret = "jina-" + "runtime-value"
+    voyage_secret = "voyage-" + "runtime-value"
     observed = {}
     qdrant_runtime = SimpleNamespace(
         qdrant_client=SimpleNamespace(close=lambda: None),
@@ -199,16 +201,26 @@ def test_rag_runtime_resolves_explicit_jina_provider_without_exposing_key():
             "LLM_BASE_URL": "https://llm.invalid",
             "LLM_API_KEY": "llm-value",
             "RERANK_PROVIDER": "jina",
-            "JINA_API_KEY": secret,
+            "JINA_API_KEY": jina_secret,
+            "VOYAGE_API_KEY": voyage_secret,
+            "USE_VOYAGE_RERANK": "true",
             "EXTERNAL_PROCESSING_POLICY": "all_external",
         }
     )
 
     def build_jina(provider_name, **kwargs):
-        observed["provider_name"] = provider_name
-        observed.update(kwargs)
+        observed["jina"] = {"provider_name": provider_name, **kwargs}
         return SimpleNamespace(
             api_key=kwargs["resolved_secrets"]["JINA_API_KEY"],
+            model=kwargs["fallback_model"],
+            endpoint=kwargs["fallback_endpoint"],
+            settings=kwargs["settings"],
+        )
+
+    def build_voyage(provider_name, **kwargs):
+        observed["voyage"] = {"provider_name": provider_name, **kwargs}
+        return SimpleNamespace(
+            api_key=kwargs["resolved_secrets"]["VOYAGE_API_KEY"],
             model=kwargs["fallback_model"],
             endpoint=kwargs["fallback_endpoint"],
             settings=kwargs["settings"],
@@ -223,24 +235,163 @@ def test_rag_runtime_resolves_explicit_jina_provider_without_exposing_key():
         ),
         vision_builder=lambda _settings: object(),
         intent_runtime_builder=lambda **_kwargs: None,
+        voyage_runtime_builder=build_voyage,
         jina_runtime_builder=build_jina,
     )
 
-    assert observed["provider_name"] == "jina"
-    assert observed["fallback_endpoint"] == "https://api.jina.ai/v1"
-    assert observed["fallback_model"] == "jina-reranker-v3"
-    assert observed["resolved_secrets"] == {"JINA_API_KEY": secret}
+    assert observed["jina"]["provider_name"] == "jina"
+    assert observed["jina"]["fallback_endpoint"] == "https://api.jina.ai/v1"
+    assert observed["jina"]["fallback_model"] == "jina-reranker-v3"
+    assert observed["jina"]["resolved_secrets"] == {"JINA_API_KEY": jina_secret}
+    assert observed["voyage"]["provider_name"] == "voyage"
+    assert observed["voyage"]["fallback_endpoint"] == "https://api.voyageai.com/v1"
+    assert observed["voyage"]["fallback_model"] == "rerank-2.5-lite"
+    assert observed["voyage"]["resolved_secrets"] == {
+        "VOYAGE_API_KEY": voyage_secret
+    }
     assert runtime.retrieval.rerank_provider == "jina"
-    assert runtime.retrieval.rerank_runtime.api_key == secret
+    assert runtime.retrieval.rerank_runtime.api_key == jina_secret
+    assert runtime.retrieval.voyage_runtime.api_key == voyage_secret
     assert runtime.retrieval.rerank_runtime.settings.processing_policy == "all_external"
-    assert secret not in repr(runtime)
-    assert secret not in repr(runtime.retrieval)
+    assert jina_secret not in repr(runtime)
+    assert voyage_secret not in repr(runtime)
+    assert jina_secret not in repr(runtime.retrieval)
+    assert voyage_secret not in repr(runtime.retrieval)
 
     runtime.close()
 
 
-def test_rag_runtime_rerank_provider_defaults_to_voyage_and_can_disable_external():
-    assert Settings().RERANK_PROVIDER == "voyage"
+def test_rag_runtime_uses_voyage_when_jina_runtime_has_no_key():
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+
+    voyage_runtime = SimpleNamespace(api_key="configured")
+    runtime = build_rag_runtime(
+        Settings(
+            RERANK_PROVIDER="jina",
+            JINA_API_KEY="configured",
+            VOYAGE_API_KEY="configured",
+            USE_VOYAGE_RERANK=True,
+        ),
+        execute_pipeline=lambda state: state.prepared((iter(()), "", [], [], {})),
+        qdrant_builder=lambda settings: SimpleNamespace(
+            qdrant_client=SimpleNamespace(close=lambda: None),
+            vector_store=object(),
+            collection_name=settings.collection,
+        ),
+        llm_builder=lambda _settings: object(),
+        vision_builder=lambda _settings: object(),
+        intent_runtime_builder=lambda **_kwargs: None,
+        jina_runtime_builder=lambda *_args, **_kwargs: SimpleNamespace(api_key=None),
+        voyage_runtime_builder=lambda *_args, **_kwargs: voyage_runtime,
+    )
+
+    assert runtime.retrieval.rerank_provider == "voyage"
+    assert runtime.retrieval.rerank_runtime is voyage_runtime
+    assert runtime.retrieval.rerank_enabled is True
+
+    runtime.close()
+
+
+def test_rag_runtime_uses_voyage_for_evaluation_only_jina_in_production():
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+
+    voyage_runtime = SimpleNamespace(api_key="configured")
+
+    def build_jina(_provider_name, **kwargs):
+        return SimpleNamespace(
+            api_key="configured",
+            endpoint="https://api.jina.ai/v1",
+            model="jina-reranker-v3",
+            profile=SimpleNamespace(
+                provider="jina",
+                is_active=True,
+                policy_version="evaluation-only-v1",
+                review_expires_at=datetime.now() + timedelta(days=1),
+                allowed_surfaces=("reranking",),
+            ),
+            settings=kwargs["settings"],
+        )
+
+    runtime = build_rag_runtime(
+        Settings(
+            RAG_EXECUTION_CONTEXT="production",
+            RERANK_PROVIDER="jina",
+            JINA_API_KEY="configured",
+            VOYAGE_API_KEY="configured",
+            USE_VOYAGE_RERANK=True,
+        ),
+        execute_pipeline=lambda state: state.prepared((iter(()), "", [], [], {})),
+        qdrant_builder=lambda settings: SimpleNamespace(
+            qdrant_client=SimpleNamespace(close=lambda: None),
+            vector_store=object(),
+            collection_name=settings.collection,
+        ),
+        llm_builder=lambda _settings: object(),
+        vision_builder=lambda _settings: object(),
+        intent_runtime_builder=lambda **_kwargs: None,
+        jina_runtime_builder=build_jina,
+        voyage_runtime_builder=lambda *_args, **_kwargs: voyage_runtime,
+    )
+
+    assert runtime.retrieval.rerank_provider == "voyage"
+    assert runtime.retrieval.rerank_runtime is voyage_runtime
+
+    runtime.close()
+
+
+def test_rag_runtime_uses_production_authorized_jina_as_primary():
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+
+    def build_jina(_provider_name, **kwargs):
+        return SimpleNamespace(
+            api_key="configured",
+            endpoint="https://api.jina.ai/v1",
+            model="jina-reranker-v3",
+            profile=SimpleNamespace(
+                provider="jina",
+                is_active=True,
+                policy_version="risk-accepted-v1-jina-production",
+                review_expires_at=datetime.now() + timedelta(days=90),
+                allowed_surfaces=("reranking",),
+                retention_mode="provider_default_no_training",
+                risk_acceptance_ref=(
+                    "owner-decision:2026-07-31:jina-primary-voyage-fallback"
+                ),
+            ),
+            settings=kwargs["settings"],
+        )
+
+    runtime = build_rag_runtime(
+        Settings(
+            RAG_EXECUTION_CONTEXT="production",
+            RERANK_PROVIDER="jina",
+            JINA_API_KEY="configured",
+            VOYAGE_API_KEY="configured",
+            USE_VOYAGE_RERANK=True,
+        ),
+        execute_pipeline=lambda state: state.prepared((iter(()), "", [], [], {})),
+        qdrant_builder=lambda settings: SimpleNamespace(
+            qdrant_client=SimpleNamespace(close=lambda: None),
+            vector_store=object(),
+            collection_name=settings.collection,
+        ),
+        llm_builder=lambda _settings: object(),
+        vision_builder=lambda _settings: object(),
+        intent_runtime_builder=lambda **_kwargs: None,
+        jina_runtime_builder=build_jina,
+        voyage_runtime_builder=lambda *_args, **_kwargs: SimpleNamespace(
+            api_key="configured"
+        ),
+    )
+
+    assert runtime.retrieval.rerank_provider == "jina"
+    assert runtime.retrieval.rerank_runtime.model == "jina-reranker-v3"
+
+    runtime.close()
+
+
+def test_rag_runtime_rerank_provider_defaults_to_jina_and_can_disable_external():
+    assert Settings().RERANK_PROVIDER == "jina"
 
     local_settings = Settings(
         RERANK_PROVIDER="local_fusion",

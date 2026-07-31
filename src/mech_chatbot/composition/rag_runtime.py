@@ -106,7 +106,7 @@ class RagRetrievalRuntime:
     voyage_runtime: Any = field(default=None, repr=False)
     voyage_enabled: bool = True
     voyage_timeout_seconds: float = 15.0
-    rerank_provider: str = "voyage"
+    rerank_provider: str = "jina"
     rerank_runtime: Any = field(default=None, repr=False)
     rerank_enabled: bool = True
     rerank_timeout_seconds: float = 15.0
@@ -240,7 +240,7 @@ def _build_intent_dependency(settings, process, builder):
 
 def _build_voyage_dependency(settings, builder):
     if (
-        settings.RERANK_PROVIDER != "voyage"
+        settings.RERANK_PROVIDER not in {"voyage", "jina"}
         or not settings.USE_VOYAGE_RERANK
     ):
         return None
@@ -269,16 +269,29 @@ def _build_jina_dependency(settings, builder):
     from mech_chatbot.llm.external_ai import (
         ExternalProcessingDenied,
         get_provider_runtime,
+        make_external_call_spec,
     )
 
     try:
-        return (builder or get_provider_runtime)(
+        external_settings = ExternalAiSettings.from_settings(settings)
+        runtime = (builder or get_provider_runtime)(
             "jina",
             fallback_endpoint="https://api.jina.ai/v1",
             fallback_model=settings.JINA_RERANK_MODEL,
-            settings=ExternalAiSettings.from_settings(settings),
+            settings=external_settings,
             resolved_secrets={"JINA_API_KEY": settings.JINA_API_KEY},
         )
+        if getattr(runtime, "profile", None) is not None:
+            make_external_call_spec(
+                provider="jina",
+                model=getattr(runtime, "model", settings.JINA_RERANK_MODEL),
+                endpoint=getattr(runtime, "endpoint", None),
+                surface="reranking",
+                policies=("all_external",),
+                profile=runtime.profile,
+                settings=external_settings,
+            )
+        return runtime
     except ExternalProcessingDenied:
         return None
 
@@ -348,21 +361,29 @@ def _retrieval_policy_settings(
     voyage_runtime,
     jina_runtime,
 ):
+    rerank_provider = settings.RERANK_PROVIDER
+    if (
+        rerank_provider == "jina"
+        and not getattr(jina_runtime, "api_key", None)
+        and settings.USE_VOYAGE_RERANK
+        and getattr(voyage_runtime, "api_key", None)
+    ):
+        rerank_provider = "voyage"
     rerank_runtime = (
         jina_runtime
-        if settings.RERANK_PROVIDER == "jina"
+        if rerank_provider == "jina"
         else voyage_runtime
     )
     rerank_enabled = (
-        settings.RERANK_PROVIDER == "jina" and jina_runtime is not None
+        rerank_provider == "jina" and jina_runtime is not None
     ) or (
-        settings.RERANK_PROVIDER == "voyage"
+        rerank_provider == "voyage"
         and settings.USE_VOYAGE_RERANK
         and voyage_runtime is not None
     )
     rerank_timeout = (
         settings.JINA_RERANK_TIMEOUT_SECONDS
-        if settings.RERANK_PROVIDER == "jina"
+        if rerank_provider == "jina"
         else settings.VOYAGE_RERANK_TIMEOUT_SECONDS
     )
     return {
@@ -386,7 +407,7 @@ def _retrieval_policy_settings(
         "voyage_runtime": voyage_runtime,
         "voyage_enabled": settings.USE_VOYAGE_RERANK,
         "voyage_timeout_seconds": settings.VOYAGE_RERANK_TIMEOUT_SECONDS,
-        "rerank_provider": settings.RERANK_PROVIDER,
+        "rerank_provider": rerank_provider,
         "rerank_runtime": rerank_runtime,
         "rerank_enabled": rerank_enabled,
         "rerank_timeout_seconds": rerank_timeout,

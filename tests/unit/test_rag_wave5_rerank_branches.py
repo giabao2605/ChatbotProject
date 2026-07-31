@@ -58,7 +58,7 @@ def test_rerank_policy_respects_external_processing_policy_and_provider_state(
     configured = rerank.RerankPolicy(
         runtime=SimpleNamespace(api_key="configured"),
     )
-    assert configured.select_backend(allowed) == "voyage"
+    assert configured.select_backend(allowed) == "jina"
     assert rerank.RerankPolicy(runtime=None).select_backend(allowed) == "local_fusion"
     assert rerank.RerankPolicy(
         enabled=False,

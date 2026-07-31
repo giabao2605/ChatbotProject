@@ -90,7 +90,7 @@ class Settings(BaseModel):
     # --- RAG core (rag/*) -------------------------------------------------
     RERANK_PER_PART: int = 8
     RERANK_TOP_N_CAP: int = 20
-    RERANK_PROVIDER: Literal["voyage", "jina", "local_fusion"] = "voyage"
+    RERANK_PROVIDER: Literal["voyage", "jina", "local_fusion"] = "jina"
     VOYAGE_API_KEY: Optional[str] = None
     VOYAGE_RERANK_MODEL: str = "rerank-2.5-lite"
     VOYAGE_RERANK_TIMEOUT_SECONDS: float = 15.0
@@ -315,7 +315,7 @@ class Settings(BaseModel):
             # RAG core
             RERANK_PER_PART=_int("RERANK_PER_PART", 8),
             RERANK_TOP_N_CAP=_int("RERANK_TOP_N_CAP", 20),
-            RERANK_PROVIDER=_str("RERANK_PROVIDER", "voyage"),
+            RERANK_PROVIDER=_str("RERANK_PROVIDER", "jina"),
             VOYAGE_API_KEY=_str("VOYAGE_API_KEY"),
             VOYAGE_RERANK_MODEL=_str("VOYAGE_RERANK_MODEL", "rerank-2.5-lite"),
             VOYAGE_RERANK_TIMEOUT_SECONDS=_float("VOYAGE_RERANK_TIMEOUT_SECONDS", 15.0),

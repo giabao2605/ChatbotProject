@@ -62,7 +62,9 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 - GraphRAG chưa có tối thiểu 20 edge được independent review.
 - Community Summaries phụ thuộc GraphRAG và corpus/eval hiện chưa đủ.
 - Late Interaction giữ tắt theo quyết định rejected.
-- Jina giữ evaluation-only; pair 02 full-RAG vượt latency ratio `1.443 > 1.25`.
+- Tại snapshot ban đầu, Jina chỉ dùng evaluation; pair 02 full-RAG vượt latency
+  ratio `1.443 > 1.25`. Quyết định provider mới hơn được ghi ở checkpoint
+  2026-07-31 bên dưới.
 - LAN launcher chỉ migrate đến `V0032`, trong khi repo có migration đến `V0041`.
 - Đường triển khai đã khóa là Windows LAN/local.
 - App startup chưa có cùng fail-fast config validation như RAG/worker.
@@ -103,6 +105,19 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 - Candidate xuất phát từ checkout HEAD `8356483`; sau khi owner duyệt, RC SHA
   được lấy từ Git HEAD chứa chính thay đổi này. RC commit vẫn chưa phải
   activation evidence.
+- Owner đã đổi provider order ngày 2026-07-31: Jina là reranker mặc định,
+  Voyage là fallback một lần, sau đó mới dùng deterministic local fusion.
+  Thay đổi code này làm RC `40a11d8` hết hiệu lực; phải freeze RC mới và chạy
+  lại formal chain. Mọi governed feature vẫn OFF.
+- Owner đã cấp production authorization cho Jina reranking. Migration `V0042`
+  chỉ promote đúng profile `V0041` sang
+  `risk-accepted-v1-jina-production`, giữ surface `reranking`, secret reference
+  và retention contract; review hết hạn sau 90 ngày. Jina là primary trong
+  production, Voyage chỉ fallback khi Jina không khả dụng/lỗi.
+- Diagnostic Jina trên RC cũ chỉ là supporting evidence: candidate đạt `9/9`,
+  Jina `8/8` call thành công, fallback/retry/provider error bằng `0`; P95 tổng
+  `21237 ms` bị chi phối bởi generation P95 `18455 ms`, không được dùng làm
+  formal activation evidence cho RC mới.
 - Query Decomposition chỉ rút gọn instruction nội bộ: base `67` ký tự, biến
   thể đồng thời thiếu nguồn và access denied `126` ký tự; không đổi model,
   classifier, planner, số subquery hoặc gate.
@@ -121,6 +136,14 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
   frontend `32/32` và production build đạt. Frontend coverage vẫn là baseline
   cũ `21.94%` line, `14.66%` branch và repo chưa cấu hình threshold frontend
   `80%`; backend là gate coverage `80/80` hiện hành.
+- Verification mới cho Jina production candidate: rerank/profile targeted xanh;
+  backend fast `2484 passed, 1 skipped`, coverage line `92.373853%`, branch
+  `85.051903%`; architecture `18/18`, security marker suite, frontend `32/32`
+  và production build đều đạt. Hai review độc lập không còn blocker.
+- Production metadata smoke gọi trực tiếp Jina `jina-reranker-v3` qua policy
+  `risk-accepted-v1-jina-production`, trả đúng top document trong `871.03 ms`;
+  Voyage không được gọi. RAG server đã restart, health `ok`, execution context
+  `production`, activation profile vẫn `all_off`.
 - Các số local trên chưa được dùng để sửa release decision. Chưa gọi provider,
   chưa ingest/re-seed SQL/Qdrant, chưa chạy formal window và chưa làm human
   review.
@@ -133,7 +156,7 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 | 2. Deployment và security fail-fast | Đã hoàn tất code; live recapture chưa chạy | Windows launcher fail nếu worktree bẩn, restore evidence sai, migration/preflight lỗi hoặc runtime-state drift; health có deployment/runtime identity | Chạy launcher thật trên restore evidence hợp lệ và thu hardened live preflight mới |
 | 3. Cohort tài khoản test | Đã hoàn tất, không tạo/xóa account | Reuse 33 account `demo_...`; viewer/uploader/reviewer login và profile đúng; credential không vào Git/report | Chỉ bổ sung account nếu một future matrix thiếu actor; cần phê duyệt riêng |
 | 4. Browser E2E và baseline all-off | Đã đo baseline | Browser `3/3`, golden `5/5`, frontend `32/32`, load c1/c5 không lỗi; mọi governed flag OFF | Chạy lại health/browser smoke sau hardened launcher để thay evidence pre-hardening |
-| 5. CRAG + Claim Repair | Dừng đúng stop rule, disposition `inconclusive` | Window 06 Pair 01 candidate `9/9`; diagnostic RC `1add3d5` cũng đạt candidate `9/9` nhưng gặp `5` Voyage 429/fallback nên bị loại trước baseline | Chờ Voyage ổn định rồi chạy clean diagnostic mới; không nới latency gate hoặc dùng lượt bị 429 |
+| 5. CRAG + Claim Repair | Dừng đúng stop rule, disposition `inconclusive` | Window 06 Pair 01 candidate `9/9`; diagnostic Voyage gặp `5` HTTP 429; diagnostic Jina đạt candidate `9/9`, Jina `8/8` thành công nhưng có generation outlier | Freeze RC Jina-primary mới rồi chạy clean interleaved diagnostic; không nới latency gate hoặc dùng evidence từ RC cũ |
 | 6. Grounded Math | Ba pair kỹ thuật đạt; disposition vẫn `inconclusive` | Fixture `16/16`, rollback `2/2`, ba pair candidate đều `16/16`; quality/safety/latency/cost/rollback xanh | CRAG phải accepted và owner review đủ `10/10`; không chạy lại window đã hoàn tất |
 | 7. Query Decomposition | RC code candidate đã được owner duyệt; disposition vẫn `inconclusive` | Instruction đạt `67/126` ký tự và unit contracts xanh; formal evidence cũ vẫn fail Pair 02 cost `1.554088 > 1.5` | Chờ provider/reranker ổn định, chạy diagnostic/formal window mới và owner review; không dùng rerun không khai báo |
 | 8. GraphRAG và Community Summaries | Provenance kỹ thuật đạt; human gate vẫn blocked | Batch `graph-eval-v1` đã re-seed, stale edge bị disable, quote thật được approve; preflight đạt `21/21`, workflow approve/reject đạt | Đồng nghiệp review độc lập toàn bộ `21` edge hợp lệ; chỉ sau Graph accepted mới chạy Community |
@@ -316,7 +339,7 @@ Release candidate và provenance
                     -> Final enable/disable decision pack
 
 Late Interaction: giữ OFF theo evidence hiện tại.
-Jina rerank: giữ evaluation-only theo evidence hiện tại.
+Rerank mặc định: Jina -> Voyage fallback -> deterministic local fusion.
 ```
 
 ## Ticket 1: Khóa release candidate và provenance
@@ -330,7 +353,7 @@ evidence cũ sang HEAD mới.
 
 1. Giữ nguyên lịch sử commit hiện tại; không reset, drop hoặc xóa report.
 2. Chạy targeted gate cho Jina/rerank và full fast suite trên HEAD.
-3. Ghi rõ Jina là evaluation-only; không đổi default Voyage.
+3. Ghi rõ Jina là default, Voyage là fallback không retry; RC cũ hết hiệu lực.
 4. Chạy backend coverage, architecture, frontend coverage/build.
 5. Sau khi code review sạch, commit các sửa đổi theo conventional commit.
 6. Không push hoặc mở PR nếu chưa có phê duyệt external action riêng.
@@ -383,6 +406,11 @@ production chưa hợp lệ.
 
 - Clean database `Mech_Chatbot_Test_RAG_20260729_T2A` bootstrap V0001-V0041 và
   chạy migration lần hai thành công; database test được giữ lại, không cleanup.
+  Evidence này có trước `V0042`; RC mới phải chạy lại clean migration qua
+  `V0042`.
+- Clean database `Mech_Chatbot_Test_JinaProd_20260731` đã bootstrap và apply
+  V0001-V0042, chạy lần hai idempotent, ledger đủ; database test được giữ lại.
+  `Mech_Chatbot_DB` cũng đã apply V0042 và đọc lại đúng production policy.
 - 177 test tập trung đạt; full fast backend suite đạt với line coverage
   `92.234594%` và branch coverage `84.905989%`.
 - Frontend 32 test đạt, production build đạt; architecture 18 test đạt.
@@ -470,7 +498,7 @@ RAG nền usable trước khi đánh giá feature nâng cao.
   liên quan đạt và golden chạy lại đạt `5/5`.
 - Benchmark metadata-only dùng 5 câu, không lỗi: concurrency 1 có complete P95
   `211 ms`; concurrency 5 có complete P95 `554 ms`. Runtime log sau khi khóa
-  provider Voyage không có provider error, retry hoặc fallback.
+  provider chain đã pin không có provider error, retry hoặc fallback vượt gate.
 - Frontend unit `32/32`, production build và `npm audit` đạt.
 
 ## Ticket 5: Hoàn tất CRAG + Claim Repair
@@ -753,7 +781,7 @@ JSON máy đọc được nằm tại
 
 | Feature | Disposition hiện tại | Khuyến nghị | Gate kế tiếp |
 | --- | --- | --- | --- |
-| CRAG + Claim Repair | Inconclusive; window 06 fail latency, diagnostic RC mới bị loại vì `5` Voyage 429/fallback | `keep_off` | Chờ Voyage ổn định; chỉ mở cửa sổ mới sau clean diagnostic |
+| CRAG + Claim Repair | Inconclusive; window 06 fail latency, diagnostic Voyage bị loại vì `5` HTTP 429; diagnostic Jina chỉ là supporting evidence trên RC cũ | `keep_off` | Freeze RC Jina-primary mới; chỉ mở cửa sổ formal sau clean interleaved diagnostic |
 | Grounded Math | Inconclusive; 3/3 pair kỹ thuật đạt, CRAG và review `0/10` còn thiếu | `re_evaluate` | CRAG accepted và owner review đủ 10 case; không rerun window |
 | Late Interaction | Rejected | `keep_off` | Chỉ mở lại khi thiết kế mới vượt quality gate |
 | Query Decomposition | Inconclusive; Pair 02 fail cost `1.554088 > 1.5`, Pair 03 không chạy | `re_evaluate` | Chẩn đoán overhead, predeclare window mới và owner review |
@@ -766,7 +794,10 @@ feature-on activation bundle trước chữ ký của chủ dự án.
 
 ## Decisions so far
 
-- Giữ Voyage `rerank-2.5-lite` làm default; Jina vẫn evaluation-only.
+- Dùng Jina `jina-reranker-v3` làm default; Voyage `rerank-2.5-lite` là fallback
+  một lần, sau đó mới về deterministic local fusion.
+- Jina được owner cho phép dùng surface `reranking` trong production qua
+  `V0042`; authorization vẫn fail-closed khi profile/key/review không hợp lệ.
 - Giữ Late Interaction OFF theo quyết định rejected hiện tại.
 - Chưa bật bất kỳ governed feature nào; live ledger vẫn fail-closed.
 - Dùng cohort `demo_...` hiện có thay vì viết account system mới.

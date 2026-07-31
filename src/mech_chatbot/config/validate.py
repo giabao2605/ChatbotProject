@@ -133,7 +133,7 @@ def validate_config(env=None, *, require_qdrant=True, require_llm=True,
             "EXTERNAL_AI_LOCAL_DEVELOPMENT chi duoc dung khi APP_ENV=development hoac local"
         )
 
-    rerank_provider = _get(env, "RERANK_PROVIDER").lower() or "voyage"
+    rerank_provider = _get(env, "RERANK_PROVIDER").lower() or "jina"
     if rerank_provider not in {"voyage", "jina", "local_fusion"}:
         errors.append(
             "RERANK_PROVIDER phai la voyage, jina hoac local_fusion"

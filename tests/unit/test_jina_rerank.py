@@ -173,7 +173,7 @@ def test_jina_failure_metadata_uses_immediate_local_fallback_without_retry():
     }
 
 
-def test_rerank_provider_selection_keeps_voyage_default_and_fails_closed():
+def test_rerank_provider_selection_keeps_jina_default_and_fails_closed():
     allowed = [
         SimpleNamespace(
             page_content="public",
@@ -182,7 +182,7 @@ def test_rerank_provider_selection_keeps_voyage_default_and_fails_closed():
     ]
     runtime = SimpleNamespace(api_key="configured")
 
-    assert rerank.RerankPolicy(runtime=runtime).select_backend(allowed) == "voyage"
+    assert rerank.RerankPolicy(runtime=runtime).select_backend(allowed) == "jina"
     assert (
         rerank.RerankPolicy(provider="jina", runtime=runtime).select_backend(allowed)
         == "jina"

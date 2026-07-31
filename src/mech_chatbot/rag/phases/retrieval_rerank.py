@@ -143,6 +143,68 @@ def _voyage_top_n(
     return min(int(cap), target_top_n)
 
 
+def _attempt_provider_rerank(
+    real_docs: list[Any],
+    effective_question: str,
+    trace_id: str,
+    input_count: int,
+    runtime: Any,
+    provider: str,
+    top_n: int,
+) -> list[Any]:
+    logger.info(
+        "Dang su dung %s rerank de filter %s tai lieu (top_n=%s)...",
+        provider,
+        len(real_docs),
+        top_n,
+    )
+    started = time.time()
+    adapter = (
+        jina_rerank_documents
+        if provider == "jina"
+        else voyage_rerank_documents
+    )
+    if provider == "jina":
+        provider_runtime = getattr(runtime, "rerank_runtime", None)
+        timeout_seconds = getattr(runtime, "rerank_timeout_seconds", 15.0)
+    else:
+        provider_runtime = getattr(runtime, "voyage_runtime", None) or getattr(
+            runtime,
+            "rerank_runtime",
+            None,
+        )
+        timeout_seconds = getattr(runtime, "voyage_timeout_seconds", 15.0)
+    result = adapter(
+        real_docs,
+        effective_question,
+        top_n=top_n,
+        trace_id=trace_id,
+        runtime=provider_runtime,
+        timeout_seconds=timeout_seconds,
+    )
+    scores = [
+        {
+            "file": doc.metadata.get("file_goc"),
+            "page": doc.metadata.get("trang_so"),
+            "score": doc.metadata.get("relevance_score", 1.0),
+        }
+        for doc in result[:5]
+    ]
+    log_trace(
+        "rerank",
+        trace_id,
+        latency_ms=int((time.time() - started) * 1000),
+        input_docs=input_count,
+        output_docs=len(result),
+        scores=scores,
+        backend=provider,
+        status="success",
+        fallback=False,
+        retry_attempted=False,
+    )
+    return result
+
+
 def _provider_rerank(
     real_docs: list[Any],
     effective_question: str,
@@ -153,79 +215,50 @@ def _provider_rerank(
     runtime: Any,
     provider: str,
 ) -> list[Any]:
-    try:
-        top_n = _voyage_top_n(
-            user_question,
-            new_part_ids,
-            per_part=getattr(runtime, "rerank_per_part", 8),
-            cap=getattr(runtime, "rerank_top_n_cap", 20),
-        )
-        logger.info(
-            "Dang su dung %s rerank de filter %s tai lieu (top_n=%s)...",
-            provider,
-            len(real_docs),
-            top_n,
-        )
-        started = time.time()
-        adapter = (
-            jina_rerank_documents
-            if provider == "jina"
-            else voyage_rerank_documents
-        )
-        provider_runtime = getattr(
-            runtime,
-            "rerank_runtime",
-            getattr(runtime, "voyage_runtime", None),
-        )
-        result = adapter(
-            real_docs,
-            effective_question,
-            top_n=top_n,
-            trace_id=trace_id,
-            runtime=provider_runtime,
-            timeout_seconds=getattr(
+    top_n = _voyage_top_n(
+        user_question,
+        new_part_ids,
+        per_part=getattr(runtime, "rerank_per_part", 8),
+        cap=getattr(runtime, "rerank_top_n_cap", 20),
+    )
+    providers = [provider]
+    if (
+        provider == "jina"
+        and bool(getattr(runtime, "voyage_enabled", False))
+        and getattr(getattr(runtime, "voyage_runtime", None), "api_key", None)
+    ):
+        providers.append("voyage")
+    for index, current_provider in enumerate(providers):
+        try:
+            return _attempt_provider_rerank(
+                real_docs,
+                effective_question,
+                trace_id,
+                input_count,
                 runtime,
-                "rerank_timeout_seconds",
-                getattr(runtime, "voyage_timeout_seconds", 15.0),
-            ),
-        )
-        scores = [
-            {
-                "file": doc.metadata.get("file_goc"),
-                "page": doc.metadata.get("trang_so"),
-                "score": doc.metadata.get("relevance_score", 1.0),
-            }
-            for doc in result[:5]
-        ]
-        log_trace(
-            "rerank",
-            trace_id,
-            latency_ms=int((time.time() - started) * 1000),
-            input_docs=input_count,
-            output_docs=len(result),
-            scores=scores,
-            backend=provider,
-            status="success",
-            fallback=False,
-            retry_attempted=False,
-        )
-        return result
-    except (ExternalAICallCancelled, RequestBudgetExceeded):
-        raise
-    except Exception as exc:
-        logger.error(
-            "Loi khi su dung %s rerank: %s. Fallback to manual rerank.",
-            provider,
-            exc,
-        )
-        result = rerank_docs(real_docs)
-        failure_metadata = (
-            jina_failure_metadata
-            if provider == "jina"
-            else voyage_failure_metadata
-        )
-        log_trace("rerank", trace_id, **failure_metadata(exc))
-        return result
+                current_provider,
+                top_n,
+            )
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
+            raise
+        except Exception as exc:
+            logger.error("Loi khi su dung %s rerank: %s.", current_provider, exc)
+            fallback_backend = (
+                providers[index + 1]
+                if index + 1 < len(providers)
+                else "local_fusion"
+            )
+            failure_metadata = (
+                jina_failure_metadata
+                if current_provider == "jina"
+                else voyage_failure_metadata
+            )(exc)
+            log_trace(
+                "rerank",
+                trace_id,
+                **{**failure_metadata, "fallback_backend": fallback_backend},
+            )
+    return rerank_docs(real_docs)
 
 
 def _apply_rerank_backend(
@@ -242,7 +275,7 @@ def _apply_rerank_backend(
         "late_interaction"
         if late_used
         else RerankPolicy(
-            provider=getattr(runtime, "rerank_provider", "voyage"),
+            provider=getattr(runtime, "rerank_provider", "jina"),
             enabled=bool(
                 getattr(
                     runtime,

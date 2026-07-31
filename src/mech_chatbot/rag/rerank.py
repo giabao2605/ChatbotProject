@@ -67,7 +67,7 @@ class RerankPolicy:
     ranking scale.
     """
 
-    provider: str = "voyage"
+    provider: str = "jina"
     enabled: bool = True
     runtime: object | None = None
 
