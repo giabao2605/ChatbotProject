@@ -166,6 +166,17 @@ class _Qdrant:
         return SimpleNamespace(count=next(self.counts))
 
 
+class _SnapshotResponse(BytesIO):
+    status_code = 200
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, chunk_size):
+        while chunk := self.read(chunk_size):
+            yield chunk
+
+
 @pytest.mark.parametrize(
     "name",
     ("Mech_Chatbot_DB", "Mech_Chatbot_Restore", "RestoreTest", "../RestoreTest"),
@@ -282,10 +293,17 @@ def test_sql_partial_restore_reports_target_may_exist():
 def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
     payload = b"snapshot"
     checksum = hashlib.sha256(payload).hexdigest()
+    download_calls = []
+
+    def download(url, **kwargs):
+        download_calls.append((url, kwargs))
+        return _SnapshotResponse(payload)
+
     monkeypatch.setattr(
         restore_module,
-        "_open_snapshot",
-        lambda *_args, **_kwargs: BytesIO(payload),
+        "requests",
+        SimpleNamespace(get=download),
+        raising=False,
     )
     client = _Qdrant(snapshot_checksum=checksum)
 
@@ -320,6 +338,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
     assert recover_call[1]["checksum"] == checksum
     assert recover_call[1]["wait"] is False
     assert Path(recover_call[1]["snapshot"].name).suffix == ".snapshot"
+    assert download_calls[0][1]["allow_redirects"] is False
     assert all(call[0] != "delete_collection" for call in client.calls)
 
     with pytest.raises(ValueError, match="API key"):
@@ -425,13 +444,32 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
         )
 
 
+def test_qdrant_snapshot_download_rejects_redirect(monkeypatch):
+    payload = b"redirect"
+    response = _SnapshotResponse(payload)
+    response.status_code = 302
+    monkeypatch.setattr(
+        restore_module,
+        "requests",
+        SimpleNamespace(get=lambda *_args, **_kwargs: response),
+    )
+
+    with pytest.raises(ValueError, match="redirect"):
+        with restore_module._verified_snapshot_file(
+            location="https://qdrant.example/snapshot",
+            api_key="test-key",
+            checksum=hashlib.sha256(payload).hexdigest(),
+        ):
+            pass
+
+
 def test_qdrant_partial_restore_reports_target_may_exist(monkeypatch):
     payload = b"snapshot"
     checksum = hashlib.sha256(payload).hexdigest()
     monkeypatch.setattr(
         restore_module,
-        "_open_snapshot",
-        lambda *_args, **_kwargs: BytesIO(payload),
+        "requests",
+        SimpleNamespace(get=lambda *_args, **_kwargs: _SnapshotResponse(payload)),
     )
     with pytest.raises(PartialRestoreError) as raised:
         restore_qdrant_snapshot(
