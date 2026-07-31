@@ -173,15 +173,26 @@ def _wait_for_restored_collection(
         raise ValueError("Qdrant wait seconds must be positive and finite")
     deadline = time.monotonic() + wait_seconds
     target_points = None
+    last_error = None
     while time.monotonic() < deadline:
-        if client.collection_exists(target):
-            target_points = int(client.count(target, exact=True).count)
-            if target_points == source_points:
-                return target_points
+        try:
+            if client.collection_exists(target):
+                target_points = int(client.count(target, exact=True).count)
+                if target_points == source_points:
+                    return target_points
+            last_error = None
+        except Exception as error:
+            last_error = error
         time.sleep(2)
     if target_points is not None:
-        raise RuntimeError("Qdrant restored point count does not match")
-    raise RuntimeError("Qdrant restored collection did not become available")
+        failure = RuntimeError("Qdrant restored point count does not match")
+    else:
+        failure = RuntimeError(
+            "Qdrant restored collection did not become available"
+        )
+    if last_error is not None:
+        raise failure from last_error
+    raise failure
 
 
 def restore_sql_backup(

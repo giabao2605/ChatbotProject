@@ -128,6 +128,7 @@ class _Qdrant:
         snapshots=("snapshot-1",),
         snapshot_checksum="a" * 64,
         recover_error=None,
+        transient_target_errors=0,
     ):
         self.source_exists = source_exists
         self.target_exists = target_exists
@@ -135,6 +136,7 @@ class _Qdrant:
         self.snapshots = snapshots
         self.snapshot_checksum = snapshot_checksum
         self.recover_error = recover_error
+        self.transient_target_errors = transient_target_errors
         self.calls = []
         self.http = SimpleNamespace(
             snapshots_api=SimpleNamespace(
@@ -144,6 +146,13 @@ class _Qdrant:
 
     def collection_exists(self, name):
         self.calls.append(("collection_exists", name))
+        if (
+            name != "TaiLieuKyThuat_v2"
+            and self.target_exists
+            and self.transient_target_errors > 0
+        ):
+            self.transient_target_errors -= 1
+            raise ConnectionError("temporary Qdrant read failure")
         return self.source_exists if name == "TaiLieuKyThuat_v2" else self.target_exists
 
     def recover_snapshot(self, **kwargs):
@@ -515,6 +524,7 @@ def test_qdrant_restore_waits_for_point_count_to_settle(monkeypatch):
 def test_qdrant_restore_accepts_completed_upload_after_client_timeout(monkeypatch):
     payload = b"snapshot"
     checksum = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(restore_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         restore_module,
         "requests",
@@ -525,6 +535,7 @@ def test_qdrant_restore_accepts_completed_upload_after_client_timeout(monkeypatc
         _Qdrant(
             snapshot_checksum=checksum,
             recover_error=TimeoutError("response timed out"),
+            transient_target_errors=1,
         ),
         source_collection="TaiLieuKyThuat_v2",
         target_collection="TaiLieuKyThuat_v2_RestoreTest_AmbiguousUpload",
