@@ -53,6 +53,11 @@ class _Result:
     def all(self):
         return list(self._rows)
 
+    def one_or_none(self):
+        if len(self._rows) > 1:
+            raise AssertionError("expected at most one row")
+        return self._rows[0] if self._rows else None
+
 
 class _Connection:
     def __init__(
@@ -61,10 +66,12 @@ class _Connection:
         database_ids,
         backup_database="Mech_Chatbot_DB",
         backup_set_guid="11111111-1111-1111-1111-111111111111",
+        database_states=(("ONLINE", "MULTI_USER", 1),),
     ):
         self.database_ids = iter(database_ids)
         self.backup_database = backup_database
         self.backup_set_guid = backup_set_guid
+        self.database_states = iter(database_states)
         self.calls = []
 
     def execution_options(self, **_kwargs):
@@ -91,6 +98,13 @@ class _Connection:
                 {"LogicalName": "source_data", "Type": "D"},
                 {"LogicalName": "source_log", "Type": "L"},
             ))
+        if "state_desc" in sql:
+            state, access, has_access = next(self.database_states)
+            return _Result(rows=({
+                "state_desc": state,
+                "user_access_desc": access,
+                "has_db_access": has_access,
+            },))
         return _Result()
 
 
@@ -695,6 +709,9 @@ def test_restore_evidence_binds_current_commit_and_snapshot(tmp_path):
             "backup_set_identity_sha256": values[
                 "sql_backup_set_identity_sha256"
             ],
+            "state_desc": "ONLINE",
+            "user_access_desc": "MULTI_USER",
+            "has_db_access": True,
             "restored": True,
         },
         "qdrant": {
@@ -717,6 +734,31 @@ def test_restore_evidence_binds_current_commit_and_snapshot(tmp_path):
         allowed_root=tmp_path,
     ) == fingerprint
 
+    for invalid_status in (
+        {"state_desc": "RESTORING"},
+        {"user_access_desc": "SINGLE_USER"},
+        {"has_db_access": False},
+    ):
+        invalid_sql = {
+            **artifact,
+            "sql": {
+                **artifact["sql"],
+                **invalid_status,
+            },
+        }
+        invalid_raw = (json.dumps(invalid_sql) + "\n").encode()
+        path.write_bytes(invalid_raw)
+        with pytest.raises(ValueError, match="current commit"):
+            verify_restore_evidence(
+                path,
+                expected_sha256=hashlib.sha256(invalid_raw).hexdigest(),
+                current_git_sha=values["git_sha"],
+                source_database=values["source_database"],
+                source_collection=values["source_collection"],
+                allowed_root=tmp_path,
+            )
+
+    path.write_bytes(raw)
     with pytest.raises(ValueError, match="commit"):
         verify_restore_evidence(
             path,

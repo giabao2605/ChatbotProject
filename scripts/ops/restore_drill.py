@@ -35,7 +35,9 @@ from scripts.eval.verify_failure_family_rollback import clean_git_sha
 _DISPOSABLE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,120}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+_DEFAULT_SQL_WAIT_SECONDS = 60.0
 _DEFAULT_QDRANT_WAIT_SECONDS = 300.0
+_SQL_TRANSIENT_STATES = frozenset({"RECOVERING", "RESTORING"})
 
 
 class PartialRestoreError(RuntimeError):
@@ -84,6 +86,131 @@ def _database_id(connection, target_database: str):
 def _assert_sql_target_absent(connection, target_database: str) -> None:
     if _database_id(connection, target_database) is not None:
         raise ValueError(f"target database already exists: {target_database}")
+
+
+def _execute_sql_restore(
+    connection,
+    *,
+    target_database: str,
+    backup_path: str | None = None,
+    destinations=(),
+) -> None:
+    driver_connection = getattr(
+        getattr(connection, "connection", None),
+        "driver_connection",
+        None,
+    )
+    if backup_path is None:
+        statement = f"RESTORE DATABASE [{target_database}] WITH RECOVERY"
+        positional_parameters = ()
+        fallback_statement = statement
+        fallback_parameters = {}
+    else:
+        positional_moves = ", ".join("MOVE ? TO ?" for _ in destinations)
+        statement = (
+            f"RESTORE DATABASE [{target_database}] FROM DISK = ? WITH "
+            f"{positional_moves}, RECOVERY"
+        )
+        positional_parameters = (
+            backup_path,
+            *(
+                value
+                for destination in destinations
+                for value in destination
+            ),
+        )
+        fallback_parameters = {
+            "backup_path": backup_path,
+            **{
+                f"logical_{index}": logical_name
+                for index, (logical_name, _) in enumerate(destinations)
+            },
+            **{
+                f"physical_{index}": physical_path
+                for index, (_, physical_path) in enumerate(destinations)
+            },
+        }
+        fallback_moves = tuple(
+            f"MOVE :logical_{index} TO :physical_{index}"
+            for index, _ in enumerate(destinations)
+        )
+        fallback_statement = (
+            f"RESTORE DATABASE [{target_database}] FROM DISK = :backup_path "
+            f"WITH {', '.join((*fallback_moves, 'RECOVERY'))}"
+        )
+    if driver_connection is None:
+        connection.execute(text(fallback_statement), fallback_parameters)
+        return
+    cursor = driver_connection.cursor()
+    try:
+        if positional_parameters:
+            cursor.execute(statement, positional_parameters)
+        else:
+            cursor.execute(statement)
+        while cursor.nextset():
+            pass
+    finally:
+        cursor.close()
+
+
+def _sql_database_status(connection, target_database: str) -> dict | None:
+    row = connection.execute(
+        text(
+            "SELECT state_desc, user_access_desc, "
+            "HAS_DBACCESS(name) AS has_db_access "
+            "FROM sys.databases WHERE name = :target_database"
+        ),
+        {"target_database": target_database},
+    ).mappings().one_or_none()
+    if row is None:
+        return None
+    has_db_access = row.get("has_db_access")
+    return {
+        "state_desc": str(row.get("state_desc") or "").strip().upper(),
+        "user_access_desc": str(
+            row.get("user_access_desc") or "").strip().upper(),
+        "has_db_access": has_db_access is True or has_db_access == 1,
+    }
+
+
+def _wait_for_sql_accessible(
+    connection,
+    target_database: str,
+    *,
+    timeout_seconds: float,
+) -> dict:
+    deadline = time.monotonic() + timeout_seconds
+    recovery_attempted = False
+    last_status = None
+    while time.monotonic() < deadline:
+        last_status = _sql_database_status(connection, target_database)
+        if last_status is None:
+            time.sleep(2)
+            continue
+        state = last_status["state_desc"]
+        if (
+            state == "ONLINE"
+            and last_status["user_access_desc"] == "MULTI_USER"
+            and last_status["has_db_access"]
+        ):
+            return last_status
+        if state == "RESTORING" and not recovery_attempted:
+            _execute_sql_restore(
+                connection,
+                target_database=target_database,
+            )
+            recovery_attempted = True
+            continue
+        if state not in _SQL_TRANSIENT_STATES:
+            raise RuntimeError(
+                f"SQL restored database entered terminal state {state or 'UNKNOWN'}"
+            )
+        time.sleep(2)
+    state = (last_status or {}).get("state_desc") or "ABSENT"
+    raise RuntimeError(
+        "SQL restored database did not become ONLINE and accessible "
+        f"before timeout; last state {state}"
+    )
 
 
 def _backup_set_identity(header: dict) -> str:
@@ -202,6 +329,7 @@ def restore_sql_backup(
     target_database: str,
     backup_path: str,
     data_dir: str,
+    timeout_seconds: float = _DEFAULT_SQL_WAIT_SECONDS,
 ) -> dict:
     target = validate_disposable_name(
         target_database,
@@ -209,6 +337,9 @@ def restore_sql_backup(
     )
     backup = _server_path(backup_path, suffix=".bak")
     destination_root = _server_path(data_dir)
+    wait_seconds = float(timeout_seconds)
+    if not math.isfinite(wait_seconds) or wait_seconds <= 0:
+        raise ValueError("SQL wait seconds must be positive and finite")
     _assert_sql_target_absent(connection, target)
     headers = connection.execute(
         text("RESTORE HEADERONLY FROM DISK = :backup_path"),
@@ -230,23 +361,21 @@ def restore_sql_backup(
         target_database=target,
         data_dir=destination_root,
     )
-    parameters = {"backup_path": str(backup)}
-    moves = []
-    for index, (logical_name, physical_path) in enumerate(destinations):
-        parameters[f"logical_{index}"] = logical_name
-        parameters[f"physical_{index}"] = physical_path
-        moves.append(f"MOVE :logical_{index} TO :physical_{index}")
     _assert_sql_target_absent(connection, target)
     try:
-        connection.execute(
-            text(
-                f"RESTORE DATABASE [{target}] FROM DISK = :backup_path WITH "
-                + ", ".join((*moves, "RECOVERY"))
-            ),
-            parameters,
+        _execute_sql_restore(
+            connection,
+            target_database=target,
+            backup_path=str(backup),
+            destinations=destinations,
         )
         if _database_id(connection, target) is None:
             raise RuntimeError("restored database is not visible")
+        status = _wait_for_sql_accessible(
+            connection,
+            target,
+            timeout_seconds=wait_seconds,
+        )
     except Exception as error:
         raise PartialRestoreError(
             "SQL restore may have created the target",
@@ -261,6 +390,7 @@ def restore_sql_backup(
         "target_database": target,
         "backup_set_identity_sha256": backup_set_identity,
         "logical_file_count": len(destinations),
+        **status,
         "restored": True,
     }
 
@@ -493,6 +623,9 @@ def verify_restore_evidence(
         or sql.get("restored") is not True
         or qdrant.get("restored") is not True
         or sql.get("target_database") != artifact.get("target_database")
+        or sql.get("state_desc") != "ONLINE"
+        or sql.get("user_access_desc") != "MULTI_USER"
+        or sql.get("has_db_access") is not True
         or qdrant.get("target_collection") != artifact.get("target_collection")
         or qdrant.get("snapshot_name") != artifact.get("qdrant_snapshot_name")
         or qdrant.get("snapshot_checksum")
