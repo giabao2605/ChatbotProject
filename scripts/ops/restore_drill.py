@@ -147,7 +147,7 @@ def _destination_files(rows, *, target_database: str, data_dir: PureWindowsPath)
 def _verified_snapshot_file(*, location: str, api_key: str, checksum: str):
     request = Request(location, headers={"api-key": api_key})
     with TemporaryDirectory(prefix="qdrant-restore-") as temporary:
-        path = Path(temporary) / "snapshot"
+        path = Path(temporary) / "restore.snapshot"
         digest = hashlib.sha256()
         with _open_snapshot(request) as response, path.open("wb") as output:
             while chunk := response.read(1024 * 1024):

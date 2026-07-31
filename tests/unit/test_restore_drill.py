@@ -319,6 +319,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
     )
     assert recover_call[1]["checksum"] == checksum
     assert recover_call[1]["wait"] is False
+    assert Path(recover_call[1]["snapshot"].name).suffix == ".snapshot"
     assert all(call[0] != "delete_collection" for call in client.calls)
 
     with pytest.raises(ValueError, match="API key"):
