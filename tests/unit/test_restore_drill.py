@@ -299,10 +299,10 @@ def test_sql_restore_reuses_autocommit_connection_after_precheck():
     assert report["restored"] is True
 
 
-def test_sql_partial_restore_reports_target_may_exist():
+def test_sql_restore_dispatch_failure_is_conservative_without_recovery():
     with pytest.raises(PartialRestoreError) as raised:
         restore_sql_backup(
-            _PartialSqlConnection(database_ids=(None, None)),
+            _PartialSqlConnection(database_ids=(None, None, None)),
             source_database="Mech_Chatbot_DB",
             target_database="Mech_Chatbot_DB_RestoreTest_Partial",
             backup_path=r"D:\Backups\source.bak",
@@ -312,7 +312,7 @@ def test_sql_partial_restore_reports_target_may_exist():
     assert raised.value.section == "sql"
     assert raised.value.details == {
         "target_database": "Mech_Chatbot_DB_RestoreTest_Partial",
-        "recovery_attempted": True,
+        "recovery_attempted": False,
         "target_may_exist": True,
     }
 
@@ -674,7 +674,10 @@ def test_qdrant_partial_restore_reports_target_may_exist(monkeypatch):
     assert "point count" in str(raised.value.__cause__)
 
 
-def test_restore_evidence_binds_current_commit_and_snapshot(tmp_path):
+def test_restore_evidence_binds_current_commit_and_snapshot(
+    tmp_path,
+    monkeypatch,
+):
     values = {
         "git_sha": "a" * 40,
         "source_database": "Mech_Chatbot_DB",
@@ -725,14 +728,22 @@ def test_restore_evidence_binds_current_commit_and_snapshot(tmp_path):
     raw = (json.dumps(artifact) + "\n").encode()
     path.write_bytes(raw)
 
-    assert verify_restore_evidence(
-        path,
-        expected_sha256=hashlib.sha256(raw).hexdigest(),
-        current_git_sha=values["git_sha"],
-        source_database=values["source_database"],
-        source_collection=values["source_collection"],
-        allowed_root=tmp_path,
-    ) == fingerprint
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            Path,
+            "read_text",
+            lambda *_args, **_kwargs: pytest.fail(
+                "evidence must not be read twice"
+            ),
+        )
+        assert verify_restore_evidence(
+            path,
+            expected_sha256=hashlib.sha256(raw).hexdigest(),
+            current_git_sha=values["git_sha"],
+            source_database=values["source_database"],
+            source_collection=values["source_collection"],
+            allowed_root=tmp_path,
+        ) == fingerprint
 
     for invalid_status in (
         {"state_desc": "RESTORING"},

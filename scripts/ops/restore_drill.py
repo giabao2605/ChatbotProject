@@ -32,12 +32,16 @@ from mech_chatbot.config.settings import (
 )
 from mech_chatbot.db.engine import build_database_runtime
 from scripts.eval.verify_failure_family_rollback import clean_git_sha
+from scripts.ops.restore_sql_runtime import (
+    SqlRestoreVerificationError,
+    execute_sql_restore,
+    wait_for_sql_accessible,
+)
 _DISPOSABLE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,120}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _DEFAULT_SQL_WAIT_SECONDS = 60.0
 _DEFAULT_QDRANT_WAIT_SECONDS = 300.0
-_SQL_TRANSIENT_STATES = frozenset({"RECOVERING", "RESTORING"})
 
 
 class PartialRestoreError(RuntimeError):
@@ -86,131 +90,6 @@ def _database_id(connection, target_database: str):
 def _assert_sql_target_absent(connection, target_database: str) -> None:
     if _database_id(connection, target_database) is not None:
         raise ValueError(f"target database already exists: {target_database}")
-
-
-def _execute_sql_restore(
-    connection,
-    *,
-    target_database: str,
-    backup_path: str | None = None,
-    destinations=(),
-) -> None:
-    driver_connection = getattr(
-        getattr(connection, "connection", None),
-        "driver_connection",
-        None,
-    )
-    if backup_path is None:
-        statement = f"RESTORE DATABASE [{target_database}] WITH RECOVERY"
-        positional_parameters = ()
-        fallback_statement = statement
-        fallback_parameters = {}
-    else:
-        positional_moves = ", ".join("MOVE ? TO ?" for _ in destinations)
-        statement = (
-            f"RESTORE DATABASE [{target_database}] FROM DISK = ? WITH "
-            f"{positional_moves}, RECOVERY"
-        )
-        positional_parameters = (
-            backup_path,
-            *(
-                value
-                for destination in destinations
-                for value in destination
-            ),
-        )
-        fallback_parameters = {
-            "backup_path": backup_path,
-            **{
-                f"logical_{index}": logical_name
-                for index, (logical_name, _) in enumerate(destinations)
-            },
-            **{
-                f"physical_{index}": physical_path
-                for index, (_, physical_path) in enumerate(destinations)
-            },
-        }
-        fallback_moves = tuple(
-            f"MOVE :logical_{index} TO :physical_{index}"
-            for index, _ in enumerate(destinations)
-        )
-        fallback_statement = (
-            f"RESTORE DATABASE [{target_database}] FROM DISK = :backup_path "
-            f"WITH {', '.join((*fallback_moves, 'RECOVERY'))}"
-        )
-    if driver_connection is None:
-        connection.execute(text(fallback_statement), fallback_parameters)
-        return
-    cursor = driver_connection.cursor()
-    try:
-        if positional_parameters:
-            cursor.execute(statement, positional_parameters)
-        else:
-            cursor.execute(statement)
-        while cursor.nextset():
-            pass
-    finally:
-        cursor.close()
-
-
-def _sql_database_status(connection, target_database: str) -> dict | None:
-    row = connection.execute(
-        text(
-            "SELECT state_desc, user_access_desc, "
-            "HAS_DBACCESS(name) AS has_db_access "
-            "FROM sys.databases WHERE name = :target_database"
-        ),
-        {"target_database": target_database},
-    ).mappings().one_or_none()
-    if row is None:
-        return None
-    has_db_access = row.get("has_db_access")
-    return {
-        "state_desc": str(row.get("state_desc") or "").strip().upper(),
-        "user_access_desc": str(
-            row.get("user_access_desc") or "").strip().upper(),
-        "has_db_access": has_db_access is True or has_db_access == 1,
-    }
-
-
-def _wait_for_sql_accessible(
-    connection,
-    target_database: str,
-    *,
-    timeout_seconds: float,
-) -> dict:
-    deadline = time.monotonic() + timeout_seconds
-    recovery_attempted = False
-    last_status = None
-    while time.monotonic() < deadline:
-        last_status = _sql_database_status(connection, target_database)
-        if last_status is None:
-            time.sleep(2)
-            continue
-        state = last_status["state_desc"]
-        if (
-            state == "ONLINE"
-            and last_status["user_access_desc"] == "MULTI_USER"
-            and last_status["has_db_access"]
-        ):
-            return last_status
-        if state == "RESTORING" and not recovery_attempted:
-            _execute_sql_restore(
-                connection,
-                target_database=target_database,
-            )
-            recovery_attempted = True
-            continue
-        if state not in _SQL_TRANSIENT_STATES:
-            raise RuntimeError(
-                f"SQL restored database entered terminal state {state or 'UNKNOWN'}"
-            )
-        time.sleep(2)
-    state = (last_status or {}).get("state_desc") or "ABSENT"
-    raise RuntimeError(
-        "SQL restored database did not become ONLINE and accessible "
-        f"before timeout; last state {state}"
-    )
 
 
 def _backup_set_identity(header: dict) -> str:
@@ -362,30 +241,73 @@ def restore_sql_backup(
         data_dir=destination_root,
     )
     _assert_sql_target_absent(connection, target)
+    restore_error = None
     try:
-        _execute_sql_restore(
+        execute_sql_restore(
             connection,
             target_database=target,
             backup_path=str(backup),
             destinations=destinations,
         )
-        if _database_id(connection, target) is None:
-            raise RuntimeError("restored database is not visible")
-        status = _wait_for_sql_accessible(
+    except Exception as error:
+        restore_error = error
+    try:
+        target_exists = _database_id(connection, target) is not None
+    except Exception as error:
+        cause = (
+            ExceptionGroup(
+                "SQL restore and target existence verification failed",
+                (restore_error, error),
+            )
+            if restore_error is not None
+            else error
+        )
+        raise PartialRestoreError(
+            "SQL restore target existence could not be verified",
+            section="sql",
+            details={
+                "target_database": target,
+                "recovery_attempted": False,
+                "target_may_exist": True,
+            },
+        ) from cause
+    if not target_exists:
+        error = restore_error or RuntimeError(
+            "restored database is not visible"
+        )
+        raise PartialRestoreError(
+            "SQL restore target is not yet visible",
+            section="sql",
+            details={
+                "target_database": target,
+                "recovery_attempted": False,
+                "target_may_exist": True,
+            },
+        ) from error
+    try:
+        status = wait_for_sql_accessible(
             connection,
             target,
             timeout_seconds=wait_seconds,
         )
-    except Exception as error:
+    except SqlRestoreVerificationError as error:
+        cause = (
+            ExceptionGroup(
+                "SQL restore and status verification failed",
+                (restore_error, error),
+            )
+            if restore_error is not None
+            else error
+        )
         raise PartialRestoreError(
-            "SQL restore may have created the target",
+            "SQL restore target is not verified accessible",
             section="sql",
             details={
                 "target_database": target,
-                "recovery_attempted": True,
+                "recovery_attempted": error.recovery_attempted,
                 "target_may_exist": True,
             },
-        ) from error
+        ) from cause
     return {
         "target_database": target,
         "backup_set_identity_sha256": backup_set_identity,
@@ -601,13 +523,13 @@ def verify_restore_evidence(
     if not evidence_path.is_relative_to(evidence_root) or not evidence_path.is_file():
         raise ValueError("restore evidence must be an existing local artifact")
     expected_digest = str(expected_sha256 or "").strip().casefold()
+    raw = evidence_path.read_bytes()
     if (
         not _SHA256.fullmatch(expected_digest)
-        or hashlib.sha256(evidence_path.read_bytes()).hexdigest()
-        != expected_digest
+        or hashlib.sha256(raw).hexdigest() != expected_digest
     ):
         raise ValueError("restore evidence SHA-256 does not match")
-    artifact = json.loads(evidence_path.read_text(encoding="utf-8"))
+    artifact = json.loads(raw.decode("utf-8"))
     sql = artifact.get("sql") if isinstance(artifact, dict) else None
     qdrant = artifact.get("qdrant") if isinstance(artifact, dict) else None
     if (
@@ -665,6 +587,12 @@ def main(argv=None) -> int:
     parser.add_argument("--sql-backup-path", required=True)
     parser.add_argument("--sql-data-dir", required=True)
     parser.add_argument("--sql-target-database", required=True)
+    parser.add_argument(
+        "--sql-wait-seconds",
+        type=float,
+        default=_DEFAULT_SQL_WAIT_SECONDS,
+        help="Timeout for restored SQL state and access verification.",
+    )
     parser.add_argument("--qdrant-snapshot-location", required=True)
     parser.add_argument("--qdrant-snapshot-name", required=True)
     parser.add_argument("--qdrant-snapshot-checksum", required=True)
@@ -682,6 +610,11 @@ def main(argv=None) -> int:
         parser.error("--execute is required to create disposable restore targets")
     if args.output.exists():
         parser.error(f"output already exists: {args.output}")
+    if (
+        not math.isfinite(args.sql_wait_seconds)
+        or args.sql_wait_seconds <= 0
+    ):
+        parser.error("--sql-wait-seconds must be positive and finite")
     if (
         not math.isfinite(args.qdrant_wait_seconds)
         or args.qdrant_wait_seconds <= 0
@@ -745,6 +678,7 @@ def main(argv=None) -> int:
                 target_database=sql_target,
                 backup_path=args.sql_backup_path,
                 data_dir=args.sql_data_dir,
+                timeout_seconds=args.sql_wait_seconds,
             )
             report["sql_backup_set_identity_sha256"] = report["sql"][
                 "backup_set_identity_sha256"
