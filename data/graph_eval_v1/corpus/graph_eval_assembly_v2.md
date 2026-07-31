@@ -3,7 +3,7 @@
 Mã tài liệu: GRAPH-EVAL-ASM-001
 Phiên bản: 2
 
-Cụm GRAPH-EVAL-ASM-001 dùng danh mục vật tư có provenance SQL.
+Cụm GRAPH-EVAL-ASM-001 dùng danh mục vật tư có provenance SQL. Cụm GRAPH-EVAL-ASM-001 áp dụng cho GRAPH-EVAL-PART-A.
 
 | Mã hàng | Tên | Số lượng | Đơn vị | Vật liệu |
 |---|---|---:|---|---|

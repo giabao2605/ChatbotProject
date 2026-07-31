@@ -393,12 +393,28 @@ def test_graph_review_fixture_uses_a_quote_from_the_current_source_page():
 
     quote = "Cụm GRAPH-EVAL-ASM-001 áp dụng cho GRAPH-EVAL-PART-A."
     assembly = next(item for item in DOCUMENTS if item["key"] == "assembly_v2")
-    exercise = __import__("pathlib").Path(
+    path = __import__("pathlib").Path
+    exercise = path(
         "scripts/graph_eval/exercise_review.py"
     ).read_text(encoding="utf-8")
+    checked_in_page = path(
+        "data/graph_eval_v1/corpus/graph_eval_assembly_v2.md"
+    ).read_text(encoding="utf-8")
+    checked_in_manifest = [
+        json.loads(line)
+        for line in path("data/graph_eval_v1/corpus_manifest.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    checked_in_assembly = next(
+        item for item in checked_in_manifest if item["key"] == "assembly_v2"
+    )
 
     assert quote in assembly["body"]
     assert f'"source_quote": "{quote}"' in exercise
+    assert quote in checked_in_page
+    assert quote in checked_in_assembly["body"]
 
 
 def test_independent_review_samples_require_unique_identity_and_reviewer():

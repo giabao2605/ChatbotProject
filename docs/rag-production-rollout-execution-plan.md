@@ -133,10 +133,10 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 | 2. Deployment và security fail-fast | Đã hoàn tất code; live recapture chưa chạy | Windows launcher fail nếu worktree bẩn, restore evidence sai, migration/preflight lỗi hoặc runtime-state drift; health có deployment/runtime identity | Chạy launcher thật trên restore evidence hợp lệ và thu hardened live preflight mới |
 | 3. Cohort tài khoản test | Đã hoàn tất, không tạo/xóa account | Reuse 33 account `demo_...`; viewer/uploader/reviewer login và profile đúng; credential không vào Git/report | Chỉ bổ sung account nếu một future matrix thiếu actor; cần phê duyệt riêng |
 | 4. Browser E2E và baseline all-off | Đã đo baseline | Browser `3/3`, golden `5/5`, frontend `32/32`, load c1/c5 không lỗi; mọi governed flag OFF | Chạy lại health/browser smoke sau hardened launcher để thay evidence pre-hardening |
-| 5. CRAG + Claim Repair | Dừng đúng stop rule, disposition `inconclusive` | Window 06 Pair 01 candidate `9/9`, correction/repair được exercise, provider failure `0`; gate bắt đúng P95 `5863.22 -> 7921.84 ms`, ratio `1.351107 > 1.25` | Chỉ mở cửa sổ mới sau clean diagnostic dự báo đạt gate; không nới latency gate |
+| 5. CRAG + Claim Repair | Dừng đúng stop rule, disposition `inconclusive` | Window 06 Pair 01 candidate `9/9`; diagnostic RC `1add3d5` cũng đạt candidate `9/9` nhưng gặp `5` Voyage 429/fallback nên bị loại trước baseline | Chờ Voyage ổn định rồi chạy clean diagnostic mới; không nới latency gate hoặc dùng lượt bị 429 |
 | 6. Grounded Math | Ba pair kỹ thuật đạt; disposition vẫn `inconclusive` | Fixture `16/16`, rollback `2/2`, ba pair candidate đều `16/16`; quality/safety/latency/cost/rollback xanh | CRAG phải accepted và owner review đủ `10/10`; không chạy lại window đã hoàn tất |
-| 7. Query Decomposition | RC code candidate đã được owner duyệt; disposition vẫn `inconclusive` | Instruction đạt `67/126` ký tự và unit contracts xanh; formal evidence cũ vẫn fail Pair 02 cost `1.554088 > 1.5` | Chạy provider diagnostic/formal window mới và owner review; không dùng rerun không khai báo |
-| 8. GraphRAG và Community Summaries | RC code candidate đã được owner duyệt; data/eval vẫn blocked | Seed/review/preflight/serving đã relation-specific và fail-closed; evidence cũ vẫn provenance `20/22`, review `0/20` | Owner duyệt đúng Graph demo batch để ingest/re-seed, đạt provenance `22/22`, rồi independent review; chỉ sau Graph accepted mới chạy Community |
+| 7. Query Decomposition | RC code candidate đã được owner duyệt; disposition vẫn `inconclusive` | Instruction đạt `67/126` ký tự và unit contracts xanh; formal evidence cũ vẫn fail Pair 02 cost `1.554088 > 1.5` | Chờ provider/reranker ổn định, chạy diagnostic/formal window mới và owner review; không dùng rerun không khai báo |
+| 8. GraphRAG và Community Summaries | Provenance kỹ thuật đạt; human gate vẫn blocked | Batch `graph-eval-v1` đã re-seed, stale edge bị disable, quote thật được approve; preflight đạt `21/21`, workflow approve/reject đạt | Đồng nghiệp review độc lập toàn bộ `21` edge hợp lệ; chỉ sau Graph accepted mới chạy Community |
 | 9. Integrated matrix, rollback và production audit | Offline capability hoàn tất; live matrix/restore thật chưa chạy | Integrated verification commit `5f7b98b`: offline `63/63`, security `15/15`, leakage 0, backend `2467` pass, coverage line/branch `92.29%/84.99%`, frontend/build và architecture xanh | Restore drill trên disposable targets, hardened all-off runtime, live matrix c1/c5 và browser rollback smoke |
 | 10. Decision pack cuối | Deliverable đã có; chưa được chủ dự án ký | JSON decision pack máy đọc được, fail-closed; từng feature có disposition/next gate; hash evidence khớp | Owner signature và release decisions đầy đủ; chỉ sau đó mới tạo feature-on activation bundle |
 
@@ -204,6 +204,8 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
    - Quote phải khớp exact current `DocumentPages` hoặc `BangKeVatTu.RawRowJson`.
    - `HAS_VERSION`, `SUPERSEDES`, `HAS_PAGE`, `CONTAINS_PART` và
      `USES_MATERIAL` bind canonical source/target endpoints.
+   - `APPLIES_TO` chỉ nhận document-to-part trong cùng source document và quote
+     phải chứa đúng mã tài liệu, mã part cùng câu giải thích có thật.
    - Department, site và security level của edge phải khớp `TaiLieu` hiện hành.
    - Missing migration, stale quote, stale version, wrong endpoint hoặc stale
      governance đều fail provenance completeness.
@@ -517,6 +519,11 @@ không bật default rollout.
   activation bundle và không bật live flag.
 - Window `20260730-crag-window-05-0090639` được giữ làm tombstone do operator
   dừng trước khi có đủ hai arm/gate; không xóa, resume hoặc dùng làm evidence.
+- Diagnostic RC `1add3d5` ngày 2026-07-31 dùng đúng manifest, fixture fingerprint
+  và provider hash của window 06. Provider smoke đạt `5/5`, retry `0`; candidate
+  đạt `9/9`, P95 `9054.55 ms`, nhưng có `5` Voyage 429/fallback. Tiến trình bị
+  dừng trước baseline theo stop rule, nên không có ratio và không được dùng làm
+  formal evidence hay lý do sửa code.
 
 ## Ticket 6: Hoàn tất Grounded Math
 
@@ -615,7 +622,8 @@ Chỉ mở Graph/Community khi provenance và independent review đạt.
 
 ### Việc làm
 
-1. Export queue tối thiểu 20 edge có source document/page/version/quote.
+1. Export toàn bộ `21` edge hợp lệ, vẫn vượt tối thiểu 20 edge, có source
+   document/page/version/quote.
 2. Thu independent labels; không để agent tự giả làm người review.
 3. Validator yêu cầu reviewed precision tối thiểu 95%.
 4. Chạy Graph baseline/candidate gate và relational router scope.
@@ -635,14 +643,16 @@ Chỉ mở Graph/Community khi provenance và independent review đạt.
   `approved_edge_provenance_incomplete`: chỉ `20/22` approved edge đủ current
   provenance. Edge 2 dùng document superseded/non-servable; edge 24 có relation
   `APPLIES_TO` chưa thuộc verified source-evidence contract.
-- Queue hiện tại có `22` edge duy nhất, đủ source quote; toàn bộ reviewer/label
-  để trống đúng independent-review contract. Artifact local:
-  `reports/graph/20260730-gate-fa8dc16/independent-review-queue.jsonl`,
-  SHA-256
-  `8948f1892034bf852cad254bb0894b0557db363e89be84a8713892994a1336c1`.
-- Không tự sửa/xóa staging data và không nới validator. Community detection,
-  generation và serving readiness đều không chạy vì Graph chưa đạt semantic
-  provenance và vẫn có `0/20` independent review.
+- Checkpoint RC `1add3d5` đã reconcile đúng batch `graph-eval-v1`: edge
+  deterministic từ version superseded bị disable, edge `APPLIES_TO` quote giả
+  bị disable sau khi validator xác nhận, proposal quote thật được approve và
+  proposal giả được reject. Preflight đạt `21/21`, provenance completeness
+  `1.0`, pending serving edge `0`, workflow approve/reject đạt.
+- Mẫu số đổi từ `22` xuống `21` vì root fix bắt buộc loại edge stale, không phải
+  hạ threshold. Không tạo edge thay thế giả để giữ mẫu số `22`; independent
+  reviewer phải review toàn bộ `21` edge hợp lệ và precision vẫn phải `>=95%`.
+- Community detection, generation và serving readiness chưa chạy vì Graph còn
+  `0/21` independent review.
 - GraphRAG và Community Summaries tiếp tục `inconclusive`; cả hai flag giữ tắt.
   Disposition:
   `reports/graph/20260730-gate-fa8dc16/gate-disposition.json`, SHA-256
@@ -743,11 +753,11 @@ JSON máy đọc được nằm tại
 
 | Feature | Disposition hiện tại | Khuyến nghị | Gate kế tiếp |
 | --- | --- | --- | --- |
-| CRAG + Claim Repair | Inconclusive; window 06 pair 01 fail latency `1.351107x > 1.25x` | `keep_off` | Clean diagnostic trước, chỉ mở cửa sổ mới khi dự báo đạt gate |
+| CRAG + Claim Repair | Inconclusive; window 06 fail latency, diagnostic RC mới bị loại vì `5` Voyage 429/fallback | `keep_off` | Chờ Voyage ổn định; chỉ mở cửa sổ mới sau clean diagnostic |
 | Grounded Math | Inconclusive; 3/3 pair kỹ thuật đạt, CRAG và review `0/10` còn thiếu | `re_evaluate` | CRAG accepted và owner review đủ 10 case; không rerun window |
 | Late Interaction | Rejected | `keep_off` | Chỉ mở lại khi thiết kế mới vượt quality gate |
 | Query Decomposition | Inconclusive; Pair 02 fail cost `1.554088 > 1.5`, Pair 03 không chạy | `re_evaluate` | Chẩn đoán overhead, predeclare window mới và owner review |
-| Graph Retrieval | Inconclusive; provenance `20/22`, review `0/20` | `re_evaluate` | Sửa 2 invalid edge; tối thiểu 20 label, precision tối thiểu 95% |
+| Graph Retrieval | Inconclusive; provenance `21/21`, review `0/21` | `re_evaluate` | Independent review toàn bộ 21 edge, precision tối thiểu 95% |
 | Community Summaries | Inconclusive; không chạy vì Graph chưa accepted | `re_evaluate` | Hoàn tất Graph rồi mới detection/generation/review/global eval |
 
 Kết luận kỹ thuật hiện tại: giữ activation profile `all_off`,

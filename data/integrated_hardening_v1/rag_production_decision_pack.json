@@ -25,7 +25,7 @@
       "CRAG and Claim Repair failed the declared latency gate",
       "Grounded Math passed three technical pairs but remains blocked by the CRAG dependency and 0 of 10 human reviews",
       "Query Decomposition stopped after pair 02 exceeded the declared cost ratio limit",
-      "Graph Retrieval has only 20 of 22 approved edges with complete current provenance and 0 of 20 independent reviews",
+      "Graph Retrieval has 21 of 21 approved edges with complete current provenance but 0 of 21 independent reviews",
       "Community Summaries remains blocked by Graph Retrieval and has no reviewed summaries",
       "runtime provenance has not been recaptured after launcher and preflight hardening",
       "backup and restore drill has not run on a disposable target"
@@ -191,6 +191,16 @@
         "code_change_authorized": false,
         "new_crag_window_authorized": false
       },
+      "rc_diagnostic": {
+        "source_commit": "1add3d546faa743718bdb29455d0d3a8c2f00d2d",
+        "path": ".local/rag-rollout-rc-1add3d5/crag-diagnostic/candidate-latency-breakdown.json",
+        "sha256": "b6d106d2a9daf37f737144ff48990b40bf4b30d458bdc0d3503f5bde5a143683",
+        "candidate_passed_cases": 9,
+        "candidate_p95_ms": 9054.55,
+        "voyage_429_fallbacks": 5,
+        "clean_diagnostic": false,
+        "baseline_run": false
+      },
       "excluded_evidence": {
         "path": "reports/controlled-demo/20260730-crag-window-05-0090639/window-outcome.json",
         "sha256": "cc293623dda95761765ab453dbed118c95c26f66ad85c568409e89fd315dd2fb",
@@ -301,28 +311,25 @@
       "disposition": "inconclusive",
       "recommendation": "re_evaluate",
       "failed_checks": [
-        "approved_edge_provenance_incomplete",
         "independent_edge_review_missing"
       ],
       "metrics": {
         "preflight_checked_cases": 13,
-        "preflight_passed": false,
-        "approved_edges": 22,
-        "provenance_complete_edges": 20,
+        "preflight_passed": true,
+        "approved_edges": 21,
+        "provenance_complete_edges": 21,
         "reviewed_edges": 0,
-        "required_reviewed_edges": 20,
-        "provenance_completeness": 0.909091
+        "required_reviewed_edges": 21,
+        "provenance_completeness": 1.0
       },
       "evidence": {
-        "source_commit": "fa8dc16c26eb13333d8ef978d75cba8d7101ebf0",
+        "source_commit": "1add3d546faa743718bdb29455d0d3a8c2f00d2d",
         "collection": "MechChatbot_Graph_Eval_v1",
-        "fixture_fingerprint": "96e911b9c3fd35f2d12459d167ec3d9c5047b4b95aeb9e575a3094448be11883",
-        "path": "reports/graph/20260730-gate-fa8dc16/gate-disposition.json",
-        "sha256": "5b61eb4300efd4935d671d91758bca894de5057039259028664f37a326902951",
-        "review_queue_path": "reports/graph/20260730-gate-fa8dc16/independent-review-queue.jsonl",
-        "review_queue_sha256": "8948f1892034bf852cad254bb0894b0557db363e89be84a8713892994a1336c1"
+        "fixture_fingerprint": "c74edb5f90673800736bc68e43cad886c8295bbd3b40c1bad0e2c9e0e69abcd8",
+        "path": ".local/rag-rollout-rc-1add3d5/graph-preflight-final.json",
+        "sha256": "493dd3ce0d6474ba2fef1bf3d6efccacf4dcb1a8d5c04c5e6808be5e5d92fc31"
       },
-      "next_gate": "correct the two invalid approved staging edges without weakening provenance validation, then obtain at least 20 independent labels and at least 95 percent precision"
+      "next_gate": "obtain independent labels for all 21 valid edges and at least 95 percent precision"
     },
     {
       "id": "community_summaries",
@@ -342,7 +349,7 @@
       "metrics": {
         "detection_run": false,
         "detected_communities": 0,
-        "source_edges": 22,
+        "source_edges": 21,
         "summaries_generated": 0,
         "persisted": false
       },
