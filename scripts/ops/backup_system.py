@@ -59,6 +59,13 @@ def _full_backup_options(engine_edition):
     return "WITH INIT" if engine_edition == 4 else "WITH INIT, COMPRESSION"
 
 
+def _execute_maintenance(connection, statement, parameters):
+    result = connection.execute(text(statement), parameters)
+    cursor = getattr(result, "cursor", None)
+    while cursor is not None and cursor.nextset():
+        pass
+
+
 def backup_sql(sql_dir=None):
     """BACKUP DATABASE (full) + BACKUP LOG (neu FULL recovery). Tra ve list file da tao."""
     _ensure_engine()
@@ -84,10 +91,17 @@ def backup_sql(sql_dir=None):
             text("SELECT CAST(SERVERPROPERTY('EngineEdition') AS INT)")
         ).scalar()
         options = _full_backup_options(engine_edition)
-        conn.execute(text(
+        _execute_maintenance(
+            conn,
             f"BACKUP DATABASE [{db}] TO DISK = :p {options}, "
-            f"NAME = :nm, STATS = 10"
-        ), {"p": full_path, "nm": f"{db} full {ts}"})
+            "NAME = :nm, STATS = 10",
+            {"p": full_path, "nm": f"{db} full {ts}"},
+        )
+        _execute_maintenance(
+            conn,
+            "RESTORE VERIFYONLY FROM DISK = :p",
+            {"p": full_path},
+        )
         print(f"[SQL] full backup OK -> {full_path}")
         created.append(full_path)
 
@@ -97,9 +111,17 @@ def backup_sql(sql_dir=None):
         ), {"db": db}).scalar()
         if rm and str(rm).upper() == "FULL":
             log_path = os.path.join(sql_dir, f"{db}_log_{ts}.trn")
-            conn.execute(text(
-                f"BACKUP LOG [{db}] TO DISK = :p WITH INIT, NAME = :nm, STATS = 10"
-            ), {"p": log_path, "nm": f"{db} log {ts}"})
+            _execute_maintenance(
+                conn,
+                f"BACKUP LOG [{db}] TO DISK = :p WITH INIT, "
+                "NAME = :nm, STATS = 10",
+                {"p": log_path, "nm": f"{db} log {ts}"},
+            )
+            _execute_maintenance(
+                conn,
+                "RESTORE VERIFYONLY FROM DISK = :p",
+                {"p": log_path},
+            )
             print(f"[SQL] log backup OK -> {log_path}")
             created.append(log_path)
         else:
