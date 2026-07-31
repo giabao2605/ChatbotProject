@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
@@ -10,7 +11,10 @@ import json
 from pathlib import Path, PureWindowsPath
 import re
 import sys
+from tempfile import TemporaryDirectory
+import time
 from urllib.parse import unquote, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[2]
 for import_root in (ROOT, ROOT / "src"):
@@ -30,6 +34,15 @@ from scripts.eval.verify_failure_family_rollback import clean_git_sha
 _DISPOSABLE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,120}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+def _open_snapshot(request):
+    return build_opener(_RejectRedirects()).open(request, timeout=120)
 
 
 class PartialRestoreError(RuntimeError):
@@ -128,6 +141,34 @@ def _destination_files(rows, *, target_database: str, data_dir: PureWindowsPath)
     if data_index == 0 or log_index == 0:
         raise ValueError("backup must contain data and log files")
     return destinations
+
+
+@contextmanager
+def _verified_snapshot_file(*, location: str, api_key: str, checksum: str):
+    request = Request(location, headers={"api-key": api_key})
+    with TemporaryDirectory(prefix="qdrant-restore-") as temporary:
+        path = Path(temporary) / "snapshot"
+        digest = hashlib.sha256()
+        with _open_snapshot(request) as response, path.open("wb") as output:
+            while chunk := response.read(1024 * 1024):
+                output.write(chunk)
+                digest.update(chunk)
+        if digest.hexdigest() != checksum:
+            raise ValueError("downloaded snapshot checksum does not match")
+        with path.open("rb") as snapshot:
+            yield snapshot
+
+
+def _wait_for_restored_collection(client, target: str, source_points: int) -> int:
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        if client.collection_exists(target):
+            target_points = int(client.count(target, exact=True).count)
+            if target_points != source_points:
+                raise RuntimeError("Qdrant restored point count does not match")
+            return target_points
+        time.sleep(2)
+    raise RuntimeError("Qdrant restored collection did not become available")
 
 
 def restore_sql_backup(
@@ -298,18 +339,22 @@ def restore_qdrant_snapshot(
         "target_may_exist": True,
     }
     try:
-        recovered = client.recover_snapshot(
-            collection_name=target,
+        with _verified_snapshot_file(
             location=location,
             api_key=api_key,
             checksum=checksum,
-            wait=True,
+        ) as snapshot_file:
+            client.http.snapshots_api.recover_from_uploaded_snapshot(
+                collection_name=target,
+                wait=False,
+                checksum=checksum,
+                snapshot=snapshot_file,
+            )
+        target_points = _wait_for_restored_collection(
+            client,
+            target,
+            source_points,
         )
-        if recovered is False or not client.collection_exists(target):
-            raise RuntimeError("Qdrant snapshot restore did not create the target")
-        target_points = int(client.count(target, exact=True).count)
-        if target_points != source_points:
-            raise RuntimeError("Qdrant restored point count does not match")
     except Exception as error:
         raise PartialRestoreError(
             "Qdrant restore may have created the target",

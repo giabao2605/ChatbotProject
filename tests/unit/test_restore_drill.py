@@ -1,4 +1,5 @@
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.exc import InvalidRequestError
 
+from scripts.ops import restore_drill as restore_module
 from scripts.ops.restore_drill import (
     PartialRestoreError,
     build_restore_snapshot_fingerprint,
@@ -132,6 +134,11 @@ class _Qdrant:
         self.snapshots = snapshots
         self.snapshot_checksum = snapshot_checksum
         self.calls = []
+        self.http = SimpleNamespace(
+            snapshots_api=SimpleNamespace(
+                recover_from_uploaded_snapshot=self._recover_uploaded_snapshot,
+            )
+        )
 
     def collection_exists(self, name):
         self.calls.append(("collection_exists", name))
@@ -141,6 +148,11 @@ class _Qdrant:
         self.calls.append(("recover_snapshot", kwargs))
         self.target_exists = True
         return True
+
+    def _recover_uploaded_snapshot(self, **kwargs):
+        self.calls.append(("recover_from_uploaded_snapshot", kwargs))
+        self.target_exists = True
+        return SimpleNamespace(result=None)
 
     def list_snapshots(self, name):
         self.calls.append(("list_snapshots", name))
@@ -267,15 +279,22 @@ def test_sql_partial_restore_reports_target_may_exist():
     }
 
 
-def test_qdrant_restore_requires_absent_target_and_never_deletes():
-    client = _Qdrant()
+def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
+    payload = b"snapshot"
+    checksum = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(
+        restore_module,
+        "_open_snapshot",
+        lambda *_args, **_kwargs: BytesIO(payload),
+    )
+    client = _Qdrant(snapshot_checksum=checksum)
 
     report = restore_qdrant_snapshot(
         client,
         source_collection="TaiLieuKyThuat_v2",
         target_collection="TaiLieuKyThuat_v2_RestoreTest_20260730",
         snapshot_name="snapshot-1",
-        snapshot_checksum="a" * 64,
+        snapshot_checksum=checksum,
         snapshot_api_key="test-key",
         snapshot_location=(
             "http://127.0.0.1:6333/collections/"
@@ -288,15 +307,18 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
         "source_collection": "TaiLieuKyThuat_v2",
         "target_collection": "TaiLieuKyThuat_v2_RestoreTest_20260730",
         "snapshot_name": "snapshot-1",
-        "snapshot_checksum": "a" * 64,
+        "snapshot_checksum": checksum,
         "source_points": 7,
         "target_points": 7,
         "restored": True,
     }
-    assert any(call[0] == "recover_snapshot" for call in client.calls)
-    recover_call = next(call for call in client.calls if call[0] == "recover_snapshot")
-    assert recover_call[1]["checksum"] == "a" * 64
-    assert recover_call[1]["api_key"] == "test-key"
+    recover_call = next(
+        call
+        for call in client.calls
+        if call[0] == "recover_from_uploaded_snapshot"
+    )
+    assert recover_call[1]["checksum"] == checksum
+    assert recover_call[1]["wait"] is False
     assert all(call[0] != "delete_collection" for call in client.calls)
 
     with pytest.raises(ValueError, match="API key"):
@@ -402,14 +424,21 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
         )
 
 
-def test_qdrant_partial_restore_reports_target_may_exist():
+def test_qdrant_partial_restore_reports_target_may_exist(monkeypatch):
+    payload = b"snapshot"
+    checksum = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(
+        restore_module,
+        "_open_snapshot",
+        lambda *_args, **_kwargs: BytesIO(payload),
+    )
     with pytest.raises(PartialRestoreError) as raised:
         restore_qdrant_snapshot(
-            _Qdrant(counts=(7, 8)),
+            _Qdrant(counts=(7, 8), snapshot_checksum=checksum),
             source_collection="TaiLieuKyThuat_v2",
             target_collection="TaiLieuKyThuat_v2_RestoreTest_CountMismatch",
             snapshot_name="snapshot-1",
-            snapshot_checksum="a" * 64,
+            snapshot_checksum=checksum,
             snapshot_api_key="test-key",
             snapshot_location=(
                 "http://127.0.0.1:6333/collections/"
@@ -425,6 +454,7 @@ def test_qdrant_partial_restore_reports_target_may_exist():
         "recovery_attempted": True,
         "target_may_exist": True,
     }
+    assert "point count" in str(raised.value.__cause__)
 
 
 def test_restore_evidence_binds_current_commit_and_snapshot(tmp_path):
