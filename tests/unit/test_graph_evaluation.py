@@ -129,6 +129,26 @@ def _edge(edge_id=1, **overrides):
     return value
 
 
+def _single_owner_governance():
+    return {
+        "schema": "rag-review-governance-v1",
+        "mode": "single_owner",
+        "owner": "bao.nguyen",
+        "scope": "controlled_demo",
+        "source_commit": "a" * 40,
+        "risk_accepted": True,
+        "accepted_at": "2026-07-20T10:00:00Z",
+        "role_signoffs": {
+            role: {
+                "owner": "bao.nguyen",
+                "signed": True,
+                "note": f"{role} checklist reviewed",
+            }
+            for role in ("rag", "security_qa", "operations")
+        },
+    }
+
+
 @pytest.mark.parametrize(
     ("source_matches", "endpoints_match"),
     [(False, True), (True, False)],
@@ -432,6 +452,11 @@ def test_independent_review_samples_require_unique_identity_and_reviewer():
             "proposal_id": 2, "review_source": "independent",
             "expected_correct": False, "decision": "rejected",
         }], require_independent=True)
+    with pytest.raises(ValueError, match="requires reviewer"):
+        validate_review_samples([{
+            "edge_id": 2, "reviewer": 7, "review_source": "independent",
+            "expected_correct": True, "decision": "approved",
+        }], require_independent=True)
 
     with pytest.raises(ValueError, match="unknown edge_id"):
         validate_review_samples([{
@@ -455,7 +480,7 @@ def test_independent_review_samples_require_two_distinct_reviewers():
     samples = [
         {
             "edge_id": edge_id,
-            "reviewer": "alice" if edge_id == 1 else "ALICE",
+            "reviewer": "Alice Smith" if edge_id == 1 else " ALICE  SMITH ",
             "review_source": "independent",
             "expected_correct": True,
             "decision": "approved",
@@ -516,6 +541,53 @@ def test_graph_preflight_resolves_relations_and_fails_closed_on_pending_edge():
     assert {failure["reason"] for failure in blocked["failures"]} >= {
         "expected_relation_missing", "pending_edge_in_serving_table",
     }
+
+
+def test_graph_preflight_accepts_commit_bound_single_owner_governance():
+    edges = [_edge(edge_id=index) for index in range(1, 21)]
+    reviews = [
+        {
+            "edge_id": index,
+            "reviewer": "bao.nguyen",
+            "review_source": "owner_review",
+            "expected_correct": True,
+            "decision": "approved",
+        }
+        for index in range(1, 21)
+    ]
+    governance = _single_owner_governance()
+
+    report = check_graph_fixture(
+        [], [], edges, [],
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS,
+        pending_serving_edge_count=0,
+        collection="MechChatbot_Graph_Eval_v1",
+        review_samples=reviews,
+        review_sample_source="owner_review",
+        review_governance=governance,
+        review_governance_source_commit="a" * 40,
+        review_governance_scope="controlled_demo",
+    )
+
+    graph = report["graph_report"]
+    assert report["passed"] is True
+    assert graph["review_mode"] == "single_owner"
+    assert graph["review_sample_source"] == "owner_review"
+    assert graph["review_governance_valid"] is True
+    assert graph["reviewer_count"] == 1
+
+    with pytest.raises(ValueError, match="review governance"):
+        check_graph_fixture(
+            [], [], edges, [],
+            applied_versions=REQUIRED_GRAPH_MIGRATIONS,
+            pending_serving_edge_count=0,
+            collection="MechChatbot_Graph_Eval_v1",
+            review_samples=reviews,
+            review_sample_source="owner_review",
+            review_governance=governance,
+            review_governance_source_commit="f" * 40,
+            review_governance_scope="controlled_demo",
+        )
 
 
 def test_graph_preflight_requires_source_evidence_migrations():

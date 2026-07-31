@@ -4,11 +4,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Mapping
+from typing import Iterable, Mapping
 
 
 REVIEW_ROLES = ("rag", "security_qa", "operations")
 MIN_INDEPENDENT_REVIEWERS = 2
+
+
+def normalize_reviewer_identity(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.split()).casefold()
+    return normalized or None
+
+
+def distinct_reviewer_count(reviewers: Iterable[object]) -> int:
+    return len({
+        identity
+        for reviewer in reviewers
+        if (identity := normalize_reviewer_identity(reviewer))
+    })
+
+
+def independent_reviewer_diversity_valid(reviewer_count: object) -> bool:
+    return (
+        type(reviewer_count) is int
+        and reviewer_count >= MIN_INDEPENDENT_REVIEWERS
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,5 +124,8 @@ __all__ = [
     "MIN_INDEPENDENT_REVIEWERS",
     "REVIEW_ROLES",
     "ReviewGovernance",
+    "distinct_reviewer_count",
+    "independent_reviewer_diversity_valid",
+    "normalize_reviewer_identity",
     "review_governance_status",
 ]

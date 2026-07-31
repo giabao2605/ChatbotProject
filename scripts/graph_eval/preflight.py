@@ -18,6 +18,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+from mech_chatbot.governance.review_governance import review_governance_status
+from scripts.eval.verify_failure_family_rollback import clean_git_sha
 
 
 def _relation_identity(value):
@@ -52,6 +54,8 @@ def check_graph_fixture(
     cases, sql_documents, graph_edges, qdrant_points, *, applied_versions,
     pending_serving_edge_count, collection, graph_nodes=None, proposals=None,
     review_samples=None, review_sample_source="independent",
+    review_governance=None, review_governance_source_commit=None,
+    review_governance_scope=None,
     workflow_fixture_passed=False, expected_batch=FIXTURE_BATCH,
     expected_collection=FIXTURE_COLLECTION,
 ):
@@ -223,6 +227,9 @@ def check_graph_fixture(
         expected_relations=resolved_relations, review_samples=review_samples or [],
         expected_domains=["Technical", "Production", "Maintenance"],
         review_sample_source=review_sample_source,
+        review_governance=review_governance,
+        review_governance_source_commit=review_governance_source_commit,
+        review_governance_scope=review_governance_scope,
     )
     if (
         graph_report["provenance_complete_count"]
@@ -498,13 +505,36 @@ def run_live_preflight(cases):
         points.extend(dict((point.payload or {}).get("metadata") or {}) for point in found)
     review_samples = []
     review_sample_source = "none"
+    review_governance = None
+    review_governance_source_commit = None
     review_path = os.getenv("RAG_GRAPH_REVIEW_SAMPLE_FILE")
+    review_governance_path = os.getenv(
+        "RAG_GRAPH_REVIEW_GOVERNANCE_FILE"
+    )
+    if review_governance_path and not review_path:
+        raise ValueError(
+            "RAG_GRAPH_REVIEW_GOVERNANCE_FILE requires review samples"
+        )
     if review_path:
         review_samples = [
             json.loads(line) for line in Path(review_path).read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        review_sample_source = "independent"
+        if review_governance_path:
+            review_governance = json.loads(
+                Path(review_governance_path).read_text(encoding="utf-8")
+            )
+            review_governance_source_commit = clean_git_sha(ROOT)
+            governance = review_governance_status(
+                review_governance,
+                source_commit=review_governance_source_commit,
+                scope="controlled_demo",
+            )
+            if not governance.valid:
+                raise ValueError("Graph review governance is invalid")
+            review_sample_source = governance.review_source
+        else:
+            review_sample_source = "independent"
     workflow_fixture_passed = (
         len(workflow_samples) >= 2
         and all(
@@ -518,6 +548,11 @@ def run_live_preflight(cases):
         pending_serving_edge_count=pending, collection=collection,
         graph_nodes=nodes, proposals=proposals, review_samples=review_samples,
         review_sample_source=review_sample_source,
+        review_governance=review_governance,
+        review_governance_source_commit=review_governance_source_commit,
+        review_governance_scope=(
+            "controlled_demo" if review_governance else None
+        ),
         workflow_fixture_passed=workflow_fixture_passed,
     )
 

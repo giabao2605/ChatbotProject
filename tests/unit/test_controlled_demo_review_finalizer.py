@@ -1,5 +1,7 @@
+import hashlib
 import json
 
+from scripts.controlled_demo_eval import finalize_reviews as finalizer
 from scripts.controlled_demo_eval.finalize_reviews import (
     build_finalization_report,
     evaluate_controlled_review,
@@ -224,11 +226,15 @@ def test_graph_review_rejects_one_independent_reviewer():
     reviewed = [
         {
             **row,
-            "reviewer": "alice",
+            "reviewer": (
+                "Alice Smith"
+                if index % 2
+                else " ALICE  SMITH "
+            ),
             "expected_correct": True,
             "review_note": "source evidence checked",
         }
-        for row in source
+        for index, row in enumerate(source)
     ]
 
     report = evaluate_graph_review(
@@ -243,6 +249,16 @@ def test_graph_review_rejects_one_independent_reviewer():
     assert report["ready_for_graph_quality_gate"] is False
     assert report["reviewer_count"] == 1
     assert report["reviewer_diversity_valid"] is False
+
+    reviewed[0]["reviewer"] = 7
+    malformed = evaluate_graph_review(
+        source,
+        reviewed,
+        anchor={"source_sha256": "q" * 64, "edge_count": 20},
+        source_sha256="q" * 64,
+    )
+    assert malformed["validation_passed"] is False
+    assert malformed["invalid_edge_ids"] == [1]
 
 
 def test_graph_review_under_minimum_sample_is_not_ready():
@@ -330,6 +346,109 @@ def test_single_owner_graph_review_cannot_be_mislabeled_independent():
 
     assert report["validation_passed"] is False
     assert report["invalid_edge_ids"] == list(range(1, 21))
+
+
+def test_finalizer_cli_accepts_commit_bound_single_owner_governance(
+    tmp_path,
+    monkeypatch,
+):
+    controlled_rows = [_review_row("case-1")]
+    pack = _pack(1, controlled_rows)
+    graph_source = [_graph_row(index) for index in range(1, 21)]
+    graph_review = [
+        {
+            **row,
+            "reviewer": "bao.nguyen",
+            "review_source": "owner_review",
+            "expected_correct": True,
+            "review_note": "source evidence checked by the named owner",
+        }
+        for row in graph_source
+    ]
+    graph_source_text = "".join(
+        f"{json.dumps(row, ensure_ascii=False)}\n"
+        for row in graph_source
+    )
+    paths = {
+        name: tmp_path / name
+        for name in (
+            "pack.json",
+            "review.jsonl",
+            "graph-source.jsonl",
+            "graph-review.jsonl",
+            "anchor.json",
+            "governance.json",
+            "output.json",
+        )
+    }
+    paths["pack.json"].write_text(
+        json.dumps(pack, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    paths["review.jsonl"].write_text(
+        "".join(
+            f"{json.dumps(row, ensure_ascii=False)}\n"
+            for row in controlled_rows
+        ),
+        encoding="utf-8",
+    )
+    paths["graph-source.jsonl"].write_text(
+        graph_source_text,
+        encoding="utf-8",
+    )
+    paths["graph-review.jsonl"].write_text(
+        "".join(
+            f"{json.dumps(row, ensure_ascii=False)}\n"
+            for row in graph_review
+        ),
+        encoding="utf-8",
+    )
+    paths["anchor.json"].write_text(
+        json.dumps({
+            "schema": "controlled-demo-human-review-anchor-v1",
+            "controlled_packs": {
+                pack["pack_id"]: _pack_anchor(pack),
+            },
+            "graph_queue": {
+                "source_sha256": hashlib.sha256(
+                    paths["graph-source.jsonl"].read_bytes()
+                ).hexdigest(),
+                "edge_count": 20,
+            },
+        }),
+        encoding="utf-8",
+    )
+    paths["governance.json"].write_text(
+        json.dumps(_single_owner_governance()),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        finalizer.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: f"{'a' * 40}\n",
+    )
+
+    exit_code = finalizer.main([
+        "--crag-pack", str(paths["pack.json"]),
+        "--crag-review", str(paths["review.jsonl"]),
+        "--grounded-math-pack", str(paths["pack.json"]),
+        "--grounded-math-review", str(paths["review.jsonl"]),
+        "--graph-source", str(paths["graph-source.jsonl"]),
+        "--graph-review", str(paths["graph-review.jsonl"]),
+        "--review-anchor", str(paths["anchor.json"]),
+        "--review-governance", str(paths["governance.json"]),
+        "--output", str(paths["output.json"]),
+    ])
+
+    report = json.loads(paths["output.json"].read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert report["graph_review"]["review_mode"] == "single_owner"
+    assert report["graph_review"]["reviewer_count"] == 1
+    assert report["graph_review"]["ready_for_graph_quality_gate"] is True
+    assert any(
+        artifact.get("schema") == "rag-review-governance-v1"
+        for artifact in report["source_artifacts"]
+    )
 
 
 def test_combined_finalization_never_unlocks_community_before_graph_gate():

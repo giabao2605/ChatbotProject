@@ -183,6 +183,11 @@ khóa nội dung gốc bằng SHA-256 và xuất một báo cáo chỉ chứa me
   --output "$run\review\finalization.json"
 ```
 
+The default independent path omits `--review-governance` and requires at least
+two distinct reviewer IDs. A single owner must pass the explicit commit-bound
+governance file with `--review-governance <path>`; rows must use
+`review_source: "owner_review"`.
+
 Exit code `2` nghĩa là review chưa đủ hoặc không hợp lệ, không phải lỗi runner.
 Anchor được track trong repo khóa semantic hash của hai pack và raw SHA-256 của
 Graph queue lịch sử; vì vậy không thể sửa đồng thời pack/source và review để vượt

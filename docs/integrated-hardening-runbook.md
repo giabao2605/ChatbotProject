@@ -72,15 +72,19 @@ Run those rows to verify the fallback path; do not restore the requested flag
 just to make the matrix look complete.
 
 Independent Graph review uses `multi_reviewer` governance and requires at
-least two distinct reviewer IDs. A single reviewer must use the explicit
+least two distinct reviewer IDs. IDs are compared case-insensitively after
+trimming and collapsing whitespace. A single reviewer must use the explicit
 `single_owner` exception below and cannot label the review as independent.
 
 For a single-owner review, copy
 `docs/examples/rag-single-owner-governance.example.json`, replace every
 placeholder, set `risk_accepted=true`, and sign the RAG, Security/QA and
 Operations sections. The resulting immutable file is passed to
-`scripts.ops.build_activation_bundle --review-governance`. It is recorded as
-`owner_review`, never as an independent review.
+`scripts.controlled_demo_eval.finalize_reviews --review-governance` and
+`scripts.ops.build_activation_bundle --review-governance`. For the Graph live
+preflight, set `RAG_GRAPH_REVIEW_GOVERNANCE_FILE` together with
+`RAG_GRAPH_REVIEW_SAMPLE_FILE`. It is recorded as `owner_review`, never as an
+independent review.
 
 ## 2. Feature flags and isolation
 

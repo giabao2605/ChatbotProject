@@ -10,7 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mech_chatbot.governance.review_governance import (
-    MIN_INDEPENDENT_REVIEWERS,
+    distinct_reviewer_count,
+    independent_reviewer_diversity_valid,
+    normalize_reviewer_identity,
     review_governance_status,
 )
 from scripts.controlled_demo_eval.review_pack import (
@@ -140,8 +142,13 @@ def _graph_by_id(rows) -> tuple[dict, bool, bool]:
 def evaluate_graph_review(
     source_rows, reviewed_rows, *, anchor: dict, source_sha256: str,
     minimum_sample=20, minimum_precision=0.95, review_governance=None,
+    source_commit=None, scope=None,
 ) -> dict:
-    governance = review_governance_status(review_governance)
+    governance = review_governance_status(
+        review_governance,
+        source_commit=source_commit,
+        scope=scope,
+    )
     source, source_duplicates, source_blank = _graph_by_id(source_rows)
     reviewed, reviewed_duplicates, reviewed_blank = _graph_by_id(reviewed_rows)
     anchor_matches = all((
@@ -165,7 +172,8 @@ def evaluate_graph_review(
         )
         if not immutable_matches:
             mismatch_edge_ids.append(edge_id)
-        reviewer = str(row.get("reviewer") or "").strip()
+        reviewer = normalize_reviewer_identity(row.get("reviewer"))
+        owner = normalize_reviewer_identity(governance.owner)
         review_note = str(row.get("review_note") or "").strip()
         expected_correct = row.get("expected_correct")
         row_valid = all((
@@ -173,19 +181,20 @@ def evaluate_graph_review(
             reviewer,
             review_note,
             row.get("review_source") == governance.review_source,
-            governance.mode != "single_owner" or reviewer == governance.owner,
+            governance.mode != "single_owner" or reviewer == owner,
             isinstance(expected_correct, bool),
         ))
         if not row_valid:
             invalid_edge_ids.append(edge_id)
             continue
-        reviewers.add(reviewer.casefold())
+        reviewers.add(reviewer)
         correct += int(expected_correct)
     sample_count = len(reviewed)
     precision = _rate(correct, sample_count)
+    reviewer_count = distinct_reviewer_count(reviewers)
     reviewer_diversity_valid = (
         governance.mode != "multi_reviewer"
-        or len(reviewers) >= MIN_INDEPENDENT_REVIEWERS
+        or independent_reviewer_diversity_valid(reviewer_count)
     )
     validation_passed = all((
         anchor_matches, bool(source), bool(reviewed), not source_duplicates,
@@ -210,7 +219,7 @@ def evaluate_graph_review(
             and precision is not None
             and precision >= float(minimum_precision)
         ),
-        "reviewer_count": len(reviewers),
+        "reviewer_count": reviewer_count,
         "reviewer_diversity_valid": reviewer_diversity_valid,
         "invalid_edge_ids": sorted(set(invalid_edge_ids)),
         "immutable_mismatch_edge_ids": sorted(set(mismatch_edge_ids)),
@@ -278,6 +287,7 @@ def main(argv=None) -> int:
     parser.add_argument("--graph-source", type=Path, required=True)
     parser.add_argument("--graph-review", type=Path, required=True)
     parser.add_argument("--review-anchor", type=Path, required=True)
+    parser.add_argument("--review-governance", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.output.exists():
@@ -285,14 +295,20 @@ def main(argv=None) -> int:
     crag_pack = _json(args.crag_pack)
     math_pack = _json(args.grounded_math_pack)
     anchor = _json(args.review_anchor)
+    review_governance = (
+        _json(args.review_governance)
+        if args.review_governance
+        else None
+    )
     if anchor.get("schema") != "controlled-demo-human-review-anchor-v1":
         raise ValueError("review anchor schema must be controlled-demo-human-review-anchor-v1")
     pack_anchors = anchor.get("controlled_packs") or {}
     graph_anchor = anchor.get("graph_queue") or {}
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
+    ).strip()
     report = build_finalization_report(
-        git_sha=subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
-        ).strip(),
+        git_sha=git_sha,
         crag_review=evaluate_controlled_review(
             crag_pack, _jsonl(args.crag_review),
             anchor=pack_anchors.get(str(crag_pack.get("pack_id") or "")) or {},
@@ -305,6 +321,9 @@ def main(argv=None) -> int:
             _jsonl(args.graph_source), _jsonl(args.graph_review),
             anchor=graph_anchor,
             source_sha256=hashlib.sha256(args.graph_source.read_bytes()).hexdigest(),
+            review_governance=review_governance,
+            source_commit=git_sha if review_governance else None,
+            scope="controlled_demo" if review_governance else None,
         ),
     )
     report["generated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -317,6 +336,11 @@ def main(argv=None) -> int:
         _reference(args.graph_review, format="jsonl"),
         _reference(args.review_anchor, schema=anchor.get("schema")),
     ]
+    if args.review_governance:
+        report["source_artifacts"].append(_reference(
+            args.review_governance,
+            schema=review_governance.get("schema"),
+        ))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
