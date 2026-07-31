@@ -1,11 +1,12 @@
 {
   "schema": "rag-production-decision-pack-v1",
-  "as_of": "2026-07-30",
+  "as_of": "2026-07-31",
   "scope": "governed_rag_feature_activation",
   "deployment_path": "windows_lan_no_docker",
-  "source_head_commit": "5f7b98b81565eb7c04db4f45be39e0f44ed85786",
+  "source_head_commit": "835648360f5fa996fe5ae52acaa69bcff0521066e",
+  "integrated_verification_commit": "5f7b98b81565eb7c04db4f45be39e0f44ed85786",
   "authoritative_for_live_activation": false,
-  "worktree_clean": true,
+  "worktree_clean": false,
   "evidence_worktree_clean": true,
   "owner_signature": "pending",
   "release_gate": {
@@ -170,20 +171,32 @@
       "metrics": {
         "baseline_passed_cases": 8,
         "candidate_passed_cases": 9,
-        "baseline_p95_ms": 5568,
-        "candidate_p95_ms": 8589,
-        "p95_latency_ratio": 1.5426,
+        "baseline_p95_ms": 5863.22,
+        "candidate_p95_ms": 7921.84,
+        "p95_latency_ratio": 1.351107,
         "max_latency_ratio": 1.25,
         "leakage_count": 0
       },
       "evidence": {
-        "source_commit": "9b6f3ec63867e619dd288a8adbf6d14964a5e464",
+        "source_commit": "00906394bce762d0d3cfd7812ed944d53617cf16",
         "collection": "MechChatbot_CRAG_Eval_v1",
         "fixture_fingerprint": "9592deb0e747ac9a14d42bf3fe14471baa3b145ad752bdd53fdc491dde3dea7f",
-        "path": "reports/controlled-demo/20260729-crag-window-04-9b6f3ec/window-outcome.json",
-        "sha256": "a0ee36c3e456a32f1d4e99c6b97b1eebefb4b3dab63776ee820493c8d27de071"
+        "path": "reports/controlled-demo/20260730-crag-window-06-0090639/window-outcome.json",
+        "sha256": "f56bdad00aed16678cc568c23bd4800b92f86750878fc1bc0bcb61c6a63a3dbc"
       },
-      "next_gate": "open a new predeclared provider-ready three-pair window without relaxing the latency limit"
+      "diagnostic": {
+        "path": "reports/controlled-demo/20260730-crag-window-06-0090639/latency-diagnostic.json",
+        "sha256": "59b04865fda432925f5f67b20397793a3146d17dfb4eca613a17914575f6e3eb",
+        "deterministic_code_defect_isolated": false,
+        "code_change_authorized": false,
+        "new_crag_window_authorized": false
+      },
+      "excluded_evidence": {
+        "path": "reports/controlled-demo/20260730-crag-window-05-0090639/window-outcome.json",
+        "sha256": "cc293623dda95761765ab453dbed118c95c26f66ad85c568409e89fd315dd2fb",
+        "reason": "operator-aborted window retained as a tombstone; not counted in the series or rollout decision"
+      },
+      "next_gate": "run a clean interleaved stage-latency diagnostic; open a new formal window only when it predicts candidate P95 at or below baseline P95 times 1.25"
     },
     {
       "id": "grounded_math",

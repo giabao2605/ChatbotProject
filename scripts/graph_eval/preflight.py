@@ -388,7 +388,65 @@ def run_live_preflight(cases):
                                       bom.VatLieu
                                     )
                                   ))))
-                             )
+                              )
+                          ))
+                        OR
+                        (e.RelationType = 'APPLIES_TO'
+                         AND sn.NodeType = 'document'
+                         AND sn.CanonicalKey =
+                           'document:' + CAST(e.SourceDocID AS NVARCHAR(30))
+                         AND tn.NodeType = 'part'
+                         AND EXISTS (
+                           SELECT 1 FROM dbo.BangKeVatTu applies_bom
+                           WHERE applies_bom.DocID = e.SourceDocID
+                             AND applies_bom.TrangSo = e.SourcePage
+                             AND tn.CanonicalKey =
+                               'part:' + LOWER(LTRIM(RTRIM(applies_bom.MaHang)))
+                             AND CHARINDEX(
+                               LTRIM(RTRIM(applies_bom.MaHang)),
+                               e.SourceQuote
+                             ) > 0
+                             AND CHARINDEX(
+                               COALESCE(
+                                 NULLIF(LTRIM(RTRIM(t.BaseCode)), ''),
+                                 NULLIF(LTRIM(RTRIM(sn.DisplayName)), '')
+                               ),
+                               e.SourceQuote
+                             ) > 0
+                             AND LEN(LTRIM(RTRIM(e.SourceQuote))) >=
+                               LEN(COALESCE(
+                                 NULLIF(LTRIM(RTRIM(t.BaseCode)), ''),
+                                 NULLIF(LTRIM(RTRIM(sn.DisplayName)), '')
+                               ))
+                               + LEN(LTRIM(RTRIM(applies_bom.MaHang))) + 8
+                         )
+                         AND NULLIF(LTRIM(RTRIM(e.SourceQuote)), N'') IS NOT NULL
+                         AND (
+                           EXISTS (
+                             SELECT 1 FROM dbo.DocumentPages source_page
+                             WHERE source_page.DocID = e.SourceDocID
+                               AND source_page.PageNo = e.SourcePage
+                               AND (
+                                 CHARINDEX(e.SourceQuote, COALESCE(
+                                   source_page.TextExtract, N''
+                                 )) > 0
+                                 OR CHARINDEX(e.SourceQuote, COALESCE(
+                                   source_page.LocalOCRText, N''
+                                 )) > 0
+                                 OR CHARINDEX(e.SourceQuote, COALESCE(
+                                   source_page.VisionSummary, N''
+                                 )) > 0
+                               )
+                           )
+                           OR EXISTS (
+                             SELECT 1 FROM dbo.BangKeVatTu source_bom
+                             WHERE source_bom.DocID = e.SourceDocID
+                               AND source_bom.TrangSo = e.SourcePage
+                               AND CHARINDEX(
+                                 e.SourceQuote,
+                                 COALESCE(source_bom.RawRowJson, N'')
+                               ) > 0
+                           )
                          ))
                       )
                      THEN 1 ELSE 0

@@ -280,9 +280,7 @@ def build_decomposition_instruction(branches) -> str:
     if not branches:
         return ""
     instruction = (
-        "\n\nHướng dẫn tổng hợp nhiều ý: với mỗi ý, chỉ trả lời đúng thông tin "
-        "được hỏi bằng một kết luận ngắn có nguồn; không thêm thuộc tính khác "
-        "từ cùng tài liệu và không suy diễn điều tài liệu không nói."
+        "\n\nTừng ý: trả lời có nguồn, không suy diễn; không lộ nhánh bị chặn."
     )
     outcomes = [str((branch or {}).get("outcome") or "") for branch in (branches or ())]
     missing = sum(
@@ -297,11 +295,7 @@ def build_decomposition_instruction(branches) -> str:
         notices.append(f"{missing} nhánh chưa có đủ bằng chứng")
     if denied:
         notices.append(f"{denied} nhánh không thể truy cập")
-    return (
-        instruction + "\n\nLưu ý bắt buộc: " + "; ".join(notices) + ". "
-        "Chỉ trả lời các nhánh có nguồn; không tự viết câu từ chối hoặc lặp lại "
-        "mã, tên hay nội dung của phần bị chặn. Hệ thống sẽ tự thêm thông báo."
-    )
+    return instruction + " " + "; ".join(notices) + "."
 
 
 def reconcile_grounded_calculation_branch(branches, citations):

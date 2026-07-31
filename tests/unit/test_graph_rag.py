@@ -238,6 +238,70 @@ def test_deterministic_seed_is_deduplicated_and_includes_version_relations():
     assert "SUPERSEDES" in seed_source
 
 
+def test_deterministic_seed_only_approves_edges_with_governed_current_sources():
+    seed_source = Path("scripts/graph/seed_deterministic.py").read_text(encoding="utf-8")
+    disable_marker = "UPDATE e\n        SET ServingStatus='disabled'"
+    node_seed = seed_source[
+        seed_source.index("MERGE dbo.KnowledgeGraphNode"):
+        seed_source.index("MERGE dbo.KnowledgeGraphEdge")
+    ]
+    edge_seed = seed_source[
+        seed_source.index("MERGE dbo.KnowledgeGraphEdge"):
+        seed_source.index(disable_marker)
+    ]
+
+    for statement in node_seed.split("MERGE dbo.KnowledgeGraphNode")[1:]:
+        source_query = statement[:statement.index(") source ON")]
+        assert "Servable=1" in source_query
+        assert "IsCurrent=1" in source_query
+        assert "ReviewStatus" in source_query and "'approved'" in source_query
+        assert "PublicationState" in source_query and "'published'" in source_query
+        assert "LifecycleStatus" in source_query and "'published'" in source_query
+        assert "EffectiveStatus" in source_query
+        assert "EffectiveDate" in source_query
+        assert "ExpiryDate" in source_query
+        assert "WHEN MATCHED THEN UPDATE SET" in statement
+        assert "SourceDocID=source.SourceDocID" in statement
+
+    for statement in edge_seed.split("MERGE dbo.KnowledgeGraphEdge")[1:]:
+        source_query = statement[:statement.index(") source ON")]
+        assert "t.Servable=1" in source_query
+        assert "t.IsCurrent=1" in source_query
+        assert "t.ReviewStatus='approved'" in source_query
+        assert "t.PublicationState='published'" in source_query
+        assert "t.LifecycleStatus='published'" in source_query
+        assert "EffectiveStatus" in source_query
+        assert "EffectiveDate" in source_query
+        assert "ExpiryDate" in source_query
+        assert "SourceQuote=source.SourceQuote" in statement
+        assert "WHEN MATCHED AND target.Origin='deterministic' THEN" in statement
+        assert "UPDATE SET Origin='deterministic'" not in statement
+
+    assert "UPDATE e\n        SET ServingStatus='approved'" not in seed_source
+    disable_update = seed_source[seed_source.index(disable_marker):]
+    assert "NOT EXISTS (" in disable_update
+    assert "t.Servable=1" in disable_update
+    assert "t.IsCurrent=1" in disable_update
+    assert "OPENJSON(:departments)" in disable_update
+    assert "dbo.KnowledgeGraphNode source_node" in disable_update
+    assert "dbo.KnowledgeGraphNode target_node" in disable_update
+    assert "dbo.DocumentPages" in disable_update
+    assert "dbo.BangKeVatTu" in disable_update
+    assert "CHARINDEX" in disable_update
+    assert "e.RelationType='HAS_VERSION'" in disable_update
+    assert "source_node.CanonicalKey='family:'" in disable_update
+    assert "target_node.CanonicalKey='document:'" in disable_update
+    assert "e.RelationType='SUPERSEDES'" in disable_update
+    assert "target_node.CanonicalKey='document:'+CAST(t.SupersedesDocID" in disable_update
+    assert "e.RelationType='HAS_PAGE'" in disable_update
+    assert "target_node.CanonicalKey='page:'" in disable_update
+    assert "e.RelationType='CONTAINS_PART'" in disable_update
+    assert "target_node.CanonicalKey='part:'" in disable_update
+    assert "e.RelationType='USES_MATERIAL'" in disable_update
+    assert "source_node.CanonicalKey='part:'" in disable_update
+    assert "target_node.CanonicalKey='material:'" in disable_update
+
+
 def test_graph_repository_filters_every_traversed_edge_and_only_returns_two_hops():
     source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
 

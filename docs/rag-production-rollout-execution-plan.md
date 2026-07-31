@@ -51,9 +51,10 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
   hiện `passed=false`, `technical_authorized=false`, `release_authorized=false`.
 - `release_decisions.json` đang `incomplete`. Chỉ Late Interaction có quyết định
   `rejected`; các feature live khác chưa có quyết định.
-- CRAG window `20260729-crag-window-04-9b6f3ec` là `inconclusive`; candidate
+- CRAG authoritative window `20260730-crag-window-06-0090639` là `inconclusive`; candidate
   đạt `9/9`, không provider failure, đã exercise correction/repair, nhưng P95
-  ratio `1.5426 > 1.25`. Pair 02/03 không chạy và không tạo authorization/bundle.
+  `5863.22 -> 7921.84 ms`, ratio `1.351107 > 1.25`. Pair 02/03 không chạy và
+  không tạo authorization/bundle. Window 05 là tombstone, không phải evidence.
 - Grounded Math đã có series kỹ thuật tốt hơn nhưng chưa thể live vì CRAG và human
   decision còn thiếu.
 - Query Decomposition có evidence chia đôi: Pair 01 đạt, Pair 02 fail cost,
@@ -67,15 +68,22 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 - App startup chưa có cùng fail-fast config validation như RAG/worker.
 - Repo chưa có Playwright E2E chạy tự động.
 
-## Tiến độ thực thi cập nhật 2026-07-30
+## Tiến độ thực thi cập nhật 2026-07-31
 
 ### Mốc Git và phạm vi bằng chứng
 
 - Branch thực thi: `codex/codebase-layer-refactor`.
 - Commit feature-evaluation sạch:
   `fa8dc16c26eb13333d8ef978d75cba8d7101ebf0`.
-- HEAD dùng cho integrated verification:
+- Integrated verification commit:
   `5f7b98b81565eb7c04db4f45be39e0f44ed85786`.
+- Checkout HEAD tại lần reconcile 2026-07-31:
+  `835648360f5fa996fe5ae52acaa69bcff0521066e`; commit này không thay thế
+  evidence đã pin theo từng window.
+- CRAG window 06 chạy tại
+  `00906394bce762d0d3cfd7812ed944d53617cf16`; Grounded Math, Query
+  Decomposition và Graph/Community chạy tại
+  `fa8dc16c26eb13333d8ef978d75cba8d7101ebf0`.
 - Grounded Math, Query Decomposition và Graph/Community disposition được chạy
   trong detached worktree sạch tại `fa8dc16`; integrated offline, full suite,
   coverage, frontend và architecture được chạy trên primary worktree sạch tại
@@ -83,9 +91,39 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 - Window Query Decomposition không khai báo ở `5f7b98b` được giữ làm tombstone
   nhưng bị loại khỏi mọi rollout decision; không trộn kết quả của window này
   với window hợp lệ ở `fa8dc16`.
+- CRAG window `20260730-crag-window-05-0090639` bị operator dừng giữa chừng,
+  được giữ nguyên làm tombstone và không được tính vào series hay rollout
+  decision. Window 06 là CRAG evidence authoritative hiện hành.
 - Đường triển khai đã chốt là Windows LAN/local, không dùng Docker. Không có
   Docker command, image, container hoặc Docker artifact nào được tạo/chỉnh sửa
   trong chuỗi thực thi này.
+
+### Release-candidate freeze checkpoint
+
+- Candidate xuất phát từ checkout HEAD `8356483`; sau khi owner duyệt, RC SHA
+  được lấy từ Git HEAD chứa chính thay đổi này. RC commit vẫn chưa phải
+  activation evidence.
+- Query Decomposition chỉ rút gọn instruction nội bộ: base `67` ký tự, biến
+  thể đồng thời thiếu nguồn và access denied `126` ký tự; không đổi model,
+  classifier, planner, số subquery hoặc gate.
+- Graph seed chỉ tạo/refresh deterministic edge từ source current, servable,
+  approved, published và effective; edge cũ sai source, quote hoặc endpoint bị
+  disable trong đúng department/source-system scope. Row LLM/human-reviewed
+  cùng natural key không bị seed ghi đè.
+- Graph proposal, preflight và runtime serving dùng cùng contract
+  relation-specific. `APPLIES_TO` chỉ nhận document -> part cùng source doc,
+  quote phải có cả mã document, mã part, nội dung bổ sung và tồn tại trong đúng
+  page/BOM row. Proposal provenance sai vẫn reject được; `REQUIRES_TOOL` chưa có
+  structured validator nên fail-closed khi approve/serve.
+- Verification local sau mọi review fix: targeted `197/197`; backend fast
+  `2478 passed, 1 skipped, 21 deselected`; coverage line `92.286356%`, branch
+  `85.008666%`; architecture `18/18`; security `137 passed, 9 skipped`;
+  frontend `32/32` và production build đạt. Frontend coverage vẫn là baseline
+  cũ `21.94%` line, `14.66%` branch và repo chưa cấu hình threshold frontend
+  `80%`; backend là gate coverage `80/80` hiện hành.
+- Các số local trên chưa được dùng để sửa release decision. Chưa gọi provider,
+  chưa ingest/re-seed SQL/Qdrant, chưa chạy formal window và chưa làm human
+  review.
 
 ### Tổng quan theo ticket
 
@@ -95,11 +133,11 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
 | 2. Deployment và security fail-fast | Đã hoàn tất code; live recapture chưa chạy | Windows launcher fail nếu worktree bẩn, restore evidence sai, migration/preflight lỗi hoặc runtime-state drift; health có deployment/runtime identity | Chạy launcher thật trên restore evidence hợp lệ và thu hardened live preflight mới |
 | 3. Cohort tài khoản test | Đã hoàn tất, không tạo/xóa account | Reuse 33 account `demo_...`; viewer/uploader/reviewer login và profile đúng; credential không vào Git/report | Chỉ bổ sung account nếu một future matrix thiếu actor; cần phê duyệt riêng |
 | 4. Browser E2E và baseline all-off | Đã đo baseline | Browser `3/3`, golden `5/5`, frontend `32/32`, load c1/c5 không lỗi; mọi governed flag OFF | Chạy lại health/browser smoke sau hardened launcher để thay evidence pre-hardening |
-| 5. CRAG + Claim Repair | Dừng đúng stop rule, disposition `inconclusive` | Pair 01 candidate `9/9`, correction/repair được exercise, provider failure `0`; gate bắt đúng latency ratio `1.5426 > 1.25` | Cửa sổ ba pair mới khi provider ổn định; không nới latency gate |
+| 5. CRAG + Claim Repair | Dừng đúng stop rule, disposition `inconclusive` | Window 06 Pair 01 candidate `9/9`, correction/repair được exercise, provider failure `0`; gate bắt đúng P95 `5863.22 -> 7921.84 ms`, ratio `1.351107 > 1.25` | Chỉ mở cửa sổ mới sau clean diagnostic dự báo đạt gate; không nới latency gate |
 | 6. Grounded Math | Ba pair kỹ thuật đạt; disposition vẫn `inconclusive` | Fixture `16/16`, rollback `2/2`, ba pair candidate đều `16/16`; quality/safety/latency/cost/rollback xanh | CRAG phải accepted và owner review đủ `10/10`; không chạy lại window đã hoàn tất |
-| 7. Query Decomposition | Dừng đúng stop rule, disposition `inconclusive` | Pair 01 đạt; Pair 02 giữ quality/latency nhưng cost ratio `1.554088 > 1.5`; Pair 03 không chạy | Chẩn đoán cost/token overhead, predeclare window mới và owner review; không dùng rerun không khai báo |
-| 8. GraphRAG và Community Summaries | Blocked bởi provenance và independent review | Queue có 22 edge; validator hiện hành chỉ xác minh `20/22`; `0/20` label độc lập; Community không chạy | Sửa hai approved staging edge sai, rồi tối thiểu 20 label và precision 95%; chỉ sau Graph accepted mới chạy Community |
-| 9. Integrated matrix, rollback và production audit | Offline capability hoàn tất; live matrix/restore thật chưa chạy | HEAD `5f7b98b`: offline `63/63`, security `15/15`, leakage 0, backend `2467` pass, coverage line/branch `92.29%/84.99%`, frontend/build và architecture xanh | Restore drill trên disposable targets, hardened all-off runtime, live matrix c1/c5 và browser rollback smoke |
+| 7. Query Decomposition | RC code candidate đã được owner duyệt; disposition vẫn `inconclusive` | Instruction đạt `67/126` ký tự và unit contracts xanh; formal evidence cũ vẫn fail Pair 02 cost `1.554088 > 1.5` | Chạy provider diagnostic/formal window mới và owner review; không dùng rerun không khai báo |
+| 8. GraphRAG và Community Summaries | RC code candidate đã được owner duyệt; data/eval vẫn blocked | Seed/review/preflight/serving đã relation-specific và fail-closed; evidence cũ vẫn provenance `20/22`, review `0/20` | Owner duyệt đúng Graph demo batch để ingest/re-seed, đạt provenance `22/22`, rồi independent review; chỉ sau Graph accepted mới chạy Community |
+| 9. Integrated matrix, rollback và production audit | Offline capability hoàn tất; live matrix/restore thật chưa chạy | Integrated verification commit `5f7b98b`: offline `63/63`, security `15/15`, leakage 0, backend `2467` pass, coverage line/branch `92.29%/84.99%`, frontend/build và architecture xanh | Restore drill trên disposable targets, hardened all-off runtime, live matrix c1/c5 và browser rollback smoke |
 | 10. Decision pack cuối | Deliverable đã có; chưa được chủ dự án ký | JSON decision pack máy đọc được, fail-closed; từng feature có disposition/next gate; hash evidence khớp | Owner signature và release decisions đầy đủ; chỉ sau đó mới tạo feature-on activation bundle |
 
 ### Những thay đổi đã implement và commit
@@ -199,9 +237,10 @@ Mục này là snapshot ban đầu khi lập plan. Trạng thái authoritative m
   leakage `0`; mọi effective release flag OFF và
   `ready_for_live_matrix=false`.
 - Local demo health vẫn `status=ok` và cả 7 governed flag OFF, nhưng deployment
-  là `windows-lan-dirty-00906394bce7`, Git SHA `0090639`, không khớp source HEAD
-  `5f7b98b`; quan sát này không phải release evidence và không được dùng thay
-  hardened launcher preflight.
+  là `windows-lan-dirty-00906394bce7`, Git SHA `0090639`, không khớp integrated
+  verification commit `5f7b98b` hoặc checkout HEAD hiện tại `8356483`; quan sát
+  này không phải release evidence và không được dùng thay hardened launcher
+  preflight.
 - `npm audit --omit=dev` và `pip-audit` trên active environment không tìm thấy
   advisory. `requirements.lock.txt` là snapshot local không canonical, đã được
   loại khỏi install/CI path từ `6ac5557`; audit của file này có 27 advisory/5
@@ -287,7 +326,7 @@ evidence cũ sang HEAD mới.
 
 ### Việc làm
 
-1. Giữ nguyên 7 commit hiện tại; không reset, drop hoặc xóa report.
+1. Giữ nguyên lịch sử commit hiện tại; không reset, drop hoặc xóa report.
 2. Chạy targeted gate cho Jina/rerank và full fast suite trên HEAD.
 3. Ghi rõ Jina là evaluation-only; không đổi default Voyage.
 4. Chạy backend coverage, architecture, frontend coverage/build.
@@ -462,24 +501,22 @@ không bật default rollout.
 - P95 không quá 1.25x, cost không quá 1.5x, retry đúng policy.
 - Rollback chỉ cần tắt hai flag và đã được test trên cùng commit.
 
-### Trạng thái thực thi 2026-07-29
+### Trạng thái thực thi authoritative 2026-07-30
 
-- Sửa evaluator trên commit `9b6f3ec`: timeout/connection/server error trong
-  RAG runtime được phân loại là provider failure, không còn biến thành
-  `wrong_refusal`; timeout ngoài RAG runtime vẫn là quality error.
-- CRAG rollout gate mới fail-closed khi baseline hoặc candidate có provider
-  failure. `104` test liên quan đạt và review độc lập không còn blocker.
-- Window `20260729-crag-window-04-9b6f3ec` preflight fixture đạt `9/9`, rollback
-  hai flag đạt, provider smoke evaluation đạt `5/5`, `0` retry.
-- Pair 01 chạy `candidate-first`: baseline `8/9`, candidate `9/9`; provider
-  failure `0/0`, wrong-refusal giảm `1 -> 0`, correction `1`, repair `1`, cost
-  ratio `0.9989`.
-- Gate chỉ fail `latency_within_budget`: P95 `5568 -> 8589 ms`, ratio `1.5426`.
-  Candidate-first cũng có retrieval/provider P95 cao hơn trên các case không
-  correction/repair, nhưng đây chỉ là chẩn đoán variance, không được dùng để
-  nới gate.
+- CRAG window `20260730-crag-window-06-0090639` chạy tại commit `0090639`;
+  preflight fixture đạt `9/9`, rollback hai flag đạt và provider failure/retry
+  bằng `0`.
+- Pair 01 chạy `candidate-first`: baseline `8/9`, candidate `9/9`;
+  wrong-refusal giảm `1 -> 0`, correction `1`, repair `1`, cost ratio
+  `1.001384`.
+- Gate chỉ fail `latency_within_budget`: P95 `5863.22 -> 7921.84 ms`, ratio
+  `1.351107`. Diagnostic chưa cô lập được deterministic code defect; generation
+  P95 `3676 -> 5216 ms` và rerank P95 `694 -> 1085 ms`, nên không cấp quyền sửa
+  code hoặc mở formal window mới từ evidence này.
 - Dừng pair 02/03 đúng predeclaration. Không tạo series, authorization,
   activation bundle và không bật live flag.
+- Window `20260730-crag-window-05-0090639` được giữ làm tombstone do operator
+  dừng trước khi có đủ hai arm/gate; không xóa, resume hoặc dùng làm evidence.
 
 ## Ticket 6: Hoàn tất Grounded Math
 
@@ -641,8 +678,9 @@ Chứng minh tổ hợp cuối không phá security/performance và có thể kh
 - Baseline trước provenance hardening từng đạt full backend, frontend `32/32`,
   production build, architecture `18/18` và browser E2E `3/3`; security
   targeted `101/101` và rollback/cache/strict-stream/preflight `75/75`.
-  Các số này chỉ là historical evidence, không thay kết quả current HEAD bên
-  dưới.
+  Các số này chỉ là historical evidence, không thay kết quả integrated
+  verification tại `5f7b98b` bên dưới và cũng không được suy diễn sang checkout
+  HEAD hiện tại.
 - Production preflight Windows trước provenance hardening đạt `5/5`: migration
   current, Qdrant ready, activation `all_off` hợp lệ, không có seeded dev
   account active và RAG health ready. Kết quả này không còn là live evidence
@@ -705,7 +743,7 @@ JSON máy đọc được nằm tại
 
 | Feature | Disposition hiện tại | Khuyến nghị | Gate kế tiếp |
 | --- | --- | --- | --- |
-| CRAG + Claim Repair | Inconclusive; pair 01 fail latency `1.5426x > 1.25x` | `keep_off` | Cửa sổ ba pair mới, không nới latency gate |
+| CRAG + Claim Repair | Inconclusive; window 06 pair 01 fail latency `1.351107x > 1.25x` | `keep_off` | Clean diagnostic trước, chỉ mở cửa sổ mới khi dự báo đạt gate |
 | Grounded Math | Inconclusive; 3/3 pair kỹ thuật đạt, CRAG và review `0/10` còn thiếu | `re_evaluate` | CRAG accepted và owner review đủ 10 case; không rerun window |
 | Late Interaction | Rejected | `keep_off` | Chỉ mở lại khi thiết kế mới vượt quality gate |
 | Query Decomposition | Inconclusive; Pair 02 fail cost `1.554088 > 1.5`, Pair 03 không chạy | `re_evaluate` | Chẩn đoán overhead, predeclare window mới và owner review |

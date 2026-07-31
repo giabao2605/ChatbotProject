@@ -60,6 +60,47 @@ class _ReviewEngine:
         return _ReviewConnection(self._rows)
 
 
+class _ProposalResult:
+    def __init__(self, row=None):
+        self._row = row
+
+    def mappings(self):
+        return self
+
+    def first(self):
+        return self._row
+
+
+class _ProposalConnection:
+    def __init__(self, proposal):
+        self.proposal = proposal
+        self.statements = []
+
+    def execute(self, statement, *_args, **_kwargs):
+        sql = str(statement)
+        self.statements.append(sql)
+        if "SELECT p.ProposalID" in sql:
+            return _ProposalResult(self.proposal)
+        return _ProposalResult()
+
+
+class _ProposalEngine:
+    def __init__(self, proposal):
+        self.connection = _ProposalConnection(proposal)
+
+    def begin(self):
+        connection = self.connection
+
+        class _Transaction:
+            def __enter__(self):
+                return connection
+
+            def __exit__(self, *_args):
+                return False
+
+        return _Transaction()
+
+
 def _document(doc_id=10, **overrides):
     value = {
         "DocID": doc_id, "TenFile": "assembly.md", "VersionNo": 2,
@@ -86,6 +127,183 @@ def _edge(edge_id=1, **overrides):
     }
     value.update(overrides)
     return value
+
+
+@pytest.mark.parametrize(
+    ("source_matches", "endpoints_match"),
+    [(False, True), (True, False)],
+)
+def test_graph_review_rejects_approval_without_verified_applies_to_provenance(
+    monkeypatch,
+    source_matches,
+    endpoints_match,
+):
+    from mech_chatbot.db.repositories import graph as graph_repository
+
+    proposal = {
+        "ProposalID": 7,
+        "SourceNodeID": 1,
+        "TargetNodeID": 2,
+        "RelationType": "APPLIES_TO",
+        "SourceDocID": 10,
+        "SourcePage": 1,
+        "SourceVersion": 2,
+        "Confidence": 1.0,
+        "Status": "pending",
+        "ThuMuc": "Technical",
+        "Site": "GRAPH-EVAL-HQ",
+        "SecurityLevel": "internal",
+        "SourceQuote": "Cụm GRAPH-EVAL-ASM-001 áp dụng cho GRAPH-EVAL-PART-A.",
+        "SourceGovernanceMatches": True,
+        "SourceEvidenceMatches": source_matches,
+        "RelationEndpointsMatch": endpoints_match,
+    }
+    fake_engine = _ProposalEngine(proposal)
+    monkeypatch.setattr(graph_repository, "_ensure_engine", lambda: None)
+    monkeypatch.setattr(graph_repository, "engine", fake_engine)
+
+    result = graph_repository.review_graph_proposal(7, "approve", "reviewer")
+
+    assert result == {"ok": False, "reason": "invalid_provenance"}
+    assert not any("MERGE dbo.KnowledgeGraphEdge" in sql for sql in fake_engine.connection.statements)
+
+
+def test_graph_review_can_reject_proposal_with_invalid_provenance(monkeypatch):
+    from mech_chatbot.db.repositories import graph as graph_repository
+
+    proposal = {
+        "ProposalID": 8,
+        "Status": "pending",
+        "SourceGovernanceMatches": False,
+        "SourceEvidenceMatches": False,
+        "RelationEndpointsMatch": False,
+    }
+    fake_engine = _ProposalEngine(proposal)
+    monkeypatch.setattr(graph_repository, "_ensure_engine", lambda: None)
+    monkeypatch.setattr(graph_repository, "engine", fake_engine)
+
+    result = graph_repository.review_graph_proposal(8, "reject", "reviewer")
+
+    assert result == {"ok": True, "proposal_id": 8, "status": "rejected"}
+    assert any("UPDATE dbo.GraphExtractionProposal" in sql for sql in fake_engine.connection.statements)
+    assert not any("MERGE dbo.KnowledgeGraphEdge" in sql for sql in fake_engine.connection.statements)
+
+
+def test_graph_review_rejects_approval_when_source_governance_is_invalid(
+    monkeypatch,
+):
+    from mech_chatbot.db.repositories import graph as graph_repository
+
+    proposal = {
+        "ProposalID": 9,
+        "Status": "pending",
+        "SourceQuote": "verified quote",
+        "SourceGovernanceMatches": False,
+        "SourceEvidenceMatches": True,
+        "RelationEndpointsMatch": True,
+    }
+    fake_engine = _ProposalEngine(proposal)
+    monkeypatch.setattr(graph_repository, "_ensure_engine", lambda: None)
+    monkeypatch.setattr(graph_repository, "engine", fake_engine)
+
+    result = graph_repository.review_graph_proposal(9, "approve", "reviewer")
+
+    assert result == {"ok": False, "reason": "invalid_provenance"}
+    assert not any("MERGE dbo.KnowledgeGraphEdge" in sql for sql in fake_engine.connection.statements)
+
+
+def test_graph_review_query_validates_each_supported_relation_endpoint():
+    from mech_chatbot.db.repositories.graph import review_graph_proposal
+
+    source = inspect.getsource(review_graph_proposal)
+    endpoint_contract = source[
+        source.index("AS SourceEvidenceMatches"):
+        source.index("AS RelationEndpointsMatch")
+    ]
+    compact = "".join(endpoint_contract.split())
+
+    for relation in (
+        "HAS_VERSION",
+        "SUPERSEDES",
+        "HAS_PAGE",
+        "CONTAINS_PART",
+        "USES_MATERIAL",
+        "APPLIES_TO",
+    ):
+        assert f"p.RelationType='{relation}'" in compact
+    assert "p.RelationType <> 'APPLIES_TO'" not in endpoint_contract
+    assert "p.RelationType = 'REQUIRES_TOOL'" not in endpoint_contract
+    assert "CHARINDEX(LTRIM(RTRIM(endpoint_bom.MaHang))" in compact
+
+
+def test_graph_review_query_keeps_invalid_pending_proposals_rejectable():
+    from mech_chatbot.db.repositories.graph import review_graph_proposal
+
+    source = inspect.getsource(review_graph_proposal)
+    query = source[source.index("SELECT p.ProposalID"):source.index('"""), {')]
+
+    assert "SourceGovernanceMatches" in query
+    assert "LEFT JOIN dbo.TaiLieu t" in query
+    assert "LEFT JOIN dbo.KnowledgeGraphNode sn" in query
+    assert "LEFT JOIN dbo.KnowledgeGraphNode tn" in query
+    where_clause = query[query.index("WHERE p.ProposalID = :proposal_id"):]
+    assert "t.Servable" not in where_clause
+    assert "t.IsCurrent" not in where_clause
+
+
+def test_graph_traversal_revalidates_source_quote_before_serving():
+    from mech_chatbot.db.repositories.graph import traverse_knowledge_graph
+
+    source = inspect.getsource(traverse_knowledge_graph)
+    eligible = source[source.index("EligibleEdges AS"):source.index("Walk AS")]
+
+    assert "NULLIF(LTRIM(RTRIM(e.SourceQuote)), N'') IS NOT NULL" in eligible
+    assert "dbo.DocumentPages eligible_page" in eligible
+    assert "CHARINDEX(" in eligible
+    assert "e.SourceQuote" in eligible
+    assert "e.RelationType = 'APPLIES_TO'" in eligible
+    assert "eligible_target.CanonicalKey" in eligible
+    assert "eligible_applies_bom.MaHang" in eligible
+    assert "'REQUIRES_TOOL'" not in eligible
+    compact = "".join(eligible.split())
+    for relation in (
+        "HAS_VERSION",
+        "SUPERSEDES",
+        "HAS_PAGE",
+        "CONTAINS_PART",
+        "USES_MATERIAL",
+        "APPLIES_TO",
+    ):
+        assert f"e.RelationType='{relation}'" in compact
+    assert "e.RelationTypeIN(" not in compact
+    assert "eligible_page.PageNo=e.SourcePage" in compact
+    assert "eligible_version_bom.RawRowJson" in eligible
+    assert "eligible_contains_bom.RawRowJson" in eligible
+    assert "eligible_material_bom.RawRowJson" in eligible
+    assert "e.SourceQuote=LEFT(" in compact
+    assert "'family:'+CAST(" in compact
+    assert "'page:'+CAST(" in compact
+
+
+def test_applies_to_quote_contract_requires_source_target_and_explanatory_text():
+    from mech_chatbot.db.repositories.graph import (
+        review_graph_proposal,
+        traverse_knowledge_graph,
+    )
+
+    review = "".join(inspect.getsource(review_graph_proposal).split())
+    traversal = "".join(inspect.getsource(traverse_knowledge_graph).split())
+    preflight = "".join(inspect.getsource(run_live_preflight).split())
+
+    assert "COALESCE(NULLIF(LTRIM(RTRIM(t.BaseCode)),''),NULLIF(LTRIM(RTRIM(sn.DisplayName)),''))" in review
+    assert "LEN(LTRIM(RTRIM(JSON_VALUE(p.EvidenceJson,'$.source_quote'))))>=" in review
+    assert "+8" in review
+    assert "COALESCE(NULLIF(LTRIM(RTRIM(t.BaseCode)),''),NULLIF(LTRIM(RTRIM(sn.DisplayName)),''))" in preflight
+    assert "LEN(LTRIM(RTRIM(e.SourceQuote)))>=" in preflight
+    assert "+8" in preflight
+    assert "COALESCE(NULLIF(LTRIM(RTRIM(governed.BaseCode)),''),NULLIF(LTRIM(RTRIM(eligible_source.DisplayName)),''))" in traversal
+    assert "LEN(LTRIM(RTRIM(e.SourceQuote)))>=" in traversal
+    assert "+8" in traversal
 
 
 def test_graph_report_uses_explicit_relation_denominator_and_review_labels():
@@ -154,6 +372,33 @@ def test_live_graph_source_match_binds_endpoints_and_governance():
     assert "e.Department = t.ThuMuc" in source
     assert "e.Site = t.Site" in source
     assert "ISNULL(t.SecurityLevel, 'confidential')" in source
+
+
+def test_live_graph_source_match_validates_applies_to_endpoint_and_quote():
+    source = inspect.getsource(run_live_preflight)
+    applies_to = source[source.index("(e.RelationType = 'APPLIES_TO'"):]
+    compact = "".join(applies_to.split())
+
+    assert "sn.NodeType = 'document'" in applies_to
+    assert "tn.NodeType = 'part'" in applies_to
+    assert "'document:' + CAST(e.SourceDocID AS NVARCHAR(30))" in applies_to
+    assert "'part:' + LOWER(LTRIM(RTRIM(applies_bom.MaHang)))" in applies_to
+    assert "CHARINDEX(LTRIM(RTRIM(applies_bom.MaHang)),e.SourceQuote)" in compact
+    assert "CHARINDEX(e.SourceQuote" in applies_to
+    assert "source_page.PageNo = e.SourcePage" in applies_to
+
+
+def test_graph_review_fixture_uses_a_quote_from_the_current_source_page():
+    from scripts.graph_eval.generate_fixture import DOCUMENTS
+
+    quote = "Cụm GRAPH-EVAL-ASM-001 áp dụng cho GRAPH-EVAL-PART-A."
+    assembly = next(item for item in DOCUMENTS if item["key"] == "assembly_v2")
+    exercise = __import__("pathlib").Path(
+        "scripts/graph_eval/exercise_review.py"
+    ).read_text(encoding="utf-8")
+
+    assert quote in assembly["body"]
+    assert f'"source_quote": "{quote}"' in exercise
 
 
 def test_independent_review_samples_require_unique_identity_and_reviewer():

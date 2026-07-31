@@ -53,7 +53,7 @@ def exercise_review(output: Path):
         evidence={
             "fixture_batch": FIXTURE_BATCH,
             "expected_correct": True,
-            "source_quote": "GRAPH-EVAL-ASM-001 applies to GRAPH-EVAL-PART-A.",
+            "source_quote": "Cụm GRAPH-EVAL-ASM-001 áp dụng cho GRAPH-EVAL-PART-A.",
         },
         proposed_by="graph-eval-extractor",
     )

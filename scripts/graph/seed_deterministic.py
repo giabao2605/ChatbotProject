@@ -48,7 +48,11 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
                 WHERE t.FamilyID=f.FamilyID
                   AND (:source_system IS NULL OR t.SourceSystem=:source_system)
                   AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
-                  AND t.ReviewStatus='approved' AND t.PublicationState='published'
+                  AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
+                  AND t.PublicationState='published' AND t.LifecycleStatus='published'
+                  AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+                  AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+                  AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
                 ORDER BY t.IsCurrent DESC, t.VersionNo DESC, t.DocID DESC
             ) current_doc
         ) source ON target.NodeType=source.NodeType AND target.CanonicalKey=source.CanonicalKey
@@ -70,7 +74,11 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
             FROM dbo.TaiLieu t
             WHERE t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
               AND (:source_system IS NULL OR t.SourceSystem=:source_system)
-              AND t.ReviewStatus = 'approved' AND t.PublicationState = 'published'
+              AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
+              AND t.PublicationState='published' AND t.LifecycleStatus='published'
+              AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+              AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+              AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
         ) source ON target.NodeType = source.NodeType AND target.CanonicalKey = source.CanonicalKey
         WHEN MATCHED THEN UPDATE SET DisplayName=source.DisplayName, SourceDocID=source.SourceDocID,
              SourceVersion=source.SourceVersion, Department=source.Department, Site=source.Site,
@@ -93,7 +101,13 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
               AND (:source_system IS NULL OR t.SourceSystem=:source_system)
               AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
               AND t.PublicationState='published' AND t.LifecycleStatus='published'
+              AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+              AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+              AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
         ) source ON target.NodeType=source.NodeType AND target.CanonicalKey=source.CanonicalKey
+        WHEN MATCHED THEN UPDATE SET DisplayName=source.DisplayName, SourceDocID=source.SourceDocID,
+             SourcePage=source.SourcePage, SourceVersion=source.SourceVersion,
+             Department=source.Department, Site=source.Site, SecurityLevel=source.SecurityLevel
         WHEN NOT MATCHED THEN INSERT
              (NodeType, CanonicalKey, DisplayName, SourceDocID, SourcePage, SourceVersion, Department, Site, SecurityLevel)
              VALUES (source.NodeType, source.CanonicalKey, source.DisplayName, source.SourceDocID,
@@ -117,8 +131,14 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
                   AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
                   AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
                   AND t.PublicationState='published' AND t.LifecycleStatus='published'
+                  AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+                  AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+                  AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
             ) ranked WHERE rn=1
         ) source ON target.NodeType=source.NodeType AND target.CanonicalKey=source.CanonicalKey
+        WHEN MATCHED THEN UPDATE SET DisplayName=source.DisplayName, SourceDocID=source.SourceDocID,
+             SourcePage=source.SourcePage, SourceVersion=source.SourceVersion,
+             Department=source.Department, Site=source.Site, SecurityLevel=source.SecurityLevel
         WHEN NOT MATCHED THEN INSERT
              (NodeType, CanonicalKey, DisplayName, SourceDocID, SourcePage, SourceVersion, Department, Site, SecurityLevel)
              VALUES (source.NodeType, source.CanonicalKey, source.DisplayName, source.SourceDocID,
@@ -145,8 +165,14 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
                   AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
                   AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
                   AND t.PublicationState='published' AND t.LifecycleStatus='published'
+                  AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+                  AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+                  AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
             ) ranked WHERE rn=1
         ) source ON target.NodeType=source.NodeType AND target.CanonicalKey=source.CanonicalKey
+        WHEN MATCHED THEN UPDATE SET DisplayName=source.DisplayName, SourceDocID=source.SourceDocID,
+             SourcePage=source.SourcePage, SourceVersion=source.SourceVersion,
+             Department=source.Department, Site=source.Site, SecurityLevel=source.SecurityLevel
         WHEN NOT MATCHED THEN INSERT
              (NodeType, CanonicalKey, DisplayName, SourceDocID, SourcePage, SourceVersion, Department, Site, SecurityLevel)
              VALUES (source.NodeType, source.CanonicalKey, source.DisplayName, source.SourceDocID,
@@ -181,11 +207,19 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
             WHERE t.FamilyID IS NOT NULL
               AND (:source_system IS NULL OR t.SourceSystem=:source_system)
               AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
-              AND t.ReviewStatus='approved' AND t.PublicationState='published'
+              AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
+              AND t.PublicationState='published' AND t.LifecycleStatus='published'
+              AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+              AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+              AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
               AND COALESCE(page_ref.SourceQuote, bom_ref.SourceQuote) IS NOT NULL
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
                    AND target.RelationType=source.RelationType AND target.SourceDocID=source.SourceDocID
                    AND target.SourcePage=source.SourcePage
+        WHEN MATCHED AND target.Origin='deterministic' THEN UPDATE SET ServingStatus='approved', Confidence=1,
+             SourceVersion=source.SourceVersion, Department=source.Department, Site=source.Site,
+             SecurityLevel=source.SecurityLevel, SourceQuote=source.SourceQuote,
+             ReviewedBy='deterministic-seed', ReviewedAt=SYSUTCDATETIME()
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
               SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
@@ -222,11 +256,19 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
             WHERE t.SupersedesDocID IS NOT NULL
               AND (:source_system IS NULL OR t.SourceSystem=:source_system)
               AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
-              AND t.ReviewStatus='approved' AND t.PublicationState='published'
+              AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
+              AND t.PublicationState='published' AND t.LifecycleStatus='published'
+              AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+              AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+              AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
               AND COALESCE(page_ref.SourceQuote, bom_ref.SourceQuote) IS NOT NULL
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
                    AND target.RelationType=source.RelationType AND target.SourceDocID=source.SourceDocID
                    AND target.SourcePage=source.SourcePage
+        WHEN MATCHED AND target.Origin='deterministic' THEN UPDATE SET ServingStatus='approved', Confidence=1,
+             SourceVersion=source.SourceVersion, Department=source.Department, Site=source.Site,
+             SecurityLevel=source.SecurityLevel, SourceQuote=source.SourceQuote,
+             ReviewedBy='deterministic-seed', ReviewedAt=SYSUTCDATETIME()
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
               SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
@@ -249,11 +291,20 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
             JOIN dbo.KnowledgeGraphNode pn ON pn.CanonicalKey='page:'+CAST(p.DocID AS NVARCHAR(30))+':'+CAST(p.PageNo AS NVARCHAR(30))
             WHERE t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments)) AND t.Servable=1 AND t.IsCurrent=1
               AND (:source_system IS NULL OR t.SourceSystem=:source_system)
+              AND t.ReviewStatus='approved' AND t.PublicationState='published'
+              AND t.LifecycleStatus='published'
+              AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+              AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+              AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
               AND COALESCE(NULLIF(LTRIM(RTRIM(p.TextExtract)),''), NULLIF(LTRIM(RTRIM(p.LocalOCRText)),''),
                            NULLIF(LTRIM(RTRIM(p.VisionSummary)),'') ) IS NOT NULL
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
                    AND target.RelationType=source.RelationType AND target.SourceDocID=source.SourceDocID
                    AND target.SourcePage=source.SourcePage
+        WHEN MATCHED AND target.Origin='deterministic' THEN UPDATE SET ServingStatus='approved', Confidence=1,
+             SourceVersion=source.SourceVersion, Department=source.Department, Site=source.Site,
+             SecurityLevel=source.SecurityLevel, SourceQuote=source.SourceQuote,
+             ReviewedBy='deterministic-seed', ReviewedAt=SYSUTCDATETIME()
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
               SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
@@ -273,11 +324,20 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
             JOIN dbo.KnowledgeGraphNode pn ON pn.CanonicalKey='part:'+LOWER(LTRIM(RTRIM(b.MaHang)))
             WHERE t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments)) AND t.Servable=1 AND t.IsCurrent=1
               AND (:source_system IS NULL OR t.SourceSystem=:source_system)
+              AND t.ReviewStatus='approved' AND t.PublicationState='published'
+              AND t.LifecycleStatus='published'
+              AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+              AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+              AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
               AND b.TrangSo IS NOT NULL
               AND NULLIF(LTRIM(RTRIM(b.RawRowJson)),'') IS NOT NULL
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
                    AND target.RelationType=source.RelationType AND target.SourceDocID=source.SourceDocID
                    AND target.SourcePage=source.SourcePage
+        WHEN MATCHED AND target.Origin='deterministic' THEN UPDATE SET ServingStatus='approved', Confidence=1,
+             SourceVersion=source.SourceVersion, Department=source.Department, Site=source.Site,
+             SecurityLevel=source.SecurityLevel, SourceQuote=source.SourceQuote,
+             ReviewedBy='deterministic-seed', ReviewedAt=SYSUTCDATETIME()
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
               SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
@@ -297,11 +357,20 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
             JOIN dbo.KnowledgeGraphNode mn ON mn.CanonicalKey='material:'+LOWER(LTRIM(RTRIM(COALESCE(NULLIF(b.NormalizedMaterial,''),b.VatLieu))))
             WHERE t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments)) AND t.Servable=1 AND t.IsCurrent=1
               AND (:source_system IS NULL OR t.SourceSystem=:source_system)
+              AND t.ReviewStatus='approved' AND t.PublicationState='published'
+              AND t.LifecycleStatus='published'
+              AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+              AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+              AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
               AND b.TrangSo IS NOT NULL
               AND NULLIF(LTRIM(RTRIM(b.RawRowJson)),'') IS NOT NULL
         ) source ON target.SourceNodeID=source.SourceNodeID AND target.TargetNodeID=source.TargetNodeID
                    AND target.RelationType=source.RelationType AND target.SourceDocID=source.SourceDocID
                    AND target.SourcePage=source.SourcePage
+        WHEN MATCHED AND target.Origin='deterministic' THEN UPDATE SET ServingStatus='approved', Confidence=1,
+             SourceVersion=source.SourceVersion, Department=source.Department, Site=source.Site,
+             SecurityLevel=source.SecurityLevel, SourceQuote=source.SourceQuote,
+             ReviewedBy='deterministic-seed', ReviewedAt=SYSUTCDATETIME()
         WHEN NOT MATCHED THEN INSERT
              (SourceNodeID,TargetNodeID,RelationType,Origin,ServingStatus,Confidence,SourceDocID,SourcePage,
               SourceVersion,Department,Site,SecurityLevel,SourceQuote,ReviewedBy,ReviewedAt)
@@ -311,27 +380,113 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
         """,
         """
         UPDATE e
-        SET ServingStatus='approved'
-        FROM dbo.KnowledgeGraphEdge e
-        WHERE e.Origin='deterministic'
-          AND e.SourcePage > 0
-          AND NULLIF(LTRIM(RTRIM(e.SourceQuote)), '') IS NOT NULL
-          AND (:source_system IS NULL OR EXISTS (
-              SELECT 1 FROM dbo.TaiLieu t
-              WHERE t.DocID=e.SourceDocID AND t.SourceSystem=:source_system
-          ));
-        """,
-        """
-        UPDATE e
         SET ServingStatus='disabled'
         FROM dbo.KnowledgeGraphEdge e
+        JOIN dbo.KnowledgeGraphNode source_node ON source_node.NodeID=e.SourceNodeID
+        JOIN dbo.KnowledgeGraphNode target_node ON target_node.NodeID=e.TargetNodeID
+        JOIN dbo.TaiLieu scoped_doc ON scoped_doc.DocID=e.SourceDocID
         WHERE e.Origin='deterministic'
-          AND (e.SourcePage <= 0 OR NULLIF(LTRIM(RTRIM(e.SourceQuote)), '') IS NULL)
-          AND (:source_system IS NULL OR EXISTS (
-              SELECT 1 FROM dbo.TaiLieu t
-              WHERE t.DocID=e.SourceDocID
-                AND t.SourceSystem=:source_system
-          ));
+          AND scoped_doc.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
+          AND (:source_system IS NULL OR scoped_doc.SourceSystem=:source_system)
+          AND (
+              e.SourcePage <= 0
+              OR NULLIF(LTRIM(RTRIM(e.SourceQuote)), '') IS NULL
+              OR NOT EXISTS (
+                  SELECT 1 FROM dbo.TaiLieu t
+                  WHERE t.DocID=e.SourceDocID
+                    AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
+                    AND (:source_system IS NULL OR t.SourceSystem=:source_system)
+                    AND t.Servable=1 AND t.IsCurrent=1 AND t.ReviewStatus='approved'
+                    AND t.PublicationState='published' AND t.LifecycleStatus='published'
+                    AND LOWER(ISNULL(t.EffectiveStatus,'effective')) NOT IN ('expired','superseded','draft')
+                    AND (t.EffectiveDate IS NULL OR t.EffectiveDate <= CAST(GETDATE() AS DATE))
+                    AND (t.ExpiryDate IS NULL OR t.ExpiryDate >= CAST(GETDATE() AS DATE))
+                    AND e.SourceVersion=t.VersionNo
+                    AND (
+                        (
+                            e.RelationType='HAS_VERSION'
+                            AND t.FamilyID IS NOT NULL
+                            AND source_node.CanonicalKey='family:'+CAST(t.FamilyID AS NVARCHAR(30))
+                            AND target_node.CanonicalKey='document:'+CAST(t.DocID AS NVARCHAR(30))
+                            AND (
+                                EXISTS (
+                                    SELECT 1 FROM dbo.DocumentPages p
+                                    WHERE p.DocID=t.DocID AND p.PageNo=e.SourcePage
+                                      AND (
+                                          CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(p.TextExtract,'')) > 0
+                                          OR CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(p.LocalOCRText,'')) > 0
+                                          OR CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(p.VisionSummary,'')) > 0
+                                      )
+                                )
+                                OR EXISTS (
+                                    SELECT 1 FROM dbo.BangKeVatTu b
+                                    WHERE b.DocID=t.DocID AND b.TrangSo=e.SourcePage
+                                      AND CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(b.RawRowJson,'')) > 0
+                                )
+                            )
+                        )
+                        OR (
+                            e.RelationType='SUPERSEDES'
+                            AND t.SupersedesDocID IS NOT NULL
+                            AND source_node.CanonicalKey='document:'+CAST(t.DocID AS NVARCHAR(30))
+                            AND target_node.CanonicalKey='document:'+CAST(t.SupersedesDocID AS NVARCHAR(30))
+                            AND (
+                                EXISTS (
+                                    SELECT 1 FROM dbo.DocumentPages p
+                                    WHERE p.DocID=t.DocID AND p.PageNo=e.SourcePage
+                                      AND (
+                                          CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(p.TextExtract,'')) > 0
+                                          OR CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(p.LocalOCRText,'')) > 0
+                                          OR CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(p.VisionSummary,'')) > 0
+                                      )
+                                )
+                                OR EXISTS (
+                                    SELECT 1 FROM dbo.BangKeVatTu b
+                                    WHERE b.DocID=t.DocID AND b.TrangSo=e.SourcePage
+                                      AND CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(b.RawRowJson,'')) > 0
+                                )
+                            )
+                        )
+                        OR (
+                            e.RelationType='HAS_PAGE'
+                            AND source_node.CanonicalKey='document:'+CAST(t.DocID AS NVARCHAR(30))
+                            AND target_node.CanonicalKey='page:'+CAST(t.DocID AS NVARCHAR(30))
+                                +':'+CAST(e.SourcePage AS NVARCHAR(30))
+                            AND EXISTS (
+                                SELECT 1 FROM dbo.DocumentPages p
+                                WHERE p.DocID=t.DocID AND p.PageNo=e.SourcePage
+                                  AND (
+                                      CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(p.TextExtract,'')) > 0
+                                      OR CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(p.LocalOCRText,'')) > 0
+                                      OR CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(p.VisionSummary,'')) > 0
+                                  )
+                            )
+                        )
+                        OR (
+                            e.RelationType='CONTAINS_PART'
+                            AND source_node.CanonicalKey='document:'+CAST(t.DocID AS NVARCHAR(30))
+                            AND EXISTS (
+                                SELECT 1 FROM dbo.BangKeVatTu b
+                                WHERE b.DocID=t.DocID AND b.TrangSo=e.SourcePage
+                                  AND target_node.CanonicalKey='part:'+LOWER(LTRIM(RTRIM(b.MaHang)))
+                                  AND CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(b.RawRowJson,'')) > 0
+                            )
+                        )
+                        OR (
+                            e.RelationType='USES_MATERIAL'
+                            AND EXISTS (
+                                SELECT 1 FROM dbo.BangKeVatTu b
+                                WHERE b.DocID=t.DocID AND b.TrangSo=e.SourcePage
+                                  AND source_node.CanonicalKey='part:'+LOWER(LTRIM(RTRIM(b.MaHang)))
+                                  AND target_node.CanonicalKey='material:'+LOWER(LTRIM(RTRIM(
+                                      COALESCE(NULLIF(b.NormalizedMaterial,''),b.VatLieu)
+                                  )))
+                                  AND CHARINDEX(LTRIM(RTRIM(e.SourceQuote)), ISNULL(b.RawRowJson,'')) > 0
+                            )
+                        )
+                    )
+              )
+          );
         """,
     ]
     with db_engine.engine.begin() as conn:
@@ -340,18 +495,22 @@ def seed(departments=DEFAULT_DEPARTMENTS, *, source_system=None):
         counts = conn.execute(text("""
             SELECT (
                        SELECT COUNT(*) FROM dbo.KnowledgeGraphNode n
-                       WHERE :source_system IS NULL OR EXISTS (
+                       WHERE EXISTS (
                            SELECT 1 FROM dbo.TaiLieu t
-                           WHERE t.DocID=n.SourceDocID AND t.SourceSystem=:source_system
+                           WHERE t.DocID=n.SourceDocID
+                             AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
+                             AND (:source_system IS NULL OR t.SourceSystem=:source_system)
                        )
                    ) AS nodes,
                    (
                        SELECT COUNT(*) FROM dbo.KnowledgeGraphEdge e
                        WHERE e.ServingStatus='approved'
-                         AND (:source_system IS NULL OR EXISTS (
+                         AND EXISTS (
                              SELECT 1 FROM dbo.TaiLieu t
-                             WHERE t.DocID=e.SourceDocID AND t.SourceSystem=:source_system
-                         ))
+                             WHERE t.DocID=e.SourceDocID
+                               AND t.ThuMuc IN (SELECT [value] FROM OPENJSON(:departments))
+                               AND (:source_system IS NULL OR t.SourceSystem=:source_system)
+                         )
                    ) AS approved_edges
         """), params).mappings().one()
     return dict(counts)

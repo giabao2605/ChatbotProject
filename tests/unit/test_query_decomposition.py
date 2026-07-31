@@ -192,9 +192,10 @@ def test_partial_answer_instruction_counts_missing_and_denied_without_source_nam
         {"outcome": "access_denied", "restricted_source": "secret-payroll.md"},
     ])
 
+    assert len(instruction) <= 130
     assert "1 nhánh chưa có đủ bằng chứng" in instruction
     assert "1 nhánh không thể truy cập" in instruction
-    assert "không tự viết câu từ chối" in instruction.lower()
+    assert "không lộ nhánh bị chặn" in instruction.lower()
     assert "secret-payroll.md" not in instruction
 
 
@@ -204,9 +205,11 @@ def test_full_decomposition_instruction_limits_each_answer_to_the_asked_fact():
         {"outcome": "full_answer"},
     ])
 
-    assert "chỉ trả lời đúng thông tin được hỏi" in instruction.lower()
-    assert "không thêm thuộc tính khác" in instruction.lower()
+    assert len(instruction) <= 80
+    assert "từng ý" in instruction.lower()
+    assert "trả lời có nguồn" in instruction.lower()
     assert "không suy diễn" in instruction.lower()
+    assert "không lộ nhánh bị chặn" in instruction.lower()
 
 
 def test_common_prompt_limits_answers_to_the_requested_attribute():

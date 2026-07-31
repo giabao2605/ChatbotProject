@@ -106,14 +106,149 @@ def review_graph_proposal(proposal_id, action, reviewer, note=None):
             SELECT p.ProposalID, p.SourceNodeID, p.TargetNodeID, p.RelationType,
                    p.SourceDocID, p.SourcePage, p.SourceVersion, p.Confidence,
                    p.Status, t.ThuMuc, t.Site, t.SecurityLevel,
-                   JSON_VALUE(p.EvidenceJson, '$.source_quote') AS SourceQuote
+                   JSON_VALUE(p.EvidenceJson, '$.source_quote') AS SourceQuote,
+                   CAST(CASE WHEN
+                     p.SourcePage > 0
+                     AND t.DocID IS NOT NULL
+                     AND t.Servable = 1
+                     AND t.IsCurrent = 1
+                     AND t.PublicationState = 'published'
+                     AND t.LifecycleStatus = 'published'
+                     AND t.ReviewStatus = 'approved'
+                     AND LOWER(ISNULL(t.EffectiveStatus, 'effective'))
+                       NOT IN ('expired', 'superseded', 'draft')
+                     AND (
+                       t.EffectiveDate IS NULL
+                       OR t.EffectiveDate <= CAST(GETDATE() AS DATE)
+                     )
+                     AND (
+                       t.ExpiryDate IS NULL
+                       OR t.ExpiryDate >= CAST(GETDATE() AS DATE)
+                     )
+                   THEN 1 ELSE 0 END AS bit) AS SourceGovernanceMatches,
+                   CAST(CASE WHEN
+                     EXISTS (
+                       SELECT 1 FROM dbo.DocumentPages source_page
+                       WHERE source_page.DocID = p.SourceDocID
+                         AND source_page.PageNo = p.SourcePage
+                         AND (
+                           CHARINDEX(
+                             NULLIF(LTRIM(RTRIM(JSON_VALUE(
+                               p.EvidenceJson, '$.source_quote'
+                             ))), N''),
+                             COALESCE(source_page.TextExtract, N'')
+                           ) > 0
+                           OR CHARINDEX(
+                             NULLIF(LTRIM(RTRIM(JSON_VALUE(
+                               p.EvidenceJson, '$.source_quote'
+                             ))), N''),
+                             COALESCE(source_page.LocalOCRText, N'')
+                           ) > 0
+                           OR CHARINDEX(
+                             NULLIF(LTRIM(RTRIM(JSON_VALUE(
+                               p.EvidenceJson, '$.source_quote'
+                             ))), N''),
+                             COALESCE(source_page.VisionSummary, N'')
+                           ) > 0
+                         )
+                     )
+                     OR EXISTS (
+                       SELECT 1 FROM dbo.BangKeVatTu source_bom
+                       WHERE source_bom.DocID = p.SourceDocID
+                         AND source_bom.TrangSo = p.SourcePage
+                         AND CHARINDEX(
+                           NULLIF(LTRIM(RTRIM(JSON_VALUE(
+                             p.EvidenceJson, '$.source_quote'
+                           ))), N''),
+                           COALESCE(source_bom.RawRowJson, N'')
+                         ) > 0
+                     )
+                   THEN 1 ELSE 0 END AS bit) AS SourceEvidenceMatches,
+                   CAST(CASE WHEN
+                     (p.RelationType = 'HAS_VERSION'
+                      AND t.FamilyID IS NOT NULL
+                      AND sn.CanonicalKey =
+                        'family:' + CAST(t.FamilyID AS NVARCHAR(30))
+                      AND tn.CanonicalKey =
+                        'document:' + CAST(p.SourceDocID AS NVARCHAR(30)))
+                     OR
+                     (p.RelationType = 'SUPERSEDES'
+                      AND t.SupersedesDocID IS NOT NULL
+                      AND sn.CanonicalKey =
+                        'document:' + CAST(p.SourceDocID AS NVARCHAR(30))
+                      AND tn.CanonicalKey =
+                        'document:' + CAST(t.SupersedesDocID AS NVARCHAR(30)))
+                     OR
+                     (p.RelationType = 'HAS_PAGE'
+                      AND sn.CanonicalKey =
+                        'document:' + CAST(p.SourceDocID AS NVARCHAR(30))
+                      AND tn.CanonicalKey =
+                        'page:' + CAST(p.SourceDocID AS NVARCHAR(30))
+                        + ':' + CAST(p.SourcePage AS NVARCHAR(30)))
+                     OR
+                     (p.RelationType = 'CONTAINS_PART'
+                      AND sn.CanonicalKey =
+                        'document:' + CAST(p.SourceDocID AS NVARCHAR(30))
+                      AND EXISTS (
+                        SELECT 1 FROM dbo.BangKeVatTu endpoint_bom
+                        WHERE endpoint_bom.DocID = p.SourceDocID
+                          AND endpoint_bom.TrangSo = p.SourcePage
+                          AND tn.CanonicalKey =
+                            'part:' + LOWER(LTRIM(RTRIM(endpoint_bom.MaHang)))
+                      ))
+                     OR
+                     (p.RelationType = 'USES_MATERIAL'
+                      AND EXISTS (
+                        SELECT 1 FROM dbo.BangKeVatTu endpoint_bom
+                        WHERE endpoint_bom.DocID = p.SourceDocID
+                          AND endpoint_bom.TrangSo = p.SourcePage
+                          AND sn.CanonicalKey =
+                            'part:' + LOWER(LTRIM(RTRIM(endpoint_bom.MaHang)))
+                          AND tn.CanonicalKey =
+                            'material:' + LOWER(LTRIM(RTRIM(COALESCE(
+                              NULLIF(endpoint_bom.NormalizedMaterial, ''),
+                              endpoint_bom.VatLieu
+                            ))))
+                      ))
+                     OR
+                     (p.RelationType = 'APPLIES_TO'
+                      AND sn.NodeType = 'document'
+                      AND sn.CanonicalKey =
+                        'document:' + CAST(p.SourceDocID AS NVARCHAR(30))
+                      AND tn.NodeType = 'part'
+                      AND EXISTS (
+                        SELECT 1 FROM dbo.BangKeVatTu endpoint_bom
+                        WHERE endpoint_bom.DocID = p.SourceDocID
+                          AND endpoint_bom.TrangSo = p.SourcePage
+                          AND tn.CanonicalKey =
+                            'part:' + LOWER(LTRIM(RTRIM(endpoint_bom.MaHang)))
+                          AND CHARINDEX(
+                            LTRIM(RTRIM(endpoint_bom.MaHang)),
+                            JSON_VALUE(p.EvidenceJson, '$.source_quote')
+                          ) > 0
+                          AND CHARINDEX(
+                            COALESCE(
+                              NULLIF(LTRIM(RTRIM(t.BaseCode)), ''),
+                              NULLIF(LTRIM(RTRIM(sn.DisplayName)), '')
+                            ),
+                            JSON_VALUE(p.EvidenceJson, '$.source_quote')
+                          ) > 0
+                          AND LEN(LTRIM(RTRIM(JSON_VALUE(
+                            p.EvidenceJson, '$.source_quote'
+                          )))) >=
+                            LEN(COALESCE(
+                              NULLIF(LTRIM(RTRIM(t.BaseCode)), ''),
+                              NULLIF(LTRIM(RTRIM(sn.DisplayName)), '')
+                            ))
+                            + LEN(LTRIM(RTRIM(endpoint_bom.MaHang))) + 8
+                      ))
+                   THEN 1 ELSE 0 END AS bit) AS RelationEndpointsMatch
             FROM dbo.GraphExtractionProposal p WITH (UPDLOCK, ROWLOCK)
-            JOIN dbo.TaiLieu t ON t.DocID = p.SourceDocID AND t.VersionNo = p.SourceVersion
+            LEFT JOIN dbo.TaiLieu t
+              ON t.DocID = p.SourceDocID AND t.VersionNo = p.SourceVersion
+            LEFT JOIN dbo.KnowledgeGraphNode sn ON sn.NodeID = p.SourceNodeID
+            LEFT JOIN dbo.KnowledgeGraphNode tn ON tn.NodeID = p.TargetNodeID
             WHERE p.ProposalID = :proposal_id
-              AND p.SourcePage > 0
-              AND t.Servable=1 AND t.IsCurrent=1
-              AND t.PublicationState='published' AND t.LifecycleStatus='published'
-              AND t.ReviewStatus='approved'
         """), {"proposal_id": int(proposal_id)}).mappings().first()
         if not proposal:
             return {"ok": False, "reason": "not_found"}
@@ -121,7 +256,12 @@ def review_graph_proposal(proposal_id, action, reviewer, note=None):
             return {"ok": False, "reason": "already_reviewed", "status": proposal["Status"]}
         if action == "approve":
             source_quote = str(proposal["SourceQuote"] or "").strip()[:2000]
-            if not source_quote:
+            if (
+                not source_quote
+                or not proposal["SourceGovernanceMatches"]
+                or not proposal["SourceEvidenceMatches"]
+                or not proposal["RelationEndpointsMatch"]
+            ):
                 return {"ok": False, "reason": "invalid_provenance"}
             conn.execute(text("""
                 MERGE dbo.KnowledgeGraphEdge AS target
@@ -191,6 +331,10 @@ def traverse_knowledge_graph(seed_keys, access_context, max_hops=2, limit=50):
                 SELECT e.*
                 FROM dbo.KnowledgeGraphEdge e
                 JOIN dbo.TaiLieu governed ON governed.DocID = e.SourceDocID
+                JOIN dbo.KnowledgeGraphNode eligible_source
+                  ON eligible_source.NodeID = e.SourceNodeID
+                JOIN dbo.KnowledgeGraphNode eligible_target
+                  ON eligible_target.NodeID = e.TargetNodeID
                 WHERE e.ServingStatus = 'approved'
                   AND governed.Servable = 1 AND governed.IsCurrent = 1
                   AND governed.PublicationState = 'published'
@@ -198,6 +342,215 @@ def traverse_knowledge_graph(seed_keys, access_context, max_hops=2, limit=50):
                   AND governed.ReviewStatus = 'approved'
                   AND e.SourceVersion = governed.VersionNo
                   AND e.SourcePage > 0
+                  AND NULLIF(LTRIM(RTRIM(e.SourceQuote)), N'') IS NOT NULL
+                  AND (
+                        ((
+                           (e.RelationType = 'HAS_VERSION'
+                            AND governed.FamilyID IS NOT NULL
+                            AND eligible_source.CanonicalKey =
+                              'family:' + CAST(
+                                governed.FamilyID AS NVARCHAR(30)
+                              )
+                            AND eligible_target.CanonicalKey =
+                              'document:' + CAST(
+                                e.SourceDocID AS NVARCHAR(30)
+                              ))
+                           OR
+                           (e.RelationType = 'SUPERSEDES'
+                            AND governed.SupersedesDocID IS NOT NULL
+                            AND eligible_source.CanonicalKey =
+                              'document:' + CAST(
+                                e.SourceDocID AS NVARCHAR(30)
+                              )
+                            AND eligible_target.CanonicalKey =
+                              'document:' + CAST(
+                                governed.SupersedesDocID AS NVARCHAR(30)
+                              ))
+                           OR
+                           (e.RelationType = 'HAS_PAGE'
+                            AND eligible_source.CanonicalKey =
+                              'document:' + CAST(
+                                e.SourceDocID AS NVARCHAR(30)
+                              )
+                            AND eligible_target.CanonicalKey =
+                              'page:' + CAST(
+                                e.SourceDocID AS NVARCHAR(30)
+                              ) + ':' + CAST(
+                                e.SourcePage AS NVARCHAR(30)
+                              ))
+                         )
+                         AND EXISTS (
+                           SELECT 1 FROM dbo.DocumentPages eligible_page
+                           WHERE eligible_page.DocID = e.SourceDocID
+                             AND eligible_page.PageNo = e.SourcePage
+                             AND e.SourceQuote = LEFT(COALESCE(
+                               NULLIF(LTRIM(RTRIM(
+                                 eligible_page.TextExtract
+                               )), N''),
+                               NULLIF(LTRIM(RTRIM(
+                                 eligible_page.LocalOCRText
+                               )), N''),
+                               NULLIF(LTRIM(RTRIM(
+                                 eligible_page.VisionSummary
+                               )), N'')
+                             ), 2000)
+                         ))
+                        OR
+                        ((
+                           e.RelationType = 'HAS_VERSION'
+                           OR e.RelationType = 'SUPERSEDES'
+                         )
+                         AND (
+                           (e.RelationType = 'HAS_VERSION'
+                            AND governed.FamilyID IS NOT NULL
+                            AND eligible_source.CanonicalKey =
+                              'family:' + CAST(
+                                governed.FamilyID AS NVARCHAR(30)
+                              )
+                            AND eligible_target.CanonicalKey =
+                              'document:' + CAST(
+                                e.SourceDocID AS NVARCHAR(30)
+                              ))
+                           OR
+                           (e.RelationType = 'SUPERSEDES'
+                            AND governed.SupersedesDocID IS NOT NULL
+                            AND eligible_source.CanonicalKey =
+                              'document:' + CAST(
+                                e.SourceDocID AS NVARCHAR(30)
+                              )
+                            AND eligible_target.CanonicalKey =
+                              'document:' + CAST(
+                                governed.SupersedesDocID AS NVARCHAR(30)
+                              ))
+                         )
+                         AND EXISTS (
+                           SELECT 1
+                           FROM dbo.BangKeVatTu eligible_version_bom
+                           WHERE eligible_version_bom.DocID = e.SourceDocID
+                             AND eligible_version_bom.TrangSo = e.SourcePage
+                             AND e.SourceQuote = LEFT(NULLIF(LTRIM(RTRIM(
+                               eligible_version_bom.RawRowJson
+                             )), N''), 2000)
+                         ))
+                        OR
+                        (e.RelationType = 'CONTAINS_PART'
+                         AND EXISTS (
+                           SELECT 1
+                           FROM dbo.BangKeVatTu eligible_contains_bom
+                           WHERE eligible_contains_bom.DocID = e.SourceDocID
+                             AND eligible_contains_bom.TrangSo = e.SourcePage
+                             AND e.SourceQuote = LEFT(NULLIF(LTRIM(RTRIM(
+                               eligible_contains_bom.RawRowJson
+                             )), N''), 2000)
+                             AND eligible_source.CanonicalKey =
+                               'document:' + CAST(
+                                 e.SourceDocID AS NVARCHAR(30)
+                               )
+                             AND eligible_target.CanonicalKey =
+                               'part:' + LOWER(LTRIM(RTRIM(
+                                 eligible_contains_bom.MaHang
+                               )))
+                         ))
+                        OR
+                        (e.RelationType = 'USES_MATERIAL'
+                         AND EXISTS (
+                           SELECT 1
+                           FROM dbo.BangKeVatTu eligible_material_bom
+                           WHERE eligible_material_bom.DocID = e.SourceDocID
+                             AND eligible_material_bom.TrangSo = e.SourcePage
+                             AND e.SourceQuote = LEFT(NULLIF(LTRIM(RTRIM(
+                               eligible_material_bom.RawRowJson
+                             )), N''), 2000)
+                             AND eligible_source.CanonicalKey =
+                               'part:' + LOWER(LTRIM(RTRIM(
+                                 eligible_material_bom.MaHang
+                               )))
+                             AND eligible_target.CanonicalKey =
+                               'material:' + LOWER(LTRIM(RTRIM(COALESCE(
+                                 NULLIF(
+                                   eligible_material_bom.NormalizedMaterial,
+                                   ''
+                                 ),
+                                 eligible_material_bom.VatLieu
+                               ))))
+                         ))
+                        OR
+                        (e.RelationType = 'APPLIES_TO'
+                         AND eligible_source.NodeType = 'document'
+                         AND eligible_source.CanonicalKey =
+                           'document:' + CAST(e.SourceDocID AS NVARCHAR(30))
+                         AND eligible_target.NodeType = 'part'
+                         AND EXISTS (
+                           SELECT 1
+                           FROM dbo.BangKeVatTu eligible_applies_bom
+                           WHERE eligible_applies_bom.DocID = e.SourceDocID
+                             AND eligible_applies_bom.TrangSo = e.SourcePage
+                             AND eligible_target.CanonicalKey =
+                               'part:' + LOWER(LTRIM(RTRIM(
+                                 eligible_applies_bom.MaHang
+                               )))
+                             AND CHARINDEX(
+                               LTRIM(RTRIM(eligible_applies_bom.MaHang)),
+                               e.SourceQuote
+                             ) > 0
+                             AND CHARINDEX(
+                               COALESCE(
+                                 NULLIF(LTRIM(RTRIM(
+                                   governed.BaseCode
+                                 )), ''),
+                                 NULLIF(LTRIM(RTRIM(
+                                   eligible_source.DisplayName
+                                 )), '')
+                               ),
+                               e.SourceQuote
+                             ) > 0
+                             AND LEN(LTRIM(RTRIM(e.SourceQuote))) >=
+                               LEN(COALESCE(
+                                 NULLIF(LTRIM(RTRIM(
+                                   governed.BaseCode
+                                 )), ''),
+                                 NULLIF(LTRIM(RTRIM(
+                                   eligible_source.DisplayName
+                                 )), '')
+                               ))
+                               + LEN(LTRIM(RTRIM(
+                                 eligible_applies_bom.MaHang
+                               ))) + 8
+                         )
+                         AND (
+                           EXISTS (
+                             SELECT 1
+                             FROM dbo.DocumentPages eligible_applies_page
+                             WHERE eligible_applies_page.DocID = e.SourceDocID
+                               AND eligible_applies_page.PageNo = e.SourcePage
+                               AND (
+                                 CHARINDEX(e.SourceQuote, COALESCE(
+                                   eligible_applies_page.TextExtract, N''
+                                 )) > 0
+                                 OR CHARINDEX(e.SourceQuote, COALESCE(
+                                   eligible_applies_page.LocalOCRText, N''
+                                 )) > 0
+                                 OR CHARINDEX(e.SourceQuote, COALESCE(
+                                   eligible_applies_page.VisionSummary, N''
+                                 )) > 0
+                               )
+                           )
+                           OR EXISTS (
+                             SELECT 1
+                             FROM dbo.BangKeVatTu eligible_applies_quote_bom
+                             WHERE eligible_applies_quote_bom.DocID =
+                               e.SourceDocID
+                               AND eligible_applies_quote_bom.TrangSo =
+                                 e.SourcePage
+                               AND CHARINDEX(
+                                 e.SourceQuote,
+                                 COALESCE(
+                                   eligible_applies_quote_bom.RawRowJson, N''
+                                 )
+                               ) > 0
+                           )
+                         ))
+                  )
                   AND LOWER(ISNULL(governed.EffectiveStatus, 'effective')) NOT IN ('expired','superseded','draft')
                   AND (governed.EffectiveDate IS NULL OR governed.EffectiveDate <= CAST(GETDATE() AS DATE))
                   AND (governed.ExpiryDate IS NULL OR governed.ExpiryDate >= CAST(GETDATE() AS DATE))

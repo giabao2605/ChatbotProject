@@ -271,6 +271,9 @@ def _graph_review_row(**overrides):
         "Site": "HQ",
         "SecurityLevel": "public",
         "SourceQuote": "verified quote",
+        "SourceGovernanceMatches": True,
+        "SourceEvidenceMatches": True,
+        "RelationEndpointsMatch": True,
     }
     row.update(overrides)
     return row
