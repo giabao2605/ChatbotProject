@@ -54,6 +54,11 @@ def _timestamp():
     return _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def _full_backup_options(engine_edition):
+    """SQL Server EngineEdition 4 is Express, which rejects COMPRESSION."""
+    return "WITH INIT" if engine_edition == 4 else "WITH INIT, COMPRESSION"
+
+
 def backup_sql(sql_dir=None):
     """BACKUP DATABASE (full) + BACKUP LOG (neu FULL recovery). Tra ve list file da tao."""
     _ensure_engine()
@@ -75,8 +80,12 @@ def backup_sql(sql_dir=None):
     # autocommit: BACKUP khong chay trong transaction
     with engine.connect() as conn:
         conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+        engine_edition = conn.execute(
+            text("SELECT CAST(SERVERPROPERTY('EngineEdition') AS INT)")
+        ).scalar()
+        options = _full_backup_options(engine_edition)
         conn.execute(text(
-            f"BACKUP DATABASE [{db}] TO DISK = :p WITH INIT, COMPRESSION, "
+            f"BACKUP DATABASE [{db}] TO DISK = :p {options}, "
             f"NAME = :nm, STATS = 10"
         ), {"p": full_path, "nm": f"{db} full {ts}"})
         print(f"[SQL] full backup OK -> {full_path}")

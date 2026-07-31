@@ -3,7 +3,12 @@ from os import utime
 
 import pytest
 
-from scripts.ops.backup_system import cleanup_old
+from scripts.ops.backup_system import _full_backup_options, cleanup_old
+
+
+def test_express_backup_omits_unsupported_compression():
+    assert _full_backup_options(4) == "WITH INIT"
+    assert _full_backup_options(3) == "WITH INIT, COMPRESSION"
 
 
 def test_backup_cleanup_is_opt_in_and_database_scoped(tmp_path):
