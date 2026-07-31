@@ -371,6 +371,145 @@ def test_rollout_pair_binds_gate_inputs_and_artifact_context(tmp_path):
     assert context_report["production_eligible"] is False
 
 
+def test_graph_rollout_pair_binds_verified_metadata(tmp_path):
+    pair = _pair(tmp_path, stage="graph_retrieval")
+    governance = _artifact_reference(
+        tmp_path,
+        "graph-governance",
+        "rag-review-governance-v1",
+        mode="single_owner",
+        owner="bao.nguyen",
+        scope="controlled_demo",
+        source_commit="abc123",
+        risk_accepted=True,
+        accepted_at="2026-07-31T00:00:00Z",
+        role_signoffs={
+            role: {
+                "owner": "bao.nguyen",
+                "signed": True,
+                "note": "risk accepted",
+            }
+            for role in ("rag", "security_qa", "operations")
+        },
+    )
+    reviews_path = tmp_path / "graph-reviews.jsonl"
+    reviews_path.write_text(
+        '{"edge_id":1,"reviewer":"bao.nguyen","review_source":"owner_review",'
+        '"expected_correct":true,"decision":"approved"}\n',
+        encoding="utf-8",
+    )
+    reviews = {
+        "path": str(reviews_path),
+        "sha256": hashlib.sha256(reviews_path.read_bytes()).hexdigest(),
+        "format": "jsonl",
+    }
+    metadata = _artifact_reference(
+        tmp_path,
+        "graph-readiness",
+        "graph-readiness-v1",
+        review_mode="single_owner",
+        review_sample_source="owner_review",
+        review_governance={
+            "path": governance["artifact_path"],
+            "sha256": governance["artifact_sha256"],
+            "schema": governance["artifact_schema"],
+        },
+        review_samples=reviews,
+    )
+    pair["metadata"] = metadata
+    gate_path = Path(pair["gate"]["artifact_path"])
+    gate_artifact = json.loads(gate_path.read_text(encoding="utf-8"))
+    required_graph_checks = {
+        "baseline_provider_telemetry_valid",
+        "candidate_provider_telemetry_valid",
+        "baseline_provider_failures_zero",
+        "candidate_provider_failures_zero",
+        "wrong_answer_not_increased",
+        "leakage_zero",
+        "provider_retries_not_increased",
+        "relational_accuracy_gain",
+        "reviewed_edge_precision",
+        "review_workflow_fixture_passed",
+        "review_sample_governance_valid",
+        "review_sample_reference_valid",
+        "reviewer_diversity_requirement_met",
+        "review_sample_size_sufficient",
+        "approved_edge_pool_sufficient",
+        "structured_coverage",
+        "provenance_complete",
+        "pilot_domains_covered",
+        "pending_edges_never_served",
+        "traversal_budget_respected",
+        "router_scope_respected",
+        "latency_within_budget",
+    }
+    gate_artifact["checks"].update({
+        check: True for check in required_graph_checks
+    })
+    gate_artifact["passed"] = True
+    gate_artifact["inputs"]["metadata_sha256"] = metadata["artifact_sha256"]
+    gate_path.write_text(json.dumps(gate_artifact), encoding="utf-8")
+    pair["gate"]["artifact_sha256"] = hashlib.sha256(
+        gate_path.read_bytes()
+    ).hexdigest()
+
+    report = evaluate_rollout_pair(pair)
+
+    assert report["checks"]["metadata_artifact_verified"] is True
+    assert report["checks"]["metadata_review_governance_verified"] is True
+    assert report["checks"]["metadata_review_samples_verified"] is True
+    assert report["checks"]["gate_check_contract_complete"] is True
+    assert report["checks"]["gate_inputs_bound"] is True
+
+    gate_artifact["checks"].pop("review_sample_reference_valid")
+    gate_path.write_text(json.dumps(gate_artifact), encoding="utf-8")
+    pair["gate"]["artifact_sha256"] = hashlib.sha256(
+        gate_path.read_bytes()
+    ).hexdigest()
+    incomplete = evaluate_rollout_pair(pair)
+    assert incomplete["checks"]["gate_check_contract_complete"] is False
+    assert incomplete["production_eligible"] is False
+    gate_artifact["checks"]["review_sample_reference_valid"] = True
+    gate_path.write_text(json.dumps(gate_artifact), encoding="utf-8")
+    pair["gate"]["artifact_sha256"] = hashlib.sha256(
+        gate_path.read_bytes()
+    ).hexdigest()
+
+    Path(governance["artifact_path"]).write_text(
+        '{"schema":"rag-review-governance-v1","tampered":true}',
+        encoding="utf-8",
+    )
+    tampered = evaluate_rollout_pair(pair)
+    assert tampered["checks"]["metadata_artifact_verified"] is True
+    assert tampered["checks"]["metadata_review_governance_verified"] is False
+    assert tampered["checks"]["gate_inputs_bound"] is False
+
+    Path(governance["artifact_path"]).write_text(
+        json.dumps({
+            "schema": "rag-review-governance-v1",
+            "mode": "single_owner",
+            "owner": "bao.nguyen",
+            "scope": "controlled_demo",
+            "source_commit": "abc123",
+            "risk_accepted": True,
+            "accepted_at": "2026-07-31T00:00:00Z",
+            "role_signoffs": {
+                role: {
+                    "owner": "bao.nguyen",
+                    "signed": True,
+                    "note": "risk accepted",
+                }
+                for role in ("rag", "security_qa", "operations")
+            },
+        }),
+        encoding="utf-8",
+    )
+    reviews_path.write_text("{}\n", encoding="utf-8")
+    tampered = evaluate_rollout_pair(pair)
+    assert tampered["checks"]["metadata_review_samples_verified"] is False
+    assert tampered["checks"]["gate_inputs_bound"] is False
+
+
 def test_rollout_series_requires_three_comparable_live_pairs(tmp_path):
     pairs = [
         _pair(tmp_path, run_id="run-1"),

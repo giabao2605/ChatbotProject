@@ -9,11 +9,15 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from mech_chatbot.governance.artifact_references import load_json_reference
+from mech_chatbot.governance.artifact_references import (
+    load_bytes_reference,
+    load_json_reference,
+)
 from mech_chatbot.governance.provider_smoke import (
     provider_smoke_artifact_valid,
     provider_smoke_fresh_for_arms,
 )
+from mech_chatbot.governance.review_governance import review_governance_status
 
 
 PAIR_SCHEMA = "rollout-evidence-pair-v1"
@@ -62,6 +66,30 @@ GATE_SCHEMAS = {
     "community_summaries": "retrieval-intelligence-gate-v1",
     "integrated_hardening": "retrieval-intelligence-gate-v1",
 }
+GRAPH_GATE_REQUIRED_CHECKS = frozenset({
+    "baseline_provider_telemetry_valid",
+    "candidate_provider_telemetry_valid",
+    "baseline_provider_failures_zero",
+    "candidate_provider_failures_zero",
+    "wrong_answer_not_increased",
+    "leakage_zero",
+    "provider_retries_not_increased",
+    "relational_accuracy_gain",
+    "reviewed_edge_precision",
+    "review_workflow_fixture_passed",
+    "review_sample_governance_valid",
+    "review_sample_reference_valid",
+    "reviewer_diversity_requirement_met",
+    "review_sample_size_sufficient",
+    "approved_edge_pool_sufficient",
+    "structured_coverage",
+    "provenance_complete",
+    "pilot_domains_covered",
+    "pending_edges_never_served",
+    "traversal_budget_respected",
+    "router_scope_respected",
+    "latency_within_budget",
+})
 
 
 def _load_verified_artifact(
@@ -227,14 +255,74 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         )
     )
     gate_checks = (gate_artifact or {}).get("checks") or {}
+    metadata_required = pair.get("stage") == "graph_retrieval"
+    metadata_reference = pair.get("metadata") or {}
+    metadata_artifact = (
+        _load_verified_artifact(metadata_reference, root=root)
+        if metadata_required
+        else None
+    )
+    metadata_artifact_verified = (
+        not metadata_required
+        or (
+            metadata_artifact is not None
+            and metadata_artifact.get("schema") == "graph-readiness-v1"
+        )
+    )
+    metadata_review_samples_verified = (
+        not metadata_required
+        or (
+            metadata_artifact_verified
+            and load_bytes_reference(
+                metadata_artifact.get("review_samples"),
+                root=root,
+                expected_format="jsonl",
+            )
+            is not None
+        )
+    )
+    metadata_review_governance_verified = not metadata_required
+    if metadata_required and metadata_artifact_verified:
+        review_mode = metadata_artifact.get("review_mode")
+        if review_mode == "single_owner":
+            governance = load_json_reference(
+                metadata_artifact.get("review_governance"),
+                root=root,
+            )
+            status = review_governance_status(
+                governance,
+                source_commit=candidate.get("git_sha"),
+                scope="controlled_demo",
+            )
+            metadata_review_governance_verified = (
+                governance is not None
+                and status.valid
+                and status.mode == review_mode
+                and status.review_source
+                == metadata_artifact.get("review_sample_source")
+            )
+        else:
+            metadata_review_governance_verified = (
+                review_mode == "multi_reviewer"
+                and metadata_artifact.get("review_sample_source")
+                == "independent"
+                and metadata_artifact.get("review_governance") is None
+            )
     expected_gate_inputs = {
         "baseline_eval_sha256": baseline.get("artifact_sha256"),
         "candidate_eval_sha256": candidate.get("artifact_sha256"),
         "baseline_trace_sha256": baseline.get("trace_sha256"),
         "candidate_trace_sha256": candidate.get("trace_sha256"),
     }
+    if metadata_required:
+        expected_gate_inputs["metadata_sha256"] = metadata_reference.get(
+            "artifact_sha256"
+        )
     gate_inputs_bound = (
         gate_artifact is not None
+        and metadata_artifact_verified
+        and metadata_review_samples_verified
+        and metadata_review_governance_verified
         and gate_artifact.get("inputs") == expected_gate_inputs
     )
     gate_result_consistent = (
@@ -242,6 +330,10 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         and bool(gate_checks)
         and all(isinstance(value, bool) for value in gate_checks.values())
         and gate_artifact.get("passed") == all(gate_checks.values())
+    )
+    gate_check_contract_complete = (
+        pair.get("stage") != "graph_retrieval"
+        or GRAPH_GATE_REQUIRED_CHECKS <= set(gate_checks)
     )
     safety_gate_passed = (
         gate_checks.get("wrong_answer_not_increased") is True
@@ -284,7 +376,25 @@ def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
         "gate_artifact_present": gate_artifact is not None,
         "gate_schema_valid": gate_schema_valid,
         "gate_stage_valid": gate_stage_valid,
+        **(
+            {"metadata_artifact_verified": metadata_artifact_verified}
+            if metadata_required
+            else {}
+        ),
+        **(
+            {
+                "metadata_review_governance_verified": (
+                    metadata_review_governance_verified
+                ),
+                "metadata_review_samples_verified": (
+                    metadata_review_samples_verified
+                ),
+            }
+            if metadata_required
+            else {}
+        ),
         "gate_inputs_bound": gate_inputs_bound,
+        "gate_check_contract_complete": gate_check_contract_complete,
         "gate_result_consistent": gate_result_consistent,
         "safety_gate_passed": safety_gate_passed,
         "rollback_contract_valid": rollback_contract_valid,

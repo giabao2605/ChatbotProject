@@ -422,11 +422,30 @@ def test_finalizer_cli_accepts_commit_bound_single_owner_governance(
         json.dumps(_single_owner_governance()),
         encoding="utf-8",
     )
+    governance_bytes = paths["governance.json"].read_bytes()
+    original_read_bytes = type(paths["governance.json"]).read_bytes
+    governance_swapped = False
+
+    def read_bytes_with_swap(path, *args, **kwargs):
+        nonlocal governance_swapped
+        raw = original_read_bytes(path, *args, **kwargs)
+        if path == paths["governance.json"] and not governance_swapped:
+            governance_swapped = True
+            path.write_bytes(b"{}")
+        return raw
+
     monkeypatch.setattr(
-        finalizer.subprocess,
-        "check_output",
-        lambda *_args, **_kwargs: f"{'a' * 40}\n",
+        type(paths["governance.json"]),
+        "read_bytes",
+        read_bytes_with_swap,
     )
+    clean_checks = []
+
+    def fake_clean_git_sha(root):
+        clean_checks.append(root)
+        return "a" * 40
+
+    monkeypatch.setattr(finalizer, "clean_git_sha", fake_clean_git_sha)
 
     exit_code = finalizer.main([
         "--crag-pack", str(paths["pack.json"]),
@@ -449,6 +468,16 @@ def test_finalizer_cli_accepts_commit_bound_single_owner_governance(
         artifact.get("schema") == "rag-review-governance-v1"
         for artifact in report["source_artifacts"]
     )
+    governance_reference = next(
+        artifact
+        for artifact in report["source_artifacts"]
+        if artifact.get("schema") == "rag-review-governance-v1"
+    )
+    assert governance_reference["sha256"] == hashlib.sha256(
+        governance_bytes
+    ).hexdigest()
+    assert governance_swapped is True
+    assert clean_checks == [finalizer.ROOT]
 
 
 def test_combined_finalization_never_unlocks_community_before_graph_gate():

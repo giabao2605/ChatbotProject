@@ -104,6 +104,7 @@ def build_graph_report(
     *, nodes, edges, proposals, expected_relations, review_samples, expected_domains,
     review_sample_source="independent", review_governance=None,
     review_governance_source_commit=None, review_governance_scope=None,
+    review_governance_reference=None, review_sample_reference=None,
 ):
     approved_edges = [
         edge for edge in edges or ()
@@ -157,6 +158,17 @@ def build_graph_report(
     return {
         "schema": "graph-readiness-v1",
         "node_count": len(nodes or ()), "approved_edge_count": len(approved_edges),
+        "approved_edge_ids": sorted(
+            (
+                edge.get("edge_id")
+                for edge in approved_edges
+                if edge.get("edge_id") is not None
+            ),
+            key=lambda value: (
+                not str(value).isdigit(),
+                int(value) if str(value).isdigit() else str(value),
+            ),
+        ),
         "proposal_count": len(proposals or ()),
         "nodes_by_type": dict(sorted(Counter(str(node.get("node_type") or "unknown") for node in nodes or ()).items())),
         "edges_by_type": dict(sorted(Counter(str(edge.get("relation_type") or "unknown") for edge in approved_edges).items())),
@@ -175,6 +187,16 @@ def build_graph_report(
         "review_sample_source": review_sample_source,
         "review_mode": governance.mode if review_governance_valid else None,
         "review_governance_valid": review_governance_valid,
+        "review_governance": (
+            dict(review_governance_reference)
+            if review_governance_reference is not None
+            else None
+        ),
+        "review_samples": (
+            dict(review_sample_reference)
+            if review_sample_reference is not None
+            else None
+        ),
         "reviewer_count": distinct_reviewer_count(
             sample.get("reviewer") for sample in reviewed
         ),

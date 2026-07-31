@@ -567,6 +567,16 @@ def test_graph_preflight_accepts_commit_bound_single_owner_governance():
         review_governance=governance,
         review_governance_source_commit="a" * 40,
         review_governance_scope="controlled_demo",
+        review_governance_reference={
+            "path": "governance.json",
+            "sha256": "b" * 64,
+            "schema": "rag-review-governance-v1",
+        },
+        review_sample_reference={
+            "path": "reviews.jsonl",
+            "sha256": "c" * 64,
+            "format": "jsonl",
+        },
     )
 
     graph = report["graph_report"]
@@ -575,6 +585,17 @@ def test_graph_preflight_accepts_commit_bound_single_owner_governance():
     assert graph["review_sample_source"] == "owner_review"
     assert graph["review_governance_valid"] is True
     assert graph["reviewer_count"] == 1
+    assert graph["approved_edge_ids"] == list(range(1, 21))
+    assert graph["review_governance"] == {
+        "path": "governance.json",
+        "sha256": "b" * 64,
+        "schema": "rag-review-governance-v1",
+    }
+    assert graph["review_samples"] == {
+        "path": "reviews.jsonl",
+        "sha256": "c" * 64,
+        "format": "jsonl",
+    }
 
     with pytest.raises(ValueError, match="review governance"):
         check_graph_fixture(

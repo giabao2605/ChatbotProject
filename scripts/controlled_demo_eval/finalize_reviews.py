@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,10 +14,14 @@ from mech_chatbot.governance.review_governance import (
     normalize_reviewer_identity,
     review_governance_status,
 )
+from mech_chatbot.governance.artifact_references import (
+    read_bytes_with_reference,
+)
 from scripts.controlled_demo_eval.review_pack import (
     HUMAN_REVIEW_TEMPLATE,
     review_contract_sha256,
 )
+from scripts.eval.verify_failure_family_rollback import clean_git_sha
 
 
 CONTROLLED_DECISIONS = {"accepted", "rejected", "needs_discussion"}
@@ -258,24 +261,30 @@ def build_finalization_report(
     }
 
 
-def _json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _read_json(path: Path) -> tuple[dict, dict]:
+    raw, reference = read_bytes_with_reference(path, root=ROOT)
+    value = json.loads(raw.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    if value.get("schema"):
+        reference["schema"] = value["schema"]
+    return value, reference
 
 
-def _jsonl(path: Path) -> list[dict]:
-    return [
-        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+def _read_jsonl(path: Path) -> tuple[list[dict], dict]:
+    raw, reference = read_bytes_with_reference(
+        path,
+        root=ROOT,
+        expected_format="jsonl",
+    )
+    rows = [
+        json.loads(line)
+        for line in raw.decode("utf-8").splitlines()
         if line.strip()
     ]
-
-
-def _reference(path: Path, *, schema=None, format=None) -> dict:
-    payload = {"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-    if schema:
-        payload["schema"] = schema
-    if format:
-        payload["format"] = format
-    return payload
+    if not all(isinstance(row, dict) for row in rows):
+        raise ValueError(f"{path} must contain JSON objects")
+    return rows, reference
 
 
 def main(argv=None) -> int:
@@ -292,35 +301,45 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.output.exists():
         raise FileExistsError(f"finalization artifact already exists: {args.output}")
-    crag_pack = _json(args.crag_pack)
-    math_pack = _json(args.grounded_math_pack)
-    anchor = _json(args.review_anchor)
-    review_governance = (
-        _json(args.review_governance)
-        if args.review_governance
-        else None
+    crag_pack, crag_pack_reference = _read_json(args.crag_pack)
+    crag_review, crag_review_reference = _read_jsonl(args.crag_review)
+    math_pack, math_pack_reference = _read_json(args.grounded_math_pack)
+    math_review, math_review_reference = _read_jsonl(
+        args.grounded_math_review
     )
+    graph_source, graph_source_reference = _read_jsonl(args.graph_source)
+    graph_review, graph_review_reference = _read_jsonl(args.graph_review)
+    anchor, anchor_reference = _read_json(args.review_anchor)
+    review_governance = None
+    review_governance_reference = None
+    if args.review_governance:
+        governance_raw, review_governance_reference = (
+            read_bytes_with_reference(
+                args.review_governance,
+                root=ROOT,
+                expected_schema="rag-review-governance-v1",
+            )
+        )
+        review_governance = json.loads(governance_raw.decode("utf-8"))
     if anchor.get("schema") != "controlled-demo-human-review-anchor-v1":
         raise ValueError("review anchor schema must be controlled-demo-human-review-anchor-v1")
     pack_anchors = anchor.get("controlled_packs") or {}
     graph_anchor = anchor.get("graph_queue") or {}
-    git_sha = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
-    ).strip()
+    git_sha = clean_git_sha(ROOT)
     report = build_finalization_report(
         git_sha=git_sha,
         crag_review=evaluate_controlled_review(
-            crag_pack, _jsonl(args.crag_review),
+            crag_pack, crag_review,
             anchor=pack_anchors.get(str(crag_pack.get("pack_id") or "")) or {},
         ),
         grounded_math_review=evaluate_controlled_review(
-            math_pack, _jsonl(args.grounded_math_review),
+            math_pack, math_review,
             anchor=pack_anchors.get(str(math_pack.get("pack_id") or "")) or {},
         ),
         graph_review=evaluate_graph_review(
-            _jsonl(args.graph_source), _jsonl(args.graph_review),
+            graph_source, graph_review,
             anchor=graph_anchor,
-            source_sha256=hashlib.sha256(args.graph_source.read_bytes()).hexdigest(),
+            source_sha256=graph_source_reference["sha256"],
             review_governance=review_governance,
             source_commit=git_sha if review_governance else None,
             scope="controlled_demo" if review_governance else None,
@@ -328,19 +347,16 @@ def main(argv=None) -> int:
     )
     report["generated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     report["source_artifacts"] = [
-        _reference(args.crag_pack, schema=crag_pack.get("schema")),
-        _reference(args.crag_review, format="jsonl"),
-        _reference(args.grounded_math_pack, schema=math_pack.get("schema")),
-        _reference(args.grounded_math_review, format="jsonl"),
-        _reference(args.graph_source, format="jsonl"),
-        _reference(args.graph_review, format="jsonl"),
-        _reference(args.review_anchor, schema=anchor.get("schema")),
+        crag_pack_reference,
+        crag_review_reference,
+        math_pack_reference,
+        math_review_reference,
+        graph_source_reference,
+        graph_review_reference,
+        anchor_reference,
     ]
     if args.review_governance:
-        report["source_artifacts"].append(_reference(
-            args.review_governance,
-            schema=review_governance.get("schema"),
-        ))
+        report["source_artifacts"].append(review_governance_reference)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))

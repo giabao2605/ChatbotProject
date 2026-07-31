@@ -305,8 +305,9 @@ def test_graph_gate_requires_coverage_precision_provenance_and_budgets():
     metadata = {
         "schema": "graph-readiness-v1", "structured_coverage": 0.8,
         "reviewed_edge_precision": 0.95, "provenance_completeness": 1.0,
-        "workflow_fixture_passed": True, "review_sample_source": "independent",
-        "review_sample_count": 20, "reviewer_count": 2,
+            "workflow_fixture_passed": True, "review_sample_source": "independent",
+            "_review_samples_reference_valid": True,
+            "review_sample_count": 20, "reviewer_count": 2,
         "approved_edge_count": 20,
         "pending_serving_edges": 0,
         "domain_coverage": {"Technical": True, "Production": True, "Maintenance": True},
@@ -407,6 +408,8 @@ def test_graph_gate_accepts_explicit_single_owner_governance():
         "review_mode": "single_owner",
         "review_sample_source": "owner_review",
         "review_governance_valid": True,
+        "_review_governance_reference_valid": True,
+        "_review_samples_reference_valid": True,
         "review_sample_count": 20,
         "reviewer_count": 1,
         "approved_edge_count": 20,
@@ -419,6 +422,7 @@ def test_graph_gate_accepts_explicit_single_owner_governance():
     result = gate.compare("graph_retrieval", baseline, candidate, metadata)
 
     assert result["checks"]["review_sample_governance_valid"] is True
+    assert result["checks"]["review_sample_reference_valid"] is True
     assert result["checks"]["reviewer_diversity_requirement_met"] is True
     assert result["passed"] is True
 
@@ -432,6 +436,192 @@ def test_graph_gate_accepts_explicit_single_owner_governance():
     assert rejected["checks"]["review_sample_governance_valid"] is False
     assert rejected["checks"]["reviewer_diversity_requirement_met"] is False
     assert rejected["passed"] is False
+
+
+def test_graph_gate_binds_metadata_and_validates_governance_reference(
+    tmp_path,
+    monkeypatch,
+):
+    gate = _module()
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    baseline_trace = tmp_path / "baseline-trace.json"
+    candidate_trace = tmp_path / "candidate-trace.json"
+    governance = tmp_path / "governance.json"
+    reviews = tmp_path / "reviews.jsonl"
+    metadata = tmp_path / "metadata.json"
+    output = tmp_path / "gate.json"
+    commit = "a" * 40
+    governance.write_text(json.dumps({
+        "schema": "rag-review-governance-v1",
+        "mode": "single_owner",
+        "owner": "bao.nguyen",
+        "scope": "controlled_demo",
+        "source_commit": commit,
+        "risk_accepted": True,
+        "accepted_at": "2026-07-31T00:00:00Z",
+        "role_signoffs": {
+            role: {
+                "owner": "bao.nguyen",
+                "signed": True,
+                "note": "risk accepted",
+            }
+            for role in ("rag", "security_qa", "operations")
+        },
+    }), encoding="utf-8")
+    reviews.write_text("".join(
+        json.dumps({
+            "edge_id": index,
+            "reviewer": "bao.nguyen",
+            "review_source": "owner_review",
+            "expected_correct": True,
+            "decision": "approved",
+        }) + "\n"
+        for index in range(1, 21)
+    ), encoding="utf-8")
+    import hashlib
+    metadata.write_text(json.dumps({
+        "schema": "graph-readiness-v1",
+        "review_mode": "single_owner",
+        "review_sample_source": "owner_review",
+        "review_sample_count": 20,
+        "reviewer_count": 1,
+        "reviewed_edge_precision": 1.0,
+        "approved_edge_count": 20,
+        "approved_edge_ids": list(range(1, 21)),
+        "review_governance": {
+            "path": str(governance),
+            "sha256": hashlib.sha256(governance.read_bytes()).hexdigest(),
+            "schema": "rag-review-governance-v1",
+        },
+        "review_samples": {
+            "path": str(reviews),
+            "sha256": hashlib.sha256(reviews.read_bytes()).hexdigest(),
+            "format": "jsonl",
+        },
+    }), encoding="utf-8")
+    baseline.write_text("{}", encoding="utf-8")
+    candidate.write_text(json.dumps({"git_sha": commit}), encoding="utf-8")
+    baseline_trace.write_text("{}", encoding="utf-8")
+    candidate_trace.write_text("{}", encoding="utf-8")
+    captured = {}
+
+    def fake_compare(stage, _baseline, _candidate, gate_metadata, _reference):
+        captured.update(gate_metadata)
+        return {
+            "schema": "retrieval-intelligence-gate-v1",
+            "stage": stage,
+            "passed": True,
+            "checks": {"test": True},
+            "limits": {},
+        }
+
+    monkeypatch.setattr(gate, "compare", fake_compare)
+
+    assert gate.main([
+        "graph_retrieval",
+        str(baseline),
+        str(candidate),
+        "--baseline-trace", str(baseline_trace),
+        "--candidate-trace", str(candidate_trace),
+        "--metadata", str(metadata),
+        "--output", str(output),
+    ]) == 0
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["inputs"]["metadata_sha256"] == hashlib.sha256(
+        metadata.read_bytes()
+    ).hexdigest()
+    assert captured["_review_governance_reference_valid"] is True
+    assert captured["_review_samples_reference_valid"] is True
+
+    governance.write_text('{"schema":"rag-review-governance-v1"}', encoding="utf-8")
+    captured.clear()
+    assert gate.main([
+        "graph_retrieval",
+        str(baseline),
+        str(candidate),
+        "--baseline-trace", str(baseline_trace),
+        "--candidate-trace", str(candidate_trace),
+        "--metadata", str(metadata),
+        "--output", str(tmp_path / "tampered-gate.json"),
+    ]) == 0
+    assert captured["_review_governance_reference_valid"] is False
+
+    governance.write_text(json.dumps({
+        "schema": "rag-review-governance-v1",
+        "mode": "single_owner",
+        "owner": "bao.nguyen",
+        "scope": "controlled_demo",
+        "source_commit": commit,
+        "risk_accepted": True,
+        "accepted_at": "2026-07-31T00:00:00Z",
+        "role_signoffs": {
+            role: {
+                "owner": "bao.nguyen",
+                "signed": True,
+                "note": "risk accepted",
+            }
+            for role in ("rag", "security_qa", "operations")
+        },
+    }), encoding="utf-8")
+    reviews.write_text("{}\n", encoding="utf-8")
+    captured.clear()
+    assert gate.main([
+        "graph_retrieval",
+        str(baseline),
+        str(candidate),
+        "--baseline-trace", str(baseline_trace),
+        "--candidate-trace", str(candidate_trace),
+        "--metadata", str(metadata),
+        "--output", str(tmp_path / "tampered-reviews-gate.json"),
+    ]) == 0
+    assert captured["_review_samples_reference_valid"] is False
+
+    forged = "".join(
+        json.dumps({
+            "edge_id": index + 100,
+            "reviewer": "bao.nguyen",
+            "review_source": "owner_review",
+            "expected_correct": True,
+            "decision": "approved",
+        }) + "\n"
+        for index in range(1, 21)
+    )
+    reviews.write_text(forged, encoding="utf-8")
+    metadata_payload = json.loads(metadata.read_text(encoding="utf-8"))
+    metadata_payload["review_samples"]["sha256"] = hashlib.sha256(
+        reviews.read_bytes()
+    ).hexdigest()
+    metadata.write_text(json.dumps(metadata_payload), encoding="utf-8")
+    captured.clear()
+    assert gate.main([
+        "graph_retrieval",
+        str(baseline),
+        str(candidate),
+        "--baseline-trace", str(baseline_trace),
+        "--candidate-trace", str(candidate_trace),
+        "--metadata", str(metadata),
+        "--output", str(tmp_path / "forged-edge-gate.json"),
+    ]) == 0
+    assert captured["_review_samples_reference_valid"] is False
+
+    reviews.write_text("[]\n", encoding="utf-8")
+    metadata_payload["review_samples"]["sha256"] = hashlib.sha256(
+        reviews.read_bytes()
+    ).hexdigest()
+    metadata.write_text(json.dumps(metadata_payload), encoding="utf-8")
+    captured.clear()
+    assert gate.main([
+        "graph_retrieval",
+        str(baseline),
+        str(candidate),
+        "--baseline-trace", str(baseline_trace),
+        "--candidate-trace", str(candidate_trace),
+        "--metadata", str(metadata),
+        "--output", str(tmp_path / "malformed-review-gate.json"),
+    ]) == 0
+    assert captured["_review_samples_reference_valid"] is False
 
 
 def test_graph_gate_fails_closed_on_pending_edge_or_router_leak():

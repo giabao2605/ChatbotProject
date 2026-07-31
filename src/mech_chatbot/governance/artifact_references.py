@@ -12,6 +12,59 @@ def resolve_path(value: object, root: str | Path) -> Path:
     return path if path.is_absolute() else Path(root) / path
 
 
+def _stored_path(path: Path, root: str | Path) -> str:
+    try:
+        return str(path.resolve().relative_to(Path(root).resolve()))
+    except ValueError:
+        return str(path.resolve())
+
+
+def read_bytes_with_reference(
+    path: str | Path,
+    *,
+    root: str | Path,
+    expected_schema: str | None = None,
+    expected_format: str | None = None,
+) -> tuple[bytes, dict]:
+    resolved = resolve_path(path, root)
+    raw = resolved.read_bytes()
+    if expected_schema:
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{resolved} must contain JSON") from exc
+        if not isinstance(value, dict) or value.get("schema") != expected_schema:
+            raise ValueError(f"{resolved} must use schema {expected_schema}")
+    reference = {
+        "path": _stored_path(resolved, root),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    if expected_schema:
+        reference["schema"] = expected_schema
+    if expected_format:
+        reference["format"] = expected_format
+    return raw, reference
+
+
+def load_bytes_reference(
+    reference: object,
+    *,
+    root: str | Path,
+    expected_format: str | None = None,
+) -> bytes | None:
+    if not isinstance(reference, dict):
+        return None
+    if expected_format and reference.get("format") != expected_format:
+        return None
+    try:
+        raw = resolve_path(reference.get("path"), root).read_bytes()
+    except OSError:
+        return None
+    if hashlib.sha256(raw).hexdigest() != str(reference.get("sha256") or ""):
+        return None
+    return raw
+
+
 def read_json_object(path: str | Path) -> tuple[dict, bytes] | tuple[None, None]:
     try:
         raw = Path(path).read_bytes()
@@ -68,27 +121,21 @@ def build_json_reference(
     root: str | Path,
     expected_schema: str,
 ) -> dict:
-    project_root = Path(root)
-    resolved = resolve_path(path, project_root)
-    value, raw = read_json_object(resolved)
-    if value is None or raw is None or value.get("schema") != expected_schema:
-        raise ValueError(f"{resolved} must use schema {expected_schema}")
-    try:
-        stored_path = str(resolved.resolve().relative_to(project_root.resolve()))
-    except ValueError:
-        stored_path = str(resolved.resolve())
-    return {
-        "path": stored_path,
-        "sha256": hashlib.sha256(raw).hexdigest(),
-        "schema": expected_schema,
-    }
+    _, reference = read_bytes_with_reference(
+        path,
+        root=root,
+        expected_schema=expected_schema,
+    )
+    return reference
 
 
 __all__ = [
     "build_json_reference",
     "inspect_json_reference",
     "json_reference_report",
+    "load_bytes_reference",
     "load_json_reference",
+    "read_bytes_with_reference",
     "read_json_object",
     "resolve_path",
 ]

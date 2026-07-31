@@ -18,6 +18,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+from mech_chatbot.governance.artifact_references import read_bytes_with_reference
 from mech_chatbot.governance.review_governance import review_governance_status
 from scripts.eval.verify_failure_family_rollback import clean_git_sha
 
@@ -55,7 +56,8 @@ def check_graph_fixture(
     pending_serving_edge_count, collection, graph_nodes=None, proposals=None,
     review_samples=None, review_sample_source="independent",
     review_governance=None, review_governance_source_commit=None,
-    review_governance_scope=None,
+    review_governance_scope=None, review_governance_reference=None,
+    review_sample_reference=None,
     workflow_fixture_passed=False, expected_batch=FIXTURE_BATCH,
     expected_collection=FIXTURE_COLLECTION,
 ):
@@ -230,6 +232,8 @@ def check_graph_fixture(
         review_governance=review_governance,
         review_governance_source_commit=review_governance_source_commit,
         review_governance_scope=review_governance_scope,
+        review_governance_reference=review_governance_reference,
+        review_sample_reference=review_sample_reference,
     )
     if (
         graph_report["provenance_complete_count"]
@@ -507,6 +511,8 @@ def run_live_preflight(cases):
     review_sample_source = "none"
     review_governance = None
     review_governance_source_commit = None
+    review_governance_reference = None
+    review_sample_reference = None
     review_path = os.getenv("RAG_GRAPH_REVIEW_SAMPLE_FILE")
     review_governance_path = os.getenv(
         "RAG_GRAPH_REVIEW_GOVERNANCE_FILE"
@@ -516,13 +522,26 @@ def run_live_preflight(cases):
             "RAG_GRAPH_REVIEW_GOVERNANCE_FILE requires review samples"
         )
     if review_path:
+        review_raw, review_sample_reference = read_bytes_with_reference(
+            review_path,
+            root=ROOT,
+            expected_format="jsonl",
+        )
         review_samples = [
-            json.loads(line) for line in Path(review_path).read_text(encoding="utf-8").splitlines()
+            json.loads(line)
+            for line in review_raw.decode("utf-8").splitlines()
             if line.strip()
         ]
         if review_governance_path:
+            governance_raw, review_governance_reference = (
+                read_bytes_with_reference(
+                    review_governance_path,
+                    root=ROOT,
+                    expected_schema="rag-review-governance-v1",
+                )
+            )
             review_governance = json.loads(
-                Path(review_governance_path).read_text(encoding="utf-8")
+                governance_raw.decode("utf-8")
             )
             review_governance_source_commit = clean_git_sha(ROOT)
             governance = review_governance_status(
@@ -553,6 +572,8 @@ def run_live_preflight(cases):
         review_governance_scope=(
             "controlled_demo" if review_governance else None
         ),
+        review_governance_reference=review_governance_reference,
+        review_sample_reference=review_sample_reference,
         workflow_fixture_passed=workflow_fixture_passed,
     )
 

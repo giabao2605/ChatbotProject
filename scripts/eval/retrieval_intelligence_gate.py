@@ -20,9 +20,16 @@ from mech_chatbot.evaluation.integrated_hardening import (
     REQUIRED_COMBINATIONS,
     REQUIRED_PREREQUISITES,
 )
-from mech_chatbot.governance.review_governance import (
-    independent_reviewer_diversity_valid,
+from mech_chatbot.governance.artifact_references import (
+    load_bytes_reference,
+    load_json_reference,
 )
+from mech_chatbot.governance.review_governance import (
+    distinct_reviewer_count,
+    independent_reviewer_diversity_valid,
+    review_governance_status,
+)
+from scripts.graph.report import validate_review_samples
 
 
 def _ratio(candidate, baseline):
@@ -33,6 +40,110 @@ def _ratio(candidate, baseline):
 
 def _group_rate(report, name):
     return float((report.get("evaluation_groups", {}).get(name) or {}).get("pass_rate") or 0.0)
+
+
+def _graph_governance_payload(metadata, candidate):
+    if metadata.get("review_mode") != "single_owner":
+        return None
+    governance = load_json_reference(
+        metadata.get("review_governance"),
+        root=ROOT,
+    )
+    if governance is None:
+        return None
+    status = review_governance_status(
+        governance,
+        source_commit=candidate.get("git_sha"),
+        scope="controlled_demo",
+    )
+    return governance if (
+        status.valid
+        and status.mode == metadata.get("review_mode")
+        and status.review_source == metadata.get("review_sample_source")
+    ) else None
+
+
+def _graph_review_samples_reference_valid(
+    metadata,
+    candidate,
+    governance,
+):
+    raw = load_bytes_reference(
+        metadata.get("review_samples"),
+        root=ROOT,
+        expected_format="jsonl",
+    )
+    if raw is None:
+        return False
+    try:
+        samples = [
+            json.loads(line)
+            for line in raw.decode("utf-8").splitlines()
+            if line.strip()
+        ]
+        if not all(isinstance(sample, dict) for sample in samples):
+            return False
+        approved_edge_ids = metadata.get("approved_edge_ids")
+        approved_edge_count = metadata.get("approved_edge_count")
+        if (
+            not isinstance(approved_edge_ids, list)
+            or type(approved_edge_count) is not int
+            or len(approved_edge_ids) != approved_edge_count
+            or len({str(value) for value in approved_edge_ids})
+            != len(approved_edge_ids)
+        ):
+            return False
+        source = metadata.get("review_sample_source")
+        reviewed = validate_review_samples(
+            samples,
+            require_independent=source == "independent",
+            allowed_edge_ids=set(approved_edge_ids),
+            review_governance=governance,
+            review_governance_source_commit=(
+                candidate.get("git_sha") if governance else None
+            ),
+            review_governance_scope=(
+                "controlled_demo" if governance else None
+            ),
+        )
+        if source == "owner_review" and governance is None:
+            return False
+        correct = (
+            sum(bool(sample.get("expected_correct")) for sample in reviewed)
+            if source == "independent"
+            else sum(
+                (
+                    bool(sample.get("expected_correct"))
+                    and sample.get("decision") == "approved"
+                )
+                or (
+                    not bool(sample.get("expected_correct"))
+                    and sample.get("decision") == "rejected"
+                )
+                for sample in reviewed
+            )
+        )
+        precision = correct / len(reviewed) if reviewed else 0.0
+        observed_precision = float(
+            metadata.get("reviewed_edge_precision")
+        )
+        return (
+            type(metadata.get("review_sample_count")) is int
+            and metadata.get("review_sample_count") == len(reviewed)
+            and type(metadata.get("reviewer_count")) is int
+            and metadata.get("reviewer_count") == distinct_reviewer_count(
+                sample.get("reviewer") for sample in reviewed
+            )
+            and abs(observed_precision - precision) <= 1e-12
+        )
+    except (
+        AttributeError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return False
 
 
 def _provider_failure_evidence(report):
@@ -396,7 +507,14 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             review_mode == "single_owner"
             and review_source == "owner_review"
             and metadata.get("review_governance_valid") is True
+            and metadata.get("_review_governance_reference_valid") is True
             and reviewer_diversity_requirement_met
+        )
+        review_sample_reference_valid = (
+            metadata.get("_review_samples_reference_valid") is True
+        )
+        review_governance_valid = (
+            review_governance_valid and review_sample_reference_valid
         )
         checks = {
             **common,
@@ -408,6 +526,7 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "reviewed_edge_precision": float(metadata.get("reviewed_edge_precision", 0.0)) >= 0.95,
             "review_workflow_fixture_passed": metadata.get("workflow_fixture_passed") is True,
             "review_sample_governance_valid": review_governance_valid,
+            "review_sample_reference_valid": review_sample_reference_valid,
             "reviewer_diversity_requirement_met": (
                 reviewer_diversity_requirement_met
             ),
@@ -590,35 +709,70 @@ def main(argv=None):
     parser.add_argument("--reference-trace", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    read = lambda path: json.loads(path.read_text(encoding="utf-8"))
     if args.stage == "late_interaction" and (not args.reference or not args.reference_trace):
         parser.error("late_interaction requires --reference and --reference-trace for the RRF arm")
-    baseline = read(args.baseline)
-    candidate = read(args.candidate)
-    metadata = read(args.metadata) if args.metadata else {}
+    def read_json_and_hash(path):
+        raw = path.read_bytes()
+        return json.loads(raw.decode("utf-8")), hashlib.sha256(raw).hexdigest()
+
+    baseline, baseline_sha = read_json_and_hash(args.baseline)
+    candidate, candidate_sha = read_json_and_hash(args.candidate)
+    baseline_trace_sha = hashlib.sha256(
+        args.baseline_trace.read_bytes()
+    ).hexdigest()
+    candidate_trace_sha = hashlib.sha256(
+        args.candidate_trace.read_bytes()
+    ).hexdigest()
+    metadata = {}
+    metadata_sha = None
+    if args.metadata:
+        metadata, metadata_sha = read_json_and_hash(args.metadata)
+    reference = None
+    reference_sha = None
+    reference_trace_sha = None
+    if args.reference:
+        reference, reference_sha = read_json_and_hash(args.reference)
+        reference_trace_sha = hashlib.sha256(
+            args.reference_trace.read_bytes()
+        ).hexdigest()
+    if args.stage == "graph_retrieval":
+        governance = _graph_governance_payload(metadata, candidate)
+        metadata["_review_governance_reference_valid"] = (
+            metadata.get("review_mode") != "single_owner"
+            or governance is not None
+        )
+        metadata["_review_samples_reference_valid"] = (
+            _graph_review_samples_reference_valid(
+                metadata,
+                candidate,
+                governance,
+            )
+        )
     if args.stage == "integrated_hardening":
         metadata["_actual_gate_inputs"] = {
-            "baseline_eval_sha256": _sha256(args.baseline),
-            "candidate_eval_sha256": _sha256(args.candidate),
-            "baseline_trace_sha256": _sha256(args.baseline_trace),
-            "candidate_trace_sha256": _sha256(args.candidate_trace),
+            "baseline_eval_sha256": baseline_sha,
+            "candidate_eval_sha256": candidate_sha,
+            "baseline_trace_sha256": baseline_trace_sha,
+            "candidate_trace_sha256": candidate_trace_sha,
         }
     result = compare(
         args.stage,
         baseline,
         candidate,
         metadata,
-        read(args.reference) if args.reference else None,
+        reference,
     )
     result["inputs"] = {
-        "baseline_eval_sha256": _sha256(args.baseline),
-        "candidate_eval_sha256": _sha256(args.candidate),
-        "baseline_trace_sha256": _sha256(args.baseline_trace),
-        "candidate_trace_sha256": _sha256(args.candidate_trace),
+        "baseline_eval_sha256": baseline_sha,
+        "candidate_eval_sha256": candidate_sha,
+        "baseline_trace_sha256": baseline_trace_sha,
+        "candidate_trace_sha256": candidate_trace_sha,
     }
+    if args.stage == "graph_retrieval":
+        result["inputs"]["metadata_sha256"] = metadata_sha
     if args.reference:
-        result["inputs"]["reference_eval_sha256"] = _sha256(args.reference)
-        result["inputs"]["reference_trace_sha256"] = _sha256(args.reference_trace)
+        result["inputs"]["reference_eval_sha256"] = reference_sha
+        result["inputs"]["reference_trace_sha256"] = reference_trace_sha
     payload = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

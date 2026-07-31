@@ -171,6 +171,7 @@ def run_rollout(
             **_artifact_reference(output / "candidate" / "trace.json", prefix="trace"),
             **candidate,
         },
+        "metadata": _artifact_reference(readiness),
         "data_plane": {"production_collection": os.getenv("RAG_PRODUCTION_QDRANT_COLLECTION", "TaiLieuKyThuat_v2"), "mutation_mode": "staging"},
         "gate": _artifact_reference(gate_path),
         "rollback": {"flags": ["RAG_GRAPH_RETRIEVAL_ENABLED"], "defaults_disabled": True, **rollback},

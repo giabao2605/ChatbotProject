@@ -65,11 +65,14 @@ def test_graph_rollout_records_runtime_provider_hash(monkeypatch, tmp_path):
         run_dir.mkdir(parents=True)
         for name, payload in (
             ("eval.json", {"schema": "rag-labeled-eval-v4"}),
-            ("trace.json", {"schema": "rag-refusal-snapshot-v1"}),
-            ("preflight.json", {
-                "fixture_fingerprint": "fixture-sha",
-                "graph_report": {"passed": True},
-            }),
+                ("trace.json", {"schema": "rag-refusal-snapshot-v1"}),
+                ("preflight.json", {
+                    "fixture_fingerprint": "fixture-sha",
+                    "graph_report": {
+                        "schema": "graph-readiness-v1",
+                        "passed": True,
+                    },
+                }),
         ):
             (run_dir / name).write_text(json.dumps(payload), encoding="utf-8")
         return {
@@ -117,6 +120,8 @@ def test_graph_rollout_records_runtime_provider_hash(monkeypatch, tmp_path):
     assert pair["baseline"]["started_at"] == "2026-07-28T00:01:00Z"
     assert pair["baseline"]["trace_schema"] == "rag-refusal-snapshot-v1"
     assert pair["candidate"]["trace_schema"] == "rag-refusal-snapshot-v1"
+    assert pair["metadata"]["artifact_schema"] == "graph-readiness-v1"
+    assert len(pair["metadata"]["artifact_sha256"]) == 64
     assert report["passed"] is False
     assert report["production_eligible"] is False
     assert report["guardrail_checks"] == {"rollback_contract_valid": False}

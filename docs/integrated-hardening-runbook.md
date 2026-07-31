@@ -86,6 +86,12 @@ preflight, set `RAG_GRAPH_REVIEW_GOVERNANCE_FILE` together with
 `RAG_GRAPH_REVIEW_SAMPLE_FILE`. It is recorded as `owner_review`, never as an
 independent review.
 
+Graph readiness records immutable references for the review JSONL and, for
+`single_owner`, the governance JSON. The quality gate binds the readiness hash,
+recomputes the reviewed edge IDs, reviewer count and precision, and the rollout
+guardrail revalidates both referenced files. Keep those files unchanged and
+available until the rollout decision artifact has been finalized.
+
 ## 2. Feature flags and isolation
 
 Each candidate process receives exactly one row from
