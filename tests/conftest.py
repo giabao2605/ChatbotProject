@@ -44,6 +44,27 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_eval)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def configured_integration_repository_runtime(request):
+    if (
+        os.getenv("RUN_DB_TESTS") != "1"
+        or request.node.get_closest_marker("integration") is None
+    ):
+        yield
+        return
+
+    from mech_chatbot.composition.maintenance_runtime import (
+        configured_repository_runtime,
+    )
+    from mech_chatbot.config.settings import load_settings
+
+    with configured_repository_runtime(
+        load_settings(),
+        include_qdrant=os.getenv("RUN_QDRANT_TESTS") == "1",
+    ):
+        yield
+
+
 # --- Fixtures: user gia lap cho test phan quyen -----------------------------
 @pytest.fixture
 def make_user():
