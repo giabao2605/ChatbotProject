@@ -14,23 +14,47 @@ def test_express_backup_omits_unsupported_compression():
     assert _full_backup_options(3) == "WITH INIT, COMPRESSION"
 
 
-class _Cursor:
-    def __init__(self, result_sets=0):
-        self.remaining = result_sets
-        self.drained = result_sets == 0
+class _MaintenanceCursor:
+    def __init__(self, owner):
+        self.owner = owner
+        self.command = ""
+        self.remaining = 0
+
+    def execute(self, statement, *_parameters):
+        self.command = statement
+        if "BACKUP DATABASE" in statement:
+            self.remaining = 2
+        elif "RESTORE VERIFYONLY" in statement:
+            assert self.owner.backup_drained
+            self.owner.verified = True
+            self.remaining = 1
+        else:
+            raise AssertionError(statement)
+        return self
 
     def nextset(self):
         if self.remaining:
             self.remaining -= 1
             return True
-        self.drained = True
+        if "BACKUP DATABASE" in self.command:
+            self.owner.backup_drained = True
         return None
+
+    def close(self):
+        pass
+
+
+class _DriverConnection:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def cursor(self):
+        return _MaintenanceCursor(self.owner)
 
 
 class _Result:
-    def __init__(self, *, scalar=None, result_sets=0):
+    def __init__(self, *, scalar=None):
         self.value = scalar
-        self.cursor = _Cursor(result_sets)
 
     def scalar(self):
         return self.value
@@ -38,8 +62,11 @@ class _Result:
 
 class _BackupConnection:
     def __init__(self):
-        self.backup_result = None
+        self.backup_drained = False
         self.verified = False
+        self.connection = SimpleNamespace(
+            driver_connection=_DriverConnection(self),
+        )
 
     def __enter__(self):
         return self
@@ -54,16 +81,10 @@ class _BackupConnection:
         sql = str(statement)
         if "EngineEdition" in sql:
             return _Result(scalar=4)
-        if "BACKUP DATABASE" in sql:
-            self.backup_result = _Result(result_sets=2)
-            return self.backup_result
-        assert self.backup_result.cursor.drained
-        if "RESTORE VERIFYONLY" in sql:
-            self.verified = True
-            return _Result(result_sets=1)
         if "DATABASEPROPERTYEX" in sql:
+            assert self.verified
             return _Result(scalar="SIMPLE")
-        raise AssertionError(sql)
+        raise AssertionError("maintenance command must use the driver cursor")
 
 
 def test_full_backup_drains_results_and_verifies_before_success(monkeypatch):
