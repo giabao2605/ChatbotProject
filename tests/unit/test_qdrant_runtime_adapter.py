@@ -2,7 +2,10 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from mech_chatbot.adapters.qdrant_runtime import build_qdrant_runtime
+from mech_chatbot.adapters.qdrant_runtime import (
+    build_qdrant_admin_runtime,
+    build_qdrant_runtime,
+)
 from mech_chatbot.config.settings import QdrantSettings
 
 
@@ -71,6 +74,36 @@ def test_qdrant_runtime_builds_explicit_vector_dependencies():
 
     with pytest.raises(FrozenInstanceError):
         dependencies.collection_name = "other"
+
+
+def test_qdrant_admin_runtime_accepts_operation_timeout():
+    client = _Client(collection_exists=True)
+    client_calls = []
+
+    runtime = build_qdrant_admin_runtime(
+        _settings(),
+        timeout_seconds=300,
+        client_factory=lambda **kwargs: client_calls.append(kwargs) or client,
+    )
+
+    assert runtime.client is client
+    assert client_calls == [
+        {
+            "url": "https://qdrant.example",
+            "api_key": "secret",
+            "timeout": 300,
+        }
+    ]
+
+
+@pytest.mark.parametrize("timeout_seconds", (0, -1, float("nan"), float("inf")))
+def test_qdrant_admin_runtime_rejects_invalid_timeout(timeout_seconds):
+    with pytest.raises(ValueError, match="positive and finite"):
+        build_qdrant_admin_runtime(
+            _settings(),
+            timeout_seconds=timeout_seconds,
+            client_factory=lambda **_: pytest.fail("must validate before client"),
+        )
 
 
 @pytest.mark.parametrize(

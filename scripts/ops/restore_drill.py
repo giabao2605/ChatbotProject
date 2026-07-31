@@ -520,6 +520,7 @@ def main(argv=None) -> int:
         "--qdrant-wait-seconds",
         type=float,
         default=_DEFAULT_QDRANT_WAIT_SECONDS,
+        help="Timeout for snapshot upload and restored-count settling.",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--execute", action="store_true")
@@ -573,7 +574,8 @@ def main(argv=None) -> int:
             replace(SqlSettings.from_settings(settings), database="master")
         )
         qdrant_runtime = build_qdrant_admin_runtime(
-            QdrantSettings.from_settings(settings)
+            QdrantSettings.from_settings(settings),
+            timeout_seconds=args.qdrant_wait_seconds,
         )
         connection = master_runtime.engine.connect().execution_options(
             isolation_level="AUTOCOMMIT"

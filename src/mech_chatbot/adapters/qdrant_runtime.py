@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import math
 from typing import Any
 
 from mech_chatbot.application.vector_ingestion import (
@@ -42,9 +43,13 @@ class QdrantAdminRuntime:
 def build_qdrant_admin_runtime(
     settings: QdrantSettings,
     *,
+    timeout_seconds: float = 120,
     client_factory: Callable[..., Any] | None = None,
 ) -> QdrantAdminRuntime:
     _validate(settings)
+    timeout = float(timeout_seconds)
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("Qdrant timeout seconds must be positive and finite")
     if client_factory is None:
         from qdrant_client import QdrantClient
 
@@ -53,7 +58,7 @@ def build_qdrant_admin_runtime(
         client=client_factory(
             url=settings.url,
             api_key=settings.api_key,
-            timeout=120,
+            timeout=timeout,
         ),
         collection_name=settings.collection,
     )
