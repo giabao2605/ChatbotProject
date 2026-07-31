@@ -127,12 +127,14 @@ class _Qdrant:
         counts=(7, 7),
         snapshots=("snapshot-1",),
         snapshot_checksum="a" * 64,
+        recover_error=None,
     ):
         self.source_exists = source_exists
         self.target_exists = target_exists
         self.counts = iter(counts)
         self.snapshots = snapshots
         self.snapshot_checksum = snapshot_checksum
+        self.recover_error = recover_error
         self.calls = []
         self.http = SimpleNamespace(
             snapshots_api=SimpleNamespace(
@@ -152,6 +154,8 @@ class _Qdrant:
     def _recover_uploaded_snapshot(self, **kwargs):
         self.calls.append(("recover_from_uploaded_snapshot", kwargs))
         self.target_exists = True
+        if self.recover_error is not None:
+            raise self.recover_error
         return SimpleNamespace(result=None)
 
     def list_snapshots(self, name):
@@ -463,6 +467,39 @@ def test_qdrant_snapshot_download_rejects_redirect(monkeypatch):
             pass
 
 
+def test_qdrant_restore_download_failure_is_not_partial(monkeypatch):
+    payload = b"redirect"
+    checksum = hashlib.sha256(payload).hexdigest()
+    response = _SnapshotResponse(payload)
+    response.status_code = 302
+    monkeypatch.setattr(
+        restore_module,
+        "requests",
+        SimpleNamespace(get=lambda *_args, **_kwargs: response),
+    )
+    client = _Qdrant(snapshot_checksum=checksum)
+
+    with pytest.raises(ValueError, match="redirect"):
+        restore_qdrant_snapshot(
+            client,
+            source_collection="TaiLieuKyThuat_v2",
+            target_collection="TaiLieuKyThuat_v2_RestoreTest_DownloadFailure",
+            snapshot_name="snapshot-1",
+            snapshot_checksum=checksum,
+            snapshot_api_key="test-key",
+            snapshot_location=(
+                "http://127.0.0.1:6333/collections/"
+                "TaiLieuKyThuat_v2/snapshots/snapshot-1"
+            ),
+            allowed_snapshot_origin="http://127.0.0.1:6333",
+        )
+
+    assert all(
+        call[0] != "recover_from_uploaded_snapshot"
+        for call in client.calls
+    )
+
+
 def test_qdrant_restore_waits_for_point_count_to_settle(monkeypatch):
     monkeypatch.setattr(restore_module.time, "sleep", lambda _seconds: None)
 
@@ -473,6 +510,79 @@ def test_qdrant_restore_waits_for_point_count_to_settle(monkeypatch):
     )
 
     assert restored_points == 7
+
+
+def test_qdrant_restore_accepts_completed_upload_after_client_timeout(monkeypatch):
+    payload = b"snapshot"
+    checksum = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(
+        restore_module,
+        "requests",
+        SimpleNamespace(get=lambda *_args, **_kwargs: _SnapshotResponse(payload)),
+    )
+
+    report = restore_qdrant_snapshot(
+        _Qdrant(
+            snapshot_checksum=checksum,
+            recover_error=TimeoutError("response timed out"),
+        ),
+        source_collection="TaiLieuKyThuat_v2",
+        target_collection="TaiLieuKyThuat_v2_RestoreTest_AmbiguousUpload",
+        snapshot_name="snapshot-1",
+        snapshot_checksum=checksum,
+        snapshot_api_key="test-key",
+        snapshot_location=(
+            "http://127.0.0.1:6333/collections/"
+            "TaiLieuKyThuat_v2/snapshots/snapshot-1"
+        ),
+        allowed_snapshot_origin="http://127.0.0.1:6333",
+    )
+
+    assert report["target_points"] == 7
+    assert report["restored"] is True
+
+
+def test_qdrant_restore_preserves_upload_error_when_settling_fails(monkeypatch):
+    payload = b"snapshot"
+    checksum = hashlib.sha256(payload).hexdigest()
+    monotonic = iter((0, 0, 121))
+    monkeypatch.setattr(
+        restore_module,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: next(monotonic),
+            sleep=lambda _seconds: None,
+        ),
+    )
+    monkeypatch.setattr(
+        restore_module,
+        "requests",
+        SimpleNamespace(get=lambda *_args, **_kwargs: _SnapshotResponse(payload)),
+    )
+
+    with pytest.raises(PartialRestoreError) as raised:
+        restore_qdrant_snapshot(
+            _Qdrant(
+                counts=(7, 8),
+                snapshot_checksum=checksum,
+                recover_error=TimeoutError("response timed out"),
+            ),
+            source_collection="TaiLieuKyThuat_v2",
+            target_collection="TaiLieuKyThuat_v2_RestoreTest_AmbiguousFailure",
+            snapshot_name="snapshot-1",
+            snapshot_checksum=checksum,
+            snapshot_api_key="test-key",
+            snapshot_location=(
+                "http://127.0.0.1:6333/collections/"
+                "TaiLieuKyThuat_v2/snapshots/snapshot-1"
+            ),
+            allowed_snapshot_origin="http://127.0.0.1:6333",
+            timeout_seconds=120,
+        )
+
+    settling_error = raised.value.__cause__
+    assert "point count" in str(settling_error)
+    assert isinstance(settling_error.__cause__, TimeoutError)
 
 
 def test_qdrant_restore_can_wait_past_two_minutes(monkeypatch):

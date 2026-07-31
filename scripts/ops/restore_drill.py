@@ -355,18 +355,22 @@ def restore_qdrant_snapshot(
         "recovery_attempted": True,
         "target_may_exist": True,
     }
-    try:
-        with _verified_snapshot_file(
-            location=location,
-            api_key=api_key,
-            checksum=checksum,
-        ) as snapshot_file:
+    recovery_error = None
+    with _verified_snapshot_file(
+        location=location,
+        api_key=api_key,
+        checksum=checksum,
+    ) as snapshot_file:
+        try:
             client.http.snapshots_api.recover_from_uploaded_snapshot(
                 collection_name=target,
                 wait=False,
                 checksum=checksum,
                 snapshot=snapshot_file,
             )
+        except Exception as error:
+            recovery_error = error
+    try:
         target_points = _wait_for_restored_collection(
             client,
             target,
@@ -374,6 +378,11 @@ def restore_qdrant_snapshot(
             timeout_seconds=wait_seconds,
         )
     except Exception as error:
+        if recovery_error is not None:
+            try:
+                raise error from recovery_error
+            except Exception as chained_error:
+                error = chained_error
         raise PartialRestoreError(
             "Qdrant restore may have created the target",
             section="qdrant",
