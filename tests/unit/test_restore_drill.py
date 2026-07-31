@@ -276,6 +276,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
         target_collection="TaiLieuKyThuat_v2_RestoreTest_20260730",
         snapshot_name="snapshot-1",
         snapshot_checksum="a" * 64,
+        snapshot_api_key="test-key",
         snapshot_location=(
             "http://127.0.0.1:6333/collections/"
             "TaiLieuKyThuat_v2/snapshots/snapshot-1"
@@ -295,7 +296,23 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
     assert any(call[0] == "recover_snapshot" for call in client.calls)
     recover_call = next(call for call in client.calls if call[0] == "recover_snapshot")
     assert recover_call[1]["checksum"] == "a" * 64
+    assert recover_call[1]["api_key"] == "test-key"
     assert all(call[0] != "delete_collection" for call in client.calls)
+
+    with pytest.raises(ValueError, match="API key"):
+        restore_qdrant_snapshot(
+            _Qdrant(),
+            source_collection="TaiLieuKyThuat_v2",
+            target_collection="TaiLieuKyThuat_v2_RestoreTest_MissingKey",
+            snapshot_name="snapshot-1",
+            snapshot_checksum="a" * 64,
+            snapshot_api_key="",
+            snapshot_location=(
+                "http://127.0.0.1:6333/collections/"
+                "TaiLieuKyThuat_v2/snapshots/snapshot-1"
+            ),
+            allowed_snapshot_origin="http://127.0.0.1:6333",
+        )
 
     existing = _Qdrant(target_exists=True)
     with pytest.raises(ValueError, match="already exists"):
@@ -305,6 +322,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
             target_collection="TaiLieuKyThuat_v2_RestoreTest_Existing",
             snapshot_name="snapshot-1",
             snapshot_checksum="a" * 64,
+            snapshot_api_key="test-key",
             snapshot_location=(
                 "http://127.0.0.1:6333/collections/"
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
@@ -319,6 +337,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
             target_collection="TaiLieuKyThuat_v2_RestoreTest_MissingSnapshot",
             snapshot_name="snapshot-1",
             snapshot_checksum="a" * 64,
+            snapshot_api_key="test-key",
             snapshot_location=(
                 "http://127.0.0.1:6333/collections/"
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
@@ -332,6 +351,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
             target_collection="TaiLieuKyThuat_v2_RestoreTest_WrongLocation",
             snapshot_name="snapshot-1",
             snapshot_checksum="a" * 64,
+            snapshot_api_key="test-key",
             snapshot_location=(
                 "http://127.0.0.1:6333/collections/"
                 "TaiLieuKyThuat_v2/snapshots/snapshot-2"
@@ -345,6 +365,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
             target_collection="TaiLieuKyThuat_v2_RestoreTest_WrongOrigin",
             snapshot_name="snapshot-1",
             snapshot_checksum="a" * 64,
+            snapshot_api_key="test-key",
             snapshot_location=(
                 "http://169.254.169.254/collections/"
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
@@ -358,6 +379,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
             target_collection="TaiLieuKyThuat_v2_RestoreTest_Prefixed",
             snapshot_name="snapshot-1",
             snapshot_checksum="a" * 64,
+            snapshot_api_key="test-key",
             snapshot_location=(
                 "http://127.0.0.1:6333/unconfigured/collections/"
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
@@ -371,6 +393,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes():
             target_collection="TaiLieuKyThuat_v2_RestoreTest_WrongChecksum",
             snapshot_name="snapshot-1",
             snapshot_checksum="b" * 64,
+            snapshot_api_key="test-key",
             snapshot_location=(
                 "http://127.0.0.1:6333/collections/"
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
@@ -387,6 +410,7 @@ def test_qdrant_partial_restore_reports_target_may_exist():
             target_collection="TaiLieuKyThuat_v2_RestoreTest_CountMismatch",
             snapshot_name="snapshot-1",
             snapshot_checksum="a" * 64,
+            snapshot_api_key="test-key",
             snapshot_location=(
                 "http://127.0.0.1:6333/collections/"
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"

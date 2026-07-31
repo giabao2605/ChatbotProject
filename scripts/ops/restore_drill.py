@@ -207,6 +207,7 @@ def restore_qdrant_snapshot(
     target_collection: str,
     snapshot_name: str,
     snapshot_checksum: str,
+    snapshot_api_key: str,
     snapshot_location: str,
     allowed_snapshot_origin: str,
 ) -> dict:
@@ -217,8 +218,16 @@ def restore_qdrant_snapshot(
     location = str(snapshot_location or "").strip()
     snapshot = str(snapshot_name or "").strip()
     checksum = str(snapshot_checksum or "").strip().casefold()
-    if not snapshot or not location or not _SHA256.fullmatch(checksum):
-        raise ValueError("snapshot name, checksum and location are required")
+    api_key = str(snapshot_api_key or "").strip()
+    if (
+        not snapshot
+        or not location
+        or not api_key
+        or not _SHA256.fullmatch(checksum)
+    ):
+        raise ValueError(
+            "snapshot name, checksum, location and API key are required"
+        )
     parsed_location = urlsplit(location)
     parsed_origin = urlsplit(str(allowed_snapshot_origin or "").strip())
     if (
@@ -292,6 +301,7 @@ def restore_qdrant_snapshot(
         recovered = client.recover_snapshot(
             collection_name=target,
             location=location,
+            api_key=api_key,
             checksum=checksum,
             wait=True,
         )
@@ -517,6 +527,7 @@ def main(argv=None) -> int:
                 target_collection=qdrant_target,
                 snapshot_name=args.qdrant_snapshot_name,
                 snapshot_checksum=args.qdrant_snapshot_checksum,
+                snapshot_api_key=settings.QDRANT_API_KEY or "",
                 snapshot_location=args.qdrant_snapshot_location,
                 allowed_snapshot_origin=settings.QDRANT_URL,
             )
