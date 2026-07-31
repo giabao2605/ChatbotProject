@@ -5,6 +5,8 @@ This neutral governance module is shared by RAG delivery and evaluation code.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 import hashlib
 import os
@@ -12,7 +14,12 @@ from pathlib import Path
 import subprocess
 from typing import Mapping
 
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from mech_chatbot.governance.artifact_references import (
+    inspect_json_reference,
     load_json_reference,
     read_json_object,
     resolve_path,
@@ -105,6 +112,10 @@ _CONTROLLED_DEMO_SCHEMAS = {
     },
     "crag": "crag-controlled-demo-authorization-v1",
 }
+_RELEASE_AUTHORITY_PUBLIC_KEY = (
+    Path("data") / "integrated_hardening_v1"
+    / "release-authority-public-key.pem"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +308,67 @@ def validate_release_decision_ledger(
         if rows[flag].get("decision") == "accepted"
     }
     return accepted == set(expected_enabled)
+
+
+def _release_authority_public_key(
+    root: str | Path, source_commit: str,
+) -> bytes | None:
+    try:
+        return subprocess.check_output(
+            [
+                "git", "show",
+                f"{source_commit}:{_RELEASE_AUTHORITY_PUBLIC_KEY.as_posix()}",
+            ],
+            cwd=Path(root),
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def release_signature_valid(bundle: object, *, root: str | Path) -> bool:
+    """Verify the release authority signature over the exact decision ledger."""
+    if not isinstance(bundle, dict):
+        return False
+    signature = bundle.get("release_signature")
+    reference = bundle.get("decision_ledger")
+    if not (
+        isinstance(signature, dict)
+        and signature.get("algorithm") == "ed25519"
+        and isinstance(reference, dict)
+    ):
+        return False
+    try:
+        inspected = inspect_json_reference(reference, root=root)
+        if inspected is None:
+            return False
+        _, ledger_bytes, _ = inspected
+        public_key_bytes = _release_authority_public_key(
+            root, str(bundle.get("source_commit") or ""),
+        )
+        if public_key_bytes is None:
+            return False
+        public_key = serialization.load_pem_public_key(
+            public_key_bytes
+        )
+        if not isinstance(public_key, Ed25519PublicKey):
+            return False
+        encoded = str(signature.get("value") or "").encode("ascii")
+        public_key.verify(
+            base64.b64decode(encoded, validate=True),
+            ledger_bytes,
+        )
+    except (
+        InvalidSignature,
+        UnsupportedAlgorithm,
+        OSError,
+        TypeError,
+        ValueError,
+        UnicodeEncodeError,
+        binascii.Error,
+    ):
+        return False
+    return True
 
 
 def _accepted_demo_decision(
@@ -562,6 +634,7 @@ def _resolve_activation_review_mode(
 
 
 def _authorize_activation(
+    bundle: dict,
     ledger: dict,
     project_root: Path,
     source_commit: str,
@@ -571,15 +644,23 @@ def _authorize_activation(
     review_mode: str,
     digest: str,
 ) -> ActivationStatus:
+    reason = "live_decision_not_accepted"
     if scope == "default_rollout":
         rows = ledger.get("decisions") if ledger.get("schema") == "integrated-release-decisions-v1" else None
-        authorized = validate_release_decision_ledger(
+        ledger_authorized = validate_release_decision_ledger(
             ledger,
             root=project_root,
             source_commit=source_commit,
             expected_enabled=set(enabled),
             review_mode=review_mode,
         )
+        signature_valid = (
+            ledger_authorized
+            and release_signature_valid(bundle, root=project_root)
+        )
+        authorized = ledger_authorized and signature_valid
+        if ledger_authorized and not signature_valid:
+            reason = "release_signature_invalid"
         fallbacks = ()
         if authorized:
             fallbacks = tuple(
@@ -602,7 +683,7 @@ def _authorize_activation(
         authorized,
         authorized,
         scope,
-        "live_decisions_accepted" if authorized else "live_decision_not_accepted",
+        "live_decisions_accepted" if authorized else reason,
         enabled,
         profile=profile,
         review_mode=review_mode,
@@ -647,7 +728,7 @@ def activation_status(
     if failure is not None:
         return failure
     return _authorize_activation(
-        ledger, project_root, source_commit, scope, enabled, profile,
+        bundle, ledger, project_root, source_commit, scope, enabled, profile,
         review_mode, digest,
     )
 
@@ -664,6 +745,7 @@ __all__ = [
     "feature_flags",
     "feature_versions",
     "profile_environment",
+    "release_signature_valid",
     "validate_controlled_demo_decision_ledger",
     "validate_release_decision_ledger",
 ]

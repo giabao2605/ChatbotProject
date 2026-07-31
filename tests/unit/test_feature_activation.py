@@ -1,16 +1,21 @@
 import hashlib
 import json
 import asyncio
+import base64
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from mech_chatbot.config.settings import Settings
 
+import mech_chatbot.governance.feature_activation as activation_policy
 from mech_chatbot.governance.feature_activation import (
     FEATURE_FLAGS,
     VERSION_DEFAULTS,
     activation_status,
+    release_signature_valid,
 )
 from mech_chatbot.governance.crag_demo_authorization import (
     build_crag_demo_authorization,
@@ -23,6 +28,21 @@ from scripts.ops.render_activation_profile import build_profile_environment
 
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def release_authority(monkeypatch):
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    monkeypatch.setattr(
+        activation_policy,
+        "_release_authority_public_key",
+        lambda root, source_commit: public_key,
+    )
+    return private_key
 
 
 def _write_json(path, payload):
@@ -168,6 +188,26 @@ def _environment(**overrides):
     environ.update({name: "false" for name in FEATURE_FLAGS})
     environ.update(overrides)
     return environ
+
+
+def _write_release_signature(tmp_path, ledger_path, private_key):
+    signature_path = tmp_path / "release-ledger-signature.txt"
+    signature_path.write_text(
+        base64.b64encode(private_key.sign(ledger_path.read_bytes())).decode("ascii"),
+        encoding="ascii",
+    )
+    return signature_path
+
+
+def _sign_release_bundle(tmp_path, bundle_path, private_key):
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ledger_path = Path(bundle["decision_ledger"]["path"])
+    signature_path = _write_release_signature(tmp_path, ledger_path, private_key)
+    bundle["release_signature"] = {
+        "algorithm": "ed25519",
+        "value": signature_path.read_text(encoding="ascii"),
+    }
+    return _write_json(bundle_path, bundle)
 
 
 def _default_bundle(
@@ -427,8 +467,13 @@ def test_production_feature_fails_closed_without_bundle(tmp_path):
     assert result.reason == "activation_bundle_missing"
 
 
-def test_default_rollout_accepts_hash_bound_decision_for_exact_commit(tmp_path):
-    bundle_path, bundle_sha = _default_bundle(tmp_path)
+def test_default_rollout_accepts_hash_bound_decision_for_exact_commit(
+    tmp_path, release_authority,
+):
+    bundle_path, _ = _default_bundle(tmp_path)
+    bundle_sha = _sign_release_bundle(
+        tmp_path, bundle_path, release_authority,
+    )
     result = activation_status(
         _environment(
             RAG_CRAG_ENABLED="true",
@@ -455,6 +500,93 @@ def test_default_rollout_accepts_hash_bound_decision_for_exact_commit(tmp_path):
         "RAG_GRAPH_RETRIEVAL_ENABLED",
         "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
     }
+
+
+def test_default_rollout_rejects_rehashed_self_authored_release_artifacts(tmp_path):
+    bundle_path, bundle_sha = _default_bundle(tmp_path)
+
+    result = activation_status(
+        _environment(
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.live_authorized is False
+    assert result.reason == "release_signature_invalid"
+
+
+def test_default_rollout_rejects_signed_ledger_after_byte_change(
+    tmp_path, release_authority,
+):
+    bundle_path, _ = _default_bundle(tmp_path)
+    _sign_release_bundle(tmp_path, bundle_path, release_authority)
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ledger_path = Path(bundle["decision_ledger"]["path"])
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["release_note"] = "same semantics, changed bytes"
+    bundle["decision_ledger"]["sha256"] = _write_json(ledger_path, ledger)
+    bundle_sha = _write_json(bundle_path, bundle)
+
+    result = activation_status(
+        _environment(
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.live_authorized is False
+    assert result.reason == "release_signature_invalid"
+
+
+def test_release_signature_rejects_a_tampered_ledger_reference(
+    tmp_path, release_authority,
+):
+    bundle_path, _ = _default_bundle(tmp_path)
+    _sign_release_bundle(tmp_path, bundle_path, release_authority)
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["decision_ledger"]["sha256"] = "0" * 64
+
+    assert release_signature_valid(bundle, root=tmp_path) is False
+
+
+def test_release_authority_key_is_read_from_exact_source_commit(
+    tmp_path, monkeypatch,
+):
+    captured = {}
+
+    def read_git_object(command, **kwargs):
+        captured["command"] = command
+        captured["cwd"] = kwargs["cwd"]
+        return b"public-key"
+
+    monkeypatch.setattr(
+        activation_policy.subprocess, "check_output", read_git_object,
+    )
+
+    result = activation_policy._release_authority_public_key(
+        tmp_path, "a" * 40,
+    )
+
+    assert result == b"public-key"
+    assert captured["command"] == [
+        "git", "show",
+        (
+            f"{'a' * 40}:data/integrated_hardening_v1/"
+            "release-authority-public-key.pem"
+        ),
+    ]
+    assert captured["cwd"] == tmp_path
 
 
 def test_default_rollout_rejects_incomplete_ledger_even_when_active_rows_pass(tmp_path):
@@ -856,7 +988,9 @@ def test_live_bundle_pins_feature_versions(tmp_path):
     assert result.reason == "activation_bundle_runtime_mismatch"
 
 
-def test_activation_bundle_builder_hashes_ledger_and_single_owner_governance(tmp_path):
+def test_activation_bundle_builder_hashes_ledger_and_single_owner_governance(
+    tmp_path, release_authority,
+):
     ledger = {
         "schema": "integrated-release-decisions-v1",
         "status": "incomplete",
@@ -925,6 +1059,9 @@ def test_activation_bundle_builder_hashes_ledger_and_single_owner_governance(tmp
 
     _default_bundle(tmp_path, review_mode="single_owner")
     ledger_path = tmp_path / "release-decisions.json"
+    signature_path = _write_release_signature(
+        tmp_path, ledger_path, release_authority,
+    )
 
     bundle, digest = build_activation_bundle(
         scope="default_rollout",
@@ -932,6 +1069,7 @@ def test_activation_bundle_builder_hashes_ledger_and_single_owner_governance(tmp
         source_commit="a" * 40,
         decision_ledger=ledger_path,
         review_governance=governance_path,
+        release_signature=signature_path,
         output=output,
         root=tmp_path,
     )
@@ -945,7 +1083,22 @@ def test_activation_bundle_builder_hashes_ledger_and_single_owner_governance(tmp
     assert bundle["review_governance"]["schema"] == "rag-review-governance-v1"
     assert len(bundle["decision_ledger"]["sha256"]) == 64
     assert len(bundle["review_governance"]["sha256"]) == 64
+    assert bundle["release_signature"]["algorithm"] == "ed25519"
     assert hashlib.sha256(output.read_bytes()).hexdigest() == digest
+
+
+def test_default_bundle_builder_requires_release_authority_signature(tmp_path):
+    _default_bundle(tmp_path)
+
+    with pytest.raises(ValueError, match="release authority signature"):
+        build_activation_bundle(
+            scope="default_rollout",
+            profile="crag_claim",
+            source_commit="a" * 40,
+            decision_ledger=tmp_path / "release-decisions.json",
+            output=tmp_path / "unsigned-activation-bundle.json",
+            root=tmp_path,
+        )
 
 
 def test_controlled_bundle_builder_rejects_failed_gate_and_unbound_single_owner(tmp_path):

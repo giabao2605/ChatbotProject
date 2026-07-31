@@ -14,6 +14,7 @@ from mech_chatbot.rag.feature_activation import (
     MILESTONE_FLAGS,
     VERSION_DEFAULTS,
     profile_environment,
+    release_signature_valid,
     validate_controlled_demo_decision_ledger,
     validate_release_decision_ledger,
 )
@@ -29,6 +30,7 @@ def build_activation_bundle(
     *, scope: str, profile: str, source_commit: str,
     decision_ledger: str | Path, output: str | Path,
     root: str | Path = ".", review_governance: str | Path | None = None,
+    release_signature: str | Path | None = None,
     versions: dict | None = None, graph_fingerprint: str | None = None,
 ) -> tuple[dict, str]:
     project_root = Path(root)
@@ -100,6 +102,10 @@ def build_activation_bundle(
             raise ValueError(
                 "controlled_demo feature-on activation requires review governance"
             )
+    ledger_reference = build_json_reference(
+        ledger_path, root=project_root,
+        expected_schema=_LEDGER_SCHEMAS[scope],
+    )
     bundle = {
         "schema": "rag-activation-bundle-v1",
         "scope": scope,
@@ -111,11 +117,29 @@ def build_activation_bundle(
         },
         "versions": resolved_versions,
         "graph_fingerprint": str(graph_fingerprint or "").strip() or None,
-        "decision_ledger": build_json_reference(
-            ledger_path, root=project_root,
-            expected_schema=_LEDGER_SCHEMAS[scope],
-        ),
+        "decision_ledger": ledger_reference,
     }
+    if scope == "default_rollout" and profile != "all_off":
+        if release_signature is None:
+            raise ValueError(
+                "default_rollout feature-on activation requires a "
+                "release authority signature"
+            )
+        signature_path = Path(release_signature)
+        if not signature_path.is_absolute():
+            signature_path = project_root / signature_path
+        try:
+            signature_value = signature_path.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError) as exc:
+            raise ValueError(
+                "release authority signature is unreadable"
+            ) from exc
+        bundle["release_signature"] = {
+            "algorithm": "ed25519",
+            "value": signature_value,
+        }
+        if not release_signature_valid(bundle, root=project_root):
+            raise ValueError("release authority signature is invalid")
     if governance_reference is not None:
         bundle["review_governance"] = governance_reference
     output_path = Path(output)
@@ -134,6 +158,7 @@ def main(argv=None):
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--decision-ledger", type=Path, required=True)
     parser.add_argument("--review-governance", type=Path)
+    parser.add_argument("--release-signature", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--planner-version", default=VERSION_DEFAULTS["RAG_PLANNER_VERSION"])
@@ -147,6 +172,7 @@ def main(argv=None):
         source_commit=args.source_commit,
         decision_ledger=args.decision_ledger,
         review_governance=args.review_governance,
+        release_signature=args.release_signature,
         output=args.output, root=args.root,
         versions={
             "RAG_PLANNER_VERSION": args.planner_version,

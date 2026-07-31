@@ -14,6 +14,7 @@ from mech_chatbot.governance.feature_activation import (
     feature_flags,
     feature_versions,
     profile_environment,
+    release_signature_valid,
     validate_controlled_demo_decision_ledger,
     validate_release_decision_ledger,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "feature_flags",
     "feature_versions",
     "profile_environment",
+    "release_signature_valid",
     "validate_controlled_demo_decision_ledger",
     "validate_release_decision_ledger",
 ]

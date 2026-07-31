@@ -120,6 +120,16 @@ degraded health. Stop both processes with
 `.\scripts\ops\stop_rag_profile_pair.ps1`. Never change a feature flag inside
 either running process.
 
+A feature-on `default_rollout` additionally requires the release owner to sign
+the exact `release_decisions.json` bytes with Ed25519. Commit only the public
+key at
+`data/integrated_hardening_v1/release-authority-public-key.pem`, keep the
+private key outside the repository, and pass the detached base64 signature file
+to `scripts.ops.build_activation_bundle --release-signature`. Verification
+loads that public key from the bundle's exact Git commit, not from mutable
+worktree bytes. Rehashing a self-authored ledger and bundle without the owner's
+private key remains fail-closed.
+
 ## 3. Baseline, candidate and result aggregation
 
 Use the individual milestone runner for each fixture; do not mix source
