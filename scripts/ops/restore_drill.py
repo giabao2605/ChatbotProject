@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 from pathlib import Path, PureWindowsPath
 import re
 import sys
@@ -34,6 +35,7 @@ from scripts.eval.verify_failure_family_rollback import clean_git_sha
 _DISPOSABLE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,120}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+_DEFAULT_QDRANT_WAIT_SECONDS = 300.0
 
 
 class PartialRestoreError(RuntimeError):
@@ -159,8 +161,17 @@ def _verified_snapshot_file(*, location: str, api_key: str, checksum: str):
             yield snapshot
 
 
-def _wait_for_restored_collection(client, target: str, source_points: int) -> int:
-    deadline = time.monotonic() + 120
+def _wait_for_restored_collection(
+    client,
+    target: str,
+    source_points: int,
+    *,
+    timeout_seconds: float = _DEFAULT_QDRANT_WAIT_SECONDS,
+) -> int:
+    wait_seconds = float(timeout_seconds)
+    if not math.isfinite(wait_seconds) or wait_seconds <= 0:
+        raise ValueError("Qdrant wait seconds must be positive and finite")
+    deadline = time.monotonic() + wait_seconds
     target_points = None
     while time.monotonic() < deadline:
         if client.collection_exists(target):
@@ -253,11 +264,15 @@ def restore_qdrant_snapshot(
     snapshot_api_key: str,
     snapshot_location: str,
     allowed_snapshot_origin: str,
+    timeout_seconds: float = _DEFAULT_QDRANT_WAIT_SECONDS,
 ) -> dict:
     target = validate_disposable_name(
         target_collection,
         source_name=source_collection,
     )
+    wait_seconds = float(timeout_seconds)
+    if not math.isfinite(wait_seconds) or wait_seconds <= 0:
+        raise ValueError("Qdrant wait seconds must be positive and finite")
     location = str(snapshot_location or "").strip()
     snapshot = str(snapshot_name or "").strip()
     checksum = str(snapshot_checksum or "").strip().casefold()
@@ -356,6 +371,7 @@ def restore_qdrant_snapshot(
             client,
             target,
             source_points,
+            timeout_seconds=wait_seconds,
         )
     except Exception as error:
         raise PartialRestoreError(
@@ -500,6 +516,11 @@ def main(argv=None) -> int:
     parser.add_argument("--qdrant-snapshot-name", required=True)
     parser.add_argument("--qdrant-snapshot-checksum", required=True)
     parser.add_argument("--qdrant-target-collection", required=True)
+    parser.add_argument(
+        "--qdrant-wait-seconds",
+        type=float,
+        default=_DEFAULT_QDRANT_WAIT_SECONDS,
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
@@ -507,6 +528,11 @@ def main(argv=None) -> int:
         parser.error("--execute is required to create disposable restore targets")
     if args.output.exists():
         parser.error(f"output already exists: {args.output}")
+    if (
+        not math.isfinite(args.qdrant_wait_seconds)
+        or args.qdrant_wait_seconds <= 0
+    ):
+        parser.error("--qdrant-wait-seconds must be positive and finite")
 
     settings = load_settings()
     git_sha = clean_git_sha(ROOT)
@@ -577,6 +603,7 @@ def main(argv=None) -> int:
                 snapshot_api_key=settings.QDRANT_API_KEY or "",
                 snapshot_location=args.qdrant_snapshot_location,
                 allowed_snapshot_origin=settings.QDRANT_URL,
+                timeout_seconds=args.qdrant_wait_seconds,
             )
             report["snapshot_fingerprint"] = (
                 build_restore_snapshot_fingerprint(

@@ -475,6 +475,27 @@ def test_qdrant_restore_waits_for_point_count_to_settle(monkeypatch):
     assert restored_points == 7
 
 
+def test_qdrant_restore_can_wait_past_two_minutes(monkeypatch):
+    monotonic = iter((0, 121))
+    monkeypatch.setattr(
+        restore_module,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: next(monotonic),
+            sleep=lambda _seconds: None,
+        ),
+    )
+
+    restored_points = restore_module._wait_for_restored_collection(
+        _Qdrant(target_exists=True, counts=(7,)),
+        "TaiLieuKyThuat_v2_RestoreTest_Slow",
+        7,
+        timeout_seconds=300,
+    )
+
+    assert restored_points == 7
+
+
 def test_qdrant_partial_restore_reports_target_may_exist(monkeypatch):
     payload = b"snapshot"
     checksum = hashlib.sha256(payload).hexdigest()
@@ -505,6 +526,7 @@ def test_qdrant_partial_restore_reports_target_may_exist(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            timeout_seconds=120,
         )
 
     assert raised.value.details == {
