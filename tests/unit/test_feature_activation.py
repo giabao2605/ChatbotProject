@@ -269,6 +269,7 @@ def _default_bundle(
         rejected_sha = _write_json(rejected_path, rejected_evidence)
         ledger["decisions"][name] = {
             "decision": "rejected",
+            "reason": "release owner keeps this feature disabled",
             "source_commit": rejected_commit,
             "evidence": {
                 "path": str(rejected_path),
@@ -500,6 +501,132 @@ def test_default_rollout_accepts_hash_bound_decision_for_exact_commit(
         "RAG_GRAPH_RETRIEVAL_ENABLED",
         "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
     }
+
+
+def test_default_rollout_allows_green_evidence_rejected_with_reason(
+    tmp_path, release_authority,
+):
+    bundle_path, _ = _default_bundle(tmp_path)
+    ledger_path = tmp_path / "release-decisions.json"
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    row = ledger["decisions"]["RAG_GROUNDED_MATH_ENABLED"]
+    evidence_path = Path(row["evidence"]["path"])
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence.update({
+        "passed": True,
+        "production_eligible": True,
+        "decision": "accepted",
+    })
+    row["evidence"]["sha256"] = _write_json(evidence_path, evidence)
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["decision_ledger"]["sha256"] = _write_json(ledger_path, ledger)
+    _write_json(bundle_path, bundle)
+    bundle_sha = _sign_release_bundle(
+        tmp_path, bundle_path, release_authority,
+    )
+
+    result = activation_status(
+        _environment(
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is True
+    assert result.profile == "crag_claim"
+    assert "RAG_GROUNDED_MATH_ENABLED" not in result.enabled_flags
+    assert "RAG_GROUNDED_MATH_ENABLED" in result.fallback_features
+
+    rejected_enablement = activation_status(
+        _environment(
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_GROUNDED_MATH_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert rejected_enablement.valid is False
+    assert rejected_enablement.reason == "activation_bundle_runtime_mismatch"
+
+
+@pytest.mark.parametrize("reason", [None, "  "])
+def test_default_rollout_rejected_decision_requires_nonblank_reason(
+    tmp_path, release_authority,
+    reason,
+):
+    bundle_path, _ = _default_bundle(tmp_path)
+    ledger_path = tmp_path / "release-decisions.json"
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    row = ledger["decisions"]["RAG_GROUNDED_MATH_ENABLED"]
+    if reason is None:
+        row.pop("reason")
+    else:
+        row["reason"] = reason
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["decision_ledger"]["sha256"] = _write_json(ledger_path, ledger)
+    _write_json(bundle_path, bundle)
+    bundle_sha = _sign_release_bundle(
+        tmp_path, bundle_path, release_authority,
+    )
+
+    result = activation_status(
+        _environment(
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.reason == "live_decision_not_accepted"
+
+
+def test_default_rollout_rejects_stale_green_late_interaction_evidence(
+    tmp_path, release_authority,
+):
+    bundle_path, _ = _default_bundle(tmp_path)
+    ledger_path = tmp_path / "release-decisions.json"
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    row = ledger["decisions"]["RAG_LATE_INTERACTION_ENABLED"]
+    evidence_path = Path(row["evidence"]["path"])
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence.update({
+        "passed": True,
+        "production_eligible": True,
+        "decision": "accepted",
+    })
+    row["evidence"]["sha256"] = _write_json(evidence_path, evidence)
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["decision_ledger"]["sha256"] = _write_json(ledger_path, ledger)
+    _write_json(bundle_path, bundle)
+    bundle_sha = _sign_release_bundle(
+        tmp_path, bundle_path, release_authority,
+    )
+
+    result = activation_status(
+        _environment(
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.reason == "live_decision_not_accepted"
 
 
 def test_default_rollout_rejects_rehashed_self_authored_release_artifacts(tmp_path):

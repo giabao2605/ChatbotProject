@@ -255,6 +255,8 @@ def _verified_release_evidence(
     decision = row.get("decision")
     if decision not in {"accepted", "rejected"}:
         return False
+    if decision == "rejected" and not str(row.get("reason") or "").strip():
+        return False
     row_commit = str(row.get("source_commit") or "")
     historical_late_rejection = (
         flag == "RAG_LATE_INTERACTION_ENABLED" and decision == "rejected"
@@ -266,6 +268,19 @@ def _verified_release_evidence(
     artifact = load_json_reference(row.get("evidence"), root=root)
     if artifact is None or artifact.get("schema") != _RELEASE_SCHEMAS[flag]:
         return False
+    if (
+        decision == "rejected"
+        and row_commit == source_commit
+        and _milestone_artifact_valid(
+            artifact,
+            milestone=FEATURE_MILESTONES[flag],
+            decision="accepted",
+            source_commit=row_commit,
+            review_mode=review_mode,
+            root=root,
+        )
+    ):
+        return True
     return _milestone_artifact_valid(
         artifact,
         milestone=FEATURE_MILESTONES[flag],

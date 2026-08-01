@@ -89,6 +89,8 @@ def _complete_release_ledger(tmp_path, source_commit="abc123"):
                 "schema": schema,
             },
         }
+        if rejected:
+            rows[flag]["reason"] = "quality gate rejected this release"
     return {
         "schema": "integrated-release-decisions-v1",
         "status": "complete",

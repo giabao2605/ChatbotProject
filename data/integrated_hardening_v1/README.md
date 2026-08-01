@@ -23,6 +23,10 @@ Late Interaction is already pinned to `rejected`. A final row needs an
 accepted or rejected decision plus a path, SHA-256 and schema for the matching
 immutable evidence artifact. The metadata composer and final gate fail closed
 when a row is missing or self-declares verification without a valid artifact.
+Every rejected row also needs a non-empty `reason`. A release owner may reject
+a technically passing current-commit artifact to keep that feature disabled;
+this never makes the feature eligible for an activation profile. Accepted rows
+still require passing, production-eligible evidence.
 
 The preflight publishes `release_matrix.requested_flags` and
 `release_matrix.effective_flags`. Missing decisions and rejected features are

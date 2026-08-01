@@ -7,6 +7,7 @@
     "RAG_GROUNDED_MATH_ENABLED": {"decision": null, "evidence": null},
     "RAG_LATE_INTERACTION_ENABLED": {
       "decision": "rejected",
+      "reason": "The governed Late Interaction quality gate rejected this release candidate.",
       "source_commit": "757b9392275b22a826269959797c43d9d169bd8b",
       "evidence": {
         "path": "data/integrated_hardening_v1/evidence/late-interaction-757b939-gate.json",
