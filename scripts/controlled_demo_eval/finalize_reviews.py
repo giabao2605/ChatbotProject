@@ -194,6 +194,7 @@ def evaluate_graph_review(
         correct += int(expected_correct)
     sample_count = len(reviewed)
     precision = _rate(correct, sample_count)
+    required_sample = max(int(minimum_sample), len(source))
     reviewer_count = distinct_reviewer_count(reviewers)
     reviewer_diversity_valid = (
         governance.mode != "multi_reviewer"
@@ -204,14 +205,14 @@ def evaluate_graph_review(
         not reviewed_duplicates, not source_blank, not reviewed_blank,
         not invalid_edge_ids, governance.valid, reviewer_diversity_valid,
     ))
-    review_complete = validation_passed and sample_count >= int(minimum_sample)
+    review_complete = validation_passed and sample_count >= required_sample
     return {
         "schema": "controlled-demo-graph-review-result-v1",
         "validation_passed": validation_passed,
         "anchor_matches": anchor_matches,
         "review_complete": review_complete,
         "review_sample_count": sample_count,
-        "minimum_review_sample": int(minimum_sample),
+        "minimum_review_sample": required_sample,
         "reviewed_edge_precision": precision,
         "review_mode": governance.mode,
         "review_source": governance.review_source,

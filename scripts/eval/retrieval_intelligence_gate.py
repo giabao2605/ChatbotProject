@@ -485,6 +485,8 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         review_mode = metadata.get("review_mode") or (
             "multi_reviewer" if review_source == "independent" else None
         )
+        review_sample_count = metadata.get("review_sample_count")
+        approved_edge_count = metadata.get("approved_edge_count")
         reviewer_count = metadata.get("reviewer_count")
         reviewer_diversity_requirement_met = (
             (
@@ -530,8 +532,15 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "reviewer_diversity_requirement_met": (
                 reviewer_diversity_requirement_met
             ),
-            "review_sample_size_sufficient": int(metadata.get("review_sample_count", 0)) >= 20,
-            "approved_edge_pool_sufficient": int(metadata.get("approved_edge_count", 0)) >= 20,
+            "review_sample_size_sufficient": (
+                type(review_sample_count) is int
+                and type(approved_edge_count) is int
+                and review_sample_count >= max(20, approved_edge_count)
+            ),
+            "approved_edge_pool_sufficient": (
+                type(approved_edge_count) is int
+                and approved_edge_count >= 20
+            ),
             "structured_coverage": float(metadata.get("structured_coverage", 0.0)) >= 0.80,
             "provenance_complete": float(metadata.get("provenance_completeness", 0.0)) == 1.0,
             "pilot_domains_covered": all(bool(domains.get(name)) for name in ("Technical", "Production", "Maintenance")),

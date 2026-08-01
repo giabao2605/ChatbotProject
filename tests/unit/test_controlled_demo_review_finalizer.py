@@ -284,6 +284,31 @@ def test_graph_review_under_minimum_sample_is_not_ready():
     assert report["ready_for_graph_quality_gate"] is False
 
 
+def test_graph_review_requires_every_edge_in_the_bound_source_queue():
+    source = [_graph_row(index) for index in range(1, 22)]
+    reviewed = [
+        {
+            **row,
+            "reviewer": "alice" if index % 2 else "bob",
+            "expected_correct": True,
+            "review_note": "checked",
+        }
+        for index, row in enumerate(source[:20])
+    ]
+
+    report = evaluate_graph_review(
+        source,
+        reviewed,
+        anchor={"source_sha256": "q" * 64, "edge_count": 21},
+        source_sha256="q" * 64,
+    )
+
+    assert report["validation_passed"] is True
+    assert report["review_sample_count"] == 20
+    assert report["review_complete"] is False
+    assert report["ready_for_graph_quality_gate"] is False
+
+
 def test_graph_review_accepts_one_owner_only_when_risk_is_explicit():
     source = [_graph_row(index) for index in range(1, 21)]
     reviewed = [
