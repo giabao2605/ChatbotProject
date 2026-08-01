@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -51,6 +52,8 @@ def _arguments(tmp_path, *extra):
         "snapshot-1",
         "--qdrant-snapshot-checksum",
         "c" * 64,
+        "--qdrant-expected-points",
+        "238",
         "--qdrant-target-collection",
         "TaiLieuKyThuat_v2_RestoreTest_Cli",
         "--output",
@@ -87,6 +90,8 @@ def test_main_passes_validated_sql_wait_seconds(
         client=SimpleNamespace(collection_exists=lambda _name: False),
     )
     captured = {}
+    captured_qdrant = {}
+    captured_fingerprint = {}
     monkeypatch.setattr(restore_module, "load_settings", lambda: settings)
     monkeypatch.setattr(
         restore_module,
@@ -127,19 +132,36 @@ def test_main_passes_validated_sql_wait_seconds(
         }
 
     monkeypatch.setattr(restore_module, "restore_sql_backup", restore_sql)
+    def restore_qdrant(_client, **kwargs):
+        captured_qdrant.update(kwargs)
+        return {
+            "expected_points": kwargs["expected_points"],
+            "target_points": kwargs["expected_points"],
+            "restored": True,
+        }
+
     monkeypatch.setattr(
         restore_module,
         "restore_qdrant_snapshot",
-        lambda *_args, **_kwargs: {"restored": True},
+        restore_qdrant,
     )
+    def build_fingerprint(**kwargs):
+        captured_fingerprint.update(kwargs)
+        return "d" * 64
+
     monkeypatch.setattr(
         restore_module,
         "build_restore_snapshot_fingerprint",
-        lambda **_kwargs: "d" * 64,
+        build_fingerprint,
     )
 
     assert restore_module.main(_arguments(tmp_path, *extra)) == 0
     assert captured["timeout_seconds"] == expected_wait
+    assert captured_qdrant["expected_points"] == 238
+    assert captured_fingerprint["expected_points"] == 238
+    receipt = json.loads((tmp_path / "restore.json").read_text(encoding="utf-8"))
+    assert receipt["qdrant_expected_points"] == 238
+    assert receipt["qdrant"]["target_points"] == 238
     assert master.closed is True
     assert qdrant.closed is True
 
@@ -168,4 +190,49 @@ def test_main_rejects_invalid_sql_wait_before_mutation(
 
     assert raised.value.code == 2
     assert "must be positive and finite" in capsys.readouterr().err
+    assert not (tmp_path / "restore.json").exists()
+
+
+@pytest.mark.parametrize("value", ("0", "-1", "1.5", "nan"))
+def test_main_rejects_invalid_qdrant_expected_points_before_mutation(
+    monkeypatch,
+    tmp_path,
+    value,
+):
+    monkeypatch.setattr(
+        restore_module,
+        "load_settings",
+        lambda: pytest.fail("settings must not load"),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        restore_module.main(
+            _arguments(
+                tmp_path,
+                "--qdrant-expected-points",
+                value,
+            )
+        )
+
+    assert raised.value.code == 2
+    assert not (tmp_path / "restore.json").exists()
+
+
+def test_main_requires_qdrant_expected_points_before_mutation(
+    monkeypatch,
+    tmp_path,
+):
+    arguments = _arguments(tmp_path)
+    option_index = arguments.index("--qdrant-expected-points")
+    del arguments[option_index:option_index + 2]
+    monkeypatch.setattr(
+        restore_module,
+        "load_settings",
+        lambda: pytest.fail("settings must not load"),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        restore_module.main(arguments)
+
+    assert raised.value.code == 2
     assert not (tmp_path / "restore.json").exists()

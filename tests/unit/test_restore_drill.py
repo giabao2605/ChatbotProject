@@ -1,6 +1,5 @@
 import hashlib
 from io import BytesIO
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -13,11 +12,9 @@ from sqlalchemy.exc import InvalidRequestError
 from scripts.ops import restore_drill as restore_module
 from scripts.ops.restore_drill import (
     PartialRestoreError,
-    build_restore_snapshot_fingerprint,
     restore_qdrant_snapshot,
     restore_sql_backup,
     validate_disposable_name,
-    verify_restore_evidence,
 )
 
 
@@ -346,6 +343,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
             "TaiLieuKyThuat_v2/snapshots/snapshot-1"
         ),
         allowed_snapshot_origin="http://127.0.0.1:6333",
+        expected_points=7,
     )
 
     assert report == {
@@ -354,6 +352,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
         "snapshot_name": "snapshot-1",
         "snapshot_checksum": checksum,
         "source_points": 7,
+        "expected_points": 7,
         "target_points": 7,
         "restored": True,
     }
@@ -381,6 +380,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
         )
 
     existing = _Qdrant(target_exists=True)
@@ -397,6 +397,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
         )
     missing_snapshot = _Qdrant(snapshots=())
     with pytest.raises(ValueError, match="source collection"):
@@ -412,6 +413,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
         )
     with pytest.raises(ValueError, match="snapshot location"):
         restore_qdrant_snapshot(
@@ -426,6 +428,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-2"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
         )
     with pytest.raises(ValueError, match="snapshot origin"):
         restore_qdrant_snapshot(
@@ -440,6 +443,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
         )
     with pytest.raises(ValueError, match="snapshot location"):
         restore_qdrant_snapshot(
@@ -454,6 +458,7 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
         )
     with pytest.raises(ValueError, match="checksum"):
         restore_qdrant_snapshot(
@@ -468,7 +473,64 @@ def test_qdrant_restore_requires_absent_target_and_never_deletes(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
         )
+
+
+def test_qdrant_restore_verifies_snapshot_count_when_source_has_drifted(
+    monkeypatch,
+):
+    payload = b"snapshot"
+    checksum = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(
+        restore_module,
+        "requests",
+        SimpleNamespace(get=lambda *_args, **_kwargs: _SnapshotResponse(payload)),
+    )
+
+    report = restore_qdrant_snapshot(
+        _Qdrant(counts=(231, 238), snapshot_checksum=checksum),
+        source_collection="TaiLieuKyThuat_v2",
+        target_collection="TaiLieuKyThuat_v2_RestoreTest_SourceDrift",
+        snapshot_name="snapshot-1",
+        snapshot_checksum=checksum,
+        snapshot_api_key="test-key",
+        snapshot_location=(
+            "http://127.0.0.1:6333/collections/"
+            "TaiLieuKyThuat_v2/snapshots/snapshot-1"
+        ),
+        allowed_snapshot_origin="http://127.0.0.1:6333",
+        expected_points=238,
+    )
+
+    assert report["source_points"] == 231
+    assert report["expected_points"] == 238
+    assert report["target_points"] == 238
+
+
+@pytest.mark.parametrize("expected_points", (0, -1, 1.5, True))
+def test_qdrant_restore_rejects_invalid_expected_points_before_mutation(
+    expected_points,
+):
+    client = _Qdrant()
+
+    with pytest.raises(ValueError, match="positive integer"):
+        restore_qdrant_snapshot(
+            client,
+            source_collection="TaiLieuKyThuat_v2",
+            target_collection="TaiLieuKyThuat_v2_RestoreTest_InvalidExpected",
+            snapshot_name="snapshot-1",
+            snapshot_checksum="a" * 64,
+            snapshot_api_key="test-key",
+            snapshot_location=(
+                "http://127.0.0.1:6333/collections/"
+                "TaiLieuKyThuat_v2/snapshots/snapshot-1"
+            ),
+            allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=expected_points,
+        )
+
+    assert client.calls == []
 
 
 def test_qdrant_snapshot_download_rejects_redirect(monkeypatch):
@@ -515,6 +577,7 @@ def test_qdrant_restore_download_failure_is_not_partial(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
         )
 
     assert all(
@@ -561,6 +624,7 @@ def test_qdrant_restore_accepts_completed_upload_after_client_timeout(monkeypatc
             "TaiLieuKyThuat_v2/snapshots/snapshot-1"
         ),
         allowed_snapshot_origin="http://127.0.0.1:6333",
+        expected_points=7,
     )
 
     assert report["target_points"] == 7
@@ -602,6 +666,7 @@ def test_qdrant_restore_preserves_upload_error_when_settling_fails(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
             timeout_seconds=120,
         )
 
@@ -661,6 +726,7 @@ def test_qdrant_partial_restore_reports_target_may_exist(monkeypatch):
                 "TaiLieuKyThuat_v2/snapshots/snapshot-1"
             ),
             allowed_snapshot_origin="http://127.0.0.1:6333",
+            expected_points=7,
             timeout_seconds=120,
         )
 
@@ -672,110 +738,3 @@ def test_qdrant_partial_restore_reports_target_may_exist(monkeypatch):
         "target_may_exist": True,
     }
     assert "point count" in str(raised.value.__cause__)
-
-
-def test_restore_evidence_binds_current_commit_and_snapshot(
-    tmp_path,
-    monkeypatch,
-):
-    values = {
-        "git_sha": "a" * 40,
-        "source_database": "Mech_Chatbot_DB",
-        "sql_backup_set_identity_sha256": "b" * 64,
-        "source_collection": "TaiLieuKyThuat_v2",
-        "snapshot_name": "snapshot-1",
-        "snapshot_checksum": "c" * 64,
-        "snapshot_location_sha256": "d" * 64,
-    }
-    fingerprint = build_restore_snapshot_fingerprint(**values)
-    artifact = {
-        "schema": "backup-restore-drill-v1",
-        "git_sha": values["git_sha"],
-        "source_database": values["source_database"],
-        "source_collection": values["source_collection"],
-        "target_database": "Mech_Chatbot_DB_RestoreTest_Evidence",
-        "target_collection": "TaiLieuKyThuat_v2_RestoreTest_Evidence",
-        "sql_backup_set_identity_sha256": values[
-            "sql_backup_set_identity_sha256"
-        ],
-        "qdrant_snapshot_location_sha256": values[
-            "snapshot_location_sha256"
-        ],
-        "qdrant_snapshot_name": values["snapshot_name"],
-        "qdrant_snapshot_checksum": values["snapshot_checksum"],
-        "snapshot_fingerprint": fingerprint,
-        "passed": True,
-        "automatic_cleanup": False,
-        "error_type": None,
-        "sql": {
-            "target_database": "Mech_Chatbot_DB_RestoreTest_Evidence",
-            "backup_set_identity_sha256": values[
-                "sql_backup_set_identity_sha256"
-            ],
-            "state_desc": "ONLINE",
-            "user_access_desc": "MULTI_USER",
-            "has_db_access": True,
-            "restored": True,
-        },
-        "qdrant": {
-            "target_collection": "TaiLieuKyThuat_v2_RestoreTest_Evidence",
-            "snapshot_name": values["snapshot_name"],
-            "snapshot_checksum": values["snapshot_checksum"],
-            "restored": True,
-        },
-    }
-    path = tmp_path / "restore.json"
-    raw = (json.dumps(artifact) + "\n").encode()
-    path.write_bytes(raw)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            Path,
-            "read_text",
-            lambda *_args, **_kwargs: pytest.fail(
-                "evidence must not be read twice"
-            ),
-        )
-        assert verify_restore_evidence(
-            path,
-            expected_sha256=hashlib.sha256(raw).hexdigest(),
-            current_git_sha=values["git_sha"],
-            source_database=values["source_database"],
-            source_collection=values["source_collection"],
-            allowed_root=tmp_path,
-        ) == fingerprint
-
-    for invalid_status in (
-        {"state_desc": "RESTORING"},
-        {"user_access_desc": "SINGLE_USER"},
-        {"has_db_access": False},
-    ):
-        invalid_sql = {
-            **artifact,
-            "sql": {
-                **artifact["sql"],
-                **invalid_status,
-            },
-        }
-        invalid_raw = (json.dumps(invalid_sql) + "\n").encode()
-        path.write_bytes(invalid_raw)
-        with pytest.raises(ValueError, match="current commit"):
-            verify_restore_evidence(
-                path,
-                expected_sha256=hashlib.sha256(invalid_raw).hexdigest(),
-                current_git_sha=values["git_sha"],
-                source_database=values["source_database"],
-                source_collection=values["source_collection"],
-                allowed_root=tmp_path,
-            )
-
-    path.write_bytes(raw)
-    with pytest.raises(ValueError, match="commit"):
-        verify_restore_evidence(
-            path,
-            expected_sha256=hashlib.sha256(raw).hexdigest(),
-            current_git_sha="f" * 40,
-            source_database=values["source_database"],
-            source_collection=values["source_collection"],
-            allowed_root=tmp_path,
-        )

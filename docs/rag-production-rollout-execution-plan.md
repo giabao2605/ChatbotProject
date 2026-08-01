@@ -296,7 +296,7 @@ restore evidence mới.
 
 1. Chủ dự án xác nhận cho phép tạo disposable restore targets và chốt:
    SQL backup path, SQL data directory, target database, Qdrant snapshot
-   URL/name/checksum và target collection.
+   URL/name/checksum, expected point count từ receipt gốc và target collection.
 2. Chạy `scripts/ops/restore_drill.py --execute` đúng một lần trên các target đã
    xác nhận. Giữ nguyên target/artifact để review; không cleanup tự động.
 3. Xác minh restore artifact hash và chạy Windows launcher trên clean commit.

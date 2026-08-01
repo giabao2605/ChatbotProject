@@ -170,7 +170,7 @@ def _verified_snapshot_file(*, location: str, api_key: str, checksum: str):
 def _wait_for_restored_collection(
     client,
     target: str,
-    source_points: int,
+    expected_points: int,
     *,
     timeout_seconds: float = _DEFAULT_QDRANT_WAIT_SECONDS,
 ) -> int:
@@ -184,7 +184,7 @@ def _wait_for_restored_collection(
         try:
             if client.collection_exists(target):
                 target_points = int(client.count(target, exact=True).count)
-                if target_points == source_points:
+                if target_points == expected_points:
                     return target_points
             last_error = None
         except Exception as error:
@@ -327,6 +327,7 @@ def restore_qdrant_snapshot(
     snapshot_api_key: str,
     snapshot_location: str,
     allowed_snapshot_origin: str,
+    expected_points: int,
     timeout_seconds: float = _DEFAULT_QDRANT_WAIT_SECONDS,
 ) -> dict:
     target = validate_disposable_name(
@@ -336,6 +337,12 @@ def restore_qdrant_snapshot(
     wait_seconds = float(timeout_seconds)
     if not math.isfinite(wait_seconds) or wait_seconds <= 0:
         raise ValueError("Qdrant wait seconds must be positive and finite")
+    if (
+        isinstance(expected_points, bool)
+        or not isinstance(expected_points, int)
+        or expected_points <= 0
+    ):
+        raise ValueError("Qdrant expected points must be a positive integer")
     location = str(snapshot_location or "").strip()
     snapshot = str(snapshot_name or "").strip()
     checksum = str(snapshot_checksum or "").strip().casefold()
@@ -437,7 +444,7 @@ def restore_qdrant_snapshot(
         target_points = _wait_for_restored_collection(
             client,
             target,
-            source_points,
+            expected_points,
             timeout_seconds=wait_seconds,
         )
     except Exception as error:
@@ -457,6 +464,7 @@ def restore_qdrant_snapshot(
         "snapshot_name": snapshot,
         "snapshot_checksum": checksum,
         "source_points": source_points,
+        "expected_points": expected_points,
         "target_points": target_points,
         "restored": True,
     }
@@ -475,6 +483,7 @@ def build_restore_snapshot_fingerprint(
     snapshot_name: str,
     snapshot_checksum: str,
     snapshot_location_sha256: str,
+    expected_points: int,
 ) -> str:
     values = {
         "git_sha": str(git_sha).casefold(),
@@ -486,6 +495,7 @@ def build_restore_snapshot_fingerprint(
         "snapshot_name": str(snapshot_name),
         "snapshot_checksum": str(snapshot_checksum).casefold(),
         "snapshot_location_sha256": str(snapshot_location_sha256).casefold(),
+        "expected_points": expected_points,
     }
     if (
         not _GIT_SHA.fullmatch(values["git_sha"])
@@ -500,6 +510,9 @@ def build_restore_snapshot_fingerprint(
         or not values["source_database"].strip()
         or not values["source_collection"].strip()
         or not values["snapshot_name"].strip()
+        or isinstance(expected_points, bool)
+        or not isinstance(expected_points, int)
+        or expected_points <= 0
     ):
         raise ValueError("restore snapshot fingerprint inputs are invalid")
     return _sha256_text(json.dumps(
@@ -532,6 +545,11 @@ def verify_restore_evidence(
     artifact = json.loads(raw.decode("utf-8"))
     sql = artifact.get("sql") if isinstance(artifact, dict) else None
     qdrant = artifact.get("qdrant") if isinstance(artifact, dict) else None
+    expected_points = (
+        artifact.get("qdrant_expected_points")
+        if isinstance(artifact, dict)
+        else None
+    )
     if (
         not isinstance(sql, dict)
         or not isinstance(qdrant, dict)
@@ -552,6 +570,11 @@ def verify_restore_evidence(
         or qdrant.get("snapshot_name") != artifact.get("qdrant_snapshot_name")
         or qdrant.get("snapshot_checksum")
         != str(artifact.get("qdrant_snapshot_checksum") or "").casefold()
+        or isinstance(expected_points, bool)
+        or not isinstance(expected_points, int)
+        or expected_points <= 0
+        or qdrant.get("expected_points") != expected_points
+        or qdrant.get("target_points") != expected_points
         or sql.get("backup_set_identity_sha256")
         != artifact.get("sql_backup_set_identity_sha256")
     ):
@@ -576,6 +599,7 @@ def verify_restore_evidence(
         snapshot_location_sha256=artifact[
             "qdrant_snapshot_location_sha256"
         ],
+        expected_points=expected_points,
     )
     if artifact.get("snapshot_fingerprint") != fingerprint:
         raise ValueError("restore evidence snapshot fingerprint does not match")
@@ -596,6 +620,7 @@ def main(argv=None) -> int:
     parser.add_argument("--qdrant-snapshot-location", required=True)
     parser.add_argument("--qdrant-snapshot-name", required=True)
     parser.add_argument("--qdrant-snapshot-checksum", required=True)
+    parser.add_argument("--qdrant-expected-points", type=int, required=True)
     parser.add_argument("--qdrant-target-collection", required=True)
     parser.add_argument(
         "--qdrant-wait-seconds",
@@ -620,6 +645,8 @@ def main(argv=None) -> int:
         or args.qdrant_wait_seconds <= 0
     ):
         parser.error("--qdrant-wait-seconds must be positive and finite")
+    if args.qdrant_expected_points <= 0:
+        parser.error("--qdrant-expected-points must be a positive integer")
 
     settings = load_settings()
     git_sha = clean_git_sha(ROOT)
@@ -646,6 +673,7 @@ def main(argv=None) -> int:
         ),
         "qdrant_snapshot_name": args.qdrant_snapshot_name,
         "qdrant_snapshot_checksum": args.qdrant_snapshot_checksum,
+        "qdrant_expected_points": args.qdrant_expected_points,
         "passed": False,
         "sql": None,
         "qdrant": None,
@@ -692,6 +720,7 @@ def main(argv=None) -> int:
                 snapshot_api_key=settings.QDRANT_API_KEY or "",
                 snapshot_location=args.qdrant_snapshot_location,
                 allowed_snapshot_origin=settings.QDRANT_URL,
+                expected_points=args.qdrant_expected_points,
                 timeout_seconds=args.qdrant_wait_seconds,
             )
             report["snapshot_fingerprint"] = (
@@ -707,6 +736,7 @@ def main(argv=None) -> int:
                     snapshot_location_sha256=report[
                         "qdrant_snapshot_location_sha256"
                     ],
+                    expected_points=args.qdrant_expected_points,
                 )
             )
             report["passed"] = True
