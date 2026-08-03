@@ -37,9 +37,15 @@ def build_evaluation_environment(*, enabled: bool, router_mode: str) -> dict[str
     environment = os.environ.copy()
     environment.update({
         "RAG_EXECUTION_CONTEXT": "evaluation",
-        "RAG_CRAG_ENABLED": "true",
-        "RAG_CLAIM_REPAIR_ENABLED": "true",
+        "RAG_CRAG_ENABLED": "false",
+        "RAG_CLAIM_REPAIR_ENABLED": "false",
         "RAG_GROUNDED_MATH_ENABLED": str(enabled).lower(),
+        "RAG_LATE_INTERACTION_ENABLED": "false",
+        "RAG_QUERY_DECOMPOSITION_ENABLED": "false",
+        "RAG_GRAPH_RETRIEVAL_ENABLED": "false",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "false",
+        "RAG_ACTIVATION_PROFILE": "selective" if enabled else "all_off",
+        "RAG_ACTIVATION_SCOPE": "evaluation",
         "SEMANTIC_CACHE_ENABLED": "false",
         "STRICT_REALTIME_STREAMING": "false",
         "QDRANT_COLLECTION": FIXTURE_COLLECTION,

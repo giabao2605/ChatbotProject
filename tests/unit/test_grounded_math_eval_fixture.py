@@ -208,10 +208,20 @@ def test_grounded_math_rollout_toggles_only_math_between_arms(monkeypatch):
     baseline = build_evaluation_environment(enabled=False, router_mode="offline")
     candidate = build_evaluation_environment(enabled=True, router_mode="offline")
 
-    assert baseline["RAG_CRAG_ENABLED"] == candidate["RAG_CRAG_ENABLED"] == "true"
-    assert baseline["RAG_CLAIM_REPAIR_ENABLED"] == candidate["RAG_CLAIM_REPAIR_ENABLED"] == "true"
+    for flag in (
+        "RAG_CRAG_ENABLED",
+        "RAG_CLAIM_REPAIR_ENABLED",
+        "RAG_LATE_INTERACTION_ENABLED",
+        "RAG_QUERY_DECOMPOSITION_ENABLED",
+        "RAG_GRAPH_RETRIEVAL_ENABLED",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
+    ):
+        assert baseline[flag] == candidate[flag] == "false"
     assert baseline["RAG_GROUNDED_MATH_ENABLED"] == "false"
     assert candidate["RAG_GROUNDED_MATH_ENABLED"] == "true"
+    assert baseline["RAG_ACTIVATION_PROFILE"] == "all_off"
+    assert candidate["RAG_ACTIVATION_PROFILE"] == "selective"
+    assert baseline["RAG_ACTIVATION_SCOPE"] == candidate["RAG_ACTIVATION_SCOPE"] == "evaluation"
     assert candidate["RAG_EVAL_PREFLIGHT_KIND"] == "grounded_math"
     assert candidate["QDRANT_COLLECTION"] == FIXTURE_COLLECTION
 

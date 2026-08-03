@@ -7,7 +7,7 @@ Runbook này triển khai Milestone 2.4 mà không thay collection production. G
 - SQL fixture chỉ dùng `SourceSystem=grounded-math-eval-v1`.
 - Qdrant fixture chỉ dùng `MechChatbot_GroundedMath_Eval_v1`.
 - Asset chỉ nằm tại `data/grounded_math_eval_v1`.
-- Baseline và candidate giữ CRAG/claim repair bật giống nhau; chỉ đổi `RAG_GROUNDED_MATH_ENABLED`.
+- Baseline là `all_off`; candidate chỉ bật `RAG_GROUNDED_MATH_ENABLED`.
 - Production mặc định vẫn `RAG_GROUNDED_MATH_ENABLED=false`.
 - Không unit conversion, không tự điền operand và không dùng LLM để tính.
 
