@@ -301,6 +301,33 @@ def _default_bundle(
     return bundle_path, bundle_sha
 
 
+def _selective_release_ledger(tmp_path, accepted_flags):
+    _default_bundle(tmp_path)
+    ledger_path = tmp_path / "release-decisions.json"
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    for flag, row in ledger["decisions"].items():
+        accepted = flag in accepted_flags
+        evidence_path = Path(row["evidence"]["path"])
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence.update({
+            "git_sha": "a" * 40,
+            "passed": accepted,
+            "production_eligible": accepted,
+            "decision": "accepted" if accepted else "rejected",
+        })
+        row.update({
+            "decision": evidence["decision"],
+            "source_commit": "a" * 40,
+        })
+        if accepted:
+            row.pop("reason", None)
+        else:
+            row["reason"] = "release owner keeps this feature disabled"
+        row["evidence"]["sha256"] = _write_json(evidence_path, evidence)
+    _write_json(ledger_path, ledger)
+    return ledger_path
+
+
 def _controlled_crag_bundle(
     tmp_path, *, evidence_passed=True, single_owner=False, bind_governance=False,
 ):
@@ -441,12 +468,29 @@ def test_all_disabled_is_live_safe_without_a_decision_bundle(tmp_path):
     assert result.reason == "all_features_disabled"
 
 
+def test_all_disabled_rejects_activation_bundle_declaration(tmp_path):
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_PROFILE="all_off",
+            RAG_ACTIVATION_BUNDLE_PATH=str(tmp_path / "feature-on-bundle.json"),
+            RAG_ACTIVATION_BUNDLE_SHA256="a" * 64,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is False
+    assert result.live_authorized is False
+    assert result.reason == "all_off_bundle_forbidden"
+
+
 def test_evaluation_candidate_is_allowed_but_never_reported_as_live(tmp_path):
     result = activation_status(
         _environment(
             RAG_EXECUTION_CONTEXT="evaluation",
             RAG_ACTIVATION_SCOPE="evaluation",
             RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
         ),
         root=tmp_path,
         current_commit="a" * 40,
@@ -1214,6 +1258,131 @@ def test_activation_bundle_builder_hashes_ledger_and_single_owner_governance(
     assert hashlib.sha256(output.read_bytes()).hexdigest() == digest
 
 
+@pytest.mark.parametrize(
+    "enabled_features",
+    [
+        {"RAG_GROUNDED_MATH_ENABLED"},
+        {"RAG_QUERY_DECOMPOSITION_ENABLED"},
+        {"RAG_GRAPH_RETRIEVAL_ENABLED"},
+        {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"},
+    ],
+)
+def test_selective_bundle_builder_accepts_exact_independent_release_set(
+    tmp_path, release_authority, enabled_features,
+):
+    ledger_path = _selective_release_ledger(tmp_path, enabled_features)
+    signature_path = _write_release_signature(
+        tmp_path, ledger_path, release_authority,
+    )
+
+    bundle, _ = build_activation_bundle(
+        scope="default_rollout",
+        profile="selective",
+        enabled_features=enabled_features,
+        source_commit="a" * 40,
+        decision_ledger=ledger_path,
+        release_signature=signature_path,
+        output=tmp_path / "selective-activation-bundle.json",
+        root=tmp_path,
+    )
+
+    assert bundle["activation_profile"] == "selective"
+    assert {
+        name for name, value in bundle["feature_flags"].items() if value
+    } == enabled_features
+
+
+def test_selective_bundle_builder_rejects_flag_without_accepted_decision(
+    tmp_path, release_authority,
+):
+    ledger_path = _selective_release_ledger(
+        tmp_path, {"RAG_GROUNDED_MATH_ENABLED"},
+    )
+    signature_path = _write_release_signature(
+        tmp_path, ledger_path, release_authority,
+    )
+
+    with pytest.raises(ValueError, match="verified release decision ledger"):
+        build_activation_bundle(
+            scope="default_rollout",
+            profile="selective",
+            enabled_features={"RAG_QUERY_DECOMPOSITION_ENABLED"},
+            source_commit="a" * 40,
+            decision_ledger=ledger_path,
+            release_signature=signature_path,
+            output=tmp_path / "invalid-selective-bundle.json",
+            root=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("enabled_features", "message"),
+    [
+        ({"RAG_CRAG_ENABLED"}, "CRAG and Claim Repair"),
+        ({"RAG_LATE_INTERACTION_ENABLED"}, "Late Interaction"),
+        (
+            {"RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"},
+            "Community Summaries requires Graph Retrieval",
+        ),
+    ],
+)
+def test_selective_profile_rejects_unsafe_feature_sets(enabled_features, message):
+    with pytest.raises(ValueError, match=message):
+        build_profile_environment(
+            profile="selective",
+            scope="evaluation",
+            enabled_features=enabled_features,
+        )
+
+
+@pytest.mark.parametrize(
+    "enabled_features",
+    [
+        {"RAG_GROUNDED_MATH_ENABLED"},
+        {"RAG_QUERY_DECOMPOSITION_ENABLED"},
+        {"RAG_GRAPH_RETRIEVAL_ENABLED"},
+        {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"},
+    ],
+)
+def test_default_rollout_authorizes_signed_selective_bundle_end_to_end(
+    tmp_path, release_authority, enabled_features,
+):
+    from mech_chatbot.api.rag_server import _environment_snapshot
+
+    ledger_path = _selective_release_ledger(tmp_path, enabled_features)
+    signature_path = _write_release_signature(
+        tmp_path, ledger_path, release_authority,
+    )
+    bundle_path = tmp_path / "selective-activation-bundle.json"
+    _, bundle_sha = build_activation_bundle(
+        scope="default_rollout",
+        profile="selective",
+        enabled_features=enabled_features,
+        source_commit="a" * 40,
+        decision_ledger=ledger_path,
+        release_signature=signature_path,
+        output=bundle_path,
+        root=tmp_path,
+    )
+    environment = build_profile_environment(
+        profile="selective",
+        scope="default_rollout",
+        activation_bundle=bundle_path,
+        activation_bundle_sha256=bundle_sha,
+    )
+
+    runtime_environment = _environment_snapshot(Settings.from_env(environment))
+    result = activation_status(
+        runtime_environment, root=tmp_path, current_commit="a" * 40,
+    )
+
+    assert runtime_environment["RAG_ACTIVATION_PROFILE"] == "selective"
+    assert result.valid is True
+    assert result.live_authorized is True
+    assert result.profile == "selective"
+    assert set(result.enabled_flags) == enabled_features
+
+
 def test_default_bundle_builder_requires_release_authority_signature(tmp_path):
     _default_bundle(tmp_path)
 
@@ -1358,6 +1527,57 @@ def test_health_is_degraded_when_activation_is_valid_but_not_live_authorized(
     assert health.status == "degraded"
 
 
+@pytest.mark.parametrize(
+    "enabled_features",
+    [
+        {"RAG_GROUNDED_MATH_ENABLED"},
+        {"RAG_QUERY_DECOMPOSITION_ENABLED"},
+        {"RAG_GRAPH_RETRIEVAL_ENABLED"},
+        {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"},
+    ],
+)
+def test_selective_evaluation_profile_renders_exact_enabled_set(enabled_features):
+    environment = build_profile_environment(
+        profile="selective",
+        scope="evaluation",
+        enabled_features=enabled_features,
+    )
+
+    assert environment["RAG_ACTIVATION_PROFILE"] == "selective"
+    assert {
+        name for name in FEATURE_FLAGS if environment[name] == "true"
+    } == enabled_features
+
+
+def test_selective_live_renderer_uses_exact_hashed_bundle_flags(tmp_path):
+    bundle = {
+        "schema": "rag-activation-bundle-v1",
+        "scope": "controlled_demo",
+        "source_commit": "a" * 40,
+        "activation_profile": "selective",
+        "feature_flags": {
+            name: name == "RAG_GROUNDED_MATH_ENABLED"
+            for name in FEATURE_FLAGS
+        },
+        "versions": dict(VERSION_DEFAULTS),
+        "graph_fingerprint": None,
+    }
+    bundle_path = tmp_path / "selective-bundle.json"
+    bundle_sha = _write_json(bundle_path, bundle)
+
+    environment = build_profile_environment(
+        profile="selective",
+        scope="controlled_demo",
+        activation_bundle=bundle_path,
+        activation_bundle_sha256=bundle_sha,
+    )
+
+    assert environment["RAG_ACTIVATION_PROFILE"] == "selective"
+    assert {
+        name for name in FEATURE_FLAGS if environment[name] == "true"
+    } == {"RAG_GROUNDED_MATH_ENABLED"}
+
+
 def test_profile_launcher_environment_uses_canonical_flags_and_isolated_scopes(tmp_path):
     evaluation = build_profile_environment(
         profile="graph_retrieval", scope="evaluation",
@@ -1396,6 +1616,27 @@ def test_profile_launcher_environment_uses_canonical_flags_and_isolated_scopes(t
     assert controlled["RAG_GRAPH_FINGERPRINT"] == "graph-fingerprint-v1"
     assert controlled["RAG_ACTIVATION_BUNDLE_PATH"] == str(bundle_path.resolve())
     assert controlled["RAG_ACTIVATION_BUNDLE_SHA256"] == bundle_sha
+
+
+def test_all_off_renderer_rejects_unneeded_bundle(tmp_path):
+    bundle_path = tmp_path / "all-off-bundle.json"
+    bundle_sha = _write_json(bundle_path, {
+        "schema": "rag-activation-bundle-v1",
+        "scope": "default_rollout",
+        "source_commit": "a" * 40,
+        "activation_profile": "all_off",
+        "feature_flags": {name: False for name in FEATURE_FLAGS},
+        "versions": dict(VERSION_DEFAULTS),
+        "graph_fingerprint": None,
+    })
+
+    with pytest.raises(ValueError, match="all_off does not use an activation bundle"):
+        build_profile_environment(
+            profile="all_off",
+            scope="default_rollout",
+            activation_bundle=bundle_path,
+            activation_bundle_sha256=bundle_sha,
+        )
 
 
 def test_controlled_profile_launcher_rejects_missing_or_mismatched_bundle(tmp_path):

@@ -556,19 +556,19 @@ def test_rollout_series_requires_completed_prior_milestone_decisions(tmp_path):
     ]
 
     blocked = evaluate_rollout_series("grounded_math", pairs)
-    artifact = tmp_path / "crag-decision.json"
+    artifact = tmp_path / "evaluation-foundation.json"
     artifact.write_text(
-        json.dumps({"schema": "crag-decision-v1", "passed": True}),
+        json.dumps({"schema": "evaluation-foundation-completion-v1"}),
         encoding="utf-8",
     )
     completed = evaluate_rollout_series(
         "grounded_math",
         pairs,
         prior_decisions={
-            "crag": {
-                "decision": "accepted",
+            "evaluation_foundation": {
+                "decision": "completed",
                 "artifact": str(artifact),
-                "artifact_schema": "crag-decision-v1",
+                "artifact_schema": "evaluation-foundation-completion-v1",
                 "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
             }
         },

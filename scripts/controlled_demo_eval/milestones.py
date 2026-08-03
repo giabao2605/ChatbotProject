@@ -40,19 +40,14 @@ MILESTONES = {
     "grounded_math": MilestoneConfig(
         groups=("grounded_math",),
         minimum_cases=10,
-        baseline_enabled=frozenset({
-            "RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED",
-        }),
+        baseline_enabled=frozenset(),
         candidate_additions=frozenset({"RAG_GROUNDED_MATH_ENABLED"}),
         pair_enabled=True,
     ),
     "query_decomposition": MilestoneConfig(
         groups=("complex",),
         minimum_cases=10,
-        baseline_enabled=frozenset({
-            "RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED",
-            "RAG_GROUNDED_MATH_ENABLED",
-        }),
+        baseline_enabled=frozenset(),
         candidate_additions=frozenset({"RAG_QUERY_DECOMPOSITION_ENABLED"}),
         pair_enabled=True,
     ),
@@ -61,17 +56,16 @@ MILESTONES = {
         minimum_cases=10,
         baseline_enabled=frozenset(),
         candidate_additions=frozenset({"RAG_GRAPH_RETRIEVAL_ENABLED"}),
-        pair_enabled=False,
+        pair_enabled=True,
     ),
     "community_summaries": MilestoneConfig(
         groups=("global",),
         minimum_cases=10,
-        baseline_enabled=frozenset(),
+        baseline_enabled=frozenset({"RAG_GRAPH_RETRIEVAL_ENABLED"}),
         candidate_additions=frozenset({
-            "RAG_GRAPH_RETRIEVAL_ENABLED",
             "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
         }),
-        pair_enabled=False,
+        pair_enabled=True,
     ),
 }
 

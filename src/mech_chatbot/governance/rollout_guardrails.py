@@ -43,10 +43,10 @@ EVIDENCE_IDENTITY_FIELDS = (
 )
 STAGE_DEPENDENCIES = {
     "crag": ("evaluation_foundation",),
-    "grounded_math": ("crag",),
+    "grounded_math": ("evaluation_foundation",),
     "late_interaction": ("grounded_math",),
-    "query_decomposition": ("late_interaction",),
-    "graph_retrieval": ("query_decomposition",),
+    "query_decomposition": ("evaluation_foundation",),
+    "graph_retrieval": ("evaluation_foundation",),
     "community_summaries": ("graph_retrieval",),
     "integrated_hardening": (
         "crag",

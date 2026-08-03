@@ -2,9 +2,11 @@
 
 from mech_chatbot.governance.feature_activation import (
     ACTIVATION_PROFILES,
+    ACTIVATION_PROFILE_NAMES,
     ActivationStatus,
     FEATURE_FLAGS,
     MILESTONE_FLAGS,
+    SELECTIVE_PROFILE,
     VERSION_DEFAULTS,
     VERSION_FIELDS,
     _artifact_commit,
@@ -22,9 +24,11 @@ from mech_chatbot.governance.feature_activation import (
 
 __all__ = [
     "ACTIVATION_PROFILES",
+    "ACTIVATION_PROFILE_NAMES",
     "ActivationStatus",
     "FEATURE_FLAGS",
     "MILESTONE_FLAGS",
+    "SELECTIVE_PROFILE",
     "VERSION_DEFAULTS",
     "VERSION_FIELDS",
     "activation_status",

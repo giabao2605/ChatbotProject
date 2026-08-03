@@ -12,21 +12,25 @@ pytestmark = pytest.mark.unit
         ("crag", set(), {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"}),
         (
             "grounded_math",
-            {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"},
-            {
-                "RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED",
-                "RAG_GROUNDED_MATH_ENABLED",
-            },
+            set(),
+            {"RAG_GROUNDED_MATH_ENABLED"},
         ),
         (
             "query_decomposition",
+            set(),
+            {"RAG_QUERY_DECOMPOSITION_ENABLED"},
+        ),
+        (
+            "graph_retrieval",
+            set(),
+            {"RAG_GRAPH_RETRIEVAL_ENABLED"},
+        ),
+        (
+            "community_summaries",
+            {"RAG_GRAPH_RETRIEVAL_ENABLED"},
             {
-                "RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED",
-                "RAG_GROUNDED_MATH_ENABLED",
-            },
-            {
-                "RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED",
-                "RAG_GROUNDED_MATH_ENABLED", "RAG_QUERY_DECOMPOSITION_ENABLED",
+                "RAG_GRAPH_RETRIEVAL_ENABLED",
+                "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
             },
         ),
     ],
@@ -49,6 +53,12 @@ def test_feature_pair_environment_isolates_exact_stage_delta(
     assert baseline["QDRANT_COLLECTION"] == "TaiLieuKyThuat_v2"
     assert candidate["RAG_EVAL_PREFLIGHT_KIND"] == "controlled_demo"
     assert candidate["RAG_EXECUTION_CONTEXT"] == "evaluation"
+    assert baseline["RAG_ACTIVATION_SCOPE"] == "evaluation"
+    assert candidate["RAG_ACTIVATION_SCOPE"] == "evaluation"
+    assert baseline["RAG_ACTIVATION_PROFILE"] == (
+        "selective" if baseline_enabled else "all_off"
+    )
+    assert candidate["RAG_ACTIVATION_PROFILE"] == "selective"
     assert candidate["SEMANTIC_CACHE_ENABLED"] == "false"
     assert {
         name for name in FEATURE_FLAGS if baseline[name] == "true"

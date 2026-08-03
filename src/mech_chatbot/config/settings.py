@@ -122,6 +122,7 @@ class Settings(BaseModel):
     RAG_QUERY_DECOMPOSITION_ENABLED: bool = False
     RAG_GRAPH_RETRIEVAL_ENABLED: bool = False
     RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED: bool = False
+    RAG_ACTIVATION_PROFILE: Optional[str] = None
     RAG_ACTIVATION_SCOPE: str = "default_rollout"
     RAG_ACTIVATION_BUNDLE_PATH: Optional[str] = None
     RAG_ACTIVATION_BUNDLE_SHA256: Optional[str] = None
@@ -357,6 +358,7 @@ class Settings(BaseModel):
             RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED=_bool(
                 "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED", False, _TRUTHY_5
             ),
+            RAG_ACTIVATION_PROFILE=_str("RAG_ACTIVATION_PROFILE"),
             RAG_ACTIVATION_SCOPE=_str("RAG_ACTIVATION_SCOPE", "default_rollout"),
             RAG_ACTIVATION_BUNDLE_PATH=_str("RAG_ACTIVATION_BUNDLE_PATH"),
             RAG_ACTIVATION_BUNDLE_SHA256=_str("RAG_ACTIVATION_BUNDLE_SHA256"),

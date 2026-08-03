@@ -99,9 +99,8 @@ def _complete_release_ledger(tmp_path, source_commit="abc123"):
 
 
 def test_combination_matrix_covers_roadmap_and_declares_dependencies():
-    report = validate_combination_matrix(
-        _json("data/integrated_hardening_v1/matrix.json")
-    )
+    matrix = _json("data/integrated_hardening_v1/matrix.json")
+    report = validate_combination_matrix(matrix)
 
     assert report["passed"] is True
     assert set(report["combination_ids"]) == {
@@ -109,6 +108,38 @@ def test_combination_matrix_covers_roadmap_and_declares_dependencies():
         "graph_retrieval", "community_summaries",
     }
     assert report["checks"]["all_flags_explicit"] is True
+    assert matrix["version"] == "integrated-v3-selective"
+    expected = {
+        "crag_claim": (
+            {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"},
+            ["evaluation_foundation"],
+        ),
+        "grounded_math": (
+            {"RAG_GROUNDED_MATH_ENABLED"},
+            ["evaluation_foundation"],
+        ),
+        "query_decomposition": (
+            {"RAG_QUERY_DECOMPOSITION_ENABLED"},
+            ["evaluation_foundation"],
+        ),
+        "graph_retrieval": (
+            {"RAG_GRAPH_RETRIEVAL_ENABLED"},
+            ["evaluation_foundation"],
+        ),
+        "community_summaries": (
+            {
+                "RAG_GRAPH_RETRIEVAL_ENABLED",
+                "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
+            },
+            ["graph_retrieval"],
+        ),
+    }
+    for row in matrix["combinations"]:
+        enabled, prerequisites = expected[row["id"]]
+        assert {
+            name for name, value in row["flags"].items() if value == "true"
+        } == enabled
+        assert row["prerequisites"] == prerequisites
 
     matrix = _json("data/integrated_hardening_v1/matrix.json")
     matrix["combinations"] = matrix["combinations"][:-1]
@@ -173,6 +204,47 @@ def test_release_matrix_fails_closed_for_missing_decisions():
     assert resolved["decisions_complete"] is False
 
 
+def test_release_matrix_derives_selective_accepted_stack_from_decisions():
+    decisions = {
+        name: {
+            "decision": (
+                "accepted"
+                if name == "RAG_QUERY_DECOMPOSITION_ENABLED"
+                else "rejected"
+            )
+        }
+        for name in FEATURE_FLAGS
+    }
+
+    resolved = build_release_matrix(
+        _json("data/integrated_hardening_v1/matrix.json"), decisions,
+    )
+
+    assert {
+        name for name, enabled in resolved["accepted_stack"].items() if enabled
+    } == {"RAG_QUERY_DECOMPOSITION_ENABLED"}
+
+
+def test_release_matrix_fails_closed_on_invalid_accepted_dependencies():
+    decisions = {
+        name: {"decision": "rejected"}
+        for name in FEATURE_FLAGS
+    }
+    decisions["RAG_CRAG_ENABLED"] = {"decision": "accepted"}
+    decisions["RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"] = {"decision": "accepted"}
+
+    resolved = build_release_matrix(
+        _json("data/integrated_hardening_v1/matrix.json"), decisions,
+    )
+
+    assert all(
+        row["effective_flags"]["RAG_CRAG_ENABLED"] is False
+        and row["effective_flags"]["RAG_CLAIM_REPAIR_ENABLED"] is False
+        and row["effective_flags"]["RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"] is False
+        for row in resolved["combinations"]
+    )
+
+
 def test_integrated_evidence_uses_effective_release_flags():
     matrix = _json("data/integrated_hardening_v1/matrix.json")
     decisions = {
@@ -197,6 +269,14 @@ def test_integrated_evidence_uses_effective_release_flags():
         for row in matrix["combinations"]
         if row["id"] == "grounded_math"
     )
+    assert not any(configurations["query_decomposition"]["baseline_flags"].values())
+    assert {
+        name
+        for name, enabled in configurations["community_summaries"][
+            "baseline_flags"
+        ].items()
+        if enabled
+    } == {"RAG_GRAPH_RETRIEVAL_ENABLED"}
 
 
 def test_repository_release_ledger_records_late_interaction_as_rejected():
@@ -230,20 +310,20 @@ def test_all_integrated_feature_flags_default_disabled():
     assert set(defaults.values()) == {False}
 
 
-def test_request_budget_is_shared_across_combined_features():
+def test_request_budget_enforces_selective_feature_boundaries():
     valid = {
-        "id": "case-ok", "combination_id": "graph_retrieval",
-        "planner_count": 1, "subquery_count": 3, "correction_count": 1,
+        "id": "case-ok", "combination_id": "query_decomposition",
+        "planner_count": 1, "subquery_count": 3, "correction_count": 0,
         "repair_count": 0, "calculation_count": 0,
-        "graph_edge_count": 12, "provider_retries": 2,
+        "graph_edge_count": 0, "provider_retries": 2,
         "final_generation_count": 1, "deadline_exceeded": False,
     }
     report = evaluate_request_budgets([valid])
     assert report["passed"] is True
-    assert report["maxima"]["correction_count"] == 1
+    assert report["maxima"]["subquery_count"] == 3
 
-    invalid = {**valid, "id": "case-over", "correction_count": 2}
-    report = evaluate_request_budgets([valid, invalid])
+    correction = {**valid, "id": "query-used-crag", "correction_count": 1}
+    report = evaluate_request_budgets([correction])
     assert report["passed"] is False
     assert report["violations"][0]["field"] == "correction_count"
 
@@ -791,6 +871,11 @@ def test_demo_matrix_keeps_all_rows_and_pins_rejected_features_off():
         and row["effective_flags"]["RAG_LATE_INTERACTION_ENABLED"] is False
         for row in demo["combinations"]
     )
+    community = next(
+        row for row in demo["combinations"]
+        if row["id"] == "community_summaries"
+    )
+    assert community["baseline_flags"]["RAG_GRAPH_RETRIEVAL_ENABLED"] is False
 
 
 def test_provider_capacity_failure_is_inconclusive_not_quality_rejection():
@@ -1129,6 +1214,10 @@ def test_combination_evidence_binds_eval_trace_load_and_results(tmp_path):
         "flags": {
             name: str(value).casefold() == "true"
             for name, value in matrix_row["flags"].items()
+        },
+        "baseline_flags": {
+            name: str(value).casefold() == "true"
+            for name, value in matrix_row["baseline_flags"].items()
         },
         "versions": matrix_row["versions"],
     }

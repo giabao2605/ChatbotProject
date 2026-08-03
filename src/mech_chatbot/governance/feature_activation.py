@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Iterable
 from dataclasses import dataclass
 import hashlib
 import os
@@ -94,6 +95,8 @@ ACTIVATION_PROFILES = {
         for flag in MILESTONE_FLAGS[milestone]
     ),
 }
+SELECTIVE_PROFILE = "selective"
+ACTIVATION_PROFILE_NAMES = (*ACTIVATION_PROFILES, SELECTIVE_PROFILE)
 ACTIVATION_SCOPES = {"evaluation", "controlled_demo", "default_rollout"}
 _TRUTHY = {"1", "true", "yes", "y", "on"}
 _RELEASE_SCHEMAS = {
@@ -162,10 +165,35 @@ def feature_versions(environ: Mapping[str, str] | None = None) -> dict[str, str]
     }
 
 
-def profile_environment(profile: str) -> dict[str, str]:
-    if profile not in ACTIVATION_PROFILES:
+def profile_environment(
+    profile: str,
+    enabled_features: Iterable[str] | None = None,
+) -> dict[str, str]:
+    requested = frozenset(enabled_features or ())
+    if profile == SELECTIVE_PROFILE:
+        if not requested:
+            raise ValueError("selective activation requires at least one feature")
+        unknown = requested - set(FEATURE_FLAGS)
+        if unknown:
+            raise ValueError(f"unknown RAG feature flag: {sorted(unknown)[0]}")
+        if ("RAG_CRAG_ENABLED" in requested) != (
+            "RAG_CLAIM_REPAIR_ENABLED" in requested
+        ):
+            raise ValueError("CRAG and Claim Repair must be enabled together")
+        if "RAG_LATE_INTERACTION_ENABLED" in requested:
+            raise ValueError("Late Interaction is rejected")
+        if (
+            "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED" in requested
+            and "RAG_GRAPH_RETRIEVAL_ENABLED" not in requested
+        ):
+            raise ValueError("Community Summaries requires Graph Retrieval")
+        enabled = requested
+    elif profile not in ACTIVATION_PROFILES:
         raise ValueError(f"unknown RAG activation profile: {profile}")
-    enabled = ACTIVATION_PROFILES[profile]
+    else:
+        if requested:
+            raise ValueError("enable-feature is only valid for selective activation")
+        enabled = ACTIVATION_PROFILES[profile]
     return {name: str(name in enabled).lower() for name in FEATURE_FLAGS}
 
 
@@ -474,44 +502,47 @@ def _activation_preflight(
     scope: str,
 ) -> tuple[ActivationStatus | None, str | None]:
     execution_context = str(env.get("RAG_EXECUTION_CONTEXT", "production")).strip().casefold()
-    if scope not in ACTIVATION_SCOPES:
-        return _status(False, False, scope, "activation_scope_invalid", enabled), None
-    if flags["RAG_CRAG_ENABLED"] != flags["RAG_CLAIM_REPAIR_ENABLED"] and scope != "evaluation":
-        return _status(
-            False, False, scope, "crag_claim_repair_must_match", enabled
-        ), None
+    declared_profile = str(env.get("RAG_ACTIVATION_PROFILE") or "").strip().casefold()
+    def invalid(reason: str) -> tuple[ActivationStatus, None]:
+        return _status(False, False, scope, reason, enabled), None
+
+    structural_failure = (
+        "activation_scope_invalid" if scope not in ACTIVATION_SCOPES
+        else "crag_claim_repair_must_match" if flags["RAG_CRAG_ENABLED"] != flags["RAG_CLAIM_REPAIR_ENABLED"]
+        else "late_interaction_rejected" if flags["RAG_LATE_INTERACTION_ENABLED"]
+        else "community_requires_graph" if flags["RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"]
+        and not flags["RAG_GRAPH_RETRIEVAL_ENABLED"]
+        else None
+    )
+    if structural_failure:
+        return invalid(structural_failure)
+    enabled_set = frozenset(enabled)
+    if declared_profile and (
+        declared_profile not in ACTIVATION_PROFILE_NAMES
+        or (declared_profile == SELECTIVE_PROFILE and not enabled)
+        or enabled_set != ACTIVATION_PROFILES.get(declared_profile, enabled_set)
+    ):
+        return invalid("activation_profile_invalid")
     if scope == "evaluation":
         if execution_context not in {"evaluation", "test"}:
-            return _status(
-                False, False, scope,
-                "evaluation_scope_requires_non_live_context", enabled,
-            ), None
-        return _status(True, False, scope, "evaluation_override", enabled), None
+            return invalid("evaluation_scope_requires_non_live_context")
+        return _status(True, False, scope, "evaluation_override", enabled, profile=declared_profile or None), None
     if not enabled:
-        return _status(
-            True, True, scope, "all_features_disabled", enabled,
-            profile="all_off",
-        ), None
-    if flags["RAG_LATE_INTERACTION_ENABLED"]:
-        return _status(
-            False, False, scope, "late_interaction_rejected", enabled
-        ), None
-    enabled_set = frozenset(enabled)
-    if enabled_set not in set(ACTIVATION_PROFILES.values()):
-        return _status(
-            False, False, scope, "activation_profile_invalid", enabled
-        ), None
-    profile = next(
-        name for name, profile_flags in ACTIVATION_PROFILES.items()
-        if profile_flags == enabled_set
-    )
-    if (
-        flags["RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"]
-        and not str(env.get("RAG_GRAPH_FINGERPRINT") or "").strip()
-    ):
-        return _status(
-            False, False, scope, "community_graph_fingerprint_missing", enabled
-        ), None
+        bundle_keys = ("RAG_ACTIVATION_BUNDLE_PATH", "RAG_ACTIVATION_BUNDLE_SHA256")
+        if any(str(env.get(name) or "").strip() for name in bundle_keys):
+            return invalid("all_off_bundle_forbidden")
+        return _status(True, True, scope, "all_features_disabled", enabled,
+                       profile="all_off"), None
+    if declared_profile == SELECTIVE_PROFILE:
+        profile = SELECTIVE_PROFILE
+    elif enabled_set not in set(ACTIVATION_PROFILES.values()):
+        return invalid("activation_profile_invalid")
+    else:
+        profile = declared_profile or next(name for name, profile_flags in ACTIVATION_PROFILES.items()
+                                           if profile_flags == enabled_set)
+    if flags["RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"] and not str(env.get(
+        "RAG_GRAPH_FINGERPRINT") or "").strip():
+        return invalid("community_graph_fingerprint_missing")
     return None, profile
 
 
@@ -750,9 +781,11 @@ def activation_status(
 
 __all__ = [
     "ACTIVATION_PROFILES",
+    "ACTIVATION_PROFILE_NAMES",
     "ActivationStatus",
     "FEATURE_FLAGS",
     "MILESTONE_FLAGS",
+    "SELECTIVE_PROFILE",
     "VERSION_DEFAULTS",
     "VERSION_FIELDS",
     "activation_status",

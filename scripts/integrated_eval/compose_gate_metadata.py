@@ -169,6 +169,7 @@ def _expected_configurations(feature_matrix: dict, release_decisions: dict) -> d
     return {
         row["id"]: {
             "flags": dict(row["effective_flags"]),
+            "baseline_flags": dict(row["baseline_flags"]),
             "versions": dict(row["versions"]),
         }
         for row in release_matrix["combinations"]
@@ -217,10 +218,13 @@ def evaluate_combination_evidence(
             expected_configuration is None
             or (
                 baseline.get("pipeline_configuration") == {
-                    "flags": {name: False for name in FEATURE_FLAGS},
+                    "flags": expected_configuration["baseline_flags"],
                     "versions": expected_configuration["versions"],
                 }
-                and candidate.get("pipeline_configuration") == expected_configuration
+                and candidate.get("pipeline_configuration") == {
+                    "flags": expected_configuration["flags"],
+                    "versions": expected_configuration["versions"],
+                }
             )
         ),
         "load_concurrency_bound": (

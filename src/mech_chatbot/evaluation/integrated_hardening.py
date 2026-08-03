@@ -4,18 +4,28 @@ from __future__ import annotations
 
 from collections import Counter
 
-from mech_chatbot.governance.feature_activation import (
-    ACTIVATION_PROFILES,
-    FEATURE_FLAGS,
-    VERSION_FIELDS,
-)
+from mech_chatbot.governance.feature_activation import FEATURE_FLAGS, VERSION_FIELDS
 
 REQUIRED_COMBINATIONS = {
-    name: set(ACTIVATION_PROFILES[name])
-    for name in (
-        "crag_claim", "grounded_math", "query_decomposition",
-        "graph_retrieval", "community_summaries",
-    )
+    "crag_claim": {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"},
+    "grounded_math": {"RAG_GROUNDED_MATH_ENABLED"},
+    "query_decomposition": {"RAG_QUERY_DECOMPOSITION_ENABLED"},
+    "graph_retrieval": {"RAG_GRAPH_RETRIEVAL_ENABLED"},
+    "community_summaries": {
+        "RAG_GRAPH_RETRIEVAL_ENABLED",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
+    },
+}
+REQUIRED_BASELINES = {
+    **{name: set() for name in REQUIRED_COMBINATIONS},
+    "community_summaries": {"RAG_GRAPH_RETRIEVAL_ENABLED"},
+}
+COMBINATION_PREREQUISITES = {
+    "crag_claim": {"evaluation_foundation"},
+    "grounded_math": {"evaluation_foundation"},
+    "query_decomposition": {"evaluation_foundation"},
+    "graph_retrieval": {"evaluation_foundation"},
+    "community_summaries": {"graph_retrieval"},
 }
 REQUIRED_SECURITY_DIMENSIONS = {
     "role", "department", "site", "clearance", "lifecycle", "publication",
@@ -51,6 +61,14 @@ def validate_combination_matrix(matrix: dict) -> dict:
         and all(isinstance(value, (str, bool, int)) for value in item["flags"].values())
         for item in combinations
     )
+    baseline_flags_explicit = all(
+        set((item.get("baseline_flags") or {}).keys()) == set(FEATURE_FLAGS)
+        and all(
+            isinstance(value, (str, bool, int))
+            for value in item["baseline_flags"].values()
+        )
+        for item in combinations
+    )
     versions_explicit = all(
         set((item.get("versions") or {}).keys()) == set(VERSION_FIELDS)
         and all(str(value or "").strip() for value in item["versions"].values())
@@ -64,19 +82,33 @@ def validate_combination_matrix(matrix: dict) -> dict:
         }
         for combination_id, required in REQUIRED_COMBINATIONS.items()
     )
+    required_baselines_correct = all(
+        combination_id in by_id
+        and required == {
+            name
+            for name, value in (
+                by_id[combination_id].get("baseline_flags") or {}
+            ).items()
+            if _enabled(value)
+        }
+        for combination_id, required in REQUIRED_BASELINES.items()
+    )
     dependencies_complete = all(
-        isinstance(item.get("prerequisites"), list)
-        and item["prerequisites"]
-        and set(item["prerequisites"]) <= REQUIRED_PREREQUISITES
-        for item in combinations
+        combination_id in by_id
+        and isinstance(by_id[combination_id].get("prerequisites"), list)
+        and set(by_id[combination_id]["prerequisites"]) == prerequisites
+        for combination_id, prerequisites in COMBINATION_PREREQUISITES.items()
     )
     checks = {
         "schema_valid": matrix.get("schema") == "integrated-feature-matrix-v1",
+        "version_valid": matrix.get("version") == "integrated-v3-selective",
         "required_combinations_exact": set(ids) == set(REQUIRED_COMBINATIONS),
         "combination_ids_unique": bool(ids) and all(count == 1 for count in id_counts.values()),
         "all_flags_explicit": flags_explicit,
+        "all_baseline_flags_explicit": baseline_flags_explicit,
         "all_versions_explicit": versions_explicit,
         "required_flags_enabled": required_flags_correct,
+        "required_baselines_enabled": required_baselines_correct,
         "dependencies_complete": dependencies_complete,
     }
     return {
@@ -132,6 +164,7 @@ def evaluate_request_budgets(cases) -> dict:
         inactive_budgets = {
             "planner_count": "RAG_QUERY_DECOMPOSITION_ENABLED",
             "subquery_count": "RAG_QUERY_DECOMPOSITION_ENABLED",
+            "correction_count": "RAG_CRAG_ENABLED",
             "repair_count": "RAG_CLAIM_REPAIR_ENABLED",
             "calculation_count": "RAG_GROUNDED_MATH_ENABLED",
             "graph_edge_count": "RAG_GRAPH_RETRIEVAL_ENABLED",

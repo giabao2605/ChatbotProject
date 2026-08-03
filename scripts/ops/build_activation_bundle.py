@@ -10,7 +10,8 @@ from pathlib import Path
 from mech_chatbot.governance.artifact_references import build_json_reference
 from mech_chatbot.governance.review_governance import review_governance_status
 from mech_chatbot.rag.feature_activation import (
-    ACTIVATION_PROFILES,
+    ACTIVATION_PROFILE_NAMES,
+    FEATURE_FLAGS,
     MILESTONE_FLAGS,
     VERSION_DEFAULTS,
     profile_environment,
@@ -32,13 +33,18 @@ def build_activation_bundle(
     root: str | Path = ".", review_governance: str | Path | None = None,
     release_signature: str | Path | None = None,
     versions: dict | None = None, graph_fingerprint: str | None = None,
+    enabled_features: set[str] | frozenset[str] | None = None,
 ) -> tuple[dict, str]:
     project_root = Path(root)
     scope = str(scope or "").strip()
     if scope not in _LEDGER_SCHEMAS:
         raise ValueError("activation scope must be controlled_demo or default_rollout")
-    if profile not in ACTIVATION_PROFILES:
+    if profile not in ACTIVATION_PROFILE_NAMES:
         raise ValueError(f"unknown activation profile: {profile}")
+    rendered_flags = profile_environment(profile, enabled_features)
+    enabled = {
+        name for name, value in rendered_flags.items() if value == "true"
+    }
     source_commit = str(source_commit or "").strip()
     if not source_commit:
         raise ValueError("source commit is required")
@@ -48,8 +54,11 @@ def build_activation_bundle(
         str(value or "").strip() for value in resolved_versions.values()
     ):
         raise ValueError("all feature versions must be present")
-    if profile == "community_summaries" and not str(graph_fingerprint or "").strip():
-        raise ValueError("community_summaries requires a graph fingerprint")
+    if (
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED" in enabled
+        and not str(graph_fingerprint or "").strip()
+    ):
+        raise ValueError("Community Summaries requires a graph fingerprint")
     ledger_path = Path(decision_ledger)
     if not ledger_path.is_absolute():
         ledger_path = project_root / ledger_path
@@ -76,7 +85,7 @@ def build_activation_bundle(
             ledger,
             root=project_root,
             source_commit=source_commit,
-            expected_enabled=ACTIVATION_PROFILES[profile],
+            expected_enabled=enabled,
             review_mode=review_mode,
         ):
             raise ValueError(
@@ -86,7 +95,7 @@ def build_activation_bundle(
         active_milestones = {
             milestone
             for milestone, flags in MILESTONE_FLAGS.items()
-            if set(flags) & set(ACTIVATION_PROFILES[profile])
+            if set(flags) & enabled
         }
         if not validate_controlled_demo_decision_ledger(
             ledger,
@@ -113,7 +122,7 @@ def build_activation_bundle(
         "activation_profile": profile,
         "feature_flags": {
             name: value == "true"
-            for name, value in profile_environment(profile).items()
+            for name, value in rendered_flags.items()
         },
         "versions": resolved_versions,
         "graph_fingerprint": str(graph_fingerprint or "").strip() or None,
@@ -154,7 +163,10 @@ def build_activation_bundle(
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--scope", choices=tuple(_LEDGER_SCHEMAS), required=True)
-    parser.add_argument("--profile", choices=tuple(ACTIVATION_PROFILES), required=True)
+    parser.add_argument("--profile", choices=ACTIVATION_PROFILE_NAMES, required=True)
+    parser.add_argument(
+        "--enable-feature", action="append", default=[], choices=FEATURE_FLAGS,
+    )
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--decision-ledger", type=Path, required=True)
     parser.add_argument("--review-governance", type=Path)
@@ -181,6 +193,7 @@ def main(argv=None):
             "RAG_COMMUNITY_SERVING_EPOCH": args.community_serving_epoch,
         },
         graph_fingerprint=args.graph_fingerprint,
+        enabled_features=set(args.enable_feature),
     )
     print(json.dumps({
         "path": str(args.output), "sha256": digest,

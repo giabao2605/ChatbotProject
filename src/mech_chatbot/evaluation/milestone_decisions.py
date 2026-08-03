@@ -228,27 +228,47 @@ def resolve_demo_flags(flags: dict, decisions: dict) -> dict:
     }
 
 
+def _bool_flags(values: dict) -> dict[str, bool]:
+    return {
+        name: value if isinstance(value, bool)
+        else str(value).strip().casefold() in {"1", "true", "yes", "on"}
+        for name, value in values.items()
+    }
+
+
+def _fail_closed_feature_flags(flags: dict[str, bool]) -> dict[str, bool]:
+    crag_pair = all(flags.get(flag) is True for flag in MILESTONE_FLAGS["crag"])
+    graph = flags.get("RAG_GRAPH_RETRIEVAL_ENABLED") is True
+    return {
+        flag: bool(enabled)
+        and flag != "RAG_LATE_INTERACTION_ENABLED"
+        and (flag not in MILESTONE_FLAGS["crag"] or crag_pair)
+        and (flag != "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED" or graph)
+        for flag, enabled in flags.items()
+    }
+
+
 def build_demo_matrix(feature_matrix: dict, decisions: dict) -> dict:
     combinations = []
     for row in feature_matrix.get("combinations") or []:
-        requested = {
-            name: (
-                value if isinstance(value, bool)
-                else str(value).strip().casefold() in {"1", "true", "yes", "on"}
-            )
-            for name, value in (row.get("flags") or {}).items()
-        }
-        applicable = {
-            milestone: decision
-            for milestone, decision in (decisions or {}).items()
-            if any(requested.get(flag) is True for flag in MILESTONE_FLAGS.get(milestone, ()))
-        }
-        resolved = resolve_demo_flags(requested, applicable)
+        baseline = _bool_flags(row.get("baseline_flags") or {})
+        requested = _bool_flags(row.get("flags") or {})
+
+        def applicable(flags: dict[str, bool]) -> dict:
+            return {
+                milestone: decision
+                for milestone, decision in (decisions or {}).items()
+                if any(flags.get(flag) is True for flag in MILESTONE_FLAGS.get(milestone, ()))
+            }
+
+        baseline_resolved = resolve_demo_flags(baseline, applicable(baseline))
+        resolved = resolve_demo_flags(requested, applicable(requested))
         combinations.append({
             "id": row.get("id"),
             "prerequisites": list(row.get("prerequisites") or []),
             "requested_flags": requested,
-            "effective_flags": resolved["flags"],
+            "baseline_flags": _fail_closed_feature_flags(baseline_resolved["flags"]),
+            "effective_flags": _fail_closed_feature_flags(resolved["flags"]),
             "fallback_milestones": resolved["fallback_milestones"],
             "versions": dict(row.get("versions") or {}),
         })
@@ -264,6 +284,11 @@ def build_demo_matrix(feature_matrix: dict, decisions: dict) -> dict:
 def build_release_matrix(feature_matrix: dict, decisions: dict) -> dict:
     """Resolve requested matrix flags through per-feature release decisions."""
     combinations = []
+    accepted = {
+        flag: (decisions.get(flag) or {}).get("decision") == "accepted"
+        for flag in FEATURE_FLAGS
+    }
+    accepted_stack = _fail_closed_feature_flags(accepted)
     all_unresolved = {
         flag for flag in FEATURE_FLAGS
         if (decisions.get(flag) or {}).get("decision") not in {"accepted", "rejected"}
@@ -273,29 +298,31 @@ def build_release_matrix(feature_matrix: dict, decisions: dict) -> dict:
         if (decisions.get(flag) or {}).get("decision") == "rejected"
     ]
     for row in feature_matrix.get("combinations") or []:
-        requested = {
-            name: (
-                value if isinstance(value, bool)
-                else str(value).strip().casefold() in {"1", "true", "yes", "on"}
-            )
-            for name, value in (row.get("flags") or {}).items()
-        }
-        effective = dict(requested)
+        baseline = _bool_flags(row.get("baseline_flags") or {})
+        requested = _bool_flags(row.get("flags") or {})
+        effective = _fail_closed_feature_flags({
+            flag: enabled
+            and (decisions.get(flag) or {}).get("decision") == "accepted"
+            for flag, enabled in requested.items()
+        })
+        effective_baseline = _fail_closed_feature_flags({
+            flag: enabled
+            and (decisions.get(flag) or {}).get("decision") == "accepted"
+            for flag, enabled in baseline.items()
+        })
         fallbacks = list(rejected)
         unresolved = []
         for flag, enabled in requested.items():
             if not enabled:
                 continue
             decision = (decisions.get(flag) or {}).get("decision")
-            if decision == "rejected":
-                effective[flag] = False
-            elif decision != "accepted":
-                effective[flag] = False
+            if decision not in {"accepted", "rejected"}:
                 unresolved.append(flag)
         combinations.append({
             "id": row.get("id"),
             "prerequisites": list(row.get("prerequisites") or []),
             "requested_flags": requested,
+            "baseline_flags": effective_baseline,
             "effective_flags": effective,
             "fallback_features": fallbacks,
             "unresolved_features": unresolved,
@@ -306,6 +333,7 @@ def build_release_matrix(feature_matrix: dict, decisions: dict) -> dict:
         "source_schema": feature_matrix.get("schema"),
         "source_version": feature_matrix.get("version"),
         "scope": "default_rollout",
+        "accepted_stack": accepted_stack,
         "decisions_complete": not all_unresolved,
         "unresolved_features": [
             flag for flag in FEATURE_FLAGS if flag in all_unresolved

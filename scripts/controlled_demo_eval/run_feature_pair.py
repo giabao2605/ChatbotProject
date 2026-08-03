@@ -50,6 +50,8 @@ def build_feature_environment(
     environment.update({name: str(name in enabled).lower() for name in FEATURE_FLAGS})
     environment.update({
         "RAG_EXECUTION_CONTEXT": "evaluation",
+        "RAG_ACTIVATION_SCOPE": "evaluation",
+        "RAG_ACTIVATION_PROFILE": "selective" if enabled else "all_off",
         "QDRANT_COLLECTION": collection,
         "RAG_PRODUCTION_QDRANT_COLLECTION": collection,
         "RAG_EVAL_PREFLIGHT_KIND": "controlled_demo",
