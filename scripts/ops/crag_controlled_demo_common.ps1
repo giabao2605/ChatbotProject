@@ -48,7 +48,12 @@ function Start-CragDemoProcess {
     }
     finally {
         foreach ($key in $Environment.Keys) {
-            [Environment]::SetEnvironmentVariable($key, $saved[$key], "Process")
+            if ($null -eq $saved[$key]) {
+                Remove-Item -LiteralPath "Env:$key" -ErrorAction SilentlyContinue
+            }
+            else {
+                [Environment]::SetEnvironmentVariable($key, $saved[$key], "Process")
+            }
         }
     }
 }

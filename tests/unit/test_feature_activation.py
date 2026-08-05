@@ -2,6 +2,8 @@ import hashlib
 import json
 import asyncio
 import base64
+import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -1688,3 +1690,34 @@ def test_legacy_crag_launcher_uses_activation_bundle_and_canonical_renderer():
     assert "activation_bundle.sha256" in launcher
     assert "$candidateEnv.RAG_CRAG_ENABLED" not in launcher
     assert "$candidateEnv.RAG_CLAIM_REPAIR_ENABLED" not in launcher
+
+
+def test_process_launcher_restores_absent_and_existing_environment_variables():
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the Windows launcher contract")
+
+    probe = r'''
+. .\scripts\ops\crag_controlled_demo_common.ps1
+function Start-Process {
+    param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle,
+          $RedirectStandardOutput, $RedirectStandardError, [switch]$PassThru)
+    [pscustomobject]@{ Id = 123; StartTime = [datetime]::UtcNow }
+}
+[Environment]::SetEnvironmentVariable("CRAG_TEST_KEEP", "before", "Process")
+Remove-Item Env:CRAG_TEST_REMOVE -ErrorAction SilentlyContinue
+Start-CragDemoProcess "python" (Get-Location).Path "probe" `
+    @{ CRAG_TEST_KEEP = "during"; CRAG_TEST_REMOVE = "during" } `
+    "site" "out.log" "err.log" | Out-Null
+if ($env:CRAG_TEST_KEEP -ne "before") { throw "existing variable was not restored" }
+if (Test-Path Env:CRAG_TEST_REMOVE) { throw "new variable was not removed" }
+'''
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", probe],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
