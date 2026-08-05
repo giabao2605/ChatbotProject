@@ -85,6 +85,7 @@ def draft_doc(monkeypatch):
                      Site, Domain, SecurityLevel, OwnerDepartment, SourceSystem,
                      ExternalProcessingPolicy, ClassificationRationale,
                      ClassificationModel, ClassificationJson, PublicationState,
+                     EffectiveStatus,
                      PublicationVersion, PublicationRetryCount, PublicationUpdatedAt,
                      Servable, KnowledgeOwnerUserID, KnowledgeApproverUserID,
                      TaxonomyVersion)
@@ -94,7 +95,7 @@ def draft_doc(monkeypatch):
                      'draft', 0, 0, 1, 'default', 'TEST', 'generic',
                      'internal', :department, 'integration_test', 'all_external',
                      'integration_test', 'test-model',
-                     '{"document_type":"policy"}', 'draft', 1, 0, GETDATE(), 0,
+                     '{"document_type":"policy"}', 'draft', 'draft', 1, 0, GETDATE(), 0,
                      :user_id, :user_id, 'v1')
                 """
             ),
@@ -152,7 +153,7 @@ def _state(doc_id):
             text(
                 """
                 SELECT LifecycleStatus, ReviewStatus, IsCurrent, Servable,
-                       PublicationState, PublicationRetryCount
+                       PublicationState, EffectiveStatus, PublicationRetryCount
                 FROM dbo.TaiLieu WHERE DocID = :doc_id
                 """
             ),
@@ -191,7 +192,9 @@ def test_publication_success_reaches_published_and_servable(draft_doc, monkeypat
 
     assert result.ok is True
     assert result.state == "published"
-    assert tuple(doc[:5]) == ("published", "approved", True, True, "published")
+    assert tuple(doc[:6]) == (
+        "published", "approved", True, True, "published", "effective",
+    )
     assert tuple(outbox) == ("done", 1)
     assert calls[0][1]["servable"] is False
     assert len(batch_calls) == 1
@@ -199,6 +202,7 @@ def test_publication_success_reaches_published_and_servable(draft_doc, monkeypat
     assert require_points is True
     assert set(updates) == {doc_id}
     assert updates[doc_id]["servable"] is True
+    assert updates[doc_id]["effective_status"] == "effective"
     assert updates[doc_id]["publication_version"] == 2
     assert updates[doc_id]["supersedes_doc_id"] is None
 
@@ -227,6 +231,6 @@ def test_vector_sync_failure_keeps_document_unservable_and_retryable(draft_doc, 
     assert result.state == "failed"
     assert doc[3] is False
     assert doc[4] == "failed"
-    assert doc[5] == 1
+    assert doc[6] == 1
     assert tuple(outbox) == ("failed", 1)
     assert calls[-1][1] == {"servable": False, "publication_state": "failed"}

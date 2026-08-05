@@ -801,7 +801,8 @@ def _publish_event(
         doc = conn.execute(
             text(
                 """
-                SELECT DocID, BaseCode, VariantCode, PublicationVersion, ServingEpoch
+                SELECT DocID, BaseCode, VariantCode, PublicationVersion,
+                       ServingEpoch, EffectiveStatus
                 FROM dbo.TaiLieu WHERE DocID = :doc_id
                 """
             ),
@@ -814,7 +815,7 @@ def _publish_event(
             old_rows = conn.execute(
                 text(
                     """
-                    SELECT DocID, ServingEpoch
+                    SELECT DocID, ServingEpoch, EffectiveStatus
                     FROM dbo.TaiLieu
                     WHERE BaseCode = :base_code
                       AND ISNULL(VariantCode, 'default') = :variant_code
@@ -829,6 +830,9 @@ def _publish_event(
             ).fetchall()
     old_ids = [int(row[0]) for row in old_rows]
     old_epochs = {int(row[0]): int(row[1] or 0) for row in old_rows}
+    old_effective_statuses = {
+        int(row[0]): _clean(row[2]) or "effective" for row in old_rows
+    }
     next_version = int(doc["PublicationVersion"] or 0) + 1
 
     # Verify that staging points exist and are mutable before SQL becomes published.
@@ -867,6 +871,7 @@ def _publish_event(
             "is_current": False,
             "is_archived": True,
             "lifecycle_status": "superseded",
+            "effective_status": "superseded",
             "publication_state": "published",
         }
         for old_id in old_ids
@@ -874,6 +879,7 @@ def _publish_event(
     publish_updates[doc_id] = {
         "doc_status": "published",
         "lifecycle_status": "published",
+        "effective_status": "effective",
         "review_status": "approved",
         "is_current": True,
         "is_archived": False,
@@ -899,7 +905,8 @@ def _publish_event(
                         """
                         UPDATE dbo.TaiLieu
                         SET IsCurrent = 0, IsArchived = 1, Servable = 0,
-                            LifecycleStatus = 'superseded', ArchivedAt = GETDATE(),
+                            LifecycleStatus = 'superseded',
+                            EffectiveStatus = 'superseded', ArchivedAt = GETDATE(),
                             PublicationState = 'published', PublicationUpdatedAt = GETDATE()
                         WHERE DocID = :old_id
                         """
@@ -911,7 +918,8 @@ def _publish_event(
                     """
                     UPDATE dbo.TaiLieu
                     SET IsCurrent = 1, IsArchived = 0, Servable = 1,
-                        LifecycleStatus = 'published', ReviewStatus = 'approved',
+                        LifecycleStatus = 'published', EffectiveStatus = 'effective',
+                        ReviewStatus = 'approved',
                         PublishedAt = GETDATE(), NgayDuyet = GETDATE(),
                         NguoiDuyet = :reviewer, ReviewedBy = :reviewer,
                         SupersedesDocID = :old_id, TrangThai = 'published',
@@ -950,6 +958,7 @@ def _publish_event(
                 "is_current": True,
                 "is_archived": False,
                 "lifecycle_status": "published",
+                "effective_status": old_effective_statuses.get(old_id, "effective"),
                 "publication_state": "published",
                 "serving_epoch": old_epochs.get(old_id, 0),
             }
@@ -959,6 +968,7 @@ def _publish_event(
             "servable": False,
             "is_current": False,
             "is_archived": False,
+            "effective_status": _clean(doc["EffectiveStatus"]) or "draft",
             "publication_state": "qdrant_synced",
             "serving_epoch": int(doc["ServingEpoch"] or 0),
         }

@@ -370,10 +370,11 @@ def test_process_new_version_event_updates_qdrant_sql_audit_and_cache(monkeypatc
                     "VariantCode": None,
                     "PublicationVersion": 4,
                     "ServingEpoch": 33,
+                    "EffectiveStatus": "draft",
                 }
             )
         if "SELECT DocID, ServingEpoch" in sql:
-            return _Result(rows=[(41, 77)])
+            return _Result(rows=[(41, 77, "effective")])
         return _Result()
 
     fake_engine = _install_engine(monkeypatch, dispatch)
@@ -442,16 +443,19 @@ def test_process_new_version_event_updates_qdrant_sql_audit_and_cache(monkeypatc
         "is_current": False,
         "is_archived": True,
         "lifecycle_status": "superseded",
+        "effective_status": "superseded",
         "publication_state": "published",
     }
     assert activated[42]["servable"] is True
+    assert activated[42]["effective_status"] == "effective"
     assert activated[42]["supersedes_doc_id"] == 41
     assert activated[42]["publication_version"] == 5
-    final_params = next(
-        params
+    final_sql, final_params = next(
+        (sql, params)
         for sql, params in fake_engine.calls
         if "SET IsCurrent = 1, IsArchived = 0, Servable = 1" in sql
     )
+    assert "EffectiveStatus = 'effective'" in final_sql
     assert final_params == {
         "doc_id": 42,
         "reviewer": "Approver",
@@ -459,6 +463,12 @@ def test_process_new_version_event_updates_qdrant_sql_audit_and_cache(monkeypatc
         "publication_version": 5,
         "serving_epoch": 901,
     }
+    supersede_sql = next(
+        sql
+        for sql, _params in fake_engine.calls
+        if "SET IsCurrent = 0, IsArchived = 1, Servable = 0" in sql
+    )
+    assert "EffectiveStatus = 'superseded'" in supersede_sql
     assert any(
         params == {"outbox_id": 901}
         for sql, params in fake_engine.calls
@@ -502,10 +512,11 @@ def test_process_event_restores_prior_qdrant_visibility_when_sql_finalize_fails(
                     "VariantCode": "A",
                     "PublicationVersion": 4,
                     "ServingEpoch": 33,
+                    "EffectiveStatus": "draft",
                 }
             )
         if "SELECT DocID, ServingEpoch" in sql:
-            return _Result(rows=[(41, 77)])
+            return _Result(rows=[(41, 77, "effective")])
         if "SET IsCurrent = 1, IsArchived = 0, Servable = 1" in sql:
             raise RuntimeError("SQL finalize failed")
         return _Result()
@@ -547,6 +558,7 @@ def test_process_event_restores_prior_qdrant_visibility_when_sql_finalize_fails(
         "is_current": True,
         "is_archived": False,
         "lifecycle_status": "published",
+        "effective_status": "effective",
         "publication_state": "published",
         "serving_epoch": 77,
     }
@@ -554,6 +566,7 @@ def test_process_event_restores_prior_qdrant_visibility_when_sql_finalize_fails(
         "servable": False,
         "is_current": False,
         "is_archived": False,
+        "effective_status": "draft",
         "publication_state": "qdrant_synced",
         "serving_epoch": 33,
     }
