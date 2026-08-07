@@ -680,7 +680,6 @@ def build_artifact(
         if passed
         else "inconclusive"
         if provider_smoke_reason == "provider_outage"
-        or not trace_checks.get("provider_errors")
         else "rejected"
     )
     return {

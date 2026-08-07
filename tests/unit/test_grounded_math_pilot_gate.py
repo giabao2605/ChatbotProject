@@ -744,6 +744,7 @@ def test_cli_rejects_trace_parse_errors_without_exposing_raw_line(tmp_path):
     assert _run(cli, inputs) == 2
     artifact = json.loads(inputs["output"].read_text())
     assert artifact["checks"]["provider_errors"] is False
+    assert artifact["decision"] == "rejected"
     assert "secret" not in json.dumps(artifact)
 
 
@@ -772,6 +773,7 @@ def test_cli_rejects_production_error_rows_without_trace_identity(tmp_path, row)
     assert _run(cli, inputs) == 2
     artifact = json.loads(inputs["output"].read_text())
     assert artifact["checks"]["provider_errors"] is False
+    assert artifact["decision"] == "rejected"
 
 
 @pytest.mark.parametrize(
