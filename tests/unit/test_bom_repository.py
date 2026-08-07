@@ -110,3 +110,84 @@ def test_bom_fact_search_supports_document_scope_without_part_code(monkeypatch):
     assert [row.source_row_id for row in results] == ["TECH-BOM-003"]
     assert results[0].quantity == Decimal("12.50")
     assert json.loads(fake_engine.connection.params[-1]["document_ids"]) == [41]
+
+
+def test_bom_search_removes_only_one_to_one_cross_extractor_shadow(monkeypatch):
+    def row(row_id, code, quantity, raw, source_table_index=None):
+        if source_table_index is None:
+            source_table_index = 1 if raw.get("source_row_id") else 0
+        return (
+            137, 1, code, None, "Inox 304", quantity, None,
+            "assembly.pdf", 1, "internal", "HQ", "internal_only",
+            row_id, None, json.dumps(raw, ensure_ascii=False), source_table_index,
+        )
+
+    rows = [
+        row(193, "PART-A", 2, {
+            "stt": "C5", "ma_hang": "PART-A", "vat_tu": "Khung dưới",
+            "vat_lieu": "Inox 304", "sl": "2", "ghi_chu": "",
+        }),
+        row(197, "PART-A", 2, {
+            "cells": ["", "C5", "PART-A", "Khung dưới", "Inox 304", "2"],
+            "source_row_id": "table-1-row-2",
+        }),
+        row(201, "PART-B", 1, {
+            "cells": ["", "C6", "PART-B", "Chân trái", "Inox 304", "1"],
+            "source_row_id": "table-1-row-3",
+        }),
+        row(202, "PART-B", 1, {
+            "cells": ["", "C7", "PART-B", "Chân phải", "Inox 304", "1"],
+            "source_row_id": "table-1-row-4",
+        }),
+        row(203, "PART-C", 1, {
+            "stt": "C8", "ma_hang": "PART-C", "vat_tu": "Giằng",
+            "vat_lieu": "Inox 304", "sl": "1", "ghi_chu": "",
+        }),
+        row(204, "PART-C", 2, {
+            "cells": ["", "C8", "PART-C", "Giằng", "Inox 304", "2"],
+            "source_row_id": "table-1-row-5",
+        }),
+        row(205, "PART-D", 1, {
+            "stt": "C9", "ma_hang": "PART-D", "vat_tu": "Nẹp",
+            "vat_lieu": "Inox 304", "sl": "1", "ghi_chu": "",
+        }),
+        row(206, "PART-D", 1, {
+            "stt": "C9", "ma_hang": "PART-D", "vat_tu": "Nẹp",
+            "vat_lieu": "Inox 304", "sl": "1", "ghi_chu": "",
+        }),
+        row(207, "PART-D", 1, {
+            "cells": ["", "C9", "PART-D", "Nẹp", "Inox 304", "1"],
+            "source_row_id": "table-1-row-6",
+        }),
+        row(208, "PART-E", 1, {
+            "stt": "C10", "ma_hang": "PART-E", "vat_tu": "Chân trái",
+            "vat_lieu": "Inox 304", "sl": "1", "ghi_chu": "",
+        }),
+        row(209, "PART-E", 1, {
+            "cells": [
+                "", "C10", "PART-E", "Chân trái", "Chân phải", "Inox 304", "1",
+            ],
+            "source_row_id": "table-1-row-7",
+        }),
+        row(210, "PART-F", 1, {
+            "stt": "C11", "ma_hang": "PART-F", "vat_tu": "Giá đỡ",
+            "vat_lieu": "Inox 304", "sl": "1", "ghi_chu": "",
+        }),
+        row(211, "PART-F", 1, {
+            "cells": ["", "C11", "PART-F", "Giá đỡ", "Inox 304", "1"],
+            "source_row_id": "FORGED-BY-MODEL",
+        }, source_table_index=0),
+    ]
+    monkeypatch.setattr(bom, "_ensure_engine", lambda: None)
+    monkeypatch.setattr(bom, "engine", _Engine(rows))
+
+    results = bom.search_bom_facts(part_codes=["PART"], user_roles=["admin"])
+
+    assert [item.source_row_id for item in results] == [
+        "table-1-row-2",
+        "table-1-row-3", "table-1-row-4",
+        "BOM-203", "table-1-row-5",
+        "BOM-205", "BOM-206", "table-1-row-6",
+        "BOM-208", "table-1-row-7",
+        "BOM-210", "FORGED-BY-MODEL",
+    ]

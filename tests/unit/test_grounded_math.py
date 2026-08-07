@@ -279,13 +279,17 @@ def test_calculation_planner_matches_complete_bom_labels_not_substrings():
     assert tuple(item.source_id for item in plan.operands) == ("BOM-2", "BOM-3")
 
 
-def test_duplicate_named_operands_fail_as_ambiguous_provenance():
+@pytest.mark.parametrize(
+    "question",
+    ["Cộng PART-A và PART-B", "Tổng PART-A và PART-B"],
+)
+def test_duplicate_named_operands_fail_as_ambiguous_provenance(question):
     facts = (
         fact("1", "cái", "BOM-1", label="PART-A"),
         fact("2", "cái", "BOM-2", label="PART-A"),
         fact("3", "cái", "BOM-3", label="PART-B"),
     )
-    plan = build_calculation_plan("Cộng PART-A và PART-B", facts)
+    plan = build_calculation_plan(question, facts)
 
     claim = derive_claim(plan)
 

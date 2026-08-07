@@ -262,7 +262,7 @@ def derive_claim(plan: CalculationPlan) -> DerivedClaim:
     if len({fact.doc_id for fact in facts}) != 1:
         return _invalid("ambiguous_provenance", facts)
     labels = [_fold(fact.label).strip() for fact in facts if str(fact.label or "").strip()]
-    if operation != "sum" and len(labels) != len(set(labels)):
+    if len(labels) != len(set(labels)):
         return _invalid("ambiguous_provenance", facts)
 
     canonical_units: dict[str, str] = {}

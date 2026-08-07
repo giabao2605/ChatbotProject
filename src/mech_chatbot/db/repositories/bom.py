@@ -3,6 +3,7 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 import re
+from collections import Counter
 from decimal import Decimal, InvalidOperation
 import json
 from typing import NamedTuple
@@ -41,6 +42,103 @@ class BomSearchRow(NamedTuple):
     bom_row_id: int
     unit: str | None
     source_row_id: str
+
+
+def _raw_bom_payload(raw):
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalized_bom_text(value):
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def _first_payload_value(payload, *keys):
+    return next((payload.get(key) for key in keys if payload.get(key)), "")
+
+
+def _bom_fact_identity(row, payload):
+    fact = _normalize_bom_result_row(row, payload)
+    return (
+        fact.doc_id,
+        fact.page,
+        _normalized_bom_text(fact.part_code),
+        _normalized_bom_text(fact.material),
+        fact.quantity,
+        _normalized_bom_text(fact.note),
+        _normalized_bom_text(fact.unit),
+        fact.version,
+    )
+
+
+def _cross_extractor_signature(row):
+    payload = _raw_bom_payload(row[14] if len(row) > 14 else None)
+    try:
+        source_table_index = int(row[15])
+    except (IndexError, TypeError, ValueError):
+        return None
+    cells = payload.get("cells")
+    if (
+        source_table_index >= 1
+        and payload.get("source_row_id")
+        and isinstance(cells, list)
+    ):
+        kind = "structured"
+        values = cells
+    elif (
+        source_table_index == 0
+        and not payload.get("source_row_id")
+        and payload.get("stt")
+    ):
+        kind = "vision"
+        values = (
+            payload.get("stt"),
+            _first_payload_value(payload, "ma_hang", "ma", "code"),
+            _first_payload_value(
+                payload, "vat_tu", "ten_vat_tu", "ten", "name",
+            ),
+            _first_payload_value(payload, "vat_lieu", "material"),
+            _first_payload_value(payload, "sl", "qty", "so_luong"),
+            _first_payload_value(payload, "ghi_chu", "note"),
+            _first_payload_value(payload, "don_vi", "unit"),
+        )
+    else:
+        return None
+    content = tuple(sorted(
+        normalized
+        for value in values
+        if (normalized := _normalized_bom_text(value))
+    ))
+    if len(content) < 4:
+        return None
+    return kind, (_bom_fact_identity(row, payload), content)
+
+
+def _remove_verified_cross_extractor_shadows(rows):
+    rows = tuple(rows)
+    signatures = tuple(
+        (index, signature)
+        for index, row in enumerate(rows)
+        if (signature := _cross_extractor_signature(row)) is not None
+    )
+    vision_counts = Counter(
+        identity for _, (kind, identity) in signatures if kind == "vision"
+    )
+    structured_counts = Counter(
+        identity for _, (kind, identity) in signatures if kind == "structured"
+    )
+    shadows = frozenset(
+        index
+        for index, (kind, identity) in signatures
+        if kind == "vision"
+        and vision_counts[identity] == structured_counts[identity] == 1
+    )
+    return tuple(row for index, row in enumerate(rows) if index not in shadows)
 
 def normalize_material_name(raw):
     """P2: uy quyen cho material_registry (tu dien DB). Fallback logic cu neu loi."""
@@ -96,17 +194,10 @@ def save_bom_records(doc_id, trang_so, records, *, db_engine=None):
         return 0
 
 
-def _normalize_bom_result_row(row):
+def _normalize_bom_result_row(row, structured=None):
     values = list(row)
     raw = values[14] if len(values) > 14 else None
-    structured = {}
-    if raw:
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                structured = parsed
-        except (TypeError, ValueError, json.JSONDecodeError):
-            structured = {}
+    structured = _raw_bom_payload(raw) if structured is None else structured
     quantity_raw = structured.get("quantity_decimal")
     if quantity_raw in (None, ""):
         quantity_raw = values[5]
@@ -303,7 +394,8 @@ def search_bom_facts(
             query = text(f"""
                 SELECT DISTINCT b.DocID, b.TrangSo, b.MaHang, b.TenVatTu, b.VatLieu,
                        b.SoLuong, b.GhiChu, t.TenFile, t.VersionNo, t.SecurityLevel,
-                       t.Site, t.ExternalProcessingPolicy, b.ID, b.Unit, b.RawRowJson
+                       t.Site, t.ExternalProcessingPolicy, b.ID, b.Unit, b.RawRowJson,
+                       b.SourceTableIndex
                 FROM BangKeVatTu b
                 JOIN TaiLieu t ON b.DocID = t.DocID
                 WHERE {filter_sql} AND b.TrangSo IS NOT NULL AND (
@@ -312,7 +404,10 @@ def search_bom_facts(
             """)
 
             result = conn.execute(query, params).fetchall()
-            return [_normalize_bom_result_row(row) for row in result]
+            return [
+                _normalize_bom_result_row(row)
+                for row in _remove_verified_cross_extractor_shadows(result)
+            ]
     except Exception as e:
         logger.error(f"Loi search_bom_facts: {e}", exc_info=True)
         return []
