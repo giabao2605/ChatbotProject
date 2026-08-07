@@ -1680,6 +1680,18 @@ def test_profile_pair_launcher_renders_canonical_profiles_into_separate_processe
     assert "$candidateEnv.RAG_LATE_INTERACTION_ENABLED" not in launcher
 
 
+def test_profile_pair_stopper_parses_iso_timestamps_culture_independently():
+    stopper = Path("scripts/ops/stop_rag_profile_pair.ps1").read_text(
+        encoding="utf-8",
+    )
+
+    assert "[Globalization.CultureInfo]::InvariantCulture" in stopper
+    assert "[Globalization.DateTimeStyles]::RoundtripKind" in stopper
+    assert "ConvertFrom-Json -DateKind String" in stopper
+    assert "System.Web.Script.Serialization.JavaScriptSerializer" in stopper
+    assert "Get-Command ConvertFrom-Json" in stopper
+
+
 def test_legacy_crag_launcher_uses_activation_bundle_and_canonical_renderer():
     launcher = Path("scripts/ops/start_crag_controlled_demo.ps1").read_text(
         encoding="utf-8",

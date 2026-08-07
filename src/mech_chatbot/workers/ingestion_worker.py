@@ -7,6 +7,7 @@ import sys
 from mech_chatbot.application.ingestion_runner import IngestionJob
 from mech_chatbot.composition.worker_runtime import WorkerRuntime, build_worker_runtime
 from mech_chatbot.config.logging import LoggingConfig, configure_logging, logger
+from mech_chatbot.config.repository_runtime import bind_repository_runtime
 from mech_chatbot.config.settings import Settings, load_settings
 
 
@@ -46,41 +47,58 @@ def run_worker(runtime: WorkerRuntime | None = None) -> None:
         resolved_runtime = build_worker_runtime(settings_snapshot)
     else:
         resolved_runtime = runtime
-    logger.info("Khởi động Ingestion Worker chạy ngầm...")
-    print("Ingestion Worker đã sẵn sàng. Đang chờ file mới...")
     last_publication_reconcile = 0.0
     last_serving_reconcile = 0.0
 
+    database_engine = getattr(resolved_runtime.database_runtime, "engine", None)
+    dependencies = resolved_runtime.pipeline_dependencies
+    qdrant_client = getattr(dependencies, "qdrant_client", None)
+    qdrant_collection = getattr(dependencies, "collection_name", None)
     try:
-        while True:
-            job: IngestionJob | None = None
-            try:
-                last_publication_reconcile, last_serving_reconcile = _reconcile(
-                    resolved_runtime,
-                    last_publication_reconcile,
-                    last_serving_reconcile,
-                )
-                job = resolved_runtime.job_store.claim_next(resolved_runtime.worker_id)
-                if job is None:
-                    resolved_runtime.clock.sleep(
-                        resolved_runtime.settings.idle_sleep_seconds
+        if (
+            database_engine is None
+            or qdrant_client is None
+            or not str(qdrant_collection or "").strip()
+        ):
+            raise RuntimeError(
+                "Ingestion worker requires explicit SQL and Qdrant repositories"
+            )
+        logger.info("Khởi động Ingestion Worker chạy ngầm...")
+        print("Ingestion Worker đã sẵn sàng. Đang chờ file mới...")
+        with bind_repository_runtime(
+            db_engine=database_engine,
+            qdrant_client=qdrant_client,
+            qdrant_collection=qdrant_collection,
+        ):
+            while True:
+                job: IngestionJob | None = None
+                try:
+                    last_publication_reconcile, last_serving_reconcile = _reconcile(
+                        resolved_runtime,
+                        last_publication_reconcile,
+                        last_serving_reconcile,
                     )
-                    continue
-                logger.info("Worker bắt đầu xử lý JobID %s: %s", job.job_id, job.file_name)
-                result = resolved_runtime.runner.run(job)
-                logger.info(
-                    "Job %s kết thúc với outcome=%s reason=%s",
-                    job.job_id,
-                    result.outcome,
-                    result.reason_code,
-                )
-            except Exception as exc:  # noqa: BLE001 - process loop must reconcile a claimed job
-                logger.error("Lỗi không xác định trong Ingestion Worker: %s", exc, exc_info=True)
-                if job is not None:
-                    resolved_runtime.reconcile_job_failure(job, exc)
-                resolved_runtime.clock.sleep(
-                    resolved_runtime.settings.error_sleep_seconds
-                )
+                    job = resolved_runtime.job_store.claim_next(resolved_runtime.worker_id)
+                    if job is None:
+                        resolved_runtime.clock.sleep(
+                            resolved_runtime.settings.idle_sleep_seconds
+                        )
+                        continue
+                    logger.info("Worker bắt đầu xử lý JobID %s: %s", job.job_id, job.file_name)
+                    result = resolved_runtime.runner.run(job)
+                    logger.info(
+                        "Job %s kết thúc với outcome=%s reason=%s",
+                        job.job_id,
+                        result.outcome,
+                        result.reason_code,
+                    )
+                except Exception as exc:  # noqa: BLE001 - process loop must reconcile a claimed job
+                    logger.error("Lỗi không xác định trong Ingestion Worker: %s", exc, exc_info=True)
+                    if job is not None:
+                        resolved_runtime.reconcile_job_failure(job, exc)
+                    resolved_runtime.clock.sleep(
+                        resolved_runtime.settings.error_sleep_seconds
+                    )
     finally:
         if owns_runtime:
             resolved_runtime.close()

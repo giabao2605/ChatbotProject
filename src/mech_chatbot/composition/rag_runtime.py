@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, Protocol
 
 from mech_chatbot.config.settings import RagProcessSettings, Settings, SqlSettings
-from mech_chatbot.config.logging import TraceRuntime
+from mech_chatbot.config.logging import TraceRuntime, runtime_identity_sha256
 from mech_chatbot.rag.execution import (
     DefaultRagExecutor,
     RagExecutor,
@@ -180,6 +180,45 @@ def _runtime_contract(settings: RagProcessSettings) -> RagRuntimeContract:
             "request_deadline_seconds": settings.request_deadline_seconds,
         }
     )
+
+
+def _runtime_identity(
+    settings: Settings,
+    process: RagProcessSettings,
+    retrieval: RagRetrievalAdapter,
+) -> str:
+    from mech_chatbot.governance.feature_activation import FEATURE_FLAGS
+    from mech_chatbot.governance.provider_smoke import (
+        provider_configuration_sha256_for_settings,
+    )
+
+    return runtime_identity_sha256({
+        "git_sha": process.deployment_git_sha,
+        "deployment_id": process.deployment_id,
+        "activation_profile": str(
+            settings.RAG_ACTIVATION_PROFILE or "all_off"
+        ).strip().casefold(),
+        "feature_flags": {
+            name: bool(getattr(settings, name)) for name in FEATURE_FLAGS
+        },
+        "snapshot_fingerprint": process.snapshot_fingerprint,
+        "provider_configuration_sha256": (
+            provider_configuration_sha256_for_settings(settings)
+        ),
+        "qdrant_collection": getattr(
+            retrieval,
+            "collection_name",
+            settings.QDRANT_COLLECTION,
+        ),
+        "sql_database": settings.SQL_DATABASE,
+        "activation_bundle_sha256": settings.RAG_ACTIVATION_BUNDLE_SHA256,
+        "restore_evidence_sha256": getattr(
+            settings,
+            "RAG_RESTORE_EVIDENCE_SHA256",
+            None,
+        ),
+        "request_deadline_seconds": process.request_deadline_seconds,
+    })
 
 
 def _build_external_stack(settings, qdrant_builder, llm_builder, vision_builder):
@@ -528,6 +567,9 @@ def build_rag_runtime(
         resolved_provider = provider
 
     process_settings = _process_settings(existing_settings)
+    identity_settings = (
+        existing_settings if isinstance(existing_settings, Settings) else Settings()
+    )
     if trace_persist is None:
         from mech_chatbot.db.repositories.analytics import save_rag_trace_summary
 
@@ -547,6 +589,11 @@ def build_rag_runtime(
         trace_runtime=TraceRuntime(
             persist=trace_persist,
             execution_context=current_execution_context,
+            runtime_identity_sha256=_runtime_identity(
+                identity_settings,
+                process_settings,
+                resolved_retrieval,
+            ),
         ),
         executor=DefaultRagExecutor(
             execute_pipeline=resolved_execute,

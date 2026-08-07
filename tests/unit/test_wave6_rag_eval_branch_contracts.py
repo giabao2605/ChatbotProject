@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from types import SimpleNamespace
 
 import pytest
@@ -83,6 +84,14 @@ def test_entity_constraints_and_candidate_resolution_cover_policy_outcomes():
     assert insufficient["decision"] == "insufficient"
     assert "| # | Mã / Model |" in entity_resolver.build_candidate_table_markdown(single["candidates"])
     assert entity_resolver.build_candidate_table_markdown([]) == ""
+
+
+def test_explicit_code_detection_rejects_long_plain_text_without_backtracking():
+    started_at = perf_counter()
+
+    assert not entity_resolver.has_explicit_code("A" * 20_000)
+    assert not entity_resolver.has_explicit_code("A-" * 10_000)
+    assert perf_counter() - started_at < 0.5
 
 
 def test_conversation_state_selection_and_history_branches(monkeypatch):

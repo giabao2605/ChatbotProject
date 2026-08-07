@@ -577,6 +577,42 @@ def _successful_rag_events(
     for citation in attributed_citations(final_diagnostics, "".join(answer_parts)):
         yield RagCitation(citation=citation)
     outcome, refusal_reason = state.completion()
+    if state.budget.calculations > 0:
+        from mech_chatbot.config.logging import log_trace
+
+        validation = final_diagnostics.get("pilot_request_validation")
+        validation = validation if isinstance(validation, MappingABC) else {}
+        log_trace(
+            "pilot_request_evidence",
+            trace_id,
+            execution_context=current_execution_context(),
+            route="calculation",
+            calculation_result_status=(
+                "valid"
+                if (generation_metrics or {}).get("calculation_result_status") == "valid"
+                else "invalid"
+            ),
+            security_passed=validation.get("access_scope_passed") is True,
+            citation_structure_passed=(
+                validation.get("citation_structure_passed") is True
+            ),
+            provenance_passed=validation.get("provenance_passed") is True,
+            leakage_detected=validation.get("leakage_passed") is not True,
+            calculations=state.budget.calculations,
+            final_latency_ms=max(
+                0,
+                round((time.monotonic() - state.budget.started_monotonic) * 1000),
+            ),
+            request_deadline_ms=max(
+                0,
+                int(state.budget.limits.deadline_seconds * 1000),
+            ),
+            estimated_cost=float(
+                (generation_metrics or {}).get("estimated_cost") or 0.0
+            ),
+            provider_retries=state.budget.provider_retries,
+            final_generations=state.budget.final_generations,
+        )
     yield RagCompleted(
         outcome=outcome,
         trace_id=trace_id,

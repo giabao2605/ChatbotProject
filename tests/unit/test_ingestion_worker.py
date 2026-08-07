@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from types import SimpleNamespace
 
 import pytest
 
 from mech_chatbot.application.ingestion_runner import IngestionJob, IngestionResult
+from mech_chatbot.application.vector_ingestion import IngestionPipelineDependencies
 from mech_chatbot.composition.worker_runtime import WorkerRuntime
+from mech_chatbot.config.repository_runtime import (
+    bind_repository_runtime,
+    current_qdrant_runtime,
+    current_repository_engine,
+)
 from mech_chatbot.config.settings import Settings, WorkerProcessSettings
 from mech_chatbot.workers import ingestion_worker
 
@@ -91,6 +98,11 @@ def _runtime(
     serving=None,
     settings=None,
 ) -> WorkerRuntime:
+    dependencies = IngestionPipelineDependencies(
+        vector_store=object(),
+        qdrant_client=object(),
+        collection_name="KnowledgeBase",
+    )
     return WorkerRuntime(
         settings=(
             settings
@@ -103,6 +115,8 @@ def _runtime(
         reconcile_publications=publication or (lambda **_: {}),
         reconcile_serving_state=serving or (lambda **_: {}),
         reconcile_job_failure=store.reconcile_unexpected_failure,
+        database_runtime=SimpleNamespace(engine=object(), close=lambda: None),
+        pipeline_dependencies=dependencies,
     )
 
 
@@ -240,6 +254,63 @@ def test_worker_delegates_lifecycle_to_runner_without_state_decisions() -> None:
     assert store.waiting == []
 
 
+def test_worker_binds_composed_repositories_while_processing_jobs() -> None:
+    database_engine = object()
+    qdrant_client = object()
+    dependencies = IngestionPipelineDependencies(
+        vector_store=object(),
+        qdrant_client=qdrant_client,
+        collection_name="KnowledgeBase",
+    )
+    observed = []
+
+    class ContextRunner(FakeRunner):
+        def run(self, job: IngestionJob) -> IngestionResult:
+            observed.append(
+                (
+                    current_repository_engine(),
+                    current_qdrant_runtime(),
+                )
+            )
+            return super().run(job)
+
+    runtime = _runtime(
+        FakeStore([_job(), None]),
+        ContextRunner(),
+        FakeClock(),
+    )
+    runtime = replace(
+        runtime,
+        database_runtime=SimpleNamespace(engine=database_engine),
+        pipeline_dependencies=dependencies,
+    )
+
+    with pytest.raises(_StopWorker):
+        ingestion_worker.run_worker(runtime)
+
+    assert observed == [
+        (database_engine, (qdrant_client, "KnowledgeBase")),
+    ]
+    assert current_repository_engine() is None
+    assert current_qdrant_runtime() == (None, None)
+
+
+def test_worker_rejects_missing_repositories_instead_of_inheriting_ambient() -> None:
+    runtime = replace(
+        _runtime(FakeStore([_job()]), FakeRunner(), FakeClock()),
+        database_runtime=None,
+        pipeline_dependencies=None,
+    )
+
+    with bind_repository_runtime(
+        db_engine=object(),
+        qdrant_client=object(),
+        qdrant_collection="Ambient",
+    ):
+        with pytest.raises(RuntimeError, match="explicit SQL and Qdrant"):
+            ingestion_worker.run_worker(runtime)
+
+
 @pytest.mark.parametrize(
     ("message", "waiting"),
     [("resource_exhausted: quota exceeded", True), ("unexpected parser failure", False)],
@@ -272,6 +343,8 @@ def test_worker_reconciles_unexpected_runner_errors(
     else:
         assert store.failed == [(job.job_id, message)]
         assert store.waiting == []
+    assert current_repository_engine() is None
+    assert current_qdrant_runtime() == (None, None)
 
 
 def test_run_worker_parses_one_settings_snapshot_at_process_start(monkeypatch) -> None:

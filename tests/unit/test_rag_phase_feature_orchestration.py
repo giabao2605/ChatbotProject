@@ -924,6 +924,129 @@ def test_executor_runs_graph_bom_image_and_corrective_enrichment(monkeypatch):
     assert corrected_document in outcome.documents
 
 
+@pytest.mark.parametrize(
+    ("part_ids", "expected_codes"),
+    [
+        (("HCP7235-STK",), []),
+        (("HCP7235-STK", "PART-A"), ["PART-A"]),
+    ],
+)
+def test_grounded_math_exact_bom_filename_selects_one_variant(
+    monkeypatch, part_ids, expected_codes,
+):
+    from mech_chatbot.rag.phases import retrieval_enrichment as enrichment_phase
+    from mech_chatbot.rag.phases.contracts import PhaseTerminal
+
+    request = _prepared_request(
+        question=(
+            "Tính tổng BOM của 9.3.03951(HCP7235-STK)-ver03-Model8.pdf "
+            "và nêu rõ phép tính."
+        )
+    )
+    decision = replace(
+        _route_decision(request, part_ids=part_ids),
+        is_bom_query=True,
+    )
+    documents = tuple(
+        Document(
+            page_content=f"Bản vẽ cơ khí {variant}",
+            metadata={
+                "doc_id": str(doc_id),
+                "trang_so": 1,
+                "file_goc": f"9.3.03951(HCP7235-STK)-ver03-{variant}.pdf",
+                "base_code": "9.3.03951",
+                "variant_code": variant,
+                "version_no": 3,
+                "domain": "mechanical",
+            },
+        )
+        for doc_id, variant in ((68, "Model7"), (69, "Model8"))
+    )
+    primary = PrimaryRetrievalOutcome(
+        documents=documents,
+        base_k=5,
+        retrieval_mode="hybrid",
+        started_at=time.time(),
+        active_filter=None,
+        has_active_filter=False,
+        decomposition_notice="",
+        decomposition_states=(),
+        decomposition_branches=(),
+        decomposition_intents=(),
+        decomposition_intent_coverage=(),
+        decomposition_used_fallback=False,
+        decomposition_intent_overflow=False,
+        auxiliary_input_tokens=0,
+        auxiliary_output_tokens=0,
+        planner_estimated_cost=0.0,
+        correction_estimated_cost=0.0,
+        lookup_documents=documents,
+    )
+    bom_lookups = []
+
+    monkeypatch.setattr(
+        "mech_chatbot.rag.community_summaries.load_community_context",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            documents=(), used=False, summary_count=0, reason="disabled"
+        ),
+    )
+    monkeypatch.setattr(
+        enrichment_phase,
+        "search_bom_facts",
+        lambda **kwargs: bom_lookups.append(kwargs) or [],
+    )
+
+    outcome = _run_phase(
+        lambda state: enrichment_phase.enrich_retrieval(decision, primary, state),
+        retrieval=_retrieval_adapter(grounded_math_enabled=True),
+        provider=SimpleNamespace(invoke=lambda *_args, **_kwargs: None),
+    )
+
+    assert not isinstance(outcome, PhaseTerminal)
+    assert [document.metadata["doc_id"] for document in outcome.documents] == ["69"]
+    assert [
+        (lookup["part_codes"], lookup["document_ids"])
+        for lookup in bom_lookups
+    ] == [(expected_codes, [69])]
+
+
+def test_exact_document_operand_miss_does_not_fall_back_to_all_document_rows():
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import (
+        _search_bom_rows,
+    )
+
+    calls = []
+
+    def search_bom_facts(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    context = SimpleNamespace(
+        decision=SimpleNamespace(
+            request=SimpleNamespace(
+                user_department="Technical",
+                max_security_level="internal",
+            ),
+            intent_data={"version_policy": "current_only"},
+        ),
+        user_roles=("viewer",),
+        allowed_departments=("Technical",),
+        allowed_sites=("HQ",),
+    )
+
+    assert _search_bom_rows(
+        context,
+        ["PART-NOT-IN-DOCUMENT"],
+        [69],
+        search_bom_facts,
+        exact_document=True,
+    ) == []
+    assert [
+        (call["part_codes"], call["document_ids"])
+        for call in calls
+    ] == [(["PART-NOT-IN-DOCUMENT"], [69])]
+
+
 def test_bom_lookup_falls_back_to_the_governed_document_scope():
     from mech_chatbot.rag.phases.retrieval_enrichment_support import (
         _search_bom_rows,
@@ -961,6 +1084,76 @@ def test_bom_lookup_falls_back_to_the_governed_document_scope():
         [],
     ]
     assert [call["document_ids"] for call in calls] == [[], [43]]
+
+
+def test_bom_aggregate_uses_only_the_resolved_document_scope():
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import (
+        _search_bom_rows,
+    )
+
+    calls = []
+
+    def search_bom_facts(**kwargs):
+        calls.append(kwargs)
+        return ["scoped-row"] if kwargs["document_ids"] == [136] else [
+            "row-from-136",
+            "row-from-137",
+        ]
+
+    context = SimpleNamespace(
+        decision=SimpleNamespace(
+            request=SimpleNamespace(
+                user_department="Technical",
+                max_security_level="internal",
+            ),
+            intent_data={"version_policy": "current_only"},
+        ),
+        user_question=(
+            "Tính tổng số lượng toàn bộ các dòng BOM của "
+            "9.3.04068 ver01 Model3."
+        ),
+        user_roles=("viewer",),
+        allowed_departments=("Technical",),
+        allowed_sites=("HQ",),
+    )
+
+    rows = _search_bom_rows(
+        context,
+        ["9.3.04068"],
+        [136],
+        search_bom_facts,
+    )
+
+    assert rows == ["scoped-row"]
+    assert [
+        (call["part_codes"], call["document_ids"])
+        for call in calls
+    ] == [([], [136])]
+
+
+def test_bom_documents_use_an_internal_repository_scope_marker():
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import (
+        _build_bom_documents,
+        is_governed_sql_bom_document,
+    )
+
+    documents = _build_bom_documents(
+        {
+            (7, 2): {
+                "file_goc": "assembly.pdf",
+                "version_no": 3,
+                "security_level": "internal",
+                "site": "HQ",
+                "external_processing_policy": "internal_only",
+                "lines": ["- Ma: P-1"],
+            }
+        },
+        {},
+    )
+
+    assert is_governed_sql_bom_document(documents[0]) is True
+    assert "access_scope_serving_predicates_applied" not in documents[0].metadata
+    assert "version_policy_serving_predicates_applied" not in documents[0].metadata
 
 
 def test_bom_lookup_does_not_scope_explicit_operands_to_one_document():

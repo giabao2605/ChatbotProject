@@ -636,6 +636,14 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     if grounded_math_enabled and calculation_docs:
         if budget is not None:
             budget.record("calculations", 1, cumulative=True)
+        calculation_result_status = (
+            "valid"
+            if all(
+                document.metadata["calculation_provenance"].get("status") == "valid"
+                for document in calculation_docs
+            )
+            else "invalid"
+        )
         answer = render_grounded_calculation_answer(
             retrieved_docs,
             language=response_language,
@@ -644,6 +652,8 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
             validate_grounded_calculation_answer(answer, retrieved_docs)
             if answer is not None else "missing_calculation_citation"
         )
+        metrics["citation_structure_passed"] = not bool(violation)
+        metrics["provenance_passed"] = not bool(violation)
         if violation:
             outcome.refusal_reason = "grounded_math_post_check"
             answer = make_insufficient_evidence_message(
@@ -652,6 +662,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 lang=response_language,
             )
         metrics["calculation_count"] = 1
+        metrics["calculation_result_status"] = calculation_result_status
         metrics["output_tokens"] += len(answer) // 4
 
         calculation_sources = {
@@ -686,6 +697,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 "grounded_math_generation",
                 trace_id,
                 calculations=len(calculation_docs),
+                calculation_result_status=calculation_result_status,
                 validation_status="blocked" if violation else "passed",
                 doc_ids=[document.metadata.get("doc_id") for document in calculation_docs],
             )
@@ -718,6 +730,8 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         | provider_model
         | StrOutputParser()
     )
+    if budget is not None:
+        budget.record("final_generations", 1, cumulative=True)
 
     stream_input = {
         "context": context_text,

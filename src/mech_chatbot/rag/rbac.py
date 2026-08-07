@@ -133,6 +133,62 @@ def create_rbac_filter(
     return models.Filter(must=must)
 
 
+def document_matches_access_scope(
+    metadata,
+    *,
+    user_department,
+    user_roles,
+    allowed_departments,
+    max_security_level,
+    allowed_sites,
+):
+    """Re-check one served document against the current retrieval scope."""
+    metadata = metadata if isinstance(metadata, dict) else {}
+    raw_departments = metadata.get("phong_ban_quyen")
+    security_level = str(metadata.get("security_level") or "").strip()
+    site = str(metadata.get("site") or "").strip()
+    if isinstance(raw_departments, str):
+        document_departments = {raw_departments.strip()} if raw_departments.strip() else set()
+    elif isinstance(raw_departments, (list, tuple, set, frozenset)):
+        document_departments = {
+            str(item).strip() for item in raw_departments if str(item).strip()
+        }
+    else:
+        document_departments = set()
+    if not document_departments or not security_level or not site:
+        return False
+
+    roles = {
+        str(role).strip().lower()
+        for role in (user_roles or [])
+        if str(role).strip()
+    }
+    if not roles:
+        return False
+    if "admin" in roles:
+        return True
+
+    clearance = str(max_security_level or "public").strip().lower()
+    if clearance not in LEVEL_ORDER or security_level.lower() not in LEVEL_ORDER:
+        return False
+    if LEVEL_ORDER[security_level.lower()] > LEVEL_ORDER[clearance]:
+        return False
+
+    sites = {str(item).strip() for item in (allowed_sites or []) if str(item).strip()}
+    if site not in sites:
+        return False
+
+    departments = {
+        str(item).strip()
+        for item in (allowed_departments or [])
+        if str(item).strip()
+    }
+    if user_department and str(user_department).strip():
+        departments.add(str(user_department).strip())
+    departments.add(SHARE_ALL_DEPARTMENT)
+    return bool(document_departments & departments)
+
+
 def _part_id_should_filter(new_part_ids, broad=False):
     """Dieu kien should match ma chi tiet (part id) tren cac key metadata."""
     keys = PART_ID_KEYS_BROAD if broad else PART_ID_KEYS_STRICT

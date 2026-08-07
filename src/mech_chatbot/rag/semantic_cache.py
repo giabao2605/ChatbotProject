@@ -7,11 +7,24 @@
 import json
 import math
 import hashlib
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 
+from mech_chatbot.domain.document_types import SUPPORTED_LEARNING_EXTENSIONS
+from mech_chatbot.rag.entity_resolver import has_explicit_code
+
 
 _REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
+_FILE_REFERENCE = re.compile(
+    rf"(?<=[^\s\"'“”‘’])(?:{'|'.join(sorted(map(re.escape, SUPPORTED_LEARNING_EXTENSIONS), key=len, reverse=True))})(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def _document_specific(question):
+    text = str(question or "")
+    return bool(_FILE_REFERENCE.search(text) or has_explicit_code(text))
 
 
 @contextmanager
@@ -206,6 +219,8 @@ def select_best(candidates, embedding, threshold):
 
 
 def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93):
+    if _document_specific(question):
+        return None
     from mech_chatbot.db.repositories.semantic_cache import (
         sc_get_candidates, sc_docs_all_current, sc_record_lookup, sc_record_hit, sc_delete,
     )
@@ -216,6 +231,9 @@ def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93):
     parsed = []
     for c in cands:
         try:
+            candidate_question = str(c.get("question") or "").strip()
+            if not candidate_question or _document_specific(candidate_question):
+                continue
             emb = c.get("embedding")
             c["embedding"] = json.loads(emb) if isinstance(emb, str) else emb
             if c["embedding"]:

@@ -138,6 +138,18 @@ def test_get_and_list_domain_profiles_normalize_json_and_defaults(fake_db):
     assert governance.list_department_domain_profiles()[1]["document_types"] == []
 
 
+def test_get_domain_profile_accepts_an_explicit_database_engine() -> None:
+    connection = _Connection([_Result(row=_profile_row())])
+
+    result = governance.get_department_domain_profile(
+        "Technical",
+        db_engine=_Engine(connection),
+    )
+
+    assert result["department_code"] == "Technical"
+    assert result["document_types"] == ["manual", "sop"]
+
+
 @pytest.mark.parametrize(
     "kwargs, message",
     [

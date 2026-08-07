@@ -171,6 +171,38 @@ def test_trace_callbacks_are_task_scoped_and_do_not_import_upper_layers(
     assert events[1]["execution_context"] == "production"
 
 
+def test_runtime_identity_digest_is_canonical_and_trace_callers_cannot_spoof_it(
+    monkeypatch,
+):
+    events: list[dict] = []
+    binding = "a" * 64
+    monkeypatch.setattr(
+        trace_logging.trace_logger,
+        "info",
+        lambda message: events.append(json.loads(message)),
+    )
+
+    assert trace_logging.runtime_identity_sha256({"b": 2, "a": 1}) == (
+        "43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777"
+    )
+    with trace_logging.bind_trace_runtime(
+        trace_logging.TraceRuntime(runtime_identity_sha256=binding)
+    ):
+        trace_logging.log_trace(
+            "route",
+            "runtime-bound",
+            runtime_identity_sha256="b" * 64,
+        )
+
+    assert events[0]["runtime_identity_sha256"] == binding
+    trace_logging.log_trace(
+        "route",
+        "runtime-unbound",
+        runtime_identity_sha256="b" * 64,
+    )
+    assert "runtime_identity_sha256" not in events[1]
+
+
 def test_maintenance_runtime_binds_and_closes_cli_dependencies(monkeypatch):
     from mech_chatbot.composition import maintenance_runtime
     from mech_chatbot.config.repository_runtime import (

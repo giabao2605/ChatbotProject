@@ -126,6 +126,7 @@ def _generation_plan(
 
 
 def _generation_debug(
+    decision: RouteDecision,
     primary: PrimaryRetrievalOutcome,
     enrichment: EnrichmentOutcome,
     reranked: RerankOutcome,
@@ -165,6 +166,40 @@ def _generation_debug(
         }
     )
     debug_info["generation_metrics"] = generation_metrics
+    from mech_chatbot.domain.serving_state import is_currently_servable
+    from mech_chatbot.rag.rbac import document_matches_access_scope
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import (
+        is_governed_sql_bom_document,
+    )
+
+    request = decision.request
+    access_scope_passed = bool(documents) and all(
+        is_governed_sql_bom_document(document)
+        or document_matches_access_scope(
+            getattr(document, "metadata", None),
+            user_department=request.user_department,
+            user_roles=request.user_roles,
+            allowed_departments=request.allowed_departments,
+            max_security_level=request.max_security_level,
+            allowed_sites=request.allowed_sites,
+        )
+        for document in documents
+    )
+    serving_state_passed = bool(documents) and all(
+        is_governed_sql_bom_document(document) or is_currently_servable(
+            getattr(document, "metadata", None),
+            require_current=True,
+        )
+        for document in documents
+    )
+    debug_info["pilot_request_validation"] = {
+        "access_scope_passed": access_scope_passed,
+        "citation_structure_passed": (
+            generation_metrics.get("citation_structure_passed") is True
+        ),
+        "provenance_passed": generation_metrics.get("provenance_passed") is True,
+        "leakage_passed": access_scope_passed and serving_state_passed,
+    }
     return debug_info
 
 
@@ -215,9 +250,6 @@ def _start_generation(
     new_part_ids: list[Any],
 ) -> tuple[Any, dict[str, Any]]:
     generation_metrics = _generation_metrics(primary, enrichment, state)
-    state.budget.record(
-        "final_generations", 0 if evidence.explicit_negative_answer else 1
-    )
     state.transition("generation")
     generation_outcome = GenerationOutcome()
     state.bind_generation(generation_outcome)
@@ -261,6 +293,7 @@ def generate(
     )
 
     debug_info = _generation_debug(
+        decision,
         primary,
         enrichment,
         reranked,

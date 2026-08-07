@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -61,6 +62,7 @@ class TraceRuntime:
 
     persist: Callable[[str, dict[str, Any]], None] | None = None
     execution_context: Callable[[], str] | None = None
+    runtime_identity_sha256: str | None = None
 
 
 @dataclass(slots=True)
@@ -79,6 +81,17 @@ trace_log_file = log_dir / "rag_trace.jsonl"
 
 logger = logging.getLogger("MechChatbot")
 trace_logger = logging.getLogger("RagTrace")
+
+
+def runtime_identity_sha256(bindings: dict[str, Any]) -> str:
+    """Hash canonical runtime bindings with a cross-process stdlib contract."""
+    payload = json.dumps(
+        bindings,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _close_handlers(target: logging.Logger) -> None:
@@ -348,12 +361,16 @@ def log_trace(event_name, trace_id, **kwargs):
     execution_context = _execution_context(
         kwargs.pop("execution_context", None)
     )
+    kwargs.pop("runtime_identity_sha256", None)
     event = _event_payload(
         event_name,
         trace_id,
         execution_context,
         kwargs,
     )
+    runtime_identity = _TRACE_RUNTIME.get().runtime_identity_sha256
+    if runtime_identity:
+        event["runtime_identity_sha256"] = runtime_identity
     try:
         trace_logger.info(json.dumps(event, ensure_ascii=False))
     except Exception as error:
@@ -378,5 +395,6 @@ __all__ = [
     "logger",
     "pop_trace_stage_metrics",
     "redact_sensitive_trace_fields",
+    "runtime_identity_sha256",
     "trace_logger",
 ]

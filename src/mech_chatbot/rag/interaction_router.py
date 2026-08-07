@@ -27,7 +27,9 @@ from typing import Callable, List, Optional, Sequence, Tuple
 from mech_chatbot.rag import chitchat
 from mech_chatbot.rag import route_config
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.rag.entity_resolver import has_explicit_code
 from mech_chatbot.rag.execution import RequestBudgetExceeded
+from mech_chatbot.rag.grounded_math import detect_calculation_operation
 
 ROUTE_CHITCHAT = "chitchat"
 ROUTE_CAPABILITY = "capability"
@@ -71,10 +73,26 @@ _HOW_TO_META_CUES = (
     "cach upload", "cach tai len", "lam sao de tai len",
 )
 _SYSTEM_CONFIGURATION_CUES = (
-    "he thong", "chatbot", "api key", "api-key", "access token",
-    "credential", "mat khau", "password", "client secret", "client-secret",
-    "private key", "private-key", "bearer token", "bearer-token",
+    "he thong", "chatbot", "api key", "access token", "credential",
+    "mat khau", "password", "client secret", "private key", "bearer token",
 )
+_SENSITIVE_CALCULATION_STEMS = tuple(
+    re.sub(r"[^a-z0-9]+", "", cue)
+    for cue in _SYSTEM_CONFIGURATION_CUES + (
+        "system", "prompt", "khoa api", "secret", "token", "session", "cookie",
+        "authorization", "config", "cau hinh", "ma cau hinh", "dang nhap",
+        "login", "otp", "csrf",
+    )
+)
+
+
+def _is_internal_calculation_code(text, normalized_text):
+    compact = re.sub(r"[^a-z0-9]+", "", normalized_text)
+    return bool(
+        not any(stem in compact for stem in _SENSITIVE_CALCULATION_STEMS)
+        and has_explicit_code(text)
+        and detect_calculation_operation(text)
+    )
 
 
 def _department_router_pattern_match(text: str, department_codes) -> str | None:
@@ -124,6 +142,13 @@ def _fast_technical_route(
             LAYER_RULE,
             confidence=0.98,
             reason="internal_keyword",
+        )
+    if _is_internal_calculation_code(text, q):
+        return RouteResult(
+            ROUTE_TECHNICAL,
+            LAYER_RULE,
+            confidence=0.98,
+            reason="internal_calculation_code",
         )
     if (
         crag_fast_routes_enabled

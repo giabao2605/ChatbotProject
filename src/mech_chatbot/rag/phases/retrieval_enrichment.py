@@ -473,6 +473,23 @@ def _disambiguate_documents(
     primary: PrimaryRetrievalOutcome,
     retrieval_mode: str,
 ) -> tuple[tuple[Any, ...], PhaseTerminal | None]:
+    if getattr(state.retrieval_adapter, "grounded_math_enabled", False):
+        from mech_chatbot.rag.grounded_math import (
+            build_calculation_plan,
+            select_grounded_bom_document_ids,
+        )
+
+        if build_calculation_plan(context.user_question, ()) is not None:
+            selected_ids = select_grounded_bom_document_ids(
+                documents, context.user_question
+            )
+            if len(selected_ids) == 1:
+                selected_documents = tuple(
+                    document for document in documents
+                    if str((getattr(document, "metadata", {}) or {}).get("doc_id"))
+                    == str(selected_ids[0])
+                )
+                documents = selected_documents or documents
     terminal, resolved_documents = _disambiguate(
         retrieved_docs=list(documents),
         user_question=context.user_question,

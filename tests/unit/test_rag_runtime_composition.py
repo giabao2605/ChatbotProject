@@ -130,6 +130,55 @@ def test_rag_runtime_projects_health_contract_from_one_settings_snapshot():
     }
 
 
+def test_rag_runtime_binds_trace_events_to_the_live_runtime_identity():
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+    from mech_chatbot.config.logging import runtime_identity_sha256
+    from mech_chatbot.governance.feature_activation import FEATURE_FLAGS
+    from mech_chatbot.governance.provider_smoke import (
+        provider_configuration_sha256_for_settings,
+    )
+
+    settings = Settings(
+        RAG_DEPLOYMENT_GIT_SHA="abc123",
+        RAG_DEPLOYMENT_ID="math-pilot",
+        RAG_ACTIVATION_PROFILE="selective",
+        RAG_GROUNDED_MATH_ENABLED=True,
+        RAG_SNAPSHOT_FINGERPRINT="snapshot-1",
+        RAG_ACTIVATION_BUNDLE_SHA256="a" * 64,
+        RAG_RESTORE_EVIDENCE_SHA256="b" * 64,
+        RAG_REQUEST_DEADLINE_SECONDS=90.0,
+        SQL_DATABASE="pilot-sql",
+        QDRANT_COLLECTION="configured-collection",
+        LLM_BASE_URL="https://llm.invalid/v1",
+    )
+    retrieval = SimpleNamespace(collection_name="live-collection")
+    runtime = build_rag_runtime(
+        settings,
+        execute_pipeline=lambda state: state.prepared((iter(()), "", [], [], {})),
+        retrieval=retrieval,
+        provider=object(),
+        trace_persist=lambda *_args: None,
+    )
+
+    assert runtime.trace_runtime.runtime_identity_sha256 == runtime_identity_sha256({
+        "git_sha": "abc123",
+        "deployment_id": "math-pilot",
+        "activation_profile": "selective",
+        "feature_flags": {
+            name: bool(getattr(settings, name)) for name in FEATURE_FLAGS
+        },
+        "snapshot_fingerprint": "snapshot-1",
+        "provider_configuration_sha256": (
+            provider_configuration_sha256_for_settings(settings)
+        ),
+        "qdrant_collection": "live-collection",
+        "sql_database": "pilot-sql",
+        "activation_bundle_sha256": "a" * 64,
+        "restore_evidence_sha256": "b" * 64,
+        "request_deadline_seconds": 90.0,
+    })
+
+
 def test_rag_runtime_composes_provider_vector_and_vision_adapters_explicitly():
     from mech_chatbot.composition.rag_runtime import build_rag_runtime
 
@@ -477,8 +526,11 @@ def test_rag_server_opens_requests_through_composed_runtime(monkeypatch):
     assert observed == [("runtime question", "runtime-trace", cancellation)]
 
 
-def test_rag_app_lifespan_builds_reports_and_closes_one_runtime(monkeypatch):
+def test_rag_app_lifespan_builds_reports_and_closes_one_runtime(
+    monkeypatch, tmp_path
+):
     from mech_chatbot.api import rag_server
+    from mech_chatbot.config.logging import LoggingConfig
     from mech_chatbot.config.repository_runtime import current_repository_engine
     from mech_chatbot.rag import rerank
     from mech_chatbot.rag.execution_contracts import RagRuntimeContract
@@ -487,7 +539,9 @@ def test_rag_app_lifespan_builds_reports_and_closes_one_runtime(monkeypatch):
     database_closed = []
     observed_settings = []
     observed_sql_settings = []
+    observed_logging = []
     database_engine = object()
+    runtime_identity_hash = "c" * 64
     credentials = {
         "QDRANT_" + "API_KEY": "qdrant-lifespan-value",
         "LLM_" + "API_KEY": "llm-lifespan-value",
@@ -496,14 +550,25 @@ def test_rag_app_lifespan_builds_reports_and_closes_one_runtime(monkeypatch):
         QDRANT_URL="https://qdrant.invalid",
         LLM_BASE_URL="https://llm.invalid",
         RAG_REQUIRE_SERVICE_AUTH=False,
+        RAG_TRACE_LOG_FILE=str(tmp_path / "runtime-trace.jsonl"),
+        SQL_DATABASE="math_pilot_evidence",
         **credentials,
     )
     runtime = SimpleNamespace(
         semaphore=SimpleNamespace(_value=2),
         runtime_contract=RagRuntimeContract("production", False, 120.0),
+        trace_runtime=SimpleNamespace(
+            runtime_identity_sha256=runtime_identity_hash,
+        ),
         close=lambda: closed.append(True),
     )
     monkeypatch.setattr(rerank, "tokenize_cached", lambda _text: "tokens")
+    monkeypatch.setattr(
+        rag_server,
+        "configure_logging",
+        lambda config: observed_logging.append(config),
+        raising=False,
+    )
 
     def build_runtime(snapshot):
         assert current_repository_engine() is database_engine
@@ -533,13 +598,63 @@ def test_rag_app_lifespan_builds_reports_and_closes_one_runtime(monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert response.json()["rag_loaded"] is True
+    assert response.json()["runtime_identity_sha256"] == runtime_identity_hash
+    assert response.json()["sql_database"] == "math_pilot_evidence"
+    assert {
+        "sql_server",
+        "sql_driver",
+        "sql_username",
+        "sql_password",
+    }.isdisjoint(response.json())
     assert len(response.json()["provider_configuration_sha256"]) == 64
     assert binding_response.json() == {"bound": True}
     assert observed_settings == [settings]
+    assert len(observed_logging) == 1
+    assert (
+        observed_logging[0].system_log_file
+        == LoggingConfig.from_settings(settings).system_log_file
+    )
+    assert observed_logging[0].trace_log_file == tmp_path / "runtime-trace.jsonl"
     assert len(observed_sql_settings) == 1
+    assert observed_sql_settings[0].database == response.json()["sql_database"]
     assert closed == [True]
     assert database_closed == [True]
     assert application.state.rag_server.ready is False
+
+
+def test_rag_health_reports_evidence_hashes_without_paths_or_credentials():
+    from mech_chatbot.api import rag_server
+
+    activation_hash = "a" * 64
+    restore_hash = "b" * 64
+    application = rag_server.create_rag_app(
+        Settings.from_env(
+            {
+                "RAG_ACTIVATION_BUNDLE_PATH": "private/activation-bundle.json",
+                "RAG_ACTIVATION_BUNDLE_SHA256": activation_hash,
+                "RAG_RESTORE_EVIDENCE_SHA256": restore_hash,
+                "SQL_USERNAME": "private-user",
+                "SQL_PASSWORD": "private-password",
+                "LLM_API_KEY": "private-llm-key",
+            }
+        )
+    )
+
+    response = TestClient(application).get("/health")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["activation_bundle_sha256"] == activation_hash
+    assert payload["restore_evidence_sha256"] == restore_hash
+    assert {
+        "activation_bundle_path",
+        "restore_evidence_path",
+        "sql_server",
+        "sql_driver",
+        "sql_username",
+        "sql_password",
+        "llm_api_key",
+    }.isdisjoint(payload)
 
 
 def test_rag_thread_worker_rebinds_repository_runtime(monkeypatch):

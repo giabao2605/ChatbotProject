@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -31,6 +32,143 @@ def test_evaluation_overrides_are_rejected_outside_evaluation_mode():
             mode="production",
             evaluation_force_ambiguous=True,
         )
+
+
+@pytest.mark.parametrize("final_generations", [0, 1], ids=["pure-math", "mixed-math"])
+def test_successful_calculation_route_emits_one_metadata_only_pilot_event(
+    monkeypatch,
+    final_generations,
+):
+    from mech_chatbot.config import logging as trace_logging
+    from mech_chatbot.rag import execution
+
+    trace_messages = []
+    clock = iter([100.0, 100.1, 100.2, 100.25])
+    monkeypatch.setattr(execution.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(trace_logging.trace_logger, "info", trace_messages.append)
+
+    def scripted_pipeline(state):
+        state.budget.record("final_generations", final_generations)
+        return state.prepared(
+            (
+                iter(["safe calculated answer"]),
+                "",
+                [],
+                [],
+                {
+                    "generation_metrics": {
+                        "calculation_count": 1,
+                        "calculation_result_status": "valid",
+                        "estimated_cost": 0.125,
+                    },
+                    "pilot_request_validation": {
+                        "access_scope_passed": True,
+                        "citation_structure_passed": True,
+                        "provenance_passed": True,
+                        "leakage_passed": True,
+                    },
+                },
+            )
+        )
+
+    events = list(
+        DefaultRagExecutor(execute_pipeline=scripted_pipeline).run(
+            RagRequest(
+                "SECRET QUESTION",
+                AccessScope(
+                    department="SECRET DEPARTMENT",
+                    roles=frozenset({"SECRET ROLE"}),
+                    allowed_sites=frozenset({"SECRET SITE"}),
+                ),
+            ),
+            RagInvocation(trace_id="calculation-pilot", mode="test"),
+        )
+    )
+
+    assert isinstance(events[-1], RagCompleted)
+    payloads = [json.loads(message) for message in trace_messages]
+    evidence = [
+        payload for payload in payloads
+        if payload["event"] == "pilot_request_evidence"
+    ]
+    assert evidence == [{
+        "ts": evidence[0]["ts"],
+        "event": "pilot_request_evidence",
+        "trace_id": "calculation-pilot",
+        "execution_context": "test",
+        "route": "calculation",
+        "calculation_result_status": "valid",
+        "security_passed": True,
+        "citation_structure_passed": True,
+        "provenance_passed": True,
+        "leakage_detected": False,
+        "calculations": 1,
+        "final_latency_ms": 250,
+        "request_deadline_ms": 120000,
+        "estimated_cost": 0.125,
+        "provider_retries": 0,
+        "final_generations": final_generations,
+    }]
+    serialized = json.dumps(evidence[0])
+    assert all(
+        secret not in serialized
+        for secret in (
+            "SECRET QUESTION",
+            "safe calculated answer",
+            "SECRET DEPARTMENT",
+            "SECRET ROLE",
+            "SECRET SITE",
+        )
+    )
+
+
+def test_completed_refused_calculation_route_emits_failed_validation_evidence(
+    monkeypatch,
+):
+    from mech_chatbot.config import logging as trace_logging
+
+    trace_messages = []
+    monkeypatch.setattr(trace_logging.trace_logger, "info", trace_messages.append)
+
+    def scripted_pipeline(state):
+        state.bind_generation(SimpleNamespace(refusal_reason="grounded_math_post_check"))
+        return state.prepared((
+            iter(["policy refusal"]),
+            "",
+            [],
+            [],
+            {
+                "generation_metrics": {
+                    "calculation_count": 1,
+                    "calculation_result_status": "invalid",
+                },
+                "pilot_request_validation": {
+                    "access_scope_passed": False,
+                    "citation_structure_passed": False,
+                    "provenance_passed": False,
+                    "leakage_passed": False,
+                },
+            },
+        ))
+
+    events = list(
+        DefaultRagExecutor(execute_pipeline=scripted_pipeline).run(
+            RagRequest("calculation", AccessScope()),
+            RagInvocation(trace_id="calculation-refused", mode="test"),
+        )
+    )
+
+    assert events[-1].outcome == "refused"
+    evidence = [
+        json.loads(message) for message in trace_messages
+        if json.loads(message)["event"] == "pilot_request_evidence"
+    ]
+    assert len(evidence) == 1
+    assert evidence[0]["calculation_result_status"] == "invalid"
+    assert evidence[0]["security_passed"] is False
+    assert evidence[0]["citation_structure_passed"] is False
+    assert evidence[0]["provenance_passed"] is False
+    assert evidence[0]["leakage_detected"] is True
 
 
 def test_safety_refusal_obeys_public_event_order_without_external_calls():

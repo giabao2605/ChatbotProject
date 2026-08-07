@@ -31,6 +31,7 @@ def cache_repository(monkeypatch: pytest.MonkeyPatch):
 def _cache_row(**overrides):
     return {
         "cache_id": 7,
+        "question": "What is the maximum pressure?",
         "embedding": "[1.0, 0.0]",
         "answer": "Pressure is 12 bar.",
         "ref_text": "Manual section 4",

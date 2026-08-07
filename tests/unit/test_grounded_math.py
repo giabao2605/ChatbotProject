@@ -111,6 +111,30 @@ def test_document_scoped_total_prefers_the_code_named_after_bom():
     ) == [43]
 
 
+def test_document_scoped_total_selects_explicit_variant_when_base_code_matches_multiple():
+    documents = [
+        SimpleNamespace(
+            page_content="Bản vẽ cơ khí Model7",
+            metadata={
+                "doc_id": 68,
+                "file_goc": "9.3.03951(HCP7235-STK)-ver03-Model7.pdf",
+            },
+        ),
+        SimpleNamespace(
+            page_content="Bản vẽ cơ khí Model8",
+            metadata={
+                "doc_id": 69,
+                "file_goc": "9.3.03951(HCP7235-STK)-ver03-Model8.pdf",
+            },
+        ),
+    ]
+
+    assert select_grounded_bom_document_ids(
+        documents,
+        "Tính tổng BOM của 9.3.03951(HCP7235-STK)-ver03-Model8.pdf",
+    ) == [69]
+
+
 def test_document_scoped_total_fails_closed_when_document_is_ambiguous():
     documents = [
         SimpleNamespace(page_content="# BOM A", metadata={"doc_id": 31}),

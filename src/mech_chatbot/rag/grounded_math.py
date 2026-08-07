@@ -77,8 +77,6 @@ def select_grounded_bom_document_ids(documents, question: str = "") -> list[int]
         ]
         if len(matches) == 1:
             return matches
-        if matches:
-            return []
     query_tokens = _identity_tokens(question)
     scores = sorted(
         ((len(query_tokens & tokens), doc_id) for doc_id, tokens in candidates.items()),
@@ -155,30 +153,35 @@ def _document_source_key(document):
         return (None, None)
 
 
+def detect_calculation_operation(question: str) -> str | None:
+    """Return the deterministic arithmetic operation requested by the user."""
+    folded = _fold(question)
+    has_word = lambda word: bool(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", folded))
+    if "quy doi" in folded or "chuyen doi don vi" in folded:
+        return "unsupported_operation"
+    if "phan tram" in folded or "%" in folded:
+        return "percent"
+    if "ty le" in folded or "ti le" in folded:
+        return "ratio"
+    if has_word("tru") or "chenh lech" in folded:
+        return "subtract"
+    if has_word("nhan") or "*" in folded:
+        return "multiply"
+    if has_word("chia") or "/" in folded:
+        return "divide"
+    if has_word("tong") or has_word("total"):
+        return "sum"
+    return "add" if has_word("cong") else None
+
+
 def build_calculation_plan(
     question: str,
     facts: tuple[GroundedFact, ...],
 ) -> CalculationPlan | None:
     """Build a deterministic plan only from BOM operands named in the question."""
     folded = _fold(question)
-    has_word = lambda word: bool(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", folded))
-    if "quy doi" in folded or "chuyen doi don vi" in folded:
-        operation = "unsupported_operation"
-    elif "phan tram" in folded or "%" in folded:
-        operation = "percent"
-    elif "ty le" in folded or "ti le" in folded:
-        operation = "ratio"
-    elif has_word("tru") or "chenh lech" in folded:
-        operation = "subtract"
-    elif has_word("nhan") or "*" in folded:
-        operation = "multiply"
-    elif has_word("chia") or "/" in folded:
-        operation = "divide"
-    elif has_word("tong") or has_word("total"):
-        operation = "sum"
-    elif has_word("cong"):
-        operation = "add"
-    else:
+    operation = detect_calculation_operation(question)
+    if operation is None:
         return None
 
     if operation == "add" and any(

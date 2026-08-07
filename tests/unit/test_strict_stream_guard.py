@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from decimal import Decimal
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import threading
@@ -107,6 +108,7 @@ def _run_generation(
     docs=None,
     **overrides,
 ):
+    metrics = overrides.pop("metrics", None)
     docs = docs or [SimpleNamespace(metadata={"doc_id": 7, "security_level": "internal"})]
     plan_fields = {
         "context_text": "Tai lieu chi ghi gia tri 10.",
@@ -149,12 +151,14 @@ def _run_generation(
             control=module.GenerationControl(
                 trace_id=plan_fields["trace_id"],
                 started_at=plan_fields["started_at"],
+                budget=plan_fields.get("budget"),
                 outcome=plan_fields.get("outcome", module.GenerationOutcome()),
             ),
             explicit_negative_answer=plan_fields.get("explicit_negative_answer", ""),
             runtime=plan_fields["runtime"],
         ),
         cancel_event=cancel_event,
+        metrics=metrics,
     )
 
 
@@ -177,7 +181,12 @@ def _run_through_executor(monkeypatch, module, **generation_kwargs):
 
     def scripted_pipeline(state):
         state.bind_generation(outcome)
-        stream = _run_generation(module, outcome=outcome, **generation_kwargs)
+        stream = _run_generation(
+            module,
+            budget=state.budget,
+            outcome=outcome,
+            **generation_kwargs,
+        )
         return state.prepared((stream, "", [], [], {}))
 
     try:
@@ -389,6 +398,7 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
         }),
     ]
 
+    metrics = {}
     events = _run_through_executor(
         monkeypatch,
         module,
@@ -396,6 +406,7 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
         docs=docs,
         runtime=runtime,
         effective_question="",
+        metrics=metrics,
     )
     emitted = [event.text for event in events if isinstance(event, RagToken)]
 
@@ -405,6 +416,10 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
         "[Nguồn: bom-v12.pdf, Trang 4, Version 12, SourceID D41P4]"
     ]
     assert events[-1].outcome == "answered"
+    assert events[-1].diagnostics.budget.final_generations == 0
+    assert metrics["citation_structure_passed"] is True
+    assert metrics["provenance_passed"] is True
+    assert metrics["calculation_result_status"] == "valid"
 
     cancelled = threading.Event()
     cancelled.set()
@@ -417,6 +432,140 @@ def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatc
             runtime=runtime,
             effective_question="",
         ))
+
+
+def test_grounded_math_generation_marks_partial_claim_non_valid(monkeypatch):
+    from mech_chatbot.config import logging as trace_logging
+
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    runtime = _runtime(grounded_math_enabled=True)
+    plan = CalculationPlan(
+        "add",
+        (
+            GroundedFact(Decimal("2"), "kg", 41, 3, 12, "BOM-1", "PART-A"),
+            GroundedFact(Decimal("5"), "m", 41, 3, 12, "BOM-2", "PART-B"),
+        ),
+    )
+    docs = [SimpleNamespace(metadata={
+        "doc_id": 41,
+        "trang_so": 3,
+        "version_no": 12,
+        "file_goc": "bom-v12.pdf",
+        "security_level": "internal",
+        "calculation_provenance": make_calculation_provenance(
+            plan, derive_claim(plan)
+        ),
+    })]
+    metrics = {}
+    trace_messages = []
+    monkeypatch.setattr(trace_logging.trace_logger, "info", trace_messages.append)
+
+    answer = "".join(_run_generation(
+        module,
+        question="Cộng PART-A và PART-B",
+        docs=docs,
+        runtime=runtime,
+        effective_question="",
+        metrics=metrics,
+    ))
+
+    assert answer.startswith("Tôi trả lời được một phần:")
+    assert metrics["calculation_result_status"] == "invalid"
+    generated = [
+        json.loads(message) for message in trace_messages
+        if json.loads(message)["event"] == "grounded_math_generation"
+    ]
+    assert generated[0]["calculation_result_status"] == "invalid"
+
+
+def test_generation_debug_validates_served_calculation_documents_for_pilot():
+    from langchain_core.documents import Document
+
+    from mech_chatbot.rag.phases.generation import _generation_debug
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import (
+        _build_bom_documents,
+    )
+
+    document = _build_bom_documents(
+        {(41, 3): {
+            "file_goc": "bom-v12.pdf",
+            "version_no": 12,
+            "security_level": "internal",
+            "site": "HCM",
+            "external_processing_policy": "internal_only",
+            "lines": ["- Mã: PART-A, SL: 2 cái"],
+        }},
+        {},
+    )[0]
+    value = lambda item: SimpleNamespace(value=item)
+    arguments = (
+        SimpleNamespace(request=SimpleNamespace(
+            user_department="Technical",
+            user_roles=("viewer",),
+            allowed_departments=("Technical",),
+            max_security_level="internal",
+            allowed_sites=("HCM",),
+        )),
+        SimpleNamespace(
+            decomposition_branches=(),
+            decomposition_intents=(),
+            decomposition_intent_coverage=(),
+            decomposition_used_fallback=False,
+            decomposition_intent_overflow=False,
+        ),
+        SimpleNamespace(
+            community_summary_used=False,
+            community_summary_count=0,
+            community_documents=(),
+            community_fallback_reason="disabled",
+            graph_routed=False,
+            graph_edge_count=0,
+            graph_max_hops=0,
+        ),
+        SimpleNamespace(served_graph_documents=()),
+        SimpleNamespace(
+            answer_policy=SimpleNamespace(
+                evidence_state=value("sufficient"),
+                outcome=value("full_answer"),
+                correction_allowed=False,
+            ),
+            evidence_decision=SimpleNamespace(stage="retrieval"),
+            evidence_quotes=(),
+        ),
+        SimpleNamespace(budget=SimpleNamespace(
+            corrections=0,
+            planners=0,
+            subqueries=0,
+            final_generations=0,
+            deadline_exceeded=False,
+        )),
+        [document],
+        {
+            "citation_structure_passed": True,
+            "provenance_passed": True,
+        },
+    )
+    debug = _generation_debug(*arguments)
+
+    assert debug["pilot_request_validation"] == {
+        "access_scope_passed": True,
+        "citation_structure_passed": True,
+        "provenance_passed": True,
+        "leakage_passed": True,
+    }
+
+    forged = Document(page_content=document.page_content, metadata={
+        **document.metadata,
+        "access_scope_serving_predicates_applied": True,
+        "version_policy_serving_predicates_applied": True,
+    })
+    blocked = _generation_debug(
+        *arguments[:-2],
+        [forged],
+        arguments[-1],
+    )["pilot_request_validation"]
+    assert blocked["access_scope_passed"] is False
+    assert blocked["leakage_passed"] is False
 
 
 def test_grounded_math_generation_keeps_the_other_decomposition_answer(monkeypatch):
@@ -470,6 +619,7 @@ def test_grounded_math_generation_keeps_the_other_decomposition_answer(monkeypat
         ),
     ]
 
+    budget = RequestBudgetLedger(RequestBudgetLimits(), started_monotonic=0.0)
     emitted = list(_run_generation(
         module,
         question=(
@@ -479,6 +629,7 @@ def test_grounded_math_generation_keeps_the_other_decomposition_answer(monkeypat
         context_text="BOM rows\nPhiên bản hiện hành là 12.",
         docs=docs,
         runtime=runtime,
+        budget=budget,
     ))
 
     assert emitted == [
@@ -487,6 +638,7 @@ def test_grounded_math_generation_keeps_the_other_decomposition_answer(monkeypat
         "Phiên bản hiện hành của CRAG-EVAL-NUM-001 là 12. "
         "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D70P1]"
     ]
+    assert budget.final_generations == 1
 
 
 def test_grounded_math_disabled_uses_normal_generation_path(monkeypatch):

@@ -66,7 +66,9 @@ def test_candidates_shape_rows_and_coerce_numeric_query_limits(monkeypatch):
     fake = _install(
         monkeypatch,
         (
-            Result(rows=((7, "[1,0]", "a", "r", "[]", "[41]", 0.2, "c", "e"),)),
+            Result(
+                rows=((7, "[1,0]", "a", "r", "[]", "[41]", 0.2, "c", "e", "q"),)
+            ),
         ),
     )
 
@@ -83,6 +85,7 @@ def test_candidates_shape_rows_and_coerce_numeric_query_limits(monkeypatch):
             "est_cost": 0.2,
             "citation_snapshot": "c",
             "evidence_snapshot": "e",
+            "question": "q",
         }
     ]
     assert fake.connection.calls[0][1] == {"lim": 25, "sc": "scope", "ttl": 12}

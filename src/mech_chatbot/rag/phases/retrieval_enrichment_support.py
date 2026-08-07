@@ -23,6 +23,17 @@ class _EnrichmentContextLike(Protocol):
     allowed_sites: tuple[str, ...]
 
 
+class _GovernedSqlBomDocument(Document):
+    """Internal source marker for repository-scoped SQL BOM evidence."""
+
+
+def is_governed_sql_bom_document(document: Any) -> bool:
+    return (
+        type(document) is _GovernedSqlBomDocument
+        and document.metadata.get("loai_du_lieu") == "sql_bom"
+    )
+
+
 def _bom_document_ids(
     documents: Sequence[Any], user_question: str, grounded_math_enabled: bool
 ) -> list[int]:
@@ -38,6 +49,8 @@ def _search_bom_rows(
     part_ids: Sequence[str],
     document_ids: Sequence[int],
     search_bom_facts: Callable[..., Sequence[Any]],
+    *,
+    exact_document: bool = False,
 ) -> Sequence[Any]:
     request = context.decision.request
 
@@ -55,8 +68,29 @@ def _search_bom_rows(
             allowed_sites=list(context.allowed_sites),
         )
 
-    rows = find(part_ids, ()) if part_ids else find((), document_ids)
-    if rows or not (part_ids and document_ids):
+    from mech_chatbot.rag.grounded_math import _fold, detect_calculation_operation
+
+    question = str(getattr(context, "user_question", "") or "")
+    folded_question = _fold(question)
+    aggregate_scope = (
+        document_ids
+        and detect_calculation_operation(question) in {"add", "sum"}
+        and any(
+            phrase in folded_question
+            for phrase in (
+                "moi dong", "tat ca", "cac dong", "toan bo",
+                "all rows", "every row",
+            )
+        )
+    )
+    if aggregate_scope:
+        return find((), document_ids)
+
+    rows = (
+        find(part_ids, document_ids if exact_document else ())
+        if part_ids else find((), document_ids)
+    )
+    if rows or exact_document or not (part_ids and document_ids):
         return rows
     return find((), document_ids)
 
@@ -164,7 +198,7 @@ def _build_bom_documents(
         if claim_key in claims and claim_key not in emitted_calculations:
             emitted_calculations.add(claim_key)
             text, provenance = _append_calculation(text, *claims[claim_key])
-        documents.append(Document(page_content=text, metadata={
+        documents.append(_GovernedSqlBomDocument(page_content=text, metadata={
             "doc_id": document_id, "trang_so": page_number,
             "file_goc": source["file_goc"], "version_no": source["version_no"],
             "security_level": source["security_level"], "site": source["site"],
@@ -189,20 +223,39 @@ def inject_bom(
     lookup_documents: Sequence[Any] | None = None,
 ) -> tuple[tuple[Any, ...], bool]:
     grounded_math_enabled = env_bool("RAG_GROUNDED_MATH_ENABLED", False)
+    bom_lookup_documents = (
+        documents if lookup_documents is None else lookup_documents
+    )
     document_ids = _bom_document_ids(
-        documents if lookup_documents is None else lookup_documents,
+        bom_lookup_documents,
         context.user_question,
         grounded_math_enabled,
     )
+    question = context.user_question.casefold()
+    selected_document_ids = {str(doc_id) for doc_id in document_ids}
+    exact_filename = next((
+        str(metadata.get("file_goc") or "").strip().casefold()
+        for document in bom_lookup_documents
+        if (metadata := (getattr(document, "metadata", {}) or {})).get("file_goc")
+        and str(metadata.get("doc_id")) in selected_document_ids
+        and str(metadata.get("file_goc") or "").strip().casefold() in question
+    ), "")
+    exact_document = bool(exact_filename)
+    search_part_ids = [
+        part_id for part_id in part_ids
+        if not exact_document or str(part_id).casefold() not in exact_filename
+    ]
     if not (part_ids or document_ids) or not context_is_mechanical(documents, part_ids):
         return tuple(documents), grounded_math_enabled
     started_at = time.time()
     try:
+        search_options = {"exact_document": True} if exact_document else {}
         rows = _search_bom_rows(
-            context, part_ids, document_ids, search_bom_facts
+            context, search_part_ids, document_ids, search_bom_facts,
+            **search_options,
         )
         if not rows:
-            _log_bom(context, started_at, 0, part_ids, document_ids)
+            _log_bom(context, started_at, 0, search_part_ids, document_ids)
             return tuple(documents), grounded_math_enabled
         grouped = _group_bom_rows(rows, grounded_math_enabled)
         claims = _calculation_claims(
@@ -213,7 +266,7 @@ def inject_bom(
             "Da them %s dong BOM tu SQL vao context (%s nguon co the citation).",
             len(rows), len(bom_documents),
         )
-        _log_bom(context, started_at, len(rows), part_ids, document_ids)
+        _log_bom(context, started_at, len(rows), search_part_ids, document_ids)
         return tuple(bom_documents) + tuple(documents), grounded_math_enabled
     except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise
@@ -222,7 +275,7 @@ def inject_bom(
         log_trace(
             "sql_bom", context.trace_id,
             latency_ms=int((time.time() - started_at) * 1000), error=str(exc),
-            part_ids=list(part_ids), document_ids=list(document_ids),
+            part_ids=list(search_part_ids), document_ids=list(document_ids),
         )
         return tuple(documents), grounded_math_enabled
 

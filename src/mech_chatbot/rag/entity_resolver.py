@@ -77,7 +77,10 @@ _DIM_PATTERN = re.compile(
 
 _CODE_PATTERNS = [
     re.compile(r"\b\d+\.\d+\.\d+\b", re.IGNORECASE),
-    re.compile(r"\b[A-Z]{2,}[A-Z0-9-]*\d+[A-Z0-9-]*\b", re.IGNORECASE),
+    re.compile(
+        r"(?<![A-Z0-9-])(?=[A-Z0-9-]*\d)[A-Z]{2,}[A-Z0-9-]*(?![A-Z0-9-])",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b[A-Z]{2,}(?:-[A-Z0-9]{2,})+-[A-Z]{1,2}\b", re.IGNORECASE),
     re.compile(r"\b\d{3}-\d{3}\b", re.IGNORECASE),
 ]

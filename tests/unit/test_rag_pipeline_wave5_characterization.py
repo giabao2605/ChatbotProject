@@ -128,6 +128,29 @@ def _answer(events):
     return "".join(event.text for event in events if isinstance(event, RagToken))
 
 
+def _semantic_cache_row(filename, *, cache_id, question):
+    source = {
+        "file_goc": filename,
+        "doc_id": 31,
+        "version_no": 1,
+        "trang": 1,
+        "source_id": "D31P1",
+        "security_level": "internal",
+    }
+    return {
+        "cache_id": cache_id,
+        "question": question,
+        "answer": f"Nội dung của {filename}. [SRC:D31P1]",
+        "ref_text": "Nguồn semantic cache",
+        "ref_images": "[]",
+        "source_doc_ids": "[31]",
+        "citation_snapshot": json.dumps([source]),
+        "evidence_snapshot": json.dumps([source]),
+        "embedding": "[1.0, 0.0]",
+        "est_cost": "0.003",
+    }
+
+
 def test_exact_cache_outage_falls_back_to_a_fail_closed_retrieval(
     monkeypatch,
     offline_boundaries,
@@ -173,6 +196,7 @@ def test_semantic_cache_hit_preserves_attribution_and_skips_qdrant(
     }
     cache_row = {
         "cache_id": 52,
+        "question": "Nên dùng định dạng .pdf hay .docx cho quy trình?",
         "answer": "Thực hiện theo quy trình đã phê duyệt. [SRC:D31P4]",
         "ref_text": "Nguồn semantic cache",
         "ref_images": "[]",
@@ -195,7 +219,7 @@ def test_semantic_cache_hit_preserves_attribution_and_skips_qdrant(
     monkeypatch.setattr(semantic_cache, "sc_delete", lambda *_args: None)
 
     events = _run(
-        "Hãy nhắc lại quy trình phê duyệt nội bộ.",
+        "Nên dùng định dạng .pdf hay .docx cho quy trình?",
         trace_id="wave5-semantic-cache-hit",
         executor=executor,
     )
@@ -212,6 +236,98 @@ def test_semantic_cache_hit_preserves_attribution_and_skips_qdrant(
     assert citation_ids == ["D31P4"]
     assert isinstance(events[-1], RagCompleted)
     assert events[-1].diagnostics["cache_hit"] is True
+
+
+@pytest.mark.parametrize(
+    ("cached_question", "incoming_question", "expected_refusal"),
+    (
+        (
+            "Tính tổng số lượng trong BOM của tài liệu manual-a.pdf.",
+            "Tính tổng số lượng trong BOM của tài liệu manual-b.pdf.",
+            "no_retrieved_docs",
+        ),
+        (
+            "Tóm tắt bản vẽ 9.3.03843.",
+            "Tóm tắt bản vẽ 9.3.04068.",
+            "no_docs_for_exact_code",
+        ),
+    ),
+)
+def test_document_specific_query_does_not_reuse_semantic_cache_from_another_file(
+    monkeypatch,
+    offline_boundaries,
+    cached_question,
+    incoming_question,
+    expected_refusal,
+):
+    from mech_chatbot.db.repositories import semantic_cache
+
+    _documents, qdrant_calls, executor, runtime = offline_boundaries
+    cache_row = _semantic_cache_row(
+        "manual-a.pdf", cache_id=53, question=cached_question
+    )
+
+    runtime.semantic_cache_enabled = True
+    runtime.semantic_cache_sim_threshold = 0.90
+    monkeypatch.setattr(semantic_cache, "sc_get_exact", lambda *_args: None)
+    monkeypatch.setattr(
+        semantic_cache, "sc_get_candidates", lambda *_args: [cache_row]
+    )
+    monkeypatch.setattr(semantic_cache, "sc_docs_all_current", lambda _ids: True)
+    monkeypatch.setattr(semantic_cache, "sc_record_hit", lambda *_args: None)
+    monkeypatch.setattr(semantic_cache, "sc_record_lookup", lambda *_args: None)
+    monkeypatch.setattr(semantic_cache, "sc_delete", lambda *_args: None)
+
+    events = _run(
+        incoming_question,
+        trace_id="wave5-document-specific-cache-isolation",
+        executor=executor,
+    )
+
+    assert qdrant_calls
+    assert _answer(events) != cache_row["answer"]
+    assert isinstance(events[-1], RagCompleted)
+    assert events[-1].outcome == "refused"
+    assert events[-1].refusal_reason == expected_refusal
+
+
+@pytest.mark.parametrize(
+    "cached_question",
+    ("Hãy tóm tắt tài liệu manual-a.json.", None),
+)
+def test_generic_query_does_not_reuse_unverifiable_semantic_cache_entry(
+    monkeypatch,
+    offline_boundaries,
+    cached_question,
+):
+    from mech_chatbot.db.repositories import semantic_cache
+
+    _documents, qdrant_calls, executor, runtime = offline_boundaries
+    cache_row = _semantic_cache_row(
+        "manual-a.json", cache_id=54, question=cached_question
+    )
+    runtime.semantic_cache_enabled = True
+    runtime.semantic_cache_sim_threshold = 0.90
+    monkeypatch.setattr(semantic_cache, "sc_get_exact", lambda *_args: None)
+    monkeypatch.setattr(
+        semantic_cache, "sc_get_candidates", lambda *_args: [cache_row]
+    )
+    monkeypatch.setattr(semantic_cache, "sc_docs_all_current", lambda _ids: True)
+    monkeypatch.setattr(semantic_cache, "sc_record_hit", lambda *_args: None)
+    monkeypatch.setattr(semantic_cache, "sc_record_lookup", lambda *_args: None)
+    monkeypatch.setattr(semantic_cache, "sc_delete", lambda *_args: None)
+
+    events = _run(
+        "Hãy tóm tắt hướng dẫn sử dụng.",
+        trace_id="wave5-document-specific-candidate-isolation",
+        executor=executor,
+    )
+
+    assert len(qdrant_calls) == 2
+    assert _answer(events) != cache_row["answer"]
+    assert isinstance(events[-1], RagCompleted)
+    assert events[-1].outcome == "refused"
+    assert events[-1].refusal_reason == "no_retrieved_docs"
 
 
 def test_conversation_history_bypasses_cache_entries_from_an_unrelated_turn(

@@ -174,12 +174,16 @@ def list_department_knowledge_governance() -> list[dict[str, Any]]:
     return [_governance_from_row(row) for row in rows]
 
 
-def get_department_domain_profile(department_code: str) -> dict[str, Any] | None:
+def get_department_domain_profile(
+    department_code: str,
+    *,
+    db_engine=None,
+) -> dict[str, Any] | None:
     code = _clean(department_code)
     if not code:
         return None
-    _ensure_engine()
-    with engine.connect() as conn:
+    selected_engine = resolve_engine(db_engine)
+    with selected_engine.connect() as conn:
         row = conn.execute(
             text(_DOMAIN_PROFILE_SELECT + " WHERE DeptCode = :code"),
             {"code": code},

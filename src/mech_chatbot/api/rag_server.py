@@ -30,8 +30,10 @@ from typing import List, Optional, Dict, Any
 
 from mech_chatbot.api.request_limits import enforce_request_rate_limit
 from mech_chatbot.config.logging import (
+    LoggingConfig,
     TraceRuntime,
     bind_trace_runtime,
+    configure_logging,
     logger,
     log_trace,
     pop_trace_stage_metrics,
@@ -133,6 +135,7 @@ async def lifespan(app: FastAPI):
         environment,
         require_service_auth=state.process_settings.require_service_auth,
     )
+    configure_logging(LoggingConfig.from_settings(state.settings))
     activation = _activation_for(state)
     app.state.rag_server = replace(state, activation=activation)
     if not activation.valid:
@@ -263,6 +266,10 @@ class HealthResponse(BaseModel):
     git_sha: Optional[str] = None
     snapshot_fingerprint: Optional[str] = None
     provider_configuration_sha256: Optional[str] = None
+    activation_bundle_sha256: Optional[str] = None
+    restore_evidence_sha256: Optional[str] = None
+    runtime_identity_sha256: Optional[str] = None
+    sql_database: str
     qdrant_collection: Optional[str] = None
     feature_flags: Dict[str, bool] = Field(default_factory=dict)
     feature_versions: Dict[str, str] = Field(default_factory=dict)
@@ -444,6 +451,14 @@ async def health_check(
         provider_configuration_sha256=(
             provider_configuration_sha256_for_settings(server_state.settings)
         ),
+        activation_bundle_sha256=server_state.settings.RAG_ACTIVATION_BUNDLE_SHA256,
+        restore_evidence_sha256=server_state.settings.RAG_RESTORE_EVIDENCE_SHA256,
+        runtime_identity_sha256=getattr(
+            getattr(server_state.runtime, "trace_runtime", None),
+            "runtime_identity_sha256",
+            None,
+        ),
+        sql_database=server_state.settings.SQL_DATABASE,
         qdrant_collection=getattr(
             retrieval,
             "collection_name",
