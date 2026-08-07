@@ -451,7 +451,7 @@ def _provider_smoke_status(
             )
         ):
             return True, None, digest
-        if artifact.get("failed_requests", 0) > 0 or outcome.get("provider_blocked") is True:
+        if outcome.get("reason") == "provider_capacity_unavailable":
             return False, "provider_outage", digest
         return False, "invalid_artifact", digest
     except (KeyError, OSError, TypeError, UnicodeError, json.JSONDecodeError, ValueError):
@@ -746,10 +746,12 @@ def main(argv: list[str] | None = None) -> int:
         artifact = {
             "schema": "grounded-math-production-pilot-gate-v1",
             "passed": False,
-            "decision": "inconclusive",
+            "decision": "rejected",
             "checks": {name: False for name in CHECKS},
             "eligible_trace_count": 0,
             "trace_id_sha256": [],
+            "provider_smoke_valid": False,
+            "provider_smoke_reason": "invalid_evidence",
         }
     _atomic_json(args.output, artifact)
     return 0 if artifact["passed"] else 2

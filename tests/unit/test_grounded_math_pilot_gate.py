@@ -366,7 +366,7 @@ def test_cli_marks_provider_smoke_failure_inconclusive(tmp_path):
             "failed_requests": 5,
             "provider_outcome": {
                 "provider_blocked": False,
-                "reason": "non_capacity_failure",
+                "reason": "provider_capacity_unavailable",
             },
         }
     )
@@ -406,6 +406,41 @@ def test_cli_rejects_substituted_provider_smoke(tmp_path):
     artifact = json.loads(inputs["output"].read_text(encoding="utf-8"))
     assert artifact["decision"] == "rejected"
     assert artifact["provider_smoke_reason"] == "invalid_evidence_binding"
+
+
+def test_cli_rejects_non_capacity_provider_failure(tmp_path):
+    cli = _load_cli()
+    inputs = _inputs(tmp_path)
+    smoke = json.loads(inputs["provider_smoke_path"].read_text(encoding="utf-8"))
+    smoke.update(
+        {
+            "passed": False,
+            "successful_requests": 0,
+            "failed_requests": 5,
+            "provider_outcome": {
+                "provider_blocked": False,
+                "reason": "non_capacity_failure",
+            },
+        }
+    )
+    inputs["provider_smoke_path"].write_text(
+        json.dumps(smoke), encoding="utf-8"
+    )
+    inputs["window"]["provider_smoke"]["sha256"] = _sha256(
+        inputs["provider_smoke_path"]
+    )
+    inputs["window_path"].write_text(
+        json.dumps(inputs["window"]), encoding="utf-8"
+    )
+    inputs["state"]["window_sha256"] = _sha256(inputs["window_path"])
+    inputs["state_path"].write_text(
+        json.dumps(inputs["state"]), encoding="utf-8"
+    )
+
+    assert _run(cli, inputs) == 2
+    artifact = json.loads(inputs["output"].read_text(encoding="utf-8"))
+    assert artifact["decision"] == "rejected"
+    assert artifact["provider_smoke_reason"] == "invalid_artifact"
 
 
 @pytest.mark.parametrize(("event_index", "eligible_count"), [(0, 100), (1, 99)])
