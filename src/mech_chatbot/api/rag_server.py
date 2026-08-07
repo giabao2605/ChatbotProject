@@ -405,7 +405,12 @@ def _trace_runtime(runtime: Any) -> TraceRuntime:
     return getattr(runtime, "trace_runtime", TraceRuntime())
 
 
-@router.get("/health", response_model=HealthResponse, tags=["System"])
+@router.get(
+    "/health",
+    response_model=HealthResponse,
+    tags=["System"],
+    dependencies=[Depends(require_service_auth)],
+)
 async def health_check(
     server_state: RagServerState = Depends(get_rag_server_state),
 ):

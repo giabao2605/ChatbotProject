@@ -636,11 +636,17 @@ def test_rag_health_reports_evidence_hashes_without_paths_or_credentials():
                 "SQL_USERNAME": "private-user",
                 "SQL_PASSWORD": "private-password",
                 "LLM_API_KEY": "private-llm-key",
+                "RAG_SERVICE_TOKEN": "health-test-token",
             }
         )
     )
 
-    response = TestClient(application).get("/health")
+    client = TestClient(application)
+    assert client.get("/health").status_code == 401
+    response = client.get(
+        "/health",
+        headers={"X-RAG-Service-Token": "health-test-token"},
+    )
     payload = response.json()
 
     assert response.status_code == 200

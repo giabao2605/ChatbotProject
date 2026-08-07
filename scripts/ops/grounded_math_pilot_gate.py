@@ -406,6 +406,35 @@ def _read_trace(path: Path) -> tuple[list[dict], bytes, bool]:
     return rows, raw, parse_error
 
 
+def _provider_smoke_valid(path: Path, window: dict) -> tuple[bool, str | None]:
+    """Validate the fresh five-probe smoke bound to this pilot window."""
+    try:
+        artifact, raw = _load_json(path)
+        pilot = window["expected_runtime"]["pilot"]
+        completed = _timestamp(artifact["completed_at"])
+        started = _timestamp(window["started_at"])
+        outcome = artifact["provider_outcome"]
+        valid = all(
+            (
+                artifact.get("schema") == "provider-smoke-v1",
+                artifact.get("passed") is True,
+                artifact.get("request_count") == 5,
+                artifact.get("successful_requests") == 5,
+                artifact.get("failed_requests") == 0,
+                artifact.get("provider_retries") == 0,
+                artifact.get("max_attempts_per_request") == 1,
+                artifact.get("provider_configuration_sha256")
+                == pilot["provider_configuration_sha256"],
+                isinstance(outcome, dict),
+                outcome.get("provider_blocked") is False,
+                timedelta(0) < started - completed <= timedelta(minutes=30),
+            )
+        )
+        return valid, _sha256(raw)
+    except (KeyError, OSError, TypeError, UnicodeError, json.JSONDecodeError, ValueError):
+        return False, None
+
+
 def _event_time_valid(event: dict, started: datetime, now: datetime) -> bool:
     try:
         timestamp = _timestamp(event["ts"])
@@ -590,6 +619,7 @@ def build_artifact(
     state_path: Path,
     health_path: Path,
     trace_path: Path,
+    provider_smoke_path: Path,
     *,
     now: datetime | None = None,
 ) -> dict:
@@ -598,6 +628,9 @@ def build_artifact(
     state, state_raw = _load_json(state_path)
     health, health_raw = _load_json(health_path)
     rows, trace_raw, parse_error = _read_trace(trace_path)
+    provider_smoke_valid, provider_smoke_sha256 = _provider_smoke_valid(
+        provider_smoke_path, window
+    )
     window_sha256 = _sha256(window_raw)
     base_runtime_valid = (
         _window_valid(window, now, window_path.parent)
@@ -612,11 +645,20 @@ def build_artifact(
     trace_checks["runtime_identity"] = (
         base_runtime_valid and trace_checks["runtime_identity"]
     )
-    passed = all(trace_checks.get(name) is True for name in CHECKS)
+    passed = provider_smoke_valid and all(
+        trace_checks.get(name) is True for name in CHECKS
+    )
+    decision = (
+        "pending_review"
+        if passed
+        else "inconclusive"
+        if not provider_smoke_valid or not trace_checks.get("provider_errors")
+        else "rejected"
+    )
     return {
         "schema": "grounded-math-production-pilot-gate-v1",
         "passed": passed,
-        "decision": "accepted" if passed else "rejected",
+        "decision": decision,
         "evaluated_at": now.isoformat().replace("+00:00", "Z"),
         "eligible_trace_count": len(trace_ids),
         "checks": {name: trace_checks.get(name) is True for name in CHECKS},
@@ -628,6 +670,8 @@ def build_artifact(
         "state_sha256": _sha256(state_raw),
         "health_capture_sha256": _sha256(health_raw),
         "trace_sha256": _sha256(trace_raw),
+        "provider_smoke_sha256": provider_smoke_sha256,
+        "provider_smoke_valid": provider_smoke_valid,
     }
 
 
@@ -655,11 +699,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--health-capture", type=Path, required=True)
     parser.add_argument("--trace", type=Path, required=True)
+    parser.add_argument("--provider-smoke", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         artifact = build_artifact(
-            args.window, args.state, args.health_capture, args.trace
+            args.window,
+            args.state,
+            args.health_capture,
+            args.trace,
+            args.provider_smoke,
         )
     except (
         KeyError,
@@ -672,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
         artifact = {
             "schema": "grounded-math-production-pilot-gate-v1",
             "passed": False,
-            "decision": "rejected",
+            "decision": "inconclusive",
             "checks": {name: False for name in CHECKS},
             "eligible_trace_count": 0,
             "trace_id_sha256": [],

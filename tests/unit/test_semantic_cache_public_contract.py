@@ -67,6 +67,18 @@ def test_exact_lookup_miss_returns_none(cache_repository):
     assert semantic_cache.lookup_exact("missing", "scope") is None
 
 
+def test_exact_lookup_skips_document_specific_questions(cache_repository):
+    cache_repository.sc_get_exact.return_value = _cache_row()
+
+    assert (
+        semantic_cache.lookup_exact(
+            "Tóm tắt bản vẽ 9.3.03843.", "scope"
+        )
+        is None
+    )
+    cache_repository.sc_get_exact.assert_not_called()
+
+
 def test_exact_lookup_returns_authorized_snapshot(cache_repository):
     cache_repository.sc_get_exact.return_value = _cache_row()
 

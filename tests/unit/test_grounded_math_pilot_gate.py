@@ -203,6 +203,26 @@ def _inputs(tmp_path: Path):
         },
     }
     window_path = _write_json(tmp_path / "window.json", window)
+    provider_smoke_path = _write_json(
+        tmp_path / "provider-smoke.json",
+        {
+            "schema": "provider-smoke-v1",
+            "started_at": (started - timedelta(minutes=2)).isoformat().replace(
+                "+00:00", "Z"
+            ),
+            "completed_at": (started - timedelta(minutes=1)).isoformat().replace(
+                "+00:00", "Z"
+            ),
+            "request_count": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+            "provider_retries": 0,
+            "max_attempts_per_request": 1,
+            "provider_configuration_sha256": pilot["provider_configuration_sha256"],
+            "provider_outcome": {"provider_blocked": False},
+            "passed": True,
+        },
+    )
     state = {
         "schema": "math-lan-pilot-process-state-v1",
         "window_sha256": _sha256(window_path),
@@ -273,6 +293,7 @@ def _inputs(tmp_path: Path):
         "health": health,
         "health_path": _write_json(tmp_path / "health.json", health),
         "trace_path": trace_path,
+        "provider_smoke_path": provider_smoke_path,
         "output": tmp_path / "gate.json",
         "bundle_path": bundle_path,
         "restore_path": restore_path,
@@ -291,6 +312,8 @@ def _run(cli, inputs) -> int:
             str(inputs["health_path"]),
             "--trace",
             str(inputs["trace_path"]),
+            "--provider-smoke",
+            str(inputs["provider_smoke_path"]),
             "--output",
             str(inputs["output"]),
         ]
@@ -306,6 +329,8 @@ def test_cli_accepts_only_complete_metadata_evidence_and_hashes_trace_ids(tmp_pa
 
     assert artifact["schema"] == "grounded-math-production-pilot-gate-v1"
     assert artifact["passed"] is True
+    assert artifact["decision"] == "pending_review"
+    assert artifact["provider_smoke_valid"] is True
     assert artifact["eligible_trace_count"] == 100
     assert artifact["checks"] == {name: True for name in CHECKS}
     assert len(artifact["trace_id_sha256"]) == 100
@@ -324,6 +349,32 @@ def test_cli_accepts_pure_math_without_an_llm_final_generation(tmp_path):
     )
 
     assert _run(cli, inputs) == 0
+
+
+def test_cli_marks_provider_smoke_failure_inconclusive(tmp_path):
+    cli = _load_cli()
+    inputs = _inputs(tmp_path)
+    smoke = json.loads(inputs["provider_smoke_path"].read_text(encoding="utf-8"))
+    smoke.update(
+        {
+            "passed": False,
+            "successful_requests": 0,
+            "failed_requests": 5,
+            "provider_outcome": {
+                "provider_blocked": False,
+                "reason": "non_capacity_failure",
+            },
+        }
+    )
+    inputs["provider_smoke_path"].write_text(
+        json.dumps(smoke), encoding="utf-8"
+    )
+
+    assert _run(cli, inputs) == 2
+    artifact = json.loads(inputs["output"].read_text(encoding="utf-8"))
+    assert artifact["passed"] is False
+    assert artifact["decision"] == "inconclusive"
+    assert artifact["provider_smoke_valid"] is False
 
 
 @pytest.mark.parametrize(("event_index", "eligible_count"), [(0, 100), (1, 99)])

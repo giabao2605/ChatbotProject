@@ -167,6 +167,8 @@ def _validated_cache_payload(best):
 
 def lookup_exact(question, scope_sig, *, ttl=24.0):
     """Indexed fast path that avoids embeddings and interaction routing."""
+    if _document_specific(question):
+        return None
     from mech_chatbot.db.repositories.semantic_cache import (
         sc_delete,
         sc_docs_all_current,
