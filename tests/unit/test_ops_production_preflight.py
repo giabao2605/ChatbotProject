@@ -1,5 +1,6 @@
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -15,11 +16,18 @@ ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT = ROOT / "scripts" / "ops" / "production_preflight.py"
 
 
-def _run_health_preflight(payload):
+def _run_health_preflight(payload, *, required_token=None):
     body = json.dumps(payload).encode("utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if (
+                required_token is not None
+                and self.headers.get("X-RAG-Service-Token") != required_token
+            ):
+                self.send_response(401)
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -33,6 +41,9 @@ def _run_health_preflight(payload):
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        environment = os.environ.copy()
+        if required_token is not None:
+            environment["RAG_SERVICE_TOKEN"] = required_token
         return subprocess.run(
             [
                 sys.executable,
@@ -45,6 +56,7 @@ def _run_health_preflight(payload):
             capture_output=True,
             text=True,
             check=False,
+            env=environment,
         )
     finally:
         server.shutdown()
@@ -97,6 +109,76 @@ def test_health_preflight_accepts_the_full_ready_contract():
 
     assert result.returncode == 0
     assert json.loads(result.stdout)["passed"] is True
+
+
+def test_health_preflight_authenticates_with_configured_service_token():
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    result = _run_health_preflight(
+        {
+            "status": "ok",
+            "rag_loaded": True,
+            "activation_valid": True,
+            "live_authorized": True,
+            "deployment_id": "lan-runtime",
+            "git_sha": git_sha,
+            "snapshot_fingerprint": "snapshot-v1",
+        },
+        required_token="configured-test-token",
+    )
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["passed"] is True
+
+
+def test_health_preflight_does_not_send_token_to_non_loopback_url(monkeypatch):
+    from scripts.ops import production_preflight
+
+    monkeypatch.setitem(
+        production_preflight.process_environ,
+        "RAG_SERVICE_TOKEN",
+        "configured-test-token",
+    )
+    monkeypatch.setattr(
+        production_preflight.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail("network request must not be sent"),
+    )
+
+    assert production_preflight.check_rag_health(
+        "http://example.invalid/health",
+        expected_git_sha="a" * 40,
+    ) == {
+        "status": "failed",
+        "reason": "rag_health_url_not_local",
+    }
+
+
+def test_health_preflight_never_requests_non_loopback_url_without_token(
+    monkeypatch,
+):
+    import dotenv
+
+    from scripts.ops import production_preflight
+
+    monkeypatch.delenv("RAG_SERVICE_TOKEN", raising=False)
+    monkeypatch.setattr(dotenv, "dotenv_values", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        production_preflight.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail("network request must not be sent"),
+    )
+
+    assert production_preflight.check_rag_health(
+        "http://example.invalid/health",
+        expected_git_sha="a" * 40,
+    ) == {
+        "status": "failed",
+        "reason": "rag_health_url_not_local",
+    }
 
 
 def test_health_preflight_rejects_missing_or_stale_runtime_provenance():

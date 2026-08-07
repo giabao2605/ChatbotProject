@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+from ipaddress import ip_address
 import json
 from os import environ as process_environ
 from pathlib import Path
 import subprocess
 import sys
+from urllib.parse import urlsplit
 import urllib.request
 
 
@@ -150,8 +152,25 @@ def check_rag_health(url: str, *, expected_git_sha: str | None = None) -> dict:
             ).strip()
         except Exception:
             return {"status": "failed", "reason": "rag_health_contract_failed"}
+    parsed = urlsplit(url)
+    host = str(parsed.hostname or "").casefold()
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
+        loopback = host == "localhost" or ip_address(host).is_loopback
+    except ValueError:
+        loopback = host == "localhost"
+    if parsed.scheme not in {"http", "https"} or not loopback:
+        return {"status": "failed", "reason": "rag_health_url_not_local"}
+    token = str(process_environ.get("RAG_SERVICE_TOKEN") or "").strip()
+    if not token:
+        from dotenv import dotenv_values
+
+        token = str(
+            dotenv_values(PROJECT_ROOT / ".env").get("RAG_SERVICE_TOKEN") or ""
+        ).strip()
+    headers = {"X-RAG-Service-Token": token} if token else {}
+    try:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=5) as response:
             payload = json.load(response)
     except Exception:
         return {"status": "failed", "reason": "rag_health_unavailable"}
