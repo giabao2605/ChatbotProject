@@ -365,7 +365,7 @@ def test_cli_marks_provider_smoke_failure_inconclusive(tmp_path):
             "successful_requests": 0,
             "failed_requests": 5,
             "provider_outcome": {
-                "provider_blocked": False,
+                "provider_blocked": True,
                 "reason": "provider_capacity_unavailable",
             },
         }

@@ -451,7 +451,11 @@ def _provider_smoke_status(
             )
         ):
             return True, None, digest
-        if outcome.get("reason") == "provider_capacity_unavailable":
+        if (
+            outcome.get("provider_blocked") is True
+            and outcome.get("reason") == "provider_capacity_unavailable"
+            and artifact.get("failed_requests", 0) > 0
+        ):
             return False, "provider_outage", digest
         return False, "invalid_artifact", digest
     except (KeyError, OSError, TypeError, UnicodeError, json.JSONDecodeError, ValueError):
