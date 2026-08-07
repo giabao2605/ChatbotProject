@@ -202,7 +202,6 @@ def _inputs(tmp_path: Path):
             "cost_multiplier": 1.5,
         },
     }
-    window_path = _write_json(tmp_path / "window.json", window)
     provider_smoke_path = _write_json(
         tmp_path / "provider-smoke.json",
         {
@@ -223,6 +222,11 @@ def _inputs(tmp_path: Path):
             "passed": True,
         },
     )
+    window["provider_smoke"] = {
+        "path": str(provider_smoke_path),
+        "sha256": _sha256(provider_smoke_path),
+    }
+    window_path = _write_json(tmp_path / "window.json", window)
     state = {
         "schema": "math-lan-pilot-process-state-v1",
         "window_sha256": _sha256(window_path),
@@ -369,12 +373,39 @@ def test_cli_marks_provider_smoke_failure_inconclusive(tmp_path):
     inputs["provider_smoke_path"].write_text(
         json.dumps(smoke), encoding="utf-8"
     )
+    inputs["window"]["provider_smoke"]["sha256"] = _sha256(
+        inputs["provider_smoke_path"]
+    )
+    inputs["window_path"].write_text(
+        json.dumps(inputs["window"]), encoding="utf-8"
+    )
+    inputs["state"]["window_sha256"] = _sha256(inputs["window_path"])
+    inputs["state_path"].write_text(
+        json.dumps(inputs["state"]), encoding="utf-8"
+    )
 
     assert _run(cli, inputs) == 2
     artifact = json.loads(inputs["output"].read_text(encoding="utf-8"))
     assert artifact["passed"] is False
     assert artifact["decision"] == "inconclusive"
     assert artifact["provider_smoke_valid"] is False
+    assert artifact["provider_smoke_reason"] == "provider_outage"
+
+
+def test_cli_rejects_substituted_provider_smoke(tmp_path):
+    cli = _load_cli()
+    inputs = _inputs(tmp_path)
+    replacement = tmp_path / "replacement-provider-smoke.json"
+    replacement.write_text(
+        inputs["provider_smoke_path"].read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    inputs["provider_smoke_path"] = replacement
+
+    assert _run(cli, inputs) == 2
+    artifact = json.loads(inputs["output"].read_text(encoding="utf-8"))
+    assert artifact["decision"] == "rejected"
+    assert artifact["provider_smoke_reason"] == "invalid_evidence_binding"
 
 
 @pytest.mark.parametrize(("event_index", "eligible_count"), [(0, 100), (1, 99)])

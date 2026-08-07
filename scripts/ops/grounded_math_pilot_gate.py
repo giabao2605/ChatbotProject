@@ -237,6 +237,7 @@ def _window_valid(window: dict, now: datetime, base: Path) -> bool:
         main = runtime["main"]
         budget = window["pilot_budget"]
         sources = window["formal_budget_sources"]
+        provider_smoke = window["provider_smoke"]
         latency_multiplier = _decimal(sources["latency_multiplier"])
         cost_multiplier = _decimal(sources["cost_multiplier"])
         max_latency = _decimal(budget["max_final_latency_ms"])
@@ -268,6 +269,10 @@ def _window_valid(window: dict, now: datetime, base: Path) -> bool:
             cost_multiplier == Decimal("1.5"),
             max_latency == baseline_latency * latency_multiplier,
             max_cost == baseline_cost * cost_multiplier,
+            isinstance(provider_smoke, dict),
+            isinstance(provider_smoke.get("path"), str)
+            and bool(provider_smoke.get("path").strip()),
+            _is_sha256(provider_smoke.get("sha256")),
         )
     )
 
@@ -406,33 +411,51 @@ def _read_trace(path: Path) -> tuple[list[dict], bytes, bool]:
     return rows, raw, parse_error
 
 
-def _provider_smoke_valid(path: Path, window: dict) -> tuple[bool, str | None]:
-    """Validate the fresh five-probe smoke bound to this pilot window."""
+def _provider_smoke_status(
+    path: Path, window: dict, base: Path
+) -> tuple[bool, str | None, str | None]:
+    """Validate a predeclared smoke and classify provider outage separately."""
     try:
         artifact, raw = _load_json(path)
+        digest = _sha256(raw)
+        declaration = window["provider_smoke"]
+        declared_path = Path(str(declaration["path"]))
+        if not declared_path.is_absolute():
+            declared_path = base / declared_path
+        if declared_path.resolve() != path.resolve() or declaration["sha256"] != digest:
+            return False, "invalid_evidence_binding", digest
         pilot = window["expected_runtime"]["pilot"]
         completed = _timestamp(artifact["completed_at"])
         started = _timestamp(window["started_at"])
         outcome = artifact["provider_outcome"]
-        valid = all(
+        identity_valid = all(
             (
                 artifact.get("schema") == "provider-smoke-v1",
-                artifact.get("passed") is True,
                 artifact.get("request_count") == 5,
-                artifact.get("successful_requests") == 5,
-                artifact.get("failed_requests") == 0,
                 artifact.get("provider_retries") == 0,
                 artifact.get("max_attempts_per_request") == 1,
                 artifact.get("provider_configuration_sha256")
                 == pilot["provider_configuration_sha256"],
                 isinstance(outcome, dict),
-                outcome.get("provider_blocked") is False,
-                timedelta(0) < started - completed <= timedelta(minutes=30),
             )
         )
-        return valid, _sha256(raw)
+        if not identity_valid:
+            return False, "invalid_artifact", digest
+        if not timedelta(0) < started - completed <= timedelta(minutes=30):
+            return False, "stale_artifact", digest
+        if artifact.get("passed") is True and all(
+            (
+                artifact.get("successful_requests") == 5,
+                artifact.get("failed_requests") == 0,
+                outcome.get("provider_blocked") is False,
+            )
+        ):
+            return True, None, digest
+        if artifact.get("failed_requests", 0) > 0 or outcome.get("provider_blocked") is True:
+            return False, "provider_outage", digest
+        return False, "invalid_artifact", digest
     except (KeyError, OSError, TypeError, UnicodeError, json.JSONDecodeError, ValueError):
-        return False, None
+        return False, "invalid_artifact", None
 
 
 def _event_time_valid(event: dict, started: datetime, now: datetime) -> bool:
@@ -628,8 +651,8 @@ def build_artifact(
     state, state_raw = _load_json(state_path)
     health, health_raw = _load_json(health_path)
     rows, trace_raw, parse_error = _read_trace(trace_path)
-    provider_smoke_valid, provider_smoke_sha256 = _provider_smoke_valid(
-        provider_smoke_path, window
+    provider_smoke_valid, provider_smoke_reason, provider_smoke_sha256 = _provider_smoke_status(
+        provider_smoke_path, window, window_path.parent
     )
     window_sha256 = _sha256(window_raw)
     base_runtime_valid = (
@@ -652,7 +675,8 @@ def build_artifact(
         "pending_review"
         if passed
         else "inconclusive"
-        if not provider_smoke_valid or not trace_checks.get("provider_errors")
+        if provider_smoke_reason == "provider_outage"
+        or not trace_checks.get("provider_errors")
         else "rejected"
     )
     return {
@@ -672,6 +696,7 @@ def build_artifact(
         "trace_sha256": _sha256(trace_raw),
         "provider_smoke_sha256": provider_smoke_sha256,
         "provider_smoke_valid": provider_smoke_valid,
+        "provider_smoke_reason": provider_smoke_reason,
     }
 
 
