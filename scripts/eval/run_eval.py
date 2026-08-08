@@ -100,7 +100,13 @@ def _is_provider_failure(exc: BaseException) -> bool:
 
 
 def _execution_metrics(debug: dict, *, calculation_count: int | None = None) -> dict:
+    from mech_chatbot.evaluation.decomposition import normalize_decomposition_usage
+
     generation = debug.get("generation_metrics") or {}
+    decomposition_usage = normalize_decomposition_usage(
+        debug.get("decomposition_usage")
+        or generation.get("decomposition_usage")
+    )
     if calculation_count is None:
         calculation_count = int(
             generation.get("calculation_count")
@@ -129,6 +135,7 @@ def _execution_metrics(debug: dict, *, calculation_count: int | None = None) -> 
         "deadline_exceeded": bool(debug.get("deadline_exceeded")),
         "graph_traversal_count": int(debug.get("graph_traversal_count") or 0),
         "graph_edge_count": int(debug.get("graph_edge_count") or 0),
+        "decomposition_usage": decomposition_usage,
     }
 
 
@@ -333,6 +340,7 @@ def run_evaluation(
     from mech_chatbot.evaluation.graph import evaluate_graph_case, summarize_graph_evaluation
     from mech_chatbot.evaluation.decomposition import (
         evaluate_decomposition_case, summarize_decomposition_evaluation,
+        summarize_decomposition_usage,
     )
     from mech_chatbot.evaluation.metrics import (
         canonical_source_identity, nearest_rank, ranked_retrieval_audit,
@@ -886,6 +894,7 @@ def run_evaluation(
             ),
         },
         "decomposition_evaluation": summarize_decomposition_evaluation(rows),
+        "decomposition_usage": summarize_decomposition_usage(rows),
         "graph_evaluation": summarize_graph_evaluation(rows),
         "failure_family_evaluation": build_failure_family_report(rows),
         "risk_coverage": build_risk_coverage_report(risk_rows),

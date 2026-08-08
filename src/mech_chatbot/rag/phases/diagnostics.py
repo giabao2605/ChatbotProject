@@ -154,7 +154,61 @@ def make_phase_diagnostics(
     }
 
 
+def make_decomposition_usage(primary, context_text: str) -> dict[str, Any]:
+    source = dict(getattr(primary, "decomposition_usage", None) or {})
+    planner = dict(source.get("planner") or {})
+    branches = []
+    for branch in source.get("branches") or ():
+        retrieval = dict(branch.get("retrieval") or {})
+        correction = dict(branch.get("correction") or {})
+        branches.append(
+            {
+                "branch_id": str(branch.get("branch_id") or ""),
+                "retrieval": {
+                    "latency_ms": int(retrieval.get("latency_ms") or 0),
+                    "document_count": int(retrieval.get("document_count") or 0),
+                    "estimated_input_tokens": int(
+                        retrieval.get("estimated_input_tokens") or 0
+                    ),
+                    "estimated_cost": retrieval.get("estimated_cost"),
+                    "cost_status": str(retrieval.get("cost_status") or "unpriced"),
+                },
+                "correction": {
+                    "attempted": bool(correction.get("attempted")),
+                    "input_tokens": int(correction.get("input_tokens") or 0),
+                    "output_tokens": int(correction.get("output_tokens") or 0),
+                    "estimated_cost": float(
+                        correction.get("estimated_cost") or 0.0
+                    ),
+                },
+            }
+        )
+    context_tokens = len(str(context_text or "")) // 4
+    return {
+        "schema": "rag-decomposition-usage-v1",
+        "planner": {
+            "calls": int(planner.get("calls") or 0),
+            "input_tokens": int(planner.get("input_tokens") or 0),
+            "output_tokens": int(planner.get("output_tokens") or 0),
+            "estimated_cost": float(planner.get("estimated_cost") or 0.0),
+        },
+        "branches": branches,
+        "final_context": {
+            "estimated_input_tokens": context_tokens,
+            "estimated_input_cost": context_tokens * 2.5 / 1_000_000,
+            "included_in_final_generation": True,
+        },
+        "final_generation": {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "estimated_cost": 0.0,
+        },
+    }
+
+
 __all__ = [
+    "make_decomposition_usage",
     "make_debug_info",
     "make_phase_diagnostics",
     "make_source_snapshot",

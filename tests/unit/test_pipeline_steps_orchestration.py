@@ -576,6 +576,58 @@ def test_generation_retries_a_rate_limited_provider_before_releasing_answer(
     assert metrics["output_tokens"] > 0
 
 
+def test_generation_records_final_usage_without_double_charging_context(
+    steps,
+    monkeypatch,
+):
+    chain = _FakeChain([["Approved answer."]])
+    _prepare_generation(steps, monkeypatch, chain)
+    usage = {
+        "schema": "rag-decomposition-usage-v1",
+        "planner": {
+            "calls": 1,
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "estimated_cost": 0.000055,
+        },
+        "branches": [],
+        "final_context": {
+            "estimated_input_tokens": 2,
+            "estimated_input_cost": 0.000005,
+            "included_in_final_generation": True,
+        },
+        "final_generation": {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "estimated_cost": 0.0,
+        },
+    }
+    metrics = {
+        "input_tokens": 12,
+        "output_tokens": 2,
+        "estimated_cost": 0.000055,
+        "decomposition_usage": usage,
+    }
+
+    assert "".join(
+        steps.generate_answer(_generation_plan(steps), metrics=metrics)
+    ) == "Approved answer."
+
+    updated_usage = metrics["decomposition_usage"]
+    assert updated_usage is not usage
+    assert usage["final_generation"]["calls"] == 0
+    final = updated_usage["final_generation"]
+    assert final["calls"] == 1
+    assert final["input_tokens"] > 0
+    assert final["output_tokens"] > 0
+    assert final["estimated_cost"] > 0
+    assert metrics["estimated_cost"] == pytest.approx(
+        usage["planner"]["estimated_cost"] + final["estimated_cost"]
+    )
+    assert usage["final_context"]["included_in_final_generation"] is True
+
+
 def test_generation_deadline_fails_closed_before_calling_the_provider(
     steps,
     monkeypatch,

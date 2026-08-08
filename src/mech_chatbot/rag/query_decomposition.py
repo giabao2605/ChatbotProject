@@ -51,6 +51,9 @@ class BranchRetrievalResult:
     correction_attempted: bool = False
     correction_input_tokens: int = 0
     correction_output_tokens: int = 0
+    retrieval_latency_ms: int = 0
+    retrieval_document_count: int = 0
+    retrieval_estimated_input_tokens: int = 0
     access_denied: bool = False
     deadline_exceeded: bool = False
 

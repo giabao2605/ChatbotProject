@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import replace
 from types import SimpleNamespace
@@ -15,11 +16,58 @@ from mech_chatbot.rag.execution import (
     RagRequest,
 )
 from mech_chatbot.rag.phases.preparation import PreparedRequest
+from mech_chatbot.rag.phases.diagnostics import make_decomposition_usage
 from mech_chatbot.rag.phases.retrieval import PrimaryRetrievalOutcome
 from mech_chatbot.rag.phases.routing import RouteDecision
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_decomposition_usage_debug_boundary_strips_unsafe_branch_fields():
+    primary = SimpleNamespace(
+        decomposition_usage={
+            "planner": {"calls": 0},
+            "branches": [
+                {
+                    "branch_id": "branch-1",
+                    "subquery": "must not escape",
+                    "retrieval": {
+                        "latency_ms": 4,
+                        "document_count": 1,
+                        "estimated_input_tokens": 7,
+                        "estimated_cost": None,
+                        "cost_status": "unpriced",
+                        "document_text": "must not escape",
+                    },
+                    "correction": {
+                        "attempted": False,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "estimated_cost": 0.0,
+                        "prompt": "must not escape",
+                    },
+                }
+            ],
+        }
+    )
+
+    usage = make_decomposition_usage(primary, "approved context")
+
+    assert set(usage["branches"][0]) == {"branch_id", "retrieval", "correction"}
+    assert set(usage["branches"][0]["retrieval"]) == {
+        "latency_ms",
+        "document_count",
+        "estimated_input_tokens",
+        "estimated_cost",
+        "cost_status",
+    }
+    assert set(usage["branches"][0]["correction"]) == {
+        "attempted",
+        "input_tokens",
+        "output_tokens",
+        "estimated_cost",
+    }
 
 
 def _retrieval_adapter(*, retrieve=lambda **_kwargs: (), **overrides):
@@ -191,6 +239,31 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
     assert outcome.decomposition_used_fallback is True
     assert outcome.documents
     assert outcome.reason_code == "retrieved"
+    usage = outcome.decomposition_usage
+    assert usage["schema"] == "rag-decomposition-usage-v1"
+    assert usage["planner"] == {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "estimated_cost": 0.0,
+    }
+    assert [branch["branch_id"] for branch in usage["branches"]] == [
+        "branch-1",
+        "branch-2",
+    ]
+    assert all(
+        branch["retrieval"]["document_count"] == 1
+        and branch["retrieval"]["estimated_input_tokens"] > 0
+        and branch["retrieval"]["estimated_cost"] is None
+        and branch["retrieval"]["cost_status"] == "unpriced"
+        and branch["correction"]["attempted"] is False
+        for branch in usage["branches"]
+    )
+    serialized = json.dumps(usage).casefold()
+    assert not any(
+        forbidden in serialized
+        for forbidden in ("subquery", "question", "prompt", "document_text", "answer")
+    )
 
 
 def test_decomposition_scopes_only_router_validated_branch_codes(
@@ -1314,6 +1387,15 @@ def test_executor_runs_one_governed_correction_across_decomposition_branches(mon
         branch["correction_attempted"]
         for branch in outcome.decomposition_branches
     ) == 1
+    corrected = [
+        branch
+        for branch in outcome.decomposition_usage["branches"]
+        if branch["correction"]["attempted"]
+    ]
+    assert len(corrected) == 1
+    assert corrected[0]["correction"]["input_tokens"] > 0
+    assert corrected[0]["correction"]["output_tokens"] > 0
+    assert corrected[0]["correction"]["estimated_cost"] > 0
 
 
 def test_executor_runs_hyde_once_after_empty_primary_retrieval(monkeypatch):

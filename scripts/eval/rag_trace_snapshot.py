@@ -94,7 +94,9 @@ def build_snapshot(
             calculation_max = max(calculation_max, int(event.get("calculations") or 0))
         if event_name == "graph_retrieval":
             graph_edge_max = max(graph_edge_max, int(event.get("edge_count") or 0))
-        if event.get("estimated_cost") is not None:
+        if event.get("cost_role") == "rollup":
+            estimated_cost += float(event.get("exclusive_estimated_cost") or 0)
+        elif event.get("estimated_cost") is not None:
             estimated_cost += float(event.get("estimated_cost") or 0)
         if event.get("event") == "corrective_retrieval" and event.get("attempt"):
             corrective_attempts += 1

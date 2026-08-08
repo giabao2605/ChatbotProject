@@ -11,6 +11,7 @@ from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.llm.llm_client import get_llm_model_name
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.phases.diagnostics import (
+    make_decomposition_usage,
     make_debug_info,
     make_phase_diagnostics,
     make_source_snapshot,
@@ -40,6 +41,7 @@ class GenerationResult:
 def _generation_metrics(
     primary: PrimaryRetrievalOutcome,
     enrichment: EnrichmentOutcome,
+    evidence: EvidenceOutcome,
     state: Any,
 ) -> dict[str, Any]:
     return {
@@ -49,6 +51,10 @@ def _generation_metrics(
         "input_tokens": enrichment.auxiliary_input_tokens,
         "output_tokens": enrichment.auxiliary_output_tokens,
         "provider_retries": state.budget.provider_retries,
+        "decomposition_usage": make_decomposition_usage(
+            primary,
+            evidence.context_text,
+        ),
     }
 
 
@@ -166,6 +172,9 @@ def _generation_debug(
         }
     )
     debug_info["generation_metrics"] = generation_metrics
+    debug_info["decomposition_usage"] = generation_metrics[
+        "decomposition_usage"
+    ]
     from mech_chatbot.domain.serving_state import is_currently_servable
     from mech_chatbot.rag.rbac import document_matches_access_scope
     from mech_chatbot.rag.phases.retrieval_enrichment_support import (
@@ -249,7 +258,7 @@ def _start_generation(
     documents: list[Any],
     new_part_ids: list[Any],
 ) -> tuple[Any, dict[str, Any]]:
-    generation_metrics = _generation_metrics(primary, enrichment, state)
+    generation_metrics = _generation_metrics(primary, enrichment, evidence, state)
     state.transition("generation")
     generation_outcome = GenerationOutcome()
     state.bind_generation(generation_outcome)

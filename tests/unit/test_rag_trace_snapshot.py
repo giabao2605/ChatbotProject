@@ -339,3 +339,40 @@ def test_snapshot_emits_observed_event_and_request_budget_metrics(tmp_path):
         "max_calculation_count": 1, "max_graph_edge_count": 12,
         "max_provider_retries": 1,
     }
+
+
+def test_snapshot_sums_leaf_cost_once_when_rollup_is_present(tmp_path):
+    snapshot = _load_snapshot_module()
+    path = tmp_path / "trace.jsonl"
+    events = [
+        {
+            "event": "corrective_retrieval",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "estimated_cost": 0.002,
+            "cost_role": "leaf",
+        },
+        {
+            "event": "query_decomposition",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "estimated_cost": 0.004,
+            "exclusive_estimated_cost": 0.002,
+            "cost_role": "rollup",
+        },
+        {
+            "event": "llm_generation",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "estimated_cost": 0.003,
+            "cost_role": "leaf",
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(item) for item in events),
+        encoding="utf-8",
+    )
+
+    report = snapshot.build_snapshot(path, execution_contexts={"evaluation"})
+
+    assert report["system_metrics"]["estimated_cost"] == pytest.approx(0.007)

@@ -2,29 +2,24 @@
 
 ## Tóm tắt
 
-- Giữ runtime LAN chính `d1d38dd` ở `all_off`; RC `b437b32` chỉ được phép chạy controlled-demo Math-only pilot, chưa được phép bật trên default rollout.
+- Giữ default rollout ở `all_off`; RC `7b9d575` chỉ được phép chạy controlled-demo Math-only pilot, chưa được phép bật mặc định.
 - Tách Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair thành các capability được đánh giá, pilot và quyết định độc lập.
 - Phát hành dần: tính năng đạt không phải chờ tính năng khác; tính năng chưa đạt tiếp tục OFF.
 - Mỗi pilot chạy trên Windows/LAN riêng trong tối thiểu 7 ngày và đủ 100 request đúng nhóm.
 - Theo đến cùng bốn tính năng chính: Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair. Chỉ dừng khi `accepted` hoặc chứng minh kỹ thuật rằng muốn tiến xa hơn phải phá ngưỡng đã khóa.
 - Community Summaries chỉ bắt đầu sau Graph accepted. Late Interaction giữ OFF vô thời hạn.
 
-## Checkpoint thực thi — 2026-08-05
+## Checkpoint thực thi — 2026-08-08
 
-- Phase 0 đã hoàn tất; Phase 1 đã hoàn tất phần tạo/reconcile disposable target và chuyển web/app pilot sang RC sạch `b437b32`. Hai target được owner duyệt vẫn được giữ, không auto-cleanup.
-- Grounded Math đã đạt ba math-only matched pair được giữ cho series (`pair-01`, `pair-03`, `pair-05`) và series guardrail `production_eligible=true` trên exact commit `b437b3240cbd5714e049b6e481e7553d9f342ed6`; candidate chỉ bật Grounded Math.
-- Full review contract thay đổi do hai baseline-only case, nhưng candidate review surface của đúng 10 case không đổi; nhãn 10/10 của `bao.nguyen` được reuse fail-closed cho controlled-demo decision. Việc reuse này không thay thế human review 20 case của pilot.
-- Giữ tombstone provider smoke đầu tiên 0/5 `ExternalProcessingDenied`. Recovery smoke được khai báo lúc `2026-08-05T03:20:44Z` vẫn 0/5 do ProxyLLM HTTP 503 `no_capacity`; proof attempt `20260805-2` sau đó có một generation thành công, 0 retry, nhưng chỉ là provider smoke và không có `grounded_math_generation`.
-- Single-owner governance đã được `bao.nguyen` xác nhận với `risk_accepted=true`, ký ba vai trò `rag`, `security_qa`, `operations` cho controlled-demo Math-only pilot.
-- Corpus-expanded restore reconciliation receipt đã pass; serving commit giữ `b437b32` để dùng exact controlled-demo bundle đã duyệt, ingestion RC là `ab25cec`. Post-publish snapshot fingerprint là `26284b5f75c101132e673afb10db9ff10fdf1b76f00d8d93bff35da2cbe66f3d`, restore evidence hash là `f4a55bdfd3f7efe393e6a024c02436a43376d54aa2052c5d8fb702560b33c59d`.
-- RAG pilot `8200` đang `status=ok`, deployment `windows-lan-pilot-math-7pdf-b437b32`, selective bundle chỉ có `RAG_GROUNDED_MATH_ENABLED=true`; control `8210` đang `status=ok/all_off`, deployment `windows-lan-control-all-off-7pdf-b437b32`. Cả hai dùng SQL `Mech_Chatbot_DB_RestoreTest_RAGPilot_20260804_b437b32`, Qdrant `TaiLieuKyThuat_v2_RestoreTest_RAGPilot_20260804_b437b32` và khớp runtime identity `4a96bfc...` / `46cb2b72...`. App `8180` đang `status=ok` và vẫn bind `RAG_SERVER_URL=http://127.0.0.1:8200`. Default rollout không đổi.
-- Window v3 bị gián đoạn khi pilot/control không còn listener; trace vẫn rỗng, `eligible_trace_count=0`. V3 đã được đóng fail-closed bằng `.local/math-pilot-b437b32-live-v3/window-interruption.json`, không chuyển trace hoặc thời gian sang attempt mới.
-- Window v4 được owner đóng làm tombstone để chọn corpus-expanded pilot; trace rỗng, không chuyển thời gian hoặc request. Window 7 PDF mới bắt đầu lúc `2026-08-04T09:08:38.4917915Z`, mốc tối thiểu `2026-08-11T09:08:38.4917915Z`, artifact `.local/math-pilot-7pdf-b437b32-live-v1/`, trace `logs/math-pilot-7pdf-b437b32-20260804-0911-7pdf/pilot-trace.jsonl`.
-- Proof declaration đã ký metadata-only và proof batch chọn 5 document-aggregate card hợp lệ. Request đầu tiên đi qua production UI nhưng ProxyLLM generation trả HTTP 503 `no_capacity` cả ba attempt nội bộ; Jina rerank thành công, request không eligible, gate vẫn `0/100`. Proof được dừng fail-closed, giữ tombstone `proof-run-20260804.json`; không retry hoặc gửi bốn card còn lại trong attempt này.
-- Hai attempt ngày `2026-08-05` được tách riêng: attempt `-1` giữ tombstone 503; attempt `-2` xác nhận provider hồi phục bằng đúng một request UI, nhưng `eligible_trace_count=0`, `count_proof_toward_pilot=false` và `proof_batch_excluded=true`. Smoke này không thay thế proof batch 5 request và không được cộng vào pilot.
-- Automation `math-pilot-daily-review` chạy hằng ngày lúc 09:00, đã chuyển sang window/health/state/trace 7 PDF; automation chỉ monitor metadata, không tạo traffic hoặc tự retry proof.
-- Cả 7 PDF đã `approved/published/servable`, target giữ `281` Qdrant point; publication artifact SHA-256 `643ef9742ec03bcc5a532cf23ef761ae6fde83e053daca0b62eb0ef194a04e15`. Chưa publish release/bật Grounded Math trên default rollout vì window mới chưa đủ 7 ngày/100 eligible request/human review và `release_decisions.json` còn `incomplete`.
-- `live_authorized=true` trong health hiện chỉ xác nhận bundle được phép ở `activation_scope=controlled_demo`; nó không authorize default rollout. `release_decisions.json` vẫn `incomplete`; chưa có Advanced RAG feature nào được phép bật trên default rollout.
+- Phase 0 và Phase 1 đã hoàn tất. Runtime pilot/control hiện bind exact commit `7b9d57562a669984b843d48d6d7ddf09048c472d`; pilot chỉ bật Grounded Math, control giữ `all_off`.
+- Grounded Math đã đạt ba current-commit formal pair, series guardrail `production_eligible=true`, formal review 16/16 và rollback/restore reconciliation trên detached checkout sạch.
+- Single-owner governance đã được `bao.nguyen` ký cho `scope=controlled_demo`, `risk_accepted=true` và đủ ba signoff `rag`, `security_qa`, `operations`. Quyền này không áp dụng cho default rollout.
+- Proof 5/5 và owner declaration cho full campaign đã hoàn tất. Window sạch hiện tại bắt đầu `2026-08-07T09:21:30.789198Z`, mốc tối thiểu `2026-08-14T09:21:30.789198Z` và đang có `30/100` eligible calculation request tại snapshot `2026-08-08T09:03:40.4878515Z`.
+- Snapshot hiện tại xác nhận runtime identity và app health hợp lệ; security, citation, provenance, budget, provider error và leakage đều pass cho 30 request. Gate vẫn fail-closed cho đến khi đủ 100 request và đủ thời gian.
+- Reviewer contract của pilot được chốt bằng `.local/math-pilot-7b9d575/review-contract-resolution.json`: `bao.nguyen` là human reviewer duy nhất cho đủ 20 case dưới signed `single_owner`; Codex chỉ chuẩn bị metadata và hỗ trợ kỹ thuật, không được tính là independent human reviewer. `pilot-window.json` được giữ nguyên vì đã bind SHA.
+- Query Decomposition đã có telemetry metadata-only tách planner, từng retrieval/correction branch, final context và final generation; rollup cost được đánh dấu để không cộng hai lần. Diagnostic không-formal sạch gần nhất tại `reports/decomposition/20260808-diagnostic-7b9d575-dirty-02/diagnostic.json` chạy đủ 13+13 case, không có provider failure nhưng không đạt: cost ratio `1.899837 > 1.35`, pass tổng `2/13 → 7/13`, decomposition `7/10`, branch accuracy `86.67%`, citation accuracy `70%`. Root fix đã chặn trước final generation đối với câu hỏi high-risk có partial coverage do nhánh `grounded_negative`; evaluation subprocess hiện được cấp `all_external` trong đúng `evaluation` scope nên không còn local `ExternalProcessingDenied`. Diagnostic `-04` đã tới ProxyLLM nhưng bị dừng sau `19/19` generation call trả HTTP 503 `no_capacity` trên 9 baseline case; chưa chạy candidate và không đánh giá cost/quality. Vì vậy chưa có post-fix cost ratio hợp lệ, chưa mở formal window và Query vẫn OFF; `-01`, `-03` và `-04` đều được giữ làm tombstone.
+- Các attempt/window cũ và provider outage cũ tiếp tục được giữ làm tombstone; không chuyển request hoặc thời gian vào window hiện tại.
+- `release_decisions.json` vẫn `incomplete`; chưa có Advanced RAG feature nào được phép bật trên default rollout.
 
 ## Tiến độ theo phase
 
@@ -38,11 +33,11 @@
   - [x] Đóng v3/v4 làm tombstone, chuyển pilot sang exact target 7 PDF, xác minh health/runtime/fingerprint và mở window mới sạch.
   - [x] Ký proof declaration; chạy request đầu tiên qua production UI và dừng fail-closed khi ProxyLLM trả HTTP 503 `no_capacity`.
   - [x] Xác nhận provider hồi phục bằng một provider smoke riêng, không retry và không tính vào pilot.
-  - [ ] Mở proof attempt mới có predeclaration và chạy đủ 5 request; chỉ khi proof pass mới ký owner declaration cho full campaign.
-  - [ ] Giữ runtime ổn định tối thiểu đến `2026-08-11T09:08:38.4917915Z` và thu đủ 100 eligible calculation request mới trong window 7 PDF.
-  - [ ] Human review 20 case phân tầng: 10 primary labels bởi `bao.nguyen`, 10 bởi `tran.nghi`; mọi failure/low-confidence case được cả hai review.
+  - [x] Proof 5/5 đã pass và owner declaration cho full campaign đã được ký.
+  - [ ] Giữ runtime ổn định tối thiểu đến `2026-08-14T09:21:30.789198Z` và thu đủ 100 eligible calculation request; hiện `30/100`.
+  - [ ] Human review 20 case phân tầng theo signed `single_owner`: cả 20 primary labels bởi `bao.nguyen`; mọi failure/low-confidence case bắt buộc owner review. Codex chỉ hỗ trợ kỹ thuật, không phải independent human reviewer.
   - [ ] Nếu pilot pass, chạy interaction matrix Math-only trên final RC ở concurrency 1 và 5, technical review bởi `tran.nghi`, rồi mới tạo default-rollout ledger/bundle để owner quyết định release Math.
-- Phase 3 — chưa bắt đầu Query Decomposition diagnostic trên RC mới; có thể triển khai telemetry metadata-only song song trong khi chờ đủ thời gian/request của Math pilot, nhưng chưa mở formal window.
+- Phase 3 — telemetry metadata-only và diagnostic `all_off → query-only` đầu tiên đã hoàn tất trong khi chờ Math pilot. Final-generation eligibility root fix đã có regression coverage; evaluation egress chỉ được mở trong subprocess, không sửa `.env` hay runtime LAN. Lượt `-04` xác nhận local policy không còn chặn nhưng ProxyLLM vẫn trả 503 và được dừng fail-closed. Chưa mở formal window và Query vẫn OFF. Theo owner, lượt diagnostic không-formal kế tiếp chạy trực tiếp khi provider thực sự hồi phục, không thêm smoke; chỉ điều tra per-case context overhead nếu cost ratio hợp lệ vẫn vượt `1.35`.
 - Phase 4 — chưa bắt đầu Graph Retrieval current-commit cycle.
 - Phase 5 — chưa bắt đầu CRAG + Claim Repair current-commit diagnostic.
 - Phase 6 — Community Summaries tiếp tục OFF; Late Interaction tiếp tục `rejected/OFF`.
@@ -158,10 +153,18 @@ Trạng thái ban đầu: chất lượng tốt nhưng cost từng đạt `1.554
    - context cuối;
    - final generation.
 2. Chạy diagnostic, không dùng làm formal evidence.
+   - Diagnostic final `20260808-diagnostic-7b9d575-dirty-02` đã chạy đủ `13+13` case, provider failure bằng 0 và cost reconciliation hợp lệ; `-01` là tombstone của implementation diff trước review.
+   - Kết quả chưa đạt: cost ratio `1.899837 > 1.35`; pass tổng `2/13 → 7/13`, decomposition pass `7/10`, branch accuracy `86.67%`, citation accuracy `70%`.
+   - Final generation là overhead trội: baseline gọi `9` lần với cost `0.0198925`, query-only gọi `13` lần với cost `0.0377925`; chênh lệch `0.0179`.
+   - Root fix hiện tại chuyển high-risk partial coverage có nhánh `grounded_negative` thành `insufficient_evidence` trước final generation; partial do `insufficient_evidence` hoặc `access_denied` không-grounded vẫn được phép sinh câu trả lời.
+   - Diagnostic `20260808-diagnostic-7b9d575-dirty-03` là tombstone inconclusive: baseline và candidate đều có `9` provider failure, cost ratio `null`. Provider smoke riêng sau đó fail `0/5` với `ExternalProcessingDenied`, nên không chạy thêm 13+13 case và không dùng `-03` để đánh giá cost/quality.
+- Evaluation runner hiện ép `EXTERNAL_PROCESSING_POLICY=all_external` cùng `RAG_EXECUTION_CONTEXT=evaluation` trong bản sao môi trường của subprocess; process cha, `.env`, runtime LAN và default rollout không đổi. Diagnostic `20260808-diagnostic-7b9d575-dirty-04` đã vượt local policy gate nhưng bị dừng sau 19 ProxyLLM error call, 13 retry event và 9 baseline trace; mọi provider call đều trả HTTP 503 `service_unavailable/no_capacity`, candidate chưa bắt đầu.
+- Diagnostic runner hiện kiểm tra lại source commit, manifest, tracked worktree, runner hash và fixture fingerprint giữa hai arm. Nếu baseline đã có provider failure, runner ghi tombstone `inconclusive` rồi dừng trước candidate; recovery chỉ được xác nhận bên ngoài diagnostic, không bắt buộc thêm smoke.
 3. Áp dụng root fix theo thứ tự:
    - Nếu duplicate source/context chiếm phần lớn overhead: dedupe theo canonical source identity trước final context, nhưng giữ đủ citation cho từng branch.
    - Nếu shared instruction bị lặp: đưa phần chung ra khỏi từng branch.
    - Planner chỉ được gọi khi deterministic splitter không bao phủ đủ intent; câu đơn giản không gọi planner.
+   - Sau root fix, theo owner không chạy thêm provider smoke cho diagnostic không-formal; chỉ mở một diagnostic mới khi provider được xác nhận hồi phục ngoài attempt này. Nếu diagnostic hợp lệ vẫn vượt ngưỡng, đo lại final-generation calls và per-case context trước khi tối ưu context; không giảm gate hoặc bỏ refusal/post-check để lấy số đẹp.
    - Nếu ba nguyên nhân trên không giải thích overhead, mở design investigation cho split-generation/merge; không sửa ngưỡng.
 4. Diagnostic target là cost `<=1.35` để có margin; formal gate vẫn giữ `<=1.5`.
 5. Freeze commit và chạy ba formal pair query-only:
@@ -288,10 +291,11 @@ Mỗi pilot:
 - Chạy đủ 7 ngày và 100 request đúng route, lấy điều kiện hoàn thành sau.
 - Automated checks đủ 100 request: runtime identity, security, citation structure, provenance, budgets, provider errors và leakage.
 - Quality gain vẫn lấy từ matched formal evaluation, không suy diễn từ organic traffic không có oracle.
-- Human review 20 case phân tầng:
-  - 10 primary labels bởi `bao.nguyen`.
-  - 10 primary labels bởi `tran.nghi`.
-  - Mọi failure, access-denied bất thường hoặc low-confidence case được cả hai review.
+- Human review 20 case phân tầng theo governance được ký trước pilot:
+  - Math controlled-demo hiện tại dùng `single_owner`: đủ 20 primary labels bởi `bao.nguyen`.
+  - Codex chỉ chuẩn bị metadata và hỗ trợ kỹ thuật; không được ghi là independent human reviewer.
+  - Mọi failure, access-denied bất thường hoặc low-confidence case bắt buộc owner review.
+  - Pilot khác hoặc default rollout không được kế thừa exception này nếu không có governance artifact đúng scope/commit.
 - Không ghi raw document, credential hoặc raw private response vào artifact.
 
 Pilot bị dừng ngay khi:
@@ -346,7 +350,7 @@ Decision pack cuối phải phân biệt `implemented / measured / reviewed / pi
 - Mục tiêu là Windows/LAN nội bộ, không Docker và không public deploy.
 - Jina vẫn là reranker chính; Voyage fallback một lần rồi deterministic local fusion.
 - Cả ba nhóm BOM/math, multi-intent và relational query đều có nhu cầu thực tế.
-- `bao.nguyen` là release owner; `tran.nghi` là technical reviewer độc lập.
+- `bao.nguyen` là release owner; `tran.nghi` vẫn là technical reviewer độc lập trước quyết định default rollout. Math controlled-demo hiện tại dùng exception `single_owner` riêng, không thay thế gate default rollout.
 - Không có UI toggle cho người dùng hoặc admin.
 - Threshold hiện hành không được nới.
 - Không tạo/xóa account; reuse cohort nội bộ hiện có.

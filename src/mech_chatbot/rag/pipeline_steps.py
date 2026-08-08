@@ -560,6 +560,35 @@ def _assemble_context(retrieved_docs, user_question):
     return context_text
 
 
+def _record_final_generation_usage(
+    metrics: dict[str, Any],
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    estimated_cost: float,
+) -> None:
+    """Update the request-local accumulator without mutating aliased usage data."""
+
+    metrics["input_tokens"] += input_tokens
+    metrics["output_tokens"] += output_tokens
+    metrics["estimated_cost"] += estimated_cost
+    usage = metrics.get("decomposition_usage")
+    if not isinstance(usage, dict):
+        return
+    current = dict(usage.get("final_generation") or {})
+    metrics["decomposition_usage"] = {
+        **usage,
+        "final_generation": {
+            "calls": int(current.get("calls") or 0) + 1,
+            "input_tokens": int(current.get("input_tokens") or 0) + input_tokens,
+            "output_tokens": int(current.get("output_tokens") or 0) + output_tokens,
+            "estimated_cost": (
+                float(current.get("estimated_cost") or 0.0) + estimated_cost
+            ),
+        },
+    }
+
+
 def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     """Generate and verify one answer from a request-local plan."""
     """BUOC C/D: sinh cau tra loi streaming (guarded_stream / normal_stream).
@@ -858,9 +887,12 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 input_tokens = len(context_text + user_question + chat_history_str) // 4
                 output_tokens = len(answer) // 4
                 estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1000000
-                metrics["input_tokens"] += input_tokens
-                metrics["output_tokens"] += output_tokens
-                metrics["estimated_cost"] += estimated_cost
+                _record_final_generation_usage(
+                    metrics,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    estimated_cost=estimated_cost,
+                )
                 doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
                 retrieval_scores = [d.metadata.get("relevance_score") for d in retrieved_docs]
                 
@@ -1075,9 +1107,12 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     input_tokens = len(context_text + user_question + chat_history_str) // 4
                     output_tokens = len(answer) // 4
                     estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1000000
-                    metrics["input_tokens"] += input_tokens
-                    metrics["output_tokens"] += output_tokens
-                    metrics["estimated_cost"] += estimated_cost
+                    _record_final_generation_usage(
+                        metrics,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        estimated_cost=estimated_cost,
+                    )
                     doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
                     retrieval_scores = [d.metadata.get("relevance_score") for d in retrieved_docs]
                     

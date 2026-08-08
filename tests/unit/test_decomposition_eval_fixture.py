@@ -1,6 +1,10 @@
+import hashlib
 import json
+import os
+import subprocess
 from contextlib import contextmanager
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +14,12 @@ from scripts.decomposition_eval.generate_manifest import cases
 from scripts.decomposition_eval.preflight import check_fixture_cases, validate_manifest_scope
 from scripts.decomposition_eval.prepare_fixture import prepare_fixture
 from scripts.decomposition_eval.run_rollout import build_evaluation_environment
+from scripts.decomposition_eval.run_diagnostic import (
+    build_cost_diagnostic,
+    build_runner_provenance,
+    build_worktree_provenance,
+    require_unchanged_diagnostic_inputs,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -302,13 +312,34 @@ def test_prepare_fixture_rejects_ambiguous_existing_bom_rows(
 
 def test_rollout_toggles_only_decomposition_between_arms(monkeypatch):
     monkeypatch.setenv("RAG_QUERY_DECOMPOSITION_ENABLED", "stale")
+    monkeypatch.setenv("EXTERNAL_PROCESSING_POLICY", "internal_only")
     baseline = build_evaluation_environment(enabled=False)
     candidate = build_evaluation_environment(enabled=True)
 
     assert baseline["RAG_QUERY_DECOMPOSITION_ENABLED"] == "false"
     assert candidate["RAG_QUERY_DECOMPOSITION_ENABLED"] == "true"
-    for flag in ("RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED", "RAG_GROUNDED_MATH_ENABLED"):
-        assert baseline[flag] == candidate[flag] == "true"
+    advanced_flags = {
+        "RAG_CRAG_ENABLED",
+        "RAG_CLAIM_REPAIR_ENABLED",
+        "RAG_GROUNDED_MATH_ENABLED",
+        "RAG_LATE_INTERACTION_ENABLED",
+        "RAG_QUERY_DECOMPOSITION_ENABLED",
+        "RAG_GRAPH_RETRIEVAL_ENABLED",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED",
+    }
+    assert {
+        flag for flag in advanced_flags if baseline[flag] == "true"
+    } == set()
+    assert {
+        flag for flag in advanced_flags if candidate[flag] == "true"
+    } == {"RAG_QUERY_DECOMPOSITION_ENABLED"}
+    assert baseline["RAG_ACTIVATION_PROFILE"] == "all_off"
+    assert candidate["RAG_ACTIVATION_PROFILE"] == "selective"
+    assert baseline["RAG_EXECUTION_CONTEXT"] == "evaluation"
+    assert candidate["RAG_EXECUTION_CONTEXT"] == "evaluation"
+    assert baseline["EXTERNAL_PROCESSING_POLICY"] == "all_external"
+    assert candidate["EXTERNAL_PROCESSING_POLICY"] == "all_external"
+    assert os.environ["EXTERNAL_PROCESSING_POLICY"] == "internal_only"
     assert baseline["QDRANT_COLLECTION"] == candidate["QDRANT_COLLECTION"] == FIXTURE_COLLECTION
 
 
@@ -325,6 +356,219 @@ def test_rollout_can_read_fixture_from_main_collection():
         environment["RAG_EVAL_FIXTURE_BATCH"]
         == "department-decomposition-eval-v1"
     )
+
+
+def test_cost_diagnostic_is_non_formal_and_names_the_dominant_stage(tmp_path):
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+
+    def report(total, planner, correction, final):
+        return {
+            "schema": "rag-eval-report-v2",
+            "total_cases": 2,
+            "passed_cases": 1,
+            "provider_failure_count": 0,
+            "decomposition_evaluation": {
+                "applicable_cases": 2,
+                "passed_cases": 1,
+                "branch_accuracy": 0.75,
+                "citation_accuracy": 0.5,
+                "budget_violations": 0,
+                "simple_planner_calls": 0,
+            },
+            "total_estimated_cost": total,
+            "decomposition_usage": {
+                "schema": "rag-decomposition-usage-summary-v1",
+                "cases": 2,
+                "planner": {"estimated_cost": planner},
+                "branch_retrieval": {
+                    "estimated_input_tokens": 10,
+                    "unpriced_branches": 2,
+                },
+                "branch_correction": {"estimated_cost": correction},
+                "final_context": {"estimated_input_tokens": 20},
+                "final_generation": {"estimated_cost": final},
+                "legacy_total_estimated_cost": total,
+                "attributed_estimated_cost": total,
+                "cost_reconciled": True,
+            },
+        }
+
+    baseline.write_text(json.dumps(report(1.0, 0.0, 0.0, 1.0)), encoding="utf-8")
+    candidate.write_text(json.dumps(report(1.2, 0.05, 0.02, 1.13)), encoding="utf-8")
+
+    diagnostic = build_cost_diagnostic(
+        baseline,
+        candidate,
+        source_commit="a" * 40,
+        tracked_diff_sha256="b" * 64,
+    )
+
+    assert diagnostic["formal_evidence"] is False
+    assert diagnostic["cost_ratio"] == pytest.approx(1.2)
+    assert diagnostic["diagnostic_target_met"] is True
+    assert diagnostic["dominant_overhead_stage"] == "final_generation"
+    assert diagnostic["stage_deltas"]["planner"] == pytest.approx(0.05)
+    assert diagnostic["baseline"]["quality"] == {
+        "total_cases": 2,
+        "passed_cases": 1,
+        "provider_failure_count": 0,
+        "decomposition": {
+            "applicable_cases": 2,
+            "passed_cases": 1,
+            "branch_accuracy": 0.75,
+            "citation_accuracy": 0.5,
+            "budget_violations": 0,
+            "simple_planner_calls": 0,
+        },
+    }
+
+    failed_candidate = json.loads(candidate.read_text(encoding="utf-8"))
+    failed_candidate["provider_failure_count"] = 1
+    candidate.write_text(json.dumps(failed_candidate), encoding="utf-8")
+
+    inconclusive = build_cost_diagnostic(
+        baseline,
+        candidate,
+        source_commit="a" * 40,
+        tracked_diff_sha256="b" * 64,
+    )
+
+    assert inconclusive["status"] == "inconclusive"
+    assert inconclusive["diagnostic_target_met"] is False
+    assert inconclusive["dominant_overhead_stage"] == "unavailable"
+    assert "externally confirmed" in inconclusive["next_action"]
+    assert "smoke" not in inconclusive["next_action"].casefold()
+
+
+def test_diagnostic_stops_after_baseline_provider_outage(monkeypatch, tmp_path):
+    from mech_chatbot.config import settings as settings_module
+    from scripts.decomposition_eval import run_diagnostic as diagnostic_module
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("{}\n", encoding="utf-8")
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "diagnostic"
+    labels = []
+    usage = {
+        "schema": "rag-decomposition-usage-summary-v1",
+        "cases": 1,
+        "planner": {"estimated_cost": 0.0},
+        "branch_retrieval": {},
+        "branch_correction": {"estimated_cost": 0.0},
+        "final_context": {},
+        "final_generation": {"estimated_cost": 0.0},
+        "legacy_total_estimated_cost": 0.0,
+        "attributed_estimated_cost": 0.0,
+        "cost_reconciled": True,
+    }
+
+    def fake_run(label, _manifest, run_output, _trace, **_kwargs):
+        labels.append(label)
+        run_dir = run_output / label
+        run_dir.mkdir(parents=True)
+        (run_dir / "eval.json").write_text(
+            json.dumps(
+                {
+                    "schema": "rag-eval-report-v2",
+                    "total_cases": 1,
+                    "passed_cases": 0,
+                    "provider_failure_count": 1,
+                    "total_estimated_cost": 0.0,
+                    "decomposition_evaluation": {},
+                    "decomposition_usage": usage,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setenv(diagnostic_module.DIAGNOSTIC_OPT_IN, "1")
+    monkeypatch.setattr(settings_module, "load_settings", lambda: object())
+    monkeypatch.setattr(
+        diagnostic_module,
+        "provider_configuration_sha256_for_settings",
+        lambda _settings: "provider-sha",
+    )
+    monkeypatch.setattr(
+        diagnostic_module,
+        "provider_environment_for_settings",
+        lambda _settings: {},
+    )
+    monkeypatch.setattr(
+        diagnostic_module,
+        "governance_scope_sha256",
+        lambda _manifest: "governance-sha",
+    )
+    monkeypatch.setattr(diagnostic_module, "_run", fake_run)
+    monkeypatch.setattr(
+        diagnostic_module,
+        "require_unchanged_diagnostic_inputs",
+        lambda **_kwargs: None,
+    )
+
+    report = diagnostic_module.run_diagnostic(manifest, output, trace)
+
+    assert labels == ["baseline"]
+    assert report["status"] == "inconclusive"
+    assert report["candidate"] is None
+    assert (output / "diagnostic.json").is_file()
+
+
+def test_diagnostic_runner_provenance_hashes_runner_and_optional_worktree_diff():
+    provenance = build_runner_provenance()
+    worktree = build_worktree_provenance()
+
+    assert Path(provenance["path"]).parts[-3:] == (
+        "scripts",
+        "decomposition_eval",
+        "run_diagnostic.py",
+    )
+    assert len(provenance["sha256"]) == 64
+    for key in ("tracked_diff_sha256", "python_diff_sha256"):
+        digest = worktree[key]
+        assert digest is None or len(digest) == 64
+
+
+def test_diagnostic_provenance_rejects_manifest_drift(tmp_path):
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("{}\n", encoding="utf-8")
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[2],
+        text=True,
+    ).strip()
+    worktree = build_worktree_provenance()
+    runner = build_runner_provenance()
+    manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+    manifest.write_text('{"changed": true}\n', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="manifest changed"):
+        require_unchanged_diagnostic_inputs(
+            source_commit=source_commit,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            worktree=worktree,
+            runner=runner,
+        )
+
+
+def test_diagnostic_cli_returns_nonzero_for_inconclusive_result(monkeypatch, tmp_path):
+    from scripts.decomposition_eval import run_diagnostic as diagnostic_module
+
+    monkeypatch.setattr(
+        diagnostic_module,
+        "run_diagnostic",
+        lambda *_args, **_kwargs: {"status": "inconclusive"},
+    )
+
+    assert diagnostic_module.main([
+        "--manifest",
+        str(tmp_path / "manifest.jsonl"),
+        "--output-dir",
+        str(tmp_path / "output"),
+    ]) == 2
 
 
 def test_decomposition_rollout_records_runtime_provider_hash(monkeypatch, tmp_path):

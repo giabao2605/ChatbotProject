@@ -9,6 +9,7 @@ from mech_chatbot.evaluation.decomposition import (
     evaluate_decomposition_case,
     load_decomposition_manifest,
     summarize_decomposition_evaluation,
+    summarize_decomposition_usage,
 )
 
 
@@ -229,3 +230,66 @@ def test_summary_reports_simple_planner_calls_and_all_request_budgets():
     assert summary["branch_accuracy"] == 1.0
     assert summary["citation_accuracy"] == 1.0
     assert summary["budget_violations"] == 0
+
+
+def test_usage_summary_reconciles_priced_stages_without_double_counting_context():
+    rows = [
+        {
+            "estimated_cost": 0.7,
+            "decomposition_usage": {
+                "schema": "rag-decomposition-usage-v1",
+                "planner": {
+                    "calls": 1,
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "estimated_cost": 0.1,
+                },
+                "branches": [
+                    {
+                        "branch_id": "branch-1",
+                        "retrieval": {
+                            "document_count": 2,
+                            "estimated_input_tokens": 20,
+                            "estimated_cost": None,
+                            "cost_status": "unpriced",
+                        },
+                        "correction": {
+                            "attempted": True,
+                            "input_tokens": 4,
+                            "output_tokens": 1,
+                            "estimated_cost": 0.2,
+                        },
+                    }
+                ],
+                "final_context": {
+                    "estimated_input_tokens": 30,
+                    "estimated_input_cost": 0.3,
+                    "included_in_final_generation": True,
+                },
+                "final_generation": {
+                    "calls": 1,
+                    "input_tokens": 40,
+                    "output_tokens": 5,
+                    "estimated_cost": 0.4,
+                },
+            },
+        }
+    ]
+
+    summary = summarize_decomposition_usage(rows)
+
+    assert summary["cases"] == 1
+    assert summary["planner"]["estimated_cost"] == pytest.approx(0.1)
+    assert summary["branch_retrieval"] == {
+        "branches": 1,
+        "document_count": 2,
+        "estimated_input_tokens": 20,
+        "priced_branches": 0,
+        "unpriced_branches": 1,
+    }
+    assert summary["branch_correction"]["estimated_cost"] == pytest.approx(0.2)
+    assert summary["final_context"]["estimated_input_cost"] == pytest.approx(0.3)
+    assert summary["final_generation"]["estimated_cost"] == pytest.approx(0.4)
+    assert summary["legacy_total_estimated_cost"] == pytest.approx(0.7)
+    assert summary["attributed_estimated_cost"] == pytest.approx(0.7)
+    assert summary["cost_reconciled"] is True

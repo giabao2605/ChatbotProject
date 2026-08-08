@@ -12,6 +12,7 @@ from mech_chatbot.rag.answer_policy import (
 )
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
 from mech_chatbot.rag.phases.evidence import EvidenceOutcome
+from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.preparation import PreparedRequest
 from mech_chatbot.rag.phases.retrieval import PrimaryRetrievalOutcome
 from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
@@ -428,6 +429,113 @@ def test_evidence_treats_a_grounded_negative_decomposition_branch_as_partial(
         primary,
         enrichment,
         reranked,
+        _state(),
+    )
+
+    assert isinstance(outcome, EvidenceOutcome)
+    assert outcome.answer_policy.outcome is AnswerOutcome.PARTIAL_ANSWER
+
+
+def test_high_risk_grounded_negative_partial_stops_before_final_generation(
+    monkeypatch,
+):
+    from dataclasses import replace
+
+    from mech_chatbot.rag.phases import evidence
+
+    request = replace(
+        _request(),
+        user_question="Giá trị P-1 và chi phí P-2 là bao nhiêu?",
+    )
+    document = Document(
+        page_content="P-1 có giá trị 1,500.",
+        metadata={
+            "doc_id": 7,
+            "trang_so": 1,
+            "file_goc": "numbers.md",
+            "version_no": 1,
+        },
+    )
+    primary = _primary(
+        branches=(
+            {"outcome": "full_answer", "grounded_negative": False},
+            {"outcome": "insufficient_evidence", "grounded_negative": True},
+        )
+    )
+    enrichment = _enrichment([document])
+    reranked = RerankOutcome((document,), (), reason_code="reranked")
+    monkeypatch.setattr(
+        evidence,
+        "_assemble_context",
+        lambda docs, _question: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = evidence.evaluate_evidence(
+        _decision(request=request),
+        primary,
+        enrichment,
+        reranked,
+        _state(),
+    )
+
+    assert isinstance(outcome, PhaseTerminal)
+    assert outcome.reason_code == "evidence_gate"
+    debug = outcome.prepared[4]
+    assert debug["generation_metrics"]["decomposition_usage"][
+        "final_generation"
+    ]["calls"] == 0
+
+
+@pytest.mark.parametrize("missing_outcome", ["insufficient_evidence", "access_denied"])
+def test_high_risk_non_grounded_partial_still_allows_answer_generation(
+    monkeypatch,
+    missing_outcome,
+):
+    from dataclasses import replace
+
+    from mech_chatbot.rag.phases import evidence
+
+    request = replace(
+        _request(),
+        user_question="Giá trị P-1 và chi phí P-2 là bao nhiêu?",
+    )
+    document = Document(
+        page_content="P-1 có giá trị 1,500.",
+        metadata={"doc_id": 7, "trang_so": 1, "file_goc": "numbers.md"},
+    )
+    primary = _primary(
+        branches=(
+            {"outcome": "full_answer", "grounded_negative": False},
+            {"outcome": missing_outcome, "grounded_negative": False},
+        )
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_assemble_context",
+        lambda docs, _question: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = evidence.evaluate_evidence(
+        _decision(request=request),
+        primary,
+        _enrichment([document]),
+        RerankOutcome((document,), (), reason_code="reranked"),
         _state(),
     )
 

@@ -57,6 +57,7 @@ class PrimaryRetrievalOutcome:
     correction_estimated_cost: float
     reason_code: str = "retrieved"
     lookup_documents: tuple[Any, ...] = ()
+    decomposition_usage: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +113,7 @@ class _DecompositionResult:
     auxiliary_output_tokens: int = 0
     planner_estimated_cost: float = 0.0
     correction_estimated_cost: float = 0.0
+    usage: Mapping[str, Any] | None = None
 
 
 def _make_context(decision: RouteDecision, state: Any) -> _RetrievalContext:
@@ -343,6 +345,7 @@ def _branch_correction_success(
         before_docs=len(result[0]), after_docs=len(corrected[0]),
         evaluator_state=branch_decision.state.value,
         estimated_cost=estimated_cost,
+        cost_role="leaf",
     )
     return _BranchCorrection(
         corrected, True, input_tokens, output_tokens, estimated_cost
@@ -377,6 +380,7 @@ def _retrieve_branch(
     if _deadline_exceeded(branch_deadline_monotonic):
         return _empty_deadline_branch()
     part_ids, strict_filter, broad_filter = _branch_filters(context, subquery)
+    retrieval_started_at = time.perf_counter()
     result = state.retrieve(
         new_part_ids=part_ids,
         strict_filter=strict_filter,
@@ -387,6 +391,10 @@ def _retrieve_branch(
         trace_id=context.trace_id,
     )
     state.checkpoint("branch_retrieval")
+    retrieval_latency_ms = max(
+        0,
+        int((time.perf_counter() - retrieval_started_at) * 1000),
+    )
     deadline_exceeded = _deadline_exceeded(branch_deadline_monotonic)
     if deadline_exceeded:
         result = ([], result[1], result[2] + "+deadline_exceeded", result[3], result[4])
@@ -410,7 +418,10 @@ def _retrieve_branch(
         deadline_exceeded,
     )
     return _finish_branch_result(
-        correction, access_denied, branch_deadline_monotonic
+        correction,
+        access_denied,
+        branch_deadline_monotonic,
+        retrieval_latency_ms,
     )
 
 
@@ -418,6 +429,7 @@ def _finish_branch_result(
     correction: _BranchCorrection,
     access_denied: bool,
     branch_deadline_monotonic: float | None,
+    retrieval_latency_ms: int = 0,
 ) -> Any:
     from mech_chatbot.rag.query_decomposition import BranchRetrievalResult
 
@@ -435,6 +447,12 @@ def _finish_branch_result(
         correction_attempted=correction.attempted,
         correction_input_tokens=correction.input_tokens,
         correction_output_tokens=correction.output_tokens,
+        retrieval_latency_ms=retrieval_latency_ms,
+        retrieval_document_count=len(final_result[0]),
+        retrieval_estimated_input_tokens=sum(
+            len(str(getattr(document, "page_content", "") or "")) // 4
+            for document in final_result[0]
+        ),
         access_denied=bool(access_denied), deadline_exceeded=deadline_exceeded,
     )
 
@@ -551,9 +569,49 @@ def _log_decomposition(
         correction_budget=1,
         deadline_exceeded=state.budget.deadline_exceeded,
         estimated_cost=planner_result.estimated_cost + correction_cost,
+        exclusive_estimated_cost=planner_result.estimated_cost,
+        cost_role="rollup",
         input_tokens=input_tokens,
         output_tokens=output_tokens,
     )
+
+
+def _decomposition_usage(
+    state: Any,
+    plan: Any,
+    planner_result: _PlannerResult,
+    branch_results: Sequence[Any],
+) -> Mapping[str, Any]:
+    return {
+        "schema": "rag-decomposition-usage-v1",
+        "planner": {
+            "calls": int(state.budget.planners),
+            "input_tokens": planner_result.input_tokens,
+            "output_tokens": planner_result.output_tokens,
+            "estimated_cost": planner_result.estimated_cost,
+        },
+        "branches": [
+            {
+                "branch_id": f"branch-{index}",
+                "retrieval": {
+                    "latency_ms": result.retrieval_latency_ms,
+                    "document_count": result.retrieval_document_count,
+                    "estimated_input_tokens": (
+                        result.retrieval_estimated_input_tokens
+                    ),
+                    "estimated_cost": None,
+                    "cost_status": "unpriced",
+                },
+                "correction": {
+                    "attempted": result.correction_attempted,
+                    "input_tokens": result.correction_input_tokens,
+                    "output_tokens": result.correction_output_tokens,
+                    "estimated_cost": result.correction_cost,
+                },
+            }
+            for index, result in enumerate(branch_results, 1)
+        ],
+    }
 
 
 def _run_complex_plan(
@@ -596,6 +654,12 @@ def _run_complex_plan(
         auxiliary_input_tokens=input_tokens, auxiliary_output_tokens=output_tokens,
         planner_estimated_cost=planner_result.estimated_cost,
         correction_estimated_cost=correction_cost,
+        usage=_decomposition_usage(
+            state,
+            plan,
+            planner_result,
+            branch_results,
+        ),
     )
 
 
@@ -681,6 +745,7 @@ def _run_decomposition(context: _RetrievalContext, state: Any) -> _Decomposition
         auxiliary_input_tokens=planner_result.input_tokens,
         auxiliary_output_tokens=planner_result.output_tokens,
         planner_estimated_cost=planner_result.estimated_cost,
+        usage=_decomposition_usage(state, plan, planner_result, ()),
     )
 
 
@@ -766,6 +831,7 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
         planner_estimated_cost=result.planner_estimated_cost,
         correction_estimated_cost=result.correction_estimated_cost,
         lookup_documents=batch.lookup_documents or batch.documents,
+        decomposition_usage=result.usage,
     )
 
 

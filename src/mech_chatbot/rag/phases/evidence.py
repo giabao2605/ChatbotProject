@@ -17,6 +17,7 @@ from mech_chatbot.rag.answer_policy import (
 from mech_chatbot.rag.evidence_gate import (
     EvidenceState,
     evaluate_answerability,
+    is_high_risk_question,
     make_insufficient_evidence_message,
 )
 from mech_chatbot.rag.intent import serialize_qdrant_filter
@@ -26,6 +27,7 @@ from mech_chatbot.rag.phases.citations import (
 )
 from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.diagnostics import (
+    make_decomposition_usage,
     make_debug_info,
     make_phase_diagnostics,
 )
@@ -261,6 +263,19 @@ def _complete_evidence(
     evidence_decision: Any,
     evidence_quotes: tuple[str, ...],
 ) -> EvidenceOutcome | PhaseTerminal:
+    if (
+        answer_policy.outcome is AnswerOutcome.PARTIAL_ANSWER
+        and is_high_risk_question(decision.request.user_question)
+        and any(
+            bool(branch.get("grounded_negative"))
+            for branch in primary.decomposition_branches
+        )
+    ):
+        answer_policy = replace(
+            answer_policy,
+            outcome=AnswerOutcome.INSUFFICIENT_EVIDENCE,
+            reason="high_risk_partial_grounded_negative",
+        )
     if not answer_policy.allows_answer_generation:
         return _prepare_refusal(
             decision,
@@ -403,7 +418,11 @@ def _make_refusal_debug(
         "output_tokens": enrichment.auxiliary_output_tokens,
         "provider_retries": state.budget.provider_retries,
         "repair_count": 0,
+        "decomposition_usage": make_decomposition_usage(primary, ""),
     }
+    debug["decomposition_usage"] = debug["generation_metrics"][
+        "decomposition_usage"
+    ]
     return debug
 
 
