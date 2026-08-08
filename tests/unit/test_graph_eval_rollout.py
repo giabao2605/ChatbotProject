@@ -6,6 +6,44 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+def test_graph_fixture_meets_phase_four_relational_floor():
+    from scripts.graph_eval.generate_fixture import cases
+
+    relational = [
+        case for case in cases() if case["evaluation_group"] == "relational"
+    ]
+    relation_types = {
+        relation["relation_type"]
+        for case in relational
+        for relation in (
+            case.get("expected_relations")
+            or [case.get("expected_relation")]
+        )
+        if relation
+    }
+
+    assert len(relational) >= 10
+    assert {
+        case["expected_department"] for case in relational
+    } >= {"Technical", "Production", "Maintenance"}
+    assert relation_types >= {
+        "HAS_VERSION",
+        "SUPERSEDES",
+        "CONTAINS_PART",
+        "USES_MATERIAL",
+        "APPLIES_TO",
+    }
+    assert all(
+        claim.get("positive_relation", {}).get("predicate")
+        and claim["positive_relation"].get("target_terms")
+        and {"không", "chưa", "chẳng", "chả"} <= set(
+            claim["positive_relation"].get("negation_terms") or []
+        )
+        for case in relational
+        for claim in case["expected_claims"]
+    )
+
+
 def _write_provider_smoke(
     path,
     provider_sha,

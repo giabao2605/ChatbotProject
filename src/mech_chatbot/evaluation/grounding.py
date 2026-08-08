@@ -152,6 +152,33 @@ def _term_present(term: str, text: str) -> bool:
     return bool(re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text))
 
 
+def _positive_relation_present(expected: dict, text: str) -> bool:
+    contract = expected.get("positive_relation")
+    if not isinstance(contract, dict):
+        return True
+    predicate = _normalize_text(contract.get("predicate"))
+    targets = [
+        _normalize_text(term)
+        for term in (contract.get("target_terms") or [])
+        if _normalize_text(term)
+    ]
+    negations = [
+        _normalize_text(term)
+        for term in (contract.get("negation_terms") or [])
+        if _normalize_text(term)
+    ]
+    clauses = re.split(
+        r"(?:[,;.!?]+|\bnhưng\b|\btuy nhiên\b)",
+        text,
+    )
+    return any(
+        _term_present(predicate, clause)
+        and all(_term_present(term, clause) for term in targets)
+        and not any(_term_present(term, clause) for term in negations)
+        for clause in clauses
+    )
+
+
 def evaluate_claims(
     actual_claims: list[dict],
     expected_claims: list[dict],
@@ -190,6 +217,7 @@ def evaluate_claims(
                     _term_present(term, normalized_claim)
                     for term in _expected_terms(expected)
                 )
+                and _positive_relation_present(expected, normalized_claim)
             ),
             None,
         )

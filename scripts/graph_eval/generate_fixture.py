@@ -51,7 +51,16 @@ def _citation(key):
 
 
 def _claim(claim_id, terms, key):
-    return {"id": claim_id, "required_terms": terms, "allowed_source_ids": [f"$PAGE:{key}"]}
+    return {
+        "id": claim_id,
+        "required_terms": terms,
+        "positive_relation": {
+            "predicate": terms[0],
+            "target_terms": terms[1:],
+            "negation_terms": ["không", "chưa", "chẳng", "chả"],
+        },
+        "allowed_source_ids": [f"$PAGE:{key}"],
+    }
 
 
 def _case(case_id, question, outcome, key, relation, claims, *, scenario="relational", **extra):
@@ -77,11 +86,15 @@ def _case(case_id, question, outcome, key, relation, claims, *, scenario="relati
 def cases():
     return [
         _case("graph-family-version", "GRAPH-EVAL-ASM-001 có phiên bản hiện hành nào?", "full_answer", "assembly_v2", {"source_key": "$FAMILY:assembly", "relation_type": "HAS_VERSION", "target_key": "$DOC:assembly_v2"}, [_claim("version", ["phiên bản", "2"], "assembly_v2")]),
-        _case("graph-supersedes", "GRAPH-EVAL-ASM-001 phiên bản 2 thay thế tài liệu nào?", "full_answer", "assembly_v2", {"source_key": "$DOC:assembly_v2", "relation_type": "SUPERSEDES", "target_key": "$DOC:assembly_v1"}, [_claim("supersedes", ["phiên bản", "1"], "assembly_v2")]),
-        _case("graph-contains-part", "GRAPH-EVAL-ASM-001 chứa bộ phận GRAPH-EVAL-PART-A nào?", "full_answer", "assembly_v2", {"source_key": "$DOC:assembly_v2", "relation_type": "CONTAINS_PART", "target_key": "part:graph-eval-part-a"}, [_claim("contains", ["GRAPH-EVAL-PART-A"], "assembly_v2")]),
-        _case("graph-uses-material", "GRAPH-EVAL-PART-A sử dụng vật liệu gì?", "full_answer", "assembly_v2", {"source_key": "part:graph-eval-part-a", "relation_type": "USES_MATERIAL", "target_key": "material:steel"}, [_claim("material", ["steel"], "assembly_v2")]),
-        _case("graph-production-page", "Tài liệu GRAPH-EVAL-PROD-001 liên kết tới trang nguồn nào và chu kỳ là bao nhiêu?", "full_answer", "production", {"source_key": "$DOC:production", "relation_type": "HAS_PAGE", "target_key": "$PAGEKEY:production"}, [_claim("production", ["55", "giây"], "production")]),
-        _case("graph-maintenance-page", "Tài liệu GRAPH-EVAL-MAINT-001 liên kết tới trang nguồn nào và chu kỳ là bao nhiêu?", "full_answer", "maintenance", {"source_key": "$DOC:maintenance", "relation_type": "HAS_PAGE", "target_key": "$PAGEKEY:maintenance"}, [_claim("maintenance", ["500", "giờ"], "maintenance")]),
+        _case("graph-supersedes", "GRAPH-EVAL-ASM-001 phiên bản 2 thay thế tài liệu nào?", "full_answer", "assembly_v2", {"source_key": "$DOC:assembly_v2", "relation_type": "SUPERSEDES", "target_key": "$DOC:assembly_v1"}, [_claim("supersedes", ["thay thế", "phiên bản", "1"], "assembly_v2")]),
+        _case("graph-contains-part", "GRAPH-EVAL-ASM-001 chứa bộ phận GRAPH-EVAL-PART-A nào?", "full_answer", "assembly_v2", {"source_key": "$DOC:assembly_v2", "relation_type": "CONTAINS_PART", "target_key": "part:graph-eval-part-a"}, [_claim("contains", ["chứa", "GRAPH-EVAL-PART-A"], "assembly_v2")]),
+        _case("graph-uses-material", "GRAPH-EVAL-PART-A sử dụng vật liệu gì?", "full_answer", "assembly_v2", {"source_key": "part:graph-eval-part-a", "relation_type": "USES_MATERIAL", "target_key": "material:steel"}, [_claim("material", ["sử dụng", "steel"], "assembly_v2")]),
+        _case("graph-contains-part-b", "GRAPH-EVAL-ASM-001 có chứa GRAPH-EVAL-PART-B không?", "full_answer", "assembly_v2", {"source_key": "$DOC:assembly_v2", "relation_type": "CONTAINS_PART", "target_key": "part:graph-eval-part-b"}, [_claim("contains-b", ["chứa", "GRAPH-EVAL-PART-B"], "assembly_v2")]),
+        _case("graph-uses-material-b", "GRAPH-EVAL-PART-B sử dụng vật liệu gì?", "full_answer", "assembly_v2", {"source_key": "part:graph-eval-part-b", "relation_type": "USES_MATERIAL", "target_key": "material:aluminum"}, [_claim("material-b", ["sử dụng", "aluminum"], "assembly_v2")]),
+        _case("graph-uses-material-c", "GRAPH-EVAL-PART-C sử dụng vật liệu gì?", "full_answer", "assembly_v2", {"source_key": "part:graph-eval-part-c", "relation_type": "USES_MATERIAL", "target_key": "material:copper"}, [_claim("material-c", ["sử dụng", "copper"], "assembly_v2")]),
+        _case("graph-applies-to", "GRAPH-EVAL-ASM-001 áp dụng cho bộ phận nào?", "full_answer", "assembly_v2", {"source_key": "$DOC:assembly_v2", "relation_type": "APPLIES_TO", "target_key": "part:graph-eval-part-a"}, [_claim("applies-to", ["áp dụng", "GRAPH-EVAL-PART-A"], "assembly_v2")]),
+        _case("graph-production-page", "Tài liệu GRAPH-EVAL-PROD-001 liên kết tới trang nguồn nào và chu kỳ là bao nhiêu?", "full_answer", "production", {"source_key": "$DOC:production", "relation_type": "HAS_PAGE", "target_key": "$PAGEKEY:production"}, [_claim("production", ["trang", "55", "giây"], "production")]),
+        _case("graph-maintenance-page", "Tài liệu GRAPH-EVAL-MAINT-001 liên kết tới trang nguồn nào và chu kỳ là bao nhiêu?", "full_answer", "maintenance", {"source_key": "$DOC:maintenance", "relation_type": "HAS_PAGE", "target_key": "$PAGEKEY:maintenance"}, [_claim("maintenance", ["trang", "500", "giờ"], "maintenance")]),
         _case("graph-site-denied", "Mã GRAPH-EVAL-SITE-001 là gì?", "access_denied", "site_restricted", {}, [], scenario="governance", forbidden_sources=["graph_eval_site_restricted_v1.md"]),
         _case("graph-security-denied", "Mã GRAPH-EVAL-SEC-001 là gì?", "access_denied", "security_restricted", {}, [], scenario="governance", forbidden_sources=["graph_eval_security_restricted_v1.md"]),
         _case("graph-department-denied", "Mã GRAPH-EVAL-DEPT-001 là gì?", "access_denied", "department_restricted", {}, [], scenario="governance", forbidden_sources=["graph_eval_department_restricted_v1.md"]),

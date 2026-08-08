@@ -109,6 +109,48 @@ def test_claim_evaluator_does_not_match_number_as_substring():
     assert report["expected_claim_recall"] == 0.0
 
 
+def test_claim_evaluator_checks_relation_polarity_within_each_clause():
+    expected = [{
+        "id": "contains-part",
+        "required_terms": ["chứa", "graph-eval-part-b"],
+        "positive_relation": {
+            "predicate": "chứa",
+            "target_terms": ["graph-eval-part-b"],
+            "negation_terms": ["không", "chưa", "chẳng", "chả"],
+        },
+        "allowed_source_ids": ["D10P1"],
+    }]
+
+    for text in (
+        "Không, cụm không chứa GRAPH-EVAL-PART-B.",
+        "Cụm chẳng chứa GRAPH-EVAL-PART-B.",
+    ):
+        inverted = evaluate_claims(
+            [{"text": text, "source_ids": ["D10P1"]}],
+            expected,
+            accessible_source_ids={"D10P1"},
+        )
+        assert inverted["claim_precision"] == 0.0
+        assert inverted["expected_claim_recall"] == 0.0
+        assert inverted["faithfulness"] == 0.0
+
+    affirmative = evaluate_claims(
+        [{
+            "text": (
+                "Cụm chứa GRAPH-EVAL-PART-B, nhưng không chứa "
+                "GRAPH-EVAL-PART-Z."
+            ),
+            "source_ids": ["D10P1"],
+        }],
+        expected,
+        accessible_source_ids={"D10P1"},
+    )
+
+    assert affirmative["claim_precision"] == 1.0
+    assert affirmative["expected_claim_recall"] == 1.0
+    assert affirmative["faithfulness"] == 1.0
+
+
 @pytest.mark.parametrize(
     "notice",
     [

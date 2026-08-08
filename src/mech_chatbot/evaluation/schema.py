@@ -11,7 +11,7 @@ EVALUATION_REPORT_SCHEMA = "rag-labeled-eval-v4"
 EVALUATOR_VERSION = "evaluation-foundation-v1"
 EVALUATOR_MODELS = {
     "retrieval": "binary-relevance-v2",
-    "claims": "deterministic-labeled-claims-v1",
+    "claims": "deterministic-labeled-claims-v2",
     "citations": "structured-source-identity-v1",
     "risk_coverage": "explicit-operating-points-v1",
 }
@@ -57,6 +57,24 @@ def validate_manifest_ground_truth(case: dict, *, expected_outcome: str) -> None
             raise ValueError("each expected_claim must have an id")
         if not isinstance(claim.get("required_terms"), list) or not claim["required_terms"]:
             raise ValueError("each expected_claim must have required_terms")
+        positive_relation = claim.get("positive_relation")
+        if positive_relation is not None:
+            valid_positive_relation = (
+                isinstance(positive_relation, dict)
+                and isinstance(positive_relation.get("predicate"), str)
+                and bool(positive_relation["predicate"].strip())
+                and isinstance(positive_relation.get("target_terms"), list)
+                and bool(positive_relation["target_terms"])
+                and isinstance(positive_relation.get("negation_terms"), list)
+                and bool(positive_relation["negation_terms"])
+                and all(
+                    isinstance(term, str) and bool(term.strip())
+                    for field in ("target_terms", "negation_terms")
+                    for term in positive_relation[field]
+                )
+            )
+            if not valid_positive_relation:
+                raise ValueError("expected_claim positive_relation is invalid")
         if not isinstance(claim.get("allowed_source_ids"), list) or not claim["allowed_source_ids"]:
             raise ValueError("each expected_claim must have allowed_source_ids")
     for citation in case["expected_citations"]:
