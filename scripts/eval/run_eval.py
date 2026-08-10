@@ -104,8 +104,8 @@ def _execution_metrics(debug: dict, *, calculation_count: int | None = None) -> 
 
     generation = debug.get("generation_metrics") or {}
     decomposition_usage = normalize_decomposition_usage(
-        debug.get("decomposition_usage")
-        or generation.get("decomposition_usage")
+        generation.get("decomposition_usage")
+        or debug.get("decomposition_usage")
     )
     if calculation_count is None:
         calculation_count = int(
