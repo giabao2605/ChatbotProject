@@ -119,23 +119,24 @@ function Get-RagServiceToken {
     if (![string]::IsNullOrWhiteSpace($token)) {
         return $token
     }
-    $envPath = Join-Path $projectRoot ".env"
-    if (!(Test-Path -LiteralPath $envPath -PathType Leaf)) {
-        return ""
-    }
-    foreach ($line in Get-Content -LiteralPath $envPath) {
-        if ($line -match "^\s*RAG_SERVICE_TOKEN\s*=\s*(.*)\s*$") {
-            $value = $Matches[1].Trim()
-            if (
-                ($value.StartsWith('"') -and $value.EndsWith('"')) -or
-                ($value.StartsWith("'") -and $value.EndsWith("'"))
-            ) {
-                $value = $value.Substring(1, $value.Length - 2)
-            }
-            return $value
+
+    $previousPythonPath = [Environment]::GetEnvironmentVariable("PYTHONPATH", "Process")
+    [Environment]::SetEnvironmentVariable("PYTHONPATH", $pythonPath, "Process")
+    Push-Location $projectRoot
+    try {
+        $tokenOutput = & $pythonExe -c `
+            "from mech_chatbot.config.settings import load_settings; print(load_settings().RAG_SERVICE_TOKEN)"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Khong doc duoc RAG service token tu runtime settings."
         }
     }
-    return ""
+    finally {
+        Pop-Location
+        [Environment]::SetEnvironmentVariable(
+            "PYTHONPATH", $previousPythonPath, "Process"
+        )
+    }
+    return ($tokenOutput -join "").Trim()
 }
 
 function Render-ProfileEnvironment {
