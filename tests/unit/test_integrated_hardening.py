@@ -623,7 +623,7 @@ def test_prerequisite_completion_requires_hashed_decision_artifact(tmp_path):
         payload = {"schema": schema, "git_sha": "abc", "passed": True}
         if name == "crag":
             payload["decision"] = "accepted"
-        if name == "grounded_math":
+        if name in {"grounded_math", "graph_retrieval"}:
             payload["production_eligible"] = True
         if name == "late_interaction":
             payload["stage"] = "late_interaction"
@@ -643,6 +643,17 @@ def test_prerequisite_completion_requires_hashed_decision_artifact(tmp_path):
     statuses, verification = _prerequisites(payload, "abc")
     assert all(statuses.values())
     assert verification["crag"]["artifact_verified"] is True
+
+    graph_path = Path(stages["graph_retrieval"]["artifact_path"])
+    graph_payload = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph_payload["production_eligible"] = False
+    graph_raw = (json.dumps(graph_payload) + "\n").encode()
+    graph_path.write_bytes(graph_raw)
+    stages["graph_retrieval"]["artifact_sha256"] = hashlib.sha256(
+        graph_raw
+    ).hexdigest()
+    assert _prerequisites(payload, "abc")[0]["graph_retrieval"] is False
+
     payload["stages"]["crag"]["artifact_sha256"] = "0" * 64
     assert _prerequisites(payload, "abc")[0]["crag"] is False
 
@@ -677,7 +688,7 @@ def test_rejected_late_interaction_prerequisite_keeps_historical_evidence(tmp_pa
         }
         if name == "crag":
             artifact_payload["decision"] = "accepted"
-        if name == "grounded_math":
+        if name in {"grounded_math", "graph_retrieval"}:
             artifact_payload["production_eligible"] = True
         if name in {"late_interaction", "community_summaries"}:
             artifact_payload["stage"] = name

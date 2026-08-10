@@ -159,7 +159,7 @@ def _milestone_outcome_valid(name, artifact, decision, git_sha):
     if decision == "accepted":
         if name == "crag":
             return artifact.get("decision") == "accepted" and artifact.get("passed") is True
-        if name == "grounded_math":
+        if name in {"grounded_math", "graph_retrieval"}:
             return artifact.get("passed") is True and artifact.get("production_eligible") is True
         return artifact.get("passed") is True
     if decision == "rejected":

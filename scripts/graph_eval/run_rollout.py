@@ -35,10 +35,17 @@ def require_clean_worktree():
 def build_evaluation_environment(*, enabled):
     environment = os.environ.copy()
     environment.update({
-        "RAG_EXECUTION_CONTEXT": "evaluation", "RAG_CRAG_ENABLED": "true",
-        "RAG_CLAIM_REPAIR_ENABLED": "true", "RAG_GROUNDED_MATH_ENABLED": "false",
+        "RAG_EXECUTION_CONTEXT": "evaluation",
+        "EXTERNAL_PROCESSING_POLICY": "all_external",
+        "RAG_CRAG_ENABLED": "false", "RAG_CLAIM_REPAIR_ENABLED": "false",
+        "RAG_GROUNDED_MATH_ENABLED": "false",
         "RAG_QUERY_DECOMPOSITION_ENABLED": "false", "RAG_LATE_INTERACTION_ENABLED": "false",
         "RAG_GRAPH_RETRIEVAL_ENABLED": str(enabled).lower(),
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "false",
+        "RAG_ACTIVATION_PROFILE": "selective" if enabled else "all_off",
+        "RAG_ACTIVATION_SCOPE": "evaluation",
+        "RAG_ACTIVATION_BUNDLE_PATH": "",
+        "RAG_ACTIVATION_BUNDLE_SHA256": "",
         "SEMANTIC_CACHE_ENABLED": "false", "STRICT_REALTIME_STREAMING": "false",
         "QDRANT_COLLECTION": FIXTURE_COLLECTION, "RAG_EVAL_PREFLIGHT_KIND": "graph",
         "RAG_EVAL_ROUTER_MODE": "offline", "LLM_ROUTER_ENABLED": "false",
@@ -181,13 +188,18 @@ def run_rollout(
     from mech_chatbot.evaluation.rollout_guardrails import evaluate_rollout_pair
     guardrail = evaluate_rollout_pair(pair)
     gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    technical_passed = bool(gate["passed"]) and bool(
+        guardrail["production_eligible"]
+    )
     report = {
         "schema": "graph-rollout-run-v1", "git_sha": git_sha,
         "manifest_sha256": manifest_sha, "fixture_fingerprint": fingerprint,
         "baseline": baseline, "candidate": candidate, "gate_exit": gate_result.returncode,
-        "passed": bool(gate["passed"]) and bool(guardrail["production_eligible"]),
+        "passed": technical_passed,
+        "technical_eligible": technical_passed,
+        "production_eligible": False,
+        "decision_status": "pending_formal_series",
         "rollout_pair_sha256": _sha(pair_path),
-        "production_eligible": bool(guardrail["production_eligible"]),
         "guardrail_checks": guardrail["checks"],
     }
     (output / "run.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -1,9 +1,49 @@
 import json
+import os
 
 import pytest
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_graph_rollout_toggles_only_graph_between_arms(monkeypatch):
+    from scripts.graph_eval.run_rollout import build_evaluation_environment
+
+    monkeypatch.setenv("RAG_CRAG_ENABLED", "stale")
+    monkeypatch.setenv("RAG_CLAIM_REPAIR_ENABLED", "stale")
+    monkeypatch.setenv("RAG_GRAPH_RETRIEVAL_ENABLED", "stale")
+    monkeypatch.setenv("EXTERNAL_PROCESSING_POLICY", "internal_only")
+
+    baseline = build_evaluation_environment(enabled=False)
+    candidate = build_evaluation_environment(enabled=True)
+
+    fixed_flags = {
+        "RAG_CRAG_ENABLED": "false",
+        "RAG_CLAIM_REPAIR_ENABLED": "false",
+        "RAG_GROUNDED_MATH_ENABLED": "false",
+        "RAG_QUERY_DECOMPOSITION_ENABLED": "false",
+        "RAG_LATE_INTERACTION_ENABLED": "false",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "false",
+    }
+    assert {key: baseline[key] for key in fixed_flags} == fixed_flags
+    assert {key: candidate[key] for key in fixed_flags} == fixed_flags
+    assert baseline["RAG_GRAPH_RETRIEVAL_ENABLED"] == "false"
+    assert candidate["RAG_GRAPH_RETRIEVAL_ENABLED"] == "true"
+    assert baseline["RAG_ACTIVATION_PROFILE"] == "all_off"
+    assert candidate["RAG_ACTIVATION_PROFILE"] == "selective"
+    assert baseline["RAG_ACTIVATION_SCOPE"] == "evaluation"
+    assert candidate["RAG_ACTIVATION_SCOPE"] == "evaluation"
+    assert baseline["RAG_EXECUTION_CONTEXT"] == "evaluation"
+    assert candidate["RAG_EXECUTION_CONTEXT"] == "evaluation"
+    assert baseline["EXTERNAL_PROCESSING_POLICY"] == "all_external"
+    assert candidate["EXTERNAL_PROCESSING_POLICY"] == "all_external"
+    assert baseline["RAG_ACTIVATION_BUNDLE_PATH"] == ""
+    assert candidate["RAG_ACTIVATION_BUNDLE_PATH"] == ""
+    assert baseline["RAG_ACTIVATION_BUNDLE_SHA256"] == ""
+    assert candidate["RAG_ACTIVATION_BUNDLE_SHA256"] == ""
+    assert os.environ["RAG_CRAG_ENABLED"] == "stale"
+    assert os.environ["EXTERNAL_PROCESSING_POLICY"] == "internal_only"
 
 
 def test_graph_fixture_meets_phase_four_relational_floor():
@@ -140,8 +180,8 @@ def test_graph_rollout_records_runtime_provider_hash(monkeypatch, tmp_path):
         rollout_guardrails,
         "evaluate_rollout_pair",
         lambda pair: {
-            "production_eligible": False,
-            "checks": {"rollback_contract_valid": False},
+            "production_eligible": True,
+            "checks": {"rollback_contract_valid": True},
         },
     )
 
@@ -160,9 +200,11 @@ def test_graph_rollout_records_runtime_provider_hash(monkeypatch, tmp_path):
     assert pair["candidate"]["trace_schema"] == "rag-refusal-snapshot-v1"
     assert pair["metadata"]["artifact_schema"] == "graph-readiness-v1"
     assert len(pair["metadata"]["artifact_sha256"]) == 64
-    assert report["passed"] is False
+    assert report["passed"] is True
+    assert report["technical_eligible"] is True
     assert report["production_eligible"] is False
-    assert report["guardrail_checks"] == {"rollback_contract_valid": False}
+    assert report["decision_status"] == "pending_formal_series"
+    assert report["guardrail_checks"] == {"rollback_contract_valid": True}
 
 
 def test_graph_rollout_rejects_manifest_drift_after_baseline(monkeypatch, tmp_path):

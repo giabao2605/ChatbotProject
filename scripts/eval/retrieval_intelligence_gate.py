@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -36,6 +37,21 @@ def _ratio(candidate, baseline):
     if baseline == 0:
         return 1.0 if candidate == 0 else float("inf")
     return candidate / baseline
+
+
+def _finite_non_negative_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def _valid_group_rate(groups, name):
+    group = groups.get(name)
+    if not isinstance(group, dict):
+        return None
+    rate = _finite_non_negative_number(group.get("pass_rate"))
+    return rate if rate is not None and rate <= 1 else None
 
 
 def _group_rate(report, name):
@@ -488,6 +504,39 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         review_sample_count = metadata.get("review_sample_count")
         approved_edge_count = metadata.get("approved_edge_count")
         reviewer_count = metadata.get("reviewer_count")
+        baseline_cost = _finite_non_negative_number(
+            baseline.get("total_estimated_cost")
+        )
+        candidate_cost = _finite_non_negative_number(
+            candidate.get("total_estimated_cost")
+        )
+        baseline_groups = baseline.get("evaluation_groups")
+        candidate_groups = candidate.get("evaluation_groups")
+        baseline_groups = baseline_groups if isinstance(
+            baseline_groups, dict
+        ) else {}
+        candidate_groups = candidate_groups if isinstance(
+            candidate_groups, dict
+        ) else {}
+        non_relational_groups = set(baseline_groups) - {"relational"}
+        non_relational_rates = [
+            (
+                _valid_group_rate(baseline_groups, name),
+                _valid_group_rate(candidate_groups, name),
+            )
+            for name in non_relational_groups
+        ]
+        non_relational_quality_not_decreased = (
+            bool(non_relational_groups)
+            and set(candidate_groups) - {"relational"}
+            == non_relational_groups
+            and all(
+                baseline_rate is not None
+                and candidate_rate is not None
+                and candidate_rate >= baseline_rate
+                for baseline_rate, candidate_rate in non_relational_rates
+            )
+        )
         reviewer_diversity_requirement_met = (
             (
                 review_mode == "single_owner"
@@ -547,13 +596,22 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "pending_edges_never_served": int(metadata.get("pending_serving_edges", -1)) == 0,
             "traversal_budget_respected": int(graph.get("budget_violations", -1)) == 0,
             "router_scope_respected": int(graph.get("non_relational_graph_calls", -1)) == 0,
+            "non_relational_quality_not_decreased": (
+                non_relational_quality_not_decreased
+            ),
             "latency_within_budget": _ratio(
                 float(candidate.get("latency_p95_ms") or 0), float(baseline.get("latency_p95_ms") or 0)
             ) <= 1.5,
+            "cost_within_budget": (
+                baseline_cost is not None
+                and candidate_cost is not None
+                and _ratio(candidate_cost, baseline_cost) <= 1.5
+            ),
         }
         limits = {
             "min_accuracy_gain": 0.10, "min_structured_coverage": 0.80,
             "min_reviewed_edge_precision": 0.95, "max_latency_ratio": 1.5,
+            "max_cost_ratio": 1.5,
             "min_governed_review_sample": 20,
             "min_approved_edge_pool": 20,
             "max_hops": 2, "max_edges": 50,

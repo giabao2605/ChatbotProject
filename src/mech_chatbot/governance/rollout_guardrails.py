@@ -88,7 +88,9 @@ GRAPH_GATE_REQUIRED_CHECKS = frozenset({
     "pending_edges_never_served",
     "traversal_budget_respected",
     "router_scope_respected",
+    "non_relational_quality_not_decreased",
     "latency_within_budget",
+    "cost_within_budget",
 })
 
 

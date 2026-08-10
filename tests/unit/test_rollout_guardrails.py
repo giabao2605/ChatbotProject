@@ -441,7 +441,9 @@ def test_graph_rollout_pair_binds_verified_metadata(tmp_path):
         "pending_edges_never_served",
         "traversal_budget_respected",
         "router_scope_respected",
+        "non_relational_quality_not_decreased",
         "latency_within_budget",
+        "cost_within_budget",
     }
     gate_artifact["checks"].update({
         check: True for check in required_graph_checks
