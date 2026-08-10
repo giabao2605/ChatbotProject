@@ -9,8 +9,16 @@ from pathlib import Path
 import pytest
 
 from mech_chatbot.config.repository_runtime import bind_repository_runtime
-from scripts.decomposition_eval.constants import BOM_ROWS, FIXTURE_COLLECTION
-from scripts.decomposition_eval.generate_manifest import cases
+from scripts.decomposition_eval.constants import (
+    BOM_ROWS,
+    DEFAULT_OUTPUT,
+    FIXTURE_COLLECTION,
+)
+from scripts.decomposition_eval.generate_manifest import (
+    cases,
+    generate_manifest,
+    interaction_cases,
+)
 from scripts.decomposition_eval.preflight import check_fixture_cases, validate_manifest_scope
 from scripts.decomposition_eval.prepare_fixture import prepare_fixture
 from scripts.decomposition_eval.run_rollout import build_evaluation_environment
@@ -121,7 +129,7 @@ def _fixture():
     return documents, rows, [_point(document) for document in documents]
 
 
-def test_manifest_covers_every_roadmap_scenario_and_simple_has_no_branches():
+def test_query_only_manifest_keeps_roadmap_floor_without_math_dependency():
     values = cases()
     ids = {case["id"] for case in values}
 
@@ -139,6 +147,28 @@ def test_manifest_covers_every_roadmap_scenario_and_simple_has_no_branches():
     assert len(simple_cases) >= 3
     assert all(case["expected_branches"] == [] for case in simple_cases)
     assert max(len(case["expected_branches"]) for case in values) == 3
+    assert all(not case.get("requires_grounded_math") for case in values)
+    assert all("expected_calculation" not in case for case in values)
+    terminal_contracts = {
+        "decomp-sql-bom-doc": ["insufficient_evidence", "full_answer"],
+        "decomp-bom-alias": ["insufficient_evidence", "full_answer"],
+        "decomp-three-source-compare": [
+            "full_answer", "insufficient_evidence", "full_answer",
+        ],
+        "decomp-sufficient-missing": ["full_answer", "insufficient_evidence"],
+    }
+    for case_id, branch_outcomes in terminal_contracts.items():
+        case = next(case for case in values if case["id"] == case_id)
+        assert case["expected_outcome"] == "insufficient_evidence"
+        assert case["expected_claims"] == []
+        assert case["expected_citations"] == []
+        assert [
+            branch["expected_outcome"] for branch in case["expected_branches"]
+        ] == branch_outcomes
+        assert all(
+            branch["expected_citations"] == []
+            for branch in case["expected_branches"]
+        )
     version_case = next(
         case for case in values if case["id"] == "decomp-version-candidate"
     )
@@ -155,17 +185,122 @@ def test_manifest_scope_requires_ten_complex_and_three_simple_negative_cases():
 
     assert report == {"complex": 10, "simple": 3}
     with pytest.raises(ValueError, match="at least 10 complex"):
-        validate_manifest_scope(cases()[:-1])
+        validate_manifest_scope([
+            case for case in cases()
+            if case["id"] != "decomp-install-version"
+        ])
     with pytest.raises(ValueError, match="at least 3 simple"):
         validate_manifest_scope([
             case for case in cases() if case["id"] != "decomp-simple-install"
         ])
 
 
-def test_manifest_labels_every_case_that_runs_grounded_math():
-    math_cases = [case for case in cases() if case.get("requires_grounded_math")]
+def test_preflight_keeps_query_floor_and_validates_interaction_scope():
+    assert validate_manifest_scope(interaction_cases()) == {
+        "complex": 3,
+        "simple": 0,
+    }
+
+    contaminated = [*cases()[:-1], interaction_cases()[0]]
+    with pytest.raises(ValueError, match="one evaluation_scope"):
+        validate_manifest_scope(contaminated)
+
+    invalid_query = [
+        {
+            **case,
+            "requires_grounded_math": True,
+            "expected_calculation": {"operation": "sum"},
+        }
+        if case["id"] == "decomp-sql-bom-doc"
+        else case
+        for case in cases()
+    ]
+    with pytest.raises(ValueError, match="must not require Grounded Math"):
+        validate_manifest_scope(invalid_query)
+
+    invalid_terminal = [
+        {**case, "expected_citations": [{"source_id": "D1P1"}]}
+        if case["id"] == "decomp-sufficient-missing"
+        else case
+        for case in cases()
+    ]
+    with pytest.raises(ValueError, match="must not expect rendered citations"):
+        validate_manifest_scope(invalid_terminal)
+
+    invalid_branches = [
+        {
+            **case,
+            "expected_branches": [
+                {**case["expected_branches"][0], "expected_outcome": "full_answer"},
+                *case["expected_branches"][1:],
+            ],
+        }
+        if case["id"] == "decomp-sql-bom-doc"
+        else case
+        for case in cases()
+    ]
+    with pytest.raises(ValueError, match="branch outcomes drifted"):
+        validate_manifest_scope(invalid_branches)
+
+    missing_scope = [
+        {
+            key: value for key, value in case.items()
+            if key != "evaluation_scope"
+        }
+        for case in cases()
+    ]
+    with pytest.raises(ValueError, match="must declare evaluation_scope"):
+        validate_manifest_scope(missing_scope)
+
+
+def test_preflight_rejects_incomplete_or_unknown_scoped_manifests():
+    unknown = [
+        {**case, "evaluation_scope": "unknown"}
+        for case in cases()
+    ]
+    with pytest.raises(ValueError, match="unsupported evaluation_scope"):
+        validate_manifest_scope(unknown)
+
+    with pytest.raises(ValueError, match="exactly 3 complex"):
+        validate_manifest_scope(interaction_cases()[:-1])
+
+    duplicated_interaction = [
+        {**interaction_cases()[0]}
+        for _ in range(3)
+    ]
+    with pytest.raises(ValueError, match="exact approved case IDs"):
+        validate_manifest_scope(duplicated_interaction)
+
+    incomplete_interaction = [
+        {
+            key: value for key, value in case.items()
+            if key != "expected_calculation"
+        }
+        if case["id"] == "decomp-sql-bom-doc"
+        else case
+        for case in interaction_cases()
+    ]
+    with pytest.raises(ValueError, match="require Grounded Math labels"):
+        validate_manifest_scope(incomplete_interaction)
+
+    missing_terminal = [
+        case for case in cases()
+        if case["id"] != "decomp-three-source-compare"
+    ]
+    with pytest.raises(ValueError, match="is missing decomp-three-source-compare"):
+        validate_manifest_scope(missing_terminal)
+
+
+def test_interaction_manifest_preserves_owner_approved_math_labels():
+    math_cases = interaction_cases()
 
     assert len(math_cases) == 3
+    assert {case["id"] for case in math_cases} == {
+        "decomp-sql-bom-doc",
+        "decomp-bom-alias",
+        "decomp-three-source-compare",
+    }
+    assert all(case["expected_outcome"] == "full_answer" for case in math_cases)
     assert all(case.get("expected_calculation") for case in math_cases)
     assert all(
         case["expected_calculation"]["formula"] == "2 + 3 = 5"
@@ -186,6 +321,44 @@ def test_manifest_labels_every_case_that_runs_grounded_math():
     )
 
 
+def test_generator_freezes_query_and_interaction_manifests(tmp_path):
+    first = generate_manifest(tmp_path)
+    query_path = tmp_path / "eval_manifest.jsonl"
+    interaction_path = tmp_path / "math_query_interaction_manifest.jsonl"
+    first_bytes = (query_path.read_bytes(), interaction_path.read_bytes())
+
+    second = generate_manifest(tmp_path)
+
+    assert first == second
+    assert first_bytes == (
+        query_path.read_bytes(), interaction_path.read_bytes(),
+    )
+    assert first["query_only"]["cases"] == 13
+    assert first["math_query_interaction"]["cases"] == 3
+    assert first["query_only"]["sha256"] == hashlib.sha256(
+        query_path.read_bytes()
+    ).hexdigest()
+    assert first["math_query_interaction"]["sha256"] == hashlib.sha256(
+        interaction_path.read_bytes()
+    ).hexdigest()
+    readme = (tmp_path / "README.md").read_text(encoding="utf-8")
+    assert first["query_only"]["sha256"] in readme
+    assert first["math_query_interaction"]["sha256"] in readme
+
+
+def test_checked_in_manifests_match_canonical_generator(tmp_path):
+    generate_manifest(tmp_path)
+
+    for filename in (
+        "eval_manifest.jsonl",
+        "math_query_interaction_manifest.jsonl",
+        "README.md",
+    ):
+        assert (DEFAULT_OUTPUT / filename).read_bytes() == (
+            tmp_path / filename
+        ).read_bytes()
+
+
 def test_preflight_resolves_dynamic_source_identity_and_checks_restricted_source():
     documents, rows, points = _fixture()
     report = check_fixture_cases(cases(), documents, rows, points, collection=FIXTURE_COLLECTION)
@@ -197,9 +370,33 @@ def test_preflight_resolves_dynamic_source_identity_and_checks_restricted_source
     assert resolved["expected_claims"][0]["allowed_source_ids"] == ["D10P1"]
 
 
+def test_query_terminal_preflight_keeps_non_rendered_source_provenance():
+    documents, rows, points = _fixture()
+    documents = [
+        document for document in documents
+        if document["TenFile"] != "crag_eval_bom_v1.md"
+    ]
+    points = [point for point in points if point["doc_id"] != 12]
+
+    report = check_fixture_cases(
+        cases(), documents, rows, points, collection=FIXTURE_COLLECTION,
+    )
+
+    assert report["passed"] is False
+    assert any(
+        failure["case_id"] == "decomp-sql-bom-doc"
+        and failure["document"] == "crag_eval_bom_v1.md"
+        and failure["reason"] == "sql_document_missing"
+        for failure in report["failures"]
+    )
+
+
 def test_preflight_resolves_grounded_math_row_sources():
     documents, rows, points = _fixture()
-    report = check_fixture_cases(cases(), documents, rows, points, collection=FIXTURE_COLLECTION)
+    report = check_fixture_cases(
+        interaction_cases(), documents, rows, points,
+        collection=FIXTURE_COLLECTION,
+    )
 
     resolved = report["case_resolutions"]["decomp-sql-bom-doc"][
         "expected_calculation"
@@ -235,7 +432,8 @@ def test_preflight_resolves_ingested_source_row_ids_without_inventing_a_unit():
     } for index, value in enumerate(("2", "3"))]
 
     report = check_fixture_cases(
-        cases(), documents, rows, points, collection=FIXTURE_COLLECTION
+        interaction_cases(), documents, rows, points,
+        collection=FIXTURE_COLLECTION,
     )
 
     assert report["passed"] is True
@@ -250,7 +448,10 @@ def test_preflight_resolves_ingested_source_row_ids_without_inventing_a_unit():
 
 def test_preflight_fails_closed_when_bom_provenance_is_missing():
     documents, rows, points = _fixture()
-    report = check_fixture_cases(cases(), documents, rows[:-1], points, collection=FIXTURE_COLLECTION)
+    report = check_fixture_cases(
+        interaction_cases(), documents, rows[:-1], points,
+        collection=FIXTURE_COLLECTION,
+    )
 
     assert report["passed"] is False
     assert any(item["reason"] == "bom_source_row_missing" for item in report["failures"])
@@ -261,7 +462,7 @@ def test_preflight_fails_closed_on_duplicate_bom_source_identity():
     duplicate = {**rows[0], "ID": 999}
 
     report = check_fixture_cases(
-        cases(), documents, [*rows, duplicate], points,
+        interaction_cases(), documents, [*rows, duplicate], points,
         collection=FIXTURE_COLLECTION,
     )
 

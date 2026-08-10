@@ -87,13 +87,22 @@ def check_activation_status(*, environ=None) -> dict:
         )
     except Exception:
         return {"status": "failed", "reason": "activation_check_failed"}
-    passed = status.valid and status.live_authorized
+    production_ready = (
+        status.valid
+        and status.live_authorized
+        and status.scope == "default_rollout"
+    )
     return {
-        "status": "passed" if passed else "failed",
-        "reason": status.reason,
+        "status": "passed" if production_ready else "failed",
+        "reason": (
+            status.reason
+            if status.scope == "default_rollout"
+            else "activation_scope_not_default_rollout"
+        ),
         "scope": status.scope,
         "profile": status.profile,
         "live_authorized": status.live_authorized,
+        "production_ready": production_ready,
     }
 
 
@@ -177,7 +186,7 @@ def check_rag_health(url: str, *, expected_git_sha: str | None = None) -> dict:
 
     if not isinstance(payload, dict):
         return {"status": "failed", "reason": "rag_health_contract_failed"}
-    ready = (
+    health_ready = (
         payload.get("status") == "ok"
         and payload.get("rag_loaded") is True
         and payload.get("activation_valid") is True
@@ -188,10 +197,34 @@ def check_rag_health(url: str, *, expected_git_sha: str | None = None) -> dict:
         and isinstance(payload.get("snapshot_fingerprint"), str)
         and bool(payload["snapshot_fingerprint"].strip())
     )
+    if not health_ready:
+        return {"status": "failed", "reason": "rag_health_contract_failed"}
+
+    scope = str(payload.get("activation_scope") or "")
+    if scope not in {"controlled_demo", "default_rollout"}:
+        return {
+            "status": "failed",
+            "reason": "activation_scope_not_health_authorized",
+            "scope": scope,
+            "production_ready": False,
+        }
+    production_ready = scope == "default_rollout"
     return {
-        "status": "passed" if ready else "failed",
-        "reason": "ready" if ready else "rag_health_contract_failed",
+        "status": "passed",
+        "reason": (
+            "ready" if production_ready else "controlled_demo_health_only"
+        ),
+        "scope": scope,
+        "production_ready": production_ready,
     }
+
+
+def _checks_passed(checks: dict, *, health_only: bool) -> bool:
+    if not all(check["status"] == "passed" for check in checks.values()):
+        return False
+    if health_only:
+        return True
+    return not any(check.get("production_ready") is False for check in checks.values())
 
 
 def main() -> int:
@@ -225,7 +258,7 @@ def main() -> int:
 
     report = {
         "schema": "production-preflight-v1",
-        "passed": all(check["status"] == "passed" for check in checks.values()),
+        "passed": _checks_passed(checks, health_only=args.health_only),
         "checks": checks,
     }
     print(json.dumps(report, sort_keys=True))

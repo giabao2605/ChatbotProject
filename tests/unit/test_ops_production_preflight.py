@@ -101,6 +101,7 @@ def test_health_preflight_accepts_the_full_ready_contract():
             "rag_loaded": True,
             "activation_valid": True,
             "live_authorized": True,
+            "activation_scope": "default_rollout",
             "deployment_id": "lan-runtime",
             "git_sha": git_sha,
             "snapshot_fingerprint": "snapshot-v1",
@@ -108,7 +109,73 @@ def test_health_preflight_accepts_the_full_ready_contract():
     )
 
     assert result.returncode == 0
-    assert json.loads(result.stdout)["passed"] is True
+    report = json.loads(result.stdout)
+    assert report["passed"] is True
+    assert report["checks"]["rag_health"]["production_ready"] is True
+    assert report["checks"]["rag_health"]["scope"] == "default_rollout"
+
+
+def test_health_only_accepts_controlled_demo_health_without_production_readiness():
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    result = _run_health_preflight(
+        {
+            "status": "ok",
+            "rag_loaded": True,
+            "activation_valid": True,
+            "live_authorized": True,
+            "activation_scope": "controlled_demo",
+            "activation_profile": "selective",
+            "deployment_id": "math-controlled-demo",
+            "git_sha": git_sha,
+            "snapshot_fingerprint": "snapshot-v1",
+        }
+    )
+
+    assert result.returncode == 0
+    report = json.loads(result.stdout)
+    assert report["passed"] is True
+    assert report["checks"]["rag_health"] == {
+        "status": "passed",
+        "reason": "controlled_demo_health_only",
+        "scope": "controlled_demo",
+        "production_ready": False,
+    }
+
+
+@pytest.mark.parametrize("scope", [None, "evaluation", "unexpected"])
+def test_health_only_rejects_missing_or_unknown_activation_scope(scope):
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    payload = {
+        "status": "ok",
+        "rag_loaded": True,
+        "activation_valid": True,
+        "live_authorized": True,
+        "deployment_id": "non-production-runtime",
+        "git_sha": git_sha,
+        "snapshot_fingerprint": "snapshot-v1",
+    }
+    if scope is not None:
+        payload["activation_scope"] = scope
+
+    result = _run_health_preflight(payload)
+
+    assert result.returncode == 1
+    report = json.loads(result.stdout)
+    assert report["passed"] is False
+    assert report["checks"]["rag_health"] == {
+        "status": "failed",
+        "reason": "activation_scope_not_health_authorized",
+        "scope": scope or "",
+        "production_ready": False,
+    }
 
 
 def test_health_preflight_authenticates_with_configured_service_token():
@@ -123,6 +190,7 @@ def test_health_preflight_authenticates_with_configured_service_token():
             "rag_loaded": True,
             "activation_valid": True,
             "live_authorized": True,
+            "activation_scope": "default_rollout",
             "deployment_id": "lan-runtime",
             "git_sha": git_sha,
             "snapshot_fingerprint": "snapshot-v1",
@@ -251,6 +319,23 @@ def test_activation_preflight_uses_canonical_fail_closed_status():
     assert result["scope"] == "default_rollout"
     assert result["profile"] == "all_off"
     assert result["live_authorized"] is True
+
+
+def test_activation_preflight_rejects_controlled_demo_as_non_production():
+    from scripts.ops.production_preflight import check_activation_status
+
+    result = check_activation_status(
+        environ={"RAG_ACTIVATION_SCOPE": "controlled_demo"}
+    )
+
+    assert result == {
+        "status": "failed",
+        "reason": "activation_scope_not_default_rollout",
+        "scope": "controlled_demo",
+        "profile": "all_off",
+        "live_authorized": True,
+        "production_ready": False,
+    }
 
 
 def test_seeded_dev_account_preflight_is_read_only_and_reports_count_only():

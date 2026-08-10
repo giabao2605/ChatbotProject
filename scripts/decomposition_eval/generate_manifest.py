@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
-from scripts.decomposition_eval.constants import BOM_DOCUMENT, BOM_ROWS, DEFAULT_OUTPUT
+from scripts.decomposition_eval.constants import (
+    BOM_DOCUMENT,
+    BOM_ROWS,
+    DEFAULT_OUTPUT,
+    MATH_QUERY_INTERACTION_CASE_IDS,
+    QUERY_ONLY_TERMINAL_BRANCH_OUTCOMES,
+)
 
 
 DOCS = {
@@ -16,7 +23,6 @@ DOCS = {
     "no_cost": ("crag_eval_no_cost_v1.md", 1),
     "restricted": ("crag_eval_restricted_v1.md", 1),
 }
-
 
 def _identity():
     return {
@@ -79,7 +85,7 @@ def _case(case_id, question, group, outcome, claims, citations, branches, *, pri
     }
 
 
-def cases():
+def _labeled_cases():
     number = _claim("number", ["1,500"], "numbers")
     alias = _claim("alias-cycle", ["90 ngày"], "alias")
     version = _claim(
@@ -109,16 +115,123 @@ def cases():
     ]
 
 
+def _source_preflight_documents(case):
+    sources = [
+        *(case.get("preflight_documents") or []),
+        *(case.get("expected_citations") or []),
+        *(
+            citation
+            for branch in case.get("expected_branches") or []
+            for citation in branch.get("expected_citations") or []
+        ),
+    ]
+    by_document = {}
+    for source in sources:
+        document = source.get("document")
+        if document and document not in by_document:
+            by_document[document] = {
+                key: source[key]
+                for key in ("document", "version", "base_code")
+                if source.get(key) is not None
+            }
+    return list(by_document.values())
+
+
+def _query_only_case(case):
+    outcomes = QUERY_ONLY_TERMINAL_BRANCH_OUTCOMES.get(case["id"])
+    if outcomes is None:
+        return case
+    base = {
+        key: value
+        for key, value in case.items()
+        if key not in {"requires_grounded_math", "expected_calculation"}
+    }
+    return {
+        **base,
+        "expected_outcome": "insufficient_evidence",
+        "expected_claims": [],
+        "expected_citations": [],
+        "preflight_documents": _source_preflight_documents(case),
+        "expected_branches": [
+            {
+                **branch,
+                "expected_outcome": outcome,
+                "expected_citations": [],
+            }
+            for branch, outcome in zip(
+                case["expected_branches"], outcomes, strict=True
+            )
+        ],
+    }
+
+
+def cases():
+    return [
+        {**_query_only_case(case), "evaluation_scope": "query_only"}
+        for case in _labeled_cases()
+    ]
+
+
+def interaction_cases():
+    approved = set(MATH_QUERY_INTERACTION_CASE_IDS)
+    return [
+        {**case, "evaluation_scope": "math_query_interaction"}
+        for case in _labeled_cases()
+        if case["id"] in approved
+    ]
+
+
 def generate_manifest(output: Path = DEFAULT_OUTPUT):
     output.mkdir(parents=True, exist_ok=True)
-    manifest = output / "eval_manifest.jsonl"
-    values = cases()
-    manifest.write_text("".join(json.dumps(case, ensure_ascii=False) + "\n" for case in values), encoding="utf-8")
-    (output / "README.md").write_text(
-        "# decomposition-eval-v1\n\nManifest dùng fixture staging `crag-eval-v1`; DocID và SourceID được preflight giải quyết lúc chạy.\n",
+    query_manifest = output / "eval_manifest.jsonl"
+    interaction_manifest = output / "math_query_interaction_manifest.jsonl"
+    query_values = cases()
+    interaction_values = interaction_cases()
+    query_manifest.write_text(
+        "".join(
+            json.dumps(case, ensure_ascii=False) + "\n"
+            for case in query_values
+        ),
         encoding="utf-8",
     )
-    return {"schema": "decomposition-eval-manifest-v1", "cases": len(values), "manifest": str(manifest)}
+    interaction_manifest.write_text(
+        "".join(
+            json.dumps(case, ensure_ascii=False) + "\n"
+            for case in interaction_values
+        ),
+        encoding="utf-8",
+    )
+    query_sha = hashlib.sha256(query_manifest.read_bytes()).hexdigest()
+    interaction_sha = hashlib.sha256(
+        interaction_manifest.read_bytes()
+    ).hexdigest()
+    (output / "README.md").write_text(
+        "# decomposition-eval-v1\n\n"
+        "Manifest dùng fixture staging `crag-eval-v1`; DocID và SourceID "
+        "được preflight giải quyết lúc chạy.\n\n"
+        "- `eval_manifest.jsonl`: Query-only, 13 case gồm 10 complex và "
+        "3 simple; Grounded Math phải OFF. Các case high-risk terminal không "
+        "kỳ vọng claim hoặc citation được render.\n"
+        "- `math_query_interaction_manifest.jsonl`: 3 case Math+Query giữ "
+        "nguyên expectation `full_answer` và phép `sum`; không dùng làm "
+        "formal evidence cho Query-only.\n\n"
+        f"Query-only SHA-256: `{query_sha}`\n\n"
+        f"Math+Query interaction SHA-256: `{interaction_sha}`\n",
+        encoding="utf-8",
+    )
+    return {
+        "schema": "decomposition-eval-manifest-v2",
+        "query_only": {
+            "cases": len(query_values),
+            "manifest": str(query_manifest),
+            "sha256": query_sha,
+        },
+        "math_query_interaction": {
+            "cases": len(interaction_values),
+            "manifest": str(interaction_manifest),
+            "sha256": interaction_sha,
+        },
+    }
 
 
 def main():

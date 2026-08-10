@@ -11,7 +11,13 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from scripts.crag_eval.constants import FIXTURE_BATCH, FIXTURE_COLLECTION
-from scripts.decomposition_eval.constants import BOM_DOCUMENT, BOM_ROWS, LIVE_OPT_IN
+from scripts.decomposition_eval.constants import (
+    BOM_DOCUMENT,
+    BOM_ROWS,
+    LIVE_OPT_IN,
+    MATH_QUERY_INTERACTION_CASE_IDS,
+    QUERY_ONLY_TERMINAL_BRANCH_OUTCOMES,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -86,11 +92,82 @@ def _resolve_calculation(
 
 
 def validate_manifest_scope(cases, *, min_complex=10, min_simple=3):
+    cases = list(cases)
+    declared_scopes = [case.get("evaluation_scope") for case in cases]
+    if not declared_scopes or any(
+        not isinstance(scope, str) or not scope.strip()
+        for scope in declared_scopes
+    ):
+        raise ValueError("manifest must declare evaluation_scope on every case")
+    scopes = {scope.strip() for scope in declared_scopes}
+    if len(scopes) != 1:
+        raise ValueError("manifest must declare one evaluation_scope")
+    scope = next(iter(scopes))
+    if scope not in {"query_only", "math_query_interaction"}:
+        raise ValueError(f"unsupported evaluation_scope: {scope}")
     groups = {"complex": 0, "simple": 0}
     for case in cases:
         group = str(case.get("evaluation_group") or "")
         if group in groups:
             groups[group] += 1
+    if scope == "math_query_interaction":
+        if groups != {"complex": 3, "simple": 0}:
+            raise ValueError(
+                "Math+Query interaction manifest requires exactly 3 complex cases"
+            )
+        case_ids = [str(case.get("id") or "") for case in cases]
+        if (
+            len(case_ids) != len(set(case_ids))
+            or set(case_ids) != set(MATH_QUERY_INTERACTION_CASE_IDS)
+        ):
+            raise ValueError(
+                "Math+Query interaction manifest requires exact approved case IDs"
+            )
+        if any(
+            not case.get("requires_grounded_math")
+            or not isinstance(case.get("expected_calculation"), dict)
+            for case in cases
+        ):
+            raise ValueError(
+                "Math+Query interaction cases require Grounded Math labels"
+            )
+        return groups
+    if scope == "query_only":
+        if any(
+            case.get("requires_grounded_math")
+            or case.get("expected_calculation") is not None
+            for case in cases
+        ):
+            raise ValueError("Query-only manifest must not require Grounded Math")
+        by_id = {str(case.get("id") or ""): case for case in cases}
+        for case_id, outcomes in QUERY_ONLY_TERMINAL_BRANCH_OUTCOMES.items():
+            case = by_id.get(case_id)
+            if case is None:
+                raise ValueError(f"Query-only manifest is missing {case_id}")
+            branches = list(case.get("expected_branches") or ())
+            if [
+                branch.get("expected_outcome") for branch in branches
+            ] != list(outcomes):
+                raise ValueError(f"{case_id} branch outcomes drifted")
+            if (
+                case.get("expected_outcome") != "insufficient_evidence"
+                or case.get("expected_claims")
+                or case.get("expected_citations")
+                or any(branch.get("expected_citations") for branch in branches)
+            ):
+                raise ValueError(
+                    f"{case_id} must not expect rendered citations or claims"
+                )
+            expected_sources = set(case.get("expected_sources") or ())
+            preflight_sources = {
+                item.get("document")
+                for item in case.get("preflight_documents") or ()
+                if item.get("document")
+            }
+            if not expected_sources or preflight_sources != expected_sources:
+                raise ValueError(
+                    f"{case_id} non-rendered source provenance drifted"
+                )
     if groups["complex"] < min_complex:
         raise ValueError(f"manifest requires at least {min_complex} complex cases")
     if groups["simple"] < min_simple:
