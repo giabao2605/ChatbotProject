@@ -49,9 +49,11 @@ def _claim(claim_id, terms, key):
 
 
 def _branch(position, outcome, *keys):
+    citations = [_citation(key) for key in keys]
     return {
         "branch_id": f"branch-{position}", "expected_outcome": outcome,
-        "expected_citations": [_citation(key) for key in keys],
+        "expected_citations": citations,
+        "expected_rendered_citations": [dict(citation) for citation in citations],
     }
 
 
@@ -151,12 +153,19 @@ def _query_only_case(case):
         "expected_outcome": "insufficient_evidence",
         "expected_claims": [],
         "expected_citations": [],
+        "expected_terminal_claim_count": 0,
+        "expected_terminal_rendered_source_count": 0,
         "preflight_documents": _source_preflight_documents(case),
         "expected_branches": [
             {
                 **branch,
                 "expected_outcome": outcome,
-                "expected_citations": [],
+                "expected_citations": (
+                    branch["expected_citations"]
+                    if outcome == "full_answer"
+                    else []
+                ),
+                "expected_rendered_citations": [],
             }
             for branch, outcome in zip(
                 case["expected_branches"], outcomes, strict=True
@@ -210,11 +219,14 @@ def generate_manifest(output: Path = DEFAULT_OUTPUT):
         "Manifest dùng fixture staging `crag-eval-v1`; DocID và SourceID "
         "được preflight giải quyết lúc chạy.\n\n"
         "- `eval_manifest.jsonl`: Query-only, 13 case gồm 10 complex và "
-        "3 simple; Grounded Math phải OFF. Các case high-risk terminal không "
-        "kỳ vọng claim hoặc citation được render.\n"
+        "3 simple; Grounded Math phải OFF. Các case high-risk terminal khóa "
+        "claim và citation render bằng `0`.\n"
         "- `math_query_interaction_manifest.jsonl`: 3 case Math+Query giữ "
         "nguyên expectation `full_answer` và phép `sum`; không dùng làm "
         "formal evidence cho Query-only.\n\n"
+        "Citation truy xuất được so khớp theo tập canonical source identity "
+        "duy nhất: nhiều chunk cùng một nguồn/trang được gộp, nhưng bất kỳ "
+        "source identity khác expectation đều làm gate fail.\n\n"
         f"Query-only SHA-256: `{query_sha}`\n\n"
         f"Math+Query interaction SHA-256: `{interaction_sha}`\n",
         encoding="utf-8",

@@ -477,6 +477,9 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "branch_accuracy_complete": float(decomposition.get("branch_accuracy") or 0.0) == 1.0,
             "branch_citations_complete": float(decomposition.get("citation_accuracy") or 0.0) == 1.0,
             "request_budgets_respected": int(decomposition.get("budget_violations", -1)) == 0,
+            "terminal_answers_clean": int(
+                decomposition.get("terminal_answer_violations", -1)
+            ) == 0,
             "latency_within_budget": _ratio(
                 float(candidate.get("latency_p95_ms") or 0), float(baseline.get("latency_p95_ms") or 0)
             ) <= 1.5,
@@ -492,6 +495,7 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
             "max_subqueries": 3,
             "max_corrections": 1,
             "max_final_generations": 1,
+            "max_terminal_answer_violations": 0,
         }
     elif stage == "graph_retrieval":
         graph = candidate.get("graph_evaluation") or {}

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from mech_chatbot.config.repository_runtime import bind_repository_runtime
+from mech_chatbot.evaluation.decomposition import evaluate_decomposition_case
 from scripts.decomposition_eval.constants import (
     BOM_ROWS,
     DEFAULT_OUTPUT,
@@ -162,13 +163,19 @@ def test_query_only_manifest_keeps_roadmap_floor_without_math_dependency():
         assert case["expected_outcome"] == "insufficient_evidence"
         assert case["expected_claims"] == []
         assert case["expected_citations"] == []
+        assert case["expected_terminal_claim_count"] == 0
+        assert case["expected_terminal_rendered_source_count"] == 0
         assert [
             branch["expected_outcome"] for branch in case["expected_branches"]
         ] == branch_outcomes
         assert all(
-            branch["expected_citations"] == []
+            branch["expected_rendered_citations"] == []
             for branch in case["expected_branches"]
         )
+        assert [
+            bool(branch["expected_citations"])
+            for branch in case["expected_branches"]
+        ] == [outcome == "full_answer" for outcome in branch_outcomes]
     version_case = next(
         case for case in values if case["id"] == "decomp-version-candidate"
     )
@@ -226,6 +233,48 @@ def test_preflight_keeps_query_floor_and_validates_interaction_scope():
     ]
     with pytest.raises(ValueError, match="must not expect rendered citations"):
         validate_manifest_scope(invalid_terminal)
+
+    invalid_rendered_branch = [
+        {
+            **case,
+            "expected_branches": [{
+                **case["expected_branches"][0],
+                "expected_rendered_citations": [{"source_id": "D1P1"}],
+            }, *case["expected_branches"][1:]],
+        }
+        if case["id"] == "decomp-sufficient-missing"
+        else case
+        for case in cases()
+    ]
+    with pytest.raises(ValueError, match="must not expect rendered citations"):
+        validate_manifest_scope(invalid_rendered_branch)
+
+    invalid_terminal_counts = [
+        {
+            **case,
+            "expected_terminal_claim_count": 1,
+        }
+        if case["id"] == "decomp-sufficient-missing"
+        else case
+        for case in cases()
+    ]
+    with pytest.raises(ValueError, match="terminal answer count contract"):
+        validate_manifest_scope(invalid_terminal_counts)
+
+    wildcard_retrieval = [
+        {
+            **case,
+            "expected_branches": [{
+                **case["expected_branches"][0],
+                "expected_citations": [{}],
+            }, *case["expected_branches"][1:]],
+        }
+        if case["id"] == "decomp-sufficient-missing"
+        else case
+        for case in cases()
+    ]
+    with pytest.raises(ValueError, match="source-bound expected_citations"):
+        validate_manifest_scope(wildcard_retrieval)
 
     invalid_branches = [
         {
@@ -368,6 +417,32 @@ def test_preflight_resolves_dynamic_source_identity_and_checks_restricted_source
     assert resolved["expected_citations"][0]["doc_id"] == 10
     assert resolved["expected_citations"][0]["source_id"] == "D10P1"
     assert resolved["expected_claims"][0]["allowed_source_ids"] == ["D10P1"]
+    first_branch = resolved["expected_branches"][0]
+    assert first_branch["expected_rendered_citations"] == (
+        first_branch["expected_citations"]
+    )
+    original = next(case for case in cases() if case["id"] == "decomp-two-intents")
+    resolved_case = {**original, **resolved}
+    debug = {
+        "planner_count": 1,
+        "subquery_count": 2,
+        "correction_count": 0,
+        "final_generation_count": 1,
+        "deadline_exceeded": False,
+        "decomposition_branches": [
+            {
+                "branch_id": branch["branch_id"],
+                "outcome": branch["expected_outcome"],
+                "citations": branch["expected_citations"],
+                "rendered_source_ids": [
+                    citation["source_id"]
+                    for citation in branch["expected_rendered_citations"]
+                ],
+            }
+            for branch in resolved["expected_branches"]
+        ],
+    }
+    assert evaluate_decomposition_case(resolved_case, debug)["passed"] is True
 
 
 def test_query_terminal_preflight_keeps_non_rendered_source_provenance():

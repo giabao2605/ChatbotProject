@@ -110,6 +110,23 @@ def validate_manifest_scope(cases, *, min_complex=10, min_simple=3):
         group = str(case.get("evaluation_group") or "")
         if group in groups:
             groups[group] += 1
+        for branch in case.get("expected_branches") or ():
+            if not isinstance(branch.get("expected_rendered_citations"), list):
+                raise ValueError(
+                    "manifest branches require expected_rendered_citations"
+                )
+            for field in (
+                "expected_citations", "expected_rendered_citations",
+            ):
+                citations = branch.get(field)
+                if not isinstance(citations, list) or any(
+                    not isinstance(citation, dict)
+                    or not str(citation.get("source_id") or "").strip()
+                    for citation in citations or ()
+                ):
+                    raise ValueError(
+                        f"manifest branches require source-bound {field}"
+                    )
     if scope == "math_query_interaction":
         if groups != {"complex": 3, "simple": 0}:
             raise ValueError(
@@ -150,13 +167,35 @@ def validate_manifest_scope(cases, *, min_complex=10, min_simple=3):
             ] != list(outcomes):
                 raise ValueError(f"{case_id} branch outcomes drifted")
             if (
+                type(case.get("expected_terminal_claim_count")) is not int
+                or case.get("expected_terminal_claim_count") != 0
+                or type(case.get(
+                    "expected_terminal_rendered_source_count"
+                )) is not int
+                or case.get("expected_terminal_rendered_source_count") != 0
+            ):
+                raise ValueError(
+                    f"{case_id} terminal answer count contract drifted"
+                )
+            if (
                 case.get("expected_outcome") != "insufficient_evidence"
                 or case.get("expected_claims")
                 or case.get("expected_citations")
-                or any(branch.get("expected_citations") for branch in branches)
+                or any(
+                    branch.get("expected_rendered_citations")
+                    for branch in branches
+                )
             ):
                 raise ValueError(
                     f"{case_id} must not expect rendered citations or claims"
+                )
+            if any(
+                bool(branch.get("expected_citations"))
+                != (branch.get("expected_outcome") == "full_answer")
+                for branch in branches
+            ):
+                raise ValueError(
+                    f"{case_id} retrieval citation contract drifted"
                 )
             expected_sources = set(case.get("expected_sources") or ())
             preflight_sources = {
@@ -299,6 +338,10 @@ def check_fixture_cases(
         resolved_branches = [{
             **branch,
             "expected_citations": [_resolve_citation(item, documents) for item in branch.get("expected_citations") or []],
+            "expected_rendered_citations": [
+                _resolve_citation(item, documents)
+                for item in branch.get("expected_rendered_citations") or []
+            ],
         } for branch in case.get("expected_branches") or []]
         page_ids = {item["document"]: item["source_id"] for item in resolved_citations}
         for branch in resolved_branches:

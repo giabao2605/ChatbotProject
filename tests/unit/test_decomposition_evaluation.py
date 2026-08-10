@@ -63,6 +63,38 @@ def test_manifest_requires_explicit_branch_outcomes_and_citations(tmp_path):
         load_decomposition_manifest(path)
 
 
+def test_scoped_manifest_requires_explicit_rendered_branch_citations(tmp_path):
+    case = _case(evaluation_scope="query_only")
+    path = tmp_path / "manifest.jsonl"
+    path.write_text(json.dumps(case) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        DecompositionManifestError,
+        match="expected_rendered_citations",
+    ):
+        load_decomposition_manifest(path)
+
+
+def test_scoped_manifest_rejects_wildcard_retrieval_citations(tmp_path):
+    case = _case(
+        evaluation_scope="query_only",
+        expected_branches=[{
+            "branch_id": "torque",
+            "expected_outcome": "full_answer",
+            "expected_citations": [{}],
+            "expected_rendered_citations": [],
+        }],
+    )
+    path = tmp_path / "manifest.jsonl"
+    path.write_text(json.dumps(case) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        DecompositionManifestError,
+        match="citation source_id is required",
+    ):
+        load_decomposition_manifest(path)
+
+
 def test_branch_evaluator_checks_outcome_and_accessible_citation_identity():
     debug = {
         "planner_count": 1,
@@ -210,6 +242,176 @@ def test_branch_citation_requires_source_id_to_be_rendered():
     assert result["citation_accuracy"] == 0.0
 
 
+def test_terminal_refusal_separates_retrieved_from_rendered_branch_citations():
+    citation = {
+        "document": "technical_effective_core.md",
+        "doc_id": 32,
+        "source_id": "D32P1",
+    }
+    case = _case(
+        expected_outcome="insufficient_evidence",
+        expected_branches=[{
+            "branch_id": "torque",
+            "expected_outcome": "full_answer",
+            "expected_citations": [citation],
+            "expected_rendered_citations": [],
+        }],
+    )
+    debug = {
+        "planner_count": 1,
+        "subquery_count": 1,
+        "correction_count": 0,
+        "final_generation_count": 0,
+        "deadline_exceeded": False,
+        "decomposition_branches": [{
+            "branch_id": "torque",
+            "outcome": "full_answer",
+            "citations": [citation],
+            "rendered_source_ids": [],
+        }],
+    }
+
+    assert evaluate_decomposition_case(case, debug)["passed"] is True
+
+    duplicate_chunk_debug = {
+        **debug,
+        "decomposition_branches": [{
+            **debug["decomposition_branches"][0],
+            "citations": [
+                citation,
+                {**citation, "chunk_index": 2},
+            ],
+        }],
+    }
+    assert (
+        evaluate_decomposition_case(case, duplicate_chunk_debug)["passed"]
+        is True
+    )
+
+    rendered_debug = {
+        **debug,
+        "decomposition_branches": [{
+            **debug["decomposition_branches"][0],
+            "rendered_source_ids": ["D32P1"],
+        }],
+    }
+    assert evaluate_decomposition_case(case, rendered_debug)["passed"] is False
+
+    missing_retrieval_debug = {
+        **debug,
+        "decomposition_branches": [{
+            **debug["decomposition_branches"][0],
+            "citations": [],
+        }],
+    }
+    assert (
+        evaluate_decomposition_case(case, missing_retrieval_debug)["passed"]
+        is False
+    )
+
+    extra_retrieval_debug = {
+        **debug,
+        "decomposition_branches": [{
+            **debug["decomposition_branches"][0],
+            "citations": [
+                citation,
+                {
+                    "document": "unexpected.md",
+                    "doc_id": 999,
+                    "source_id": "D999P1",
+                },
+            ],
+        }],
+    }
+    assert (
+        evaluate_decomposition_case(case, extra_retrieval_debug)["passed"]
+        is False
+    )
+
+
+def test_terminal_refusal_rejects_factual_text_without_rendered_source():
+    citation = {
+        "document": "technical_effective_core.md",
+        "doc_id": 32,
+        "source_id": "D32P1",
+    }
+    case = _case(
+        expected_outcome="insufficient_evidence",
+        expected_terminal_claim_count=0,
+        expected_terminal_rendered_source_count=0,
+        expected_branches=[{
+            "branch_id": "torque",
+            "expected_outcome": "full_answer",
+            "expected_citations": [citation],
+            "expected_rendered_citations": [],
+        }],
+    )
+    debug = {
+        "planner_count": 1,
+        "subquery_count": 1,
+        "correction_count": 0,
+        "final_generation_count": 0,
+        "deadline_exceeded": False,
+        "decomposition_branches": [{
+            "branch_id": "torque",
+            "outcome": "full_answer",
+            "citations": [citation],
+            "rendered_source_ids": [],
+        }],
+    }
+
+    result = evaluate_decomposition_case(
+        case,
+        debug,
+        answer=(
+            "Tài liệu nội bộ hiện có không đề cập đến chi phí. "
+            "Giá trị định mức là 1,500."
+        ),
+    )
+
+    assert result["passed"] is False
+    assert result["terminal_answer_passed"] is False
+    assert result["terminal_claim_count"] == 1
+
+    result = evaluate_decomposition_case(
+        case,
+        debug,
+        answer=(
+            "Tài liệu nội bộ hiện có không đề cập đến chi phí. "
+            "[Nguồn: unrelated.md; SourceID: D999P1]"
+        ),
+    )
+
+    assert result["passed"] is False
+    assert result["terminal_answer_passed"] is False
+    assert result["terminal_rendered_source_count"] == 1
+
+    result = evaluate_decomposition_case(
+        case,
+        debug,
+        answer=(
+            "Tài liệu hiện tại không ghi thông tin đủ để trả lời câu hỏi này "
+            "(partial_branch_coverage).\n\n"
+            "Mình sẽ không tự ước lượng hoặc tự bịa số liệu. Để trả lời được, "
+            "bạn cần bổ sung tài liệu có dữ kiện trực tiếp liên quan, ví dụ "
+            "thời gian gia công cho 1 sản phẩm, năng suất theo giờ/ca, định "
+            "mức sản xuất, chi phí hoặc tiêu chuẩn kiểm tra tương ứng."
+        ),
+    )
+
+    assert result["passed"] is True
+    assert result["terminal_answer_passed"] is True
+    assert result["terminal_claim_count"] == 0
+    assert result["terminal_rendered_source_count"] == 0
+
+    result = evaluate_decomposition_case(case, debug)
+
+    assert result["passed"] is False
+    assert result["terminal_answer_violations"] == [
+        {"kind": "terminal_answer_missing", "value": ""}
+    ]
+
+
 def test_summary_reports_simple_planner_calls_and_all_request_budgets():
     rows = [
         {
@@ -230,6 +432,28 @@ def test_summary_reports_simple_planner_calls_and_all_request_budgets():
     assert summary["branch_accuracy"] == 1.0
     assert summary["citation_accuracy"] == 1.0
     assert summary["budget_violations"] == 0
+
+
+def test_summary_counts_terminal_answer_violations():
+    rows = [
+        {
+            "evaluation_group": "complex",
+            "planner_count": 1,
+            "decomposition_evaluation": {
+                "applicable": True,
+                "passed": False,
+                "branch_accuracy": 1.0,
+                "citation_accuracy": 1.0,
+                "budget_passed": True,
+                "terminal_answer_passed": False,
+            },
+        },
+    ]
+
+    summary = summarize_decomposition_evaluation(rows)
+
+    assert summary["terminal_answer_violations"] == 1
+
 
 
 def test_usage_summary_reconciles_priced_stages_without_double_counting_context():

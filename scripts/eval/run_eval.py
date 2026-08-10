@@ -532,7 +532,11 @@ def run_evaluation(
                 debug.get("calculation_provenance") or [],
                 answer=answer,
             )
-            decomposition_evaluation = evaluate_decomposition_case(case, debug)
+            decomposition_evaluation = evaluate_decomposition_case(
+                case,
+                debug,
+                answer=answer,
+            )
             graph_evaluation = evaluate_graph_case(case, debug)
             grounding_ok = (
                 (

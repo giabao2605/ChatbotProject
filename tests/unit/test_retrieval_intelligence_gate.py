@@ -267,11 +267,34 @@ def test_decomposition_gate_requires_complex_gain_and_zero_simple_planner_calls(
         "citation_accuracy": 1.0,
         "simple_planner_calls": 0,
         "budget_violations": 0,
+        "terminal_answer_violations": 0,
     }
 
     result = gate.compare("query_decomposition", baseline, candidate)
 
     assert result["passed"] is True
+
+
+def test_decomposition_gate_rejects_terminal_answer_violation():
+    gate = _module()
+    baseline = report(groups={"complex": {"pass_rate": 0.50}})
+    candidate = report(
+        groups={"complex": {"pass_rate": 0.65}},
+        p95=120,
+        cost=1.2,
+    )
+    candidate["decomposition_evaluation"] = {
+        "branch_accuracy": 1.0,
+        "citation_accuracy": 1.0,
+        "simple_planner_calls": 0,
+        "budget_violations": 0,
+        "terminal_answer_violations": 1,
+    }
+
+    result = gate.compare("query_decomposition", baseline, candidate)
+
+    assert result["checks"]["terminal_answers_clean"] is False
+    assert result["passed"] is False
 
 
 def test_decomposition_gate_rejects_branch_budget_or_simple_router_regression():

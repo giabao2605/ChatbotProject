@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from statistics import mean
 from typing import Any, Mapping, Sequence
+
+from mech_chatbot.evaluation.grounding import extract_claims
+from mech_chatbot.rag.answer_checks import extract_source_ids
 
 
 class DecompositionManifestError(ValueError):
@@ -20,7 +24,40 @@ IDENTITY_FIELDS = (
     "allowed_sites",
     "max_security_level",
 )
+IDENTITY_FIELDS_FOR_CITATION = ("document", "doc_id", "page", "version", "source_id")
 BRANCH_OUTCOMES = {"full_answer", "partial_answer", "insufficient_evidence", "access_denied"}
+TERMINAL_OUTCOMES = {"insufficient_evidence", "access_denied"}
+CITATION_MARKER_PATTERN = re.compile(r"\[(?:Nguồn|Source)\s*:", re.IGNORECASE)
+TERMINAL_POLICY_NOTICE_PATTERNS = (
+    re.compile(
+        r"^tài liệu hiện tại không ghi thông tin đủ để trả lời câu hỏi này "
+        r"\([^)]+\)\.?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^mình sẽ không tự ước lượng hoặc tự bịa số liệu\.?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^để trả lời được, bạn cần bổ sung tài liệu có dữ kiện trực tiếp "
+        r"liên quan, ví dụ .+$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^the current documents do not contain enough information to answer "
+        r"this question \([^)]+\)\.?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^i will not estimate or fabricate data\.?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^to get an answer, please load documents with directly relevant "
+        r"data, such as .+$",
+        re.IGNORECASE,
+    ),
+)
 
 
 def validate_decomposition_case(case: Mapping[str, Any]) -> None:
@@ -47,6 +84,53 @@ def validate_decomposition_case(case: Mapping[str, Any]) -> None:
             raise DecompositionManifestError(f"{case_id}:{branch_id}: invalid expected_outcome")
         if "expected_citations" not in branch or not isinstance(branch["expected_citations"], list):
             raise DecompositionManifestError(f"{case_id}:{branch_id}: expected_citations is required")
+        rendered = branch.get("expected_rendered_citations")
+        scoped = case.get("evaluation_scope") in {
+            "query_only", "math_query_interaction",
+        }
+        if scoped and not isinstance(rendered, list):
+            raise DecompositionManifestError(
+                f"{case_id}:{branch_id}: expected_rendered_citations is required"
+            )
+        if scoped and any(
+            not isinstance(citation, Mapping)
+            or not str(citation.get("source_id") or "").strip()
+            for citation in branch["expected_citations"]
+        ):
+            raise DecompositionManifestError(
+                f"{case_id}:{branch_id}: citation source_id is required"
+            )
+        if isinstance(rendered, list) and any(
+            not isinstance(citation, Mapping)
+            or not str(citation.get("source_id") or "").strip()
+            for citation in rendered
+        ):
+            raise DecompositionManifestError(
+                f"{case_id}:{branch_id}: rendered citation source_id is required"
+            )
+        if scoped:
+            expected_source_ids = [
+                str(citation["source_id"]).strip().upper()
+                for citation in branch["expected_citations"]
+            ]
+            if len(expected_source_ids) != len(set(expected_source_ids)):
+                raise DecompositionManifestError(
+                    f"{case_id}:{branch_id}: duplicate citation source_id"
+                )
+    terminal_count_fields = (
+        "expected_terminal_claim_count",
+        "expected_terminal_rendered_source_count",
+    )
+    if any(field in case for field in terminal_count_fields) and (
+        case.get("expected_outcome") not in TERMINAL_OUTCOMES
+        or any(
+            type(case.get(field)) is not int or case.get(field) != 0
+            for field in terminal_count_fields
+        )
+    ):
+        raise DecompositionManifestError(
+            f"{case_id}: terminal answer count contract must be zero"
+        )
 
 
 def load_decomposition_manifest(path: str | Path) -> list[dict[str, Any]]:
@@ -94,6 +178,88 @@ def _citations_match(actual: Sequence[Any], expected: Sequence[Any]) -> bool:
     if not expected:
         return not actual
     return all(any(_matches(item, wanted) for item in actual) for wanted in expected)
+
+
+def _citations_match_exact(actual: Sequence[Any], expected: Sequence[Any]) -> bool:
+    unique_actual: list[Any] = []
+    seen_actual: set[tuple[str, str, str, str, str]] = set()
+    for item in actual:
+        identity = _identity(item)
+        key = tuple(identity[field] for field in IDENTITY_FIELDS_FOR_CITATION)
+        if key not in seen_actual:
+            seen_actual.add(key)
+            unique_actual.append(item)
+    if len(unique_actual) != len(expected):
+        return False
+    used: set[int] = set()
+    for wanted in expected:
+        match = next(
+            (
+                index
+                for index, item in enumerate(unique_actual)
+                if index not in used and _matches(item, wanted)
+            ),
+            None,
+        )
+        if match is None:
+            return False
+        used.add(match)
+    return True
+
+
+def _terminal_answer_contract(
+    case: Mapping[str, Any],
+    answer: Any,
+) -> tuple[bool, list[dict[str, str]], int, int]:
+    expected_claim_count = case.get("expected_terminal_claim_count")
+    expected_rendered_source_count = case.get(
+        "expected_terminal_rendered_source_count"
+    )
+    if expected_claim_count is None and expected_rendered_source_count is None:
+        return True, [], 0, 0
+    if case.get("expected_outcome") not in TERMINAL_OUTCOMES or answer is None:
+        return False, [{"kind": "terminal_answer_missing", "value": ""}], 0, 0
+    answer = str(answer or "")
+    violations: list[dict[str, str]] = []
+    fragments = [
+        fragment.strip()
+        for fragment in re.split(r"(?<=[.!?])\s+|[;\r\n]+", answer)
+        if fragment.strip()
+    ]
+    terminal_claim_count = sum(
+        len(extract_claims(fragment))
+        for fragment in fragments
+        if not any(
+            pattern.fullmatch(fragment)
+            for pattern in TERMINAL_POLICY_NOTICE_PATTERNS
+        )
+    )
+    terminal_rendered_source_count = max(
+        len(extract_source_ids(answer)),
+        len(CITATION_MARKER_PATTERN.findall(answer)),
+    )
+    if (
+        expected_claim_count is not None
+        and terminal_claim_count != int(expected_claim_count)
+    ):
+        violations.append({
+            "kind": "terminal_claim_count",
+            "value": str(terminal_claim_count),
+        })
+    if (
+        expected_rendered_source_count is not None
+        and terminal_rendered_source_count != int(expected_rendered_source_count)
+    ):
+        violations.append({
+            "kind": "terminal_rendered_source_count",
+            "value": str(terminal_rendered_source_count),
+        })
+    return (
+        not violations,
+        violations,
+        terminal_claim_count,
+        terminal_rendered_source_count,
+    )
 
 
 def _usage_int(value: Any, field: str) -> int:
@@ -238,7 +404,12 @@ def normalize_decomposition_usage(value: Any) -> dict[str, Any] | None:
     }
 
 
-def evaluate_decomposition_case(case: Mapping[str, Any], debug: Mapping[str, Any]) -> dict[str, Any]:
+def evaluate_decomposition_case(
+    case: Mapping[str, Any],
+    debug: Mapping[str, Any],
+    *,
+    answer: str | None = None,
+) -> dict[str, Any]:
     expected = list(case.get("expected_branches") or [])
     actual = list(debug.get("decomposition_branches") or [])
     results = []
@@ -253,19 +424,39 @@ def evaluate_decomposition_case(case: Mapping[str, Any], debug: Mapping[str, Any
         if actual_index is not None:
             used.add(actual_index)
         outcome_ok = branch.get("outcome") == wanted.get("expected_outcome")
-        expected_source_ids = {
-            str(citation.get("source_id") or "").strip().upper()
-            for citation in wanted.get("expected_citations") or []
-            if citation.get("source_id")
-        }
         rendered_source_ids = {
             str(source_id).strip().upper()
             for source_id in branch.get("rendered_source_ids") or []
             if source_id
         }
-        citation_ok = _citations_match(
-            branch.get("citations") or [], wanted.get("expected_citations") or [],
-        ) and expected_source_ids <= rendered_source_ids
+        if "expected_rendered_citations" in wanted:
+            expected_rendered = wanted.get("expected_rendered_citations") or []
+            expected_rendered_source_ids = {
+                str(citation.get("source_id") or "").strip().upper()
+                for citation in expected_rendered
+                if citation.get("source_id")
+            }
+            rendered_contract_valid = len(expected_rendered_source_ids) == len(
+                expected_rendered
+            )
+            citation_ok = (
+                _citations_match_exact(
+                    branch.get("citations") or [],
+                    wanted.get("expected_citations") or [],
+                )
+                and rendered_contract_valid
+                and rendered_source_ids == expected_rendered_source_ids
+            )
+        else:
+            expected_source_ids = {
+                str(citation.get("source_id") or "").strip().upper()
+                for citation in wanted.get("expected_citations") or []
+                if citation.get("source_id")
+            }
+            citation_ok = _citations_match(
+                branch.get("citations") or [],
+                wanted.get("expected_citations") or [],
+            ) and expected_source_ids <= rendered_source_ids
         results.append({
             "branch_id": wanted_id,
             "outcome_passed": outcome_ok,
@@ -294,13 +485,27 @@ def evaluate_decomposition_case(case: Mapping[str, Any], debug: Mapping[str, Any
         "intent_coverage": intent_coverage_ok,
     }
     budget_passed = all(budget_checks.values())
+    effective_answer = answer if answer is not None else debug.get("answer")
+    (
+        terminal_answer_passed,
+        terminal_answer_violations,
+        terminal_claim_count,
+        terminal_rendered_source_count,
+    ) = _terminal_answer_contract(
+        case,
+        effective_answer,
+    )
     return {
         "applicable": bool(expected),
-        "passed": bool(results) and branch_accuracy == 1.0 and citation_accuracy == 1.0 and budget_passed,
+        "passed": bool(results) and branch_accuracy == 1.0 and citation_accuracy == 1.0 and budget_passed and terminal_answer_passed,
         "branch_accuracy": branch_accuracy,
         "citation_accuracy": citation_accuracy,
         "budget_passed": budget_passed,
         "budget_checks": budget_checks,
+        "terminal_answer_passed": terminal_answer_passed,
+        "terminal_answer_violations": terminal_answer_violations,
+        "terminal_claim_count": terminal_claim_count,
+        "terminal_rendered_source_count": terminal_rendered_source_count,
         "branches": results,
     }
 
@@ -320,6 +525,12 @@ def summarize_decomposition_evaluation(rows: Sequence[Mapping[str, Any]]) -> dic
         ) if applicable else None,
         "budget_violations": sum(
             not bool((row.get("decomposition_evaluation") or {}).get("budget_passed"))
+            for row in applicable
+        ),
+        "terminal_answer_violations": sum(
+            (row.get("decomposition_evaluation") or {}).get(
+                "terminal_answer_passed"
+            ) is False
             for row in applicable
         ),
         "simple_planner_calls": sum(
