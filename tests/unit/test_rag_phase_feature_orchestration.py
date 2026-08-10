@@ -527,6 +527,268 @@ def test_decomposition_missing_branch_does_not_publish_citations(monkeypatch):
     ] == [1, 2]
 
 
+def test_general_branch_publishes_only_its_served_top_source(monkeypatch):
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+
+    request = _prepared_request(
+        question=(
+            "Mắt cú xanh kiểm tra theo chu kỳ nào và "
+            "giá trị CRAG-EVAL-NUM-001 là bao nhiêu?"
+        )
+    )
+    decision = _route_decision(request, part_ids=("CRAG-EVAL-NUM-001",))
+
+    def document(doc_id, name):
+        return Document(
+            page_content=name,
+            metadata={
+                "doc_id": doc_id,
+                "trang_so": 1,
+                "file_goc": f"{name}.md",
+                "version_no": 1,
+            },
+        )
+
+    def retrieve(**kwargs):
+        if "mắt cú xanh" in kwargs["query_to_search"].lower():
+            return (
+                [document(1, "alias"), document(2, "unrelated")],
+                5,
+                "general:explicit_dense_bm25_rrf",
+                time.time(),
+                object(),
+            )
+        return (
+            [document(3, "number")],
+            5,
+            "strict_exact:explicit_dense_bm25_rrf",
+            time.time(),
+            object(),
+        )
+
+    monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
+    monkeypatch.setattr(
+        retrieval_phase,
+        "_assemble_context",
+        lambda docs, _query: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        retrieval_phase,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = _run_phase(
+        lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(
+            retrieve=retrieve,
+            query_decomposition_enabled=True,
+        ),
+        provider=SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: SimpleNamespace(
+                content=(
+                    '{"subqueries":["Mắt cú xanh kiểm tra theo chu kỳ nào",'
+                    '"giá trị CRAG-EVAL-NUM-001"]}'
+                )
+            )
+        ),
+    )
+
+    assert [
+        citation["doc_id"]
+        for citation in outcome.decomposition_branches[0]["citations"]
+    ] == [1]
+    assert [document.metadata["doc_id"] for document in outcome.documents] == [1, 3]
+    assert outcome.decomposition_usage["branches"][0]["retrieval"][
+        "document_count"
+    ] == 2
+
+
+def test_general_branch_answerability_uses_only_its_served_top_source(monkeypatch):
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+
+    request = _prepared_request(
+        question=(
+            "Mắt cú xanh kiểm tra theo chu kỳ nào và "
+            "giá trị CRAG-EVAL-NUM-001 là bao nhiêu?"
+        )
+    )
+    decision = _route_decision(request, part_ids=("CRAG-EVAL-NUM-001",))
+
+    def document(doc_id, content):
+        return Document(
+            page_content=content,
+            metadata={"doc_id": doc_id, "trang_so": 1},
+        )
+
+    def retrieve(**kwargs):
+        if "mắt cú xanh" in kwargs["query_to_search"].lower():
+            return (
+                [document(1, "unrelated"), document(2, "alias evidence")],
+                5,
+                "general:explicit_dense_bm25_rrf",
+                time.time(),
+                object(),
+            )
+        return (
+            [document(3, "number evidence")],
+            5,
+            "strict_exact:explicit_dense_bm25_rrf",
+            time.time(),
+            object(),
+        )
+
+    def answerability(_query, _context, *, docs, **_kwargs):
+        documents = docs
+        content = "\n".join(document.page_content for document in documents)
+        state = (
+            EvidenceState.SUFFICIENT
+            if "evidence" in content
+            else EvidenceState.INSUFFICIENT
+        )
+        return EvidenceDecision(
+            state,
+            reason=(
+                "covered" if state is EvidenceState.SUFFICIENT else "missing"
+            ),
+        )
+
+    monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
+    monkeypatch.setattr(
+        retrieval_phase,
+        "_assemble_context",
+        lambda docs, _query: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(retrieval_phase, "evaluate_answerability", answerability)
+
+    outcome = _run_phase(
+        lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(
+            retrieve=retrieve,
+            query_decomposition_enabled=True,
+        ),
+        provider=SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: SimpleNamespace(
+                content=(
+                    '{"subqueries":["Mắt cú xanh kiểm tra theo chu kỳ nào",'
+                    '"giá trị CRAG-EVAL-NUM-001"]}'
+                )
+            )
+        ),
+    )
+
+    assert [branch["outcome"] for branch in outcome.decomposition_branches] == [
+        "insufficient_evidence",
+        "full_answer",
+    ]
+    assert outcome.decomposition_branches[0]["citations"] == []
+    assert [document.metadata["doc_id"] for document in outcome.documents] == [3]
+    assert outcome.decomposition_usage["branches"][0]["retrieval"][
+        "document_count"
+    ] == 2
+
+
+def test_general_branch_serves_corrected_top_source_and_keeps_raw_count(monkeypatch):
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+
+    request = _prepared_request(
+        question=(
+            "Mắt cú xanh kiểm tra theo chu kỳ nào và "
+            "giá trị CRAG-EVAL-NUM-001 là bao nhiêu?"
+        )
+    )
+    decision = _route_decision(
+        request,
+        part_ids=("CRAG-EVAL-NUM-001",),
+        crag_enabled=True,
+    )
+
+    def document(doc_id, content):
+        return Document(
+            page_content=content,
+            metadata={"doc_id": doc_id, "trang_so": 1},
+        )
+
+    def retrieve(**kwargs):
+        query = kwargs["query_to_search"].lower()
+        if query == "rewritten alias":
+            return (
+                [document(4, "alias evidence")],
+                5,
+                "general:explicit_dense_bm25_rrf",
+                time.time(),
+                object(),
+            )
+        if "mắt cú xanh" in query:
+            return (
+                [document(1, "unrelated one"), document(2, "unrelated two")],
+                5,
+                "general:explicit_dense_bm25_rrf",
+                time.time(),
+                object(),
+            )
+        return (
+            [document(3, "number evidence")],
+            5,
+            "strict_exact:explicit_dense_bm25_rrf",
+            time.time(),
+            object(),
+        )
+
+    def answerability(_query, _context, *, docs, **_kwargs):
+        content = "\n".join(document.page_content for document in docs)
+        if "evidence" in content:
+            return EvidenceDecision(EvidenceState.SUFFICIENT, reason="covered")
+        return EvidenceDecision(EvidenceState.AMBIGUOUS, reason="missing")
+
+    def invoke(*_args, **kwargs):
+        if kwargs["surface"] == "query_decomposition":
+            return SimpleNamespace(
+                content=(
+                    '{"subqueries":["Mắt cú xanh kiểm tra theo chu kỳ nào",'
+                    '"giá trị CRAG-EVAL-NUM-001"]}'
+                )
+            )
+        return SimpleNamespace(content="rewritten alias")
+
+    monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
+    monkeypatch.setattr(
+        retrieval_phase,
+        "_assemble_context",
+        lambda docs, _query: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(retrieval_phase, "evaluate_answerability", answerability)
+
+    outcome = _run_phase(
+        lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(
+            retrieve=retrieve,
+            query_decomposition_enabled=True,
+            crag_enabled=True,
+        ),
+        provider=SimpleNamespace(invoke=invoke),
+    )
+
+    assert [branch["outcome"] for branch in outcome.decomposition_branches] == [
+        "full_answer",
+        "full_answer",
+    ]
+    assert [
+        citation["doc_id"]
+        for citation in outcome.decomposition_branches[0]["citations"]
+    ] == [4]
+    assert [document.metadata["doc_id"] for document in outcome.documents] == [4, 3]
+    assert outcome.decomposition_usage["branches"][0]["retrieval"][
+        "document_count"
+    ] == 2
+
+
 def test_crag_force_ambiguous_override_is_request_local(monkeypatch):
     from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
     from mech_chatbot.rag.phases import retrieval_enrichment as enrichment_phase

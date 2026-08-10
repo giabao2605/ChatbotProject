@@ -334,8 +334,18 @@ def _branch_correction_success(
     input_tokens = len(rewrite_prompt) // 4
     output_tokens = len(str(rewritten)) // 4
     estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1_000_000
+    if str(result[2]).startswith("general"):
+        merged_documents = merge_corrected_documents(
+            corrected_result[0],
+            result[0],
+        )
+    else:
+        merged_documents = merge_corrected_documents(
+            result[0],
+            corrected_result[0],
+        )
     corrected = (
-        merge_corrected_documents(result[0], corrected_result[0]),
+        merged_documents,
         result[1], result[2] + "+corrected:" + corrected_result[2],
         result[3], result[4],
     )
@@ -376,6 +386,8 @@ def _retrieve_branch(
     correction_budget: Any,
     branch_deadline_monotonic: float | None,
 ) -> Any:
+    from mech_chatbot.rag.query_decomposition import served_branch_documents
+
     state.checkpoint("branch_retrieval")
     if _deadline_exceeded(branch_deadline_monotonic):
         return _empty_deadline_branch()
@@ -390,6 +402,7 @@ def _retrieve_branch(
         rbac_filter=context.decision.rbac_filter,
         trace_id=context.trace_id,
     )
+    raw_documents = tuple(result[0])
     state.checkpoint("branch_retrieval")
     retrieval_latency_ms = max(
         0,
@@ -398,7 +411,7 @@ def _retrieve_branch(
     deadline_exceeded = _deadline_exceeded(branch_deadline_monotonic)
     if deadline_exceeded:
         result = ([], result[1], result[2] + "+deadline_exceeded", result[3], result[4])
-    branch_documents = result[0]
+    branch_documents = served_branch_documents(result[0], result[2])
     decision, policy = _branch_answer_policy(
         context,
         subquery,
@@ -422,6 +435,7 @@ def _retrieve_branch(
         access_denied,
         branch_deadline_monotonic,
         retrieval_latency_ms,
+        raw_documents,
     )
 
 
@@ -430,6 +444,7 @@ def _finish_branch_result(
     access_denied: bool,
     branch_deadline_monotonic: float | None,
     retrieval_latency_ms: int = 0,
+    raw_documents: Sequence[Any] = (),
 ) -> Any:
     from mech_chatbot.rag.query_decomposition import BranchRetrievalResult
 
@@ -448,10 +463,10 @@ def _finish_branch_result(
         correction_input_tokens=correction.input_tokens,
         correction_output_tokens=correction.output_tokens,
         retrieval_latency_ms=retrieval_latency_ms,
-        retrieval_document_count=len(final_result[0]),
+        retrieval_document_count=len(raw_documents),
         retrieval_estimated_input_tokens=sum(
             len(str(getattr(document, "page_content", "") or "")) // 4
-            for document in final_result[0]
+            for document in raw_documents
         ),
         access_denied=bool(access_denied), deadline_exceeded=deadline_exceeded,
     )
@@ -512,15 +527,21 @@ def _branch_diagnostics(
     plan: Any,
     branch_results: list[Any],
 ) -> tuple[tuple[str, ...], tuple[Mapping[str, Any], ...]]:
+    from mech_chatbot.rag.query_decomposition import served_branch_documents
+
     states: list[str] = []
     branches: list[Mapping[str, Any]] = []
     for branch_index, (subquery, result) in enumerate(
         zip(plan.subqueries, branch_results), 1
     ):
+        branch_documents = served_branch_documents(
+            result.documents,
+            result.retrieval_mode,
+        )
         _, policy = _branch_answer_policy(
             context,
             subquery,
-            result.documents,
+            branch_documents,
             retrieval_can_improve=False,
             access_denied=bool(result.access_denied),
         )
@@ -536,7 +557,7 @@ def _branch_diagnostics(
             "grounded_negative": policy.reason == "explicit_negative_evidence",
             "bom_lookup": is_bom_lookup(subquery),
             "citations": (
-                make_source_snapshot(result.documents)
+                make_source_snapshot(branch_documents)
                 if policy.outcome.value == "full_answer"
                 else []
             ),

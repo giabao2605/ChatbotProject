@@ -224,9 +224,10 @@ def generate_manifest(output: Path = DEFAULT_OUTPUT):
         "- `math_query_interaction_manifest.jsonl`: 3 case Math+Query giữ "
         "nguyên expectation `full_answer` và phép `sum`; không dùng làm "
         "formal evidence cho Query-only.\n\n"
-        "Citation truy xuất được so khớp theo tập canonical source identity "
-        "duy nhất: nhiều chunk cùng một nguồn/trang được gộp, nhưng bất kỳ "
-        "source identity khác expectation đều làm gate fail.\n\n"
+        "Citation của evidence đủ điều kiện phục vụ được so khớp theo tập "
+        "canonical source identity duy nhất: nhiều chunk cùng một nguồn/trang "
+        "được gộp, nhưng bất kỳ source identity khác expectation đều làm gate "
+        "fail. Số document raw retrieval vẫn được giữ riêng trong telemetry.\n\n"
         f"Query-only SHA-256: `{query_sha}`\n\n"
         f"Math+Query interaction SHA-256: `{interaction_sha}`\n",
         encoding="utf-8",
