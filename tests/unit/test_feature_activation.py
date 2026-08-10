@@ -4,6 +4,7 @@ import asyncio
 import base64
 import shutil
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -1722,6 +1723,167 @@ def test_profile_pair_launcher_renders_canonical_profiles_into_separate_processe
     assert '"candidate" $candidateEnv' in launcher
     assert "$candidateEnv.RAG_CRAG_ENABLED" not in launcher
     assert "$candidateEnv.RAG_LATE_INTERACTION_ENABLED" not in launcher
+
+
+def test_profile_pair_launcher_supports_selective_external_checkout():
+    launcher = Path("scripts/ops/start_rag_profile_pair.ps1").read_text(
+        encoding="utf-8",
+    )
+
+    assert '"selective"' in launcher
+    assert "[string[]]$EnableFeature" in launcher
+    assert '"--enable-feature", $feature' in launcher
+    assert '$TargetProfile -eq "selective" -and $Scope -eq "evaluation"' in launcher
+    assert "Selective profile requires EnableFeature in evaluation." in launcher
+    assert "Live selective flags come from ActivationBundle" in launcher
+    assert "try {\n        $output = & $pythonExe @arguments" in launcher
+    assert "[string]$ProjectRoot" in launcher
+    assert "[string]$PythonExe" in launcher
+    assert "[string]$SqlDatabase" in launcher
+    assert "[string]$QdrantCollection" in launcher
+    assert "Graph controlled_demo requires SqlDatabase and QdrantCollection." in launcher
+    assert (
+        "Graph controlled_demo fingerprint must match ActivationBundle."
+        in launcher
+    )
+    assert "$common.SQL_DATABASE = $SqlDatabase" in launcher
+    assert "$common.QDRANT_COLLECTION = $QdrantCollection" in launcher
+
+
+@pytest.mark.parametrize(
+    ("scope", "extra_args", "expected_error"),
+    [
+        (
+            "evaluation",
+            [],
+            "Selective profile requires EnableFeature in evaluation.",
+        ),
+        (
+            "controlled_demo",
+            ["-EnableFeature", "RAG_GRAPH_RETRIEVAL_ENABLED"],
+            "Live selective flags come from ActivationBundle",
+        ),
+    ],
+)
+def test_profile_pair_launcher_rejects_invalid_selective_flag_sources(
+    tmp_path,
+    scope,
+    extra_args,
+    expected_error,
+):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the Windows launcher contract")
+
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-File",
+            str(Path("scripts/ops/start_rag_profile_pair.ps1").resolve()),
+            "-Profile",
+            "selective",
+            "-Scope",
+            scope,
+            "-SnapshotFingerprint",
+            "test-fingerprint",
+            "-ProjectRoot",
+            str(tmp_path),
+            "-PythonExe",
+            sys.executable,
+            *extra_args,
+        ],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+def test_profile_pair_launcher_resolves_live_bundle_from_external_checkout(tmp_path):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the Windows launcher contract")
+
+    scripts_dir = tmp_path / "scripts" / "ops"
+    scripts_dir.mkdir(parents=True)
+    (tmp_path / "bundle.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "checkout_sentinel.py").write_text(
+        'VALUE = "external-checkout"\n',
+        encoding="utf-8",
+    )
+    (scripts_dir / "render_activation_profile.py").write_text(
+        """import json
+import subprocess
+import sys
+
+from checkout_sentinel import VALUE
+
+profile = sys.argv[sys.argv.index("--profile") + 1]
+head = subprocess.run(
+    ["git", "rev-parse", "HEAD"], capture_output=True, check=True, text=True
+).stdout.strip()
+flags = {
+    "RAG_CRAG_ENABLED": "false",
+    "RAG_CLAIM_REPAIR_ENABLED": "false",
+    "RAG_GROUNDED_MATH_ENABLED": "false",
+    "RAG_LATE_INTERACTION_ENABLED": "false",
+    "RAG_QUERY_DECOMPOSITION_ENABLED": "false",
+    "RAG_GRAPH_RETRIEVAL_ENABLED": "true" if profile == "selective" else "false",
+    "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "false",
+}
+print(json.dumps({**flags, "RAG_DEPLOYMENT_GIT_SHA": head, "sentinel": VALUE}))
+""",
+        encoding="utf-8",
+    )
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "add", "."],
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    ):
+        subprocess.run(command, cwd=tmp_path, check=True, capture_output=True)
+
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-File",
+            str(Path("scripts/ops/start_rag_profile_pair.ps1").resolve()),
+            "-Profile",
+            "selective",
+            "-Scope",
+            "controlled_demo",
+            "-SnapshotFingerprint",
+            "test-fingerprint",
+            "-ActivationBundle",
+            "bundle.json",
+            "-ActivationBundleSha256",
+            "test-sha",
+            "-ProjectRoot",
+            str(tmp_path),
+            "-PythonExe",
+            sys.executable,
+        ],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Graph controlled_demo requires SqlDatabase and QdrantCollection." in result.stderr
 
 
 def test_profile_pair_stopper_parses_iso_timestamps_culture_independently():
