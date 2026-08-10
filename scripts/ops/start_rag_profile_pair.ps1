@@ -114,6 +114,30 @@ function ConvertTo-EnvironmentTable {
     return $table
 }
 
+function Get-RagServiceToken {
+    $token = [Environment]::GetEnvironmentVariable("RAG_SERVICE_TOKEN", "Process")
+    if (![string]::IsNullOrWhiteSpace($token)) {
+        return $token
+    }
+    $envPath = Join-Path $projectRoot ".env"
+    if (!(Test-Path -LiteralPath $envPath -PathType Leaf)) {
+        return ""
+    }
+    foreach ($line in Get-Content -LiteralPath $envPath) {
+        if ($line -match "^\s*RAG_SERVICE_TOKEN\s*=\s*(.*)\s*$") {
+            $value = $Matches[1].Trim()
+            if (
+                ($value.StartsWith('"') -and $value.EndsWith('"')) -or
+                ($value.StartsWith("'") -and $value.EndsWith("'"))
+            ) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+            return $value
+        }
+    }
+    return ""
+}
+
 function Render-ProfileEnvironment {
     param([string]$TargetProfile)
     $arguments = @(
@@ -197,6 +221,10 @@ if ($SqlDatabase) {
 if ($QdrantCollection) {
     $common.QDRANT_COLLECTION = $QdrantCollection
 }
+$serviceToken = Get-RagServiceToken
+if (![string]::IsNullOrWhiteSpace($serviceToken)) {
+    $common.RAG_SERVICE_TOKEN = $serviceToken
+}
 foreach ($key in $common.Keys) {
     $controlEnv[$key] = $common[$key]
     $candidateEnv[$key] = $common[$key]
@@ -220,9 +248,9 @@ try {
         (Join-Path $logsDir "candidate.err.log")
 
     Wait-CragDemoHttpHealth "http://127.0.0.1:$ControlPort/health" 60 `
-        "Control RAG deployment khong healthy."
+        "Control RAG deployment khong healthy." $serviceToken
     Wait-CragDemoHttpHealth "http://127.0.0.1:$CandidatePort/health" 60 `
-        "Candidate RAG deployment khong healthy."
+        "Candidate RAG deployment khong healthy." $serviceToken
 
     @{
         schema = "rag-profile-pair-process-state-v1"

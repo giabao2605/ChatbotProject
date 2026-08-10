@@ -2,11 +2,16 @@ function Wait-CragDemoHttpHealth {
     param(
         [string]$Url,
         [int]$Attempts,
-        [string]$FailureMessage
+        [string]$FailureMessage,
+        [string]$ServiceToken
     )
+    $headers = @{}
+    if (![string]::IsNullOrWhiteSpace($ServiceToken)) {
+        $headers["X-RAG-Service-Token"] = $ServiceToken
+    }
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
         try {
-            $health = Invoke-RestMethod -Uri $Url -TimeoutSec 5
+            $health = Invoke-RestMethod -Uri $Url -TimeoutSec 5 -Headers $headers
             if ($health.status -eq "ok") { return }
         }
         catch {

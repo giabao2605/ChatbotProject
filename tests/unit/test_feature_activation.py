@@ -1747,8 +1747,18 @@ def test_profile_pair_launcher_supports_selective_external_checkout():
         "Graph controlled_demo fingerprint must match ActivationBundle."
         in launcher
     )
+    assert "function Get-RagServiceToken" in launcher
+    assert "$common.RAG_SERVICE_TOKEN = $serviceToken" in launcher
     assert "$common.SQL_DATABASE = $SqlDatabase" in launcher
     assert "$common.QDRANT_COLLECTION = $QdrantCollection" in launcher
+
+    common = Path("scripts/ops/crag_controlled_demo_common.ps1").read_text(
+        encoding="utf-8",
+    )
+    assert "[string]$ServiceToken" in common
+    assert '$headers["X-RAG-Service-Token"] = $ServiceToken' in common
+    assert "$headers.Authorization" not in common
+    assert "Invoke-RestMethod -Uri $Url -TimeoutSec 5 -Headers $headers" in common
 
 
 @pytest.mark.parametrize(
