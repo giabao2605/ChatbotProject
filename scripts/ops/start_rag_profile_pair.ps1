@@ -22,7 +22,9 @@ param(
     [string]$ProjectRoot,
     [string]$PythonExe,
     [string]$SqlDatabase,
-    [string]$QdrantCollection
+    [string]$QdrantCollection,
+    [string]$RestoreEvidence,
+    [string]$RestoreEvidenceSha256
 )
 
 $ErrorActionPreference = "Stop"
@@ -82,6 +84,21 @@ if ($Scope -ne "evaluation") {
         $ActivationBundle = Join-Path $projectRoot $ActivationBundle
     }
     $ActivationBundle = (Resolve-Path -LiteralPath $ActivationBundle).Path
+}
+if (![string]::IsNullOrWhiteSpace($RestoreEvidence)) {
+    if (![IO.Path]::IsPathRooted($RestoreEvidence)) {
+        $RestoreEvidence = Join-Path $projectRoot $RestoreEvidence
+    }
+    $RestoreEvidence = (Resolve-Path -LiteralPath $RestoreEvidence).Path
+}
+if (
+    ![string]::IsNullOrWhiteSpace($RestoreEvidenceSha256) -and
+    $RestoreEvidenceSha256 -notmatch "^[0-9a-fA-F]{64}$"
+) {
+    throw "RestoreEvidenceSha256 must be a SHA-256 digest."
+}
+if (![string]::IsNullOrWhiteSpace($RestoreEvidenceSha256)) {
+    $RestoreEvidenceSha256 = $RestoreEvidenceSha256.ToLowerInvariant()
 }
 
 Push-Location $projectRoot
@@ -201,6 +218,38 @@ if (
 if (
     $Scope -eq "controlled_demo" -and
     $actualFeatures -contains "RAG_GRAPH_RETRIEVAL_ENABLED" -and
+    ([string]::IsNullOrWhiteSpace($RestoreEvidence) -or
+     [string]::IsNullOrWhiteSpace($RestoreEvidenceSha256))
+) {
+    throw "Graph controlled_demo requires verified restore evidence."
+}
+if (
+    $Scope -eq "controlled_demo" -and
+    $actualFeatures -contains "RAG_GRAPH_RETRIEVAL_ENABLED"
+) {
+    $previousPythonPath = [Environment]::GetEnvironmentVariable("PYTHONPATH", "Process")
+    [Environment]::SetEnvironmentVariable("PYTHONPATH", $pythonPath, "Process")
+    Push-Location $projectRoot
+    try {
+        $verifiedFingerprint = & $pythonExe -m scripts.ops.verify_restore_evidence `
+            --evidence $RestoreEvidence --sha256 $RestoreEvidenceSha256
+        if ($LASTEXITCODE -ne 0) {
+            throw "Graph restore evidence verification failed."
+        }
+    }
+    finally {
+        Pop-Location
+        [Environment]::SetEnvironmentVariable(
+            "PYTHONPATH", $previousPythonPath, "Process"
+        )
+    }
+    if (($verifiedFingerprint -join "").Trim() -ne $SnapshotFingerprint) {
+        throw "Graph restore evidence fingerprint does not match SnapshotFingerprint."
+    }
+}
+if (
+    $Scope -eq "controlled_demo" -and
+    $actualFeatures -contains "RAG_GRAPH_RETRIEVAL_ENABLED" -and
     $candidateEnv.RAG_GRAPH_FINGERPRINT -ne $SnapshotFingerprint
 ) {
     throw "Graph controlled_demo fingerprint must match ActivationBundle."
@@ -221,6 +270,9 @@ if ($SqlDatabase) {
 }
 if ($QdrantCollection) {
     $common.QDRANT_COLLECTION = $QdrantCollection
+}
+if ($RestoreEvidenceSha256) {
+    $common.RAG_RESTORE_EVIDENCE_SHA256 = $RestoreEvidenceSha256
 }
 $serviceToken = Get-RagServiceToken
 if (![string]::IsNullOrWhiteSpace($serviceToken)) {
@@ -262,6 +314,8 @@ try {
         snapshot_fingerprint = $SnapshotFingerprint
         activation_bundle = $ActivationBundle
         activation_bundle_sha256 = $ActivationBundleSha256
+        restore_evidence = $RestoreEvidence
+        restore_evidence_sha256 = $RestoreEvidenceSha256
         control_url = "http://127.0.0.1:$ControlPort"
         candidate_url = "http://127.0.0.1:$CandidatePort"
         processes = $started

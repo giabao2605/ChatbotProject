@@ -1742,11 +1742,16 @@ def test_profile_pair_launcher_supports_selective_external_checkout():
     assert "[string]$PythonExe" in launcher
     assert "[string]$SqlDatabase" in launcher
     assert "[string]$QdrantCollection" in launcher
+    assert "[string]$RestoreEvidence" in launcher
+    assert "[string]$RestoreEvidenceSha256" in launcher
     assert "Graph controlled_demo requires SqlDatabase and QdrantCollection." in launcher
+    assert "Graph controlled_demo requires verified restore evidence." in launcher
     assert (
         "Graph controlled_demo fingerprint must match ActivationBundle."
         in launcher
     )
+    assert "scripts.ops.verify_restore_evidence" in launcher
+    assert "$common.RAG_RESTORE_EVIDENCE_SHA256 = $RestoreEvidenceSha256" in launcher
     assert "function Get-RagServiceToken" in launcher
     assert "load_settings().RAG_SERVICE_TOKEN" in launcher
     assert "Get-Content -LiteralPath $envPath" not in launcher
