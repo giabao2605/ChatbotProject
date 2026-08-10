@@ -3,6 +3,7 @@ import json
 import asyncio
 import base64
 import shutil
+import socket
 import subprocess
 import sys
 from dataclasses import replace
@@ -1809,9 +1810,11 @@ def test_profile_pair_launcher_resolves_live_bundle_from_external_checkout(tmp_p
         pytest.skip("PowerShell is required for the Windows launcher contract")
 
     scripts_dir = tmp_path / "scripts" / "ops"
+    source_dir = tmp_path / "src"
     scripts_dir.mkdir(parents=True)
+    source_dir.mkdir()
     (tmp_path / "bundle.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "checkout_sentinel.py").write_text(
+    (source_dir / "checkout_sentinel.py").write_text(
         'VALUE = "external-checkout"\n',
         encoding="utf-8",
     )
@@ -1855,6 +1858,12 @@ print(json.dumps({**flags, "RAG_DEPLOYMENT_GIT_SHA": head, "sentinel": VALUE}))
     ):
         subprocess.run(command, cwd=tmp_path, check=True, capture_output=True)
 
+    ports = []
+    for _ in range(2):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            ports.append(listener.getsockname()[1])
+
     result = subprocess.run(
         [
             powershell,
@@ -1875,6 +1884,10 @@ print(json.dumps({**flags, "RAG_DEPLOYMENT_GIT_SHA": head, "sentinel": VALUE}))
             str(tmp_path),
             "-PythonExe",
             sys.executable,
+            "-ControlPort",
+            str(ports[0]),
+            "-CandidatePort",
+            str(ports[1]),
         ],
         cwd=Path.cwd(),
         capture_output=True,
