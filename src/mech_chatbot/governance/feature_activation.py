@@ -29,6 +29,9 @@ from mech_chatbot.governance.crag_demo_authorization import (
     validate_crag_demo_authorization,
 )
 from mech_chatbot.governance.review_governance import review_governance_status
+from mech_chatbot.governance.rollout_guardrails import (
+    validate_rollout_series_artifact,
+)
 
 
 FEATURE_FLAGS = (
@@ -114,6 +117,7 @@ _CONTROLLED_DEMO_SCHEMAS = {
         for milestone, flags in MILESTONE_FLAGS.items()
     },
     "crag": "crag-controlled-demo-authorization-v1",
+    "graph_retrieval": "rollout-guardrail-series-v1",
 }
 _RELEASE_AUTHORITY_PUBLIC_KEY = (
     Path("data") / "integrated_hardening_v1"
@@ -259,8 +263,25 @@ def _milestone_artifact_valid(
         and artifact.get("stage") != milestone
     ):
         return False
+    if (
+        expected_schema == "rollout-guardrail-series-v1"
+        and not validate_rollout_series_artifact(
+            artifact, stage=milestone, root=root,
+        )
+    ):
+        return False
     artifact_review_mode = _artifact_review_mode(artifact, milestone)
-    if artifact_review_mode is not None and artifact_review_mode != review_mode:
+    if (
+        scope == "controlled_demo"
+        and milestone == "graph_retrieval"
+        and artifact_review_mode != review_mode
+    ):
+        return False
+    if (
+        not (scope == "controlled_demo" and milestone == "graph_retrieval")
+        and artifact_review_mode is not None
+        and artifact_review_mode != review_mode
+    ):
         return False
     if decision == "accepted":
         return (
@@ -652,13 +673,6 @@ def _resolve_activation_review_mode(
 ) -> tuple[ActivationStatus | None, str]:
     review_mode = "multi_reviewer"
     if bundle.get("review_governance") is None:
-        if scope == "controlled_demo" and enabled:
-            return _activation_evidence_failure(
-                scope, "review_governance_missing", enabled,
-                profile=profile,
-                source_commit=source_commit,
-                digest=digest,
-            ), review_mode
         return None, review_mode
     governance_artifact = load_json_reference(
         bundle.get("review_governance"), root=project_root,

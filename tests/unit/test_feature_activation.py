@@ -1424,23 +1424,67 @@ def test_controlled_bundle_builder_rejects_failed_gate_and_unbound_single_owner(
         )
 
 
-def test_controlled_bundle_builder_requires_review_governance_for_feature_on(
+def test_controlled_bundle_builder_accepts_independent_review_without_governance(
     tmp_path,
 ):
     _controlled_crag_bundle(tmp_path)
 
-    with pytest.raises(ValueError, match="requires review governance"):
+    bundle, _ = build_activation_bundle(
+        scope="controlled_demo",
+        profile="crag_claim",
+        source_commit="a" * 40,
+        decision_ledger=tmp_path / "controlled-demo-decisions.json",
+        output=tmp_path / "independent-controlled-bundle.json",
+        root=tmp_path,
+    )
+
+    assert "review_governance" not in bundle
+
+
+def test_controlled_bundle_builder_rejects_explicit_multi_reviewer_governance(
+    tmp_path,
+):
+    _controlled_crag_bundle(tmp_path)
+    governance_path = tmp_path / "invalid-independent-governance.json"
+    _write_json(governance_path, {
+        "schema": "rag-review-governance-v1",
+        "mode": "multi_reviewer",
+    })
+
+    with pytest.raises(ValueError, match="review governance is invalid"):
         build_activation_bundle(
             scope="controlled_demo",
             profile="crag_claim",
             source_commit="a" * 40,
             decision_ledger=tmp_path / "controlled-demo-decisions.json",
-            output=tmp_path / "ungoverned-controlled-bundle.json",
+            review_governance=governance_path,
+            output=tmp_path / "invalid-independent-bundle.json",
             root=tmp_path,
         )
 
 
-def test_controlled_demo_runtime_rejects_feature_on_bundle_without_governance(
+def test_controlled_demo_runtime_accepts_independent_review_without_governance(
+    tmp_path,
+):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+    )
+
+    assert result.valid is True
+    assert result.review_mode == "multi_reviewer"
+
+
+def test_controlled_demo_runtime_rejects_stripped_single_owner_governance(
     tmp_path,
 ):
     bundle_path, bundle_sha = _controlled_crag_bundle(
@@ -1463,7 +1507,7 @@ def test_controlled_demo_runtime_rejects_feature_on_bundle_without_governance(
     )
 
     assert result.valid is False
-    assert result.reason == "review_governance_missing"
+    assert result.reason == "live_decision_not_accepted"
 
 
 def test_health_reports_complete_activation_contract(monkeypatch):

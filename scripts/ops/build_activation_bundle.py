@@ -107,10 +107,6 @@ def build_activation_bundle(
             raise ValueError(
                 "controlled_demo requires a verified controlled-demo decision ledger"
             )
-        if profile != "all_off" and governance_reference is None:
-            raise ValueError(
-                "controlled_demo feature-on activation requires review governance"
-            )
     ledger_reference = build_json_reference(
         ledger_path, root=project_root,
         expected_schema=_LEDGER_SCHEMAS[scope],

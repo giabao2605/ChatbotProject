@@ -13,7 +13,12 @@ import pytest
 from mech_chatbot.evaluation.rollout_guardrails import (
     evaluate_rollout_pair,
     evaluate_rollout_series,
+    validate_rollout_series_artifact,
 )
+from mech_chatbot.governance.feature_activation import (
+    validate_controlled_demo_decision_ledger,
+)
+from mech_chatbot.governance.rollout_guardrails import GRAPH_GATE_REQUIRED_CHECKS
 
 
 pytestmark = pytest.mark.unit
@@ -149,6 +154,97 @@ def _pair(tmp_path, **overrides):
         },
     }
     pair.update(overrides)
+    return pair
+
+
+def _reviewed_graph_pair(
+    tmp_path, *, run_id, review_mode="multi_reviewer",
+):
+    pair = _pair(tmp_path, run_id=run_id, stage="graph_retrieval")
+    single_owner = review_mode == "single_owner"
+    review_source = "owner_review" if single_owner else "independent"
+    reviewer = "release-owner" if single_owner else None
+    reviews_path = tmp_path / f"{run_id}-graph-reviews.jsonl"
+    reviews_path.write_text(
+        "".join(
+            json.dumps({
+                "edge_id": edge_id,
+                "reviewer": (
+                    reviewer
+                    or ("reviewer-a" if edge_id % 2 else "reviewer-b")
+                ),
+                "review_source": review_source,
+                "expected_correct": True,
+                "decision": "approved",
+            }) + "\n"
+            for edge_id in range(1, 22)
+        ),
+        encoding="utf-8",
+    )
+    governance_reference = None
+    if single_owner:
+        governance_reference = _artifact_reference(
+            tmp_path,
+            f"{run_id}-graph-governance",
+            "rag-review-governance-v1",
+            mode="single_owner",
+            owner=reviewer,
+            scope="controlled_demo",
+            source_commit="abc123",
+            risk_accepted=True,
+            accepted_at="2026-08-10T00:00:00Z",
+            role_signoffs={
+                role: {
+                    "owner": reviewer,
+                    "signed": True,
+                    "note": "risk accepted",
+                }
+                for role in ("rag", "security_qa", "operations")
+            },
+        )
+    metadata = _artifact_reference(
+        tmp_path,
+        f"{run_id}-graph-readiness",
+        "graph-readiness-v1",
+        review_mode=review_mode,
+        review_sample_source=review_source,
+        review_governance=(
+            {
+                "path": governance_reference["artifact_path"],
+                "sha256": governance_reference["artifact_sha256"],
+                "schema": governance_reference["artifact_schema"],
+            }
+            if governance_reference
+            else None
+        ),
+        review_samples={
+            "path": str(reviews_path),
+            "sha256": hashlib.sha256(reviews_path.read_bytes()).hexdigest(),
+            "format": "jsonl",
+        },
+        reviewer_count=1 if single_owner else 2,
+        reviewed_edge_precision=1.0,
+    )
+    pair["metadata"] = metadata
+
+    gate_path = Path(pair["gate"]["artifact_path"])
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    gate["checks"] = {check: True for check in GRAPH_GATE_REQUIRED_CHECKS}
+    gate["passed"] = True
+    gate["inputs"]["metadata_sha256"] = metadata["artifact_sha256"]
+    gate_path.write_text(json.dumps(gate), encoding="utf-8")
+    pair["gate"]["artifact_sha256"] = hashlib.sha256(
+        gate_path.read_bytes()
+    ).hexdigest()
+
+    rollback_path = Path(pair["rollback"]["artifact_path"])
+    rollback = json.loads(rollback_path.read_text(encoding="utf-8"))
+    rollback["flags"] = ["RAG_GRAPH_RETRIEVAL_ENABLED"]
+    rollback_path.write_text(json.dumps(rollback), encoding="utf-8")
+    pair["rollback"].update({
+        "flags": ["RAG_GRAPH_RETRIEVAL_ENABLED"],
+        "artifact_sha256": hashlib.sha256(rollback_path.read_bytes()).hexdigest(),
+    })
     return pair
 
 
@@ -549,6 +645,136 @@ def test_rollout_series_requires_three_comparable_live_pairs(tmp_path):
     )
     assert too_small["checks"]["minimum_independent_pairs"] is False
     assert too_small["production_eligible"] is False
+
+
+def test_graph_series_binds_independent_review_mode_and_authorizes_demo(tmp_path):
+    pairs = [
+        _reviewed_graph_pair(tmp_path, run_id=f"graph-{index}")
+        for index in range(1, 4)
+    ]
+    pair_references = []
+    for index, pair in enumerate(pairs, start=1):
+        path = tmp_path / f"graph-pair-{index}.json"
+        path.write_text(json.dumps(pair), encoding="utf-8")
+        pair_references.append({
+            "path": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "schema": "rollout-evidence-pair-v1",
+        })
+    foundation_path = tmp_path / "evaluation-foundation.json"
+    foundation_path.write_text(
+        json.dumps({"schema": "evaluation-foundation-completion-v1"}),
+        encoding="utf-8",
+    )
+    decisions = {
+        "evaluation_foundation": {
+            "decision": "completed",
+            "artifact": str(foundation_path),
+            "artifact_schema": "evaluation-foundation-completion-v1",
+            "artifact_sha256": hashlib.sha256(
+                foundation_path.read_bytes()
+            ).hexdigest(),
+        }
+    }
+    series = evaluate_rollout_series(
+        "graph_retrieval",
+        pairs,
+        prior_decisions=decisions,
+        pair_references=pair_references,
+        root=tmp_path,
+    )
+    series_path = tmp_path / "graph-series.json"
+    series_path.write_text(json.dumps(series), encoding="utf-8")
+    decision = {
+        "schema": "milestone-decision-v2",
+        "milestone": "graph_retrieval",
+        "scope": "controlled_demo",
+        "decision": "accepted",
+        "source_commit": "abc123",
+        "evidence": [{
+            "path": str(series_path),
+            "sha256": hashlib.sha256(series_path.read_bytes()).hexdigest(),
+            "schema": "rollout-guardrail-series-v1",
+        }],
+        "reason": "Three independently reviewed Graph pairs passed.",
+        "reviewer_signoff": {
+            "reviewer": "release-owner",
+            "signed_at": "2026-08-10T00:00:00Z",
+        },
+    }
+    decision_path = tmp_path / "graph-decision.json"
+    decision_path.write_text(json.dumps(decision), encoding="utf-8")
+    ledger = {
+        "schema": "controlled-demo-decision-ledger-v2",
+        "status": "complete",
+        "decisions": {
+            "graph_retrieval": {
+                "path": str(decision_path),
+                "sha256": hashlib.sha256(decision_path.read_bytes()).hexdigest(),
+                "schema": "milestone-decision-v2",
+            }
+        },
+    }
+
+    assert series["review_mode"] == "multi_reviewer"
+    assert series["review_source"] == "independent"
+    assert validate_rollout_series_artifact(
+        series, stage="graph_retrieval", root=tmp_path,
+    ) is True
+    assert validate_controlled_demo_decision_ledger(
+        ledger,
+        active_milestones={"graph_retrieval"},
+        root=tmp_path,
+        source_commit="abc123",
+        review_mode="multi_reviewer",
+    ) is True
+
+    missing_mode = copy.deepcopy(series)
+    missing_mode.pop("review_mode")
+    assert validate_rollout_series_artifact(
+        missing_mode, stage="graph_retrieval", root=tmp_path,
+    ) is False
+
+    wrong_mode = copy.deepcopy(series)
+    wrong_mode["review_mode"] = "single_owner"
+    assert validate_rollout_series_artifact(
+        wrong_mode, stage="graph_retrieval", root=tmp_path,
+    ) is False
+
+
+def test_graph_series_rejects_single_owner_review_exception(tmp_path):
+    pairs = [
+        _reviewed_graph_pair(
+            tmp_path,
+            run_id=f"owner-graph-{index}",
+            review_mode="single_owner",
+        )
+        for index in range(1, 4)
+    ]
+    foundation_path = tmp_path / "evaluation-foundation-owner.json"
+    foundation_path.write_text(
+        json.dumps({"schema": "evaluation-foundation-completion-v1"}),
+        encoding="utf-8",
+    )
+    report = evaluate_rollout_series(
+        "graph_retrieval",
+        pairs,
+        prior_decisions={
+            "evaluation_foundation": {
+                "decision": "completed",
+                "artifact": str(foundation_path),
+                "artifact_schema": "evaluation-foundation-completion-v1",
+                "artifact_sha256": hashlib.sha256(
+                    foundation_path.read_bytes()
+                ).hexdigest(),
+            }
+        },
+        root=tmp_path,
+    )
+
+    assert all(pair["passed"] for pair in report["pair_reports"])
+    assert report["checks"]["graph_review_contract_consistent"] is False
+    assert report["production_eligible"] is False
 
 
 def test_rollout_series_requires_completed_prior_milestone_decisions(tmp_path):

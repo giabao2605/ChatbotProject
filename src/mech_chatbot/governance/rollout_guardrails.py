@@ -454,6 +454,26 @@ def evaluate_rollout_series(
         all((pair.get("baseline") or {}).get(field) == reference.get(field) for field in series_fields)
         for pair in pairs
     )
+    review_mode = None
+    review_source = None
+    graph_review_contract_consistent = True
+    if stage == "graph_retrieval":
+        review_contracts = []
+        for pair in pairs:
+            metadata = _load_verified_artifact(pair.get("metadata") or {}, root=root)
+            review_contracts.append((
+                (metadata or {}).get("review_mode"),
+                (metadata or {}).get("review_sample_source"),
+            ))
+        distinct_contracts = set(review_contracts)
+        graph_review_contract_consistent = (
+            bool(review_contracts)
+            and len(distinct_contracts) == 1
+            and next(iter(distinct_contracts))
+            == ("multi_reviewer", "independent")
+        )
+        if graph_review_contract_consistent:
+            review_mode, review_source = review_contracts[0]
     dependencies = STAGE_DEPENDENCIES.get(stage, ())
     checks = {
         "stage_known": stage in STAGE_DEPENDENCIES,
@@ -470,6 +490,15 @@ def evaluate_rollout_series(
             and all(all(value not in (None, "") for value in signature) for signature in evidence_signatures)
         ),
         "series_conditions_match": bool(pairs) and series_conditions_match,
+        **(
+            {
+                "graph_review_contract_consistent": (
+                    graph_review_contract_consistent
+                ),
+            }
+            if stage == "graph_retrieval"
+            else {}
+        ),
         "prior_milestones_completed": all(
             _decision_complete(prior_decisions.get(dependency), root=root)
             for dependency in dependencies
@@ -487,6 +516,14 @@ def evaluate_rollout_series(
         ),
         "pair_count": len(pairs),
         "run_ids": run_ids,
+        **(
+            {
+                "review_mode": review_mode,
+                "review_source": review_source,
+            }
+            if stage == "graph_retrieval"
+            else {}
+        ),
         "pair_windows": [
             {
                 "baseline_started_at": (pair.get("baseline") or {}).get(
@@ -507,3 +544,36 @@ def evaluate_rollout_series(
         "dependencies": list(dependencies),
         "pair_reports": pair_reports,
     }
+
+
+def validate_rollout_series_artifact(
+    artifact: object,
+    *,
+    stage: str,
+    root: str | Path = ".",
+) -> bool:
+    """Recompute a stored series from its hash-bound pair references."""
+    if not isinstance(artifact, dict) or not all((
+        artifact.get("schema") == "rollout-guardrail-series-v1",
+        artifact.get("stage") == stage,
+        type(artifact.get("minimum_pairs")) is int,
+        isinstance(artifact.get("prior_decisions"), dict),
+        isinstance(artifact.get("source_artifacts"), list),
+    )):
+        return False
+    pair_references = artifact["source_artifacts"]
+    pairs = [
+        load_json_reference(reference, root=root)
+        for reference in pair_references
+    ]
+    if not pairs or any(pair is None for pair in pairs):
+        return False
+    recomputed = evaluate_rollout_series(
+        stage,
+        pairs,
+        prior_decisions=artifact["prior_decisions"],
+        minimum_pairs=artifact["minimum_pairs"],
+        pair_references=pair_references,
+        root=root,
+    )
+    return recomputed == artifact

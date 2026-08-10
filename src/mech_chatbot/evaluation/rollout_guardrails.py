@@ -10,6 +10,7 @@ from mech_chatbot.governance.rollout_guardrails import (
     STAGE_DEPENDENCIES,
     evaluate_rollout_pair,
     evaluate_rollout_series,
+    validate_rollout_series_artifact,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "STAGE_DEPENDENCIES",
     "evaluate_rollout_pair",
     "evaluate_rollout_series",
+    "validate_rollout_series_artifact",
 ]
