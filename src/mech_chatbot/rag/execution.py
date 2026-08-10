@@ -16,7 +16,6 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Mapping as MappingABC
 from typing import Any, Callable, Iterator, Literal, Mapping, Protocol
 
 from mech_chatbot.rag.execution_contracts import (
@@ -574,45 +573,18 @@ def _successful_rag_events(
         generation_metrics["provider_retries"] = state.budget.provider_retries
     state.capture_budget(final_diagnostics)
     state.checkpoint("completion")
-    for citation in attributed_citations(final_diagnostics, "".join(answer_parts)):
+    final_answer = "".join(answer_parts)
+    for citation in attributed_citations(final_diagnostics, final_answer):
         yield RagCitation(citation=citation)
     outcome, refusal_reason = state.completion()
-    if state.budget.calculations > 0:
-        from mech_chatbot.config.logging import log_trace
-
-        validation = final_diagnostics.get("pilot_request_validation")
-        validation = validation if isinstance(validation, MappingABC) else {}
-        log_trace(
-            "pilot_request_evidence",
-            trace_id,
-            execution_context=current_execution_context(),
-            route="calculation",
-            calculation_result_status=(
-                "valid"
-                if (generation_metrics or {}).get("calculation_result_status") == "valid"
-                else "invalid"
-            ),
-            security_passed=validation.get("access_scope_passed") is True,
-            citation_structure_passed=(
-                validation.get("citation_structure_passed") is True
-            ),
-            provenance_passed=validation.get("provenance_passed") is True,
-            leakage_detected=validation.get("leakage_passed") is not True,
-            calculations=state.budget.calculations,
-            final_latency_ms=max(
-                0,
-                round((time.monotonic() - state.budget.started_monotonic) * 1000),
-            ),
-            request_deadline_ms=max(
-                0,
-                int(state.budget.limits.deadline_seconds * 1000),
-            ),
-            estimated_cost=float(
-                (generation_metrics or {}).get("estimated_cost") or 0.0
-            ),
-            provider_retries=state.budget.provider_retries,
-            final_generations=state.budget.final_generations,
-        )
+    _log_pilot_request_event(
+        final_diagnostics,
+        final_answer,
+        state,
+        trace_id,
+        outcome,
+        refusal_reason,
+    )
     yield RagCompleted(
         outcome=outcome,
         trace_id=trace_id,
@@ -620,6 +592,38 @@ def _successful_rag_events(
             final_diagnostics, ledger=state.budget
         ),
         refusal_reason=refusal_reason,
+    )
+
+
+def _log_pilot_request_event(
+    diagnostics: Mapping[str, Any],
+    answer: str,
+    state: _ExecutionState,
+    trace_id: str,
+    outcome: CompletionOutcome,
+    refusal_reason: str | None,
+) -> None:
+    from mech_chatbot.rag.pilot_evidence import pilot_request_event_fields
+
+    fields = pilot_request_event_fields(
+        diagnostics,
+        answer,
+        state.budget,
+        final_latency_ms=round(
+            (time.monotonic() - state.budget.started_monotonic) * 1000
+        ),
+        completion_outcome=outcome,
+        refusal_reason=refusal_reason,
+    )
+    if fields is None:
+        return
+    from mech_chatbot.config.logging import log_trace
+
+    log_trace(
+        "pilot_request_evidence",
+        trace_id,
+        execution_context=current_execution_context(),
+        **fields,
     )
 
 

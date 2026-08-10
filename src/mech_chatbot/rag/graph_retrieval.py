@@ -18,6 +18,14 @@ _RELATIONAL_TERMS = (
 )
 
 
+def _graph_confidence(value) -> float | None:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if 0.0 <= normalized <= 1.0 else None
+
+
 def enabled(value: bool = False) -> bool:
     return bool(value)
 
@@ -122,16 +130,18 @@ def hydrate_graph_edges(edges, client, collection_name):
                 f"Quan he duoc duyet: {edge.get('source_name') or edge.get('source_key')} "
                 f"--{edge.get('relation_type')}--> {edge.get('target_name') or edge.get('target_key')}"
             )
-            metadata.update({
+            metadata = {
+                **metadata,
                 "doc_id": doc_id, "trang_so": page, "version_no": version,
                 "file_goc": edge.get("file_goc") or metadata.get("file_goc"),
                 "security_level": edge.get("security_level"), "site": edge.get("site"),
                 "loai_du_lieu": "knowledge_graph", "doc_status": "published",
                 "graph_edge_id": edge.get("edge_id"),
+                "graph_confidence": _graph_confidence(edge.get("confidence")),
                 "graph_relation_type": edge.get("relation_type"),
                 "graph_source_key": edge.get("source_key"),
                 "graph_target_key": edge.get("target_key"),
-            })
+            }
             hydrated.append(Document(page_content=relation + "\n\n" + content, metadata=metadata))
             break
     return hydrated

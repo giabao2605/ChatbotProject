@@ -28,6 +28,7 @@ def serialize_debug_documents(docs=None) -> list[dict[str, Any]]:
             "score": doc.metadata.get("relevance_score"),
             "security_level": doc.metadata.get("security_level"),
             "graph_edge_id": doc.metadata.get("graph_edge_id"),
+            "graph_confidence": doc.metadata.get("graph_confidence"),
             "graph_relation_type": doc.metadata.get("graph_relation_type"),
             "graph_source_key": doc.metadata.get("graph_source_key"),
             "graph_target_key": doc.metadata.get("graph_target_key"),

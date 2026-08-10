@@ -388,6 +388,7 @@ def _trace_refusal(
 
 
 def _make_refusal_debug(
+    request: Any,
     primary: PrimaryRetrievalOutcome,
     enrichment: EnrichmentOutcome,
     reranked: RerankOutcome,
@@ -397,20 +398,8 @@ def _make_refusal_debug(
     evidence_quotes: tuple[str, ...],
     documents: list[Any],
 ) -> dict[str, Any]:
-    debug = make_debug_info(documents)
-    debug.update(
-        make_phase_diagnostics(
-            primary,
-            enrichment,
-            reranked,
-            state,
-            answer_policy,
-            evidence_decision,
-            evidence_quotes,
-        )
-    )
-    debug["citation_docs"] = make_debug_info(documents)["retrieved_docs"]
-    debug["generation_metrics"] = {
+    base_debug = make_debug_info(documents)
+    generation_metrics = {
         "estimated_cost": (
             enrichment.correction_estimated_cost + primary.planner_estimated_cost
         ),
@@ -420,10 +409,51 @@ def _make_refusal_debug(
         "repair_count": 0,
         "decomposition_usage": make_decomposition_usage(primary, ""),
     }
-    debug["decomposition_usage"] = debug["generation_metrics"][
-        "decomposition_usage"
-    ]
-    return debug
+    return {
+        **base_debug,
+        **make_phase_diagnostics(
+            primary, enrichment, reranked, state, answer_policy,
+            evidence_decision, evidence_quotes,
+        ),
+        "citation_docs": base_debug["retrieved_docs"],
+        "generation_metrics": generation_metrics,
+        "decomposition_usage": generation_metrics["decomposition_usage"],
+        "pilot_request_validation": _refusal_request_validation(
+            request, documents
+        ),
+    }
+
+
+def _refusal_request_validation(request: Any, documents: list[Any]) -> dict:
+    from mech_chatbot.domain.serving_state import is_currently_servable
+    from mech_chatbot.rag.rbac import document_matches_access_scope
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import (
+        is_governed_sql_bom_document,
+    )
+
+    access_passed = bool(documents) and all(
+        is_governed_sql_bom_document(document)
+        or document_matches_access_scope(
+            getattr(document, "metadata", None),
+            user_department=request.user_department,
+            user_roles=request.user_roles,
+            allowed_departments=request.allowed_departments,
+            max_security_level=request.max_security_level,
+            allowed_sites=request.allowed_sites,
+        )
+        for document in documents
+    )
+    current_passed = bool(documents) and all(
+        is_governed_sql_bom_document(document)
+        or is_currently_servable(
+            getattr(document, "metadata", None), require_current=True
+        )
+        for document in documents
+    )
+    return {
+        "access_scope_passed": access_passed,
+        "leakage_passed": access_passed and current_passed,
+    }
 
 
 def _prepare_refusal(
@@ -452,6 +482,7 @@ def _prepare_refusal(
 
     _trace_refusal(decision, enrichment, documents)
     debug = _make_refusal_debug(
+        request,
         primary,
         enrichment,
         reranked,

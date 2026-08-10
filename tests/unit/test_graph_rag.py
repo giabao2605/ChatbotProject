@@ -137,11 +137,13 @@ def test_graph_evidence_rejects_serving_edge_without_source_quote():
 
 
 def test_graph_edge_requires_exact_qdrant_page_hydration():
+    from decimal import Decimal
     from types import SimpleNamespace
 
     candidate = edge(
         edge_id=1, doc_id=7, page=3, version=2, file_goc="approved.pdf",
         source_name="A", target_name="B", relation_type="USES_MATERIAL",
+        confidence=Decimal("0.90000"),
     )
 
     class Client:
@@ -156,6 +158,8 @@ def test_graph_edge_requires_exact_qdrant_page_hydration():
     assert len(docs) == 1
     assert "Approved source text" in docs[0].page_content
     assert docs[0].metadata["graph_edge_id"] == 1
+    assert docs[0].metadata["graph_confidence"] == 0.9
+    assert type(docs[0].metadata["graph_confidence"]) is float
 
 
 def test_graph_context_survives_when_regular_retrieval_already_has_same_page():
@@ -331,6 +335,7 @@ def test_llm_edge_producer_only_inserts_pending_proposals():
 def test_graph_traversal_hydrates_reviewed_proposal_source_quote():
     source = Path("src/mech_chatbot/db/repositories/graph.py").read_text(encoding="utf-8")
     assert "COALESCE(e.SourceQuote, proposal.source_quote) AS source_quote" in source
+    assert "e.Confidence AS confidence" in source
     assert "JSON_VALUE(p.EvidenceJson, '$.source_quote')" in source
 
 

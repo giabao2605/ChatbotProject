@@ -590,6 +590,7 @@ def traverse_knowledge_graph(seed_keys, access_context, max_hops=2, limit=50):
                    sn.CanonicalKey AS source_key, sn.DisplayName AS source_name,
                    tn.CanonicalKey AS target_key, tn.DisplayName AS target_name,
                    e.Origin AS origin, e.ServingStatus AS serving_status,
+                   e.Confidence AS confidence,
                    e.SourceDocID AS doc_id, e.SourcePage AS page, e.SourceVersion AS version,
                    t.TenFile AS file_goc, t.ThuMuc AS department, t.Site AS site,
                    t.SecurityLevel AS security_level, t.Servable AS servable,
