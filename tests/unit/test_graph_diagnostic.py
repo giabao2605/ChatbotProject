@@ -25,6 +25,7 @@ def _arm(
     provider_failures: int = 0,
     provider_retries: int = 0,
     generation_p95_ms: int = 300,
+    trace_errors: int = 0,
 ) -> dict:
     return {
         "eval": {
@@ -41,6 +42,7 @@ def _arm(
                 "total": {"latency_p95_ms": latency_p95_ms},
             },
         },
+        "trace": {"error_event_count": trace_errors},
     }
 
 
@@ -146,6 +148,30 @@ def test_outcome_is_inconclusive_on_provider_variance(failure_field):
     assert report["diagnostic_target_met"] is False
     assert report["latency_p95_ratio"] is None
     assert report["formal_window_authorized"] is False
+
+
+def test_outcome_is_inconclusive_on_retrieval_transport_error():
+    pair = {
+        "id": "pair-01",
+        "arm_order": "candidate-first",
+        "gate": {"passed": False},
+        "baseline": _arm(
+            latency_p95_ms=1000,
+            cost=1.0,
+            trace_errors=1,
+        ),
+        "candidate": None,
+    }
+
+    report = build_diagnostic_outcome(
+        [pair],
+        source_commit="a" * 40,
+        declaration_sha256="b" * 64,
+    )
+
+    assert report["status"] == "inconclusive"
+    assert report["provider_failure_count"] == 1
+    assert report["diagnostic_target_met"] is False
 
 
 def test_outcome_is_inconclusive_when_arm_order_changes_effect_size():
@@ -483,7 +509,7 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
             encoding="utf-8",
         )
         (run_dir / "trace.json").write_text(
-            '{"schema":"rag-refusal-snapshot-v1"}',
+            '{"schema":"rag-refusal-snapshot-v1","error_event_count":0}',
             encoding="utf-8",
         )
         (run_dir / "preflight.json").write_text(
@@ -534,4 +560,5 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
     assert arm["latency"]["stage_summary"]["generation"] == {
         "latency_p95_ms": 500
     }
+    assert arm["trace"] == {"error_event_count": 0, "error_events": {}}
     assert set(arm["artifacts"]) == {"eval", "trace", "latency"}

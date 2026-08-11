@@ -175,7 +175,10 @@ def _provider_failures(arm: Mapping[str, Any] | None) -> int:
         for row in report.get("cases") or []
         if isinstance(row, Mapping)
     )
-    return max(direct, cases)
+    trace_errors = int(
+        (arm.get("trace") or {}).get("error_event_count") or 0
+    )
+    return max(direct, cases, trace_errors)
 
 
 def _provider_retries(arm: Mapping[str, Any] | None) -> int:
@@ -550,6 +553,7 @@ def _verify_arm_preflight(context: DiagnosticContext, path: Path) -> None:
 def _sanitized_arm(
     *,
     eval_report: Mapping[str, Any],
+    trace_report: Mapping[str, Any],
     latency_report: Mapping[str, Any],
     eval_path: Path,
     trace_path: Path,
@@ -566,6 +570,12 @@ def _sanitized_arm(
         },
         "latency": {
             "stage_summary": dict(latency_report.get("stage_summary") or {}),
+        },
+        "trace": {
+            "error_event_count": int(
+                trace_report.get("error_event_count") or 0
+            ),
+            "error_events": dict(trace_report.get("error_events") or {}),
         },
         "artifacts": {
             "eval": _artifact(eval_path),
@@ -608,6 +618,7 @@ def _run_arm(
     trace_path = pair_dir / label / "trace.json"
     latency_path = pair_dir / label / "latency-breakdown.json"
     eval_report = json.loads(eval_path.read_text(encoding="utf-8"))
+    trace_report = json.loads(trace_path.read_text(encoding="utf-8"))
     latency_report = {
         **build_latency_breakdown(
             context.trace,
@@ -625,6 +636,7 @@ def _run_arm(
     _verify_arm_preflight(context, pair_dir / label / "preflight.json")
     arm = _sanitized_arm(
         eval_report=eval_report,
+        trace_report=trace_report,
         latency_report=latency_report,
         eval_path=eval_path,
         trace_path=trace_path,

@@ -64,6 +64,7 @@ def build_snapshot(
     llm_retries = 0
     query_count = 0
     event_counts: Counter[str] = Counter()
+    error_events: Counter[str] = Counter()
     planner_max = subquery_max = calculation_max = graph_edge_max = 0
     retries_by_trace: Counter[str] = Counter()
     external_ai_latencies: dict[str, list[float]] = defaultdict(list)
@@ -87,6 +88,8 @@ def build_snapshot(
             continue
         event_name = str(event.get("event") or "<missing>")
         event_counts[event_name] += 1
+        if event.get("error"):
+            error_events[event_name] += 1
         if event_name == "query_decomposition":
             planner_max = max(planner_max, int(event.get("planner_count") or 0))
             subquery_max = max(subquery_max, int(event.get("subquery_count") or 0))
@@ -200,6 +203,8 @@ def build_snapshot(
         "parse_errors": parse_errors,
         "legacy_reason_events": legacy_reason_events,
         "event_counts": dict(sorted(event_counts.items())),
+        "error_event_count": sum(error_events.values()),
+        "error_events": dict(sorted(error_events.items())),
         "external_ai_latency": external_ai_latency,
         "rerank_by_provider": rerank_by_provider,
         "voyage_rerank": rerank_by_provider["voyage"],

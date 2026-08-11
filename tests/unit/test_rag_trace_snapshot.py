@@ -147,6 +147,35 @@ def test_snapshot_summarizes_external_ai_latency_by_surface_without_payload(tmp_
     assert "120000.0" in markdown
 
 
+def test_snapshot_counts_error_events_without_persisting_error_payload(tmp_path):
+    snapshot = _load_snapshot_module()
+    path = tmp_path / "trace.jsonl"
+    events = [
+        {
+            "ts": "2026-07-13T00:00:00+00:00",
+            "event": "hybrid_fallback",
+            "trace_id": "eval:candidate:qdrant-timeout",
+            "execution_context": "evaluation",
+            "error": "sensitive endpoint and transport details",
+        },
+        {
+            "ts": "2026-07-13T00:00:01+00:00",
+            "event": "rag_end",
+            "trace_id": "eval:candidate:qdrant-timeout",
+            "execution_context": "evaluation",
+            "refusal": False,
+            "final_latency_ms": 1000,
+        },
+    ]
+    path.write_text("\n".join(json.dumps(item) for item in events), encoding="utf-8")
+
+    report = snapshot.build_snapshot(path, execution_contexts={"evaluation"})
+
+    assert report["error_event_count"] == 1
+    assert report["error_events"] == {"hybrid_fallback": 1}
+    assert "sensitive endpoint" not in json.dumps(report)
+
+
 def test_snapshot_does_not_count_failed_correction_as_exercised(tmp_path):
     snapshot = _load_snapshot_module()
     path = tmp_path / "trace.jsonl"
