@@ -156,6 +156,25 @@ collections inside one pair:
 .\chat_env\Scripts\python.exe -m scripts.graph_eval.run_rollout ...
 ```
 
+For Query Decomposition formal pairs, use only
+`data/decomposition_eval_v1/eval_manifest.jsonl`. It is the canonical
+Query-only scope with 10 complex and 3 simple cases. The decomposition runner
+forces Grounded Math and every other advanced capability off in both arms; the
+candidate enables only Query Decomposition.
+
+Do not combine that manifest with
+`data/decomposition_eval_v1/math_query_interaction_manifest.jsonl` in one
+preflight or rollout. The interaction manifest is a separate three-case
+Math+Query contract and cannot satisfy Query-only formal coverage. It must not
+be passed to `scripts.decomposition_eval.run_rollout`, because that runner
+intentionally forces Grounded Math off. Reserve it for the integrated
+interaction matrix after both capabilities have independently passed their
+required gates and the matrix runner has been explicitly declared.
+
+Run the two scopes through separate preflight artifacts. A Query formal series
+always starts again at pair 01 with a new declaration and fresh smoke after a
+provider tombstone; never carry a prior pair into the new series.
+
 Every runner requires `--provider-smoke-artifact` from a fresh 5/5 smoke
 completed no more than 30 minutes before that pair. The runner binds its hash
 and provider identity into `rollout_pair.json`; a missing, expired,
