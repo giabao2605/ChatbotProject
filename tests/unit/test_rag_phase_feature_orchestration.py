@@ -1705,6 +1705,7 @@ def test_exact_code_miss_returns_a_typed_terminal(monkeypatch, blocked, expected
     from mech_chatbot.rag.phases import retrieval_enrichment as enrichment_phase
     from mech_chatbot.rag.phases.contracts import PhaseTerminal
 
+    trace_events = []
     request = _prepared_request(question="Thông số P-1")
     decision = _route_decision(request)
     primary = PrimaryRetrievalOutcome(
@@ -1738,6 +1739,11 @@ def test_exact_code_miss_returns_a_typed_terminal(monkeypatch, blocked, expected
         "probe_restricted_access",
         lambda *_args, **_kwargs: (blocked, "security_level" if blocked else None),
     )
+    monkeypatch.setattr(
+        enrichment_phase,
+        "log_trace",
+        lambda event, _trace_id, **fields: trace_events.append((event, fields)),
+    )
 
     outcome = _run_phase(
         lambda state: enrichment_phase.enrich_retrieval(decision, primary, state),
@@ -1747,6 +1753,14 @@ def test_exact_code_miss_returns_a_typed_terminal(monkeypatch, blocked, expected
 
     assert isinstance(outcome, PhaseTerminal)
     assert outcome.reason_code == expected_reason
+    retrieval_events = [
+        fields for event, fields in trace_events if event == "retrieval"
+    ]
+    assert len(retrieval_events) == 1
+    assert retrieval_events[0]["mode"] == "hybrid"
+    assert retrieval_events[0]["docs_count"] == 0
+    event_names = [event for event, _fields in trace_events]
+    assert event_names.index("retrieval") < event_names.index("rag_end")
 
 
 def test_inherited_code_miss_falls_back_to_general_retrieval(monkeypatch):

@@ -421,6 +421,7 @@ def _exact_code_terminal(
 def _handle_exact_code_miss(
     context: _EnrichmentContext,
     state: Any,
+    primary: PrimaryRetrievalOutcome,
     documents: Sequence[Any],
     retrieval_mode: str,
     active_filter: Any,
@@ -438,6 +439,7 @@ def _handle_exact_code_miss(
             part_ids,
         )
         blocked, reason = _probe_exact_code_access(context, part_ids)
+        _log_retrieval(context, documents, part_ids, primary, retrieval_mode)
         terminal = (
             _access_denied_terminal(context, state, reason)
             if blocked and reason
@@ -853,7 +855,7 @@ def enrich_retrieval(
     graph = _enrich_graph(context, primary.documents, state)
     community = _enrich_community(context, graph, state)
     code_result = _handle_exact_code_miss(
-        context, state, community.documents, primary.retrieval_mode,
+        context, state, primary, community.documents, primary.retrieval_mode,
         primary.active_filter, primary.has_active_filter,
     )
     if code_result.terminal is not None:
