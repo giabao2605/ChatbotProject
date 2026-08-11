@@ -16,11 +16,6 @@ This runbook evaluates CRAG and claim repair against a deterministic staging fix
 Run these commands in a dedicated PowerShell session. The environment must point at the intended staging SQL instance before the opt-in is set.
 
 ```powershell
-$main = (Get-Location).Path
-$python = Join-Path $main 'chat_env\Scripts\python.exe'
-$rc = 'C:\path\to\clean-detached-checkout' # Replace with the exact RC path.
-Set-Location $rc
-
 $env:QDRANT_COLLECTION = 'MechChatbot_CRAG_Eval_v1'
 $env:RUN_CRAG_EVAL_FIXTURE = '1'
 $env:RAG_EXECUTION_CONTEXT = 'evaluation'
@@ -75,9 +70,25 @@ rollout or feature enablement. Run it from a clean detached checkout at the
 exact commit being measured, with provider settings supplied through the
 process environment; do not copy a dotenv or credentials into the checkout.
 
-Open a new PowerShell session and use a new directory for every attempt:
+Open a new PowerShell session in the primary checkout and use a new directory
+for every attempt:
 
 ```powershell
+$main = (Get-Location).Path
+$python = Join-Path $main 'chat_env\Scripts\python.exe'
+$dotenv = Join-Path $main '.env'
+$rc = 'C:\path\to\clean-detached-checkout' # Replace with the exact RC path.
+if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+  throw 'chat_env Python was not found in the primary checkout.'
+}
+if (-not (Test-Path -LiteralPath $dotenv -PathType Leaf)) {
+  throw 'The primary checkout dotenv was not found.'
+}
+if (-not (Test-Path -LiteralPath $rc -PathType Container)) {
+  throw 'Replace $rc with an existing clean detached checkout.'
+}
+Set-Location -LiteralPath $rc
+
 $env:QDRANT_COLLECTION = 'MechChatbot_CRAG_Eval_v1'
 $env:RUN_CRAG_EVAL_FIXTURE = '1'
 $env:RAG_CRAG_DIAGNOSTIC_OPT_IN = '1'
@@ -88,18 +99,18 @@ $run = Get-Date -Format 'yyyyMMdd-HHmmss'
 $root = "reports\crag-diagnostic\$run"
 New-Item -ItemType Directory -Path $root | Out-Null
 
-& $python -m dotenv -f "$main\.env" run --no-override -- $python `
+& $python -m dotenv -f $dotenv run --no-override -- $python `
   -m scripts.crag_eval.preflight `
   --manifest data\crag_eval_v1\eval_manifest.jsonl `
   --output "$root\preflight.json"
 if ($LASTEXITCODE -ne 0) { throw 'CRAG fixture preflight failed.' }
 
-& $python -m dotenv -f "$main\.env" run --no-override -- $python `
+& $python -m dotenv -f $dotenv run --no-override -- $python `
   -m scripts.eval.provider_smoke `
   --output "$root\provider-smoke.json"
 if ($LASTEXITCODE -ne 0) { throw 'Provider smoke failed.' }
 
-& $python -m dotenv -f "$main\.env" run --no-override -- $python `
+& $python -m dotenv -f $dotenv run --no-override -- $python `
   -m scripts.crag_eval.run_diagnostic `
   --manifest data\crag_eval_v1\eval_manifest.jsonl `
   --preflight "$root\preflight.json" `
