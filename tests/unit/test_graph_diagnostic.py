@@ -30,6 +30,7 @@ def _arm(
     provider_failures: int = 0,
     provider_retries: int = 0,
     generation_p95_ms: int | None = 300,
+    graph_retrieval_p95_ms: int | None = None,
     trace_errors: int = 0,
     trace_fallbacks: int = 0,
     trace_retries: int = 0,
@@ -45,11 +46,26 @@ def _arm(
         },
         "latency": {
             "stage_summary": {
-                "retrieval": {"latency_p95_ms": 100},
+                "retrieval": {"sample_count": 1, "latency_p95_ms": 100},
                 "rerank": {"latency_p95_ms": 20},
                 **(
-                    {"generation": {"latency_p95_ms": generation_p95_ms}}
+                    {
+                        "generation": {
+                            "sample_count": 1,
+                            "latency_p95_ms": generation_p95_ms,
+                        }
+                    }
                     if generation_p95_ms is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "graph_retrieval": {
+                            "sample_count": 1,
+                            "latency_p95_ms": graph_retrieval_p95_ms,
+                        }
+                    }
+                    if graph_retrieval_p95_ms is not None
                     else {}
                 ),
                 "total": {"latency_p95_ms": latency_p95_ms},
@@ -89,7 +105,7 @@ def test_declaration_precommits_interleaved_case_pairs_as_non_formal_evidence():
     case_plan = [
         {
             "ordinal": 1,
-            "case_id": "graph-case-01",
+            "case_id": "graph-uses-material",
             "arm_order": "candidate-first",
         },
         {
@@ -113,11 +129,26 @@ def test_declaration_precommits_interleaved_case_pairs_as_non_formal_evidence():
         case_plan=case_plan,
     )
 
-    assert report["schema"] == "graph-latency-diagnostic-declaration-v2"
+    assert report["schema"] == "graph-latency-diagnostic-declaration-v3"
     assert report["scope"] == "supporting_diagnostic_only"
     assert report["formal_evidence"] is False
-    assert report["measurement_design"] == "case_paired_interleaved"
+    assert report["measurement_design"] == (
+        "mirrored_two_pair_warmup_then_case_paired_interleaved"
+    )
     assert report["case_plan"] == case_plan
+    assert report["warmup"] == {
+        "enabled": True,
+        "measured": False,
+        "interpretation": "warm_state_supporting_diagnostic_only",
+        "case_id": "graph-uses-material",
+        "pair_plan": [
+            {"ordinal": 1, "arm_order": "baseline-first"},
+            {"ordinal": 2, "arm_order": "candidate-first"},
+        ],
+        "runs_per_arm": 2,
+        "health_gate_before_each_pair": True,
+        "trace_scope": "separate_from_measured",
+    }
     assert report["health_gate"] == {
         "before_each_case_pair": True,
         "collection": "MechChatbot_Graph_Eval_v1",
@@ -139,6 +170,7 @@ def test_declaration_precommits_interleaved_case_pairs_as_non_formal_evidence():
         "retrieval": "every_case_both_arms",
         "generation": "same_case_presence_both_arms_and_at_least_one_pair",
     }
+    assert "warm-up" in " ".join(report["stop_rules"])
     assert "fallback" in " ".join(report["stop_rules"])
     assert report["formal_window_authorized"] is False
     assert report["feature_enablement_authorized"] is False
@@ -600,7 +632,7 @@ def test_driver_requires_runner_to_exist_in_source_commit(monkeypatch):
     from scripts.graph_eval import run_diagnostic as diagnostic
 
     calls = []
-    returncodes = iter((0, 1))
+    returncodes = iter((0, 0, 1))
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -623,6 +655,12 @@ def test_driver_requires_runner_to_exist_in_source_commit(monkeypatch):
             "cat-file",
             "-e",
             "HEAD:scripts/graph_eval/diagnostic_metrics.py",
+        ],
+        [
+            "git",
+            "cat-file",
+            "-e",
+            "HEAD:scripts/graph_eval/diagnostic_warmup.py",
         ],
     ]
 
@@ -699,7 +737,7 @@ def test_driver_stops_before_case_arms_when_qdrant_health_fails(
     context = SimpleNamespace(
         output=tmp_path / "output",
         source_commit="a" * 40,
-        cases=({"id": "case-a", "value": 1},),
+        cases=({"id": "graph-uses-material", "value": 1},),
     )
     observed = []
     monkeypatch.setattr(diagnostic, "_prepare_context", lambda *args: context)
@@ -737,13 +775,16 @@ def test_driver_stops_before_case_arms_when_qdrant_health_fails(
     assert not (context.output / "case-002").exists()
 
 
-def test_driver_executes_exact_predeclared_arm_order(monkeypatch, tmp_path):
+def test_driver_excludes_symmetric_warmup_from_measured_outcome(
+    monkeypatch,
+    tmp_path,
+):
     from scripts.graph_eval import run_diagnostic as diagnostic
 
     context = SimpleNamespace(
         output=tmp_path / "output",
         source_commit="a" * 40,
-        cases=({"id": "case-a"}, {"id": "case-b"}),
+        cases=({"id": "graph-uses-material"}, {"id": "case-b"}),
     )
     observed = []
 
@@ -757,7 +798,16 @@ def test_driver_executes_exact_predeclared_arm_order(monkeypatch, tmp_path):
         diagnostic,
         "_run_case_health",
         lambda unused_context, case_dir: (
-            observed.append((case_dir.name, "health", None))
+            observed.append(
+                (
+                    "warmup"
+                    if case_dir.parent.name == "warmup"
+                    else "measured",
+                    case_dir.name,
+                    "health",
+                    None,
+                )
+            )
             or {"passed": True}
         ),
     )
@@ -770,12 +820,27 @@ def test_driver_executes_exact_predeclared_arm_order(monkeypatch, tmp_path):
         enabled,
         arm_starts,
         case_id,
+        trace_log=None,
     ):
-        observed.append((pair_dir.name, label, enabled))
+        phase = "warmup" if pair_dir.parent.name == "warmup" else "measured"
+        assert trace_log == (
+            context.output / "warmup" / "trace.jsonl"
+            if phase == "warmup"
+            else None
+        )
+        observed.append((phase, pair_dir.name, label, enabled))
+        if phase == "warmup":
+            return _arm(
+                latency_p95_ms=90_000,
+                cost=99.0,
+                generation_p95_ms=50_000,
+                graph_retrieval_p95_ms=40_000 if enabled else None,
+            )
         return _arm(
             latency_p95_ms=1200 if enabled else 1000,
             cost=1.4 if enabled else 1.0,
             generation_p95_ms=500 if enabled else 300,
+            graph_retrieval_p95_ms=400 if enabled else None,
         )
 
     monkeypatch.setattr(diagnostic, "_run_arm", fake_run_arm)
@@ -789,15 +854,37 @@ def test_driver_executes_exact_predeclared_arm_order(monkeypatch, tmp_path):
     )
 
     assert observed == [
-        ("case-001", "health", None),
-        ("case-001", "candidate", True),
-        ("case-001", "baseline", False),
-        ("case-002", "health", None),
-        ("case-002", "baseline", False),
-        ("case-002", "candidate", True),
+        ("warmup", "case-001", "health", None),
+        ("warmup", "case-001", "baseline", False),
+        ("warmup", "case-001", "candidate", True),
+        ("warmup", "case-002", "health", None),
+        ("warmup", "case-002", "candidate", True),
+        ("warmup", "case-002", "baseline", False),
+        ("measured", "case-001", "health", None),
+        ("measured", "case-001", "candidate", True),
+        ("measured", "case-001", "baseline", False),
+        ("measured", "case-002", "health", None),
+        ("measured", "case-002", "baseline", False),
+        ("measured", "case-002", "candidate", True),
     ]
+    assert report["schema"] == "graph-latency-diagnostic-outcome-v3"
+    assert report["measurement_design"] == (
+        "mirrored_two_pair_warmup_then_case_paired_interleaved"
+    )
+    assert report["warmup"]["measured"] is False
+    assert report["warmup"]["interpretation"] == (
+        "warm_state_supporting_diagnostic_only"
+    )
+    assert report["warmup"]["passed"] is True
+    assert report["warmup"]["pair_count"] == 2
+    assert report["pair_count"] == 2
+    assert report["baseline_latency_p95_ms"] == 1000
+    assert report["candidate_latency_p95_ms"] == 1200
+    assert report["latency_p95_ratio"] == pytest.approx(1.2)
+    assert report["cost_ratio"] == pytest.approx(1.4)
     assert report["status"] == "passed"
     assert report["full_quality_gate_executed"] is False
+    assert (context.output / "warmup" / "summary.json").is_file()
     assert (context.output / "case-001" / "summary.json").is_file()
     assert (context.output / "case-002" / "summary.json").is_file()
     assert (context.output / "outcome.json").is_file()
@@ -812,7 +899,7 @@ def test_driver_stops_without_carry_forward_on_provider_retry(
     context = SimpleNamespace(
         output=tmp_path / "output",
         source_commit="a" * 40,
-        cases=({"id": "case-a"}, {"id": "case-b"}),
+        cases=({"id": "graph-uses-material"}, {"id": "case-b"}),
     )
     observed = []
     monkeypatch.setattr(diagnostic, "_prepare_context", lambda *args: context)
@@ -835,6 +922,7 @@ def test_driver_stops_without_carry_forward_on_provider_retry(
         enabled,
         arm_starts,
         case_id,
+        trace_log=None,
     ):
         observed.append((pair_dir.name, label))
         return _arm(
@@ -853,10 +941,85 @@ def test_driver_stops_without_carry_forward_on_provider_retry(
         trace=tmp_path / "trace.jsonl",
     )
 
-    assert observed == [("case-001", "candidate")]
+    assert observed == [("case-001", "baseline")]
     assert report["status"] == "inconclusive"
+    assert report["pair_count"] == 0
     assert report["provider_retry_count"] == 1
+    assert report["warmup"]["passed"] is False
+    assert not (context.output / "case-001").exists()
     assert not (context.output / "case-002").exists()
+
+
+@pytest.mark.parametrize(
+    "invalid_stage",
+    ["missing_generation", "missing_candidate_graph", "baseline_graph"],
+)
+def test_driver_stops_before_measurement_on_invalid_warmup_stage(
+    monkeypatch,
+    tmp_path,
+    invalid_stage,
+):
+    from scripts.graph_eval import run_diagnostic as diagnostic
+
+    context = SimpleNamespace(
+        output=tmp_path / "output",
+        source_commit="a" * 40,
+        cases=({"id": "graph-uses-material"},),
+    )
+    monkeypatch.setattr(diagnostic, "_prepare_context", lambda *args: context)
+    monkeypatch.setattr(
+        diagnostic,
+        "_write_declaration",
+        lambda unused_context, unused_plan: "b" * 64,
+    )
+    monkeypatch.setattr(
+        diagnostic,
+        "_run_case_health",
+        lambda unused_context, unused_dir: {"passed": True},
+    )
+
+    def fake_run_arm(
+        unused_context,
+        unused_pair_dir,
+        *,
+        label,
+        enabled,
+        arm_starts,
+        case_id,
+        trace_log=None,
+    ):
+        return _arm(
+            latency_p95_ms=1200 if enabled else 1000,
+            cost=1.4 if enabled else 1.0,
+            generation_p95_ms=(
+                None
+                if invalid_stage == "missing_generation" and not enabled
+                else 500
+            ),
+            graph_retrieval_p95_ms=(
+                400
+                if enabled and invalid_stage != "missing_candidate_graph"
+                else 400
+                if not enabled and invalid_stage == "baseline_graph"
+                else None
+            ),
+        )
+
+    monkeypatch.setattr(diagnostic, "_run_arm", fake_run_arm)
+
+    report = run_diagnostic(
+        manifest=tmp_path / "manifest.jsonl",
+        preflight=tmp_path / "preflight.json",
+        provider_smoke=tmp_path / "smoke.json",
+        output=context.output,
+        trace=tmp_path / "trace.jsonl",
+    )
+
+    assert report["status"] == "inconclusive"
+    assert report["pair_count"] == 0
+    assert report["execution_failure_count"] == 1
+    assert report["warmup"]["passed"] is False
+    assert not (context.output / "case-001").exists()
 
 
 def test_driver_persists_secret_safe_inconclusive_arm_failure(
@@ -868,7 +1031,7 @@ def test_driver_persists_secret_safe_inconclusive_arm_failure(
     context = SimpleNamespace(
         output=tmp_path / "output",
         source_commit="a" * 40,
-        cases=({"id": "case-a"}, {"id": "case-b"}),
+        cases=({"id": "graph-uses-material"}, {"id": "case-b"}),
     )
     monkeypatch.setattr(diagnostic, "_prepare_context", lambda *args: context)
     monkeypatch.setattr(
@@ -899,11 +1062,14 @@ def test_driver_persists_secret_safe_inconclusive_arm_failure(
 
     assert report["status"] == "inconclusive"
     assert report["execution_failure_count"] == 1
-    summary = (context.output / "case-001" / "summary.json").read_text(
+    summary = (
+        context.output / "warmup" / "case-001" / "summary.json"
+    ).read_text(
         encoding="utf-8"
     )
     assert '"error_type": "ValueError"' in summary
     assert "secret provider endpoint" not in summary
+    assert not (context.output / "case-001").exists()
     assert not (context.output / "case-002").exists()
 
 
@@ -947,6 +1113,7 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
 
     def fake_run(label, manifest, output, trace, **kwargs):
         run_environment.update(kwargs["provider_environment"])
+        run_environment["trace_argument"] = trace
         run_environment["case_id"] = kwargs["case_id"]
         run_dir = output / label
         run_dir.mkdir(parents=True)
@@ -1013,6 +1180,8 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
         },
     )
 
+    warmup_trace = tmp_path / "warmup-trace.jsonl"
+    warmup_trace.write_text("", encoding="utf-8")
     arm = diagnostic._run_arm(
         context,
         pair_dir,
@@ -1020,10 +1189,12 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
         enabled=True,
         arm_starts=("2026-08-10T00:00:00Z",),
         case_id="graph-case-01",
+        trace_log=warmup_trace,
     )
 
     assert smoke_calls == [("2026-08-10T00:00:00Z",)]
-    assert run_environment["RAG_TRACE_LOG_FILE"] == str(context.trace.resolve())
+    assert run_environment["RAG_TRACE_LOG_FILE"] == str(warmup_trace.resolve())
+    assert run_environment["trace_argument"] == warmup_trace
     assert run_environment["case_id"] == "graph-case-01"
     assert arm["eval"] == {
         "provider_failure_count": 0,

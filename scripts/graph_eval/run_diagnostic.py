@@ -26,6 +26,7 @@ from scripts.graph_eval.diagnostic_metrics import (
     _provider_retries,
     build_diagnostic_outcome,
 )
+from scripts.graph_eval import diagnostic_warmup as warmup_contract
 from scripts.eval.provider_smoke import (
     provider_configuration_sha256_for_settings,
     provider_environment_for_settings,
@@ -46,6 +47,7 @@ CANONICAL_MANIFEST_SHA256 = (
     "def156e8d30a9184fd7105ca5e799ddef311c98a5c88c7bc59001ad42ee8a136"
 )
 METRICS_MODULE = ROOT / "scripts" / "graph_eval" / "diagnostic_metrics.py"
+WARMUP_MODULE = ROOT / "scripts" / "graph_eval" / "diagnostic_warmup.py"
 
 
 @dataclass(frozen=True)
@@ -156,12 +158,13 @@ def _runner_provenance() -> dict[str, Any]:
         **_artifact(Path(__file__).resolve()),
         "dependencies": {
             "diagnostic_metrics": _artifact(METRICS_MODULE),
+            "diagnostic_warmup": _artifact(WARMUP_MODULE),
         },
     }
 
 
 def _require_runner_in_source_commit() -> None:
-    for runner in (Path(__file__).resolve(), METRICS_MODULE):
+    for runner in (Path(__file__).resolve(), METRICS_MODULE, WARMUP_MODULE):
         relative = runner.relative_to(ROOT).as_posix()
         result = subprocess.run(
             ["git", "cat-file", "-e", f"HEAD:{relative}"],
@@ -193,10 +196,11 @@ def build_diagnostic_declaration(
     runner: Mapping[str, Any],
     case_plan: list[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    warmup_contract.build_warmup_plan(case_plan)
     return {
-        "schema": "graph-latency-diagnostic-declaration-v2",
+        "schema": "graph-latency-diagnostic-declaration-v3",
         "scope": "supporting_diagnostic_only",
-        "measurement_design": "case_paired_interleaved",
+        "measurement_design": warmup_contract.MEASUREMENT_DESIGN,
         "declared_at": _utc_now(),
         "formal_evidence": False,
         "source_commit": source_commit,
@@ -208,6 +212,7 @@ def build_diagnostic_declaration(
         "runner": dict(runner),
         "concurrency": 1,
         "case_plan": [dict(item) for item in case_plan],
+        "warmup": warmup_contract.declaration_warmup(),
         "health_gate": {
             "before_each_case_pair": True,
             "collection": FIXTURE_COLLECTION,
@@ -235,6 +240,7 @@ def build_diagnostic_declaration(
         },
         "stop_rules": [
             "stop on source, fixture, manifest, provider, governance, or runner drift",
+            "stop before measured pairs when warm-up is incomplete or anomalous",
             "stop before a case pair when the Qdrant health preflight fails",
             "stop and mark inconclusive on any fallback, provider failure, or retry",
             "do not rerun, overwrite, or carry forward any case pair",
@@ -413,6 +419,11 @@ def _require_inputs_unchanged(context: DiagnosticContext) -> None:
             context.runner["dependencies"]["diagnostic_metrics"]["sha256"],
             "diagnostic metrics",
         ),
+        (
+            WARMUP_MODULE,
+            context.runner["dependencies"]["diagnostic_warmup"]["sha256"],
+            "diagnostic warm-up",
+        ),
     )
     for path, expected_sha, label in checks:
         if _sha256(path) != expected_sha:
@@ -558,8 +569,10 @@ def _run_arm(
     enabled: bool,
     arm_starts: tuple[str, ...],
     case_id: str | None = None,
+    trace_log: Path | None = None,
 ) -> dict[str, Any]:
     started_at = arm_starts[-1]
+    active_trace = trace_log or context.trace
     _require_inputs_unchanged(context)
     validate_provider_smoke_for_arms(
         context.provider_smoke,
@@ -570,13 +583,13 @@ def _run_arm(
         label,
         context.manifest,
         pair_dir,
-        context.trace,
+        active_trace,
         enabled=enabled,
         provider_sha=context.provider_configuration_sha256,
         governance_sha=context.governance_scope_sha256,
         provider_environment={
             **context.provider_environment,
-            "RAG_TRACE_LOG_FILE": str(context.trace.resolve()),
+            "RAG_TRACE_LOG_FILE": str(active_trace.resolve()),
         },
         started_at=started_at,
         case_id=case_id,
@@ -588,7 +601,7 @@ def _run_arm(
     trace_report = json.loads(trace_path.read_text(encoding="utf-8"))
     latency_report = {
         **build_latency_breakdown(
-            context.trace,
+            active_trace,
             start=timing["started_at"],
             end=timing["completed_at"],
             execution_contexts={"evaluation"},
@@ -623,6 +636,10 @@ def _run_case_pair(
     context: DiagnosticContext,
     plan: Mapping[str, Any],
     arm_starts: tuple[str, ...],
+    *,
+    output_root: Path | None = None,
+    warmup: bool = False,
+    trace_log: Path | None = None,
 ) -> tuple[dict[str, Any], tuple[str, ...], bool]:
     arm_order = str(plan["arm_order"])
     arm_specs = (
@@ -630,7 +647,7 @@ def _run_case_pair(
         if arm_order == "candidate-first"
         else (("baseline", False), ("candidate", True))
     )
-    pair_dir = context.output / f"case-{int(plan['ordinal']):03d}"
+    pair_dir = (output_root or context.output) / f"case-{int(plan['ordinal']):03d}"
     pair_dir.mkdir(parents=True, exist_ok=False)
     health = _run_case_health(context, pair_dir)
     pair_identity = {
@@ -654,7 +671,10 @@ def _run_case_pair(
                 enabled=enabled,
                 arm_starts=arm_starts,
                 case_id=str(plan["case_id"]),
+                trace_log=trace_log,
             )
+            if warmup:
+                warmup_contract.validate_warmup_arm(arm, enabled=enabled)
         except Exception as exc:
             pair = {
                 **pair_identity,
@@ -685,6 +705,35 @@ def _run_case_pair(
     return pair, arm_starts, False
 
 
+def _run_warmup(
+    context: DiagnosticContext,
+    case_plan: list[Mapping[str, Any]],
+    arm_starts: tuple[str, ...],
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    warmup_plan = warmup_contract.build_warmup_plan(case_plan)
+    warmup_root = context.output / "warmup"
+    warmup_root.mkdir(parents=True, exist_ok=False)
+    warmup_trace = warmup_root / "trace.jsonl"
+    warmup_trace.touch(exist_ok=False)
+    pairs: tuple[Mapping[str, Any], ...] = ()
+    for plan in warmup_plan:
+        pair, arm_starts, stopped = _run_case_pair(
+            context,
+            plan,
+            arm_starts,
+            output_root=warmup_root,
+            warmup=True,
+            trace_log=warmup_trace,
+        )
+        pairs = (*pairs, pair)
+        if stopped:
+            break
+    report = warmup_contract.build_warmup_summary(pairs, warmup_plan)
+    summary_path = warmup_root / "summary.json"
+    _write_json(summary_path, report)
+    return {**report, "artifact": _artifact(summary_path)}, arm_starts
+
+
 def run_diagnostic(
     *,
     manifest: Path,
@@ -704,21 +753,24 @@ def run_diagnostic(
     declaration_sha = _write_declaration(context, case_plan)
     arm_starts: tuple[str, ...] = ()
     pairs: tuple[dict[str, Any], ...] = ()
-    for plan in case_plan:
-        pair, arm_starts, stopped = _run_case_pair(
-            context,
-            plan,
-            arm_starts,
-        )
-        pairs = (*pairs, pair)
-        if stopped:
-            break
-    outcome = build_diagnostic_outcome(
+    warmup, arm_starts = _run_warmup(context, case_plan, arm_starts)
+    if warmup["passed"] is True:
+        for plan in case_plan:
+            pair, arm_starts, stopped = _run_case_pair(
+                context,
+                plan,
+                arm_starts,
+            )
+            pairs = (*pairs, pair)
+            if stopped:
+                break
+    measured = build_diagnostic_outcome(
         list(pairs),
         case_plan=case_plan,
         source_commit=context.source_commit,
         declaration_sha256=declaration_sha,
     )
+    outcome = warmup_contract.wrap_v3_outcome(measured, warmup)
     _write_json(context.output / "outcome.json", outcome)
     return outcome
 
