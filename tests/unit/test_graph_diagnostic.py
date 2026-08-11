@@ -223,6 +223,25 @@ def test_preflight_binds_graph_collection_case_count_and_review_report():
         )
 
 
+def test_latency_report_requires_complete_parse_clean_trace_coverage():
+    from scripts.graph_eval import run_diagnostic as diagnostic
+
+    diagnostic._validate_latency_report(
+        {"query_count": 17, "parse_errors": 0},
+        expected_case_count=17,
+    )
+    with pytest.raises(RuntimeError, match="query count"):
+        diagnostic._validate_latency_report(
+            {"query_count": 0, "parse_errors": 0},
+            expected_case_count=17,
+        )
+    with pytest.raises(RuntimeError, match="parse errors"):
+        diagnostic._validate_latency_report(
+            {"query_count": 17, "parse_errors": 1},
+            expected_case_count=17,
+        )
+
+
 def test_driver_accepts_only_the_canonical_graph_manifest(tmp_path):
     canonical = (
         Path(__file__).resolve().parents[2]
@@ -440,6 +459,7 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
     context.trace.write_text("", encoding="utf-8")
     pair_dir = tmp_path / "pair-01"
     smoke_calls = []
+    run_environment = {}
     monkeypatch.setattr(diagnostic, "_require_inputs_unchanged", lambda unused: None)
     monkeypatch.setattr(
         diagnostic,
@@ -448,6 +468,7 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
     )
 
     def fake_run(label, manifest, output, trace, **kwargs):
+        run_environment.update(kwargs["provider_environment"])
         run_dir = output / label
         run_dir.mkdir(parents=True)
         (run_dir / "eval.json").write_text(
@@ -483,6 +504,8 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
         "build_latency_breakdown",
         lambda *args, **kwargs: {
             "schema": "crag-latency-breakdown-v1",
+            "query_count": 17,
+            "parse_errors": 0,
             "stage_summary": {
                 "generation": {"latency_p95_ms": 500},
                 "total": {"latency_p95_ms": 1200},
@@ -499,6 +522,7 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
     )
 
     assert smoke_calls == [("2026-08-10T00:00:00Z",)]
+    assert run_environment["RAG_TRACE_LOG_FILE"] == str(context.trace.resolve())
     assert arm["eval"] == {
         "provider_failure_count": 0,
         "provider_retries": 0,

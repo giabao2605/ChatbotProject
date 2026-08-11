@@ -416,6 +416,17 @@ def validate_canonical_manifest(path: Path) -> None:
         raise ValueError("canonical Graph manifest hash is not approved")
 
 
+def _validate_latency_report(
+    report: Mapping[str, Any],
+    *,
+    expected_case_count: int,
+) -> None:
+    if int(report.get("query_count") or 0) != expected_case_count:
+        raise RuntimeError("diagnostic trace query count must match the eval cases")
+    if int(report.get("parse_errors") or 0):
+        raise RuntimeError("diagnostic trace must have zero parse errors")
+
+
 def _validate_run_inputs(
     manifest: Path,
     preflight: Path,
@@ -587,7 +598,10 @@ def _run_arm(
         enabled=enabled,
         provider_sha=context.provider_configuration_sha256,
         governance_sha=context.governance_scope_sha256,
-        provider_environment=dict(context.provider_environment),
+        provider_environment={
+            **context.provider_environment,
+            "RAG_TRACE_LOG_FILE": str(context.trace.resolve()),
+        },
         started_at=started_at,
     )
     eval_path = pair_dir / label / "eval.json"
@@ -603,6 +617,10 @@ def _run_arm(
         ),
         "schema": "graph-latency-breakdown-v1",
     }
+    _validate_latency_report(
+        latency_report,
+        expected_case_count=int(eval_report.get("total_cases") or 0),
+    )
     _write_json(latency_path, latency_report)
     _verify_arm_preflight(context, pair_dir / label / "preflight.json")
     arm = _sanitized_arm(
