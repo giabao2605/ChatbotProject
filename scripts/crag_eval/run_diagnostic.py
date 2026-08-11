@@ -358,7 +358,7 @@ def _run_arm(
 
 
 def _prepare_arm_trace(case_dir: Path, label: str) -> Path:
-    trace_log = case_dir / label / "rag_trace.jsonl"
+    trace_log = case_dir / "rag-traces" / f"{label}.jsonl"
     trace_log.parent.mkdir(parents=True, exist_ok=True)
     if trace_log.exists() and trace_log.stat().st_size:
         raise ValueError("case arm trace must be new or empty")

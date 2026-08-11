@@ -470,10 +470,13 @@ def _fake_arm_runner(trace_logs):
     ):
         del manifest, kwargs
         trace_logs.append(trace)
+        assert not (output / label).exists()
         payload = _case_arm_payload(
             case_id, label, total_ms=1000, cost=1.0
         )
-        _write_arm_fixture(output / label, payload)
+        run_dir = output / label
+        run_dir.mkdir(parents=True)
+        _write_arm_fixture(run_dir, payload)
         _write_arm_trace(trace, payload["eval"]["cases"][0]["trace_id"])
         return {
             "started_at": started_at,
@@ -514,8 +517,8 @@ def test_case_arms_use_separate_trace_logs(monkeypatch, tmp_path):
     )
 
     assert trace_logs == [
-        tmp_path / "series-01" / "case-001" / "candidate" / "rag_trace.jsonl",
-        tmp_path / "series-01" / "case-001" / "baseline" / "rag_trace.jsonl",
+        tmp_path / "series-01" / "case-001" / "rag-traces" / "candidate.jsonl",
+        tmp_path / "series-01" / "case-001" / "rag-traces" / "baseline.jsonl",
     ]
 
 
