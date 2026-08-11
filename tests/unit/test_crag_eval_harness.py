@@ -960,8 +960,10 @@ def test_crag_rollout_arm_binds_trace_log_file(monkeypatch, tmp_path):
     trace.write_text("", encoding="utf-8")
     output = tmp_path / "rollout"
     env_values = []
+    commands = []
 
     def fake_run(command, **kwargs):
+        commands.append(command)
         env_values.append(kwargs["env"]["RAG_TRACE_LOG_FILE"])
         if "scripts.eval.run_eval" in command:
             run_dir = output / "baseline"
@@ -988,9 +990,11 @@ def test_crag_rollout_arm_binds_trace_log_file(monkeypatch, tmp_path):
         router_mode="offline",
         provider_configuration_sha256="provider",
         governance_scope_sha256_value="scope",
+        case_id="case-1",
     )
 
     assert env_values == [str(trace), str(trace)]
+    assert commands[0][-2:] == ["--case-id", "case-1"]
 
 
 def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(

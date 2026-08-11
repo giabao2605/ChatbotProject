@@ -195,6 +195,7 @@ def _run(
     governance_scope_sha256_value: str,
     provider_environment: dict[str, str] | None = None,
     started_at: str | None = None,
+    case_id: str | None = None,
 ) -> dict:
     env = build_evaluation_environment(enabled=enabled, router_mode=router_mode)
     env.update(provider_environment or {})
@@ -205,10 +206,15 @@ def _run(
         "RAG_TRACE_LOG_FILE": str(trace),
     })
     started_at = started_at or _utc_now()
-    eval_result = subprocess.run([
+    eval_command = [
         sys.executable, "-m", "scripts.eval.run_eval",
         "--manifest", str(manifest), "--output-dir", str(output), "--run-label", label,
-    ], cwd=ROOT, env=env, check=False)
+    ]
+    if case_id:
+        eval_command.extend(("--case-id", case_id))
+    eval_result = subprocess.run(
+        eval_command, cwd=ROOT, env=env, check=False,
+    )
     completed_at = _utc_now()
     run_dir = output / label
     if not (run_dir / "eval.json").exists():

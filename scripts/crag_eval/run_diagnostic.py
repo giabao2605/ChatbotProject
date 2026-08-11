@@ -6,14 +6,25 @@ import argparse
 import hashlib
 import json
 import os
-import statistics
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from scripts.crag_eval import diagnostic_aggregation as aggregation_module
+from scripts.crag_eval import run_rollout as rollout_module
 from scripts.crag_eval.constants import FIXTURE_COLLECTION
+from scripts.crag_eval.diagnostic_aggregation import (
+    MAX_PAIR_COST_RATIO_SPREAD,
+    MAX_PAIR_LATENCY_RATIO_SPREAD,
+    build_diagnostic_outcome,
+    build_series_summary,
+    provider_failures as _provider_failures,
+    provider_retries as _provider_retries,
+    validate_singleton_arm,
+    validate_singleton_evaluation,
+)
 from scripts.crag_eval.run_rollout import (
     _run,
     governance_scope_sha256,
@@ -21,7 +32,6 @@ from scripts.crag_eval.run_rollout import (
     require_source_commit,
 )
 from scripts.eval.crag_latency_breakdown import build_latency_breakdown
-from scripts.eval.crag_rollout_gate import compare_reports
 from scripts.eval.provider_smoke import (
     provider_configuration_sha256_for_settings,
     provider_environment_for_settings,
@@ -34,22 +44,10 @@ CANONICAL_MANIFEST = ROOT / "data" / "crag_eval_v1" / "eval_manifest.jsonl"
 CANONICAL_MANIFEST_SHA256 = (
     "beac3aac28b59ac57930b2c7099997efa7bdfda2a76bf65e3f1620d4b0fb897b"
 )
-MAX_PAIR_LATENCY_RATIO_SPREAD = 0.10
-MAX_PAIR_COST_RATIO_SPREAD = 0.10
-PAIR_ORDER = (
-    ("pair-01", "candidate-first"),
-    ("pair-02", "baseline-first"),
+SERIES_ORDER = (
+    ("series-01", "candidate-first"),
+    ("series-02", "baseline-first"),
 )
-STAGES = (
-    "retrieval",
-    "parent_context",
-    "rerank",
-    "generation",
-    "correction",
-    "claim_repair",
-)
-
-
 @dataclass(frozen=True)
 class DiagnosticContext:
     manifest: Path
@@ -63,10 +61,21 @@ class DiagnosticContext:
     manifest_sha256: str
     preflight_sha256: str
     provider_smoke_sha256: str
-    runner: Mapping[str, str]
+    runner: Mapping[str, Any]
+    case_ids: tuple[str, ...]
     provider_configuration_sha256: str
     provider_environment: Mapping[str, str]
     governance_scope_sha256: str
+
+
+@dataclass(frozen=True)
+class DiagnosticExecution:
+    series: tuple[dict[str, Any], ...] = ()
+    arm_starts: tuple[str, ...] = ()
+    completed_case_pairs: int = 0
+    arm_run_count: int = 0
+    execution_failure: Mapping[str, str] | None = None
+    stopped_case: Mapping[str, Any] | None = None
 
 
 def _utc_now() -> str:
@@ -81,8 +90,23 @@ def _artifact(path: Path) -> dict[str, str]:
     return {"path": str(path.resolve()), "sha256": _sha256(path)}
 
 
-def _runner_provenance() -> dict[str, str]:
-    return _artifact(Path(__file__).resolve())
+def _runner_provenance() -> dict[str, Mapping[str, str]]:
+    return {
+        "diagnostic": _artifact(Path(__file__).resolve()),
+        "rollout": _artifact(Path(rollout_module.__file__).resolve()),
+        "aggregation": _artifact(Path(aggregation_module.__file__).resolve()),
+    }
+
+
+def _series_plan(case_ids: tuple[str, ...]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": series_id,
+            "arm_order": arm_order,
+            "case_ids": list(case_ids),
+        }
+        for series_id, arm_order in SERIES_ORDER
+    ]
 
 
 def build_diagnostic_declaration(
@@ -94,10 +118,14 @@ def build_diagnostic_declaration(
     provider_smoke: Mapping[str, Any],
     governance_scope_sha256: str,
     runner: Mapping[str, Any],
+    case_ids: tuple[str, ...],
 ) -> dict[str, Any]:
     return {
-        "schema": "crag-stage-latency-diagnostic-declaration-v2",
+        "schema": "crag-stage-latency-diagnostic-declaration-v3",
         "scope": "supporting_diagnostic_only",
+        "measurement_design": "mirrored_case_paired_interleaved",
+        "trace_strategy": "one_private_log_per_series_case_arm",
+        "case_count": len(case_ids),
         "declared_at": _utc_now(),
         "formal_evidence": False,
         "source_commit": source_commit,
@@ -108,10 +136,7 @@ def build_diagnostic_declaration(
         "governance_scope_sha256": governance_scope_sha256,
         "runner": dict(runner),
         "concurrency": 1,
-        "pair_order": [
-            {"id": pair_id, "arm_order": arm_order}
-            for pair_id, arm_order in PAIR_ORDER
-        ],
+        "series_plan": _series_plan(case_ids),
         "limits": {
             "max_latency_ratio": 1.25,
             "max_cost_ratio": 1.5,
@@ -123,195 +148,14 @@ def build_diagnostic_declaration(
         "stop_rules": [
             "stop on source, fixture, manifest, provider, governance, or runner drift",
             "stop and mark inconclusive on any provider failure",
-            "do not rerun or overwrite any pair",
+            "stop and mark inconclusive on any provider retry",
+            "do not refresh provider smoke inside the declared window",
+            "do not rerun, resume, carry forward, or overwrite any case or series",
         ],
         "formal_window_authorized": False,
+        "controlled_demo_pilot_authorized": False,
+        "default_rollout_authorized": False,
         "feature_enablement_authorized": False,
-    }
-
-
-def _provider_failures(arm: Mapping[str, Any] | None) -> int:
-    if not arm:
-        return 0
-    report = arm.get("eval") or {}
-    direct = int(report.get("provider_failure_count") or 0)
-    cases = sum(bool(row.get("provider_failure")) for row in report.get("cases") or [])
-    return max(direct, cases)
-
-
-def _provider_retries(arm: Mapping[str, Any] | None) -> int:
-    if not arm:
-        return 0
-    report = arm.get("eval") or {}
-    return int(report.get("provider_retries") or 0)
-
-
-def _arm_metric(
-    pairs: list[Mapping[str, Any]], arm: str, metric: str
-) -> float | None:
-    values = []
-    for pair in pairs:
-        payload = pair.get(arm)
-        if not isinstance(payload, Mapping):
-            continue
-        latency = payload.get("latency") or {}
-        if metric == "estimated_cost":
-            value = latency.get(metric)
-        else:
-            value = (latency.get("stage_summary") or {}).get(metric, {}).get(
-                "latency_p50_ms"
-            )
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            values.append(float(value))
-    return statistics.median(values) if values else None
-
-
-def _pair_ratios(
-    pairs: list[Mapping[str, Any]], metric: str
-) -> list[float]:
-    ratios = []
-    for pair in pairs:
-        baseline = _arm_metric([pair], "baseline", metric)
-        candidate = _arm_metric([pair], "candidate", metric)
-        if baseline and candidate is not None:
-            ratios.append(candidate / baseline)
-    return ratios
-
-
-def _ratio_spread(values: list[float]) -> float | None:
-    return max(values) - min(values) if len(values) == len(PAIR_ORDER) else None
-
-
-def _failed_checks(pair: Mapping[str, Any]) -> frozenset[str]:
-    checks = (pair.get("gate") or {}).get("checks") or {}
-    return frozenset(name for name, passed in checks.items() if not passed)
-
-
-def _dominant_pair_stage(pair: Mapping[str, Any]) -> str:
-    deltas = {}
-    for stage in STAGES:
-        baseline = _arm_metric([pair], "baseline", stage)
-        candidate = _arm_metric([pair], "candidate", stage)
-        if candidate is not None and candidate - (baseline or 0.0) > 0:
-            deltas[stage] = candidate - (baseline or 0.0)
-    return max(deltas, key=deltas.get) if deltas else "none"
-
-
-def build_diagnostic_outcome(
-    pairs: list[Mapping[str, Any]],
-    *,
-    source_commit: str,
-    declaration_sha256: str,
-) -> dict[str, Any]:
-    provider_failures = sum(
-        _provider_failures(pair.get(arm))
-        for pair in pairs
-        for arm in ("baseline", "candidate")
-    )
-    provider_retries = sum(
-        _provider_retries(pair.get(arm))
-        for pair in pairs
-        for arm in ("baseline", "candidate")
-    )
-    complete = len(pairs) == len(PAIR_ORDER) and all(
-        isinstance(pair.get("baseline"), Mapping)
-        and isinstance(pair.get("candidate"), Mapping)
-        for pair in pairs
-    )
-    baseline_total = _arm_metric(pairs, "baseline", "total")
-    candidate_total = _arm_metric(pairs, "candidate", "total")
-    baseline_cost = _arm_metric(pairs, "baseline", "estimated_cost")
-    candidate_cost = _arm_metric(pairs, "candidate", "estimated_cost")
-    pair_latency_ratios = _pair_ratios(pairs, "total")
-    pair_cost_ratios = _pair_ratios(pairs, "estimated_cost")
-    latency_ratio_spread = _ratio_spread(pair_latency_ratios)
-    cost_ratio_spread = _ratio_spread(pair_cost_ratios)
-    latency_ratio = (
-        candidate_total / baseline_total
-        if baseline_total and candidate_total is not None
-        else None
-    )
-    cost_ratio = (
-        candidate_cost / baseline_cost
-        if baseline_cost and candidate_cost is not None
-        else None
-    )
-    stage_deltas = {}
-    for stage in STAGES:
-        baseline = _arm_metric(pairs, "baseline", stage)
-        candidate = _arm_metric(pairs, "candidate", stage)
-        if candidate is not None:
-            stage_deltas[stage] = candidate - (baseline or 0.0)
-    positive = {stage: value for stage, value in stage_deltas.items() if value > 0}
-    gate_states = [bool((pair.get("gate") or {}).get("passed")) for pair in pairs]
-    failed_check_sets = [_failed_checks(pair) for pair in pairs]
-    dominant_pair_stages = [_dominant_pair_stage(pair) for pair in pairs]
-    arm_order_consistent = bool(
-        complete
-        and len(set(gate_states)) == 1
-        and len(set(failed_check_sets)) == 1
-        and len(set(dominant_pair_stages)) == 1
-        and latency_ratio_spread is not None
-        and latency_ratio_spread <= MAX_PAIR_LATENCY_RATIO_SPREAD
-        and cost_ratio_spread is not None
-        and cost_ratio_spread <= MAX_PAIR_COST_RATIO_SPREAD
-    )
-    gates_passed = complete and all(gate_states)
-    target_met = bool(
-        not provider_failures
-        and not provider_retries
-        and arm_order_consistent
-        and gates_passed
-        and latency_ratio is not None
-        and latency_ratio <= 1.25
-        and cost_ratio is not None
-        and cost_ratio <= 1.5
-    )
-    inconclusive = bool(
-        provider_failures
-        or provider_retries
-        or not complete
-        or not arm_order_consistent
-    )
-    return {
-        "schema": "crag-stage-latency-diagnostic-outcome-v2",
-        "formal_evidence": False,
-        "status": "inconclusive" if inconclusive else "passed" if target_met else "failed",
-        "source_commit": source_commit,
-        "declaration_sha256": declaration_sha256,
-        "pair_count": len(pairs),
-        "provider_failure_count": provider_failures,
-        "provider_retry_count": provider_retries,
-        "arm_order_consistent": arm_order_consistent,
-        "pair_latency_ratios": pair_latency_ratios,
-        "pair_cost_ratios": pair_cost_ratios,
-        "latency_ratio_spread": latency_ratio_spread,
-        "cost_ratio_spread": cost_ratio_spread,
-        "dominant_pair_stages": dominant_pair_stages,
-        "latency_ratio": latency_ratio if complete and not provider_failures else None,
-        "cost_ratio": cost_ratio if complete and not provider_failures else None,
-        "diagnostic_target_met": target_met,
-        "stage_deltas_ms": stage_deltas if complete and not provider_failures else {},
-        "dominant_overhead_stage": (
-            max(positive, key=positive.get)
-            if complete and not provider_failures and positive
-            else "none" if complete and not provider_failures else "unavailable"
-        ),
-        "pairs": [
-            {"id": pair.get("id"), "gate_passed": bool((pair.get("gate") or {}).get("passed"))}
-            for pair in pairs
-        ],
-        "formal_window_authorized": False,
-        "feature_enablement_authorized": False,
-        "next_action": (
-            "Wait for externally confirmed provider recovery before a new declaration."
-            if provider_failures or provider_retries
-            else "Treat the delta as order-sensitive provider variance and use a new declaration."
-            if complete and not arm_order_consistent
-            else "Complete the predeclared diagnostic before choosing a code fix."
-            if not complete
-            else "Use the dominant stage to choose one root fix; keep both flags off."
-        ),
     }
 
 
@@ -332,35 +176,11 @@ def _require_inputs_unchanged(context: DiagnosticContext) -> None:
         raise RuntimeError("preflight changed during diagnostic")
     if _sha256(context.provider_smoke) != context.provider_smoke_sha256:
         raise RuntimeError("provider smoke changed during diagnostic")
-    if _sha256(Path(__file__).resolve()) != context.runner["sha256"]:
+    if any(
+        _sha256(Path(reference["path"])) != reference["sha256"]
+        for reference in context.runner.values()
+    ):
         raise RuntimeError("diagnostic runner changed during diagnostic")
-
-
-def _sanitized_arm(
-    *,
-    eval_report: Mapping[str, Any],
-    latency_report: Mapping[str, Any],
-    eval_path: Path,
-    trace_path: Path,
-    latency_path: Path,
-) -> dict[str, Any]:
-    return {
-        "eval": {
-            "provider_failure_count": _provider_failures({"eval": eval_report}),
-            "provider_retries": int(eval_report.get("provider_retries") or 0),
-            "total_cases": int(eval_report.get("total_cases") or 0),
-            "passed_cases": int(eval_report.get("passed_cases") or 0),
-        },
-        "latency": {
-            "estimated_cost": float(latency_report.get("estimated_cost") or 0.0),
-            "stage_summary": dict(latency_report.get("stage_summary") or {}),
-        },
-        "artifacts": {
-            "eval": _artifact(eval_path),
-            "trace": _artifact(trace_path),
-            "latency": _artifact(latency_path),
-        },
-    }
 
 
 def validate_preflight_report(
@@ -384,6 +204,20 @@ def validate_canonical_manifest(path: Path) -> None:
         raise ValueError("diagnostic requires the canonical CRAG manifest path")
     if _sha256(path) != CANONICAL_MANIFEST_SHA256:
         raise ValueError("canonical CRAG manifest hash is not approved")
+
+
+def _manifest_case_ids(path: Path) -> tuple[str, ...]:
+    rows = [
+        json.loads(raw)
+        for raw in path.read_text(encoding="utf-8").splitlines()
+        if raw.strip()
+    ]
+    case_ids = tuple(str(row.get("id") or "").strip() for row in rows)
+    if not case_ids or any(not case_id for case_id in case_ids):
+        raise ValueError("canonical CRAG manifest contains an empty case ID")
+    if len(set(case_ids)) != len(case_ids):
+        raise ValueError("canonical CRAG manifest contains duplicate case IDs")
+    return case_ids
 
 
 def _validate_run_inputs(
@@ -436,6 +270,7 @@ def _prepare_context(
     from mech_chatbot.config.settings import load_settings
 
     settings = load_settings()
+    case_ids = _manifest_case_ids(manifest)
     return DiagnosticContext(
         manifest=manifest,
         preflight=preflight,
@@ -449,6 +284,7 @@ def _prepare_context(
         preflight_sha256=_sha256(preflight),
         provider_smoke_sha256=_sha256(provider_smoke),
         runner=_runner_provenance(),
+        case_ids=case_ids,
         provider_configuration_sha256=(
             provider_configuration_sha256_for_settings(settings)
         ),
@@ -475,6 +311,7 @@ def _write_declaration(context: DiagnosticContext) -> str:
         provider_smoke=_artifact(context.provider_smoke),
         governance_scope_sha256=context.governance_scope_sha256,
         runner=context.runner,
+        case_ids=context.case_ids,
     )
     declaration_path = context.output / "declaration.json"
     _write_json(declaration_path, declaration)
@@ -483,11 +320,12 @@ def _write_declaration(context: DiagnosticContext) -> str:
 
 def _run_arm(
     context: DiagnosticContext,
-    pair_dir: Path,
+    case_dir: Path,
     *,
     label: str,
     enabled: bool,
     arm_starts: tuple[str, ...],
+    case_id: str,
 ) -> dict[str, Any]:
     started_at = arm_starts[-1]
     _require_inputs_unchanged(context)
@@ -496,108 +334,276 @@ def _run_arm(
         expected_provider_sha256=context.provider_configuration_sha256,
         arm_started_at=arm_starts,
     )
+    trace_log = _prepare_arm_trace(case_dir, label)
     timing = _run(
         label,
         context.manifest,
-        pair_dir,
-        context.trace,
+        case_dir,
+        trace_log,
         enabled=enabled,
         router_mode=context.router_mode,
         provider_configuration_sha256=context.provider_configuration_sha256,
         governance_scope_sha256_value=context.governance_scope_sha256,
         provider_environment=dict(context.provider_environment),
         started_at=started_at,
+        case_id=case_id,
     )
-    eval_path = pair_dir / label / "eval.json"
-    trace_path = pair_dir / label / "trace.json"
-    latency_path = pair_dir / label / "latency-breakdown.json"
-    eval_report = json.loads(eval_path.read_text(encoding="utf-8"))
-    trace_report = json.loads(trace_path.read_text(encoding="utf-8"))
-    latency_report = build_latency_breakdown(
-        context.trace,
+    arm = _load_arm_artifacts(case_dir / label, trace_log, timing)
+    _verify_arm_preflight(context, case_dir / label / "preflight.json")
+    validate_singleton_evaluation(case_id, arm)
+    if not _provider_failures(arm) and not _provider_retries(arm):
+        validate_singleton_arm(case_id, arm)
+    _require_inputs_unchanged(context)
+    return arm
+
+
+def _prepare_arm_trace(case_dir: Path, label: str) -> Path:
+    trace_log = case_dir / label / "rag_trace.jsonl"
+    trace_log.parent.mkdir(parents=True, exist_ok=True)
+    if trace_log.exists() and trace_log.stat().st_size:
+        raise ValueError("case arm trace must be new or empty")
+    trace_log.touch(exist_ok=True)
+    return trace_log
+
+
+def _load_arm_artifacts(
+    arm_dir: Path,
+    trace_log: Path,
+    timing: Mapping[str, str],
+) -> dict[str, Any]:
+    paths = {
+        "eval": arm_dir / "eval.json",
+        "trace": arm_dir / "trace.json",
+        "latency": arm_dir / "latency-breakdown.json",
+    }
+    reports = {
+        name: json.loads(path.read_text(encoding="utf-8"))
+        for name, path in paths.items()
+        if name != "latency"
+    }
+    latency = build_latency_breakdown(
+        trace_log,
         start=timing["started_at"],
         end=timing["completed_at"],
         execution_contexts={"evaluation"},
     )
-    _write_json(latency_path, latency_report)
-    arm = _sanitized_arm(
-        eval_report=eval_report,
-        latency_report=latency_report,
-        eval_path=eval_path,
-        trace_path=trace_path,
-        latency_path=latency_path,
-    )
-    _verify_arm_preflight(context, pair_dir / label / "preflight.json")
-    _require_inputs_unchanged(context)
-    return {**arm, "_gate_inputs": {"eval": eval_report, "trace": trace_report}}
+    _write_json(paths["latency"], latency)
+    return {
+        **reports,
+        "latency": latency,
+        "artifacts": {name: _artifact(path) for name, path in paths.items()},
+    }
 
 
 def _verify_arm_preflight(context: DiagnosticContext, path: Path) -> None:
     report = json.loads(path.read_text(encoding="utf-8"))
-    if report.get("fixture_fingerprint") != context.preflight_report.get(
-        "fixture_fingerprint"
+    if (
+        report.get("fixture_fingerprint")
+        != context.preflight_report.get("fixture_fingerprint")
+        or report.get("checked_cases") != 1
     ):
         raise RuntimeError("fixture snapshot changed during diagnostic")
 
 
-def _run_pair(
+def _public_case_arm(arm: Mapping[str, Any]) -> dict[str, Any]:
+    evaluation = arm.get("eval") or {}
+    latency = arm.get("latency") or {}
+    return {
+        "eval": {
+            "provider_failure_count": _provider_failures({"eval": evaluation}),
+            "provider_retries": int(evaluation.get("provider_retries") or 0),
+            "total_cases": int(evaluation.get("total_cases") or 0),
+            "passed_cases": int(evaluation.get("passed_cases") or 0),
+        },
+        "latency": {
+            "estimated_cost": float(latency.get("estimated_cost") or 0.0),
+            "stage_summary": dict(latency.get("stage_summary") or {}),
+        },
+        "artifacts": dict(arm.get("artifacts") or {}),
+    }
+
+
+def _run_case_pair(
     context: DiagnosticContext,
-    pair_id: str,
+    *,
+    series_id: str,
+    ordinal: int,
+    case_id: str,
     arm_order: str,
     arm_starts: tuple[str, ...],
 ) -> tuple[dict[str, Any], tuple[str, ...], bool]:
-    arm_specs = (
-        (("candidate", True), ("baseline", False))
-        if arm_order == "candidate-first"
-        else (("baseline", False), ("candidate", True))
-    )
-    pair_dir = context.output / pair_id
+    case_dir = context.output / series_id / f"case-{ordinal:03d}"
     arms: dict[str, dict[str, Any]] = {}
-    for label, enabled in arm_specs:
+    for label, enabled in _arm_specs(arm_order):
         arm_starts = (*arm_starts, _utc_now())
         arm = _run_arm(
             context,
-            pair_dir,
+            case_dir,
             label=label,
             enabled=enabled,
             arm_starts=arm_starts,
+            case_id=case_id,
         )
         arms = {**arms, label: arm}
         if _provider_failures(arm) or _provider_retries(arm):
-            pair = {
-                "id": pair_id,
-                "arm_order": arm_order,
-                **arms,
-                "gate": {"passed": False, "reason": "provider_variance"},
-            }
+            pair = _case_pair(case_id, arm_order, arms)
+            _write_case_summary(case_dir, pair, stopped=True)
             return pair, arm_starts, True
 
-    baseline, baseline_inputs = _without_gate_inputs(arms["baseline"])
-    candidate, candidate_inputs = _without_gate_inputs(arms["candidate"])
-    gate = compare_reports(
-        baseline_inputs["eval"],
-        candidate_inputs["eval"],
-        baseline_inputs["trace"],
-        candidate_inputs["trace"],
-    )
-    pair = {
-        "id": pair_id,
-        "arm_order": arm_order,
-        "baseline": baseline,
-        "candidate": candidate,
-        "gate": gate,
-    }
-    _write_json(pair_dir / "gate.json", gate)
-    _write_json(pair_dir / "summary.json", pair)
+    pair = _case_pair(case_id, arm_order, arms)
+    _write_case_summary(case_dir, pair, stopped=False)
     return pair, arm_starts, False
 
 
-def _without_gate_inputs(
-    arm: Mapping[str, Any],
-) -> tuple[dict[str, Any], Mapping[str, Any]]:
-    inputs = arm.get("_gate_inputs") or {}
-    sanitized = {key: value for key, value in arm.items() if key != "_gate_inputs"}
-    return sanitized, inputs
+def _arm_specs(arm_order: str) -> tuple[tuple[str, bool], ...]:
+    if arm_order == "candidate-first":
+        return (("candidate", True), ("baseline", False))
+    return (("baseline", False), ("candidate", True))
+
+
+def _case_pair(
+    case_id: str,
+    arm_order: str,
+    arms: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {"case_id": case_id, "arm_order": arm_order, **arms}
+
+
+def _write_case_summary(
+    case_dir: Path,
+    pair: Mapping[str, Any],
+    *,
+    stopped: bool,
+) -> None:
+    arms = {
+        label: _public_case_arm(pair[label])
+        for label in ("baseline", "candidate")
+        if label in pair
+    }
+    report = {
+        "case_id": pair["case_id"],
+        "arm_order": pair["arm_order"],
+        **arms,
+    }
+    if stopped:
+        report = {**report, "stopped": "provider_variance"}
+    _write_json(case_dir / "summary.json", report)
+
+
+def _stopped_case(
+    series_id: str,
+    case_id: str,
+    pair: Mapping[str, Any],
+) -> dict[str, Any]:
+    labels = ("baseline", "candidate")
+    return {
+        "series_id": series_id,
+        "case_id": case_id,
+        "provider_failure_count": sum(
+            _provider_failures(pair.get(label)) for label in labels
+        ),
+        "provider_retry_count": sum(
+            _provider_retries(pair.get(label)) for label in labels
+        ),
+    }
+
+
+def _run_series(
+    context: DiagnosticContext,
+    execution: DiagnosticExecution,
+    *,
+    series_id: str,
+    arm_order: str,
+) -> DiagnosticExecution:
+    case_pairs: tuple[dict[str, Any], ...] = ()
+    state = execution
+    for ordinal, case_id in enumerate(context.case_ids, start=1):
+        pair, starts, stopped = _run_case_pair(
+            context,
+            series_id=series_id,
+            ordinal=ordinal,
+            case_id=case_id,
+            arm_order=arm_order,
+            arm_starts=state.arm_starts,
+        )
+        state = replace(
+            state,
+            arm_starts=starts,
+            arm_run_count=state.arm_run_count
+            + sum(label in pair for label in ("baseline", "candidate")),
+        )
+        if stopped:
+            return replace(state, stopped_case=_stopped_case(series_id, case_id, pair))
+        case_pairs = (*case_pairs, pair)
+        state = replace(
+            state,
+            completed_case_pairs=state.completed_case_pairs + 1,
+        )
+    summary = build_series_summary(
+        series_id=series_id,
+        arm_order=arm_order,
+        case_pairs=case_pairs,
+    )
+    _write_json(context.output / series_id / "summary.json", summary)
+    return replace(state, series=(*state.series, summary))
+
+
+def _execute_series_plan(context: DiagnosticContext) -> DiagnosticExecution:
+    execution = DiagnosticExecution()
+    try:
+        for series_id, arm_order in SERIES_ORDER:
+            execution = _run_series(
+                context,
+                execution,
+                series_id=series_id,
+                arm_order=arm_order,
+            )
+            if execution.stopped_case:
+                break
+    except (RuntimeError, ValueError) as exc:
+        execution = replace(
+            execution,
+            execution_failure={"error_type": type(exc).__name__},
+        )
+    return execution
+
+
+def _finalize_diagnostic(
+    context: DiagnosticContext,
+    declaration_sha: str,
+    execution: DiagnosticExecution,
+) -> dict[str, Any]:
+    series = list(execution.series)
+    try:
+        base = build_diagnostic_outcome(
+            series,
+            source_commit=context.source_commit,
+            declaration_sha256=declaration_sha,
+        )
+        return aggregation_module.finalize_case_paired_outcome(
+            base,
+            series,
+            expected_case_ids=context.case_ids,
+            completed_case_pairs=execution.completed_case_pairs,
+            arm_run_count=execution.arm_run_count,
+            execution_failure=execution.execution_failure,
+            stopped_case=execution.stopped_case,
+        )
+    except (RuntimeError, ValueError) as exc:
+        empty = build_diagnostic_outcome(
+            [],
+            source_commit=context.source_commit,
+            declaration_sha256=declaration_sha,
+        )
+        return aggregation_module.finalize_case_paired_outcome(
+            empty,
+            [],
+            expected_case_ids=context.case_ids,
+            completed_case_pairs=execution.completed_case_pairs,
+            arm_run_count=execution.arm_run_count,
+            execution_failure={"error_type": type(exc).__name__},
+            stopped_case=execution.stopped_case,
+        )
 
 
 def run_diagnostic(
@@ -618,24 +624,10 @@ def run_diagnostic(
         router_mode,
     )
     declaration_sha = _write_declaration(context)
-
-    arm_starts: tuple[str, ...] = ()
-    pairs: tuple[dict[str, Any], ...] = ()
-    for pair_id, arm_order in PAIR_ORDER:
-        pair, arm_starts, stopped = _run_pair(
-            context,
-            pair_id,
-            arm_order,
-            arm_starts,
-        )
-        pairs = (*pairs, pair)
-        if stopped:
-            break
-
-    outcome = build_diagnostic_outcome(
-        list(pairs),
-        source_commit=context.source_commit,
-        declaration_sha256=declaration_sha,
+    outcome = _finalize_diagnostic(
+        context,
+        declaration_sha,
+        _execute_series_plan(context),
     )
     _write_json(context.output / "outcome.json", outcome)
     return outcome
