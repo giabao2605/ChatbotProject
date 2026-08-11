@@ -65,6 +65,7 @@ def _run(
     governance_sha,
     provider_environment=None,
     started_at=None,
+    case_id=None,
 ):
     environment = build_evaluation_environment(enabled=enabled)
     environment.update(provider_environment or {})
@@ -74,10 +75,16 @@ def _run(
         "RAG_EVAL_CONCURRENCY": "1",
     })
     started_at = started_at or _utc_now()
-    result = subprocess.run([
+    command = [
         sys.executable, "-m", "scripts.eval.run_eval", "--manifest", str(manifest),
         "--output-dir", str(output), "--run-label", label,
-    ], cwd=ROOT, env=environment, check=False)
+    ]
+    if case_id is not None:
+        case_id = str(case_id).strip()
+        if not case_id:
+            raise ValueError("case_id must be non-empty")
+        command.extend(("--case-id", case_id))
+    result = subprocess.run(command, cwd=ROOT, env=environment, check=False)
     completed_at = _utc_now()
     run_dir = output / label
     if not (run_dir / "eval.json").exists():

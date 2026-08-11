@@ -1,10 +1,46 @@
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_graph_arm_forwards_exact_case_selector(monkeypatch, tmp_path):
+    from scripts.graph_eval import run_rollout as rollout
+
+    output = tmp_path / "output"
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        run_dir = output / "baseline"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if "scripts.eval.run_eval" in command:
+            (run_dir / "eval.json").write_text("{}\n", encoding="utf-8")
+        else:
+            (run_dir / "trace.json").write_text("{}\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(rollout.subprocess, "run", fake_run)
+
+    rollout._run(
+        "baseline",
+        tmp_path / "manifest.jsonl",
+        output,
+        trace,
+        enabled=False,
+        provider_sha="a" * 64,
+        governance_sha="b" * 64,
+        case_id="graph-case-02",
+    )
+
+    assert commands[0][-2:] == ["--case-id", "graph-case-02"]
+    assert "--case-id" not in commands[1]
 
 
 def test_graph_rollout_toggles_only_graph_between_arms(monkeypatch):

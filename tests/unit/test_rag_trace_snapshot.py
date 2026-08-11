@@ -176,6 +176,89 @@ def test_snapshot_counts_error_events_without_persisting_error_payload(tmp_path)
     assert "sensitive endpoint" not in json.dumps(report)
 
 
+def test_snapshot_counts_fallback_and_retry_events_without_payload(tmp_path):
+    snapshot = _load_snapshot_module()
+    path = tmp_path / "trace.jsonl"
+    events = [
+        {
+            "event": "hybrid_fallback",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "transport_details": "sensitive qdrant endpoint",
+        },
+        {
+            "event": "rerank",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "backend": "jina",
+            "fallback": True,
+            "fallback_backend": "local_fusion",
+        },
+        {
+            "event": "llm_retry",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "reason": "sensitive provider response",
+        },
+        {
+            "event": "rerank",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "backend": "jina",
+            "retry_attempted": True,
+        },
+        {
+            "event": "external_ai",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "status": "error",
+            "error_type": "SecretTransportError",
+        },
+        {
+            "event": "rerank",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "fallback_reason": "sensitive rerank failure",
+        },
+        {
+            "event": "generation",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "community_summary_fallback_reason": "sensitive summary failure",
+        },
+        {
+            "event": "retrieval",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "deterministic_fallback": True,
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(item) for item in events),
+        encoding="utf-8",
+    )
+
+    report = snapshot.build_snapshot(path, execution_contexts={"evaluation"})
+
+    assert report["error_event_count"] == 1
+    assert report["error_events"] == {"external_ai": 1}
+    assert report["fallback_event_count"] == 5
+    assert report["fallback_events"] == {
+        "generation": 1,
+        "hybrid_fallback": 1,
+        "rerank": 2,
+        "retrieval": 1,
+    }
+    assert report["retry_event_count"] == 2
+    assert report["retry_events"] == {"llm_retry": 1, "rerank": 1}
+    serialized = json.dumps(report)
+    assert "sensitive qdrant endpoint" not in serialized
+    assert "sensitive provider response" not in serialized
+    assert "SecretTransportError" not in serialized
+    assert "sensitive rerank failure" not in serialized
+    assert "sensitive summary failure" not in serialized
+
+
 def test_snapshot_does_not_count_failed_correction_as_exercised(tmp_path):
     snapshot = _load_snapshot_module()
     path = tmp_path / "trace.jsonl"

@@ -240,6 +240,27 @@ def load_manifest_files(paths: list[Path]) -> list[dict]:
     return cases
 
 
+def select_cases(
+    cases: list[dict],
+    case_ids: list[str] | None,
+) -> list[dict]:
+    if not case_ids:
+        return cases
+    requested = [str(case_id).strip() for case_id in case_ids]
+    if any(not case_id for case_id in requested):
+        raise ValueError("case selector must be non-empty")
+    if len(set(requested)) != len(requested):
+        raise ValueError("duplicate case selector")
+    manifest_ids = [str(case["id"]) for case in cases]
+    if len(set(manifest_ids)) != len(manifest_ids):
+        raise ValueError("duplicate manifest case id")
+    by_id = {str(case["id"]): case for case in cases}
+    unknown = [case_id for case_id in requested if case_id not in by_id]
+    if unknown:
+        raise ValueError(f"unknown case selector: {unknown[0]}")
+    return [by_id[case_id] for case_id in requested]
+
+
 def resolve_output_paths(output_dir: Path, run_label: str) -> dict[str, Path]:
     if run_label not in RUN_LABELS:
         raise ValueError(f"run_label must be one of {RUN_LABELS}")
@@ -310,8 +331,9 @@ def run_evaluation(
     rag_executor=None,
     number_normalizer=None,
     preflight_runner=None,
+    case_ids: list[str] | None = None,
 ) -> tuple[dict, bool]:
-    cases = load_manifest_files(manifest_files)
+    cases = select_cases(load_manifest_files(manifest_files), case_ids)
     paths = resolve_output_paths(output_dir, run_label)
     if paths["directory"].exists() and any(paths["directory"].iterdir()):
         raise ValueError(f"refusing to overwrite non-empty run directory: {paths['directory']}")
@@ -930,12 +952,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, action="append", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--run-label", choices=RUN_LABELS, required=True)
+    parser.add_argument("--case-id", action="append")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    cases = load_manifest_files(args.manifest)
+    case_ids = getattr(args, "case_id", None)
+    cases = select_cases(load_manifest_files(args.manifest), case_ids)
     settings = load_settings()
     with configured_repository_runtime(settings, include_qdrant=True):
         preflight_report = _default_preflight_runner()(cases)
@@ -946,6 +970,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.output_dir,
                 args.run_label,
                 preflight_runner=cached_preflight,
+                case_ids=case_ids,
             )
 
         from mech_chatbot.config.logging import (
@@ -963,6 +988,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.run_label,
                     rag_executor=runtime.executor,
                     preflight_runner=cached_preflight,
+                    case_ids=case_ids,
                 )
         finally:
             runtime.close()

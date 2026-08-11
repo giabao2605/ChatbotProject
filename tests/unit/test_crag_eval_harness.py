@@ -177,6 +177,30 @@ def test_cli_accepts_multiple_manifests():
     assert args.manifest == [Path("one.jsonl"), Path("two.jsonl")]
 
 
+def test_cli_case_selector_is_exact_and_fail_closed():
+    runner = _load("run_eval_case_selector", "scripts/eval/run_eval.py")
+    args = runner.parse_args([
+        "--manifest", "cases.jsonl",
+        "--output-dir", "reports/run",
+        "--run-label", "candidate",
+        "--case-id", "case-2",
+    ])
+    cases = [{"id": "case-1"}, {"id": "case-2"}]
+
+    assert args.case_id == ["case-2"]
+    assert runner.select_cases(cases, args.case_id) == [{"id": "case-2"}]
+    assert runner.select_cases(cases, None) == cases
+    with pytest.raises(ValueError, match="unknown case selector"):
+        runner.select_cases(cases, ["missing"])
+    with pytest.raises(ValueError, match="duplicate case selector"):
+        runner.select_cases(cases, ["case-1", "case-1"])
+    with pytest.raises(ValueError, match="duplicate manifest case id"):
+        runner.select_cases(
+            [{"id": "case-1", "value": 1}, {"id": "case-1", "value": 2}],
+            ["case-1"],
+        )
+
+
 def test_main_evaluator_uses_typed_evaluation_invocation(tmp_path, monkeypatch):
     from mech_chatbot.rag.execution import (
         RagCompleted,

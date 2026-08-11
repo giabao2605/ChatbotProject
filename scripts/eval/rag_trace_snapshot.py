@@ -65,6 +65,8 @@ def build_snapshot(
     query_count = 0
     event_counts: Counter[str] = Counter()
     error_events: Counter[str] = Counter()
+    fallback_events: Counter[str] = Counter()
+    retry_events: Counter[str] = Counter()
     planner_max = subquery_max = calculation_max = graph_edge_max = 0
     retries_by_trace: Counter[str] = Counter()
     external_ai_latencies: dict[str, list[float]] = defaultdict(list)
@@ -88,8 +90,21 @@ def build_snapshot(
             continue
         event_name = str(event.get("event") or "<missing>")
         event_counts[event_name] += 1
-        if event.get("error"):
+        has_error = bool(
+            event.get("error")
+            or event.get("error_type")
+            or str(event.get("status") or "").casefold() == "error"
+        )
+        if has_error:
             error_events[event_name] += 1
+        has_fallback = event_name.endswith("_fallback") or any(
+            "fallback" in str(key).casefold() and bool(value)
+            for key, value in event.items()
+        )
+        if has_fallback:
+            fallback_events[event_name] += 1
+        if event_name.endswith("_retry") or bool(event.get("retry_attempted")):
+            retry_events[event_name] += 1
         if event_name == "query_decomposition":
             planner_max = max(planner_max, int(event.get("planner_count") or 0))
             subquery_max = max(subquery_max, int(event.get("subquery_count") or 0))
@@ -205,6 +220,10 @@ def build_snapshot(
         "event_counts": dict(sorted(event_counts.items())),
         "error_event_count": sum(error_events.values()),
         "error_events": dict(sorted(error_events.items())),
+        "fallback_event_count": sum(fallback_events.values()),
+        "fallback_events": dict(sorted(fallback_events.items())),
+        "retry_event_count": sum(retry_events.values()),
+        "retry_events": dict(sorted(retry_events.items())),
         "external_ai_latency": external_ai_latency,
         "rerank_by_provider": rerank_by_provider,
         "voyage_rerank": rerank_by_provider["voyage"],
