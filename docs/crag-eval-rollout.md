@@ -16,6 +16,11 @@ This runbook evaluates CRAG and claim repair against a deterministic staging fix
 Run these commands in a dedicated PowerShell session. The environment must point at the intended staging SQL instance before the opt-in is set.
 
 ```powershell
+$main = (Get-Location).Path
+$python = Join-Path $main 'chat_env\Scripts\python.exe'
+$rc = 'C:\path\to\clean-detached-checkout' # Replace with the exact RC path.
+Set-Location $rc
+
 $env:QDRANT_COLLECTION = 'MechChatbot_CRAG_Eval_v1'
 $env:RUN_CRAG_EVAL_FIXTURE = '1'
 $env:RAG_EXECUTION_CONTEXT = 'evaluation'
@@ -61,6 +66,64 @@ Runner exit status is diagnostic only. If an evaluation wrote its artifacts, the
 - `gate.json` and `run.json`
 
 Do not start a production pilot unless `gate.json` contains `"passed": true`. During a small pilot, set `RAG_CRAG_ENABLED=true` and `RAG_CLAIM_REPAIR_ENABLED=true`, then monitor `evidence_gate`, `corrective_retrieval`, `claim_repair` and `llm_retry`. Roll back by setting both flags to `false`; no data migration is involved.
+
+## Run the supporting case-paired diagnostic V3
+
+Use this diagnostic only to decide whether a new formal window is worth opening.
+It never creates formal evidence or authorizes a controlled-demo pilot, default
+rollout or feature enablement. Run it from a clean detached checkout at the
+exact commit being measured, with provider settings supplied through the
+process environment; do not copy a dotenv or credentials into the checkout.
+
+Open a new PowerShell session and use a new directory for every attempt:
+
+```powershell
+$env:QDRANT_COLLECTION = 'MechChatbot_CRAG_Eval_v1'
+$env:RUN_CRAG_EVAL_FIXTURE = '1'
+$env:RAG_CRAG_DIAGNOSTIC_OPT_IN = '1'
+$env:RAG_EXECUTION_CONTEXT = 'evaluation'
+$env:EXTERNAL_PROCESSING_POLICY = 'all_external'
+
+$run = Get-Date -Format 'yyyyMMdd-HHmmss'
+$root = "reports\crag-diagnostic\$run"
+New-Item -ItemType Directory -Path $root | Out-Null
+
+& $python -m dotenv -f "$main\.env" run --no-override -- $python `
+  -m scripts.crag_eval.preflight `
+  --manifest data\crag_eval_v1\eval_manifest.jsonl `
+  --output "$root\preflight.json"
+if ($LASTEXITCODE -ne 0) { throw 'CRAG fixture preflight failed.' }
+
+& $python -m dotenv -f "$main\.env" run --no-override -- $python `
+  -m scripts.eval.provider_smoke `
+  --output "$root\provider-smoke.json"
+if ($LASTEXITCODE -ne 0) { throw 'Provider smoke failed.' }
+
+& $python -m dotenv -f "$main\.env" run --no-override -- $python `
+  -m scripts.crag_eval.run_diagnostic `
+  --manifest data\crag_eval_v1\eval_manifest.jsonl `
+  --preflight "$root\preflight.json" `
+  --provider-smoke-artifact "$root\provider-smoke.json" `
+  --output-dir "$root\diagnostic" `
+  --trace "$root\driver-trace.jsonl" `
+  --router-mode offline
+```
+
+Start the diagnostic only when preflight passes `9/9` and the fresh smoke
+passes `5/5` with zero failure and retry. Every arm must start within 30 minutes
+of the same smoke. Do not refresh the smoke during a declared window.
+
+V3 evaluates each canonical case as an adjacent candidate/baseline pair, then
+repeats the full case order with the arm order mirrored. Each arm has a private
+trace at `diagnostic/<series>/case-<ordinal>/rag-traces/<arm>.jsonl`; evaluator
+outputs remain under the sibling `<arm>/` directory. The full nine-case series
+is aggregated before the unchanged rollout gate is applied.
+
+Any provider error, fallback, retry, input drift, trace mismatch or smoke expiry
+tombstones the whole window. Do not resume it, rerun only the missing cases,
+carry completed pairs forward, overwrite the directory or select the better
+series. A complete passing diagnostic only permits owner adjudication of a new
+formal declaration while both feature flags remain off.
 
 ## Cleanup
 
