@@ -232,6 +232,18 @@ def test_snapshot_counts_fallback_and_retry_events_without_payload(tmp_path):
             "trace_id": "q1",
             "deterministic_fallback": True,
         },
+        {
+            "event": "community_summaries",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "fallback_reason": "graph_retrieval_disabled",
+        },
+        {
+            "event": "community_summaries",
+            "execution_context": "evaluation",
+            "trace_id": "q1",
+            "fallback_reason": "community_summaries_disabled",
+        },
     ]
     path.write_text(
         "\n".join(json.dumps(item) for item in events),

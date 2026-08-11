@@ -835,6 +835,39 @@ def test_graph_preflight_can_validate_an_explicit_non_default_staging_scope():
     )
     assert changed_report["fixture_fingerprint"] != report["fixture_fingerprint"]
 
+    changed_id_case = {
+        **changed_case,
+        "id": "controlled-demo-page-changed",
+    }
+    changed_id_report = check_graph_fixture(
+        [changed_id_case],
+        [document],
+        [edge],
+        [point],
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS,
+        pending_serving_edge_count=0,
+        collection="MechChatbot_Controlled_Demo_v2",
+        expected_batch="controlled-demo-v2",
+        expected_collection="MechChatbot_Controlled_Demo_v2",
+    )
+    combined_report = check_graph_fixture(
+        [case, changed_id_case],
+        [document],
+        [edge],
+        [point],
+        applied_versions=REQUIRED_GRAPH_MIGRATIONS,
+        pending_serving_edge_count=0,
+        collection="MechChatbot_Controlled_Demo_v2",
+        expected_batch="controlled-demo-v2",
+        expected_collection="MechChatbot_Controlled_Demo_v2",
+    )
+    assert combined_report["case_fixture_fingerprints"] == {
+        case["id"]: report["fixture_fingerprint"],
+        "controlled-demo-page-changed": changed_id_report[
+            "fixture_fingerprint"
+        ],
+    }
+
 
 def test_graph_preflight_reports_unresolved_relation_symbol_explicitly():
     case = {

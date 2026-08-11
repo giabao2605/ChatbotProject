@@ -51,6 +51,27 @@ def _resolve_key(value, documents_by_key):
     return raw
 
 
+def _fixture_fingerprint(
+    cases,
+    sql_documents,
+    graph_edges,
+    qdrant_points,
+    applied_versions,
+    *,
+    expected_batch,
+    expected_collection,
+):
+    return hashlib.sha256(json.dumps({
+        "cases": cases,
+        "expected_batch": expected_batch,
+        "expected_collection": expected_collection,
+        "documents": sql_documents,
+        "edges": graph_edges,
+        "points": qdrant_points,
+        "versions": sorted(applied_versions),
+    }, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def check_graph_fixture(
     cases, sql_documents, graph_edges, qdrant_points, *, applied_versions,
     pending_serving_edge_count, collection, graph_nodes=None, proposals=None,
@@ -64,6 +85,7 @@ def check_graph_fixture(
     if collection != expected_collection:
         raise ValueError(f"collection must equal {expected_collection}")
     failures = []
+    case_list = list(cases or ())
     missing_versions = sorted(
         REQUIRED_GRAPH_MIGRATIONS
         - {str(value).upper() for value in applied_versions}
@@ -81,7 +103,7 @@ def check_graph_fixture(
     }
     resolutions = {}
     resolved_relations = []
-    for case in cases or ():
+    for case in case_list:
         case_id = str(case.get("id") or "")
         filename = str(case.get("expected_document") or "")
         document = documents.get(filename.casefold())
@@ -216,13 +238,27 @@ def check_graph_fixture(
         else:
             resolution["expected_relation"] = case_relations[0] if case_relations else {}
         resolutions[case_id] = resolution
-    fingerprint = hashlib.sha256(json.dumps({
-        "cases": cases,
-        "expected_batch": expected_batch,
-        "expected_collection": expected_collection,
-        "documents": sql_documents, "edges": graph_edges, "points": qdrant_points,
-        "versions": sorted(applied_versions),
-    }, sort_keys=True, default=str).encode()).hexdigest()
+    fingerprint = _fixture_fingerprint(
+        case_list,
+        sql_documents,
+        graph_edges,
+        qdrant_points,
+        applied_versions,
+        expected_batch=expected_batch,
+        expected_collection=expected_collection,
+    )
+    case_fixture_fingerprints = {
+        str(case.get("id") or ""): _fixture_fingerprint(
+            [case],
+            sql_documents,
+            graph_edges,
+            qdrant_points,
+            applied_versions,
+            expected_batch=expected_batch,
+            expected_collection=expected_collection,
+        )
+        for case in case_list
+    }
     from scripts.graph.report import build_graph_report
     graph_report = build_graph_report(
         nodes=graph_nodes or [], edges=graph_edges or [], proposals=proposals or [],
@@ -249,8 +285,9 @@ def check_graph_fixture(
     return {
         "schema": "graph-fixture-preflight-v1", "passed": not failures,
         "batch": expected_batch, "collection": collection,
-        "checked_cases": len(cases or ()), "failures": failures,
+        "checked_cases": len(case_list), "failures": failures,
         "case_resolutions": resolutions, "fixture_fingerprint": fingerprint,
+        "case_fixture_fingerprints": case_fixture_fingerprints,
         "graph_report": graph_report,
     }
 

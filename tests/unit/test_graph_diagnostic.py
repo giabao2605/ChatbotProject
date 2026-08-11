@@ -384,6 +384,10 @@ def test_preflight_binds_graph_collection_case_count_and_review_report():
         "collection": "MechChatbot_Graph_Eval_v1",
         "checked_cases": 17,
         "fixture_fingerprint": "a" * 64,
+        "case_fixture_fingerprints": {
+            f"case-{index}": "a" * 64
+            for index in range(17)
+        },
         "graph_report": {
             "schema": "graph-readiness-v1",
             "review_mode": "multi_reviewer",
@@ -392,7 +396,19 @@ def test_preflight_binds_graph_collection_case_count_and_review_report():
         },
     }
 
-    validate_preflight_report(report, expected_case_count=17)
+    expected_case_ids = set(report["case_fixture_fingerprints"])
+    validate_preflight_report(
+        report,
+        expected_case_count=17,
+        expected_case_ids=expected_case_ids,
+    )
+
+    with pytest.raises(ValueError, match="case ids"):
+        validate_preflight_report(
+            report,
+            expected_case_count=17,
+            expected_case_ids={*expected_case_ids, "unexpected"},
+        )
 
     with pytest.raises(ValueError, match="collection"):
         validate_preflight_report(
@@ -532,6 +548,7 @@ def test_arm_preflight_allows_only_case_scoped_coverage_changes(tmp_path):
     context = SimpleNamespace(
         preflight_report={
             "fixture_fingerprint": "a" * 64,
+            "case_fixture_fingerprints": {"case-a": "b" * 64},
             "graph_report": full_graph,
         },
     )
@@ -542,7 +559,8 @@ def test_arm_preflight_allows_only_case_scoped_coverage_changes(tmp_path):
         "batch": "graph-eval-v1",
         "collection": "MechChatbot_Graph_Eval_v1",
         "checked_cases": 1,
-        "fixture_fingerprint": "a" * 64,
+        "fixture_fingerprint": "b" * 64,
+        "case_fixture_fingerprints": {"case-a": "b" * 64},
         "case_resolutions": {"case-a": {}},
         "graph_report": case_graph,
     }
@@ -553,6 +571,13 @@ def test_arm_preflight_allows_only_case_scoped_coverage_changes(tmp_path):
     report["graph_report"] = {**case_graph, "reviewer_count": 1}
     path.write_text(json.dumps(report), encoding="utf-8")
     with pytest.raises(RuntimeError, match="governance"):
+        diagnostic._verify_arm_preflight(context, path, case_id="case-a")
+
+    report["graph_report"] = case_graph
+    report["fixture_fingerprint"] = "c" * 64
+    report["case_fixture_fingerprints"] = {"case-a": "c" * 64}
+    path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="fixture snapshot"):
         diagnostic._verify_arm_preflight(context, path, case_id="case-a")
 
 
@@ -903,6 +928,9 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
         provider_environment={"GPT_MODEL_NAME": "test-model"},
         preflight_report={
             "fixture_fingerprint": "c" * 64,
+            "case_fixture_fingerprints": {
+                "graph-case-01": "c" * 64,
+            },
             "graph_report": graph_report,
         },
     )
@@ -950,6 +978,9 @@ def test_arm_execution_binds_smoke_preflight_and_privacy_safe_metrics(
                 "collection": "MechChatbot_Graph_Eval_v1",
                 "checked_cases": 1,
                 "fixture_fingerprint": "c" * 64,
+                "case_fixture_fingerprints": {
+                    "graph-case-01": "c" * 64,
+                },
                 "case_resolutions": {"graph-case-01": {}},
                 "graph_report": graph_report,
             }),

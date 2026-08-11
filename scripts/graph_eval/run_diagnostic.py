@@ -1,4 +1,4 @@
-"""Run a non-formal, reversed-arm Graph retrieval latency diagnostic."""
+"""Run a non-formal, case-paired Graph retrieval latency diagnostic."""
 
 from __future__ import annotations
 
@@ -248,6 +248,7 @@ def validate_preflight_report(
     report: Mapping[str, Any],
     *,
     expected_case_count: int,
+    expected_case_ids: set[str] | None = None,
 ) -> None:
     if report.get("schema") != "graph-fixture-preflight-v1":
         raise ValueError("Graph fixture preflight schema is invalid")
@@ -261,6 +262,21 @@ def validate_preflight_report(
         raise ValueError("preflight case count must match the manifest")
     if len(str(report.get("fixture_fingerprint") or "")) != 64:
         raise ValueError("preflight fixture fingerprint is invalid")
+    case_fingerprints = report.get("case_fixture_fingerprints")
+    if (
+        not isinstance(case_fingerprints, Mapping)
+        or len(case_fingerprints) != expected_case_count
+        or any(
+            not str(case_id).strip() or len(str(fingerprint)) != 64
+            for case_id, fingerprint in case_fingerprints.items()
+        )
+    ):
+        raise ValueError("preflight case fixture fingerprints are invalid")
+    if (
+        expected_case_ids is not None
+        and set(case_fingerprints) != expected_case_ids
+    ):
+        raise ValueError("preflight case ids do not match the manifest")
     graph_report = report.get("graph_report")
     if not isinstance(graph_report, Mapping) or graph_report.get(
         "schema"
@@ -330,11 +346,12 @@ def _validate_run_inputs(
     )
     if not cases or any(not isinstance(case, Mapping) for case in cases):
         raise ValueError("canonical Graph manifest must contain object cases")
-    build_case_plan(list(cases))
+    case_plan = build_case_plan(list(cases))
     manifest_case_count = len(cases)
     validate_preflight_report(
         preflight_report,
         expected_case_count=manifest_case_count,
+        expected_case_ids={item["case_id"] for item in case_plan},
     )
     return preflight_report, cases
 
@@ -437,9 +454,18 @@ def _verify_arm_preflight(
     case_id: str,
 ) -> None:
     report = json.loads(path.read_text(encoding="utf-8"))
-    validate_preflight_report(report, expected_case_count=1)
-    if report.get("fixture_fingerprint") != context.preflight_report.get(
-        "fixture_fingerprint"
+    validate_preflight_report(
+        report,
+        expected_case_count=1,
+        expected_case_ids={case_id},
+    )
+    expected_fingerprint = (
+        context.preflight_report.get("case_fixture_fingerprints") or {}
+    ).get(case_id)
+    actual_fingerprints = report.get("case_fixture_fingerprints") or {}
+    if (
+        report.get("fixture_fingerprint") != expected_fingerprint
+        or actual_fingerprints != {case_id: expected_fingerprint}
     ):
         raise RuntimeError("fixture snapshot changed during diagnostic")
     if set((report.get("case_resolutions") or {}).keys()) != {case_id}:

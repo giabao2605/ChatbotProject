@@ -21,6 +21,12 @@ from mech_chatbot.evaluation.metrics import nearest_rank
 
 DEFAULT_EXCLUDED_REASONS = {"client_cancelled"}
 RERANK_PROVIDERS = ("jina", "voyage")
+NON_FALLBACK_COMMUNITY_REASONS = frozenset({
+    "approved_summary_used",
+    "community_summaries_disabled",
+    "graph_retrieval_disabled",
+    "query_not_global",
+})
 
 
 def _parse_timestamp(value: str | None):
@@ -97,9 +103,20 @@ def build_snapshot(
         )
         if has_error:
             error_events[event_name] += 1
-        has_fallback = event_name.endswith("_fallback") or any(
-            "fallback" in str(key).casefold() and bool(value)
+        fallback_fields = [
+            value
             for key, value in event.items()
+            if "fallback" in str(key).casefold() and bool(value)
+        ]
+        has_fallback = event_name.endswith("_fallback") or bool(
+            fallback_fields
+            and not (
+                event_name == "community_summaries"
+                and all(
+                    str(value).casefold() in NON_FALLBACK_COMMUNITY_REASONS
+                    for value in fallback_fields
+                )
+            )
         )
         if has_fallback:
             fallback_events[event_name] += 1
