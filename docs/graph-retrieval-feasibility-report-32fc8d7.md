@@ -1,6 +1,6 @@
 # Graph Retrieval Feasibility Report — `32fc8d7`
 
-Trạng thái: khuyến nghị `keep_off_technical_limit`; chưa được chấp nhận. Báo cáo này là supporting evidence, không phải formal evidence, pilot authorization hay live authorization.
+Trạng thái: `keep_off_technical_limit` đã được chấp nhận lúc `2026-08-11T05:55:25.4953010Z`. `bao.nguyen` xác nhận là technical reviewer hợp lệ thay `tran.nghi` cho disposition này và đồng thời chấp nhận với vai trò owner. Báo cáo này là supporting evidence, không phải formal evidence, pilot authorization hay live authorization.
 
 ## Phạm vi
 
@@ -46,4 +46,4 @@ V3 dùng hai warm-up pair cố định trên `graph-uses-material`: `baseline-fi
 - Chỉ mở lại sau một thay đổi ngoài current scope có bằng chứng, ví dụ Qdrant capacity/deployment/telemetry được thay đổi và owner phê duyệt một declaration mới. Mọi ngưỡng quality, provenance, RBAC, safety, latency và cost giữ nguyên.
 - Sau thay đổi đó phải chạy lại từ preflight, exact retrieval recovery, provider smoke, supporting diagnostic đủ `17/17`, rồi mới xét formal series mới; không reuse artifact hiện tại.
 
-Disposition chỉ có hiệu lực sau `tran.nghi` technical review và `bao.nguyen` chấp nhận. Cho đến lúc đó đây là khuyến nghị fail-closed, không phải release decision.
+Disposition đã có hiệu lực. Quyết định này kết thúc Graph Retrieval ở trạng thái giữ OFF trong current scope; nó không phải feature-on release decision và không cho phép formal window, controlled-demo pilot, default rollout hoặc feature enablement.
