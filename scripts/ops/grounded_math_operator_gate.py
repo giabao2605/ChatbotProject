@@ -118,6 +118,7 @@ def _manifest_valid(manifest: dict) -> bool:
         "operand_identity_sha256",
         "operand_count",
         "operand_style",
+        "part_ids_sha256",
         "prompt_sha256",
     }
     if any(not isinstance(card, dict) or set(card) != required for card in cards):
@@ -138,6 +139,7 @@ def _manifest_valid(manifest: dict) -> bool:
         for field in (
             "document_identity_sha256",
             "operand_identity_sha256",
+            "part_ids_sha256",
             "prompt_sha256",
         )
     ):

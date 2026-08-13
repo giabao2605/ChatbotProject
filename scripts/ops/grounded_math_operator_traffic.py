@@ -386,8 +386,8 @@ def run_due_once(
     validate_live_health(artifacts["health"], live_health)
     if send is None:
         rag_url = _loopback_url(artifacts["state"].get("rag_url"))
-        send = lambda question, _card_id: campaign.send_internal_rag_sse(
-            rag_url, service_token, question
+        send = lambda question, _card_id, part_ids: campaign.send_internal_rag_sse(
+            rag_url, service_token, question, part_ids
         )
     with campaign.single_instance_lock(campaign_root / "campaign.lock"):
         _validate_previous_base_gate(

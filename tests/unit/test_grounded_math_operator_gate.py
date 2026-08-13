@@ -20,7 +20,7 @@ def _artifacts():
     inventory = [
         {
             "doc_id": index,
-            "file_name": f"drawing-{index}.pdf",
+            "file_name": f"9.3.{index:05d}(TEST)-ver01-Model{index}.pdf",
             "version": 1,
             "department": "Technical",
             "site": "PHONG_KY_THUAT",

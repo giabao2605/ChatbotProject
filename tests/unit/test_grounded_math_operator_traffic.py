@@ -14,7 +14,7 @@ def _inventory() -> list[dict]:
     return [
         {
             "doc_id": index,
-            "file_name": f"drawing-{index}.pdf",
+            "file_name": f"9.3.{index:05d}(TEST)-ver01-Model{index}.pdf",
             "version": 1,
             "department": "Technical",
             "site": "PHONG_KY_THUAT",
@@ -121,7 +121,7 @@ def test_create_plan_freezes_start_artifacts_and_keeps_raw_prompts_private(tmp_p
     ]
     public_text = (root / "campaign-public.json").read_text(encoding="utf-8")
     private_text = (root / "campaign-private.json").read_text(encoding="utf-8")
-    assert "drawing-" not in public_text
+    assert "9.3." not in public_text
     assert "PART-" in private_text
     assert json.loads(root.joinpath("owner-declaration.json").read_text())["organic_claim_allowed"] is False
     with pytest.raises(FileExistsError):

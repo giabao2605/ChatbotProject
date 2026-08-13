@@ -42,6 +42,12 @@ OPERATOR_USER_ID = 81
 OPERATOR_USERNAME = "admin_bao"
 EXPECTED_SERVING_COMMIT = "7b9d57562a669984b843d48d6d7ddf09048c472d"
 PART_CODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{1,63}")
+DOCUMENT_NAME_RE = re.compile(
+    r"(?P<drawing>\d+(?:\.\d+){2,5})"
+    r"(?:\([^\r\n)]{1,40}\))?"
+    r"-ver(?P<version>\d{1,3})-Model(?P<model>\d{1,4})\.pdf",
+    re.IGNORECASE,
+)
 INVENTORY_SQL = """
 SELECT
     t.DocID,
@@ -100,9 +106,45 @@ def parse_timestamp(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _document_anchor(value: object) -> str | None:
+    name = str(value or "").strip()
+    if not 1 <= len(name) <= 160:
+        return None
+    match = DOCUMENT_NAME_RE.fullmatch(name)
+    if match is None:
+        return None
+    return (
+        f"{match.group('drawing')} "
+        f"ver{match.group('version')} Model{match.group('model')}"
+    )
+
+
+def _question_contains_part_id(question: str, part_id: str) -> bool:
+    return bool(
+        re.search(
+            rf"(?<![A-Za-z0-9_/-]){re.escape(part_id)}(?![A-Za-z0-9_/-])",
+            question,
+        )
+    )
+
+
+def _part_ids_valid(part_ids: object) -> bool:
+    return (
+        isinstance(part_ids, list)
+        and len(part_ids) == 2
+        and all(isinstance(part_id, str) for part_id in part_ids)
+        and len({part_id.casefold() for part_id in part_ids}) == 2
+        and all(PART_CODE_RE.fullmatch(part_id) for part_id in part_ids)
+    )
+
+
 def _normalized_inventory(inventory: Iterable[dict]) -> list[dict]:
     normalized: list[dict] = []
     for item in inventory:
+        file_name = str(item.get("file_name") or "").strip()
+        document_anchor = _document_anchor(file_name)
+        if document_anchor is None:
+            continue
         facts = sorted(
             (
                 {
@@ -120,7 +162,8 @@ def _normalized_inventory(inventory: Iterable[dict]) -> list[dict]:
         normalized.append(
             {
                 "doc_id": str(item["doc_id"]),
-                "file_name": str(item["file_name"]).strip(),
+                "file_name": file_name,
+                "document_anchor": document_anchor,
                 "version": str(item["version"]),
                 "department": str(item["department"]).strip(),
                 "site": str(item["site"]).strip(),
@@ -185,12 +228,12 @@ def inventory_from_rows(rows: Iterable[dict]) -> list[dict]:
     ]
 
 
-def _pair_prompt_candidates(labels: list[str]) -> list[dict]:
+def _pair_prompt_candidates(labels: list[str], document_anchor: str) -> list[dict]:
     operation_templates = {
-        "add": "Theo BOM, cộng số lượng {left} với {right}.",
-        "subtract": "Theo BOM, lấy số lượng {left} trừ số lượng {right}.",
-        "ratio": "Tỷ lệ số lượng {left} so với {right} trong BOM là bao nhiêu?",
-        "percent": "Số lượng {left} bằng bao nhiêu phần trăm số lượng {right} trong BOM?",
+        "add": "Theo BOM {file_name}, cộng số lượng {left} với {right}.",
+        "subtract": "Theo BOM {file_name}, lấy số lượng {left} trừ số lượng {right}.",
+        "ratio": "Trong BOM {file_name}, tỷ lệ số lượng {left} so với {right} là bao nhiêu?",
+        "percent": "Trong BOM {file_name}, số lượng {left} bằng bao nhiêu phần trăm số lượng {right}?",
     }
     candidates: list[dict] = []
     for operation, template in operation_templates.items():
@@ -206,21 +249,31 @@ def _pair_prompt_candidates(labels: list[str]) -> list[dict]:
                     "template_id": f"{operation}-pair",
                     "operand_labels": [left, right],
                     "operand_style": "part_code",
-                    "prompt": template.format(left=left, right=right),
+                    "prompt": template.format(
+                        file_name=document_anchor,
+                        left=left,
+                        right=right,
+                    ),
                 }
             )
     return candidates
 
 
-def _multiply_prompt_candidates(labels: list[str]) -> list[dict]:
-    multiply_template = "Theo BOM, nhân số lượng {left} với số lượng {right}."
+def _multiply_prompt_candidates(labels: list[str], document_anchor: str) -> list[dict]:
+    multiply_template = (
+        "Theo BOM {file_name}, nhân số lượng {left} với số lượng {right}."
+    )
     return [
         {
             "operation": "multiply",
             "template_id": "multiply-pair",
             "operand_labels": [left, right],
             "operand_style": "part_code",
-            "prompt": multiply_template.format(left=left, right=right),
+            "prompt": multiply_template.format(
+                file_name=document_anchor,
+                left=left,
+                right=right,
+            ),
         }
         for left, right in list(combinations(labels, 2))[
             :MAX_CARDS_PER_DOCUMENT_OPERATION
@@ -283,8 +336,10 @@ def _prompt_candidates(document: dict) -> tuple[list[dict], list[dict]]:
         )
         for fact in document["operand_facts"]
     )
-    candidates = _pair_prompt_candidates(labels)
-    candidates.extend(_multiply_prompt_candidates(labels))
+    candidates = _pair_prompt_candidates(labels, document["document_anchor"])
+    candidates.extend(
+        _multiply_prompt_candidates(labels, document["document_anchor"])
+    )
     by_operation, audit = _validated_candidates(candidates, facts)
     return _interleave_candidates(by_operation), audit
 
@@ -408,6 +463,10 @@ def build_campaign_cards(
                 "operand_count": len(candidate["operand_labels"]),
                 "operand_style": candidate["operand_style"],
                 "prompt_sha256": _sha256(candidate["prompt"]),
+                "part_ids_sha256": _sha256(
+                    _canonical_json(candidate["operand_labels"])
+                ),
+                "part_ids": list(candidate["operand_labels"]),
                 "prompt": candidate["prompt"],
             }
         )
@@ -420,7 +479,11 @@ def build_campaign_cards(
         "inventory_sha256": inventory_sha256,
         "preflight": preflight,
         "cards": [
-            {key: value for key, value in card.items() if key != "prompt"}
+            {
+                key: value
+                for key, value in card.items()
+                if key not in {"prompt", "part_ids"}
+            }
             for card in raw_cards
         ],
     }
@@ -438,7 +501,11 @@ def build_campaign_cards(
     public = {
         **common,
         "cards": [
-            {key: value for key, value in card.items() if key != "prompt"}
+            {
+                key: value
+                for key, value in card.items()
+                if key not in {"prompt", "part_ids"}
+            }
             for card in raw_cards
         ],
     }
@@ -449,6 +516,7 @@ def build_campaign_cards(
                 "card_id": card["card_id"],
                 "prompt_sha256": card["prompt_sha256"],
                 "question": card["prompt"],
+                "part_ids": list(card["part_ids"]),
             }
             for card in raw_cards
         ],
@@ -607,6 +675,7 @@ def send_internal_rag_sse(
     base_url: str,
     service_token: str,
     question: str,
+    part_ids: list[str],
     *,
     post=None,
     timeout_seconds: float = 150.0,
@@ -614,9 +683,8 @@ def send_internal_rag_sse(
     if not service_token:
         raise CampaignStopped("service_token_missing")
     normalized_url = loopback_runtime_url(base_url)
-    part_ids = extract_explicit_codes(question)
-    if len(part_ids) != 2 or any(
-        not PART_CODE_RE.fullmatch(part_id) for part_id in part_ids
+    if not isinstance(question, str) or not _part_ids_valid(part_ids) or any(
+        not _question_contains_part_id(question, part_id) for part_id in part_ids
     ):
         raise CampaignStopped("operator_part_codes_invalid")
     if post is None:
@@ -660,7 +728,7 @@ def dispatch_due(
     private: dict,
     wal_path: str | Path,
     now: datetime,
-    send: Callable[[str, str], str],
+    send: Callable[[str, str, list[str]], str],
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> dict | None:
@@ -706,6 +774,16 @@ def dispatch_due(
     private_card = private_by_id.get(due["card_id"])
     if not private_card or private_card.get("prompt_sha256") != due.get("prompt_sha256"):
         raise CampaignStopped("private_manifest_mismatch")
+    question = private_card.get("question")
+    part_ids = private_card.get("part_ids")
+    if (
+        not isinstance(question, str)
+        or _sha256(question) != due.get("prompt_sha256")
+        or not _part_ids_valid(part_ids)
+        or _sha256(_canonical_json(part_ids)) != due.get("part_ids_sha256")
+        or any(not _question_contains_part_id(question, part_id) for part_id in part_ids)
+    ):
+        raise CampaignStopped("private_manifest_mismatch")
 
     timestamp = _format_timestamp(current)
     _append_wal(
@@ -719,7 +797,7 @@ def dispatch_due(
         },
     )
     try:
-        trace_id = send(private_card["question"], due["card_id"])
+        trace_id = send(question, due["card_id"], list(part_ids))
     except Exception:
         terminal_time = (clock or (lambda: datetime.now(timezone.utc)))().astimezone(
             timezone.utc
