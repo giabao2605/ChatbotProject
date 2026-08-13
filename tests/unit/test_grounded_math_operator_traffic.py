@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -123,7 +124,12 @@ def test_create_plan_freezes_start_artifacts_and_keeps_raw_prompts_private(tmp_p
     private_text = (root / "campaign-private.json").read_text(encoding="utf-8")
     assert "9.3." not in public_text
     assert "8.1.00001" in private_text
-    assert json.loads(root.joinpath("owner-declaration.json").read_text())["organic_claim_allowed"] is False
+    manifest = json.loads(public_text)
+    declaration = json.loads(root.joinpath("owner-declaration.json").read_text())
+    assert manifest["traffic_class"] == "owner_authorized_operator_generated"
+    assert len({card["scheduled_at"] for card in manifest["cards"]}) == 100
+    assert declaration["count_toward_pilot"] is True
+    assert declaration["organic_claim_allowed"] is False
     with pytest.raises(FileExistsError):
         traffic.create_campaign_plan(
             root,
@@ -137,6 +143,58 @@ def test_create_plan_freezes_start_artifacts_and_keeps_raw_prompts_private(tmp_p
             tool_sha256="1" * 64,
             local_root=tmp_path / ".local",
         )
+
+
+def test_create_burst_plan_freezes_100_cards_due_together_and_excludes_pilot_claims(
+    tmp_path,
+):
+    window, state, health = _runtime_artifacts()
+    root = tmp_path / ".local" / "operator-burst"
+    started = datetime(2026, 8, 12, 2, tzinfo=timezone.utc)
+
+    result = traffic.create_campaign_plan(
+        root,
+        _inventory(),
+        started,
+        datetime(2026, 8, 12, 1, tzinfo=timezone.utc),
+        window,
+        state,
+        health,
+        _release_decisions(),
+        tool_sha256="1" * 64,
+        local_root=tmp_path / ".local",
+        burst=True,
+    )
+
+    manifest = json.loads(root.joinpath("campaign-public.json").read_text())
+    declaration = json.loads(root.joinpath("owner-declaration.json").read_text())
+    assert result["card_count"] == 100
+    assert manifest["schema"] == "grounded-math-operator-burst-v1"
+    assert manifest["traffic_class"] == "owner_authorized_operator_generated_burst"
+    assert {card["scheduled_at"] for card in manifest["cards"]} == {
+        "2026-08-12T02:00:00Z"
+    }
+    assert declaration["schema"] == (
+        "grounded-math-operator-burst-owner-declaration-v1"
+    )
+    assert declaration["traffic_class"] == (
+        "owner_authorized_operator_generated_burst"
+    )
+    assert declaration["count_toward_pilot"] is False
+    assert declaration["qualifies_as_7_day_pilot"] is False
+    assert declaration["duration_claim_allowed"] is False
+    assert declaration["organic_claim_allowed"] is False
+    assert declaration["quality_claim_allowed"] is False
+    assert declaration["ui_parity_claim_allowed"] is False
+    assert declaration["default_rollout_authorized"] is False
+    assert declaration["concurrency"] == 1
+    assert declaration["max_requests"] == 100
+    assert declaration["request_count"] == 100
+    assert declaration["retry_policy"] == "none"
+    assert declaration["abort_on_ambiguous"] is True
+    rendered = json.dumps({"manifest": manifest, "declaration": declaration})
+    assert "8.1.00001" not in rendered
+    assert "question" not in rendered
 
 
 def test_create_plan_rejects_private_manifest_outside_local(tmp_path):
@@ -339,6 +397,369 @@ def test_status_reports_only_metadata(tmp_path):
     assert status["remaining"] == 99
     assert "question" not in json.dumps(status)
     assert "raw-trace" not in json.dumps(status)
+
+
+def _burst_gate_from_wal(root, state):
+    wal_path = root / "campaign.wal.jsonl"
+    rows = (
+        [json.loads(line) for line in wal_path.read_text().splitlines()]
+        if wal_path.exists()
+        else []
+    )
+    completed = [row for row in rows if row["event"] == "attempt_completed"]
+    if not completed:
+        return {
+            "schema": "grounded-math-production-pilot-gate-v1",
+            "eligible_trace_count": 0,
+            "trace_id_sha256": [],
+            "window_sha256": state["window_sha256"],
+            "provider_smoke_valid": True,
+            "checks": {},
+        }
+    return {
+        "schema": "grounded-math-production-pilot-gate-v1",
+        "eligible_trace_count": len(completed),
+        "trace_id_sha256": [row["trace_id_sha256"] for row in completed],
+        "window_sha256": state["window_sha256"],
+        "checks": {
+            name: True
+            for name in (
+                "security",
+                "citation_structure",
+                "provenance",
+                "budgets",
+                "provider_errors",
+                "leakage",
+            )
+        },
+    }
+
+
+def _create_burst_plan(tmp_path):
+    window, state, health = _runtime_artifacts()
+    root = tmp_path / ".local" / "operator-burst"
+    traffic.create_campaign_plan(
+        root,
+        _inventory(),
+        datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+        datetime(2026, 8, 12, 1, tzinfo=timezone.utc),
+        window,
+        state,
+        health,
+        _release_decisions(),
+        tool_sha256="1" * 64,
+        local_root=tmp_path / ".local",
+        burst=True,
+    )
+    return root, state, health
+
+
+def test_run_burst_dispatches_100_sequentially_and_reconciles_every_completion(
+    tmp_path,
+):
+    root, state, health = _create_burst_plan(tmp_path)
+    sent_questions = []
+    active = 0
+    max_active = 0
+    refreshes = {"health": 0, "release": 0, "gate": 0}
+
+    def refresh_health():
+        refreshes["health"] += 1
+        return json.loads(json.dumps(health))
+
+    def refresh_release():
+        refreshes["release"] += 1
+        return _release_decisions()
+
+    def refresh_gate():
+        refreshes["gate"] += 1
+        return _burst_gate_from_wal(root, state)
+
+    def send(question, card_id, _part_ids):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        sent_questions.append(question)
+        active -= 1
+        return f"raw-sensitive-trace-{card_id}"
+
+    result = traffic.run_burst(
+        root,
+        datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+        refresh_live_health=refresh_health,
+        refresh_release_decisions=refresh_release,
+        refresh_base_gate=refresh_gate,
+        service_token="secret-token",
+        current_tool_sha256="1" * 64,
+        send=send,
+    )
+
+    rows = [
+        json.loads(line)
+        for line in root.joinpath("campaign.wal.jsonl").read_text().splitlines()
+    ]
+    status = traffic.campaign_status(root)
+    assert result["status"] == "completed"
+    assert result["completed"] == 100
+    assert result["remaining"] == 0
+    assert result["count_toward_pilot"] is False
+    assert result["qualifies_as_7_day_pilot"] is False
+    assert len(sent_questions) == 100
+    assert max_active == 1
+    assert refreshes == {"health": 101, "release": 101, "gate": 101}
+    assert [row["event"] for row in rows] == [
+        event
+        for _ in range(100)
+        for event in ("attempt_started", "attempt_completed")
+    ]
+    assert len({row["card_id"] for row in rows}) == 100
+    rendered = json.dumps({"result": result, "status": status, "wal": rows})
+    assert "secret-token" not in rendered
+    assert all(question not in rendered for question in sent_questions)
+    assert "raw-sensitive-trace" not in rendered
+    assert status["completed"] == 100
+    assert status["remaining"] == 0
+    assert status["count_toward_pilot"] is False
+    assert status["qualifies_as_7_day_pilot"] is False
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("gate", "base_gate_not_reconciled"),
+        ("health", "live_runtime_unhealthy"),
+        ("release", "default_rollout_decision_changed"),
+    ],
+)
+def test_run_burst_stops_before_the_next_request_when_a_live_gate_fails(
+    tmp_path, failure, message
+):
+    root, state, health = _create_burst_plan(tmp_path)
+    sent = []
+
+    def completed_count():
+        path = root / "campaign.wal.jsonl"
+        return (
+            sum(
+                json.loads(line)["event"] == "attempt_completed"
+                for line in path.read_text().splitlines()
+            )
+            if path.exists()
+            else 0
+        )
+
+    def refresh_health():
+        current = json.loads(json.dumps(health))
+        if failure == "health" and completed_count():
+            current["pilot"]["status"] = "error"
+        return current
+
+    def refresh_release():
+        if failure == "release" and completed_count():
+            return {
+                "status": "complete",
+                "decisions": {
+                    "RAG_GROUNDED_MATH_ENABLED": {"decision": "accepted"}
+                },
+            }
+        return _release_decisions()
+
+    def refresh_gate():
+        if failure == "gate" and completed_count():
+            return {}
+        return _burst_gate_from_wal(root, state)
+
+    with pytest.raises(campaign.CampaignStopped, match=message):
+        traffic.run_burst(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            refresh_live_health=refresh_health,
+            refresh_release_decisions=refresh_release,
+            refresh_base_gate=refresh_gate,
+            service_token="secret-token",
+            current_tool_sha256="1" * 64,
+            send=lambda question, card_id, _part_ids: (
+                sent.append((question, card_id)) or f"raw-trace-{card_id}"
+            ),
+        )
+
+    rows = [
+        json.loads(line)
+        for line in root.joinpath("campaign.wal.jsonl").read_text().splitlines()
+    ]
+    assert len(sent) == 1
+    assert [row["event"] for row in rows] == [
+        "attempt_started",
+        "attempt_completed",
+    ]
+    rendered = json.dumps({"status": traffic.campaign_status(root), "wal": rows})
+    assert "secret-token" not in rendered
+    assert sent[0][0] not in rendered
+    assert "raw-trace" not in rendered
+
+
+def test_failed_burst_is_one_shot_and_cannot_resume(tmp_path):
+    root, _state, health = _create_burst_plan(tmp_path)
+    sent = []
+
+    with pytest.raises(campaign.CampaignStopped, match="live_runtime_unhealthy"):
+        traffic.run_burst(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            refresh_live_health=lambda: {
+                **health,
+                "pilot": {**health["pilot"], "status": "error"},
+            },
+            refresh_release_decisions=_release_decisions,
+            refresh_base_gate=lambda: {},
+            service_token="secret-token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_args: sent.append("sent") or "trace",
+        )
+
+    with pytest.raises(
+        campaign.CampaignStopped, match="burst_invocation_already_started"
+    ):
+        traffic.run_burst(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            refresh_live_health=lambda: health,
+            refresh_release_decisions=_release_decisions,
+            refresh_base_gate=lambda: {},
+            service_token="secret-token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_args: sent.append("sent") or "trace",
+        )
+
+    marker = root.joinpath("burst-invocation.json").read_text()
+    assert sent == []
+    assert "secret-token" not in marker
+    assert "question" not in marker
+
+
+def test_copied_burst_root_cannot_replay_the_signed_plan(tmp_path):
+    root, _state, health = _create_burst_plan(tmp_path)
+    copied = tmp_path / ".local" / "copied-burst"
+    shutil.copytree(root, copied)
+
+    with pytest.raises(campaign.CampaignStopped, match="burst_authorization_invalid"):
+        traffic.run_burst(
+            copied,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            refresh_live_health=lambda: health,
+            refresh_release_decisions=_release_decisions,
+            refresh_base_gate=lambda: {},
+            service_token="secret-token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_args: pytest.fail("network must not run"),
+        )
+
+    assert not copied.joinpath("burst-invocation.json").exists()
+
+
+def test_burst_rejects_a_seeded_wal_before_network(tmp_path):
+    root, _state, health = _create_burst_plan(tmp_path)
+    root.joinpath("campaign.wal.jsonl").write_text(
+        json.dumps(
+            {
+                "schema": campaign.WAL_SCHEMA,
+                "event": "attempt_started",
+                "card_id": "card-001",
+                "ts": "2026-08-12T02:00:00Z",
+                "prompt_sha256": "0" * 64,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(campaign.CampaignStopped, match="burst_wal_must_be_empty"):
+        traffic.run_burst(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            refresh_live_health=lambda: health,
+            refresh_release_decisions=_release_decisions,
+            refresh_base_gate=lambda: {},
+            service_token="secret-token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_args: pytest.fail("network must not run"),
+        )
+
+    assert not root.joinpath("burst-invocation.json").exists()
+
+
+def test_burst_rejects_wrong_initial_gate_binding_before_network(tmp_path):
+    root, _state, health = _create_burst_plan(tmp_path)
+    sent = []
+    wrong_gate = {
+        "schema": "wrong",
+        "window_sha256": "0" * 64,
+        "eligible_trace_count": 0,
+        "trace_id_sha256": [],
+    }
+
+    with pytest.raises(campaign.CampaignStopped, match="base_gate_not_reconciled"):
+        traffic.run_burst(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            refresh_live_health=lambda: health,
+            refresh_release_decisions=_release_decisions,
+            refresh_base_gate=lambda: wrong_gate,
+            service_token="secret-token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_args: sent.append("sent") or "trace",
+        )
+
+    assert sent == []
+    assert json.loads(root.joinpath("burst-invocation.json").read_text())["status"] == (
+        "aborted"
+    )
+    assert json.loads(root.joinpath("tombstone.json").read_text())["status"] == (
+        "tombstoned"
+    )
+
+
+def test_burst_rejects_empty_initial_gate_before_network(tmp_path):
+    root, _state, health = _create_burst_plan(tmp_path)
+    sent = []
+
+    with pytest.raises(campaign.CampaignStopped, match="base_gate_not_reconciled"):
+        traffic.run_burst(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            refresh_live_health=lambda: health,
+            refresh_release_decisions=_release_decisions,
+            refresh_base_gate=lambda: {},
+            service_token="secret-token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_args: sent.append("sent") or "trace",
+        )
+
+    assert sent == []
+
+
+def test_burst_rejects_declaration_campaign_id_drift_before_network(tmp_path):
+    root, _state, health = _create_burst_plan(tmp_path)
+    declaration_path = root / "owner-declaration.json"
+    declaration = json.loads(declaration_path.read_text())
+    declaration["campaign_id"] = "different-campaign"
+    declaration_path.write_text(json.dumps(declaration), encoding="utf-8")
+    declaration["bindings"]["manifest_sha256"] = "0" * 64
+
+    with pytest.raises(
+        campaign.CampaignStopped,
+        match="frozen_artifact_drift|burst_authorization_invalid",
+    ):
+        traffic.run_burst(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            refresh_live_health=lambda: health,
+            refresh_release_decisions=_release_decisions,
+            refresh_base_gate=lambda: {},
+            service_token="secret-token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_args: pytest.fail("network must not run"),
+        )
 
 
 def test_run_due_once_requires_the_previous_card_in_the_current_base_gate(tmp_path):
@@ -758,3 +1179,151 @@ def test_main_run_due_loads_service_token_from_settings_not_cli(tmp_path, monkey
     assert captured["service_token"] == "env-token"
     assert captured["current_base_gate"] == {}
     assert captured["current_release_decisions"] == _release_decisions()
+
+
+def test_main_run_burst_writes_final_gates_and_tombstone(tmp_path, monkeypatch):
+    from mech_chatbot.config import settings as settings_module
+    from scripts.ops import grounded_math_operator_burst_gate, grounded_math_pilot_gate
+
+    root = tmp_path / "operator-burst"
+    root.mkdir()
+    base_gate = root / "base-gate.json"
+    release_decisions = root / "release-decisions.json"
+    release_decisions.write_text(json.dumps(_release_decisions()), encoding="utf-8")
+    invocation = {
+        "schema": "grounded-math-operator-burst-invocation-v1",
+        "status": "completed",
+    }
+    root.joinpath("burst-invocation.json").write_text(
+        json.dumps(invocation), encoding="utf-8"
+    )
+    artifacts = {
+        "state": {},
+        "declaration": {},
+        "manifest": {"campaign_id": "campaign-1"},
+        "release_decisions": _release_decisions(),
+    }
+    monkeypatch.setattr(
+        traffic,
+        "_parse_args",
+        lambda: SimpleNamespace(
+            command="run-burst",
+            root=root,
+            base_gate=base_gate,
+            trace=root / "trace.jsonl",
+            window=root / "window.json",
+            state=root / "state.json",
+            health_capture=root / "health.json",
+            provider_smoke=root / "smoke.json",
+            release_decisions=release_decisions,
+            dotenv=root / ".env",
+        ),
+    )
+    monkeypatch.setattr(traffic, "_load_plan", lambda _root: artifacts)
+    monkeypatch.setattr(
+        settings_module,
+        "load_settings",
+        lambda _path: SimpleNamespace(RAG_SERVICE_TOKEN="env-token"),
+    )
+    monkeypatch.setattr(
+        traffic,
+        "run_burst",
+        lambda *_args, **_kwargs: {
+            "status": "completed",
+            "completed": 100,
+            "remaining": 0,
+        },
+    )
+    final_base = {"schema": "grounded-math-production-pilot-gate-v1"}
+    monkeypatch.setattr(
+        grounded_math_pilot_gate, "build_artifact", lambda *_args: final_base
+    )
+    final_burst = {
+        "passed": True,
+        "decision": "throughput_evidence_only",
+        "count_toward_pilot": False,
+        "qualifies_as_7_day_pilot": False,
+        "default_rollout_authorized": False,
+    }
+    monkeypatch.setattr(
+        grounded_math_operator_burst_gate,
+        "evaluate_burst_gate",
+        lambda *_args: final_burst,
+    )
+
+    assert traffic.main() == 0
+    assert json.loads(base_gate.read_text()) == final_base
+    assert json.loads(root.joinpath("burst-gate.json").read_text()) == final_burst
+    tombstone = json.loads(root.joinpath("tombstone.json").read_text())
+    assert tombstone["status"] == "tombstoned"
+    assert tombstone["count_toward_pilot"] is False
+    assert tombstone["qualifies_as_7_day_pilot"] is False
+    assert tombstone["default_rollout_authorized"] is False
+
+
+def test_main_run_burst_tombstones_when_final_gate_rejects(tmp_path, monkeypatch):
+    from mech_chatbot.config import settings as settings_module
+    from scripts.ops import grounded_math_operator_burst_gate, grounded_math_pilot_gate
+
+    root = tmp_path / "operator-burst"
+    root.mkdir()
+    release_decisions = root / "release-decisions.json"
+    release_decisions.write_text(json.dumps(_release_decisions()), encoding="utf-8")
+    root.joinpath("burst-invocation.json").write_text(
+        json.dumps({"status": "completed"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        traffic,
+        "_parse_args",
+        lambda: SimpleNamespace(
+            command="run-burst",
+            root=root,
+            base_gate=root / "base-gate.json",
+            trace=root / "trace.jsonl",
+            window=root / "window.json",
+            state=root / "state.json",
+            health_capture=root / "health.json",
+            provider_smoke=root / "smoke.json",
+            release_decisions=release_decisions,
+            dotenv=root / ".env",
+        ),
+    )
+    monkeypatch.setattr(
+        traffic,
+        "_load_plan",
+        lambda _root: {
+            "state": {},
+            "declaration": {},
+            "manifest": {"campaign_id": "campaign-1"},
+            "release_decisions": _release_decisions(),
+        },
+    )
+    monkeypatch.setattr(
+        settings_module,
+        "load_settings",
+        lambda _path: SimpleNamespace(RAG_SERVICE_TOKEN="env-token"),
+    )
+    monkeypatch.setattr(
+        traffic,
+        "run_burst",
+        lambda *_args, **_kwargs: {"status": "completed", "completed": 100},
+    )
+    monkeypatch.setattr(
+        grounded_math_pilot_gate,
+        "build_artifact",
+        lambda *_args: {"schema": "grounded-math-production-pilot-gate-v1"},
+    )
+    monkeypatch.setattr(
+        grounded_math_operator_burst_gate,
+        "evaluate_burst_gate",
+        lambda *_args: {"passed": False, "decision": "rejected"},
+    )
+
+    with pytest.raises(campaign.CampaignStopped, match="burst_gate_rejected"):
+        traffic.main()
+
+    tombstone = json.loads(root.joinpath("tombstone.json").read_text())
+    assert tombstone["reason"] == "burst_finalization_failed"
+    assert tombstone["completed_request_count"] == 100
+    assert tombstone["count_toward_pilot"] is False
+    assert tombstone["default_rollout_authorized"] is False

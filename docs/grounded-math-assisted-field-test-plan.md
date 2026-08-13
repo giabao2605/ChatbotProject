@@ -238,6 +238,12 @@ Campaign chỉ được ghi là completed khi:
 
 Campaign không tự authorize default rollout. Nếu pilot đủ 7 ngày, canonical eligible count đạt 100 theo declaration, automated gate pass và review pass, bước tiếp theo vẫn là interaction matrix c1/c5, technical review bởi `tran.nghi`, rồi owner decision/default-rollout ledger như plan chính.[S1]
 
+### Nhánh owner-authorized burst 100 request
+
+Khi owner chấp nhận chạy nhanh, operator có thể tạo một campaign riêng với traffic class `owner_authorized_operator_generated_burst` và gửi tối đa 100 request tuần tự trong một invocation. Contract bắt buộc giữ concurrency `1`, không retry/replacement, append-only WAL, kiểm tra live health, release ledger và trace reconciliation sau từng request; bất kỳ ambiguous, noneligible, drift hoặc automated-check failure nào cũng dừng trước request kế tiếp.
+
+Burst declaration phải được ký trước request đầu tiên và luôn ghi `count_toward_pilot=false`, `qualifies_as_7_day_pilot=false`, `duration_claim_allowed=false`, mọi organic/quality/UI/default-rollout claim đều false. Kết quả chỉ là throughput/safety evidence tại một thời điểm; dù đạt 100/100, nó không chứng minh ổn định theo thời gian và không hoàn thành acceptance 7 ngày của plan chính. Không tạo Scheduled Task cho nhánh này; runtime phải dừng và campaign phải tombstone sau khi kết thúc hoặc fail.
+
 ## Stop conditions
 
 Dừng ngay và report fail-closed, không tự restart hay sửa runtime, khi có một trong các điều kiện:

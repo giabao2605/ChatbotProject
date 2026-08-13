@@ -1,4 +1,4 @@
-"""Operator workflow for the seven-day Grounded Math traffic campaign."""
+"""Operator workflow for governed Grounded Math traffic campaigns."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -63,6 +64,35 @@ def _write_json_replace(path: Path, value: object) -> None:
             temporary.unlink()
 
 
+def _write_burst_tombstone(
+    root: Path,
+    campaign_id: str,
+    *,
+    reason: str,
+    completed_request_count: int,
+    burst_gate: dict | None = None,
+) -> None:
+    path = root / "tombstone.json"
+    if path.exists():
+        return
+    value = {
+        "schema": "grounded-math-operator-burst-tombstone-v1",
+        "status": "tombstoned",
+        "reason": reason,
+        "campaign_id": campaign_id,
+        "completed_request_count": completed_request_count,
+        "count_toward_pilot": False,
+        "qualifies_as_7_day_pilot": False,
+        "carry_forward_requests": 0,
+        "default_rollout_authorized": False,
+    }
+    if burst_gate is not None:
+        value["burst_gate_sha256"] = hashlib.sha256(
+            campaign.canonical_json(burst_gate)
+        ).hexdigest()
+    _write_json_exclusive(path, value)
+
+
 def create_campaign_plan(
     root: str | Path,
     inventory: list[dict],
@@ -75,6 +105,7 @@ def create_campaign_plan(
     *,
     tool_sha256: str,
     local_root: str | Path = PROJECT_LOCAL_ROOT,
+    burst: bool = False,
 ) -> dict:
     output_root = Path(root).resolve()
     allowed_root = Path(local_root).resolve()
@@ -85,8 +116,15 @@ def create_campaign_plan(
     if not relative.parts:
         raise campaign.CampaignStopped("private_root_outside_local")
     output_root.mkdir(parents=True, exist_ok=False)
-    manifest, private = campaign.build_campaign_cards(inventory, started_at)
-    declaration = campaign.build_owner_declaration(
+    manifest, private = campaign.build_campaign_cards(
+        inventory, started_at, burst=burst
+    )
+    declaration_builder = (
+        campaign.build_burst_owner_declaration
+        if burst
+        else campaign.build_owner_declaration
+    )
+    declaration = declaration_builder(
         manifest,
         window,
         state,
@@ -96,6 +134,10 @@ def create_campaign_plan(
         declared_at=approved_at,
         tool_sha256=tool_sha256,
     )
+    if burst:
+        declaration["bindings"]["execution_root_sha256"] = hashlib.sha256(
+            str(output_root).casefold().encode("utf-8")
+        ).hexdigest()
     artifacts = {
         "manifest": manifest,
         "private": private,
@@ -264,8 +306,64 @@ def _validate_campaign_authorization(artifacts: dict) -> None:
         raise campaign.CampaignStopped("campaign_authorization_invalid")
 
 
+def _validate_burst_authorization(artifacts: dict) -> None:
+    declaration = artifacts["declaration"]
+    manifest = artifacts["manifest"]
+    if not all(
+        (
+            manifest.get("schema") == campaign.BURST_SCHEMA,
+            manifest.get("traffic_class") == campaign.BURST_TRAFFIC_CLASS,
+            manifest.get("count_toward_pilot") is False,
+            manifest.get("qualifies_as_7_day_pilot") is False,
+            manifest.get("max_concurrency") == 1,
+            manifest.get("max_requests") == campaign.CAMPAIGN_CARD_COUNT,
+            declaration.get("schema") == campaign.BURST_DECLARATION_SCHEMA,
+            declaration.get("owner") == "bao.nguyen",
+            declaration.get("campaign_id") == manifest.get("campaign_id"),
+            declaration.get("traffic_class") == campaign.BURST_TRAFFIC_CLASS,
+            declaration.get("transport") == campaign.TRANSPORT,
+            declaration.get("count_toward_pilot") is False,
+            declaration.get("qualifies_as_7_day_pilot") is False,
+            declaration.get("duration_claim_allowed") is False,
+            declaration.get("organic_claim_allowed") is False,
+            declaration.get("quality_claim_allowed") is False,
+            declaration.get("ui_parity_claim_allowed") is False,
+            declaration.get("default_rollout_authorized") is False,
+            declaration.get("concurrency") == 1,
+            declaration.get("request_count") == campaign.CAMPAIGN_CARD_COUNT,
+            declaration.get("max_requests") == campaign.CAMPAIGN_CARD_COUNT,
+            declaration.get("retry_policy") == "none",
+            declaration.get("abort_on_ambiguous") is True,
+            declaration.get("bindings", {}).get("execution_root_sha256")
+            == hashlib.sha256(
+                str(artifacts["root"].resolve()).casefold().encode("utf-8")
+            ).hexdigest(),
+        )
+    ):
+        raise campaign.CampaignStopped("burst_authorization_invalid")
+    standard = {
+        **declaration,
+        "schema": "grounded-math-operator-owner-declaration-v1",
+        "traffic_class": campaign.TRAFFIC_CLASS,
+        "count_toward_pilot": True,
+    }
+    _validate_campaign_authorization(
+        {**artifacts, "declaration": standard, "manifest": {
+            **manifest,
+            "schema": campaign.SCHEMA,
+            "traffic_class": campaign.TRAFFIC_CLASS,
+        }}
+    )
+
+
 def _load_plan(root: Path) -> dict:
-    return {name: _load_json(root / file_name) for name, file_name in PLAN_FILES.items()}
+    return {
+        "root": root,
+        **{
+            name: _load_json(root / file_name)
+            for name, file_name in PLAN_FILES.items()
+        },
+    }
 
 
 def _validate_previous_base_gate(
@@ -273,10 +371,25 @@ def _validate_previous_base_gate(
     base_gate: dict,
     state: dict,
     manifest: dict,
+    *,
+    require_initial_gate: bool = False,
 ) -> None:
     rows = campaign._read_wal(wal_path)
     completed = [row for row in rows if row.get("event") == "attempt_completed"]
     if not completed:
+        if require_initial_gate and not base_gate:
+            raise campaign.CampaignStopped("base_gate_not_reconciled")
+        if base_gate and not all(
+            (
+                base_gate.get("schema")
+                == "grounded-math-production-pilot-gate-v1",
+                base_gate.get("window_sha256") == state.get("window_sha256"),
+                base_gate.get("eligible_trace_count") == 0,
+                base_gate.get("trace_id_sha256") == [],
+                base_gate.get("provider_smoke_valid") is True,
+            )
+        ):
+            raise campaign.CampaignStopped("base_gate_not_reconciled")
         return
     trace_hashes = [row.get("trace_id_sha256") for row in completed]
     gate_hashes = base_gate.get("trace_id_sha256")
@@ -346,6 +459,27 @@ def _validate_previous_base_gate(
         raise campaign.CampaignStopped("base_gate_not_reconciled")
 
 
+def _validate_current_release_decisions(value: dict) -> None:
+    decisions = value.get("decisions") if isinstance(value, dict) else None
+    grounded_math = (
+        decisions.get("RAG_GROUNDED_MATH_ENABLED")
+        if isinstance(decisions, dict)
+        else None
+    )
+    if not all(
+        (
+            isinstance(value, dict),
+            value.get("status") == "incomplete",
+            isinstance(grounded_math, dict),
+            "decision" in grounded_math if isinstance(grounded_math, dict) else False,
+            grounded_math.get("decision") is None
+            if isinstance(grounded_math, dict)
+            else False,
+        )
+    ):
+        raise campaign.CampaignStopped("default_rollout_decision_changed")
+
+
 def run_due_once(
     root: str | Path,
     now: datetime,
@@ -363,26 +497,7 @@ def run_due_once(
     artifacts = _load_plan(campaign_root)
     _validate_frozen_bindings(campaign_root, artifacts, current_tool_sha256)
     _validate_campaign_authorization(artifacts)
-    if not isinstance(current_release_decisions, dict):
-        raise campaign.CampaignStopped("default_rollout_decision_changed")
-    decisions = current_release_decisions.get("decisions")
-    grounded_math = (
-        decisions.get("RAG_GROUNDED_MATH_ENABLED")
-        if isinstance(decisions, dict)
-        else None
-    )
-    default_still_off = all(
-        (
-            current_release_decisions.get("status") == "incomplete",
-            isinstance(grounded_math, dict),
-            "decision" in grounded_math if isinstance(grounded_math, dict) else False,
-            grounded_math.get("decision") is None
-            if isinstance(grounded_math, dict)
-            else False,
-        )
-    )
-    if not default_still_off:
-        raise campaign.CampaignStopped("default_rollout_decision_changed")
+    _validate_current_release_decisions(current_release_decisions)
     validate_live_health(artifacts["health"], live_health)
     if send is None:
         rag_url = _loopback_url(artifacts["state"].get("rag_url"))
@@ -403,6 +518,131 @@ def run_due_once(
             now,
             send,
         )
+
+
+def run_burst(
+    root: str | Path,
+    now: datetime,
+    *,
+    refresh_live_health,
+    refresh_release_decisions,
+    refresh_base_gate,
+    service_token: str,
+    current_tool_sha256: str,
+    send=None,
+) -> dict:
+    if not service_token:
+        raise campaign.CampaignStopped("service_token_missing")
+    campaign_root = Path(root)
+    artifacts = _load_plan(campaign_root)
+    _validate_frozen_bindings(campaign_root, artifacts, current_tool_sha256)
+    _validate_burst_authorization(artifacts)
+    if send is None:
+        rag_url = _loopback_url(artifacts["state"].get("rag_url"))
+        send = lambda question, _card_id, part_ids: campaign.send_internal_rag_sse(
+            rag_url, service_token, question, part_ids
+        )
+    wal_path = campaign_root / "campaign.wal.jsonl"
+    invocation_path = campaign_root / "burst-invocation.json"
+    global_lock = Path(tempfile.gettempdir()) / (
+        "grounded-math-operator-burst-"
+        f"{artifacts['manifest']['campaign_id']}-"
+        f"{artifacts['declaration']['bindings']['execution_root_sha256']}.lock"
+    )
+    with campaign.single_instance_lock(global_lock):
+        if invocation_path.exists():
+            raise campaign.CampaignStopped("burst_invocation_already_started")
+        if wal_path.exists() and campaign._read_wal(wal_path):
+            raise campaign.CampaignStopped("burst_wal_must_be_empty")
+        _write_json_exclusive(
+            invocation_path,
+            {
+                "schema": "grounded-math-operator-burst-invocation-v1",
+                "status": "started",
+                "campaign_id": artifacts["manifest"]["campaign_id"],
+                "started_at": now.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "execution_root_sha256": artifacts["declaration"]["bindings"][
+                    "execution_root_sha256"
+                ],
+                "count_toward_pilot": False,
+                "qualifies_as_7_day_pilot": False,
+                "default_rollout_authorized": False,
+            },
+        )
+        try:
+            while True:
+                live_health = refresh_live_health()
+                current_release_decisions = refresh_release_decisions()
+                current_base_gate = refresh_base_gate()
+                validate_live_health(artifacts["health"], live_health)
+                _validate_current_release_decisions(current_release_decisions)
+                _validate_previous_base_gate(
+                    wal_path,
+                    current_base_gate,
+                    artifacts["state"],
+                    artifacts["manifest"],
+                    require_initial_gate=True,
+                )
+                completed = sum(
+                    row.get("event") == "attempt_completed"
+                    for row in campaign._read_wal(wal_path)
+                )
+                if completed == campaign.CAMPAIGN_CARD_COUNT:
+                    result = {
+                        "status": "completed",
+                        "completed": completed,
+                        "remaining": 0,
+                        "count_toward_pilot": False,
+                        "qualifies_as_7_day_pilot": False,
+                        "default_rollout_authorized": False,
+                    }
+                    _write_json_replace(
+                        invocation_path,
+                        {
+                            **_load_json(invocation_path),
+                            **result,
+                            "completed_at": datetime.now(timezone.utc)
+                            .isoformat()
+                            .replace("+00:00", "Z"),
+                        },
+                    )
+                    return result
+                result = campaign.dispatch_due(
+                    artifacts["manifest"],
+                    artifacts["private"],
+                    wal_path,
+                    datetime.now(timezone.utc),
+                    send,
+                )
+                if result is None:
+                    raise campaign.CampaignStopped("burst_card_not_due")
+        except BaseException as exc:
+            reason = (
+                str(exc)
+                if isinstance(exc, campaign.CampaignStopped)
+                else "burst_aborted"
+            )
+            aborted = {
+                **_load_json(invocation_path),
+                "status": "aborted",
+                "reason": reason,
+                "aborted_at": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+            _write_json_replace(invocation_path, aborted)
+            _write_burst_tombstone(
+                campaign_root,
+                artifacts["manifest"]["campaign_id"],
+                reason=reason,
+                completed_request_count=sum(
+                    row.get("event") == "attempt_completed"
+                    for row in campaign._read_wal(wal_path)
+                ),
+            )
+            raise
 
 
 def campaign_status(root: str | Path) -> dict:
@@ -433,13 +673,17 @@ def campaign_status(root: str | Path) -> dict:
     return {
         "schema": "grounded-math-operator-status-v1",
         "campaign_id": manifest["campaign_id"],
-        "traffic_class": campaign.TRAFFIC_CLASS,
+        "traffic_class": manifest.get("traffic_class"),
         "completed": completed,
         "ambiguous": ambiguous + len(started_without_terminal),
         "remaining": campaign.CAMPAIGN_CARD_COUNT - completed,
         "next_card_id": next_card["card_id"] if next_card else None,
         "next_scheduled_at": next_card["scheduled_at"] if next_card else None,
         "minimum_runtime_until": manifest["minimum_runtime_until"],
+        "count_toward_pilot": manifest.get("count_toward_pilot", True),
+        "qualifies_as_7_day_pilot": manifest.get(
+            "qualifies_as_7_day_pilot", True
+        ),
         "default_rollout_authorized": False,
     }
 
@@ -486,6 +730,7 @@ def _tool_sha256() -> str:
         Path(campaign.__file__),
         Path(__file__),
         Path(__file__).with_name("grounded_math_operator_gate.py"),
+        Path(__file__).with_name("grounded_math_operator_burst_gate.py"),
     )
     material = [
         {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
@@ -507,11 +752,32 @@ def _parse_args() -> argparse.Namespace:
     plan.add_argument("--approved-at", required=True)
     plan.add_argument("--dotenv", type=Path, default=Path(".env"))
 
+    plan_burst = subparsers.add_parser("plan-burst")
+    plan_burst.add_argument("--root", type=Path, required=True)
+    plan_burst.add_argument("--window", type=Path, required=True)
+    plan_burst.add_argument("--state", type=Path, required=True)
+    plan_burst.add_argument("--health", type=Path, required=True)
+    plan_burst.add_argument("--release-decisions", type=Path, required=True)
+    plan_burst.add_argument("--start-at", required=True)
+    plan_burst.add_argument("--approved-at", required=True)
+    plan_burst.add_argument("--dotenv", type=Path, default=Path(".env"))
+
     run_due = subparsers.add_parser("run-due")
     run_due.add_argument("--root", type=Path, required=True)
     run_due.add_argument("--base-gate", type=Path, required=True)
     run_due.add_argument("--release-decisions", type=Path, required=True)
     run_due.add_argument("--dotenv", type=Path, default=Path(".env"))
+
+    run_burst_parser = subparsers.add_parser("run-burst")
+    run_burst_parser.add_argument("--root", type=Path, required=True)
+    run_burst_parser.add_argument("--base-gate", type=Path, required=True)
+    run_burst_parser.add_argument("--trace", type=Path, required=True)
+    run_burst_parser.add_argument("--window", type=Path, required=True)
+    run_burst_parser.add_argument("--state", type=Path, required=True)
+    run_burst_parser.add_argument("--health-capture", type=Path, required=True)
+    run_burst_parser.add_argument("--provider-smoke", type=Path, required=True)
+    run_burst_parser.add_argument("--release-decisions", type=Path, required=True)
+    run_burst_parser.add_argument("--dotenv", type=Path, default=Path(".env"))
 
     status = subparsers.add_parser("status")
     status.add_argument("--root", type=Path, required=True)
@@ -521,12 +787,18 @@ def _parse_args() -> argparse.Namespace:
     gate.add_argument("--base-gate", type=Path, required=True)
     gate.add_argument("--release-decisions", type=Path, required=True)
     gate.add_argument("--output", type=Path)
+
+    gate_burst = subparsers.add_parser("gate-burst")
+    gate_burst.add_argument("--root", type=Path, required=True)
+    gate_burst.add_argument("--base-gate", type=Path, required=True)
+    gate_burst.add_argument("--release-decisions", type=Path, required=True)
+    gate_burst.add_argument("--output", type=Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
-    if args.command == "plan":
+    if args.command in {"plan", "plan-burst"}:
         from mech_chatbot.config.settings import SqlSettings, load_settings
         from mech_chatbot.db.engine import create_db_engine
 
@@ -552,6 +824,7 @@ def main() -> int:
             health,
             release_decisions,
             tool_sha256=_tool_sha256(),
+            burst=args.command == "plan-burst",
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
@@ -575,6 +848,73 @@ def main() -> int:
         output = result or {"status": "not_due"}
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
+    if args.command == "run-burst":
+        from mech_chatbot.config.settings import load_settings
+        from scripts.ops import (
+            grounded_math_operator_burst_gate,
+            grounded_math_pilot_gate,
+        )
+
+        artifacts = _load_plan(args.root)
+        settings = load_settings(args.dotenv)
+
+        def refresh_health():
+            return fetch_live_health(
+                artifacts["state"], service_token=settings.RAG_SERVICE_TOKEN
+            )
+
+        def refresh_gate():
+            return grounded_math_pilot_gate.build_artifact(
+                args.window,
+                args.state,
+                args.health_capture,
+                args.trace,
+                args.provider_smoke,
+            )
+
+        result = run_burst(
+            args.root,
+            datetime.now(timezone.utc),
+            refresh_live_health=refresh_health,
+            refresh_release_decisions=lambda: _load_json(args.release_decisions),
+            refresh_base_gate=refresh_gate,
+            service_token=settings.RAG_SERVICE_TOKEN,
+            current_tool_sha256=_tool_sha256(),
+        )
+        try:
+            final_base_gate = refresh_gate()
+            _write_json_replace(args.base_gate, final_base_gate)
+            rows = campaign._read_wal(args.root / "campaign.wal.jsonl")
+            burst_gate = grounded_math_operator_burst_gate.evaluate_burst_gate(
+                artifacts["declaration"],
+                artifacts["manifest"],
+                rows,
+                final_base_gate,
+                artifacts["state"],
+                artifacts["release_decisions"],
+                _load_json(args.release_decisions),
+                _load_json(args.root / "burst-invocation.json"),
+            )
+            _write_json_replace(args.root / "burst-gate.json", burst_gate)
+            if not burst_gate["passed"]:
+                raise campaign.CampaignStopped("burst_gate_rejected")
+            _write_burst_tombstone(
+                args.root,
+                artifacts["manifest"]["campaign_id"],
+                reason="burst_completed",
+                completed_request_count=campaign.CAMPAIGN_CARD_COUNT,
+                burst_gate=burst_gate,
+            )
+        except BaseException:
+            _write_burst_tombstone(
+                args.root,
+                artifacts["manifest"]["campaign_id"],
+                reason="burst_finalization_failed",
+                completed_request_count=campaign.CAMPAIGN_CARD_COUNT,
+            )
+            raise
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     if args.command == "status":
         print(json.dumps(campaign_status(args.root), ensure_ascii=False, indent=2))
         return 0
@@ -585,6 +925,28 @@ def main() -> int:
             _load_json(args.release_decisions),
         )
         output = args.output or args.root / "operator-gate.json"
+        _write_json_replace(output, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, indent=2))
+        return 0 if artifact["passed"] else 2
+    if args.command == "gate-burst":
+        from scripts.ops import grounded_math_operator_burst_gate
+
+        artifacts = _load_plan(args.root)
+        _validate_frozen_bindings(args.root, artifacts, _tool_sha256())
+        _validate_burst_authorization(artifacts)
+        wal_path = args.root / "campaign.wal.jsonl"
+        rows = campaign._read_wal(wal_path)
+        artifact = grounded_math_operator_burst_gate.evaluate_burst_gate(
+            artifacts["declaration"],
+            artifacts["manifest"],
+            rows,
+            _load_json(args.base_gate),
+            artifacts["state"],
+            artifacts["release_decisions"],
+            _load_json(args.release_decisions),
+            _load_json(args.root / "burst-invocation.json"),
+        )
+        output = args.output or args.root / "burst-gate.json"
         _write_json_replace(output, artifact)
         print(json.dumps(artifact, ensure_ascii=False, indent=2))
         return 0 if artifact["passed"] else 2

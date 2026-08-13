@@ -27,6 +27,9 @@ from mech_chatbot.rag.intent import is_bom_lookup
 SCHEMA = "grounded-math-operator-campaign-v1"
 WAL_SCHEMA = "grounded-math-operator-wal-v1"
 TRAFFIC_CLASS = "owner_authorized_operator_generated"
+BURST_SCHEMA = "grounded-math-operator-burst-v1"
+BURST_DECLARATION_SCHEMA = "grounded-math-operator-burst-owner-declaration-v1"
+BURST_TRAFFIC_CLASS = "owner_authorized_operator_generated_burst"
 TRANSPORT = "internal_rag_sse"
 OPERATIONS = ("add", "subtract", "ratio", "percent", "multiply")
 UNAVAILABLE_OPERATIONS = {
@@ -435,7 +438,7 @@ def _select_candidates(
 
 
 def build_campaign_cards(
-    inventory: Iterable[dict], started_at: datetime
+    inventory: Iterable[dict], started_at: datetime, *, burst: bool = False
 ) -> tuple[dict, dict]:
     if started_at.tzinfo is None:
         raise ValueError("timestamp_timezone_missing")
@@ -452,7 +455,11 @@ def build_campaign_cards(
             "labels": candidate["operand_labels"],
             "style": candidate["operand_style"],
         }
-        scheduled = started + CAMPAIGN_DURATION * index / (CAMPAIGN_CARD_COUNT - 1)
+        scheduled = (
+            started
+            if burst
+            else started + CAMPAIGN_DURATION * index / (CAMPAIGN_CARD_COUNT - 1)
+        )
         raw_cards.append(
             {
                 "card_id": f"card-{index + 1:03d}",
@@ -473,8 +480,8 @@ def build_campaign_cards(
         )
 
     campaign_seed = {
-        "schema": SCHEMA,
-        "traffic_class": TRAFFIC_CLASS,
+        "schema": BURST_SCHEMA if burst else SCHEMA,
+        "traffic_class": BURST_TRAFFIC_CLASS if burst else TRAFFIC_CLASS,
         "transport": TRANSPORT,
         "started_at": _format_timestamp(started),
         "inventory_sha256": inventory_sha256,
@@ -490,15 +497,26 @@ def build_campaign_cards(
     }
     campaign_id = _sha256(_canonical_json(campaign_seed))[:24]
     common = {
-        "schema": SCHEMA,
+        "schema": BURST_SCHEMA if burst else SCHEMA,
         "campaign_id": campaign_id,
-        "traffic_class": TRAFFIC_CLASS,
+        "traffic_class": BURST_TRAFFIC_CLASS if burst else TRAFFIC_CLASS,
         "transport": TRANSPORT,
         "started_at": _format_timestamp(started),
-        "minimum_runtime_until": _format_timestamp(started + CAMPAIGN_DURATION),
+        "minimum_runtime_until": _format_timestamp(
+            started if burst else started + CAMPAIGN_DURATION
+        ),
         "inventory_sha256": inventory_sha256,
         "preflight": preflight,
     }
+    if burst:
+        common.update(
+            {
+                "count_toward_pilot": False,
+                "qualifies_as_7_day_pilot": False,
+                "max_concurrency": 1,
+                "max_requests": CAMPAIGN_CARD_COUNT,
+            }
+        )
     public = {
         **common,
         "cards": [
@@ -585,6 +603,43 @@ def build_owner_declaration(
             "release_decisions_sha256": _sha256(_canonical_json(release_decisions)),
             "operator_tool_sha256": tool_sha256,
         },
+    }
+
+
+def build_burst_owner_declaration(
+    manifest: dict,
+    window: dict,
+    state: dict,
+    health: dict,
+    release_decisions: dict,
+    *,
+    approved_at: datetime,
+    tool_sha256: str,
+    declared_at: datetime | None = None,
+) -> dict:
+    declaration = build_owner_declaration(
+        manifest,
+        window,
+        state,
+        health,
+        release_decisions,
+        approved_at=approved_at,
+        tool_sha256=tool_sha256,
+        declared_at=declared_at,
+    )
+    return {
+        **declaration,
+        "schema": BURST_DECLARATION_SCHEMA,
+        "campaign_id": manifest["campaign_id"],
+        "traffic_class": BURST_TRAFFIC_CLASS,
+        "count_toward_pilot": False,
+        "qualifies_as_7_day_pilot": False,
+        "duration_claim_allowed": False,
+        "concurrency": 1,
+        "max_requests": CAMPAIGN_CARD_COUNT,
+        "request_count": CAMPAIGN_CARD_COUNT,
+        "retry_policy": "none",
+        "abort_on_ambiguous": True,
     }
 
 
@@ -735,6 +790,17 @@ def dispatch_due(
 ) -> dict | None:
     if public.get("campaign_id") != private.get("campaign_id"):
         raise CampaignStopped("manifest_mismatch")
+    burst = all(
+        (
+            public.get("schema") == BURST_SCHEMA,
+            public.get("traffic_class") == BURST_TRAFFIC_CLASS,
+            public.get("count_toward_pilot") is False,
+            public.get("qualifies_as_7_day_pilot") is False,
+            public.get("max_concurrency") == 1,
+            public.get("max_requests") == CAMPAIGN_CARD_COUNT,
+        )
+    )
+    minimum_cadence = timedelta(0) if burst else CAMPAIGN_CADENCE
     path = Path(wal_path)
     rows = _read_wal(path)
     if any(row.get("event") in {"attempt_failed", "attempt_ambiguous"} for row in rows):
@@ -757,7 +823,7 @@ def dispatch_due(
         if row.get("event") == "attempt_started"
     ]
     current = now.astimezone(timezone.utc)
-    if attempt_times and current < max(attempt_times) + CAMPAIGN_CADENCE:
+    if attempt_times and current < max(attempt_times) + minimum_cadence:
         return None
 
     private_by_id = {card["card_id"]: card for card in private["cards"]}
