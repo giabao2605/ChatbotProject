@@ -26,7 +26,7 @@ def _artifacts():
             "site": "PHONG_KY_THUAT",
             "operand_facts": [
                 {
-                    "label": f"PART-{index}-{item}",
+                    "label": f"8.{index}.{item:05d}",
                     "value": str(item),
                     "unit": "piece",
                     "page": 1,

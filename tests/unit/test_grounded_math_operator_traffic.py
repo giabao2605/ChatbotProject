@@ -20,7 +20,7 @@ def _inventory() -> list[dict]:
             "site": "PHONG_KY_THUAT",
             "operand_facts": [
                 {
-                    "label": f"PART-{index}-{item}",
+                    "label": f"8.{index}.{item:05d}",
                     "value": str(item),
                     "unit": "piece",
                     "page": 1,
@@ -122,7 +122,7 @@ def test_create_plan_freezes_start_artifacts_and_keeps_raw_prompts_private(tmp_p
     public_text = (root / "campaign-public.json").read_text(encoding="utf-8")
     private_text = (root / "campaign-private.json").read_text(encoding="utf-8")
     assert "9.3." not in public_text
-    assert "PART-" in private_text
+    assert "8.1.00001" in private_text
     assert json.loads(root.joinpath("owner-declaration.json").read_text())["organic_claim_allowed"] is False
     with pytest.raises(FileExistsError):
         traffic.create_campaign_plan(
@@ -535,7 +535,7 @@ def test_fetch_inventory_uses_the_read_only_identity_query():
                     "Site": "PHONG_KY_THUAT",
                     "SourceRowID": 11,
                     "TrangSo": 2,
-                    "MaHang": "PART-A",
+                    "MaHang": "8.3.00001",
                     "SoLuong": 4,
                     "Unit": "piece",
                 }
@@ -560,7 +560,7 @@ def test_fetch_inventory_uses_the_read_only_identity_query():
 
     assert result[0]["operand_facts"] == [
         {
-            "label": "PART-A",
+            "label": "8.3.00001",
             "value": "4",
             "unit": "piece",
             "page": 2,

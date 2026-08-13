@@ -41,7 +41,7 @@ MAX_CARDS_PER_DOCUMENT_OPERATION = 7
 OPERATOR_USER_ID = 81
 OPERATOR_USERNAME = "admin_bao"
 EXPECTED_SERVING_COMMIT = "7b9d57562a669984b843d48d6d7ddf09048c472d"
-PART_CODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{1,63}")
+PART_CODE_RE = re.compile(r"\d{1,4}(?:\.\d{1,6}){2,5}")
 DOCUMENT_NAME_RE = re.compile(
     r"(?P<drawing>\d+(?:\.\d+){2,5})"
     r"(?:\([^\r\n)]{1,40}\))?"
@@ -122,7 +122,8 @@ def _document_anchor(value: object) -> str | None:
 def _question_contains_part_id(question: str, part_id: str) -> bool:
     return bool(
         re.search(
-            rf"(?<![A-Za-z0-9_/-]){re.escape(part_id)}(?![A-Za-z0-9_/-])",
+            rf"(?<![A-Za-z0-9_/-])(?<!\d\.){re.escape(part_id)}"
+            rf"(?![A-Za-z0-9_/-]|\.\d)",
             question,
         )
     )
