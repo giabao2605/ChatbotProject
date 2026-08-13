@@ -8,6 +8,20 @@ Có thể tổ chức một chiến dịch 100 câu hỏi Grounded Math qua đú
 
 Kế hoạch này không thay đổi runtime, threshold, dependency, activation bundle hoặc code gate. Nó chỉ quy định cách chuẩn bị câu hỏi, chạy thử nhỏ, chạy chiến dịch và review fail-closed.
 
+## Hardening cho operator window kế tiếp
+
+Phần này áp dụng cho campaign mới được tạo sau thay đổi code, không sửa hoặc nới contract của window-06 đang chạy. Operator traffic vẫn là `owner_authorized_operator_generated`, không phải organic demand, quality evidence hay UI parity; default rollout tiếp tục OFF.
+
+- Trước mỗi dispatch, runner phải đọc `release_decisions.json` hiện tại và dừng nếu ledger không còn `incomplete` hoặc Grounded Math đã có decision.
+- Từ card thứ hai, tập trace hash completed trong WAL phải khớp chính xác `eligible_trace_count` và `trace_id_sha256` của base gate hiện tại; sáu check security/citation/provenance/budget/provider/leakage phải xanh. Gate cũ hoặc thiếu trace dừng trước dispatch.
+- URL runtime dùng chung một validator loopback chặt: chỉ HTTP `127.0.0.1`/`localhost`, không userinfo, path, query hay fragment.
+- WAL ghi thời điểm terminal thực tế, không sao chép timestamp bắt đầu. Mọi started không có terminal hoặc transport exception vẫn là ambiguous và không được retry.
+- Companion gate bắt buộc cả hai pacing cap: tối đa 3 attempt trong mọi rolling 30 phút và 15 attempt trong mọi rolling 24 giờ.
+- Owner declaration phải machine-bind `divide=corpus_missing_dimensionless_divisor`; không được lặng lẽ coi operation này là đã bao phủ.
+- Review contract chỉ có một primary human reviewer: `bao.nguyen` review đủ 20 case phân tầng và mọi failure/low-confidence; Codex chỉ hỗ trợ metadata và kỹ thuật.
+
+Corpus phải được recapture trước mỗi campaign. Snapshot operator gần nhất dùng 12 PDF/130 BOM row; các con số 9 document/41 row và 7 PDF/87 row bên dưới là checkpoint lịch sử, không phải inventory mặc định cho window mới.
+
 ## Checkpoint thực thi 2026-08-05
 
 - Owner đã duyệt và restore thành công hai target riêng `Mech_Chatbot_DB_RestoreTest_RAGPilot_20260804_b437b32` và `TaiLieuKyThuat_v2_RestoreTest_RAGPilot_20260804_b437b32`; pre-ingest reconciliation receipt SHA-256 `f4a55bdfd3f7efe393e6a024c02436a43376d54aa2052c5d8fb702560b33c59d`, snapshot fingerprint `4f3bc3ad3e149d428f80db62569a705ceb3a098049930faefb96a82415511d97`.
@@ -28,7 +42,7 @@ Kế hoạch này không thay đổi runtime, threshold, dependency, activation 
 - Pilot hiện yêu cầu tối thiểu 7 ngày, 100 request có calculation route, automated checks đủ 100 và human review 20 case.[S1][S2]
 - Gate hiện đếm mọi trace có `execution_context=production` khi có đúng một `grounded_math_generation` hoặc `pilot_request_evidence` với `route=calculation`; gate không có trường phân loại organic/assisted.[S2][S3]
 - Vì vậy assisted traffic có thể được gate đếm về mặt kỹ thuật, nhưng chỉ owner declaration mới quyết định nó có được dùng làm pilot evidence về mặt governance hay không.
-- Read-only inventory ban đầu của disposable pilot target hiện chỉ có 41 BOM row có quantity, thuộc 9 current/published document, 9 page, 31 distinct part code và 4 unit; chỉ 3 document là PDF giống production, 6 document còn lại là demo/eval Markdown. Corpus expanded sau publish có 7 production PDF, 87 BOM row, 40 distinct part-code identity toàn corpus (44 theo từng document), 19 description identity và 0 unit; `divide` được khai báo unavailable. Vì vậy 100 request vẫn là repeated exposure có phân tầng trên corpus nhỏ, không phải 100 tình huống tài liệu độc lập hay đại diện đầy đủ cho production.
+- Historical disposable target ban đầu chỉ có 41 BOM row có quantity, thuộc 9 current/published document, 9 page, 31 distinct part code và 4 unit; chỉ 3 document là PDF giống production, 6 document còn lại là demo/eval Markdown. Historical corpus expanded sau publish có 7 production PDF, 87 BOM row, 40 distinct part-code identity toàn corpus (44 theo từng document), 19 description identity và 0 unit; `divide` được khai báo unavailable. Các số này chỉ mô tả window cũ. Campaign mới phải recapture inventory và vẫn xem 100 request là repeated exposure có phân tầng trên corpus nhỏ, không phải 100 tình huống tài liệu độc lập hay đại diện đầy đủ cho production.
 
 ## Định nghĩa traffic
 
@@ -181,7 +195,7 @@ Declaration không được sửa sau khi biết campaign result. Nếu manifest
 
 Current window bắt đầu ở `0/100`; provider smoke và proof batch đều excluded. Vì vậy full campaign phải predeclare đúng 100 submission mới. Chỉ khi cả 100 đều eligible thì campaign mới tự đạt ngưỡng 100; mọi noneligible vẫn giữ nguyên disposition và không được gửi bù ngoài manifest.
 
-Khuyến nghị: chỉ chọn `true` khi proof xác nhận intent có thể được tạo mà không dùng oracle, manifest đạt diversity caps và owner chấp nhận rõ giới hạn 7 production PDF/87 BOM row cùng `divide` unavailable. Nếu không, chọn `false` và chờ organic traffic hoặc mở pilot mới với corpus tốt hơn.
+Khuyến nghị: chỉ chọn `true` khi proof xác nhận intent có thể được tạo mà không dùng oracle, manifest đạt diversity caps và owner chấp nhận rõ giới hạn của inventory vừa recapture cùng mọi operation unavailable. Mốc 7 production PDF/87 BOM row và `divide` unavailable chỉ thuộc historical window; campaign mới không được kế thừa các số đó. Nếu không, chọn `false` và chờ organic traffic hoặc mở pilot mới với corpus tốt hơn.
 
 ### Bước 3 — Full campaign 100
 
@@ -196,11 +210,12 @@ Khuyến nghị: chỉ chọn `true` khi proof xác nhận intent có thể đư
 
 Khóa sample trước khi đọc câu trả lời:
 
-- 10 primary case cho `bao.nguyen`;
-- 10 primary case cho `tran.nghi`;
+- đủ 20 primary case cho `bao.nguyen` theo signed `single_owner` contract;
 - phân tầng theo document class, operation và eligible/noneligible outcome;
-- mọi failure, access-denied bất thường hoặc low-confidence case được cả hai review;
+- mọi failure, access-denied bất thường hoặc low-confidence case bắt buộc owner review;
 - cùng document-operation không chiếm quá 2 primary case nếu còn strata khác.
+
+`tran.nghi` chỉ thực hiện technical review ở interaction-matrix/release step sau pilot; không được tính là primary human reviewer của 20-case operator sample.
 
 Review có thể xem response trong authorized UI, nhưng artifact chỉ lưu reviewer, trace hash, booleans `calculation/formula/unit/citation/provenance/correct`, confidence band và reason code. Không copy raw answer hoặc raw document vào report.[S1]
 
@@ -236,7 +251,7 @@ Wrong calculation hoặc severe wrong-answer dừng campaign và giữ evidence.
 
 ## Optional path — bổ sung corpus tài liệu thực tế
 
-Thêm tài liệu thực tế sẽ cải thiện diversity hơn việc ép 100 biến thể trên 9 document hiện tại. Tuy nhiên không được ingest vào current `b437b32` pilot target: thay đổi SQL/Qdrant fingerprint sẽ làm window, restore reconciliation và runtime binding hiện tại mất hiệu lực.[S2][S6]
+Trong historical `b437b32` window, thêm tài liệu thực tế sẽ cải thiện diversity hơn việc ép 100 biến thể trên 9 document khi đó. Không được dùng các số lịch sử này để lập campaign mới; phải recapture inventory. Việc ingest vào chính target đã freeze sẽ làm window, restore reconciliation và runtime binding mất hiệu lực.[S2][S6]
 
 Read-only preflight ban đầu của bốn folder `9.1.00678`, `9.3.03843`, `9.3.04068`, `9.3.04080` ghi nhận 33 PDF unique, không mã hóa, mỗi file một trang, text-extractable, không duplicate hash hoặc symlink. Visual + text-extraction QA chỉ xác nhận 8 PDF có bảng BOM rõ ràng: lần lượt `0`, `3`, `2`, `3` theo bốn folder; 4 file `plot.log` phải bị loại. Vì vậy corpus mở rộng có thể tăng số scenario thực tế nhưng không được coi cả 33 PDF là Grounded Math case. Exact file manifest và folder hash phải được lưu trước ingest; chỉ 8 BOM-positive PDF được dùng để thiết kế math challenge.[S9]
 
@@ -251,8 +266,8 @@ Nếu owner chọn path này:
 
 Hai lựa chọn không được trộn evidence:
 
-- tiếp tục current campaign: nhanh hơn nhưng kết luận bị giới hạn bởi 9 document/41 BOM row;
-- mở corpus-expanded pilot mới: chậm hơn và reset window, nhưng tạo bằng chứng diversity đáng tin hơn.
+- tiếp tục historical small-corpus campaign: nhanh hơn nhưng kết luận bị giới hạn bởi snapshot 9 document/41 BOM row của window đó;
+- mở corpus-expanded pilot mới sau recapture: chậm hơn và reset window, nhưng tạo bằng chứng diversity đáng tin hơn.
 
 ## Artifact tối thiểu
 

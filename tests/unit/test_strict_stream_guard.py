@@ -542,6 +542,7 @@ def test_generation_debug_validates_served_calculation_documents_for_pilot():
         [document],
         {
             "citation_structure_passed": True,
+            "decomposition_usage": {},
             "provenance_passed": True,
         },
     )

@@ -60,6 +60,10 @@
 - Các attempt/window cũ và provider outage cũ tiếp tục được giữ làm tombstone; không chuyển request hoặc thời gian vào window hiện tại.
 - `release_decisions.json` vẫn `incomplete`; chưa có Advanced RAG feature nào được phép bật trên default rollout.
 
+### Grounded Math operator hardening cho window kế tiếp
+
+Window-06 đang chạy tiếp tục bị bind vào tool hash và artifact hiện tại; không áp dụng hồi tố thay đổi code bên dưới. Mọi campaign operator mới phải fail-closed trước dispatch nếu current release ledger đã đổi hoặc base gate chưa reconcile toàn bộ completed trace trước đó. URL chỉ được là HTTP loopback không path/query/userinfo/fragment; WAL dùng terminal timestamp thực; companion gate áp cả rolling cap `3/30 phút` và `15/24 giờ`; owner declaration machine-bind `divide` là unavailable do corpus thiếu dimensionless divisor. Review vẫn theo signed `single_owner`: `bao.nguyen` gắn đủ 20 primary labels và review mọi failure/low-confidence, Codex chỉ hỗ trợ kỹ thuật. Operator volume không tạo organic, quality, UI-parity hoặc default-rollout claim.
+
 ## Tiến độ theo phase
 
 - Phase 0 — hoàn tất governance/selective activation và baseline foundation.
