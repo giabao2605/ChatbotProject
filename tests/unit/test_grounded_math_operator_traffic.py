@@ -18,22 +18,18 @@ def _inventory() -> list[dict]:
             "version": 1,
             "department": "Technical",
             "site": "PHONG_KY_THUAT",
-            "operand_labels": [
-                f"PART-{index}-A",
-                f"PART-{index}-B",
-                f"PART-{index}-C",
-                f"Description {index} A",
-                f"Description {index} B",
+            "operand_facts": [
+                {
+                    "label": f"PART-{index}-{item}",
+                    "value": str(item),
+                    "unit": "piece",
+                    "page": 1,
+                    "source_id": f"{index}-{item}",
+                }
+                for item in range(1, 9)
             ],
-            "operand_styles": {
-                f"PART-{index}-A": "part_code",
-                f"PART-{index}-B": "part_code",
-                f"PART-{index}-C": "part_code",
-                f"Description {index} A": "description",
-                f"Description {index} B": "description",
-            },
         }
-        for index in range(1, 13)
+        for index in range(1, 5)
     ]
 
 
@@ -126,7 +122,7 @@ def test_create_plan_freezes_start_artifacts_and_keeps_raw_prompts_private(tmp_p
     public_text = (root / "campaign-public.json").read_text(encoding="utf-8")
     private_text = (root / "campaign-private.json").read_text(encoding="utf-8")
     assert "drawing-" not in public_text
-    assert "drawing-" in private_text
+    assert "PART-" in private_text
     assert json.loads(root.joinpath("owner-declaration.json").read_text())["organic_claim_allowed"] is False
     with pytest.raises(FileExistsError):
         traffic.create_campaign_plan(
@@ -537,8 +533,11 @@ def test_fetch_inventory_uses_the_read_only_identity_query():
                     "VersionNo": 1,
                     "OwnerDepartment": "Technical",
                     "Site": "PHONG_KY_THUAT",
+                    "SourceRowID": 11,
+                    "TrangSo": 2,
                     "MaHang": "PART-A",
-                    "TenVatTu": "Part A",
+                    "SoLuong": 4,
+                    "Unit": "piece",
                 }
             ]
 
@@ -559,13 +558,17 @@ def test_fetch_inventory_uses_the_read_only_identity_query():
 
     result = traffic.fetch_inventory(Engine())
 
-    assert result[0]["operand_labels"] == ["PART-A", "Part A"]
-    assert result[0]["operand_styles"] == {
-        "PART-A": "part_code",
-        "Part A": "description",
-    }
+    assert result[0]["operand_facts"] == [
+        {
+            "label": "PART-A",
+            "value": "4",
+            "unit": "piece",
+            "page": 2,
+            "source_id": "11",
+        }
+    ]
     assert "SELECT" in captured["sql"]
-    assert "SoLuong" not in captured["sql"]
+    assert "SoLuong" in captured["sql"]
 
 
 @pytest.mark.parametrize(

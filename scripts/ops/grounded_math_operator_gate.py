@@ -154,8 +154,7 @@ def _manifest_valid(manifest: dict) -> bool:
         (
             _preflight_valid(manifest.get("preflight"), cards),
             set(card["operation"] for card in cards) == set(campaign.OPERATIONS),
-            set(card["operand_style"] for card in cards)
-            == {"document_aggregate", "part_code", "description"},
+            set(card["operand_style"] for card in cards) == {"part_code"},
             max(per_document.values()) <= campaign.MAX_CARDS_PER_DOCUMENT,
             max(per_doc_operation.values())
             <= campaign.MAX_CARDS_PER_DOCUMENT_OPERATION,
@@ -174,6 +173,7 @@ def _preflight_valid(preflight: object, cards: list[dict]) -> bool:
         "production_checks",
         "generated",
         "accepted",
+        "deterministic_validated",
         "rejected_by_reason",
         "by_operation",
         "by_operand_style",
@@ -186,11 +186,13 @@ def _preflight_valid(preflight: object, cards: list[dict]) -> bool:
         "detect_calculation_operation",
         "extract_explicit_codes",
         "is_bom_lookup",
+        "solve_grounded_calculation",
     ]:
         return False
     try:
         generated = int(preflight["generated"])
         accepted = int(preflight["accepted"])
+        deterministic_validated = int(preflight["deterministic_validated"])
     except (KeyError, TypeError, ValueError):
         return False
     rejected = preflight.get("rejected_by_reason")
@@ -199,7 +201,11 @@ def _preflight_valid(preflight: object, cards: list[dict]) -> bool:
         for key, value in rejected.items()
     ):
         return False
-    if generated < accepted or accepted < len(cards):
+    if (
+        generated < accepted
+        or accepted < len(cards)
+        or deterministic_validated != accepted
+    ):
         return False
     if generated - accepted != sum(rejected.values()):
         return False
@@ -209,7 +215,7 @@ def _preflight_valid(preflight: object, cards: list[dict]) -> bool:
         (
             "by_operand_style",
             "operand_style",
-            {"document_aggregate", "part_code", "description"},
+            {"part_code"},
         ),
         (
             "by_document",

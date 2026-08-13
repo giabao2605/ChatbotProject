@@ -10,17 +10,23 @@ Kế hoạch này không thay đổi runtime, threshold, dependency, activation 
 
 ## Hardening cho operator window kế tiếp
 
-Phần này áp dụng cho campaign mới được tạo sau thay đổi code, không sửa hoặc nới contract của window-06 đang chạy. Operator traffic vẫn là `owner_authorized_operator_generated`, không phải organic demand, quality evidence hay UI parity; default rollout tiếp tục OFF.
+Phần này áp dụng cho campaign mới được tạo sau thay đổi code; không sửa, nới hoặc tái sử dụng contract của window-06. Operator traffic vẫn là `owner_authorized_operator_generated`, không phải organic demand, quality evidence hay UI parity; default rollout tiếp tục OFF.
+
+Window-06 sau đó đã được dừng fail-closed trước card 018: `17` transport completion chỉ tạo `10` eligible trace, còn `7` trace có `calculation_result_status=invalid`. Không request hoặc runtime duration nào được carry-forward. Các invariant UI-assisted lịch sử ở phần dưới không áp dụng cho operator replacement; replacement dùng transport `internal_rag_sse` đã khai báo và không được claim UI parity.
 
 - Trước mỗi dispatch, runner phải đọc `release_decisions.json` hiện tại và dừng nếu ledger không còn `incomplete` hoặc Grounded Math đã có decision.
 - Từ card thứ hai, tập trace hash completed trong WAL phải khớp chính xác `eligible_trace_count` và `trace_id_sha256` của base gate hiện tại; sáu check security/citation/provenance/budget/provider/leakage phải xanh. Gate cũ hoặc thiếu trace dừng trước dispatch.
 - URL runtime dùng chung một validator loopback chặt: chỉ HTTP `127.0.0.1`/`localhost`, không userinfo, path, query hay fragment.
 - WAL ghi thời điểm terminal thực tế, không sao chép timestamp bắt đầu. Mọi started không có terminal hoặc transport exception vẫn là ambiguous và không được retry.
 - Companion gate bắt buộc cả hai pacing cap: tối đa 3 attempt trong mọi rolling 30 phút và 15 attempt trong mọi rolling 24 giờ.
-- Owner declaration phải machine-bind `divide=corpus_missing_dimensionless_divisor`; không được lặng lẽ coi operation này là đã bao phủ.
+- Owner declaration phải machine-bind `divide=corpus_missing_dimensionless_divisor` và `sum=transport_has_no_explicit_document_scope`; không được lặng lẽ coi hai operation này là đã bao phủ.
+- Inventory preflight đọc read-only `MaHang`, `SoLuong`, `Unit`, page và source-row identity để loại dòng thiếu quantity, part code có nhiều quantity fact, cặp khác unit và mọi candidate mà production `solve_grounded_calculation` không trả `valid`. Quantity/unit chỉ tồn tại trong bộ nhớ và inventory hash; public manifest và prompt không chứa giá trị.
+- Prompt operator không chứa filename; runner truyền đúng hai explicit part code qua `current_part_ids`. Corpus recapture hiện cho phép đúng 100 pair-intent card trên 4 document, với cap được khai báo `26` card/document và `7` card/document/operation; selection bias này không được dùng làm quality claim.
 - Review contract chỉ có một primary human reviewer: `bao.nguyen` review đủ 20 case phân tầng và mọi failure/low-confidence; Codex chỉ hỗ trợ metadata và kỹ thuật.
 
 Corpus phải được recapture trước mỗi campaign. Snapshot operator gần nhất dùng 12 PDF/130 BOM row; các con số 9 document/41 row và 7 PDF/87 row bên dưới là checkpoint lịch sử, không phải inventory mặc định cho window mới.
+
+Các mục “Định nghĩa traffic”, “Các invariant bị khóa” và “Nguồn dùng để tạo challenge card” bên dưới mô tả assisted-UI contract lịch sử. Owner authorization mới thay contract đó đúng phạm vi operator replacement như phần hardening trên; không thay đổi default rollout hay human-review requirement.
 
 ## Checkpoint thực thi 2026-08-05
 

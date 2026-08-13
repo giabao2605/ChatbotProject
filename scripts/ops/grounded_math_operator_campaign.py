@@ -5,16 +5,22 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from itertools import combinations
 from pathlib import Path
 from urllib.parse import urlparse
 
 from mech_chatbot.rag.entity_resolver import extract_explicit_codes
-from mech_chatbot.rag.grounded_math import detect_calculation_operation
+from mech_chatbot.rag.grounded_math import (
+    GroundedFact,
+    detect_calculation_operation,
+    solve_grounded_calculation,
+)
 from mech_chatbot.rag.intent import is_bom_lookup
 
 
@@ -22,16 +28,20 @@ SCHEMA = "grounded-math-operator-campaign-v1"
 WAL_SCHEMA = "grounded-math-operator-wal-v1"
 TRAFFIC_CLASS = "owner_authorized_operator_generated"
 TRANSPORT = "internal_rag_sse"
-OPERATIONS = ("add", "subtract", "ratio", "percent", "multiply", "sum")
-UNAVAILABLE_OPERATIONS = {"divide": "corpus_missing_dimensionless_divisor"}
+OPERATIONS = ("add", "subtract", "ratio", "percent", "multiply")
+UNAVAILABLE_OPERATIONS = {
+    "divide": "corpus_missing_dimensionless_divisor",
+    "sum": "transport_has_no_explicit_document_scope",
+}
 CAMPAIGN_CARD_COUNT = 100
 CAMPAIGN_DURATION = timedelta(days=7)
 CAMPAIGN_CADENCE = CAMPAIGN_DURATION / (CAMPAIGN_CARD_COUNT - 1)
-MAX_CARDS_PER_DOCUMENT = 15
-MAX_CARDS_PER_DOCUMENT_OPERATION = 3
+MAX_CARDS_PER_DOCUMENT = 26
+MAX_CARDS_PER_DOCUMENT_OPERATION = 7
 OPERATOR_USER_ID = 81
 OPERATOR_USERNAME = "admin_bao"
 EXPECTED_SERVING_COMMIT = "7b9d57562a669984b843d48d6d7ddf09048c472d"
+PART_CODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{1,63}")
 INVENTORY_SQL = """
 SELECT
     t.DocID,
@@ -39,8 +49,11 @@ SELECT
     t.VersionNo,
     t.OwnerDepartment,
     t.Site,
+    b.ID AS SourceRowID,
+    b.TrangSo,
     b.MaHang,
-    b.TenVatTu
+    b.SoLuong,
+    b.Unit
 FROM dbo.TaiLieu AS t
 JOIN dbo.BangKeVatTu AS b ON b.DocID = t.DocID
 WHERE t.LifecycleStatus = 'published'
@@ -90,13 +103,20 @@ def parse_timestamp(value: str) -> datetime:
 def _normalized_inventory(inventory: Iterable[dict]) -> list[dict]:
     normalized: list[dict] = []
     for item in inventory:
-        labels = sorted({str(value).strip() for value in item["operand_labels"] if str(value).strip()})
-        supplied_styles = item.get("operand_styles") or {}
-        operand_styles = {
-            label: str(supplied_styles.get(label) or "part_code") for label in labels
-        }
-        if any(style not in {"part_code", "description"} for style in operand_styles.values()):
-            raise ValueError("operand_style_invalid")
+        facts = sorted(
+            (
+                {
+                    "label": str(fact["label"]).strip(),
+                    "value": str(Decimal(str(fact["value"]))),
+                    "unit": str(fact.get("unit") or "").strip(),
+                    "page": int(fact["page"]),
+                    "source_id": str(fact["source_id"]),
+                }
+                for fact in item.get("operand_facts") or ()
+                if str(fact.get("label") or "").strip()
+            ),
+            key=lambda fact: (fact["label"].casefold(), fact["source_id"]),
+        )
         normalized.append(
             {
                 "doc_id": str(item["doc_id"]),
@@ -104,18 +124,23 @@ def _normalized_inventory(inventory: Iterable[dict]) -> list[dict]:
                 "version": str(item["version"]),
                 "department": str(item["department"]).strip(),
                 "site": str(item["site"]).strip(),
-                "operand_labels": labels,
-                "operand_styles": operand_styles,
+                "operand_facts": facts,
             }
         )
     return sorted(normalized, key=lambda item: (item["doc_id"], item["file_name"]))
 
 
 def inventory_from_rows(rows: Iterable[dict]) -> list[dict]:
+    source_rows = [dict(row) for row in rows]
     documents: dict[object, dict] = {}
-    labels: dict[object, set[str]] = defaultdict(set)
-    styles: dict[object, dict[str, str]] = defaultdict(dict)
-    for row in rows:
+    facts: dict[object, list[dict]] = defaultdict(list)
+    quantity_code_counts = Counter(
+        str(row.get("MaHang") or "").strip().casefold()
+        for row in source_rows
+        if str(row.get("MaHang") or "").strip()
+        and row.get("SoLuong") is not None
+    )
+    for row in source_rows:
         doc_id = row["DocID"]
         documents.setdefault(
             doc_id,
@@ -127,89 +152,85 @@ def inventory_from_rows(rows: Iterable[dict]) -> list[dict]:
                 "site": str(row.get("Site") or "").strip(),
             },
         )
-        for source, style in (("MaHang", "part_code"), ("TenVatTu", "description")):
-            label = str(row.get(source) or "").strip()
-            if label:
-                labels[doc_id].add(label)
-                styles[doc_id][label] = style
+        label = str(row.get("MaHang") or "").strip()
+        if (
+            not PART_CODE_RE.fullmatch(label)
+            or row.get("SoLuong") is None
+            or quantity_code_counts[label.casefold()] != 1
+        ):
+            continue
+        try:
+            value = str(Decimal(str(row["SoLuong"])))
+            page = int(row.get("TrangSo") or 1)
+            source_id = str(row.get("SourceRowID") or row.get("ID"))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+        if not source_id or source_id == "None":
+            continue
+        facts[doc_id].append(
+            {
+                "label": label,
+                "value": value,
+                "unit": str(row.get("Unit") or "").strip(),
+                "page": page,
+                "source_id": source_id,
+            }
+        )
     return [
         {
             **documents[doc_id],
-            "operand_labels": sorted(labels[doc_id]),
-            "operand_styles": {
-                label: styles[doc_id][label] for label in sorted(labels[doc_id])
-            },
+            "operand_facts": facts[doc_id],
         }
         for doc_id in sorted(documents, key=str)
     ]
 
 
-def _pair_prompt_candidates(file_name: str, labels_by_style: dict) -> list[dict]:
+def _pair_prompt_candidates(labels: list[str]) -> list[dict]:
     operation_templates = {
-        "add": "Theo BOM {doc}, cộng số lượng {left} với {right}.",
-        "subtract": "Theo BOM {doc}, lấy số lượng {left} trừ số lượng {right}.",
-        "ratio": "Tỷ lệ số lượng {left} so với {right} trong BOM {doc} là bao nhiêu?",
-        "percent": "Số lượng {left} bằng bao nhiêu phần trăm số lượng {right} trong BOM {doc}?",
+        "add": "Theo BOM, cộng số lượng {left} với {right}.",
+        "subtract": "Theo BOM, lấy số lượng {left} trừ số lượng {right}.",
+        "ratio": "Tỷ lệ số lượng {left} so với {right} trong BOM là bao nhiêu?",
+        "percent": "Số lượng {left} bằng bao nhiêu phần trăm số lượng {right} trong BOM?",
     }
     candidates: list[dict] = []
     for operation, template in operation_templates.items():
-        style_order = (
-            ("description", "part_code")
-            if operation in {"subtract", "percent"}
-            else ("part_code", "description")
+        pairs = (
+            list(combinations(labels, 2))
+            if operation == "add"
+            else [(left, right) for left in labels for right in labels if left != right]
         )
-        styled_pairs: list[tuple[str, str, str]] = []
-        for style in style_order:
-            style_labels = labels_by_style[style]
-            pairs = (
-                list(combinations(style_labels, 2))
-                if operation == "add"
-                else [
-                    (left, right)
-                    for left in style_labels
-                    for right in style_labels
-                    if left != right
-                ]
-            )
-            styled_pairs.extend((left, right, style) for left, right in pairs)
-        for left, right, operand_style in styled_pairs[:MAX_CARDS_PER_DOCUMENT_OPERATION]:
+        for left, right in pairs[:MAX_CARDS_PER_DOCUMENT_OPERATION]:
             candidates.append(
                 {
                     "operation": operation,
                     "template_id": f"{operation}-pair",
                     "operand_labels": [left, right],
-                    "operand_style": operand_style,
-                    "prompt": template.format(doc=file_name, left=left, right=right),
+                    "operand_style": "part_code",
+                    "prompt": template.format(left=left, right=right),
                 }
             )
     return candidates
 
 
-def _multiply_prompt_candidates(file_name: str, labels_by_style: dict) -> list[dict]:
-    multiply_template = "Theo BOM {doc}, nhân số lượng {left} với số lượng {right}."
-    multiply_pairs: list[tuple[str, str, str]] = []
-    for style in ("description", "part_code"):
-        multiply_pairs.extend(
-            (left, right, style)
-            for left, right in combinations(labels_by_style[style], 2)
-        )
+def _multiply_prompt_candidates(labels: list[str]) -> list[dict]:
+    multiply_template = "Theo BOM, nhân số lượng {left} với số lượng {right}."
     return [
         {
             "operation": "multiply",
             "template_id": "multiply-pair",
             "operand_labels": [left, right],
-            "operand_style": operand_style,
-            "prompt": multiply_template.format(
-                doc=file_name, left=left, right=right
-            ),
+            "operand_style": "part_code",
+            "prompt": multiply_template.format(left=left, right=right),
         }
-        for left, right, operand_style in multiply_pairs[
+        for left, right in list(combinations(labels, 2))[
             :MAX_CARDS_PER_DOCUMENT_OPERATION
         ]
     ]
 
 
-def _validated_candidates(candidates: list[dict]) -> tuple[dict, list[dict]]:
+def _validated_candidates(
+    candidates: list[dict], facts: tuple[GroundedFact, ...]
+) -> tuple[dict, list[dict]]:
     by_operation: dict[str, list[dict]] = defaultdict(list)
     audit: list[dict] = []
     for candidate in candidates:
@@ -220,6 +241,10 @@ def _validated_candidates(candidates: list[dict]) -> tuple[dict, list[dict]]:
             rejection_reason = "explicit_code_missing"
         elif not is_bom_lookup(candidate["prompt"]):
             rejection_reason = "bom_intent_not_detected"
+        else:
+            result = solve_grounded_calculation(candidate["prompt"], facts)
+            if result.status != "valid":
+                rejection_reason = f"calculation_{result.status}"
         accepted = rejection_reason is None
         audit.append(
             {
@@ -245,25 +270,22 @@ def _interleave_candidates(by_operation: dict) -> list[dict]:
 
 
 def _prompt_candidates(document: dict) -> tuple[list[dict], list[dict]]:
-    file_name = document["file_name"]
-    labels = document["operand_labels"]
-    styles = document["operand_styles"]
-    labels_by_style = {
-        style: [label for label in labels if styles[label] == style]
-        for style in ("part_code", "description")
-    }
-    candidates = [
-        {
-            "operation": "sum",
-            "template_id": "sum-1",
-            "operand_labels": [],
-            "operand_style": "document_aggregate",
-            "prompt": f"Tính tổng số lượng toàn bộ các dòng trong BOM {file_name}.",
-        }
-    ]
-    candidates.extend(_pair_prompt_candidates(file_name, labels_by_style))
-    candidates.extend(_multiply_prompt_candidates(file_name, labels_by_style))
-    by_operation, audit = _validated_candidates(candidates)
+    labels = [fact["label"] for fact in document["operand_facts"]]
+    facts = tuple(
+        GroundedFact(
+            value=Decimal(fact["value"]),
+            unit=fact["unit"],
+            doc_id=int(document["doc_id"]),
+            page=fact["page"],
+            version=int(document["version"]),
+            source_id=fact["source_id"],
+            label=fact["label"],
+        )
+        for fact in document["operand_facts"]
+    )
+    candidates = _pair_prompt_candidates(labels)
+    candidates.extend(_multiply_prompt_candidates(labels))
+    by_operation, audit = _validated_candidates(candidates, facts)
     return _interleave_candidates(by_operation), audit
 
 
@@ -312,9 +334,11 @@ def _preflight_summary(documents: list[dict], audit_by_document: dict) -> dict:
             "detect_calculation_operation",
             "extract_explicit_codes",
             "is_bom_lookup",
+            "solve_grounded_calculation",
         ],
         "generated": len(rows),
         "accepted": sum(bool(row["accepted"]) for row in rows),
+        "deterministic_validated": sum(bool(row["accepted"]) for row in rows),
         "rejected_by_reason": dict(sorted(rejected.items())),
         "by_operation": summarize("operation"),
         "by_operand_style": summarize("operand_style"),
@@ -349,11 +373,7 @@ def _select_candidates(
         raise ValueError("insufficient_unique_cards")
     if {candidate["operation"] for _, candidate in selected} != set(OPERATIONS):
         raise ValueError("insufficient_operation_coverage")
-    if {candidate["operand_style"] for _, candidate in selected} != {
-        "document_aggregate",
-        "part_code",
-        "description",
-    }:
+    if {candidate["operand_style"] for _, candidate in selected} != {"part_code"}:
         raise ValueError("insufficient_operand_style_coverage")
     return selected, _preflight_summary(documents, audit_by_document)
 
@@ -594,6 +614,11 @@ def send_internal_rag_sse(
     if not service_token:
         raise CampaignStopped("service_token_missing")
     normalized_url = loopback_runtime_url(base_url)
+    part_ids = extract_explicit_codes(question)
+    if len(part_ids) != 2 or any(
+        not PART_CODE_RE.fullmatch(part_id) for part_id in part_ids
+    ):
+        raise CampaignStopped("operator_part_codes_invalid")
     if post is None:
         import requests
 
@@ -609,6 +634,7 @@ def send_internal_rag_sse(
                 "user_id": OPERATOR_USER_ID,
                 "username": OPERATOR_USERNAME,
                 "user_question": question,
+                "current_part_ids": part_ids,
                 "response_language": "vi",
             },
             stream=True,

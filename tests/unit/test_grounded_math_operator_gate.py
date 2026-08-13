@@ -24,22 +24,18 @@ def _artifacts():
             "version": 1,
             "department": "Technical",
             "site": "PHONG_KY_THUAT",
-            "operand_labels": [
-                f"PART-{index}-A",
-                f"PART-{index}-B",
-                f"PART-{index}-C",
-                f"Description {index} A",
-                f"Description {index} B",
+            "operand_facts": [
+                {
+                    "label": f"PART-{index}-{item}",
+                    "value": str(item),
+                    "unit": "piece",
+                    "page": 1,
+                    "source_id": f"{index}-{item}",
+                }
+                for item in range(1, 9)
             ],
-            "operand_styles": {
-                f"PART-{index}-A": "part_code",
-                f"PART-{index}-B": "part_code",
-                f"PART-{index}-C": "part_code",
-                f"Description {index} A": "description",
-                f"Description {index} B": "description",
-            },
         }
-        for index in range(1, 13)
+        for index in range(1, 5)
     ]
     manifest, _private = campaign.build_campaign_cards(
         inventory, datetime(2026, 8, 12, tzinfo=timezone.utc)
@@ -148,9 +144,7 @@ def _artifacts():
         "default_rollout_authorized": False,
         "selection_bias_disclosed": True,
         "generator_used_structured_values": True,
-        "unavailable_operations": {
-            "divide": "corpus_missing_dimensionless_divisor"
-        },
+        "unavailable_operations": campaign.UNAVAILABLE_OPERATIONS,
         "review_contract": {
             "primary_reviewers": ["bao.nguyen"],
             "stratified_cases": 20,
