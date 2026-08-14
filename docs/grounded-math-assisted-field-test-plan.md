@@ -8,9 +8,17 @@ Có thể tổ chức một chiến dịch 100 câu hỏi Grounded Math qua đú
 
 Kế hoạch này không thay đổi runtime, threshold, dependency, activation bundle hoặc code gate. Nó chỉ quy định cách chuẩn bị câu hỏi, chạy thử nhỏ, chạy chiến dịch và review fail-closed.
 
+## Trạng thái sau burst — 2026-08-14
+
+- Window-06 đã tombstone ở `17` transport completion, `10` eligible trace và `7` calculation-invalid; không carry-forward request hoặc runtime duration.
+- Burst `20dfd03b262a2eedf15731d7` hoàn tất `100/100` request nhưng canonical gate `rejected` ở `owner_declaration` do hash-domain mismatch. Nó chỉ là throughput evidence, không tính vào pilot và không được rerun.
+- Validator đã được sửa cho campaign tương lai tại `d77f28c09c995dd983591a730db0e07a79b2f4e2`; fix không thay đổi tombstone hoặc authorization lịch sử.
+- Owner disposition hiện là `deferred_pending_valid_pilot`, artifact SHA-256 `55007d64095d95005cb696f38c6a00e326624b5c8b024b7db6bf512df910f21e`. Phần chạy 7 ngày/100 request được để lại; owner review, interaction matrix và default rollout vẫn bị chặn.
+- Runbook chuẩn bị review nằm ở `docs/grounded-math-owner-review-preparation.md`; tài liệu này không cấp quyền khóa sample hoặc bắt đầu review.
+
 ## Hardening cho operator window kế tiếp
 
-Phần này áp dụng cho campaign mới được tạo sau thay đổi code; không sửa, nới hoặc tái sử dụng contract của window-06. Operator traffic vẫn là `owner_authorized_operator_generated`, không phải organic demand, quality evidence hay UI parity; default rollout tiếp tục OFF.
+Phần này chỉ áp dụng khi có owner authorization mới cho campaign tương lai; không sửa, nới hoặc tái sử dụng contract của window-06 hay burst-window-11. Operator traffic vẫn là `owner_authorized_operator_generated`, không phải organic demand, quality evidence hay UI parity; default rollout tiếp tục OFF.
 
 Window-06 sau đó đã được dừng fail-closed trước card 018: `17` transport completion chỉ tạo `10` eligible trace, còn `7` trace có `calculation_result_status=invalid`. Không request hoặc runtime duration nào được carry-forward. Các invariant UI-assisted lịch sử ở phần dưới không áp dụng cho operator replacement; replacement dùng transport `internal_rag_sse` đã khai báo và không được claim UI parity.
 
@@ -28,10 +36,10 @@ Corpus phải được recapture trước mỗi campaign. Snapshot operator gầ
 
 Các mục “Định nghĩa traffic”, “Các invariant bị khóa” và “Nguồn dùng để tạo challenge card” bên dưới mô tả assisted-UI contract lịch sử. Owner authorization mới thay contract đó đúng phạm vi operator replacement như phần hardening trên; không thay đổi default rollout hay human-review requirement.
 
-## Checkpoint thực thi 2026-08-05
+## Checkpoint thực thi 2026-08-05 (lịch sử, superseded bởi trạng thái sau burst)
 
 - Owner đã duyệt và restore thành công hai target riêng `Mech_Chatbot_DB_RestoreTest_RAGPilot_20260804_b437b32` và `TaiLieuKyThuat_v2_RestoreTest_RAGPilot_20260804_b437b32`; pre-ingest reconciliation receipt SHA-256 `f4a55bdfd3f7efe393e6a024c02436a43376d54aa2052c5d8fb702560b33c59d`, snapshot fingerprint `4f3bc3ad3e149d428f80db62569a705ceb3a098049930faefb96a82415511d97`.
-- SQL không có pending migration; Qdrant không thiếu index/payload field. App `8180`, pilot `8200` và control `8210` hiện healthy trên target 7 PDF `20260804_b437b32`; pilot chỉ bật Grounded Math, control giữ `all_off`.
+- Tại checkpoint này, SQL không có pending migration; Qdrant không thiếu index/payload field. App `8180`, pilot `8200` và control `8210` khi đó healthy trên target 7 PDF `20260804_b437b32`; pilot chỉ bật Grounded Math, control giữ `all_off`.
 - Corpus manifest đã khóa 33 PDF unique, 8 BOM-positive, 4 `plot.log` bị loại; manifest SHA-256 `aa8ee132ad25687fde63a619fc200c60906a7b6e654d2c188ce9f93d22883d1e`.
 - Ingest proof đầu tiên bị quality gate chặn: `failed`, quality `50`, `0` chunk, `0` BOM record. Qdrant đã rollback về đúng `231` point; không có tài liệu mới pending-review, published hoặc servable. 32 PDF còn lại chưa được tạo job.
 - Nguyên nhân gốc đã xác nhận là production worker chạy runner mà không bind repository runtime: managed `proxyllm` profile thực tế vẫn tồn tại trong target nhưng lookup fail-closed; đồng thời classifier truyền `db_engine` vào `get_department_domain_profile()` dù hàm này chưa nhận tham số đó. Artifact fail-closed: `.local/assisted-field-test-b437b32/ingestion-quality.json`, SHA-256 `aad03bda62c3df11b8aa82d45e453655fb1ea4485483c8e872c523091ca2cebf`.
@@ -39,8 +47,8 @@ Các mục “Định nghĩa traffic”, “Các invariant bị khóa” và “
 - Hai target đã duyệt được reconcile read-only cho RC mới. Migration ledger `43/43` và Qdrant schema đều current; Qdrant source/target giống nhau `231` point. SQL serving giống nhau sau khi khai báo loại đúng một `dbo.TaiLieu.FilePath` là đường dẫn máy cục bộ của proof cũ; không có drift lifecycle/publication/content. Receipt `.local/restore-drill/restore-drill-20260804-ab25cec-reconciled.json`, SHA-256 `f4a55bdfd3f7efe393e6a024c02436a43376d54aa2052c5d8fb702560b33c59d`, snapshot fingerprint `4f3bc3ad3e149d428f80db62569a705ceb3a098049930faefb96a82415511d97`.
 - Historical pre-publication proof `pdf-10` đã pass qua đúng production `run_worker()`: `pending_review`, quality `85`, `8` chunk, `12` BOM record, Qdrant `231 -> 239`; artifact `.local/assisted-field-test-b437b32/ingestion-proof-rc-ab25cec.json`, SHA-256 `10749973081555e38ab0805f5725bbf9f21cbfc87674d52af5dc35661ecd6ab5`. Sau đó document này đã được đưa vào batch publish 7 tài liệu ở dòng kế tiếp.
 - Sáu BOM-positive còn lại (`pdf-11`, `pdf-16`, `pdf-20`, `pdf-25`, `pdf-32`, `pdf-33`) đã được ingest tuần tự qua cùng worker RC; cả 6 đạt quality `85`, tổng thêm `42` chunk và `75` BOM record. Sau validation contract, actor `demo_approver_technical` (ID 37, `knowledge_approver`) đã publish đủ 7 document BOM-positive trên target assisted; cả 7 là `approved/published/servable`. Publication artifact `.local/assisted-field-test-b437b32/publication-rc-ab25cec.json`, SHA-256 `643ef9742ec03bcc5a532cf23ef761ae6fde83e053daca0b62eb0ef194a04e15`.
-- Runtime drift cũ đã được tombstone; current 7-PDF window bắt đầu `2026-08-04T09:08:38.4917915Z`, minimum runtime đến `2026-08-11T09:08:38.4917915Z`. Health binding hiện khớp, nhưng canonical gate vẫn `rejected`, `eligible_trace_count=0`.
-- Challenge manifest 99 card cũ được giữ làm artifact lịch sử nhưng bị supersede vì giả định có một starting trace được include. Current window là `0/100`, nên không dùng manifest đó cho proof hoặc campaign; phải freeze manifest 100 card mới trước proof.
+- Runtime drift cũ đã được tombstone; 7-PDF window lịch sử bắt đầu `2026-08-04T09:08:38.4917915Z`, minimum runtime đến `2026-08-11T09:08:38.4917915Z`. Health binding tại checkpoint này khớp, nhưng canonical gate vẫn `rejected`, `eligible_trace_count=0`.
+- Challenge manifest 99 card cũ được giữ làm artifact lịch sử nhưng bị supersede vì giả định có một starting trace được include. Window tại checkpoint này là `0/100`, nên không dùng manifest đó cho proof hoặc campaign; phải freeze manifest 100 card mới trước proof.
 - Attempt `20260805-1` giữ tombstone ProxyLLM 503. Attempt `20260805-2` có một generation thành công qua production UI, 0 retry, nhưng không có `grounded_math_generation`, được exclude và không tính vào pilot. Proof batch 5 request vẫn chưa chạy.
 
 ## Vì sao cần plan riêng
@@ -62,8 +70,8 @@ Việc một request đi qua production UI chưa tự động biến nó thành 
 
 ## Các invariant bị khóa
 
-1. Chỉ dùng app `8180` và Math-only pilot runtime đang được bind trong `pilot-window.json`; không gọi thẳng RAG API và không chạy replay/script loop.[S6]
-2. Giữ exact commit, deployment, bundle, restore receipt, snapshot, provider configuration, SQL database và Qdrant collection của window hiện tại.[S2][S6]
+1. Chỉ dùng app `8180` và Math-only pilot runtime được bind trong `pilot-window.json` của assisted-UI contract; không gọi thẳng RAG API và không chạy replay/script loop.[S6]
+2. Giữ exact commit, deployment, bundle, restore receipt, snapshot, provider configuration, SQL database và Qdrant collection của window được declaration bind.[S2][S6]
 3. Giữ nguyên minimum 7 ngày/100 eligible, một calculation, không provider retry, tối đa một final generation, latency multiplier `1.25`, cost multiplier `1.5`.[S2]
 4. Artifact campaign chỉ lưu ID/hash/count/boolean/reason code; không lưu raw question, raw answer, raw document, credential hoặc private response.[S2][S7]
 5. Không dùng quantity, expected answer, expected formula hoặc evaluation oracle để tạo câu hỏi.
@@ -199,7 +207,7 @@ Owner xem proof artifact, corpus inventory và exact manifest hash, rồi chọn
 
 Declaration không được sửa sau khi biết campaign result. Nếu manifest/corpus/runtime đổi, declaration hết hiệu lực.
 
-Current window bắt đầu ở `0/100`; provider smoke và proof batch đều excluded. Vì vậy full campaign phải predeclare đúng 100 submission mới. Chỉ khi cả 100 đều eligible thì campaign mới tự đạt ngưỡng 100; mọi noneligible vẫn giữ nguyên disposition và không được gửi bù ngoài manifest.
+Window lịch sử tại checkpoint bắt đầu ở `0/100`; provider smoke và proof batch đều excluded. Vì vậy một future full campaign phải predeclare đúng 100 submission mới. Chỉ khi cả 100 đều eligible thì campaign mới tự đạt ngưỡng 100; mọi noneligible vẫn giữ nguyên disposition và không được gửi bù ngoài manifest.
 
 Khuyến nghị: chỉ chọn `true` khi proof xác nhận intent có thể được tạo mà không dùng oracle, manifest đạt diversity caps và owner chấp nhận rõ giới hạn của inventory vừa recapture cùng mọi operation unavailable. Mốc 7 production PDF/87 BOM row và `divide` unavailable chỉ thuộc historical window; campaign mới không được kế thừa các số đó. Nếu không, chọn `false` và chờ organic traffic hoặc mở pilot mới với corpus tốt hơn.
 

@@ -40,7 +40,7 @@ Vì vậy, “100% controlled demo” không đồng nghĩa phải bật mọi c
 | -------------------------------- | --------------------------------------------- | -------------------------- | --------------------------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | Telemetry và labeled evaluation | Có                                           | Có                        | Có                                                                   | Áp dụng cho evaluation           | Foundation v4 hoàn tất; pilot labels thuộc Milestone A–F                                         |
 | CRAG và claim repair            | Có                                           | Có                        | Ba gate đạt                                                         | Inconclusive | Thiếu 20 matched pairs, hai người dùng và reviewer sign-off; flag giữ tắt |
-| Grounded math                    | Có                                           | Có, gồm integration live | 3/3 pair đạt; series bị chặn bởi CRAG                            | Inconclusive | Thiếu 10 truy vấn demo được review thủ công; flag giữ tắt |
+| Grounded math                    | Có                                           | Có, gồm integration live | 3/3 pair đạt; window-06 và burst đều tombstone | Inconclusive | Thiếu pilot 7 ngày/100 request hợp lệ; owner review và interaction matrix chưa được mở; flag giữ tắt |
 | Late Interaction                 | Có                                           | Có                        | Có readiness và 3 pair clean-commit gate fail-closed                | Rejected cho controlled demo mặc định | `late-v2` được giữ làm research path; flag bị pin tắt trong demo matrix |
 | Query decomposition              | Có                                           | Có, full suite xanh       | Có provider-stable 8-case pair tại `937ec52`; quality gate không đạt | Inconclusive cho controlled demo | Chưa có 10 câu hỏi phức hợp bổ sung theo hợp đồng nghiệm thu; flag giữ tắt |
 | Governed GraphRAG                | Có schema/API/retrieval                      | Có, gồm integration live | Có clean-commit pair; gate fail-closed vì thiếu independent review | Inconclusive | Thiếu 20 edge do reviewer độc lập gán nhãn; flag giữ tắt |
@@ -360,7 +360,7 @@ Không đạt default-rollout gate không đồng nghĩa phải xóa tính năng
 | --- | --- |
 | 2.1–2.2 foundation | Hoàn tất implementation; 112 targeted tests xanh tại `937ec52` và có tracked technical evidence |
 | 2.3 CRAG | `inconclusive`; main-collection preflight thích ứng đã đạt 44/44 case nhưng chưa có CRAG-only baseline/candidate đủ 20 matched pairs và reviewer sign-off |
-| 2.4 Grounded Math | `inconclusive`; staging đạt nhưng chưa có 10 truy vấn demo được review |
+| 2.4 Grounded Math | `inconclusive`; staging đạt nhưng chưa có pilot 7 ngày/100 request hợp lệ; owner review và interaction matrix chưa được mở |
 | 2.5 Late Interaction | `rejected`; immutable evidence và decision v2 đã được thêm |
 | 2.6 Query Decomposition | `inconclusive`; smoke 5/5 và clean 8-case pair có 0 error/0 retry nhưng còn thiếu 10 câu hỏi phức hợp bổ sung |
 | 2.7 GraphRAG | `inconclusive`; thiếu independent review tối thiểu 20 edge |
@@ -381,7 +381,7 @@ Không đạt default-rollout gate không đồng nghĩa phải xóa tính năng
 | 2.1 Rollout guardrails    | Policy, CLI và fail-closed checks đã có                                                                             | Không còn implementation riêng; phải tiếp tục áp dụng guardrail cho từng run mới                                                                                                                        | Sẵn sàng                                      |
 | 2.2 Evaluation foundation | Schema v4, manifest v2, claim/citation/risk-coverage evaluator, adjudication protocol, worked examples và tracked 112-test artifact đã có | Sample controlled-demo đủ reviewer chưa được thu; đây là evidence gap của demo, không phải implementation gap | Hoàn tất kỹ thuật |
 | 2.3 CRAG/repair           | Code readiness, staging gates, canary isolation, replay, telemetry, abort, Voyage fallback policy và rollback đã có | Chưa có 20 matched pairs/tối thiểu hai user và reviewer sign-off | `inconclusive`, flag tắt |
-| 2.4 Grounded Math         | Fixture live, 3/3 pair, exact Decimal/provenance/citation gate và rollback đều đạt | Chưa có 10 truy vấn demo thật được review toàn bộ | `inconclusive`, flag tắt |
+| 2.4 Grounded Math         | Fixture live, 3/3 pair, exact Decimal/provenance/citation gate và rollback đều đạt | Window-06 và burst đã tombstone; chưa có pilot 7 ngày/100 request hợp lệ, owner review hoặc interaction matrix | `inconclusive`, flag tắt |
 | 2.5 Late Interaction      | Shadow `late-v2`, coverage/governance, three-arm benchmark, tracked immutable evidence và `milestone-decision-v2` đã có | Candidate không chứng minh nDCG gain; đã kết thúc nhánh evidence-first bằng quyết định `rejected` cho controlled demo mặc định | Hoàn tất quyết định; flag giữ tắt |
 
 Đối với controlled demo, các yêu cầu 7–14 ngày, tối thiểu 100 matched pairs và quality threshold đầy đủ vẫn là mục tiêu tham chiếu cho default rollout, không phải điều kiện bắt buộc để bắt đầu một demo nhỏ. Demo vẫn phải dừng ngay khi có leakage, governance escape hoặc rollback không hoạt động.
@@ -515,7 +515,7 @@ Protocol canary, labeling, artifact và abort này được tái sử dụng cho
 
 ### 2.4 Milestone B — Đóng Grounded Math live gate
 
-Trạng thái hiện tại: **staging evidence đã hoàn tất, controlled demo chưa chạy**. Fixture, evaluator, isolated ingest/preflight/cleanup, baseline/candidate runner, rollback verifier và gate đã được triển khai. Ba pair trên commit `d5ec3e1` đạt toàn bộ pair gate và series conditions. Dependency CRAG và provider stability vẫn chặn default rollout, nhưng không cấm một demo Grounded Math cô lập, opt-in và có rollback.
+Trạng thái hiện tại: **staging evidence đã hoàn tất, controlled demo hợp lệ vẫn chưa đạt**. Fixture, evaluator, isolated ingest/preflight/cleanup, baseline/candidate runner, rollback verifier và gate đã được triển khai. Ba pair trên commit `d5ec3e1` đạt toàn bộ pair gate và series conditions. Selective activation cho phép đánh giá Grounded Math độc lập, nhưng default rollout vẫn cần pilot, review, interaction matrix và release decision riêng.
 
 #### Mục tiêu
 
@@ -541,7 +541,8 @@ Chứng minh deterministic calculation có provenance tốt hơn baseline mà kh
 5. [Đã hoàn tất 3/3 pair] Chạy baseline với flag tắt và candidate với `RAG_GROUNDED_MATH_ENABLED=true` trên cùng snapshot và commit.
 6. [Đã đạt] Chạy `retrieval_intelligence_gate.py grounded_math`; latency/cost/citation/provenance, retry telemetry và rollback contract đều đạt ở cả ba pair.
 7. [Đã chạy, dependency-blocked] Series guardrail đạt mọi điều kiện nội tại của Grounded Math nhưng fail-closed vì milestone CRAG chưa hoàn tất.
-8. Khi dependency CRAG đã có quyết định hoàn tất và provider ổn định, chạy lại series dependency check, sau đó pilot production nhỏ rồi đo calculation failure/refusal/latency; nếu không đạt thì lưu artifact quyết định giữ flag tắt.
+8. [Đã tombstone] Window-06 dừng ở `17` transport completion, `10` eligible trace và `7` calculation-invalid; burst `20dfd03b262a2eedf15731d7` hoàn tất 100 request nhưng canonical gate reject hash-domain mismatch. Không carry-forward hoặc rerun hai window này.
+9. [Deferred theo owner 2026-08-14] Validator cho campaign tương lai đã sửa tại `d77f28c`; phần chạy 7 ngày/100 request chưa được authorize lại. Owner review, interaction matrix và default rollout tiếp tục bị chặn; disposition là `deferred_pending_valid_pilot`.
 
 #### Điều kiện hoàn tất
 
@@ -904,7 +905,7 @@ Tất cả milestone đã đạt
 ### 2.11 Checklist cuối để tuyên bố đạt 100%
 
 - [ ] CRAG/repair production pilot đạt hoặc có reject decision/artifact theo nhánh bác bỏ.
-- [ ] Grounded math đã có live baseline/candidate và gate fail; còn human review và decision cuối.
+- [ ] Grounded Math có staging baseline/candidate đạt, nhưng window-06 và burst đã tombstone; còn thiếu pilot 7 ngày/100 request hợp lệ trước owner review, interaction matrix và decision cuối.
 - [X] Late Interaction có clean-commit three-arm artifact và quyết định không dùng `late-v2` làm default; controlled demo vẫn là hạng mục quan sát tùy chọn, flags mặc định giữ tắt.
 - [ ] Query decomposition đã có complex-query gate `inconclusive`; còn bổ sung case thứ 10 và decision/pilot cuối.
 - [ ] GraphRAG migration, seed, reviewer flow, quality gate và pilot/decision đạt.
