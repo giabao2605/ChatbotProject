@@ -181,8 +181,9 @@ def _inputs(tmp_path: Path):
         )
     window = {
         "schema": "math-lan-pilot-window-v1",
+        "pilot_contract_version": "grounded-math-3d-100-v1",
         "started_at": started.isoformat().replace("+00:00", "Z"),
-        "minimum_runtime_until": (started + timedelta(days=7)).isoformat().replace(
+        "minimum_runtime_until": (started + timedelta(days=3)).isoformat().replace(
             "+00:00", "Z"
         ),
         "minimum_eligible_requests": 100,
@@ -334,6 +335,7 @@ def test_cli_accepts_only_complete_metadata_evidence_and_hashes_trace_ids(tmp_pa
     assert artifact["schema"] == "grounded-math-production-pilot-gate-v1"
     assert artifact["passed"] is True
     assert artifact["decision"] == "pending_review"
+    assert artifact["pilot_contract_version"] == "grounded-math-3d-100-v1"
     assert artifact["provider_smoke_valid"] is True
     assert artifact["eligible_trace_count"] == 100
     assert artifact["checks"] == {name: True for name in CHECKS}
@@ -341,6 +343,60 @@ def test_cli_accepts_only_complete_metadata_evidence_and_hashes_trace_ids(tmp_pa
     assert artifact["trace_sha256"] == _sha256(inputs["trace_path"])
     rendered = json.dumps(artifact)
     assert "sensitive-raw-trace" not in rendered
+
+
+def test_cli_rejects_more_than_exact_contract_request_count(tmp_path):
+    cli = _load_cli()
+    inputs = _inputs(tmp_path)
+    rows = [json.loads(line) for line in inputs["trace_path"].read_text().splitlines()]
+    extra = [
+        {
+            **row,
+            "trace_id": "sensitive-raw-trace-100",
+            "ts": (
+                datetime.now(timezone.utc) - timedelta(hours=1)
+            ).isoformat().replace("+00:00", "Z"),
+        }
+        for row in rows[-3:]
+    ]
+    inputs["trace_path"].write_text(
+        "".join(json.dumps(row) + "\n" for row in rows + extra),
+        encoding="utf-8",
+    )
+    inputs["window"]["minimum_eligible_requests"] = 101
+    inputs["window_path"].write_text(
+        json.dumps(inputs["window"]), encoding="utf-8"
+    )
+    inputs["state"]["window_sha256"] = _sha256(inputs["window_path"])
+    inputs["state_path"].write_text(
+        json.dumps(inputs["state"]), encoding="utf-8"
+    )
+
+    assert _run(cli, inputs) == 2
+    artifact = json.loads(inputs["output"].read_text(encoding="utf-8"))
+    assert artifact["eligible_trace_count"] == 101
+    assert artifact["checks"]["runtime_identity"] is False
+    assert artifact["passed"] is False
+
+
+def test_cli_rejects_100_eligible_traces_compressed_inside_72_hours(tmp_path):
+    cli = _load_cli()
+    inputs = _inputs(tmp_path)
+    rows = [json.loads(line) for line in inputs["trace_path"].read_text().splitlines()]
+    compressed_start = datetime.now(timezone.utc) - timedelta(hours=71)
+    for index, row in enumerate(rows):
+        row["ts"] = (
+            compressed_start + timedelta(minutes=index // 3)
+        ).isoformat().replace("+00:00", "Z")
+    inputs["trace_path"].write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+
+    assert _run(cli, inputs) == 2
+    artifact = json.loads(inputs["output"].read_text(encoding="utf-8"))
+    assert artifact["eligible_trace_count"] == 100
+    assert artifact["checks"]["runtime_identity"] is False
+    assert artifact["passed"] is False
 
 
 def test_cli_accepts_pure_math_without_an_llm_final_generation(tmp_path):
@@ -468,11 +524,16 @@ def test_cli_rejects_calculation_without_valid_result_status(
 @pytest.mark.parametrize(
     "weaken",
     [
+        lambda value: value.pop("pilot_contract_version"),
+        lambda value: value.update(
+            pilot_contract_version="grounded-math-7d-100-v1"
+        ),
         lambda value: value.update(minimum_eligible_requests=99),
         lambda value: value.update(
             minimum_runtime_until=(
                 datetime.fromisoformat(value["started_at"].replace("Z", "+00:00"))
-                + timedelta(days=6)
+                + timedelta(days=3)
+                - timedelta(microseconds=1)
             ).isoformat().replace("+00:00", "Z")
         ),
         lambda value: value["pilot_budget"].update(max_calculations=2),

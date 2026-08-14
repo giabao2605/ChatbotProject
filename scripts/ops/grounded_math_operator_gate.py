@@ -13,6 +13,7 @@ from scripts.ops import grounded_math_operator_campaign as campaign
 DECLARATION_SCHEMA = "grounded-math-operator-owner-declaration-v1"
 GATE_SCHEMA = "grounded-math-operator-gate-v1"
 MAX_ATTEMPTS_PER_30_MINUTES = 3
+MAX_ATTEMPTS_PER_24_HOURS = 35
 
 
 def _canonical_sha256(value: object) -> str:
@@ -48,6 +49,10 @@ def _owner_declaration_valid(declaration: dict, manifest: dict, window: dict) ->
             declaration.get("traffic_class") == campaign.TRAFFIC_CLASS,
             declaration.get("transport") == campaign.TRANSPORT,
             declaration.get("count_toward_pilot") is True,
+            declaration.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
+            window.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
             declaration.get("organic_claim_allowed") is False,
             declaration.get("quality_claim_allowed") is False,
             declaration.get("ui_parity_claim_allowed") is False,
@@ -76,6 +81,7 @@ def _bindings_valid(
     state: dict,
     health: dict,
     release_decisions: dict,
+    owner_authorization: dict,
 ) -> bool:
     bindings = declaration.get("bindings")
     if not isinstance(bindings, dict):
@@ -87,6 +93,7 @@ def _bindings_valid(
         "state_sha256": _canonical_sha256(state),
         "health_sha256": _canonical_sha256(health),
         "release_decisions_sha256": _canonical_sha256(release_decisions),
+        "owner_authorization_sha256": _canonical_sha256(owner_authorization),
     }
     return all(bindings.get(name) == value for name, value in expected.items()) and _is_sha256(
         bindings.get("operator_tool_sha256")
@@ -101,6 +108,7 @@ def _manifest_valid(manifest: dict) -> bool:
         "transport",
         "started_at",
         "minimum_runtime_until",
+        "pilot_contract_version",
         "inventory_sha256",
         "preflight",
         "cards",
@@ -128,6 +136,8 @@ def _manifest_valid(manifest: dict) -> bool:
     if manifest.get("traffic_class") != campaign.TRAFFIC_CLASS:
         return False
     if manifest.get("transport") != campaign.TRANSPORT:
+        return False
+    if manifest.get("pilot_contract_version") != campaign.PILOT_CONTRACT_VERSION:
         return False
     card_ids = [card["card_id"] for card in cards]
     prompt_hashes = [card["prompt_sha256"] for card in cards]
@@ -302,6 +312,7 @@ def _wal_analysis(manifest: dict, rows: list[dict]) -> tuple[bool, bool, list[st
 
     trace_hashes: list[str] = []
     started_at = []
+    completed_at = []
     exactly_once = len(by_card) == campaign.CAMPAIGN_CARD_COUNT
     pacing = True
     for card_id, card in cards.items():
@@ -329,13 +340,18 @@ def _wal_analysis(manifest: dict, rows: list[dict]) -> tuple[bool, bool, list[st
         if attempt_time < scheduled_time or completed_time < attempt_time:
             pacing = False
         started_at.append(attempt_time)
+        completed_at.append(completed_time)
 
     if len(set(trace_hashes)) != campaign.CAMPAIGN_CARD_COUNT:
         exactly_once = False
     started_at.sort()
+    completed_at.sort()
     if len(started_at) != campaign.CAMPAIGN_CARD_COUNT:
         pacing = False
-    elif started_at[-1] - started_at[0] < campaign.CAMPAIGN_DURATION:
+    elif (
+        started_at[-1] - started_at[0] < campaign.CAMPAIGN_DURATION
+        or completed_at[-1] - started_at[0] < campaign.CAMPAIGN_DURATION
+    ):
         pacing = False
     else:
         for index, timestamp in enumerate(started_at):
@@ -350,7 +366,7 @@ def _wal_analysis(manifest: dict, rows: list[dict]) -> tuple[bool, bool, list[st
                 timestamp <= candidate < timestamp + timedelta(days=1)
                 for candidate in started_at[index:]
             )
-            if within_day > 15:
+            if within_day > MAX_ATTEMPTS_PER_24_HOURS:
                 pacing = False
                 break
     return exactly_once, pacing, trace_hashes
@@ -361,6 +377,8 @@ def _base_gate_valid(base_gate: dict, state: dict) -> bool:
     return all(
         (
             base_gate.get("schema") == "grounded-math-production-pilot-gate-v1",
+            base_gate.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
             base_gate.get("window_sha256") == state.get("window_sha256"),
             base_gate.get("passed") is True,
             base_gate.get("decision") == "pending_review",
@@ -430,6 +448,7 @@ def evaluate_operator_gate(
     state: dict,
     health: dict,
     start_release_decisions: dict,
+    owner_authorization: dict,
     current_release_decisions: dict | None = None,
 ) -> dict:
     effective_release_decisions = (
@@ -442,7 +461,16 @@ def evaluate_operator_gate(
     checks = {
         "owner_declaration": _owner_declaration_valid(declaration, manifest, window),
         "artifact_bindings": _bindings_valid(
-            declaration, manifest, window, state, health, start_release_decisions
+            declaration,
+            manifest,
+            window,
+            state,
+            health,
+            start_release_decisions,
+            owner_authorization,
+        ),
+        "owner_authorization": campaign.owner_authorization_valid(
+            owner_authorization
         ),
         "manifest_contract": _manifest_valid(manifest),
         "wal_exactly_once": wal_valid,
@@ -458,6 +486,7 @@ def evaluate_operator_gate(
     passed = all(checks.values())
     return {
         "schema": GATE_SCHEMA,
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
         "passed": passed,
         "decision": "pending_owner_review" if passed else "rejected",
         "checks": checks,

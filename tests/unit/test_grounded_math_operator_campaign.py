@@ -42,11 +42,13 @@ def test_build_campaign_freezes_100_private_prompts_and_hash_only_public_cards()
     public, private = campaign.build_campaign_cards(_inventory(), started)
 
     assert public["schema"] == "grounded-math-operator-campaign-v1"
+    assert public["pilot_contract_version"] == "grounded-math-3d-100-v1"
+    assert private["pilot_contract_version"] == "grounded-math-3d-100-v1"
     assert public["traffic_class"] == "owner_authorized_operator_generated"
     assert public["transport"] == "internal_rag_sse"
     assert len(public["cards"]) == len(private["cards"]) == 100
     assert public["campaign_id"] == private["campaign_id"]
-    assert public["minimum_runtime_until"] == "2026-08-19T00:00:00Z"
+    assert public["minimum_runtime_until"] == "2026-08-15T00:00:00Z"
     assert public["cards"][0]["operation"] == "add"
     assert public["cards"][0]["operand_count"] == 2
     assert len(public["cards"][0]["part_ids_sha256"]) == 64
@@ -55,7 +57,7 @@ def test_build_campaign_freezes_100_private_prompts_and_hash_only_public_cards()
     assert len(card_ids) == len(set(card_ids)) == 100
     schedules = [campaign.parse_timestamp(card["scheduled_at"]) for card in public["cards"]]
     assert schedules[0] == started
-    assert schedules[-1] - schedules[0] == timedelta(days=7)
+    assert schedules[-1] - schedules[0] == timedelta(days=3)
 
     per_document = Counter(card["document_identity_sha256"] for card in public["cards"])
     per_document_operation = Counter(
@@ -310,6 +312,7 @@ def test_send_internal_rag_sse_returns_only_done_trace_and_uses_fixed_owner_acto
         "response_language": "vi",
     }
     assert captured["stream"] is True
+    assert captured["allow_redirects"] is False
     assert captured["closed"] is True
 
 
@@ -511,7 +514,10 @@ def test_inventory_rows_keep_only_unique_quantity_facts():
 def test_owner_declaration_binds_frozen_artifacts_and_disallows_claim_inflation():
     started = datetime(2026, 8, 12, tzinfo=timezone.utc)
     manifest, _private = campaign.build_campaign_cards(_inventory(), started)
-    window = {"expected_runtime": {"pilot": {"git_sha": "7" * 40}, "main": {}}}
+    window = {
+        "pilot_contract_version": "grounded-math-3d-100-v1",
+        "expected_runtime": {"pilot": {"git_sha": "7" * 40}, "main": {}},
+    }
     state = {"activation_scope": "controlled_demo", "expected_runtime": window["expected_runtime"]}
     health = {"pilot": {"status": "ok"}, "main": {"status": "ok"}}
     decisions = {"status": "incomplete"}
@@ -529,6 +535,7 @@ def test_owner_declaration_binds_frozen_artifacts_and_disallows_claim_inflation(
     assert declaration["owner"] == "bao.nguyen"
     assert declaration["actor"] == {"user_id": 81, "username": "admin_bao"}
     assert declaration["count_toward_pilot"] is True
+    assert declaration["pilot_contract_version"] == "grounded-math-3d-100-v1"
     assert declaration["organic_claim_allowed"] is False
     assert declaration["quality_claim_allowed"] is False
     assert declaration["ui_parity_claim_allowed"] is False
@@ -536,9 +543,69 @@ def test_owner_declaration_binds_frozen_artifacts_and_disallows_claim_inflation(
     assert declaration["bindings"]["manifest_sha256"] == hashlib.sha256(
         campaign.canonical_json(manifest)
     ).hexdigest()
+    assert declaration["bindings"]["owner_authorization_sha256"] == hashlib.sha256(
+        campaign.canonical_json(campaign.load_owner_authorization())
+    ).hexdigest()
     assert declaration["runtime_bindings"] == window["expected_runtime"]
     assert declaration["unavailable_operations"] == campaign.UNAVAILABLE_OPERATIONS
     assert "9.3." not in json.dumps(declaration)
+
+
+def test_owner_declaration_rejects_missing_or_drifted_pilot_contract():
+    started = datetime(2026, 8, 12, tzinfo=timezone.utc)
+    manifest, _private = campaign.build_campaign_cards(_inventory(), started)
+    state = {"activation_scope": "controlled_demo"}
+    health = {"pilot": {"status": "ok"}, "main": {"status": "ok"}}
+    decisions = {"status": "incomplete"}
+
+    for contract_version in (None, "grounded-math-7d-100-v1"):
+        window = {
+            "pilot_contract_version": contract_version,
+            "expected_runtime": {"pilot": {"git_sha": "7" * 40}, "main": {}},
+        }
+        with pytest.raises(ValueError, match="pilot_contract_version_invalid"):
+            campaign.build_owner_declaration(
+                manifest,
+                window,
+                state,
+                health,
+                decisions,
+                approved_at=datetime(2026, 8, 11, tzinfo=timezone.utc),
+                tool_sha256="a" * 64,
+            )
+
+
+def test_owner_declaration_rejects_owner_authorization_drift():
+    started = datetime(2026, 8, 12, tzinfo=timezone.utc)
+    manifest, _private = campaign.build_campaign_cards(_inventory(), started)
+    authorization = campaign.load_owner_authorization()
+    authorization["historical_exclusions"]["burst_window_11_requests"] = 100
+
+    with pytest.raises(ValueError, match="owner_authorization_invalid"):
+        campaign.build_owner_declaration(
+            manifest,
+            {
+                "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
+                "expected_runtime": {},
+            },
+            {"activation_scope": "controlled_demo"},
+            {"pilot": {"status": "ok"}, "main": {"status": "ok"}},
+            {"status": "incomplete"},
+            approved_at=datetime(2026, 8, 11, tzinfo=timezone.utc),
+            tool_sha256="a" * 64,
+            owner_authorization=authorization,
+        )
+
+
+def test_send_internal_rag_sse_rejects_localhost_dns_before_exposing_token():
+    with pytest.raises(campaign.CampaignStopped, match="non_loopback_runtime_url"):
+        campaign.send_internal_rag_sse(
+            "http://localhost:8200",
+            "secret-token",
+            "private prompt",
+            ["8.1.00001", "8.1.00002"],
+            post=lambda *_args, **_kwargs: pytest.fail("network must not run"),
+        )
 
 
 def test_campaign_uses_only_deterministically_valid_unique_quantity_facts():

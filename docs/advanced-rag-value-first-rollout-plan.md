@@ -5,16 +5,16 @@
 - Giữ default rollout ở `all_off`; RC `7b9d575` chỉ được phép chạy controlled-demo Math-only pilot, chưa được phép bật mặc định.
 - Tách Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair thành các capability được đánh giá, pilot và quyết định độc lập.
 - Phát hành dần: tính năng đạt không phải chờ tính năng khác; tính năng chưa đạt tiếp tục OFF.
-- Mỗi pilot chạy trên Windows/LAN riêng trong tối thiểu 7 ngày và đủ 100 request đúng nhóm.
+- Mỗi pilot chạy trên Windows/LAN riêng theo contract của capability và đủ 100 request đúng nhóm. Mặc định vẫn tối thiểu 7 ngày; riêng Grounded Math dùng contract prospective 3 ngày/100 request được owner chấp nhận ngày `2026-08-14`.
 - Theo đến cùng bốn tính năng chính: Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair. Chỉ dừng khi `accepted` hoặc chứng minh kỹ thuật rằng muốn tiến xa hơn phải phá ngưỡng đã khóa.
 - Community Summaries chỉ bắt đầu sau Graph accepted. Late Interaction giữ OFF vô thời hạn.
 
 ## Checkpoint thực thi — 2026-08-14
 
 - Operator window-06 đã tombstone ở `17` transport completion, chỉ `10` eligible trace và `7` calculation-invalid; `carry_forward_requests=0`.
-- Burst `20dfd03b262a2eedf15731d7` đã hoàn tất `100/100` request với 100 unique trace hash và không ambiguous, nhưng canonical burst gate vẫn `rejected` vì `owner_declaration=false` do validator so sánh hai miền `window_sha256` khác nhau. Kết quả chỉ là throughput evidence; không phải pilot 7 ngày, organic, quality, UI-parity hoặc default-rollout evidence.
+- Burst `20dfd03b262a2eedf15731d7` đã hoàn tất `100/100` request với 100 unique trace hash và không ambiguous, nhưng canonical burst gate vẫn `rejected` vì `owner_declaration=false` do validator so sánh hai miền `window_sha256` khác nhau. Kết quả chỉ là throughput evidence; không phải pilot hợp lệ theo contract 7 ngày lúc chạy hoặc contract 3 ngày prospective, organic, quality, UI-parity hay default-rollout evidence.
 - Root fix cho campaign tương lai nằm ở commit `d77f28c09c995dd983591a730db0e07a79b2f4e2`; fix không sửa artifact lịch sử, không replay traffic và không làm gate gốc pass hồi tố.
-- Owner disposition `data/integrated_hardening_v1/evidence/grounded-math-20dfd03b-deferred-disposition.json`, SHA-256 `55007d64095d95005cb696f38c6a00e326624b5c8b024b7db6bf512df910f21e`, khóa trạng thái `deferred_pending_valid_pilot`: phần chạy 7 ngày/100 request được loại khỏi công việc hiện tại; không mở owner review, interaction matrix, default ledger/bundle hoặc feature activation.
+- Owner disposition `data/integrated_hardening_v1/evidence/grounded-math-20dfd03b-deferred-disposition.json`, SHA-256 `55007d64095d95005cb696f38c6a00e326624b5c8b024b7db6bf512df910f21e`, tiếp tục khóa burst lịch sử ở `deferred_pending_valid_pilot`. Artifact prospective `data/integrated_hardening_v1/evidence/grounded-math-3d-100-owner-authorization.json` chỉ mở một future pilot theo contract 3 ngày/100 request và cho phép bật riêng Grounded Math trong controlled-demo; không sửa disposition/tombstone cũ, không carry-forward và chưa mở owner review, interaction matrix, default ledger/bundle hoặc feature activation ngoài controlled-demo.
 - Runtime burst đã dừng, Scheduled Task đã bị xóa và các port campaign `8180/8200/8210` không còn listener. Default rollout tiếp tục `all_off`; release ledger vẫn `incomplete`.
 
 ## Checkpoint thực thi — 2026-08-10 (lịch sử, superseded bởi checkpoint 2026-08-14)
@@ -23,7 +23,7 @@
 - Grounded Math đã đạt ba current-commit formal pair, series guardrail `production_eligible=true`, formal review 16/16 và rollback/restore reconciliation trên detached checkout sạch.
 - Single-owner governance đã được `bao.nguyen` ký cho `scope=controlled_demo`, `risk_accepted=true` và đủ ba signoff `rag`, `security_qa`, `operations`. Quyền này không áp dụng cho default rollout.
 - Proof 5/5 và owner declaration cho full campaign đã hoàn tất. Window dừng ở `30/100` đã được tombstone, không carry-forward request hoặc downtime. Window thay thế sạch bắt đầu `2026-08-10T04:33:45.6530163Z`, mốc tối thiểu `2026-08-17T04:33:45.6530163Z` và bắt đầu lại ở `0/100` eligible calculation request.
-- Owner-authorized burst 100 request, nếu được chạy, chỉ tạo throughput/safety evidence với `count_toward_pilot=false` và `qualifies_as_7_day_pilot=false`; nó không thay thế checklist LAN pilot tối thiểu 7 ngày/100 eligible request và không authorize default rollout.
+- Owner-authorized burst 100 request, nếu được chạy, chỉ tạo throughput/safety evidence với `count_toward_pilot=false` và `qualifies_as_7_day_pilot=false`; nó không thay thế checklist LAN pilot đang hiệu lực tại thời điểm chạy và cũng không thỏa contract Math 3 ngày/100 prospective ngày `2026-08-14`; default rollout không được authorize.
 - Snapshot lịch sử lúc `2026-08-11T07:09:22Z` đã xác nhận runtime identity và app health hợp lệ trên exact commit `7b9d57562a669984b843d48d6d7ddf09048c472d`; app/pilot/control lúc đó listen ở `8180/8200/8210`, pilot chỉ bật Grounded Math trong `controlled_demo`, control giữ `all_off`. Gate false tại `0/100` là trạng thái collecting fail-closed dự kiến; không phát sinh synthetic production traffic. Health SHA-256 `51728bed4f75523f3131a47531822949d328a38fbd1d3c5884f40ec37a995489`, gate SHA-256 `b9ccf3ddc75d97beca0e7fff11c29aad9ac1898e0b56ec1da1f496aaedfaf984`.
 - Reviewer contract của pilot được chốt bằng `.local/math-pilot-7b9d575/review-contract-resolution.json`: `bao.nguyen` là human reviewer duy nhất cho đủ 20 case dưới signed `single_owner`; Codex chỉ chuẩn bị metadata và hỗ trợ kỹ thuật, không được tính là independent human reviewer. `pilot-window.json` được giữ nguyên vì đã bind SHA.
 - Query Decomposition đã có telemetry metadata-only tách planner, từng retrieval/correction branch, final context và final generation; rollup cost được đánh dấu để không cộng hai lần. Diagnostic không-formal sạch gần nhất tại `reports/decomposition/20260808-diagnostic-7b9d575-dirty-02/diagnostic.json` chạy đủ 13+13 case, không có provider failure nhưng không đạt: cost ratio `1.899837 > 1.35`, pass tổng `2/13 → 7/13`, decomposition `7/10`, branch accuracy `86.67%`, citation accuracy `70%`. Root fix đã chặn trước final generation đối với câu hỏi high-risk có partial coverage do nhánh `grounded_negative`; evaluation subprocess hiện được cấp `all_external` trong đúng `evaluation` scope nên không còn local `ExternalProcessingDenied`. Diagnostic `-04` đã tới ProxyLLM nhưng bị dừng sau `19/19` generation call trả HTTP 503 `no_capacity` trên 9 baseline case; chưa chạy candidate và không đánh giá cost/quality. Vì vậy chưa có post-fix cost ratio hợp lệ, chưa mở formal window và Query vẫn OFF; `-01`, `-03` và `-04` đều được giữ làm tombstone.
@@ -71,13 +71,13 @@
 
 ### Grounded Math operator hardening cho window kế tiếp
 
-Window-06 đã dừng fail-closed ở `17` completed transport, `10` eligible và `7` calculation-invalid; Scheduled Task bị disable trước card 018 và không carry-forward request/thời gian. Campaign thay thế phải recapture BOM read-only, chỉ chọn part code dạng mã kỹ thuật số-chấm có đúng một quantity fact trong corpus, cùng tài liệu/cùng unit, và chạy `solve_grounded_calculation` thành `valid` trước khi freeze card; chuỗi nhãn tự do hoặc mang ngữ nghĩa không được vào prompt. Quantity/unit chỉ tồn tại trong bộ nhớ preflight và inventory hash, không đi vào public manifest hoặc prompt. Prompt giữ document anchor chuẩn rút từ filename kỹ thuật đã allowlist, chỉ gồm drawing/version/model để retrieval bám đúng document và không chèn phần filename tự do; runner truyền đúng hai part code từ field riêng `part_ids` đã hash-bind qua `current_part_ids`, không parse code từ toàn prompt. `sum` được machine-bind unavailable vì transport không có explicit document scope; `divide` vẫn unavailable do thiếu dimensionless divisor. Corpus hiện chỉ đủ 4 document có pair hợp lệ nên cap được predeclare là `26` card/document và `7` card/document/operation; selection bias phải được công bố. Mọi campaign operator mới vẫn fail-closed trước dispatch nếu current release ledger đã đổi hoặc base gate chưa reconcile toàn bộ completed trace trước đó; trong phase collecting, reconciliation yêu cầu trace hash/WAL và 6 quality-safety checks khớp, còn `runtime_identity` chỉ được kỳ vọng pass ở final gate khi đủ `100` eligible. URL chỉ được là HTTP loopback không path/query/userinfo/fragment; WAL dùng terminal timestamp thực; companion gate áp rolling cap `3/30 phút` và `15/24 giờ`. Review giữ signed `single_owner`: `bao.nguyen` gắn đủ 20 primary labels và review mọi failure/low-confidence, Codex chỉ hỗ trợ kỹ thuật. Operator volume không tạo organic, quality, UI-parity hoặc default-rollout claim.
+Window-06 đã dừng fail-closed ở `17` completed transport, `10` eligible và `7` calculation-invalid; Scheduled Task bị disable trước card 018 và không carry-forward request/thời gian. Campaign thay thế phải recapture BOM read-only, chỉ chọn part code dạng mã kỹ thuật số-chấm có đúng một quantity fact trong corpus, cùng tài liệu/cùng unit, và chạy `solve_grounded_calculation` thành `valid` trước khi freeze card; chuỗi nhãn tự do hoặc mang ngữ nghĩa không được vào prompt. Quantity/unit chỉ tồn tại trong bộ nhớ preflight và inventory hash, không đi vào public manifest hoặc prompt. Prompt giữ document anchor chuẩn rút từ filename kỹ thuật đã allowlist, chỉ gồm drawing/version/model để retrieval bám đúng document và không chèn phần filename tự do; runner truyền đúng hai part code từ field riêng `part_ids` đã hash-bind qua `current_part_ids`, không parse code từ toàn prompt. `sum` được machine-bind unavailable vì transport không có explicit document scope; `divide` vẫn unavailable do thiếu dimensionless divisor. Corpus hiện chỉ đủ 4 document có pair hợp lệ nên cap được predeclare là `26` card/document và `7` card/document/operation`; selection bias phải được công bố. Mọi campaign operator mới vẫn fail-closed trước dispatch nếu current release ledger đã đổi hoặc base gate chưa reconcile toàn bộ completed trace trước đó; trong phase collecting, reconciliation yêu cầu trace hash/WAL và 6 quality-safety checks khớp, còn `runtime_identity` chỉ được kỳ vọng pass ở final gate khi đủ `100` eligible. URL chỉ được là HTTP loopback không path/query/userinfo/fragment; WAL dùng terminal timestamp thực; companion gate áp rolling cap `3/30 phút` và `35/24 giờ`. Review giữ signed `single_owner`: `bao.nguyen` gắn đủ 20 primary labels và review mọi failure/low-confidence, Codex chỉ hỗ trợ kỹ thuật. Operator volume không tạo organic, quality, UI-parity hoặc default-rollout claim.
 
 ## Tiến độ theo phase
 
 - Phase 0 — hoàn tất governance/selective activation và baseline foundation.
 - Phase 1 — hoàn tất disposable target, restore reconciliation, Math-only pilot/control runtime và collector/gate metadata-only.
-- Phase 2 — deferred fail-closed trước một LAN pilot Grounded Math hợp lệ:
+- Phase 2 — được owner mở lại cho một future LAN pilot Grounded Math theo contract 3 ngày/100 request; chưa có pilot hợp lệ:
   - [x] Ba current-commit formal pair và series guardrail.
   - [x] So sánh review contract và xác minh 10 candidate labels lịch sử không đổi; tracked controlled-demo decision vẫn `inconclusive`, không được gọi là accepted.
   - [x] Chuyển web/app sang Math-only RC, xác minh runtime/rollback binding và traffic thật chỉ đếm `grounded_math_generation`.
@@ -90,8 +90,10 @@ Window-06 đã dừng fail-closed ở `17` completed transport, `10` eligible v�
   - [x] Dừng window-06 fail-closed trước card 018 sau khi xác nhận `7` calculation-invalid khiến manifest cũ không thể đạt `100` eligible.
   - [x] Chạy burst 100 request tuần tự và tombstone kết quả ở `throughput_evidence_only` sau khi canonical gate reject hash-domain mismatch; không carry-forward hoặc rerun.
   - [x] Sửa validator cho campaign tương lai tại `d77f28c`, giữ nguyên gate/artifact gốc.
-  - [x] Ghi owner disposition `deferred_pending_valid_pilot`; phần chạy 7 ngày/100 request không thuộc công việc hiện tại và chưa được authorize lại.
-  - [ ] Khi có owner authorization mới, mở window operator mới từ commit đã review rồi thu đủ tối thiểu 7 ngày và `100` eligible calculation request; không reuse window-06 hoặc burst-window-11.
+  - [x] Ghi owner disposition lịch sử `deferred_pending_valid_pilot`; không sửa hoặc carry-forward artifact của window-06/burst-window-11.
+  - [x] Owner chấp nhận prospective Grounded Math contract `grounded-math-3d-100-v1` ngày `2026-08-14`: đúng `100` eligible calculation request trên lịch freeze trước request đầu, từ dispatch eligible đầu tiên đến completion eligible thứ 100 tối thiểu `72` giờ, rolling cap `35/24 giờ`, concurrency 1 và không retry/replacement/catch-up.
+  - [x] TDD cập nhật operator campaign/gate và canonical `grounded_math_pilot_gate.py` từ `7 ngày` + `15/24 giờ` sang contract Math `3 ngày` + `35/24 giờ`. Declaration, window và manifest mới bind immutable `pilot_contract_version=grounded-math-3d-100-v1`; cả hai gate từ chối artifact thiếu marker, legacy hoặc drift. Targeted coverage đạt trên 80%, full unit suite và ba trục review Standards/Spec/Security đã pass trước khi freeze tooling.
+  - [ ] Tạo declaration mới bind contract 3 ngày/100 và mở window operator mới từ commit đã review; không reuse request, thời gian, trace hoặc gate của window-06/burst-window-11.
   - [ ] Human review 20 case phân tầng theo signed `single_owner`: cả 20 primary labels bởi `bao.nguyen`; mọi failure/low-confidence case bắt buộc owner review. Codex chỉ hỗ trợ kỹ thuật, không phải independent human reviewer.
   - [ ] Nếu pilot pass, chạy interaction matrix Math-only trên final RC ở concurrency 1 và 5, technical review bởi `tran.nghi`, rồi mới tạo default-rollout ledger/bundle để owner quyết định release Math.
 - Phase 3 — owner đã adjudicate current-contract drift. Query-only manifest mới giữ floor `10+3`, không phụ thuộc Math và khóa terminal no-render contract; ba nhãn BOM Math-coupled được tách nguyên vẹn sang interaction manifest. Generator/preflight/regression suite và served-evidence root fix đã GREEN. Fresh smoke pass `5/5`, `0` retry, nhưng formal-series-02 pair 01 vẫn tombstone RED vì baseline provider failure/retry; candidate decomposition/branch/citation/terminal contract đều đạt. Pair 02/03 không chạy; Query vẫn OFF và series tương lai cần declaration + smoke mới.
@@ -191,10 +193,11 @@ Trạng thái ban đầu: lợi ích đã rõ; chưa cần tối ưu thuật to�
    - Chỉ reuse nhãn khi immutable case và `review_contract_sha256` không đổi.
    - Case hoặc candidate output thay đổi phải review lại.
 3. Chạy LAN pilot math-only:
-   - Tối thiểu 7 ngày và 100 request có calculation route.
+   - Contract `grounded-math-3d-100-v1` hợp lệ từ `2026-08-14` là đúng 100 request có calculation route, với ít nhất `72` giờ từ dispatch eligible đầu tiên đến completion eligible thứ 100.
+   - Freeze trước toàn bộ card, prompt hash và lịch dispatch; rolling cap `35/24 giờ`, concurrency 1, không retry/replacement/catch-up và dừng fail-closed khi declaration/runtime/gate drift.
    - Automated safety/citation/provenance check đủ 100.
    - Human review 20 case phân tầng và mọi failure.
-   - Trạng thái hiện tại là `deferred_pending_valid_pilot`; burst 100 request không thỏa điều kiện này và không mở review.
+   - Owner đã authorize mở future pilot theo contract này, nhưng chưa có pilot pass. Burst 100 request lịch sử không thỏa điều kiện 72 giờ, giữ nguyên tombstone và không mở review.
 4. Nếu đạt, tạo release Math:
    - Main stack chuyển `all_off → {Grounded Math}`.
    - Rollback thông thường về `all_off`.
@@ -328,7 +331,7 @@ Mỗi feature đi qua cùng lifecycle:
 5. Ba formal pair và stop-on-first-failure.
 6. Human review pack.
 7. Controlled-demo bundle cho LAN pilot riêng.
-8. Pilot đủ 7 ngày và 100 eligible requests.
+8. Pilot đủ thời lượng theo capability contract và 100 eligible requests: mặc định 7 ngày; riêng Grounded Math prospective từ `2026-08-14` là tối thiểu 72 giờ.
 9. Integrated interaction matrix.
 10. `tran.nghi` review kỹ thuật.
 11. `bao.nguyen` chấp nhận hoặc giữ OFF.
@@ -348,7 +351,7 @@ Bất kỳ lỗi security, cross-scope leakage, bundle/commit drift hoặc rollb
 
 Mỗi pilot:
 
-- Chạy đủ 7 ngày và 100 request đúng route, lấy điều kiện hoàn thành sau.
+- Chạy đủ thời lượng theo capability contract và 100 request đúng route, lấy điều kiện hoàn thành sau. Mặc định là 7 ngày; riêng Grounded Math prospective từ `2026-08-14` là tối thiểu 72 giờ từ dispatch eligible đầu tiên đến completion eligible thứ 100, với lịch freeze và rolling cap `35/24 giờ`.
 - Automated checks đủ 100 request: runtime identity, security, citation structure, provenance, budgets, provider errors và leakage.
 - Quality gain vẫn lấy từ matched formal evaluation, không suy diễn từ organic traffic không có oracle.
 - Human review 20 case phân tầng theo governance được ký trước pilot:
@@ -412,7 +415,7 @@ Decision pack cuối phải phân biệt `implemented / measured / reviewed / pi
 - Cả ba nhóm BOM/math, multi-intent và relational query đều có nhu cầu thực tế.
 - `bao.nguyen` là release owner; `tran.nghi` vẫn là technical reviewer độc lập trước quyết định default rollout. Riêng Graph `keep_off_technical_limit`, `bao.nguyen` đã xác nhận là reviewer hợp lệ thay `tran.nghi`; substitution này không cấp quyền feature-on và không áp dụng cho feature/default-rollout khác. Math controlled-demo hiện tại dùng exception `single_owner` riêng, không thay thế gate default rollout.
 - Không có UI toggle cho người dùng hoặc admin.
-- Threshold hiện hành không được nới.
+- Không nới threshold quality, safety, security, citation, provenance, budget hoặc rollback. Thay đổi thời lượng Grounded Math từ 7 ngày xuống 3 ngày là contract prospective do owner chấp nhận, không áp dụng hồi tố và không thay đổi các threshold kỹ thuật.
 - Không tạo/xóa account; reuse cohort nội bộ hiện có.
 - Không cleanup disposable targets tự động.
 - Không push hoặc publish tracker/PR nếu chưa có phê duyệt riêng.

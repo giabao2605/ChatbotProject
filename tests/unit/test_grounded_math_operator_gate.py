@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from scripts.ops import grounded_math_operator_campaign as campaign
 from scripts.ops import grounded_math_operator_gate as operator_gate
@@ -65,6 +65,7 @@ def _artifacts():
     window = {
         "status": "running",
         "feature": "grounded_math",
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
         "source_commit": campaign.EXPECTED_SERVING_COMMIT,
         "minimum_eligible_requests": 100,
         "expected_runtime": {
@@ -108,6 +109,7 @@ def _artifacts():
     }
     base_gate = {
         "schema": "grounded-math-production-pilot-gate-v1",
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
         "passed": True,
         "decision": "pending_review",
         "eligible_trace_count": 100,
@@ -137,6 +139,7 @@ def _artifacts():
         "traffic_class": campaign.TRAFFIC_CLASS,
         "transport": campaign.TRANSPORT,
         "count_toward_pilot": True,
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
         "organic_claim_allowed": False,
         "quality_claim_allowed": False,
         "ui_parity_claim_allowed": False,
@@ -160,9 +163,22 @@ def _artifacts():
             "health_sha256": _sha256_json(health),
             "release_decisions_sha256": _sha256_json(release_decisions),
             "operator_tool_sha256": "a" * 64,
+            "owner_authorization_sha256": _sha256_json(
+                campaign.load_owner_authorization()
+            ),
         },
     }
-    return declaration, manifest, wal, base_gate, window, state, health, release_decisions
+    return (
+        declaration,
+        manifest,
+        wal,
+        base_gate,
+        window,
+        state,
+        health,
+        release_decisions,
+        campaign.load_owner_authorization(),
+    )
 
 
 def test_gate_reconciles_all_100_operator_traces_but_never_authorizes_default():
@@ -189,6 +205,29 @@ def test_gate_fails_closed_when_owner_provenance_is_mislabelled():
     assert result["decision"] == "rejected"
     assert result["checks"]["owner_declaration"] is False
     assert result["default_rollout_authorized"] is False
+
+
+def test_gate_rejects_semantically_drifted_pilot_contract():
+    artifacts = list(_artifacts())
+    declaration = copy.deepcopy(artifacts[0])
+    manifest = copy.deepcopy(artifacts[1])
+    window = copy.deepcopy(artifacts[4])
+    legacy = "grounded-math-7d-100-v1"
+    declaration["pilot_contract_version"] = legacy
+    manifest["pilot_contract_version"] = legacy
+    window["pilot_contract_version"] = legacy
+    declaration["bindings"]["manifest_sha256"] = _sha256_json(manifest)
+    declaration["bindings"]["window_sha256"] = _sha256_json(window)
+    artifacts[0] = declaration
+    artifacts[1] = manifest
+    artifacts[4] = window
+
+    result = operator_gate.evaluate_operator_gate(*artifacts)
+
+    assert result["checks"]["artifact_bindings"] is True
+    assert result["checks"]["owner_declaration"] is False
+    assert result["checks"]["manifest_contract"] is False
+    assert result["passed"] is False
 
 
 def test_gate_fails_closed_when_base_trace_set_does_not_match_wal():
@@ -253,6 +292,37 @@ def test_gate_rejects_more_than_three_dispatches_in_rolling_thirty_minutes():
     assert result["passed"] is False
 
 
+def test_gate_rejects_more_than_35_dispatches_in_rolling_24_hours():
+    artifacts = list(_artifacts())
+    declaration = copy.deepcopy(artifacts[0])
+    manifest = copy.deepcopy(artifacts[1])
+    wal = copy.deepcopy(artifacts[2])
+    started = datetime(2026, 8, 12, tzinfo=timezone.utc)
+    schedules = [started + timedelta(minutes=40 * index) for index in range(36)]
+    schedules.extend(
+        started
+        + timedelta(days=1, minutes=1)
+        + (timedelta(days=2) - timedelta(minutes=1)) * index / 63
+        for index in range(64)
+    )
+    for card, scheduled in zip(manifest["cards"], schedules, strict=True):
+        card["scheduled_at"] = operator_gate.card_timestamp(scheduled)
+    for index, scheduled in enumerate(schedules):
+        timestamp = operator_gate.card_timestamp(scheduled)
+        wal[index * 2]["ts"] = timestamp
+        wal[index * 2 + 1]["ts"] = timestamp
+    declaration["bindings"]["manifest_sha256"] = _sha256_json(manifest)
+    artifacts[0] = declaration
+    artifacts[1] = manifest
+    artifacts[2] = wal
+
+    result = operator_gate.evaluate_operator_gate(*artifacts)
+
+    assert result["checks"]["manifest_contract"] is True
+    assert result["checks"]["pacing"] is False
+    assert result["passed"] is False
+
+
 def test_gate_rejects_missing_unavailable_divide_declaration():
     artifacts = list(_artifacts())
     declaration = copy.deepcopy(artifacts[0])
@@ -308,6 +378,17 @@ def test_gate_rejects_actor_provenance_drift():
 def test_gate_rejects_schema_less_or_different_window_base_gate():
     artifacts = list(_artifacts())
     artifacts[3] = {**artifacts[3], "schema": "other", "window_sha256": "f" * 64}
+
+    result = operator_gate.evaluate_operator_gate(*artifacts)
+
+    assert result["checks"]["base_gate"] is False
+    assert result["passed"] is False
+
+
+def test_gate_rejects_base_gate_without_the_pilot_contract_marker():
+    artifacts = list(_artifacts())
+    artifacts[3] = copy.deepcopy(artifacts[3])
+    artifacts[3].pop("pilot_contract_version")
 
     result = operator_gate.evaluate_operator_gate(*artifacts)
 

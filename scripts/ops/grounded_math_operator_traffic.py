@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from scripts.ops import grounded_math_operator_campaign as campaign
@@ -22,6 +22,7 @@ PLAN_FILES = {
     "health": "start-health.json",
     "release_decisions": "release-decisions-start.json",
 }
+OWNER_AUTHORIZATION_FILE = "owner-authorization.json"
 HEALTH_BINDINGS = (
     "deployment_id",
     "git_sha",
@@ -106,6 +107,7 @@ def create_campaign_plan(
     tool_sha256: str,
     local_root: str | Path = PROJECT_LOCAL_ROOT,
     burst: bool = False,
+    owner_authorization: dict | None = None,
 ) -> dict:
     output_root = Path(root).resolve()
     allowed_root = Path(local_root).resolve()
@@ -133,6 +135,14 @@ def create_campaign_plan(
         approved_at=approved_at,
         declared_at=approved_at,
         tool_sha256=tool_sha256,
+        **(
+            {
+                "owner_authorization": owner_authorization
+                or campaign.load_owner_authorization()
+            }
+            if not burst
+            else {}
+        ),
     )
     if burst:
         declaration["bindings"]["execution_root_sha256"] = hashlib.sha256(
@@ -147,8 +157,15 @@ def create_campaign_plan(
         "health": health,
         "release_decisions": release_decisions,
     }
+    if not burst:
+        artifacts["authorization"] = (
+            owner_authorization or campaign.load_owner_authorization()
+        )
     for name, value in artifacts.items():
-        _write_json_exclusive(output_root / PLAN_FILES[name], value)
+        file_name = (
+            OWNER_AUTHORIZATION_FILE if name == "authorization" else PLAN_FILES[name]
+        )
+        _write_json_exclusive(output_root / file_name, value)
     return {"campaign_id": manifest["campaign_id"], "card_count": len(manifest["cards"])}
 
 
@@ -179,33 +196,75 @@ def _loopback_url(value: object) -> str:
 def fetch_live_health(state: dict, *, service_token: str, get=None) -> dict:
     if not service_token:
         raise campaign.CampaignStopped("service_token_missing")
+    session = None
     if get is None:
         import requests
 
-        get = requests.get
+        session = requests.Session()
+        session.trust_env = False
+        get = session.get
     result = {}
-    for arm, state_key in (("pilot", "rag_url"), ("main", "control_url")):
-        url = _loopback_url(state.get(state_key))
-        response = None
-        try:
-            response = get(
-                url + "/health",
-                headers={"X-RAG-Service-Token": service_token},
-                timeout=5,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise TypeError("health_object_required")
-            result[arm] = payload
-        except campaign.CampaignStopped:
-            raise
-        except Exception:
-            raise campaign.CampaignStopped("live_health_unavailable") from None
-        finally:
-            if response is not None:
-                response.close()
+    try:
+        for arm, state_key in (("pilot", "rag_url"), ("main", "control_url")):
+            url = _loopback_url(state.get(state_key))
+            response = None
+            try:
+                response = get(
+                    url + "/health",
+                    headers={"X-RAG-Service-Token": service_token},
+                    timeout=5,
+                    allow_redirects=False,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise TypeError("health_object_required")
+                result[arm] = payload
+            except campaign.CampaignStopped:
+                raise
+            except Exception:
+                raise campaign.CampaignStopped("live_health_unavailable") from None
+            finally:
+                if response is not None:
+                    response.close()
+    finally:
+        if session is not None:
+            session.close()
     return result
+
+
+def capture_live_health_artifact(
+    state: dict,
+    *,
+    service_token: str,
+    now: datetime | None = None,
+    get=None,
+) -> dict:
+    live = fetch_live_health(state, service_token=service_token, get=get)
+    checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return {
+        "schema": "math-lan-pilot-health-capture-v1",
+        "checked_at": checked_at.isoformat().replace("+00:00", "Z"),
+        "pilot": live["pilot"],
+        "main": live["main"],
+    }
+
+
+def live_health_capture_valid(value: object, now: datetime) -> bool:
+    if not isinstance(value, dict):
+        return False
+    try:
+        checked_at = campaign.parse_timestamp(value["checked_at"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return all(
+        (
+            value.get("schema") == "math-lan-pilot-health-capture-v1",
+            isinstance(value.get("pilot"), dict),
+            isinstance(value.get("main"), dict),
+            timedelta(0) <= now.astimezone(timezone.utc) - checked_at <= timedelta(minutes=15),
+        )
+    )
 
 
 def _validate_frozen_bindings(root: Path, artifacts: dict, tool_sha256: str) -> None:
@@ -235,6 +294,10 @@ def _validate_frozen_bindings(root: Path, artifacts: dict, tool_sha256: str) -> 
         ).hexdigest(),
         "operator_tool_sha256": tool_sha256,
     }
+    if artifacts["manifest"].get("traffic_class") == campaign.TRAFFIC_CLASS:
+        expected["owner_authorization_sha256"] = hashlib.sha256(
+            campaign.canonical_json(artifacts.get("authorization"))
+        ).hexdigest()
     if any(bindings.get(name) != value for name, value in expected.items()):
         reason = (
             "operator_tool_drift"
@@ -252,8 +315,11 @@ def _validate_frozen_bindings(root: Path, artifacts: dict, tool_sha256: str) -> 
 
 def _validate_campaign_authorization(artifacts: dict) -> None:
     declaration = artifacts["declaration"]
+    manifest = artifacts["manifest"]
+    private = artifacts["private"]
     window = artifacts["window"]
     state = artifacts["state"]
+    authorization_artifact = artifacts.get("authorization")
     expected_runtime = window.get("expected_runtime") or {}
     pilot_flags = (expected_runtime.get("pilot") or {}).get("feature_flags") or {}
     main_flags = (expected_runtime.get("main") or {}).get("feature_flags") or {}
@@ -282,11 +348,26 @@ def _validate_campaign_authorization(artifacts: dict) -> None:
             declaration.get("traffic_class") == campaign.TRAFFIC_CLASS,
             declaration.get("transport") == campaign.TRANSPORT,
             declaration.get("count_toward_pilot") is True,
+            declaration.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
+            manifest.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
+            private.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
+            window.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
             declaration.get("organic_claim_allowed") is False,
             declaration.get("quality_claim_allowed") is False,
             declaration.get("ui_parity_claim_allowed") is False,
             declaration.get("scope") == "controlled_demo",
             declaration.get("default_rollout_authorized") is False,
+            campaign.owner_authorization_valid(authorization_artifact),
+            (authorization_artifact.get("authorization") or {}).get(
+                "controlled_demo_feature_enablement_authorized"
+            )
+            is True
+            if isinstance(authorization_artifact, dict)
+            else False,
             declaration.get("selection_bias_disclosed") is True,
             declaration.get("generator_used_structured_values") is True,
             declaration.get("unavailable_operations")
@@ -351,24 +432,38 @@ def _validate_burst_authorization(artifacts: dict) -> None:
         "schema": "grounded-math-operator-owner-declaration-v1",
         "traffic_class": campaign.TRAFFIC_CLASS,
         "count_toward_pilot": True,
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
     }
     _validate_campaign_authorization(
-        {**artifacts, "declaration": standard, "manifest": {
-            **manifest,
-            "schema": campaign.SCHEMA,
-            "traffic_class": campaign.TRAFFIC_CLASS,
-        }}
+        {
+            **artifacts,
+            "authorization": campaign.load_owner_authorization(),
+            "declaration": standard,
+            "manifest": {
+                **manifest,
+                "schema": campaign.SCHEMA,
+                "traffic_class": campaign.TRAFFIC_CLASS,
+                "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
+            },
+            "private": {
+                **artifacts["private"],
+                "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
+            },
+        }
     )
 
 
 def _load_plan(root: Path) -> dict:
-    return {
+    artifacts = {
         "root": root,
         **{
             name: _load_json(root / file_name)
             for name, file_name in PLAN_FILES.items()
         },
     }
+    if artifacts["manifest"].get("traffic_class") == campaign.TRAFFIC_CLASS:
+        artifacts["authorization"] = _load_json(root / OWNER_AUTHORIZATION_FILE)
+    return artifacts
 
 
 def _validate_previous_base_gate(
@@ -378,22 +473,55 @@ def _validate_previous_base_gate(
     manifest: dict,
     *,
     require_initial_gate: bool = False,
+    current_health_sha256: str | None = None,
 ) -> None:
     rows = campaign._read_wal(wal_path)
     completed = [row for row in rows if row.get("event") == "attempt_completed"]
     if not completed:
         if require_initial_gate and not base_gate:
             raise campaign.CampaignStopped("base_gate_not_reconciled")
-        if base_gate and not all(
-            (
-                base_gate.get("schema")
-                == "grounded-math-production-pilot-gate-v1",
-                base_gate.get("window_sha256") == state.get("window_sha256"),
-                base_gate.get("eligible_trace_count") == 0,
-                base_gate.get("trace_id_sha256") == [],
-                base_gate.get("provider_smoke_valid") is True,
+        initial_checks = (
+            base_gate.get("schema")
+            == "grounded-math-production-pilot-gate-v1",
+            base_gate.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
+            base_gate.get("window_sha256") == state.get("window_sha256"),
+            base_gate.get("eligible_trace_count") == 0,
+            base_gate.get("trace_id_sha256") == [],
+            base_gate.get("provider_smoke_valid") is True,
+        )
+        if manifest.get("traffic_class") == campaign.TRAFFIC_CLASS:
+            expected_checks = {
+                "runtime_identity": False,
+                "security": False,
+                "citation_structure": False,
+                "provenance": False,
+                "budgets": False,
+                "provider_errors": False,
+                "leakage": False,
+            }
+            window = _load_json(wal_path.parent / PLAN_FILES["window"])
+            initial_checks += (
+                base_gate.get("passed") is False,
+                base_gate.get("decision") == "rejected",
+                base_gate.get("checks") == expected_checks,
+                base_gate.get("state_sha256")
+                == hashlib.sha256(
+                    (wal_path.parent / PLAN_FILES["state"]).read_bytes()
+                ).hexdigest(),
+                base_gate.get("health_capture_sha256")
+                == (
+                    current_health_sha256
+                    or hashlib.sha256(
+                        (wal_path.parent / PLAN_FILES["health"]).read_bytes()
+                    ).hexdigest()
+                ),
+                base_gate.get("trace_sha256") == hashlib.sha256(b"").hexdigest(),
+                base_gate.get("provider_smoke_sha256")
+                == (window.get("provider_smoke") or {}).get("sha256"),
+                base_gate.get("provider_smoke_reason") is None,
             )
-        ):
+        if base_gate and not all(initial_checks):
             raise campaign.CampaignStopped("base_gate_not_reconciled")
         return
     trace_hashes = [row.get("trace_id_sha256") for row in completed]
@@ -433,6 +561,8 @@ def _validate_previous_base_gate(
         (
             base_gate.get("schema")
             == "grounded-math-production-pilot-gate-v1",
+            base_gate.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
             isinstance(state.get("window_sha256"), str),
             len(state.get("window_sha256", "")) == 64,
             base_gate.get("window_sha256") == state.get("window_sha256"),
@@ -458,6 +588,15 @@ def _validate_previous_base_gate(
             all(checks.get(name) is True for name in required_checks)
             if isinstance(checks, dict)
             else False,
+            base_gate.get("provider_smoke_valid") is True
+            if manifest.get("traffic_class") == campaign.TRAFFIC_CLASS
+            else True,
+            base_gate.get("provider_smoke_reason") is None
+            if manifest.get("traffic_class") == campaign.TRAFFIC_CLASS
+            else True,
+            base_gate.get("health_capture_sha256") == current_health_sha256
+            if current_health_sha256 is not None
+            else True,
         )
     )
     if not reconciled:
@@ -494,6 +633,7 @@ def run_due_once(
     current_base_gate: dict,
     service_token: str,
     current_tool_sha256: str,
+    current_health_sha256: str | None = None,
     send=None,
 ) -> dict | None:
     if not service_token:
@@ -515,6 +655,8 @@ def run_due_once(
             current_base_gate,
             artifacts["state"],
             artifacts["manifest"],
+            require_initial_gate=True,
+            current_health_sha256=current_health_sha256,
         )
         return campaign.dispatch_due(
             artifacts["manifest"],
@@ -675,6 +817,14 @@ def campaign_status(root: str | Path) -> dict:
         ),
         None,
     )
+    uses_contract = all(
+        (
+            manifest.get("traffic_class") == campaign.TRAFFIC_CLASS,
+            manifest.get("pilot_contract_version")
+            == campaign.PILOT_CONTRACT_VERSION,
+            manifest.get("count_toward_pilot", True) is True,
+        )
+    )
     return {
         "schema": "grounded-math-operator-status-v1",
         "campaign_id": manifest["campaign_id"],
@@ -686,9 +836,9 @@ def campaign_status(root: str | Path) -> dict:
         "next_scheduled_at": next_card["scheduled_at"] if next_card else None,
         "minimum_runtime_until": manifest["minimum_runtime_until"],
         "count_toward_pilot": manifest.get("count_toward_pilot", True),
-        "qualifies_as_7_day_pilot": manifest.get(
-            "qualifies_as_7_day_pilot", True
-        ),
+        "pilot_contract_version": manifest.get("pilot_contract_version"),
+        "uses_contract": uses_contract,
+        "qualifies_as_7_day_pilot": False,
         "default_rollout_authorized": False,
     }
 
@@ -726,6 +876,7 @@ def evaluate_current_gate(
         artifacts["state"],
         artifacts["health"],
         artifacts["release_decisions"],
+        artifacts["authorization"],
         current_release_decisions,
     )
 
@@ -736,6 +887,8 @@ def _tool_sha256() -> str:
         Path(__file__),
         Path(__file__).with_name("grounded_math_operator_gate.py"),
         Path(__file__).with_name("grounded_math_operator_burst_gate.py"),
+        Path(__file__).with_name("grounded_math_pilot_gate.py"),
+        Path(__file__).with_name("run_grounded_math_3d_campaign.ps1"),
     )
     material = [
         {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
@@ -753,6 +906,7 @@ def _parse_args() -> argparse.Namespace:
     plan.add_argument("--state", type=Path, required=True)
     plan.add_argument("--health", type=Path, required=True)
     plan.add_argument("--release-decisions", type=Path, required=True)
+    plan.add_argument("--authorization", type=Path, required=True)
     plan.add_argument("--start-at", required=True)
     plan.add_argument("--approved-at", required=True)
     plan.add_argument("--dotenv", type=Path, default=Path(".env"))
@@ -770,8 +924,15 @@ def _parse_args() -> argparse.Namespace:
     run_due = subparsers.add_parser("run-due")
     run_due.add_argument("--root", type=Path, required=True)
     run_due.add_argument("--base-gate", type=Path, required=True)
+    run_due.add_argument("--live-health", type=Path, required=True)
     run_due.add_argument("--release-decisions", type=Path, required=True)
     run_due.add_argument("--dotenv", type=Path, default=Path(".env"))
+
+    capture_health = subparsers.add_parser("capture-health")
+    capture_health.add_argument("--root", type=Path, required=True)
+    capture_health.add_argument("--release-decisions", type=Path, required=True)
+    capture_health.add_argument("--output", type=Path, required=True)
+    capture_health.add_argument("--dotenv", type=Path, default=Path(".env"))
 
     run_burst_parser = subparsers.add_parser("run-burst")
     run_burst_parser.add_argument("--root", type=Path, required=True)
@@ -811,6 +972,9 @@ def main() -> int:
         state = _load_json(args.state)
         health = _load_json(args.health)
         release_decisions = _load_json(args.release_decisions)
+        owner_authorization = (
+            _load_json(args.authorization) if args.command == "plan" else None
+        )
         settings = load_settings(args.dotenv).model_copy(
             update={"SQL_DATABASE": state["sql_database"]}
         )
@@ -830,6 +994,7 @@ def main() -> int:
             release_decisions,
             tool_sha256=_tool_sha256(),
             burst=args.command == "plan-burst",
+            owner_authorization=owner_authorization,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
@@ -838,20 +1003,55 @@ def main() -> int:
 
         artifacts = _load_plan(args.root)
         settings = load_settings(args.dotenv)
-        live_health = fetch_live_health(
-            artifacts["state"], service_token=settings.RAG_SERVICE_TOKEN
+        current_release_decisions = _load_json(args.release_decisions)
+        current_base_gate = _load_json(args.base_gate)
+        live_health_artifact = _load_json(args.live_health)
+        live_health_sha256 = hashlib.sha256(args.live_health.read_bytes()).hexdigest()
+        now = datetime.now(timezone.utc)
+        current_tool_sha256 = _tool_sha256()
+        _validate_frozen_bindings(args.root, artifacts, current_tool_sha256)
+        _validate_campaign_authorization(artifacts)
+        _validate_current_release_decisions(current_release_decisions)
+        if not live_health_capture_valid(live_health_artifact, now):
+            raise campaign.CampaignStopped("live_health_capture_invalid")
+        _validate_previous_base_gate(
+            args.root / "campaign.wal.jsonl",
+            current_base_gate,
+            artifacts["state"],
+            artifacts["manifest"],
+            require_initial_gate=True,
+            current_health_sha256=live_health_sha256,
         )
         result = run_due_once(
             args.root,
-            datetime.now(timezone.utc),
-            live_health,
-            current_release_decisions=_load_json(args.release_decisions),
-            current_base_gate=_load_json(args.base_gate),
+            now,
+            {
+                "pilot": live_health_artifact["pilot"],
+                "main": live_health_artifact["main"],
+            },
+            current_release_decisions=current_release_decisions,
+            current_base_gate=current_base_gate,
             service_token=settings.RAG_SERVICE_TOKEN,
-            current_tool_sha256=_tool_sha256(),
+            current_tool_sha256=current_tool_sha256,
+            current_health_sha256=live_health_sha256,
         )
         output = result or {"status": "not_due"}
         print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "capture-health":
+        from mech_chatbot.config.settings import load_settings
+
+        artifacts = _load_plan(args.root)
+        current_release_decisions = _load_json(args.release_decisions)
+        _validate_frozen_bindings(args.root, artifacts, _tool_sha256())
+        _validate_campaign_authorization(artifacts)
+        _validate_current_release_decisions(current_release_decisions)
+        settings = load_settings(args.dotenv)
+        artifact = capture_live_health_artifact(
+            artifacts["state"], service_token=settings.RAG_SERVICE_TOKEN
+        )
+        _write_json_replace(args.output, artifact)
+        print(json.dumps({"status": "captured"}, ensure_ascii=False))
         return 0
     if args.command == "run-burst":
         from mech_chatbot.config.settings import load_settings

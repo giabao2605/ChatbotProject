@@ -22,6 +22,8 @@ CHECKS = (
     "provider_errors",
     "leakage",
 )
+PILOT_CONTRACT_VERSION = "grounded-math-3d-100-v1"
+PILOT_MINIMUM_DURATION = timedelta(days=3)
 FEATURE_FLAGS = (
     "RAG_CRAG_ENABLED",
     "RAG_CLAIM_REPAIR_ENABLED",
@@ -253,10 +255,11 @@ def _window_valid(window: dict, now: datetime, base: Path) -> bool:
     return all(
         (
             window.get("schema") == "math-lan-pilot-window-v1",
-            minimum_until - started >= timedelta(days=7),
+            window.get("pilot_contract_version") == PILOT_CONTRACT_VERSION,
+            minimum_until - started >= PILOT_MINIMUM_DURATION,
             now >= minimum_until,
             type(window.get("minimum_eligible_requests")) is int,
-            window.get("minimum_eligible_requests", 0) >= 100,
+            window.get("minimum_eligible_requests") == 100,
             window.get("required_automated_checks") == list(CHECKS),
             pilot["git_sha"] == main["git_sha"] == sources.get("source_commit"),
             type(budget.get("max_calculations")) is int,
@@ -542,9 +545,22 @@ def _trace_checks(rows: list[dict], window: dict, now: datetime, parse_error: bo
             for event in events_by_trace[trace_id]
         )
     }
+    eligible_event_times = [
+        _timestamp(event["ts"])
+        for trace_id in eligible_ids
+        for event in events_by_trace[trace_id]
+        if event.get("event")
+        in {"grounded_math_generation", "pilot_request_evidence", "rag_end"}
+    ]
+    eligible_span_valid = (
+        bool(eligible_event_times)
+        and max(eligible_event_times) - min(eligible_event_times)
+        >= PILOT_MINIMUM_DURATION
+    )
     runtime_identity = (
         candidate_ids == eligible_ids
-        and len(eligible_ids) >= window["minimum_eligible_requests"]
+        and len(eligible_ids) == window["minimum_eligible_requests"]
+        and eligible_span_valid
     )
     security = citation = provenance = budgets = leakage = True
     provider_errors = not parse_error and not orphan_production_error
@@ -684,6 +700,7 @@ def build_artifact(
     )
     return {
         "schema": "grounded-math-production-pilot-gate-v1",
+        "pilot_contract_version": window.get("pilot_contract_version"),
         "passed": passed,
         "decision": decision,
         "evaluated_at": now.isoformat().replace("+00:00", "Z"),

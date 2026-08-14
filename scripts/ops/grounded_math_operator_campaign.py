@@ -27,6 +27,7 @@ from mech_chatbot.rag.intent import is_bom_lookup
 SCHEMA = "grounded-math-operator-campaign-v1"
 WAL_SCHEMA = "grounded-math-operator-wal-v1"
 TRAFFIC_CLASS = "owner_authorized_operator_generated"
+PILOT_CONTRACT_VERSION = "grounded-math-3d-100-v1"
 BURST_SCHEMA = "grounded-math-operator-burst-v1"
 BURST_DECLARATION_SCHEMA = "grounded-math-operator-burst-owner-declaration-v1"
 BURST_TRAFFIC_CLASS = "owner_authorized_operator_generated_burst"
@@ -37,13 +38,23 @@ UNAVAILABLE_OPERATIONS = {
     "sum": "transport_has_no_explicit_document_scope",
 }
 CAMPAIGN_CARD_COUNT = 100
-CAMPAIGN_DURATION = timedelta(days=7)
+CAMPAIGN_DURATION = timedelta(days=3)
 CAMPAIGN_CADENCE = CAMPAIGN_DURATION / (CAMPAIGN_CARD_COUNT - 1)
 MAX_CARDS_PER_DOCUMENT = 26
 MAX_CARDS_PER_DOCUMENT_OPERATION = 7
 OPERATOR_USER_ID = 81
 OPERATOR_USERNAME = "admin_bao"
 EXPECTED_SERVING_COMMIT = "7b9d57562a669984b843d48d6d7ddf09048c472d"
+OWNER_AUTHORIZATION_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "integrated_hardening_v1"
+    / "evidence"
+    / "grounded-math-3d-100-owner-authorization.json"
+)
+HISTORICAL_DISPOSITION_SHA256 = (
+    "55007d64095d95005cb696f38c6a00e326624b5c8b024b7db6bf512df910f21e"
+)
 PART_CODE_RE = re.compile(r"\d{1,4}(?:\.\d{1,6}){2,5}")
 DOCUMENT_NAME_RE = re.compile(
     r"(?P<drawing>\d+(?:\.\d+){2,5})"
@@ -93,6 +104,83 @@ def canonical_json(value: object) -> bytes:
     """Return the stable byte representation used by campaign bindings."""
 
     return _canonical_json(value)
+
+
+def load_owner_authorization(path: Path = OWNER_AUTHORIZATION_PATH) -> dict:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("owner_authorization_invalid")
+    return value
+
+
+def owner_authorization_valid(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    contract = value.get("contract")
+    supersedes = value.get("supersedes")
+    exclusions = value.get("historical_exclusions")
+    authorization = value.get("authorization")
+    return all(
+        (
+            value.get("schema") == "grounded-math-pilot-owner-authorization-v1",
+            value.get("feature") == "RAG_GROUNDED_MATH_ENABLED",
+            value.get("scope") == "controlled_demo",
+            value.get("status") == "authorized",
+            value.get("owner") == "bao.nguyen",
+            value.get("pilot_contract_version") == PILOT_CONTRACT_VERSION,
+            value.get("prospective_only") is True,
+            contract
+            == {
+                "eligible_calculation_requests": 100,
+                "minimum_elapsed_hours_from_first_dispatch_to_final_completion": 72,
+                "max_attempts_per_rolling_24_hours": 35,
+                "max_attempts_per_rolling_30_minutes": 3,
+                "max_concurrency": 1,
+                "retry_policy": "none",
+                "replacement_policy": "none",
+                "catch_up_policy": "none",
+                "traffic_class": TRAFFIC_CLASS,
+                "transport": TRANSPORT,
+            },
+            isinstance(supersedes, dict),
+            supersedes.get("artifact_sha256") == HISTORICAL_DISPOSITION_SHA256
+            if isinstance(supersedes, dict)
+            else False,
+            supersedes.get("fields")
+            == ["authorization.new_campaign_authorized", "reopen_condition"]
+            if isinstance(supersedes, dict)
+            else False,
+            exclusions
+            == {
+                "window_06_requests": 0,
+                "window_06_elapsed_duration": False,
+                "burst_window_11_requests": 0,
+                "burst_window_11_elapsed_duration": False,
+                "historical_gate_rewrite_allowed": False,
+                "historical_traffic_replay_allowed": False,
+            },
+            authorization
+            == {
+                "new_campaign_authorized": True,
+                "owner_review_authorized": False,
+                "interaction_matrix_authorized": False,
+                "default_rollout_authorized": False,
+                "controlled_demo_feature_enablement_authorized": True,
+                "feature_enablement_authorized": False,
+            },
+            set(value.get("required_bindings") or ())
+            == {
+                "owner_authorization_sha256",
+                "operator_tool_sha256",
+                "pilot_contract_version",
+                "manifest_sha256",
+                "window_sha256",
+                "state_sha256",
+                "health_sha256",
+                "release_decisions_sha256",
+            },
+        )
+    )
 
 
 def _format_timestamp(value: datetime) -> str:
@@ -495,6 +583,8 @@ def build_campaign_cards(
             for card in raw_cards
         ],
     }
+    if not burst:
+        campaign_seed["pilot_contract_version"] = PILOT_CONTRACT_VERSION
     campaign_id = _sha256(_canonical_json(campaign_seed))[:24]
     common = {
         "schema": BURST_SCHEMA if burst else SCHEMA,
@@ -508,6 +598,8 @@ def build_campaign_cards(
         "inventory_sha256": inventory_sha256,
         "preflight": preflight,
     }
+    if not burst:
+        common["pilot_contract_version"] = PILOT_CONTRACT_VERSION
     if burst:
         common.update(
             {
@@ -553,7 +645,14 @@ def build_owner_declaration(
     approved_at: datetime,
     tool_sha256: str,
     declared_at: datetime | None = None,
+    owner_authorization: dict | None = None,
 ) -> dict:
+    burst = manifest.get("schema") == BURST_SCHEMA
+    if not burst and (
+        manifest.get("pilot_contract_version") != PILOT_CONTRACT_VERSION
+        or window.get("pilot_contract_version") != PILOT_CONTRACT_VERSION
+    ):
+        raise ValueError("pilot_contract_version_invalid")
     started_at = parse_timestamp(manifest["started_at"])
     approved = approved_at.astimezone(timezone.utc)
     declared = (declared_at or approved_at).astimezone(timezone.utc)
@@ -563,10 +662,15 @@ def build_owner_declaration(
         character not in "0123456789abcdef" for character in tool_sha256
     ):
         raise ValueError("operator_tool_sha256_invalid")
+    authorization = owner_authorization
+    if not burst:
+        authorization = authorization or load_owner_authorization()
+        if not owner_authorization_valid(authorization):
+            raise ValueError("owner_authorization_invalid")
     runtime_bindings = json.loads(
         json.dumps(window.get("expected_runtime") or {}, ensure_ascii=False)
     )
-    return {
+    declaration = {
         "schema": "grounded-math-operator-owner-declaration-v1",
         "owner": "bao.nguyen",
         "actor": {
@@ -604,6 +708,12 @@ def build_owner_declaration(
             "operator_tool_sha256": tool_sha256,
         },
     }
+    if not burst:
+        declaration["pilot_contract_version"] = PILOT_CONTRACT_VERSION
+        declaration["bindings"]["owner_authorization_sha256"] = _sha256(
+            _canonical_json(authorization)
+        )
+    return declaration
 
 
 def build_burst_owner_declaration(
@@ -713,7 +823,7 @@ def loopback_runtime_url(value: object) -> str:
         valid = all(
             (
                 parsed.scheme == "http",
-                parsed.hostname in {"127.0.0.1", "localhost"},
+                parsed.hostname == "127.0.0.1",
                 parsed.username is None,
                 parsed.password is None,
                 parsed.path in {"", "/"},
@@ -747,10 +857,13 @@ def send_internal_rag_sse(
         not _question_contains_part_id(question, part_id) for part_id in part_ids
     ):
         raise CampaignStopped("operator_part_codes_invalid")
+    session = None
     if post is None:
         import requests
 
-        post = requests.post
+        session = requests.Session()
+        session.trust_env = False
+        post = session.post
     from mech_chatbot.adapters.pilot_replay import iter_sse_events
 
     response = None
@@ -766,6 +879,7 @@ def send_internal_rag_sse(
                 "response_language": "vi",
             },
             stream=True,
+            allow_redirects=False,
             timeout=(10, timeout_seconds),
         )
         response.raise_for_status()
@@ -781,6 +895,8 @@ def send_internal_rag_sse(
     finally:
         if response is not None:
             response.close()
+        if session is not None:
+            session.close()
 
 
 def dispatch_due(

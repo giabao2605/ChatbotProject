@@ -1,6 +1,6 @@
 # Grounded Math staging và production pilot
 
-Runbook này triển khai Milestone 2.4 mà không thay collection production. Grounded Math chỉ được xét production sau khi CRAG đã có quyết định milestone hoàn tất.
+Runbook này triển khai Milestone 2.4 mà không thay collection production. Grounded Math được đánh giá độc lập với CRAG; feature chỉ được xét default rollout sau khi chính Grounded Math hoàn tất formal gate, pilot, review, interaction matrix, technical review và owner decision.
 
 ## Phạm vi và fail-safe
 
@@ -47,7 +47,7 @@ Gate chỉ đạt khi 100% case đúng, Decimal/công thức/đơn vị/provenan
 
 ## Production pilot nhỏ
 
-Chỉ bắt đầu khi có ít nhất ba rollout pair staging hợp lệ, quyết định CRAG dependency đã hoàn tất và series guardrail cho Grounded Math đạt. Pilot dùng protocol canary chung trong `docs/crag-production-pilot.md`, nhưng chỉ bật thêm:
+Chỉ bắt đầu khi có ít nhất ba rollout pair staging hợp lệ và series guardrail cho Grounded Math đạt. Prospective operator pilot dùng `pilot_contract_version=grounded-math-3d-100-v1`: đúng 100 eligible calculation request, tối thiểu 72 giờ từ dispatch đầu đến completion thứ 100, rolling cap `35/24 giờ` và `3/30 phút`, concurrency 1, không retry/replacement/catch-up. Declaration, window, manifest, canonical gate và operator gate phải bind đúng marker; request đầu cần canonical base gate `0/100` hợp lệ. Pilot chỉ bật thêm:
 
 ```text
 RAG_GROUNDED_MATH_ENABLED=true

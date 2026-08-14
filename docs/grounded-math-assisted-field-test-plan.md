@@ -2,31 +2,31 @@
 
 ## Kết luận
 
-Có thể tổ chức một chiến dịch 100 câu hỏi Grounded Math qua đúng production UI/runtime để kiểm tra thực tế có kiểm soát. Kết quả phải được gọi là **assisted controlled field test**, không được gọi là organic traffic.
+Có thể tổ chức một chiến dịch 100 câu hỏi Grounded Math qua transport `internal_rag_sse` đã khai báo trên Math-only runtime để kiểm tra thực tế có kiểm soát. Kết quả phải được gọi là **owner-authorized operator controlled field test**, không được gọi là organic traffic hoặc UI parity.
 
 100 request chỉ được tính vào ngưỡng pilot khi `bao.nguyen` ký declaration **trước khi chạy full campaign**, chấp nhận rõ nguồn assisted là một phần của pilot volume. Không được quyết định hồi tố dựa trên việc kết quả xanh hay đỏ.
 
-Kế hoạch này không thay đổi runtime, threshold, dependency, activation bundle hoặc code gate. Nó chỉ quy định cách chuẩn bị câu hỏi, chạy thử nhỏ, chạy chiến dịch và review fail-closed.
+Kế hoạch này ghi contract prospective `grounded-math-3d-100-v1`; implementation phải bind marker này trong declaration/window/manifest và cả operator/canonical gate. Quality, safety, security, citation, provenance, budget, rollback và default-rollout threshold không đổi.
 
 ## Trạng thái sau burst — 2026-08-14
 
 - Window-06 đã tombstone ở `17` transport completion, `10` eligible trace và `7` calculation-invalid; không carry-forward request hoặc runtime duration.
 - Burst `20dfd03b262a2eedf15731d7` hoàn tất `100/100` request nhưng canonical gate `rejected` ở `owner_declaration` do hash-domain mismatch. Nó chỉ là throughput evidence, không tính vào pilot và không được rerun.
 - Validator đã được sửa cho campaign tương lai tại `d77f28c09c995dd983591a730db0e07a79b2f4e2`; fix không thay đổi tombstone hoặc authorization lịch sử.
-- Owner disposition hiện là `deferred_pending_valid_pilot`, artifact SHA-256 `55007d64095d95005cb696f38c6a00e326624b5c8b024b7db6bf512df910f21e`. Phần chạy 7 ngày/100 request được để lại; owner review, interaction matrix và default rollout vẫn bị chặn.
+- Disposition lịch sử vẫn là `deferred_pending_valid_pilot`, artifact SHA-256 `55007d64095d95005cb696f38c6a00e326624b5c8b024b7db6bf512df910f21e`. Owner authorization mới chỉ mở future pilot theo `grounded-math-3d-100-v1`; owner review, interaction matrix và default rollout vẫn bị chặn cho tới khi pilot/gate tương ứng pass.
 - Runbook chuẩn bị review nằm ở `docs/grounded-math-owner-review-preparation.md`; tài liệu này không cấp quyền khóa sample hoặc bắt đầu review.
 
 ## Hardening cho operator window kế tiếp
 
-Phần này chỉ áp dụng khi có owner authorization mới cho campaign tương lai; không sửa, nới hoặc tái sử dụng contract của window-06 hay burst-window-11. Operator traffic vẫn là `owner_authorized_operator_generated`, không phải organic demand, quality evidence hay UI parity; default rollout tiếp tục OFF.
+Owner đã authorize prospective campaign `grounded-math-3d-100-v1` ngày `2026-08-14`; không sửa, nới hoặc tái sử dụng contract của window-06 hay burst-window-11. Operator traffic vẫn là `owner_authorized_operator_generated`, không phải organic demand, quality evidence hay UI parity; default rollout tiếp tục OFF.
 
 Window-06 sau đó đã được dừng fail-closed trước card 018: `17` transport completion chỉ tạo `10` eligible trace, còn `7` trace có `calculation_result_status=invalid`. Không request hoặc runtime duration nào được carry-forward. Các invariant UI-assisted lịch sử ở phần dưới không áp dụng cho operator replacement; replacement dùng transport `internal_rag_sse` đã khai báo và không được claim UI parity.
 
 - Trước mỗi dispatch, runner phải đọc `release_decisions.json` hiện tại và dừng nếu ledger không còn `incomplete` hoặc Grounded Math đã có decision.
-- Từ card thứ hai, tập trace hash completed trong WAL phải khớp chính xác `eligible_trace_count` và `trace_id_sha256` của base gate hiện tại; sáu check security/citation/provenance/budget/provider/leakage phải xanh. Gate cũ hoặc thiếu trace dừng trước dispatch.
-- URL runtime dùng chung một validator loopback chặt: chỉ HTTP `127.0.0.1`/`localhost`, không userinfo, path, query hay fragment.
+- Trước card đầu tiên, canonical base gate phải bind đúng contract/window, provider smoke hợp lệ, `eligible_trace_count=0` và trace hash rỗng. Từ card thứ hai, tập trace hash completed trong WAL phải khớp chính xác `eligible_trace_count` và `trace_id_sha256` của base gate hiện tại; sáu check security/citation/provenance/budget/provider/leakage phải xanh. Gate cũ, thiếu marker hoặc thiếu trace dừng trước dispatch.
+- URL runtime dùng chung một validator loopback chặt: chỉ HTTP tới literal `127.0.0.1`, không DNS alias, userinfo, path, query, fragment, proxy hay redirect.
 - WAL ghi thời điểm terminal thực tế, không sao chép timestamp bắt đầu. Mọi started không có terminal hoặc transport exception vẫn là ambiguous và không được retry.
-- Companion gate bắt buộc cả hai pacing cap: tối đa 3 attempt trong mọi rolling 30 phút và 15 attempt trong mọi rolling 24 giờ.
+- Companion gate bắt buộc cả hai pacing cap: tối đa 3 attempt trong mọi rolling 30 phút và 35 attempt trong mọi rolling 24 giờ.
 - Owner declaration phải machine-bind `divide=corpus_missing_dimensionless_divisor` và `sum=transport_has_no_explicit_document_scope`; không được lặng lẽ coi hai operation này là đã bao phủ.
 - Inventory preflight đọc read-only `MaHang`, `SoLuong`, `Unit`, page và source-row identity để chỉ nhận mã kỹ thuật số-chấm không mang ngữ nghĩa, loại dòng thiếu quantity, part code có nhiều quantity fact, cặp khác unit và mọi candidate mà production `solve_grounded_calculation` không trả `valid`. Quantity/unit chỉ tồn tại trong bộ nhớ và inventory hash; public manifest và prompt không chứa giá trị.
 - Prompt operator giữ document anchor chuẩn rút từ filename kỹ thuật đã allowlist, chỉ gồm drawing/version/model để retrieval bám đúng document và không chèn phần filename tự do; runner truyền đúng hai explicit part code từ field riêng `part_ids` đã hash-bind qua `current_part_ids`, không parse code từ toàn prompt. Corpus recapture hiện cho phép đúng 100 pair-intent card trên 4 document, với cap được khai báo `26` card/document và `7` card/document/operation; selection bias này không được dùng làm quality claim.
@@ -53,7 +53,7 @@ Các mục “Định nghĩa traffic”, “Các invariant bị khóa” và “
 
 ## Vì sao cần plan riêng
 
-- Pilot hiện yêu cầu tối thiểu 7 ngày, 100 request có calculation route, automated checks đủ 100 và human review 20 case.[S1][S2]
+- Pilot Grounded Math prospective yêu cầu đúng 100 request có calculation route, tối thiểu 72 giờ từ dispatch eligible đầu tiên đến completion eligible thứ 100, automated checks đủ 100 và human review 20 case.[S1][S2]
 - Gate hiện đếm mọi trace có `execution_context=production` khi có đúng một `grounded_math_generation` hoặc `pilot_request_evidence` với `route=calculation`; gate không có trường phân loại organic/assisted.[S2][S3]
 - Vì vậy assisted traffic có thể được gate đếm về mặt kỹ thuật, nhưng chỉ owner declaration mới quyết định nó có được dùng làm pilot evidence về mặt governance hay không.
 - Historical disposable target ban đầu chỉ có 41 BOM row có quantity, thuộc 9 current/published document, 9 page, 31 distinct part code và 4 unit; chỉ 3 document là PDF giống production, 6 document còn lại là demo/eval Markdown. Historical corpus expanded sau publish có 7 production PDF, 87 BOM row, 40 distinct part-code identity toàn corpus (44 theo từng document), 19 description identity và 0 unit; `divide` được khai báo unavailable. Các số này chỉ mô tả window cũ. Campaign mới phải recapture inventory và vẫn xem 100 request là repeated exposure có phân tầng trên corpus nhỏ, không phải 100 tình huống tài liệu độc lập hay đại diện đầy đủ cho production.
@@ -70,9 +70,9 @@ Việc một request đi qua production UI chưa tự động biến nó thành 
 
 ## Các invariant bị khóa
 
-1. Chỉ dùng app `8180` và Math-only pilot runtime được bind trong `pilot-window.json` của assisted-UI contract; không gọi thẳng RAG API và không chạy replay/script loop.[S6]
+1. Chỉ dùng Math-only pilot runtime và control `all_off` được bind trong window mới; operator gọi đúng transport loopback `internal_rag_sse`, không replay hoặc script loop ngoài governed runner.[S6]
 2. Giữ exact commit, deployment, bundle, restore receipt, snapshot, provider configuration, SQL database và Qdrant collection của window được declaration bind.[S2][S6]
-3. Giữ nguyên minimum 7 ngày/100 eligible, một calculation, không provider retry, tối đa một final generation, latency multiplier `1.25`, cost multiplier `1.5`.[S2]
+3. Giữ đúng contract `grounded-math-3d-100-v1`: 100 eligible, tối thiểu 72 giờ, một calculation, không provider retry, tối đa một final generation, latency multiplier `1.25`, cost multiplier `1.5`.[S2]
 4. Artifact campaign chỉ lưu ID/hash/count/boolean/reason code; không lưu raw question, raw answer, raw document, credential hoặc private response.[S2][S7]
 5. Không dùng quantity, expected answer, expected formula hoặc evaluation oracle để tạo câu hỏi.
 6. Không lặp nguyên văn câu hỏi; không gửi song song; không cố gửi bù đến khi đủ con số sau khi một stratum thất bại.
@@ -124,12 +124,11 @@ Với non-aggregate operation, authorized operator phải lấy user-visible ope
 Corpus snapshot phải được inventory lại read-only trước declaration. Allocation chính xác được khóa trong manifest; các trần sau là bắt buộc:
 
 - tổng cộng đúng 100 planned submissions;
-- không quá 15 request trên một document;
-- không quá 3 request cho cùng cặp `document + operation`;
-- tất cả 7 published production PDF document trong expanded inventory được phủ;
-- cả 7 published production PDF document đều phải được phủ;
+- không quá 26 request trên một document;
+- không quá 7 request cho cùng cặp `document + operation`;
+- mọi published/current/approved/servable PDF có deterministic-valid pair trong inventory freeze phải được phủ; campaign gần nhất có 4 document đủ điều kiện;
 - bao phủ mọi operation khả thi trong `sum/add/subtract/ratio/percent/multiply/divide`; operation không khả thi do corpus phải được nêu trong declaration, không được thay lặng lẽ;
-- có cả document aggregate, part-code operand và description operand;
+- operator replacement chỉ dùng explicit part-code operand đã hash-bind;
 - câu hỏi phải khác về nhu cầu diễn đạt, không chỉ thay một từ đồng nghĩa để né duplicate.
 
 100 là số submission đã predeclare, không phải cam kết 100 submission đều trở thành eligible trace. Request không đi vào calculation route vẫn được giữ trong attempted count; không được spam thêm bản sao để bù.
@@ -137,13 +136,13 @@ Corpus snapshot phải được inventory lại read-only trước declaration. 
 ### Nhịp chạy chống spam
 
 - concurrency luôn bằng 1;
-- tối đa 15 submission/ngày;
+- tối đa 35 submission trong mọi rolling 24 giờ;
 - tối đa 3 submission trong 30 phút;
-- chia qua ít nhất 7 ngày của campaign;
-- sau mỗi request chờ UI hoàn tất và health/gate metadata được ghi nhận trước request kế tiếp;
+- từ dispatch eligible đầu tiên đến completion eligible thứ 100 tối thiểu 72 giờ;
+- sau mỗi request chờ transport `internal_rag_sse` hoàn tất và health/gate metadata được ghi nhận trước request kế tiếp;
 - một operator không được copy/paste một template 100 lần.
 
-Nhịp tham chiếu: `15 + 15 + 14 + 14 + 14 + 14 + 14 = 100`. Đây là giới hạn vận hành campaign, không phải threshold release mới.
+Nhịp tham chiếu là lịch 100 card freeze đều trên 72 giờ (`72h / 99` khoảng 43 phút 38 giây); Scheduled Task poll 5 phút có thể làm thời gian thực dài hơn nhưng không được catch-up. Đây là giới hạn vận hành campaign, không phải threshold release mới.
 
 ## Trình tự thực hiện
 
@@ -214,8 +213,8 @@ Khuyến nghị: chỉ chọn `true` khi proof xác nhận intent có thể đư
 ### Bước 3 — Full campaign 100
 
 1. Mỗi ngày kiểm tra health/runtime binding trước batch.
-2. Chạy đúng card được schedule, tuần tự qua UI.
-3. Sau mỗi request chỉ ghi metadata: card ID, started/completed timestamp, HTTP/UI completion class, route eligible boolean, runtime identity hash, trace hash và automated check booleans.
+2. Chạy đúng card được schedule, tuần tự qua transport `internal_rag_sse`; không dùng UI parity làm bằng chứng.
+3. Sau mỗi request chỉ ghi metadata: card ID, started/completed timestamp, transport completion class, route eligible boolean, runtime identity hash, trace hash và automated check booleans.
 4. Không mở raw response để lấy operand/quantity cho card sau.
 5. Cuối ngày chạy gate hiện hành; không sửa threshold hoặc artifact lịch sử.
 6. Nếu card không eligible, giữ kết quả `noneligible`; không lặp lại card và không thay bằng prompt gần giống.
@@ -244,13 +243,13 @@ Campaign chỉ được ghi là completed khi:
 - gate checks giữ nguyên;
 - 20-case review hoàn tất.
 
-Campaign không tự authorize default rollout. Nếu pilot đủ 7 ngày, canonical eligible count đạt 100 theo declaration, automated gate pass và review pass, bước tiếp theo vẫn là interaction matrix c1/c5, technical review bởi `tran.nghi`, rồi owner decision/default-rollout ledger như plan chính.[S1]
+Campaign không tự authorize default rollout. Nếu pilot đủ tối thiểu 72 giờ, canonical eligible count đạt 100 theo declaration, automated gate pass và review pass, bước tiếp theo vẫn là interaction matrix c1/c5, technical review bởi `tran.nghi`, rồi owner decision/default-rollout ledger như plan chính.[S1]
 
 ### Nhánh owner-authorized burst 100 request
 
 Khi owner chấp nhận chạy nhanh, operator có thể tạo một campaign riêng với traffic class `owner_authorized_operator_generated_burst` và gửi tối đa 100 request tuần tự trong một invocation. Contract bắt buộc giữ concurrency `1`, không retry/replacement, append-only WAL, kiểm tra live health, release ledger và trace reconciliation sau từng request; bất kỳ ambiguous, noneligible, drift hoặc automated-check failure nào cũng dừng trước request kế tiếp.
 
-Burst declaration phải được ký trước request đầu tiên và luôn ghi `count_toward_pilot=false`, `qualifies_as_7_day_pilot=false`, `duration_claim_allowed=false`, mọi organic/quality/UI/default-rollout claim đều false. Kết quả chỉ là throughput/safety evidence tại một thời điểm; dù đạt 100/100, nó không chứng minh ổn định theo thời gian và không hoàn thành acceptance 7 ngày của plan chính. Không tạo Scheduled Task cho nhánh này; runtime phải dừng và campaign phải tombstone sau khi kết thúc hoặc fail.
+Burst declaration phải được ký trước request đầu tiên và luôn ghi `count_toward_pilot=false`, `qualifies_as_7_day_pilot=false`, `duration_claim_allowed=false`, mọi organic/quality/UI/default-rollout claim đều false. Kết quả chỉ là throughput/safety evidence tại một thời điểm; dù đạt 100/100, nó không chứng minh ổn định theo thời gian và không hoàn thành contract prospective 72 giờ. Không tạo Scheduled Task cho nhánh này; runtime phải dừng và campaign phải tombstone sau khi kết thúc hoặc fail.
 
 ## Stop conditions
 
@@ -304,16 +303,16 @@ assisted-field-test/
   review-20.json
 ```
 
-Không cần script/framework mới nếu stdlib/PowerShell hiện có đủ để hash, sort và validate JSON. Chỉ viết validator nhỏ nếu proof cho thấy kiểm tra thủ công không fail-closed được.
+Governed Python runner/gate hiện có chịu trách nhiệm hash, sort, validate JSON và dispatch fail-closed; wrapper PowerShell chỉ orchestration bằng absolute path, không tự diễn giải contract.
 
 ## Nguồn primary
 
-- **S1** — `docs/advanced-rag-value-first-rollout-plan.md`: checkpoint hiện tại, Phase 2, pilot 7 ngày/100 request, review 20 case, stop conditions và interaction matrix.
-- **S2** — `C:/Users/bao.nguyen/Documents/ChatBotProject-math-pilot-evidence/scripts/ops/grounded_math_pilot_gate.py:49-66,230-271,454-478,492-560,580-616`: whitelist metadata, locked thresholds, production eligibility, fail-closed checks và hashed trace IDs.
+- **S1** — `docs/advanced-rag-value-first-rollout-plan.md`: checkpoint hiện tại, Phase 2, contract `grounded-math-3d-100-v1`, review 20 case, stop conditions và interaction matrix.
+- **S2** — `scripts/ops/grounded_math_pilot_gate.py`: canonical validator hiện hành cho contract marker, exact 100 trace, tối thiểu 72 giờ, runtime/provider bindings, fail-closed checks và hashed trace IDs.
 - **S3** — `C:/Users/bao.nguyen/Documents/ChatBotProject-math-pilot-evidence/src/mech_chatbot/rag/execution.py:580-610` và `src/mech_chatbot/rag/pipeline_steps.py:683-702`: producer của calculation evidence và grounded math generation.
 - **S4** — `C:/Users/bao.nguyen/Documents/ChatBotProject-math-pilot-evidence/src/mech_chatbot/rag/grounded_math.py:47-89,156-215,237-340`: exact-document selection, supported operation và deterministic calculation plan.
 - **S5** — `C:/Users/bao.nguyen/Documents/ChatBotProject-math-pilot-evidence/src/mech_chatbot/db/repositories/bom.py:138-220`: governed BOM lookup, document scope, RBAC và current/published predicates.
-- **S6** — `C:/Users/bao.nguyen/Documents/ChatBotProject-math-pilot-evidence/.local/math-pilot-b437b32-live-v2/pilot-window.json`, `pilot-gate.json` và `reports/grounded-math/20260804-selective-b437b32/review-governance-single-owner.json`: exact current runtime/window/count/governance bindings.
+- **S6** — `C:/Users/bao.nguyen/Documents/ChatBotProject-math-pilot-evidence/.local/math-pilot-b437b32-live-v2/pilot-window.json`, `pilot-gate.json` và `reports/grounded-math/20260804-selective-b437b32/review-governance-single-owner.json`: historical runtime/window/count/governance bindings, chỉ dùng đối chiếu và không được carry-forward.
 - **S7** — `C:/Users/bao.nguyen/Documents/ChatBotProject-math-pilot-evidence/tests/unit/test_grounded_math_pilot_gate.py:298-313`: regression proof rằng gate artifact hash trace IDs và không render raw trace content.
 - **S8** — `data/integrated_hardening_v1/release_decisions.json:1-8`: default release decisions vẫn incomplete và Grounded Math chưa có accepted default decision.
 - **S9** — `reports/grounded-math/20260804-assisted-corpus-audit.json` (SHA-256 `93f4e5d427a598df65a24c68a877a10d50666110d2127298753a6db6f149a354`): metadata-only audit của bốn root folder, visual confirmation 8 BOM-positive PDF và explicit `ingestion.authorized=false/current_pilot_target_allowed=false`.

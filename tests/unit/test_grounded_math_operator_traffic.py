@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -65,8 +67,10 @@ def _runtime_artifacts():
     window = {
         "status": "running",
         "feature": "grounded_math",
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
         "source_commit": campaign.EXPECTED_SERVING_COMMIT,
         "minimum_eligible_requests": 100,
+        "provider_smoke": {"path": "provider-smoke.json", "sha256": "8" * 64},
         "expected_runtime": {
             "pilot": {key: value for key, value in pilot.items() if key != "status"},
             "main": {key: value for key, value in main.items() if key != "status"},
@@ -80,7 +84,9 @@ def _runtime_artifacts():
         "activation_scope": "controlled_demo",
         "enabled_features": ["RAG_GROUNDED_MATH_ENABLED"],
         "expected_runtime": window["expected_runtime"],
-        "window_sha256": "9" * 64,
+        "window_sha256": hashlib.sha256(
+            (json.dumps(window, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        ).hexdigest(),
     }
     return window, state, {"pilot": pilot, "main": main}
 
@@ -89,6 +95,37 @@ def _release_decisions() -> dict:
     return {
         "status": "incomplete",
         "decisions": {"RAG_GROUNDED_MATH_ENABLED": {"decision": None}},
+    }
+
+
+def _initial_gate(state: dict, root: Path) -> dict:
+    return {
+        "schema": "grounded-math-production-pilot-gate-v1",
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
+        "passed": False,
+        "decision": "rejected",
+        "eligible_trace_count": 0,
+        "checks": {
+            "runtime_identity": False,
+            "security": False,
+            "citation_structure": False,
+            "provenance": False,
+            "budgets": False,
+            "provider_errors": False,
+            "leakage": False,
+        },
+        "trace_id_sha256": [],
+        "window_sha256": state["window_sha256"],
+        "state_sha256": hashlib.sha256(
+            (root / "start-state.json").read_bytes()
+        ).hexdigest(),
+        "health_capture_sha256": hashlib.sha256(
+            (root / "start-health.json").read_bytes()
+        ).hexdigest(),
+        "trace_sha256": hashlib.sha256(b"").hexdigest(),
+        "provider_smoke_sha256": "8" * 64,
+        "provider_smoke_valid": True,
+        "provider_smoke_reason": None,
     }
 
 
@@ -114,6 +151,7 @@ def test_create_plan_freezes_start_artifacts_and_keeps_raw_prompts_private(tmp_p
     assert sorted(path.name for path in root.iterdir()) == [
         "campaign-private.json",
         "campaign-public.json",
+        "owner-authorization.json",
         "owner-declaration.json",
         "release-decisions-start.json",
         "start-health.json",
@@ -127,8 +165,15 @@ def test_create_plan_freezes_start_artifacts_and_keeps_raw_prompts_private(tmp_p
     manifest = json.loads(public_text)
     declaration = json.loads(root.joinpath("owner-declaration.json").read_text())
     assert manifest["traffic_class"] == "owner_authorized_operator_generated"
+    assert manifest["pilot_contract_version"] == campaign.PILOT_CONTRACT_VERSION
     assert len({card["scheduled_at"] for card in manifest["cards"]}) == 100
     assert declaration["count_toward_pilot"] is True
+    assert declaration["pilot_contract_version"] == campaign.PILOT_CONTRACT_VERSION
+    authorization = json.loads(root.joinpath("owner-authorization.json").read_text())
+    assert campaign.owner_authorization_valid(authorization) is True
+    assert declaration["bindings"]["owner_authorization_sha256"] == hashlib.sha256(
+        campaign.canonical_json(authorization)
+    ).hexdigest()
     assert declaration["organic_claim_allowed"] is False
     with pytest.raises(FileExistsError):
         traffic.create_campaign_plan(
@@ -296,6 +341,182 @@ def test_run_due_once_refuses_tool_drift_before_writing_wal(tmp_path):
     assert not root.joinpath("campaign.wal.jsonl").exists()
 
 
+def test_run_due_once_requires_contract_bound_initial_base_gate(tmp_path):
+    window, state, health = _runtime_artifacts()
+    root = tmp_path / ".local" / "operator-window"
+    traffic.create_campaign_plan(
+        root,
+        _inventory(),
+        datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+        datetime(2026, 8, 12, 1, tzinfo=timezone.utc),
+        window,
+        state,
+        health,
+        {"status": "incomplete"},
+        tool_sha256="1" * 64,
+        local_root=tmp_path / ".local",
+    )
+
+    with pytest.raises(campaign.CampaignStopped, match="base_gate_not_reconciled"):
+        traffic.run_due_once(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            health,
+            current_release_decisions=_release_decisions(),
+            current_base_gate={},
+            service_token="token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_: pytest.fail("network must not run"),
+        )
+    assert not root.joinpath("campaign.wal.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("state_sha256", "0" * 64),
+        ("health_capture_sha256", "0" * 64),
+        ("trace_sha256", "0" * 64),
+        ("provider_smoke_sha256", "0" * 64),
+        ("passed", True),
+        ("decision", "pending_review"),
+        ("checks", {}),
+    ],
+)
+def test_run_due_once_rejects_tampered_initial_gate_before_network(
+    tmp_path, field, value
+):
+    window, state, health = _runtime_artifacts()
+    root = tmp_path / ".local" / "operator-window"
+    traffic.create_campaign_plan(
+        root,
+        _inventory(),
+        datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+        datetime(2026, 8, 12, 1, tzinfo=timezone.utc),
+        window,
+        state,
+        health,
+        {"status": "incomplete"},
+        tool_sha256="1" * 64,
+        local_root=tmp_path / ".local",
+    )
+    gate = _initial_gate(state, root)
+    gate[field] = value
+
+    with pytest.raises(campaign.CampaignStopped, match="base_gate_not_reconciled"):
+        traffic.run_due_once(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            health,
+            current_release_decisions=_release_decisions(),
+            current_base_gate=gate,
+            service_token="token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_: pytest.fail("network must not run"),
+        )
+    assert not root.joinpath("campaign.wal.jsonl").exists()
+
+
+def test_run_due_once_rejects_semantic_owner_authorization_drift_before_network(
+    tmp_path,
+):
+    window, state, health = _runtime_artifacts()
+    root = tmp_path / ".local" / "operator-window"
+    traffic.create_campaign_plan(
+        root,
+        _inventory(),
+        datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+        datetime(2026, 8, 12, 1, tzinfo=timezone.utc),
+        window,
+        state,
+        health,
+        {"status": "incomplete"},
+        tool_sha256="1" * 64,
+        local_root=tmp_path / ".local",
+    )
+    authorization_path = root / "owner-authorization.json"
+    declaration_path = root / "owner-declaration.json"
+    authorization = json.loads(authorization_path.read_text())
+    declaration = json.loads(declaration_path.read_text())
+    authorization["authorization"][
+        "controlled_demo_feature_enablement_authorized"
+    ] = False
+    declaration["bindings"]["owner_authorization_sha256"] = hashlib.sha256(
+        campaign.canonical_json(authorization)
+    ).hexdigest()
+    authorization_path.write_text(json.dumps(authorization), encoding="utf-8")
+    declaration_path.write_text(json.dumps(declaration), encoding="utf-8")
+
+    with pytest.raises(campaign.CampaignStopped, match="campaign_authorization_invalid"):
+        traffic.run_due_once(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            health,
+            current_release_decisions=_release_decisions(),
+            current_base_gate=_initial_gate(state, root),
+            service_token="token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_: pytest.fail("network must not run"),
+        )
+    assert not root.joinpath("campaign.wal.jsonl").exists()
+
+
+def test_run_due_once_rejects_semantic_contract_drift_before_network(tmp_path):
+    window, state, health = _runtime_artifacts()
+    root = tmp_path / ".local" / "operator-window"
+    traffic.create_campaign_plan(
+        root,
+        _inventory(),
+        datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+        datetime(2026, 8, 12, 1, tzinfo=timezone.utc),
+        window,
+        state,
+        health,
+        {"status": "incomplete"},
+        tool_sha256="1" * 64,
+        local_root=tmp_path / ".local",
+    )
+    legacy = "grounded-math-7d-100-v1"
+    manifest_path = root / "campaign-public.json"
+    private_path = root / "campaign-private.json"
+    declaration_path = root / "owner-declaration.json"
+    window_path = root / "start-window.json"
+    manifest = json.loads(manifest_path.read_text())
+    private = json.loads(private_path.read_text())
+    declaration = json.loads(declaration_path.read_text())
+    frozen_window = json.loads(window_path.read_text())
+    manifest["pilot_contract_version"] = legacy
+    private["pilot_contract_version"] = legacy
+    declaration["pilot_contract_version"] = legacy
+    frozen_window["pilot_contract_version"] = legacy
+    declaration["bindings"]["manifest_sha256"] = hashlib.sha256(
+        campaign.canonical_json(manifest)
+    ).hexdigest()
+    declaration["bindings"]["window_sha256"] = hashlib.sha256(
+        campaign.canonical_json(frozen_window)
+    ).hexdigest()
+    for path, value in (
+        (manifest_path, manifest),
+        (private_path, private),
+        (declaration_path, declaration),
+        (window_path, frozen_window),
+    ):
+        path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(campaign.CampaignStopped, match="campaign_authorization_invalid"):
+        traffic.run_due_once(
+            root,
+            datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+            health,
+            current_release_decisions=_release_decisions(),
+            current_base_gate={},
+            service_token="token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_: pytest.fail("network must not run"),
+        )
+    assert not root.joinpath("campaign.wal.jsonl").exists()
+
+
 def test_run_due_once_rejects_live_default_decision_before_wal_or_network(tmp_path):
     window, state, health = _runtime_artifacts()
     root = tmp_path / ".local" / "operator-window"
@@ -384,7 +605,7 @@ def test_status_reports_only_metadata(tmp_path):
         datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
         health,
         current_release_decisions=_release_decisions(),
-        current_base_gate={},
+        current_base_gate=_initial_gate(state, root),
         service_token="token",
         current_tool_sha256="1" * 64,
         send=lambda *_: "raw-trace",
@@ -396,8 +617,41 @@ def test_status_reports_only_metadata(tmp_path):
     assert status["completed"] == 1
     assert status["ambiguous"] == 0
     assert status["remaining"] == 99
+    assert status["pilot_contract_version"] == campaign.PILOT_CONTRACT_VERSION
+    assert status["uses_contract"] is True
+    assert status["qualifies_as_7_day_pilot"] is False
     assert "question" not in json.dumps(status)
     assert "raw-trace" not in json.dumps(status)
+
+
+def test_tool_hash_binds_the_canonical_pilot_gate(monkeypatch):
+    baseline = traffic._tool_sha256()
+    original = Path.read_bytes
+
+    def changed(path):
+        content = original(path)
+        if path.name == "grounded_math_pilot_gate.py":
+            return content + b"\n# contract drift"
+        return content
+
+    monkeypatch.setattr(Path, "read_bytes", changed)
+
+    assert traffic._tool_sha256() != baseline
+
+
+def test_tool_hash_binds_the_scheduled_task_wrapper(monkeypatch):
+    baseline = traffic._tool_sha256()
+    original = Path.read_bytes
+
+    def changed(path):
+        content = original(path)
+        if path.name == "run_grounded_math_3d_campaign.ps1":
+            return content + b"\n# task drift"
+        return content
+
+    monkeypatch.setattr(Path, "read_bytes", changed)
+
+    assert traffic._tool_sha256() != baseline
 
 
 def _burst_gate_from_wal(root, state):
@@ -411,6 +665,7 @@ def _burst_gate_from_wal(root, state):
     if not completed:
         return {
             "schema": "grounded-math-production-pilot-gate-v1",
+            "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
             "eligible_trace_count": 0,
             "trace_id_sha256": [],
             "window_sha256": state["window_sha256"],
@@ -419,6 +674,7 @@ def _burst_gate_from_wal(root, state):
         }
     return {
         "schema": "grounded-math-production-pilot-gate-v1",
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
         "eligible_trace_count": len(completed),
         "trace_id_sha256": [row["trace_id_sha256"] for row in completed],
         "window_sha256": state["window_sha256"],
@@ -787,7 +1043,7 @@ def test_run_due_once_requires_the_previous_card_in_the_current_base_gate(tmp_pa
         datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
         health,
         current_release_decisions=decisions,
-        current_base_gate={},
+        current_base_gate=_initial_gate(state, root),
         service_token="token",
         current_tool_sha256="1" * 64,
         send=lambda *_: "trace-1",
@@ -838,7 +1094,7 @@ def test_run_due_once_dispatches_after_previous_card_reconciles(tmp_path):
         datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
         health,
         current_release_decisions=decisions,
-        current_base_gate={},
+        current_base_gate=_initial_gate(state, root),
         service_token="token",
         current_tool_sha256="1" * 64,
         send=lambda *_: "trace-1",
@@ -848,9 +1104,12 @@ def test_run_due_once_dispatches_after_previous_card_reconciles(tmp_path):
     )["trace_id_sha256"]
     reconciled_gate = {
         "schema": "grounded-math-production-pilot-gate-v1",
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
         "eligible_trace_count": 1,
         "trace_id_sha256": [trace_hash],
         "window_sha256": state["window_sha256"],
+        "provider_smoke_valid": True,
+        "provider_smoke_reason": None,
         "checks": {
             "runtime_identity": False,
             "security": True,
@@ -876,6 +1135,76 @@ def test_run_due_once_dispatches_after_previous_card_reconciles(tmp_path):
     assert result == {"card_id": "card-002", "status": "completed"}
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("provider_smoke_valid", False), ("provider_smoke_reason", "invalid_artifact")],
+)
+def test_run_due_once_rejects_provider_smoke_drift_after_first_request(
+    tmp_path, field, value
+):
+    window, state, health = _runtime_artifacts()
+    root = tmp_path / ".local" / "operator-window"
+    decisions = _release_decisions()
+    traffic.create_campaign_plan(
+        root,
+        _inventory(),
+        datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+        datetime(2026, 8, 12, 1, tzinfo=timezone.utc),
+        window,
+        state,
+        health,
+        decisions,
+        tool_sha256="1" * 64,
+        local_root=tmp_path / ".local",
+    )
+    traffic.run_due_once(
+        root,
+        datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
+        health,
+        current_release_decisions=decisions,
+        current_base_gate=_initial_gate(state, root),
+        service_token="token",
+        current_tool_sha256="1" * 64,
+        send=lambda *_: "trace-1",
+    )
+    trace_hash = json.loads(
+        root.joinpath("campaign.wal.jsonl").read_text().splitlines()[1]
+    )["trace_id_sha256"]
+    reconciled_gate = {
+        "schema": "grounded-math-production-pilot-gate-v1",
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
+        "eligible_trace_count": 1,
+        "trace_id_sha256": [trace_hash],
+        "window_sha256": state["window_sha256"],
+        "provider_smoke_valid": True,
+        "provider_smoke_reason": None,
+        "checks": {
+            name: True
+            for name in (
+                "security",
+                "citation_structure",
+                "provenance",
+                "budgets",
+                "provider_errors",
+                "leakage",
+            )
+        },
+    }
+    reconciled_gate[field] = value
+
+    with pytest.raises(campaign.CampaignStopped, match="base_gate_not_reconciled"):
+        traffic.run_due_once(
+            root,
+            datetime(2026, 8, 12, 4, tzinfo=timezone.utc),
+            health,
+            current_release_decisions=decisions,
+            current_base_gate=reconciled_gate,
+            service_token="token",
+            current_tool_sha256="1" * 64,
+            send=lambda *_: pytest.fail("network must not run"),
+        )
+
+
 def test_run_due_once_rejects_wal_prompt_binding_drift(tmp_path):
     window, state, health = _runtime_artifacts()
     root = tmp_path / ".local" / "operator-window"
@@ -897,7 +1226,7 @@ def test_run_due_once_rejects_wal_prompt_binding_drift(tmp_path):
         datetime(2026, 8, 12, 2, tzinfo=timezone.utc),
         health,
         current_release_decisions=decisions,
-        current_base_gate={},
+        current_base_gate=_initial_gate(state, root),
         service_token="token",
         current_tool_sha256="1" * 64,
         send=lambda *_: "trace-1",
@@ -911,6 +1240,7 @@ def test_run_due_once_rejects_wal_prompt_binding_drift(tmp_path):
     )
     base_gate = {
         "schema": "grounded-math-production-pilot-gate-v1",
+        "pilot_contract_version": campaign.PILOT_CONTRACT_VERSION,
         "eligible_trace_count": 1,
         "trace_id_sha256": [trace_hash],
         "window_sha256": state["window_sha256"],
@@ -1032,15 +1362,16 @@ def test_fetch_live_health_returns_both_loopback_arms_and_closes_responses():
         def close(self):
             closed.append(self.deployment)
 
-    def get(url, timeout, headers):
+    def get(url, timeout, headers, allow_redirects):
         assert timeout == 5
         assert headers == {"X-RAG-Service-Token": "service-token"}
+        assert allow_redirects is False
         return Response("pilot" if ":8200" in url else "control")
 
     result = traffic.fetch_live_health(
         {
             "rag_url": "http://127.0.0.1:8200",
-            "control_url": "http://localhost:8210",
+            "control_url": "http://127.0.0.1:8210",
         },
         service_token="service-token",
         get=get,
@@ -1061,6 +1392,35 @@ def test_fetch_live_health_rejects_missing_service_token_before_network():
             service_token="",
             get=lambda *_args, **_kwargs: pytest.fail("network must not run"),
         )
+
+
+def test_capture_live_health_artifact_has_fresh_timestamp_and_both_arms():
+    now = datetime(2026, 8, 14, 2, 30, tzinfo=timezone.utc)
+
+    def get(url, **_kwargs):
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "status": "ok",
+                "deployment_id": "pilot" if ":8200" in url else "control",
+            },
+            close=lambda: None,
+        )
+
+    artifact = traffic.capture_live_health_artifact(
+        {
+            "rag_url": "http://127.0.0.1:8200",
+            "control_url": "http://127.0.0.1:8210",
+        },
+        service_token="token",
+        now=now,
+        get=get,
+    )
+
+    assert artifact["schema"] == "math-lan-pilot-health-capture-v1"
+    assert artifact["checked_at"] == "2026-08-14T02:30:00Z"
+    assert artifact["pilot"]["deployment_id"] == "pilot"
+    assert artifact["main"]["deployment_id"] == "control"
 
 
 def test_current_gate_uses_frozen_start_artifacts_and_current_decisions(tmp_path):
@@ -1145,9 +1505,21 @@ def test_main_run_due_loads_service_token_from_settings_not_cli(tmp_path, monkey
 
     base_gate = tmp_path / "base-gate.json"
     release_decisions = tmp_path / "release-decisions.json"
+    live_health = tmp_path / "live-health.json"
     base_gate.write_text("{}", encoding="utf-8")
     release_decisions.write_text(
         json.dumps(_release_decisions()), encoding="utf-8"
+    )
+    live_health.write_text(
+        json.dumps(
+            {
+                "schema": "math-lan-pilot-health-capture-v1",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "pilot": {},
+                "main": {},
+            }
+        ),
+        encoding="utf-8",
     )
     monkeypatch.setattr(
         traffic,
@@ -1157,16 +1529,18 @@ def test_main_run_due_loads_service_token_from_settings_not_cli(tmp_path, monkey
             root=tmp_path,
             dotenv=tmp_path / ".env",
             base_gate=base_gate,
+            live_health=live_health,
             release_decisions=release_decisions,
         ),
     )
-    monkeypatch.setattr(traffic, "_load_plan", lambda _root: {"state": {}})
     monkeypatch.setattr(
-        traffic,
-        "fetch_live_health",
-        lambda _state, *, service_token: {"pilot": {}, "main": {}},
+        traffic, "_load_plan", lambda _root: {"state": {}, "manifest": {}}
     )
     monkeypatch.setattr(traffic, "_tool_sha256", lambda: "1" * 64)
+    monkeypatch.setattr(traffic, "_validate_frozen_bindings", lambda *_args: None)
+    monkeypatch.setattr(traffic, "_validate_campaign_authorization", lambda *_args: None)
+    monkeypatch.setattr(traffic, "_validate_current_release_decisions", lambda *_args: None)
+    monkeypatch.setattr(traffic, "_validate_previous_base_gate", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(settings_module, "load_settings", lambda _path: SimpleNamespace(RAG_SERVICE_TOKEN="env-token"))
     captured = {}
 
@@ -1180,6 +1554,106 @@ def test_main_run_due_loads_service_token_from_settings_not_cli(tmp_path, monkey
     assert captured["service_token"] == "env-token"
     assert captured["current_base_gate"] == {}
     assert captured["current_release_decisions"] == _release_decisions()
+    assert captured["current_health_sha256"] == hashlib.sha256(
+        live_health.read_bytes()
+    ).hexdigest()
+
+
+def test_main_run_due_validates_frozen_bindings_before_token_bearing_health_fetch(
+    tmp_path, monkeypatch
+):
+    from mech_chatbot.config import settings as settings_module
+
+    base_gate = tmp_path / "base-gate.json"
+    release_decisions = tmp_path / "release-decisions.json"
+    live_health = tmp_path / "live-health.json"
+    base_gate.write_text("{}", encoding="utf-8")
+    release_decisions.write_text(json.dumps(_release_decisions()), encoding="utf-8")
+    live_health.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        traffic,
+        "_parse_args",
+        lambda: SimpleNamespace(
+            command="run-due",
+            root=tmp_path,
+            dotenv=tmp_path / ".env",
+            base_gate=base_gate,
+            live_health=live_health,
+            release_decisions=release_decisions,
+        ),
+    )
+    monkeypatch.setattr(
+        traffic,
+        "_load_plan",
+        lambda _root: {"state": {"rag_url": "http://127.0.0.1:65530"}},
+    )
+    monkeypatch.setattr(traffic, "_tool_sha256", lambda: "1" * 64)
+    monkeypatch.setattr(
+        traffic,
+        "_validate_frozen_bindings",
+        lambda *_args: (_ for _ in ()).throw(
+            campaign.CampaignStopped("frozen_artifact_drift")
+        ),
+    )
+    monkeypatch.setattr(
+        settings_module,
+        "load_settings",
+        lambda _path: SimpleNamespace(RAG_SERVICE_TOKEN="env-token"),
+    )
+    monkeypatch.setattr(
+        traffic,
+        "fetch_live_health",
+        lambda *_args, **_kwargs: pytest.fail("token-bearing health must not run"),
+    )
+
+    with pytest.raises(campaign.CampaignStopped, match="frozen_artifact_drift"):
+        traffic.main()
+
+
+def test_main_capture_health_validates_frozen_bindings_before_loading_token(
+    tmp_path, monkeypatch
+):
+    from mech_chatbot.config import settings as settings_module
+
+    release_decisions = tmp_path / "release-decisions.json"
+    release_decisions.write_text(json.dumps(_release_decisions()), encoding="utf-8")
+    monkeypatch.setattr(
+        traffic,
+        "_parse_args",
+        lambda: SimpleNamespace(
+            command="capture-health",
+            root=tmp_path,
+            output=tmp_path / "live-health.json",
+            release_decisions=release_decisions,
+            dotenv=tmp_path / ".env",
+        ),
+    )
+    monkeypatch.setattr(
+        traffic,
+        "_load_plan",
+        lambda _root: {"state": {"rag_url": "http://127.0.0.1:65530"}},
+    )
+    monkeypatch.setattr(traffic, "_tool_sha256", lambda: "1" * 64)
+    monkeypatch.setattr(
+        traffic,
+        "_validate_frozen_bindings",
+        lambda *_args: (_ for _ in ()).throw(
+            campaign.CampaignStopped("frozen_artifact_drift")
+        ),
+    )
+    monkeypatch.setattr(
+        settings_module,
+        "load_settings",
+        lambda _path: pytest.fail("token must not load before validation"),
+    )
+    monkeypatch.setattr(
+        traffic,
+        "fetch_live_health",
+        lambda *_args, **_kwargs: pytest.fail("token-bearing health must not run"),
+    )
+
+    with pytest.raises(campaign.CampaignStopped, match="frozen_artifact_drift"):
+        traffic.main()
 
 
 def test_main_run_burst_writes_final_gates_and_tombstone(tmp_path, monkeypatch):
