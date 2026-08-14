@@ -629,6 +629,10 @@ def build_burst_owner_declaration(
     )
     return {
         **declaration,
+        "bindings": {
+            **declaration["bindings"],
+            "window_sha256": state["window_sha256"],
+        },
         "schema": BURST_DECLARATION_SCHEMA,
         "campaign_id": manifest["campaign_id"],
         "traffic_class": BURST_TRAFFIC_CLASS,

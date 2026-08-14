@@ -216,9 +216,14 @@ def _validate_frozen_bindings(root: Path, artifacts: dict, tool_sha256: str) -> 
             campaign.canonical_json(artifacts["manifest"])
         ).hexdigest(),
         "inventory_sha256": artifacts["manifest"].get("inventory_sha256"),
-        "window_sha256": hashlib.sha256(
-            campaign.canonical_json(artifacts["window"])
-        ).hexdigest(),
+        "window_sha256": (
+            artifacts["state"].get("window_sha256")
+            if artifacts["manifest"].get("traffic_class")
+            == campaign.BURST_TRAFFIC_CLASS
+            else hashlib.sha256(
+                campaign.canonical_json(artifacts["window"])
+            ).hexdigest()
+        ),
         "state_sha256": hashlib.sha256(
             campaign.canonical_json(artifacts["state"])
         ).hexdigest(),

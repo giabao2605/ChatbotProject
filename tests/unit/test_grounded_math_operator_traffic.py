@@ -192,6 +192,7 @@ def test_create_burst_plan_freezes_100_cards_due_together_and_excludes_pilot_cla
     assert declaration["request_count"] == 100
     assert declaration["retry_policy"] == "none"
     assert declaration["abort_on_ambiguous"] is True
+    assert declaration["bindings"]["window_sha256"] == state["window_sha256"]
     rendered = json.dumps({"manifest": manifest, "declaration": declaration})
     assert "8.1.00001" not in rendered
     assert "question" not in rendered
