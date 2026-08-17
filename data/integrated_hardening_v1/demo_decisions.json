@@ -8,7 +8,7 @@
     },
     "grounded_math": {
       "path": "data/integrated_hardening_v1/demo_decisions/grounded_math.json",
-      "sha256": "4d23b873ecd1fafeb7e0bec172d6b93ad27ba83c8b260333977cb1a23d53ef5a"
+      "sha256": "70b74acb5faa587720ed5726ac1346b3f6e6d1ce3703544bfb20eeb71b9ad132"
     },
     "late_interaction": {
       "path": "data/integrated_hardening_v1/demo_decisions/late_interaction.json",

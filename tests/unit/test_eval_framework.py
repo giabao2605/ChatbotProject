@@ -447,6 +447,171 @@ def test_benchmark_runtime_identity_requires_health_provenance(monkeypatch):
         )
 
 
+def test_benchmark_runtime_identity_authenticates_health_request(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("BENCHMARK_TEST_TOKEN", "secret-token")
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "rag_loaded": True,
+                "deployment_id": "candidate-1",
+                "git_sha": "a" * 40,
+                "snapshot_fingerprint": "b" * 64,
+                "provider_configuration_sha256": "c" * 64,
+                "qdrant_collection": "fixture",
+                "execution_context": "evaluation",
+                "feature_flags": {},
+                "feature_versions": {},
+            }
+
+    def get(*_args, **kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(benchmark.requests, "get", get)
+    benchmark._runtime_identity(
+        SimpleNamespace(
+            base_url="http://127.0.0.1:8100",
+            timeout=30,
+            token_env="BENCHMARK_TEST_TOKEN",
+        ),
+    )
+    assert captured["headers"] == {"X-RAG-Service-Token": "secret-token"}
+
+
+def test_benchmark_failed_request_records_status_without_response_body(monkeypatch):
+    class Response:
+        status_code = 429
+
+        def raise_for_status(self):
+            raise benchmark.requests.HTTPError(
+                "sensitive server detail", response=self
+            )
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(benchmark.requests, "post", lambda *_args, **_kwargs: Response())
+    sample = benchmark.measure_one(
+        "http://127.0.0.1:8100",
+        "secret-token",
+        {"question": "safe question", "username": "admin"},
+        30,
+        sample_index=1,
+    )
+    assert sample["status_code"] == 429
+    assert "sensitive" not in json.dumps(sample)
+    assert "secret-token" not in json.dumps(sample)
+
+
+def test_benchmark_cli_waits_before_crossing_request_window(
+    tmp_path, monkeypatch,
+):
+    questions = tmp_path / "questions.jsonl"
+    report = tmp_path / "report.json"
+    _write_jsonl(questions, [
+        {"question": "one", "username": "admin"},
+        {"question": "two", "username": "admin"},
+    ])
+    identity = {
+        "deployment_id": "benchmark-test",
+        "git_sha": "a" * 40,
+        "snapshot_fingerprint": "b" * 64,
+        "provider_configuration_sha256": "c" * 64,
+        "collection": "fixture",
+        "execution_context": "evaluation",
+        "pipeline_configuration": {"flags": {}, "versions": {}},
+    }
+    monkeypatch.setattr(benchmark, "_runtime_identity", lambda _args: identity)
+    monkeypatch.setattr(benchmark.time, "monotonic", lambda: 0.0)
+    sleeps = []
+    monkeypatch.setattr(benchmark.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        benchmark,
+        "measure_one",
+        lambda *_args, sample_index=0, **_kwargs: {
+            "sample_id": f"q{sample_index:04d}",
+            "ok": True,
+            "first_token_ms": 1,
+            "complete_ms": 2,
+            "trace_id": f"trace-{sample_index}",
+            "stage_metrics": {},
+        },
+    )
+    monkeypatch.setattr("sys.argv", [
+        "benchmark_rag_concurrency.py", str(questions),
+        "--concurrency", "1,5",
+        "--request-limit", "3",
+        "--request-window-seconds", "60",
+        "--report", str(report),
+    ])
+    assert benchmark.main() == 0
+    assert sleeps == [61.0]
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["request_window"] == {
+        "enabled": True,
+        "limit": 3,
+        "seconds": 60.0,
+    }
+    assert [
+        result["request_window_wait_seconds"]
+        for result in payload["results"]
+    ] == [0.0, 61.0]
+    assert all(result["started_at"] for result in payload["results"])
+    assert all(result["finished_at"] for result in payload["results"])
+
+
+def test_benchmark_cli_default_does_not_limit_legacy_manifest(
+    tmp_path, monkeypatch,
+):
+    questions = tmp_path / "questions.jsonl"
+    report = tmp_path / "report.json"
+    _write_jsonl(questions, [
+        {"question": f"question {index}", "username": "admin"}
+        for index in range(31)
+    ])
+    identity = {
+        "deployment_id": "benchmark-test",
+        "git_sha": "a" * 40,
+        "snapshot_fingerprint": "b" * 64,
+        "provider_configuration_sha256": "c" * 64,
+        "collection": "fixture",
+        "execution_context": "evaluation",
+        "pipeline_configuration": {"flags": {}, "versions": {}},
+    }
+    monkeypatch.setattr(benchmark, "_runtime_identity", lambda _args: identity)
+    monkeypatch.setattr(
+        benchmark,
+        "measure_one",
+        lambda *_args, sample_index=0, **_kwargs: {
+            "sample_id": f"q{sample_index:04d}",
+            "ok": True,
+            "first_token_ms": 1,
+            "complete_ms": 2,
+            "trace_id": f"trace-{sample_index}",
+            "stage_metrics": {},
+        },
+    )
+    monkeypatch.setattr("sys.argv", [
+        "benchmark_rag_concurrency.py", str(questions),
+        "--concurrency", "1",
+        "--report", str(report),
+    ])
+
+    assert benchmark.main() == 0
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["question_count"] == 31
+    assert payload["request_window"] == {
+        "enabled": False,
+        "limit": None,
+        "seconds": 60.0,
+    }
+
+
 def test_benchmark_cli_rejects_runtime_identity_drift(tmp_path, monkeypatch):
     questions = tmp_path / "questions.jsonl"
     report = tmp_path / "report.json"

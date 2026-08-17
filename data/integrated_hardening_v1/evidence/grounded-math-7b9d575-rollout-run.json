@@ -1,0 +1,49 @@
+{
+  "schema": "grounded-math-rollout-run-v1",
+  "git_sha": "7b9d57562a669984b843d48d6d7ddf09048c472d",
+  "manifest_sha256": "650af531b2b2f349c8fef85dc8a6681592c3d4af523f3060f66259cc469af0c3",
+  "fixture_fingerprint": "79d3f99524512476a15cf306297ea4bcf9c035c3f85e97bab5462e275b7acec6",
+  "router_mode": "offline",
+  "baseline": {
+    "started_at": "2026-08-07T08:56:26.710388Z",
+    "completed_at": "2026-08-07T08:58:27.849534Z",
+    "runner_exit": 2
+  },
+  "candidate": {
+    "started_at": "2026-08-07T08:58:28.299813Z",
+    "completed_at": "2026-08-07T08:59:22.883880Z",
+    "runner_exit": 0
+  },
+  "gate_exit": 0,
+  "passed": true,
+  "rollout_pair_sha256": "c965e7b0d7adc0974101b7e2f0384ff6e2e3fcca78ccff805d194e2e360ecb47",
+  "production_eligible": true,
+  "guardrail_checks": {
+    "schema_valid": true,
+    "source_commit_bound": true,
+    "run_id_present": true,
+    "stage_known": true,
+    "live_artifact": true,
+    "benchmark_conditions_match": true,
+    "benchmark_conditions_complete": true,
+    "evidence_identity_complete": true,
+    "evidence_artifacts_verified": true,
+    "evidence_artifact_schemas_valid": true,
+    "artifact_context_valid": true,
+    "baseline_candidate_artifacts_distinct": true,
+    "arm_order_valid": true,
+    "evidence_windows_valid": true,
+    "production_collection_not_mutated": true,
+    "provider_smoke_artifact_valid": true,
+    "provider_smoke_precedes_pair": true,
+    "provider_smoke_fresh_for_pair": true,
+    "gate_artifact_present": true,
+    "gate_schema_valid": true,
+    "gate_stage_valid": true,
+    "gate_inputs_bound": true,
+    "gate_check_contract_complete": true,
+    "gate_result_consistent": true,
+    "safety_gate_passed": true,
+    "rollback_contract_valid": true
+  }
+}

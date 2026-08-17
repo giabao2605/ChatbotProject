@@ -99,8 +99,10 @@ def _safe_base_url(raw: str) -> str:
 
 
 def _runtime_identity(args: argparse.Namespace) -> dict[str, Any]:
+    token = os.getenv(getattr(args, "token_env", "RAG_SERVICE_TOKEN"), "")
     response = requests.get(
         f"{str(args.base_url).rstrip('/')}/health",
+        headers={"X-RAG-Service-Token": token} if token else {},
         timeout=min(args.timeout, 10),
     )
     response.raise_for_status()
@@ -313,12 +315,17 @@ def measure_one(
             "stage_metrics": stage_metrics,
         }
     except Exception as exc:
+        status_code = getattr(response, "status_code", None)
         return {
             **sample,
             "ok": False,
             "first_token_ms": first_token_ms,
             "complete_ms": int((time.perf_counter() - started) * 1000),
             "error_type": type(exc).__name__,
+            **(
+                {"status_code": status_code}
+                if isinstance(status_code, int) else {}
+            ),
             "stage_metrics": stage_metrics,
         }
     finally:
@@ -615,6 +622,11 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--token-env", default="RAG_SERVICE_TOKEN")
     parser.add_argument("--username", default=os.getenv("RAG_BENCHMARK_USERNAME"))
     parser.add_argument("--concurrency", default="1,5,10", help="CSV levels (default: 1,5,10)")
+    parser.add_argument(
+        "--request-limit", type=int, default=None,
+        help="Optional per-user request limit for governed window pacing",
+    )
+    parser.add_argument("--request-window-seconds", type=float, default=60.0)
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--trace-jsonl", type=Path, default=None, help="Optional rag_trace.jsonl for stage P50/P95")
     parser.add_argument("--report", type=Path, default=Path("reports/rag_concurrency_benchmark.json"))
@@ -626,6 +638,11 @@ def _load_runtime_inputs(
 ) -> tuple[list[dict[str, Any]], list[int]]:
     if args.timeout < 1:
         raise SystemExit("--timeout phai lon hon 0")
+    if (
+        (args.request_limit is not None and args.request_limit < 1)
+        or args.request_window_seconds <= 0
+    ):
+        raise SystemExit("request limit va window phai lon hon 0")
     try:
         cases = load_benchmark_cases(args.questions, default_username=args.username)
         levels = parse_concurrency_levels(args.concurrency)
@@ -633,6 +650,8 @@ def _load_runtime_inputs(
         raise SystemExit(str(exc)) from exc
     if args.trace_jsonl is not None and not args.trace_jsonl.is_file():
         raise SystemExit(f"Khong tim thay trace JSONL: {args.trace_jsonl}")
+    if args.request_limit is not None and len(cases) > args.request_limit:
+        raise SystemExit("Question count vuot request limit cua mot window")
     return cases, levels
 
 
@@ -729,6 +748,7 @@ def _measure_level(
     level: int,
     args: argparse.Namespace,
     token: str,
+    request_window_wait_seconds: float = 0.0,
 ) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc)
     samples = _measure_samples(cases, level=level, args=args, token=token)
@@ -737,6 +757,9 @@ def _measure_level(
         args, samples, started_at=started_at, finished_at=finished_at,
     )
     return {
+        "started_at": started_at.isoformat().replace("+00:00", "Z"),
+        "finished_at": finished_at.isoformat().replace("+00:00", "Z"),
+        "request_window_wait_seconds": request_window_wait_seconds,
         "summary": summarize(
             samples,
             level,
@@ -760,6 +783,11 @@ def _build_report_payload(
         "runtime_identity": runtime_identity,
         "concurrency_levels": levels,
         "question_count": len(cases),
+        "request_window": {
+            "enabled": args.request_limit is not None,
+            "limit": args.request_limit,
+            "seconds": args.request_window_seconds,
+        },
         "stage_metric_contract": {
             "sse": "done.data.trace_stages.{stage}.latency_ms",
             "trace_jsonl": (
@@ -804,15 +832,40 @@ def main() -> int:
         "governance_scope_sha256": governance_scope_sha256(args.questions),
     }
     results = []
+    window_started = (
+        time.monotonic() if args.request_limit is not None else None
+    )
+    requests_in_window = 0
     for level in levels:
+        wait_seconds = 0.0
+        if (
+            args.request_limit is not None
+            and requests_in_window + len(cases) > args.request_limit
+        ):
+            remaining = max(
+                0.0,
+                args.request_window_seconds
+                - (time.monotonic() - window_started)
+                + 1.0,
+            )
+            if remaining:
+                time.sleep(remaining)
+                wait_seconds = remaining
+            window_started = time.monotonic()
+            requests_in_window = 0
         if _runtime_identity(args) != deployed_runtime:
             raise RuntimeError("benchmark runtime identity changed before level")
         result = _measure_level(
-            cases, level=level, args=args, token=token
+            cases,
+            level=level,
+            args=args,
+            token=token,
+            request_window_wait_seconds=wait_seconds,
         )
         if _runtime_identity(args) != deployed_runtime:
             raise RuntimeError("benchmark runtime identity changed during level")
         results.append(result)
+        requests_in_window += len(cases)
     payload = _build_report_payload(
         args, cases, levels, results, runtime_identity
     )

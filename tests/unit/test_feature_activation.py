@@ -848,6 +848,23 @@ def test_controlled_demo_rejects_accepted_decision_when_gate_failed(tmp_path):
     assert evidence["decision"] == "inconclusive"
 
 
+def test_repository_grounded_math_controlled_demo_decision_passes_runtime_validator():
+    root = Path.cwd()
+    ledger = json.loads(
+        (root / "data/integrated_hardening_v1/demo_decisions.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert activation_policy.validate_controlled_demo_decision_ledger(
+        ledger,
+        active_milestones={"grounded_math"},
+        root=root,
+        source_commit="7b9d57562a669984b843d48d6d7ddf09048c472d",
+        review_mode="multi_reviewer",
+    )
+
+
 def test_controlled_demo_crag_uses_pre_pilot_authorization_not_pilot_outcome(tmp_path):
     bundle_path, bundle_sha = _controlled_crag_bundle(
         tmp_path, single_owner=True, bind_governance=True,

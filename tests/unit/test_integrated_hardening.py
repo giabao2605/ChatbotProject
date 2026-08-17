@@ -1023,7 +1023,7 @@ def test_demo_ledger_verifies_scoped_decisions_without_mutating_live_state(tmp_p
     assert report["ready_for_live_matrix"] is False
 
 
-def test_repository_demo_ledger_is_complete_and_defaults_every_unaccepted_feature_off():
+def test_repository_demo_ledger_enables_only_accepted_grounded_math():
     root = Path.cwd()
     ledger = _json("data/integrated_hardening_v1/demo_decisions.json")
     report = verify_demo_decision_ledger(ledger, root=root, current_commit="current")
@@ -1035,9 +1035,19 @@ def test_repository_demo_ledger_is_complete_and_defaults_every_unaccepted_featur
         report["decisions"],
     )
     assert len(matrix["combinations"]) == 5
-    assert all(
-        not any(row["effective_flags"].values())
+    effective_by_id = {
+        row["id"]: row["effective_flags"]
         for row in matrix["combinations"]
+    }
+    assert effective_by_id["grounded_math"]["RAG_GROUNDED_MATH_ENABLED"] is True
+    assert all(
+        not enabled
+        for combination_id, flags in effective_by_id.items()
+        for flag, enabled in flags.items()
+        if not (
+            combination_id == "grounded_math"
+            and flag == "RAG_GROUNDED_MATH_ENABLED"
+        )
     )
 
 
