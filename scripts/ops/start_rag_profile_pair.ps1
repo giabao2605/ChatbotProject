@@ -286,6 +286,7 @@ $controlEnv.RAG_DEPLOYMENT_GIT_SHA = $head
 $controlEnv.RAG_SERVER_PORT = [string]$ControlPort
 $controlEnv.RAG_DEPLOYMENT_ID = $ControlDeploymentId
 $controlEnv.RAG_TRACE_LOG_FILE = Join-Path $logsDir "control-trace.jsonl"
+$candidateEnv.RAG_DEPLOYMENT_GIT_SHA = $head
 $candidateEnv.RAG_SERVER_PORT = [string]$CandidatePort
 $candidateEnv.RAG_DEPLOYMENT_ID = $CandidateDeploymentId
 $candidateEnv.RAG_TRACE_LOG_FILE = Join-Path $logsDir "candidate-trace.jsonl"

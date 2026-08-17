@@ -1739,6 +1739,8 @@ def test_profile_pair_launcher_renders_canonical_profiles_into_separate_processe
     assert "scripts.ops.render_activation_profile" in launcher
     assert '"control" $controlEnv' in launcher
     assert '"candidate" $candidateEnv' in launcher
+    assert "$controlEnv.RAG_DEPLOYMENT_GIT_SHA = $head" in launcher
+    assert "$candidateEnv.RAG_DEPLOYMENT_GIT_SHA = $head" in launcher
     assert "$candidateEnv.RAG_CRAG_ENABLED" not in launcher
     assert "$candidateEnv.RAG_LATE_INTERACTION_ENABLED" not in launcher
 
@@ -1775,6 +1777,8 @@ def test_profile_pair_launcher_supports_selective_external_checkout():
     assert "$common.RAG_SERVICE_TOKEN = $serviceToken" in launcher
     assert "$common.SQL_DATABASE = $SqlDatabase" in launcher
     assert "$common.QDRANT_COLLECTION = $QdrantCollection" in launcher
+    assert "$controlEnv.RAG_DEPLOYMENT_GIT_SHA = $head" in launcher
+    assert "$candidateEnv.RAG_DEPLOYMENT_GIT_SHA = $head" in launcher
 
     common = Path("scripts/ops/crag_controlled_demo_common.ps1").read_text(
         encoding="utf-8",
