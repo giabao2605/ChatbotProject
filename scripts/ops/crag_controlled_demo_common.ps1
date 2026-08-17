@@ -3,7 +3,9 @@ function Wait-CragDemoHttpHealth {
         [string]$Url,
         [int]$Attempts,
         [string]$FailureMessage,
-        [string]$ServiceToken
+        [string]$ServiceToken,
+        [ValidateSet("live", "evaluation", "controlled_demo", "default_rollout")]
+        [string]$ActivationScope = "live"
     )
     $headers = @{}
     if (![string]::IsNullOrWhiteSpace($ServiceToken)) {
@@ -12,7 +14,29 @@ function Wait-CragDemoHttpHealth {
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
         try {
             $health = Invoke-RestMethod -Uri $Url -TimeoutSec 5 -Headers $headers
-            if ($health.status -eq "ok") { return }
+            $evaluationReady = (
+                $ActivationScope -eq "evaluation" -and
+                $health.status -eq "degraded" -and
+                $health.rag_loaded -eq $true -and
+                $health.activation_valid -eq $true -and
+                $health.live_authorized -eq $false -and
+                $health.activation_scope -eq "evaluation" -and
+                $health.execution_context -eq "evaluation"
+            )
+            $liveReady = (
+                $ActivationScope -in @("controlled_demo", "default_rollout") -and
+                $health.status -eq "ok" -and
+                $health.rag_loaded -eq $true -and
+                $health.activation_valid -eq $true -and
+                $health.live_authorized -eq $true -and
+                $health.activation_scope -eq $ActivationScope -and
+                $health.execution_context -eq "production"
+            )
+            $legacyReady = (
+                $ActivationScope -eq "live" -and
+                $health.status -eq "ok"
+            )
+            if ($evaluationReady -or $liveReady -or $legacyReady) { return }
         }
         catch {
         }

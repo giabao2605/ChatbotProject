@@ -301,9 +301,9 @@ try {
         (Join-Path $logsDir "candidate.err.log")
 
     Wait-CragDemoHttpHealth "http://127.0.0.1:$ControlPort/health" 60 `
-        "Control RAG deployment khong healthy." $serviceToken
+        "Control RAG deployment khong healthy." $serviceToken $Scope
     Wait-CragDemoHttpHealth "http://127.0.0.1:$CandidatePort/health" 60 `
-        "Candidate RAG deployment khong healthy." $serviceToken
+        "Candidate RAG deployment khong healthy." $serviceToken $Scope
 
     @{
         schema = "rag-profile-pair-process-state-v1"

@@ -1785,6 +1785,98 @@ def test_profile_pair_launcher_supports_selective_external_checkout():
     assert "Invoke-RestMethod -Uri $Url -TimeoutSec 5 -Headers $headers" in common
 
 
+def test_http_health_waiter_accepts_ready_evaluation_runtime():
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the launcher health contract")
+
+    probe = r'''
+. .\scripts\ops\crag_controlled_demo_common.ps1
+function Invoke-RestMethod {
+    [pscustomobject]@{
+        status = "degraded"
+        rag_loaded = $true
+        activation_valid = $true
+        live_authorized = $false
+        activation_scope = "evaluation"
+        execution_context = "evaluation"
+    }
+}
+Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" "" "evaluation"
+'''
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", probe],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_http_health_waiter_keeps_live_contract_fail_closed():
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the launcher health contract")
+
+    probe = r'''
+. .\scripts\ops\crag_controlled_demo_common.ps1
+function Invoke-RestMethod {
+    [pscustomobject]@{
+        status = "degraded"
+        rag_loaded = $true
+        activation_valid = $true
+        live_authorized = $false
+        activation_scope = "evaluation"
+        execution_context = "evaluation"
+    }
+}
+Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" "" "default_rollout"
+'''
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", probe],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "not ready" in result.stderr
+
+
+def test_http_health_waiter_rejects_wrong_live_scope_even_when_status_ok():
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the launcher health contract")
+
+    probe = r'''
+. .\scripts\ops\crag_controlled_demo_common.ps1
+function Invoke-RestMethod {
+    [pscustomobject]@{
+        status = "ok"
+        rag_loaded = $true
+        activation_valid = $true
+        live_authorized = $true
+        activation_scope = "controlled_demo"
+        execution_context = "production"
+    }
+}
+Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" "" "default_rollout"
+'''
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", probe],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "not ready" in result.stderr
+
+
 @pytest.mark.parametrize(
     ("scope", "extra_args", "expected_error"),
     [
