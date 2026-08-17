@@ -1785,11 +1785,21 @@ def test_profile_pair_launcher_supports_selective_external_checkout():
     assert "Invoke-RestMethod -Uri $Url -TimeoutSec 5 -Headers $headers" in common
 
 
-def test_http_health_waiter_accepts_ready_evaluation_runtime():
+def _run_health_waiter_probe(probe: str) -> subprocess.CompletedProcess[str]:
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     if powershell is None:
         pytest.skip("PowerShell is required for the launcher health contract")
 
+    return subprocess.run(
+        [powershell, "-NoProfile", "-Command", probe],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_http_health_waiter_accepts_ready_evaluation_runtime():
     probe = r'''
 . .\scripts\ops\crag_controlled_demo_common.ps1
 function Invoke-RestMethod {
@@ -1804,22 +1814,12 @@ function Invoke-RestMethod {
 }
 Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" "" "evaluation"
 '''
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-Command", probe],
-        cwd=Path.cwd(),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_health_waiter_probe(probe)
 
     assert result.returncode == 0, result.stderr
 
 
 def test_http_health_waiter_keeps_live_contract_fail_closed():
-    powershell = shutil.which("pwsh") or shutil.which("powershell")
-    if powershell is None:
-        pytest.skip("PowerShell is required for the launcher health contract")
-
     probe = r'''
 . .\scripts\ops\crag_controlled_demo_common.ps1
 function Invoke-RestMethod {
@@ -1834,23 +1834,13 @@ function Invoke-RestMethod {
 }
 Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" "" "default_rollout"
 '''
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-Command", probe],
-        cwd=Path.cwd(),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_health_waiter_probe(probe)
 
     assert result.returncode != 0
     assert "not ready" in result.stderr
 
 
 def test_http_health_waiter_rejects_wrong_live_scope_even_when_status_ok():
-    powershell = shutil.which("pwsh") or shutil.which("powershell")
-    if powershell is None:
-        pytest.skip("PowerShell is required for the launcher health contract")
-
     probe = r'''
 . .\scripts\ops\crag_controlled_demo_common.ps1
 function Invoke-RestMethod {
@@ -1865,13 +1855,49 @@ function Invoke-RestMethod {
 }
 Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" "" "default_rollout"
 '''
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-Command", probe],
-        cwd=Path.cwd(),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_health_waiter_probe(probe)
+
+    assert result.returncode != 0
+    assert "not ready" in result.stderr
+
+
+def test_http_health_waiter_rejects_evaluation_scope_mismatch():
+    probe = r'''
+. .\scripts\ops\crag_controlled_demo_common.ps1
+function Invoke-RestMethod {
+    [pscustomobject]@{
+        status = "ok"
+        rag_loaded = $true
+        activation_valid = $true
+        live_authorized = $true
+        activation_scope = "default_rollout"
+        execution_context = "production"
+    }
+}
+Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" "" "evaluation"
+'''
+    result = _run_health_waiter_probe(probe)
+
+    assert result.returncode != 0
+    assert "not ready" in result.stderr
+
+
+def test_http_health_waiter_rejects_malformed_boolean_payload():
+    probe = r'''
+. .\scripts\ops\crag_controlled_demo_common.ps1
+function Invoke-RestMethod {
+    [pscustomobject]@{
+        status = "degraded"
+        rag_loaded = @($false, $true)
+        activation_valid = $true
+        live_authorized = $false
+        activation_scope = "evaluation"
+        execution_context = "evaluation"
+    }
+}
+Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" "" "evaluation"
+'''
+    result = _run_health_waiter_probe(probe)
 
     assert result.returncode != 0
     assert "not ready" in result.stderr

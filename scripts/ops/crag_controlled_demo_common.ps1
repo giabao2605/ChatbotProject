@@ -14,27 +14,34 @@ function Wait-CragDemoHttpHealth {
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
         try {
             $health = Invoke-RestMethod -Uri $Url -TimeoutSec 5 -Headers $headers
+            $status = [string]$health.status
+            $scope = [string]$health.activation_scope
+            $context = [string]$health.execution_context
+            $ragLoaded = $health.rag_loaded -is [bool] -and $health.rag_loaded -eq $true
+            $activationValid = $health.activation_valid -is [bool] -and $health.activation_valid -eq $true
+            $liveAuthorized = $health.live_authorized -is [bool] -and $health.live_authorized -eq $true
+            $notLiveAuthorized = $health.live_authorized -is [bool] -and $health.live_authorized -eq $false
             $evaluationReady = (
                 $ActivationScope -eq "evaluation" -and
-                $health.status -eq "degraded" -and
-                $health.rag_loaded -eq $true -and
-                $health.activation_valid -eq $true -and
-                $health.live_authorized -eq $false -and
-                $health.activation_scope -eq "evaluation" -and
-                $health.execution_context -eq "evaluation"
+                $status -eq "degraded" -and
+                $ragLoaded -and
+                $activationValid -and
+                $notLiveAuthorized -and
+                $scope -eq "evaluation" -and
+                $context -eq "evaluation"
             )
             $liveReady = (
                 $ActivationScope -in @("controlled_demo", "default_rollout") -and
-                $health.status -eq "ok" -and
-                $health.rag_loaded -eq $true -and
-                $health.activation_valid -eq $true -and
-                $health.live_authorized -eq $true -and
-                $health.activation_scope -eq $ActivationScope -and
-                $health.execution_context -eq "production"
+                $status -eq "ok" -and
+                $ragLoaded -and
+                $activationValid -and
+                $liveAuthorized -and
+                $scope -eq $ActivationScope -and
+                $context -eq "production"
             )
             $legacyReady = (
                 $ActivationScope -eq "live" -and
-                $health.status -eq "ok"
+                $status -eq "ok"
             )
             if ($evaluationReady -or $liveReady -or $legacyReady) { return }
         }
