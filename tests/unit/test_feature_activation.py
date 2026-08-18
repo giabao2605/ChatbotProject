@@ -1907,6 +1907,21 @@ Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" "" "evaluation"
     assert "not ready" in result.stderr
 
 
+def test_http_health_waiter_legacy_invocation_accepts_generic_status_ok():
+    probe = r'''
+. .\scripts\ops\crag_controlled_demo_common.ps1
+function Invoke-RestMethod {
+    [pscustomobject]@{
+        status = "ok"
+    }
+}
+Wait-CragDemoHttpHealth "http://test/health" 1 "not ready" ""
+'''
+    result = _run_health_waiter_probe(probe)
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     ("scope", "extra_args", "expected_error"),
     [
