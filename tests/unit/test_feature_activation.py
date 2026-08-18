@@ -1745,6 +1745,25 @@ def test_profile_pair_launcher_renders_canonical_profiles_into_separate_processe
     assert "$candidateEnv.RAG_LATE_INTERACTION_ENABLED" not in launcher
 
 
+def test_profile_pair_launcher_persists_verified_listener_identity():
+    launcher = Path("scripts/ops/start_rag_profile_pair.ps1").read_text(
+        encoding="utf-8",
+    )
+
+    assert "Get-NetTCPConnection" in launcher
+    assert "OwningProcess" in launcher
+    assert "Get-CimInstance -ClassName Win32_Process" in launcher
+    assert "mech_chatbot\\.api\\.rag_server" in launcher
+    assert "processes = $verifiedProcesses" in launcher
+    assert "processes = $started" not in launcher
+    assert "$verifiedProcesses + $started" in launcher
+    assert "$launchStartedAt = [datetime]::UtcNow" in launcher
+    assert "Get-NetTCPConnection -State Listen -LocalPort $port" in launcher
+    assert "$process.Path -ne $pythonExe" in launcher
+    assert "StartTime.ToUniversalTime() -lt $launchStartedAt.AddSeconds(-1)" in launcher
+    assert "Select-Object -Unique" in launcher
+
+
 def test_profile_pair_launcher_supports_selective_external_checkout():
     launcher = Path("scripts/ops/start_rag_profile_pair.ps1").read_text(
         encoding="utf-8",
@@ -2080,6 +2099,121 @@ def test_profile_pair_stopper_parses_iso_timestamps_culture_independently():
     assert "ConvertFrom-Json -DateKind String" in stopper
     assert "System.Web.Script.Serialization.JavaScriptSerializer" in stopper
     assert "Get-Command ConvertFrom-Json" in stopper
+
+
+def test_profile_pair_stopper_preserves_legacy_state_fail_closed(tmp_path):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the Windows launcher contract")
+
+    scripts_dir = tmp_path / "scripts" / "ops"
+    scripts_dir.mkdir(parents=True)
+    stopper = scripts_dir / "stop_rag_profile_pair.ps1"
+    shutil.copy(Path("scripts/ops/stop_rag_profile_pair.ps1"), stopper)
+    python_path = tmp_path / "chat_env" / "Scripts" / "python.exe"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_bytes(b"")
+    state_path = tmp_path / ".agents" / "state" / "rag-profile-pair.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "processes": [
+                    {
+                        "name": "control",
+                        "pid": 999999,
+                        "started_at": "2026-08-18T00:00:00.0000000Z",
+                    }
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-File", str(stopper)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "listener metadata" in result.stderr
+    assert state_path.is_file()
+
+
+def test_profile_pair_stopper_preserves_state_when_listener_ownership_mismatches(
+    tmp_path,
+):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the Windows launcher contract")
+
+    scripts_dir = tmp_path / "scripts" / "ops"
+    scripts_dir.mkdir(parents=True)
+    stopper = scripts_dir / "stop_rag_profile_pair.ps1"
+    shutil.copy(Path("scripts/ops/stop_rag_profile_pair.ps1"), stopper)
+    python_path = tmp_path / "chat_env" / "Scripts" / "python.exe"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_bytes(b"")
+    started_at = "2026-08-18T00:00:00.0000000Z"
+    state_path = tmp_path / ".agents" / "state" / "rag-profile-pair.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "processes": [
+                    {
+                        "name": "control",
+                        "pid": 41001,
+                        "port": 8210,
+                        "started_at": started_at,
+                    },
+                    {
+                        "name": "candidate",
+                        "pid": 41002,
+                        "port": 8200,
+                        "started_at": started_at,
+                    },
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+    stopper_path = str(stopper).replace("'", "''")
+    python_path_text = str(python_path).replace("'", "''")
+    probe = f'''
+$expectedStart = [datetimeoffset]::Parse("{started_at}").UtcDateTime
+function Get-Process {{
+    param([int]$Id, [object]$ErrorAction)
+    [pscustomobject]@{{
+        Id = $Id
+        ProcessName = "python"
+        Name = "python"
+        Path = "{python_path_text}"
+        StartTime = $expectedStart
+    }}
+}}
+function Get-NetTCPConnection {{
+    param([string]$State, [int]$LocalPort, [object]$ErrorAction)
+    [pscustomobject]@{{ OwningProcess = 999999 }}
+}}
+function Stop-Process {{ param([int]$Id, [object]$ErrorAction) }}
+function Wait-Process {{ param([int]$Id, [int]$Timeout, [object]$ErrorAction) }}
+& '{stopper_path}'
+'''
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", probe],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "does not own port" in result.stderr
+    assert state_path.is_file()
 
 
 def test_legacy_crag_launcher_uses_activation_bundle_and_canonical_renderer():

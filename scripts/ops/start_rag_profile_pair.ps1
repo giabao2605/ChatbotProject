@@ -293,6 +293,8 @@ $candidateEnv.RAG_TRACE_LOG_FILE = Join-Path $logsDir "candidate-trace.jsonl"
 
 New-Item -ItemType Directory -Force -Path $stateDir, $logsDir | Out-Null
 $started = @()
+$verifiedProcesses = @()
+$launchStartedAt = [datetime]::UtcNow
 try {
     $started += Start-CragDemoProcess $pythonExe $projectRoot "control" $controlEnv `
         "mech_chatbot.api.rag_server" (Join-Path $logsDir "control.out.log") `
@@ -305,6 +307,49 @@ try {
         "Control RAG deployment khong healthy." $serviceToken $Scope
     Wait-CragDemoHttpHealth "http://127.0.0.1:$CandidatePort/health" 60 `
         "Candidate RAG deployment khong healthy." $serviceToken $Scope
+
+    foreach ($entry in @(
+        @{ name = "control"; port = $ControlPort },
+        @{ name = "candidate"; port = $CandidatePort }
+    )) {
+        $listeners = @(
+            Get-NetTCPConnection -State Listen -LocalPort $entry.port -ErrorAction Stop
+        )
+        if ($listeners.Count -ne 1) {
+            throw "Expected exactly one listener on port $($entry.port)."
+        }
+        [int]$listenerPid = $listeners[0].OwningProcess
+        if ($listenerPid -le 0) {
+            throw "Listener PID on port $($entry.port) must be positive."
+        }
+        $process = Get-Process -Id $listenerPid -ErrorAction Stop
+        if ($process.ProcessName -notmatch '^python(?:\.exe)?$') {
+            throw "Listener on port $($entry.port) is not Python."
+        }
+        $cimProcess = Get-CimInstance -ClassName Win32_Process `
+            -Filter "ProcessId = $listenerPid" -ErrorAction Stop
+        if (
+            !$cimProcess -or
+            [string]$cimProcess.CommandLine -notmatch '(?:^|\s)-m\s+mech_chatbot\.api\.rag_server(?:\s|$)'
+        ) {
+            throw "Listener on port $($entry.port) is not mech_chatbot.api.rag_server."
+        }
+        $verifiedProcesses += @{
+            name = $entry.name
+            pid = $listenerPid
+            port = $entry.port
+            started_at = $process.StartTime.ToUniversalTime().ToString(
+                "o",
+                [Globalization.CultureInfo]::InvariantCulture
+            )
+        }
+    }
+    if ($verifiedProcesses[0].pid -eq $verifiedProcesses[1].pid) {
+        throw "Verified listener PIDs must be distinct."
+    }
+    if ($verifiedProcesses[0].port -eq $verifiedProcesses[1].port) {
+        throw "Verified listener ports must be distinct."
+    }
 
     @{
         schema = "rag-profile-pair-process-state-v1"
@@ -319,13 +364,44 @@ try {
         restore_evidence_sha256 = $RestoreEvidenceSha256
         control_url = "http://127.0.0.1:$ControlPort"
         candidate_url = "http://127.0.0.1:$CandidatePort"
-        processes = $started
+        processes = $verifiedProcesses
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding utf8
     Write-Output "Control va candidate da san sang tren hai process rieng."
 }
 catch {
-    foreach ($item in $started) {
-        Stop-Process -Id $item.pid -ErrorAction SilentlyContinue
+    $cleanupPids = @(
+        $verifiedProcesses + $started |
+            Where-Object { $null -ne $_.pid } |
+            ForEach-Object { [int]$_.pid } |
+            Select-Object -Unique
+    )
+    foreach ($port in $ControlPort, $CandidatePort) {
+        foreach ($listener in @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)) {
+            [int]$listenerPid = $listener.OwningProcess
+            if ($listenerPid -le 0) { continue }
+            try {
+                $process = Get-Process -Id $listenerPid -ErrorAction Stop
+                if ($process.ProcessName -notmatch '^python(?:\.exe)?$') { continue }
+                if ($process.Path -ne $pythonExe) { continue }
+                if ($process.StartTime.ToUniversalTime() -lt $launchStartedAt.AddSeconds(-1)) { continue }
+                $cimProcess = Get-CimInstance -ClassName Win32_Process `
+                    -Filter "ProcessId = $listenerPid" -ErrorAction Stop
+                if (
+                    !$cimProcess -or
+                    [string]$cimProcess.CommandLine -notmatch '(?:^|\s)-m\s+mech_chatbot\.api\.rag_server(?:\s|$)'
+                ) {
+                    continue
+                }
+                $cleanupPids += $listenerPid
+            }
+            catch {
+                continue
+            }
+        }
+    }
+    $cleanupPids = @($cleanupPids | Select-Object -Unique)
+    foreach ($processId in $cleanupPids) {
+        Stop-Process -Id $processId -ErrorAction SilentlyContinue
     }
     throw
 }
