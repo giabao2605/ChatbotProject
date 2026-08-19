@@ -2216,6 +2216,92 @@ function Wait-Process {{ param([int]$Id, [int]$Timeout, [object]$ErrorAction) }}
     assert state_path.is_file()
 
 
+def test_profile_pair_stopper_waits_for_port_release_after_process_exit(tmp_path):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the Windows launcher contract")
+
+    scripts_dir = tmp_path / "scripts" / "ops"
+    scripts_dir.mkdir(parents=True)
+    stopper = scripts_dir / "stop_rag_profile_pair.ps1"
+    shutil.copy(Path("scripts/ops/stop_rag_profile_pair.ps1"), stopper)
+    started_at = "2026-08-18T00:00:00.0000000Z"
+    state_path = tmp_path / ".agents" / "state" / "rag-profile-pair.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "processes": [
+                    {
+                        "name": "control",
+                        "pid": 41001,
+                        "port": 8210,
+                        "started_at": started_at,
+                    },
+                    {
+                        "name": "candidate",
+                        "pid": 41002,
+                        "port": 8200,
+                        "started_at": started_at,
+                    },
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+    stopper_path = str(stopper).replace("'", "''")
+    probe = f'''
+$expectedStart = [datetimeoffset]::Parse("{started_at}").UtcDateTime
+$global:processState = @{{ 41001 = $true; 41002 = $true }}
+$global:port8210PostStopChecks = 0
+function Get-Process {{
+    param([int]$Id, [object]$ErrorAction)
+    if (-not $global:processState[$Id]) {{ return }}
+    [pscustomobject]@{{ ProcessName = "python"; StartTime = $expectedStart }}
+}}
+function Get-NetTCPConnection {{
+    param([string]$State, [int]$LocalPort, [object]$ErrorAction)
+    if ($LocalPort -eq 8200) {{
+        if ($global:processState[41002]) {{
+            return [pscustomobject]@{{ OwningProcess = 41002 }}
+        }}
+        return
+    }}
+    if ($LocalPort -eq 8210) {{
+        if ($global:processState[41001]) {{
+            return [pscustomobject]@{{ OwningProcess = 41001 }}
+        }}
+        $global:port8210PostStopChecks++
+        if ($global:port8210PostStopChecks -eq 1) {{
+            return [pscustomobject]@{{ OwningProcess = 41001 }}
+        }}
+    }}
+}}
+function Get-CimInstance {{
+    param([string]$ClassName, [string]$Filter, [object]$ErrorAction)
+    [pscustomobject]@{{ CommandLine = "-m mech_chatbot.api.rag_server" }}
+}}
+function Stop-Process {{
+    param([int]$Id, [object]$ErrorAction)
+    $global:processState[$Id] = $false
+}}
+function Start-Sleep {{ param([int]$Milliseconds) }}
+& '{stopper_path}'
+'''
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", probe],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Da stop control PID 41001." in result.stdout
+    assert "Da stop candidate PID 41002." in result.stdout
+    assert not state_path.exists()
+
+
 def test_legacy_crag_launcher_uses_activation_bundle_and_canonical_renderer():
     launcher = Path("scripts/ops/start_crag_controlled_demo.ps1").read_text(
         encoding="utf-8",

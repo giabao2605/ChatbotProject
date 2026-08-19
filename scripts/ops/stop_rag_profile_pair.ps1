@@ -100,11 +100,19 @@ do {
             Get-Process -Id $_.pid -ErrorAction SilentlyContinue
         }
     )
-    if ($remainingProcesses.Count -eq 0) { break }
+    $remainingListeners = @(
+        $validatedProcesses | Where-Object {
+            @(Get-NetTCPConnection -State Listen -LocalPort $_.port -ErrorAction SilentlyContinue).Count -ne 0
+        }
+    )
+    if ($remainingProcesses.Count -eq 0 -and $remainingListeners.Count -eq 0) { break }
     Start-Sleep -Milliseconds 250
 } while ([datetime]::UtcNow -lt $deadline)
 if ($remainingProcesses.Count -ne 0) {
     throw "Timed out waiting for RAG profile processes to stop."
+}
+if ($remainingListeners.Count -ne 0) {
+    throw "Timed out waiting for RAG profile ports to stop."
 }
 foreach ($entry in $validatedProcesses) {
     if (Get-Process -Id $entry.pid -ErrorAction SilentlyContinue) {
