@@ -321,7 +321,7 @@ Checklist này chỉ chuẩn bị offline; không phải authorization:
 - [ ] `QDRANT_COLLECTION` và `RAG_EVAL_EXPECTED_COLLECTION` cùng bằng
   `MechChatbot_CRAG_Eval_v1` trước khi tạo run-root.
 - [ ] Run-root chưa từng tồn tại; không reuse trace, output, smoke, declaration
-  hoặc pair từ hai window tombstone trước.
+  hoặc pair từ bất kỳ window/smoke tombstone trước.
 - [ ] Query packet, manifest 13 case và runner hash khớp byte-for-byte.
 - [ ] Math campaign terminal `100/100`, stop marker tồn tại, base/operator gate
   pass, Scheduled Task `Disabled`.
@@ -362,6 +362,15 @@ expires_at: <required>
 
 Nếu một placeholder còn trống, exact binding đã drift hoặc owner chưa ký thì
 giữ `status: NOT_AUTHORIZED_TEMPLATE` và không tạo smoke/declaration.
+
+### Recovery/cooldown gate sau smoke `58dbb08`
+
+Run-root `query-provider-smoke-58dbb08-20260820-141914` đã tombstone sau
+offline/provider-boundary guards xanh nhưng smoke `0/5`, năm HTTP `502`, zero
+retry. Không chạy smoke theo timer, manual retry hoặc same-root retry. Chỉ owner
+được mở một smoke mới sau khi có recovery signal bên ngoài ghi rõ timestamp và
+provider identity; signal đó không phải formal evidence và vẫn cần run-root,
+authorization, preparation và boundary revalidation mới.
 
 ## Sau formal window
 
