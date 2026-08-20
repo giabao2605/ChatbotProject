@@ -961,6 +961,7 @@ def test_crag_rollout_arm_binds_trace_log_file(monkeypatch, tmp_path):
     output = tmp_path / "rollout"
     env_values = []
     commands = []
+    trace_id = f"eval:baseline:{_case()['id']}"
 
     def fake_run(command, **kwargs):
         commands.append(command)
@@ -969,12 +970,31 @@ def test_crag_rollout_arm_binds_trace_log_file(monkeypatch, tmp_path):
             run_dir = output / "baseline"
             run_dir.mkdir(parents=True)
             (run_dir / "eval.json").write_text(
-                json.dumps({"schema": "rag-labeled-eval-v4"}),
+                json.dumps({
+                    "schema": "rag-labeled-eval-v4",
+                    "total_cases": 1,
+                    "cases": [{"trace_id": trace_id}],
+                }),
+                encoding="utf-8",
+            )
+            trace.write_text(
+                json.dumps({
+                    "event": "rag_end",
+                    "execution_context": "evaluation",
+                    "trace_id": trace_id,
+                }) + "\n",
                 encoding="utf-8",
             )
         else:
             (output / "baseline" / "trace.json").write_text(
-                json.dumps({"schema": "rag-refusal-snapshot-v1"}),
+                json.dumps({
+                    "schema": "rag-refusal-snapshot-v1",
+                    "system_metrics": {"query_count": 1},
+                    "observed_range": {"first": "start", "last": "end"},
+                    "parse_errors": 0,
+                    "error_event_count": 0,
+                    "retry_event_count": 0,
+                }),
                 encoding="utf-8",
             )
         return SimpleNamespace(returncode=0)
@@ -995,6 +1015,201 @@ def test_crag_rollout_arm_binds_trace_log_file(monkeypatch, tmp_path):
 
     assert env_values == [str(trace), str(trace)]
     assert commands[0][-2:] == ["--case-id", "case-1"]
+
+
+def test_crag_rollout_rejects_abnormal_eval_exit_after_artifact(
+    monkeypatch,
+    tmp_path,
+):
+    rollout = _load("crag_rollout_eval_exit", "scripts/crag_eval/run_rollout.py")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "rollout"
+
+    def fake_run(_command, **_kwargs):
+        run_dir = output / "baseline"
+        run_dir.mkdir(parents=True)
+        (run_dir / "eval.json").write_text("{}", encoding="utf-8")
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(rollout.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="baseline evaluation exited 1"):
+        rollout._run(
+            "baseline",
+            manifest,
+            output,
+            trace,
+            enabled=False,
+            router_mode="offline",
+            provider_configuration_sha256="provider",
+            governance_scope_sha256_value="scope",
+        )
+
+
+def test_crag_rollout_rejects_malformed_arm_artifact(tmp_path):
+    rollout = _load("crag_rollout_malformed", "scripts/crag_eval/run_rollout.py")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    evaluation = tmp_path / "eval.json"
+    evaluation.write_text(
+        json.dumps({"total_cases": 1, "cases": [{"trace_id": "wrong"}]}),
+        encoding="utf-8",
+    )
+    snapshot = tmp_path / "trace.json"
+    snapshot.write_text(
+        json.dumps({
+            "system_metrics": {"query_count": 1},
+            "observed_range": {"first": "start", "last": "end"},
+            "parse_errors": 0,
+            "error_event_count": 0,
+            "retry_event_count": 0,
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="frozen manifest"):
+        rollout._validate_arm_artifacts(
+            "baseline",
+            manifest,
+            evaluation,
+            snapshot,
+        )
+
+
+def test_crag_rollout_rejects_appended_trace_identity_drift(tmp_path):
+    rollout = _load("crag_rollout_trace_drift", "scripts/crag_eval/run_rollout.py")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text(
+        "\n".join((
+            json.dumps({
+                "event": "rag_end",
+                "execution_context": "evaluation",
+                "trace_id": "wrong",
+            }),
+            json.dumps({
+                "event": "rag_end",
+                "execution_context": "evaluation",
+                "trace_id": "wrong",
+            }),
+        )) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="trace identities"):
+        rollout._validate_appended_trace_identities(
+            "baseline",
+            manifest,
+            rollout._read_appended_trace(trace, 0, "baseline"),
+        )
+
+
+def test_crag_rollout_validates_selected_singleton_case(tmp_path):
+    rollout = _load("crag_rollout_singleton", "scripts/crag_eval/run_rollout.py")
+    first = _case(id="case-1")
+    second = _case(id="case-2")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        json.dumps(first) + "\n" + json.dumps(second) + "\n",
+        encoding="utf-8",
+    )
+    trace_id = "eval:candidate:case-1"
+    evaluation = tmp_path / "eval.json"
+    evaluation.write_text(
+        json.dumps({"total_cases": 1, "cases": [{"trace_id": trace_id}]}),
+        encoding="utf-8",
+    )
+    snapshot = tmp_path / "trace.json"
+    snapshot.write_text(
+        json.dumps({
+            "system_metrics": {"query_count": 1},
+            "observed_range": {"first": "start", "last": "end"},
+            "parse_errors": 0,
+            "error_event_count": 0,
+            "retry_event_count": 0,
+        }),
+        encoding="utf-8",
+    )
+
+    rollout._validate_arm_artifacts(
+        "candidate",
+        manifest,
+        evaluation,
+        snapshot,
+        case_id="case-1",
+    )
+    rollout._validate_appended_trace_identities(
+        "candidate",
+        manifest,
+        [{
+            "event": "rag_end",
+            "execution_context": "evaluation",
+            "trace_id": trace_id,
+        }],
+        case_id="case-1",
+    )
+
+
+def test_crag_rollout_uses_every_manifest_case_without_selection(tmp_path):
+    rollout = _load("crag_rollout_full_manifest", "scripts/crag_eval/run_rollout.py")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        json.dumps(_case(id="case-1"))
+        + "\n"
+        + json.dumps(_case(id="case-2"))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert rollout._manifest_trace_ids(manifest, "baseline") == [
+        "eval:baseline:case-1",
+        "eval:baseline:case-2",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("returncode", "passed", "valid"),
+    ((0, True, True), (1, False, True), (1, True, False), (0, False, False)),
+)
+def test_crag_rollout_gate_exit_must_match_artifact(
+    tmp_path,
+    returncode,
+    passed,
+    valid,
+):
+    rollout = _load("crag_rollout_gate_exit", "scripts/crag_eval/run_rollout.py")
+    gate = tmp_path / "gate.json"
+    gate.write_text(json.dumps({"passed": passed}), encoding="utf-8")
+    result = SimpleNamespace(returncode=returncode)
+
+    if valid:
+        assert rollout._load_successful_gate(gate, result)["passed"] is passed
+    else:
+        with pytest.raises(RuntimeError, match="gate exit/artifact mismatch"):
+            rollout._load_successful_gate(gate, result)
+
+
+def test_crag_rollout_requires_fresh_window_paths(monkeypatch, tmp_path):
+    rollout = _load("crag_rollout_fresh_paths", "scripts/crag_eval/run_rollout.py")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("old-event\n", encoding="utf-8")
+    output = tmp_path / "rollout"
+    output.mkdir()
+    monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+
+    with pytest.raises(ValueError, match="fresh zero-byte trace"):
+        rollout.run_rollout(
+            manifest,
+            output,
+            trace,
+            provider_smoke_artifact=tmp_path / "smoke.json",
+        )
 
 
 def test_crag_rollout_records_runtime_resolved_provider_configuration_hash(
@@ -1185,16 +1400,26 @@ def test_crag_rollout_rejects_stale_provider_smoke_at_each_arm(
     assert labels == expected_labels
 
 
-def test_rollout_rejects_dirty_tracked_worktree(monkeypatch):
+@pytest.mark.parametrize(
+    "status",
+    (
+        " M src/mech_chatbot/rag/pipeline.py\n",
+        "?? untracked-module.py\n",
+    ),
+)
+def test_rollout_rejects_dirty_worktree(monkeypatch, status):
     rollout = _load("crag_rollout_clean_tree", "scripts/crag_eval/run_rollout.py")
-    monkeypatch.setattr(
-        rollout.subprocess,
-        "check_output",
-        lambda *args, **kwargs: " M src/mech_chatbot/rag/pipeline.py\n",
-    )
+    captured = {}
 
-    with pytest.raises(RuntimeError, match="clean tracked worktree"):
+    def fake_check_output(command, **_kwargs):
+        captured["command"] = command
+        return status
+
+    monkeypatch.setattr(rollout.subprocess, "check_output", fake_check_output)
+
+    with pytest.raises(RuntimeError, match="clean worktree"):
         rollout.require_clean_worktree()
+    assert captured["command"][-1] == "--untracked-files=all"
 
 
 def test_rollout_rejects_source_commit_drift(monkeypatch):

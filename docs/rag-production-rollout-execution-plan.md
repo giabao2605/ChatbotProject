@@ -294,6 +294,27 @@ Quyết định này tránh tạo bản sao không cần thiết nhưng không l
 thành đạt; trước khi ingest dữ liệu thật vẫn phải chốt disposable targets và thu
 restore evidence mới.
 
+#### Restore drill envelope đã chuẩn bị, chưa execute
+
+Read-only inventory ngày 2026-08-20 đã xác nhận một full SQL backup duy nhất
+đúng source database/type và một Qdrant snapshot duy nhất đúng checksum. Source
+hiện có `231` point; target mẫu theo `<FINAL_SHA7>` phải được recheck là chưa tồn
+tại sau khi freeze commit cuối:
+
+- SQL backup: `C:\Program Files\Microsoft SQL Server\MSSQL16.SQLEXPRESS\MSSQL\Backup\Mech_Chatbot_DB_full_20260810_112622.bak`, BackupSetGUID `470D1337-FC9C-46BA-B3B2-2F2915903D6D`.
+- SQL data directory: `C:\Program Files\Microsoft SQL Server\MSSQL16.SQLEXPRESS\MSSQL\DATA\`.
+- Qdrant snapshot: `TaiLieuKyThuat_v2-2195499271613585-2026-08-10-04-24-31.snapshot`, checksum `4d78fd4cec112528b5a6ecab2c6ccf4d52cbbbf795c636d05ea586fa039ae4aa`.
+- Qdrant snapshot location: exact configured Qdrant origin cộng `/collections/TaiLieuKyThuat_v2/snapshots/TaiLieuKyThuat_v2-2195499271613585-2026-08-10-04-24-31.snapshot`; không ghi API key vào command/evidence.
+- Target SQL: `Mech_Chatbot_DB_RestoreTest_Readiness_20260820_<FINAL_SHA7>`.
+- Target Qdrant: `TaiLieuKyThuat_v2_RestoreTest_Readiness_20260820_<FINAL_SHA7>`.
+- Output mới: `.local/restore-drill/<FINAL_SHA7>/restore.json`.
+
+Lệnh `restore_drill.py --execute` chưa được chạy vì nó tạo thật database và
+collection. Ngay trước khi owner cấp quyền, operator phải kiểm lại exact HEAD,
+worktree sạch, backup header, snapshot checksum/point count và sự vắng mặt của
+cả hai target; không reuse target hoặc output đã tồn tại. Health/browser rollback
+smoke sau drill chỉ gọi `/health` và `/api/health`; không gửi model question.
+
 1. Chủ dự án xác nhận cho phép tạo disposable restore targets và chốt:
    SQL backup path, SQL data directory, target database, Qdrant snapshot
    URL/name/checksum, expected point count từ receipt gốc và target collection.

@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from mech_chatbot.governance.feature_activation import FEATURE_FLAGS
+
 
 pytestmark = pytest.mark.unit
 
@@ -16,7 +18,11 @@ ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT = ROOT / "scripts" / "ops" / "production_preflight.py"
 
 
-def _run_health_preflight(payload, *, required_token=None):
+def _feature_flags(*enabled):
+    return {name: name in enabled for name in FEATURE_FLAGS}
+
+
+def _run_health_preflight(payload, *, required_token=None, extra_args=()):
     body = json.dumps(payload).encode("utf-8")
 
     class Handler(BaseHTTPRequestHandler):
@@ -51,6 +57,7 @@ def _run_health_preflight(payload, *, required_token=None):
                 "--health-only",
                 "--rag-health-url",
                 f"http://127.0.0.1:{server.server_port}/health",
+                *extra_args,
             ],
             cwd=ROOT,
             capture_output=True,
@@ -89,6 +96,16 @@ def test_health_preflight_rejects_degraded_http_200_without_echoing_payload():
     assert "must-not-be-echoed" not in result.stdout + result.stderr
 
 
+def test_health_preflight_classifies_non_object_json_as_contract_failure():
+    result = _run_health_preflight(["unexpected"])
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["checks"]["rag_health"] == {
+        "status": "failed",
+        "reason": "rag_health_contract_failed",
+    }
+
+
 def test_health_preflight_accepts_the_full_ready_contract():
     git_sha = subprocess.check_output(
         ["git", "rev-parse", "HEAD"],
@@ -113,6 +130,125 @@ def test_health_preflight_accepts_the_full_ready_contract():
     assert report["passed"] is True
     assert report["checks"]["rag_health"]["production_ready"] is True
     assert report["checks"]["rag_health"]["scope"] == "default_rollout"
+
+
+def test_health_preflight_accepts_exact_signed_runtime_expectations():
+    expected_git_sha = "a" * 40
+    bundle_sha256 = "b" * 64
+    result = _run_health_preflight(
+        {
+            "status": "ok",
+            "rag_loaded": True,
+            "activation_valid": True,
+            "live_authorized": True,
+            "activation_scope": "default_rollout",
+            "activation_profile": "selective",
+            "deployment_id": "math-only-release",
+            "git_sha": expected_git_sha,
+            "snapshot_fingerprint": "snapshot-v1",
+            "activation_bundle_sha256": bundle_sha256,
+            "feature_flags": _feature_flags("RAG_GROUNDED_MATH_ENABLED"),
+        },
+        extra_args=(
+            "--expected-git-sha",
+            expected_git_sha,
+            "--expected-profile",
+            "selective",
+            "--expected-deployment-id",
+            "math-only-release",
+            "--expected-bundle-sha256",
+            bundle_sha256,
+            "--expect-enabled-feature",
+            "RAG_GROUNDED_MATH_ENABLED",
+        ),
+    )
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["passed"] is True
+
+
+@pytest.mark.parametrize(
+    "update",
+    (
+        {"activation_profile": "all_off"},
+        {"deployment_id": "wrong-release"},
+        {"activation_bundle_sha256": "c" * 64},
+        {
+            "feature_flags": _feature_flags(
+                "RAG_GROUNDED_MATH_ENABLED",
+                "RAG_QUERY_DECOMPOSITION_ENABLED",
+            )
+        },
+    ),
+)
+def test_health_preflight_rejects_signed_runtime_expectation_drift(update):
+    expected_git_sha = "a" * 40
+    bundle_sha256 = "b" * 64
+    payload = {
+        "status": "ok",
+        "rag_loaded": True,
+        "activation_valid": True,
+        "live_authorized": True,
+        "activation_scope": "default_rollout",
+        "activation_profile": "selective",
+        "deployment_id": "math-only-release",
+        "git_sha": expected_git_sha,
+        "snapshot_fingerprint": "snapshot-v1",
+        "activation_bundle_sha256": bundle_sha256,
+        "feature_flags": _feature_flags("RAG_GROUNDED_MATH_ENABLED"),
+        **update,
+    }
+    result = _run_health_preflight(
+        payload,
+        extra_args=(
+            "--expected-git-sha",
+            expected_git_sha,
+            "--expected-profile",
+            "selective",
+            "--expected-deployment-id",
+            "math-only-release",
+            "--expected-bundle-sha256",
+            bundle_sha256,
+            "--expect-enabled-feature",
+            "RAG_GROUNDED_MATH_ENABLED",
+        ),
+    )
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["checks"]["rag_health"] == {
+        "status": "failed",
+        "reason": "rag_health_expectation_failed",
+    }
+
+
+@pytest.mark.parametrize("bundle_sha256", (None, "b" * 64))
+def test_health_preflight_locks_all_off_rollback_without_bundle(bundle_sha256):
+    expected_git_sha = "a" * 40
+    result = _run_health_preflight(
+        {
+            "status": "ok",
+            "rag_loaded": True,
+            "activation_valid": True,
+            "live_authorized": True,
+            "activation_scope": "default_rollout",
+            "activation_profile": "all_off",
+            "deployment_id": "control-all-off",
+            "git_sha": expected_git_sha,
+            "snapshot_fingerprint": "snapshot-v1",
+            "activation_bundle_sha256": bundle_sha256,
+            "feature_flags": _feature_flags(),
+        },
+        extra_args=(
+            "--expected-git-sha",
+            expected_git_sha,
+            "--expected-profile",
+            "all_off",
+            "--expect-all-features-off",
+            "--expect-no-bundle",
+        ),
+    )
+
+    assert result.returncode == (0 if bundle_sha256 is None else 1)
 
 
 def test_health_only_accepts_controlled_demo_health_without_production_readiness():
@@ -223,6 +359,88 @@ def test_health_preflight_does_not_send_token_to_non_loopback_url(monkeypatch):
         "status": "failed",
         "reason": "rag_health_url_not_local",
     }
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://127.0.0.1:9999/capture",
+        "http://user@127.0.0.1:8100/health",
+        "http://127.0.0.1:8100/health?x=1",
+        "http://127.0.0.1:8100/health#fragment",
+    ),
+)
+def test_health_preflight_does_not_send_token_to_untrusted_local_url(
+    monkeypatch,
+    url,
+):
+    from scripts.ops import production_preflight
+
+    monkeypatch.setitem(
+        production_preflight.process_environ,
+        "RAG_SERVICE_TOKEN",
+        "configured-test-token",
+    )
+    monkeypatch.setattr(
+        production_preflight.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail("network request must not be sent"),
+    )
+
+    assert production_preflight.check_rag_health(
+        url,
+        expected_git_sha="a" * 40,
+    ) == {
+        "status": "failed",
+        "reason": "rag_health_url_not_local",
+    }
+
+
+def test_health_preflight_does_not_follow_redirects_with_service_token(
+    monkeypatch,
+):
+    from scripts.ops import production_preflight
+
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", "http://example.invalid/capture")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return
+
+    redirect_attempts = []
+
+    def record_redirect(*args, **kwargs):
+        redirect_attempts.append((args, kwargs))
+        return None
+
+    monkeypatch.setitem(
+        production_preflight.process_environ,
+        "RAG_SERVICE_TOKEN",
+        "configured-test-token",
+    )
+    monkeypatch.setattr(
+        production_preflight.urllib.request.HTTPRedirectHandler,
+        "redirect_request",
+        record_redirect,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = production_preflight.check_rag_health(
+            f"http://127.0.0.1:{server.server_port}/health",
+            expected_git_sha="a" * 40,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+    assert result == {"status": "failed", "reason": "rag_health_unavailable"}
+    assert redirect_attempts == []
 
 
 def test_health_preflight_never_requests_non_loopback_url_without_token(
@@ -365,6 +583,25 @@ def test_preflight_cli_exposes_pre_runtime_skip_health_mode():
 
     assert result.returncode == 0
     assert "--skip-health" in result.stdout
+
+
+def test_preflight_cli_rejects_health_expectations_when_health_is_skipped():
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PREFLIGHT),
+            "--skip-health",
+            "--expected-git-sha",
+            "a" * 40,
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "health expectations cannot be used with --skip-health" in result.stderr
 
 
 def test_production_lan_launcher_trusts_the_discovered_lan_host():

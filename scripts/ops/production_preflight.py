@@ -7,6 +7,7 @@ from ipaddress import ip_address
 import json
 from os import environ as process_environ
 from pathlib import Path
+import re
 import subprocess
 import sys
 from urllib.parse import urlsplit
@@ -14,7 +15,24 @@ import urllib.request
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC = PROJECT_ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from mech_chatbot.governance.feature_activation import (
+    ACTIVATION_PROFILE_NAMES,
+    FEATURE_FLAGS,
+)
+
+
 SEEDED_DEV_USERNAMES = ("admin", "viewer1", "uploader1", "reviewer1")
+_GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
 
 
 def check_migration_state(*, runner=subprocess.run) -> dict:
@@ -151,24 +169,76 @@ def check_seeded_dev_accounts(
     }
 
 
-def check_rag_health(url: str, *, expected_git_sha: str | None = None) -> dict:
-    if expected_git_sha is None:
-        try:
-            expected_git_sha = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=PROJECT_ROOT,
-                text=True,
-            ).strip()
-        except Exception:
-            return {"status": "failed", "reason": "rag_health_contract_failed"}
+def _health_expectations_match(
+    payload: dict,
+    *,
+    expected_profile: str | None,
+    expected_deployment_id: str | None,
+    expected_bundle_sha256: str | None,
+    expect_no_bundle: bool,
+    expected_enabled_features: tuple[str, ...] | None,
+    expect_all_features_off: bool,
+) -> bool:
+    if (
+        expected_profile is not None
+        and payload.get("activation_profile") != expected_profile
+    ):
+        return False
+    if (
+        expected_deployment_id is not None
+        and payload.get("deployment_id") != expected_deployment_id
+    ):
+        return False
+    if (
+        expected_bundle_sha256 is not None
+        and payload.get("activation_bundle_sha256") != expected_bundle_sha256
+    ):
+        return False
+    if expect_no_bundle and payload.get("activation_bundle_sha256") is not None:
+        return False
+    if expected_enabled_features is None and not expect_all_features_off:
+        return True
+    flags = payload.get("feature_flags")
+    if not (
+        isinstance(flags, dict)
+        and set(flags) == set(FEATURE_FLAGS)
+        and all(isinstance(value, bool) for value in flags.values())
+    ):
+        return False
+    expected = set(expected_enabled_features or ())
+    return {name for name, value in flags.items() if value} == expected
+
+
+def _current_git_sha() -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=PROJECT_ROOT,
+            text=True,
+        ).strip()
+    except Exception:
+        return None
+
+
+def _health_url_is_local(url: str) -> bool:
     parsed = urlsplit(url)
     host = str(parsed.hostname or "").casefold()
     try:
         loopback = host == "localhost" or ip_address(host).is_loopback
     except ValueError:
         loopback = host == "localhost"
-    if parsed.scheme not in {"http", "https"} or not loopback:
-        return {"status": "failed", "reason": "rag_health_url_not_local"}
+    return bool(
+        parsed.scheme in {"http", "https"}
+        and loopback
+        and parsed.path == "/health"
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _load_health_payload(url: str) -> object | None:
     token = str(process_environ.get("RAG_SERVICE_TOKEN") or "").strip()
     if not token:
         from dotenv import dotenv_values
@@ -179,27 +249,29 @@ def check_rag_health(url: str, *, expected_git_sha: str | None = None) -> dict:
     headers = {"X-RAG-Service-Token": token} if token else {}
     try:
         request = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(request, timeout=5) as response:
+        opener = urllib.request.build_opener(_NoRedirectHandler())
+        with opener.open(request, timeout=5) as response:
             payload = json.load(response)
     except Exception:
-        return {"status": "failed", "reason": "rag_health_unavailable"}
+        return None
+    return payload
 
-    if not isinstance(payload, dict):
-        return {"status": "failed", "reason": "rag_health_contract_failed"}
-    health_ready = (
+
+def _base_health_valid(payload: dict, expected_git_sha: str) -> bool:
+    return bool(
         payload.get("status") == "ok"
         and payload.get("rag_loaded") is True
         and payload.get("activation_valid") is True
         and payload.get("live_authorized") is True
         and isinstance(payload.get("deployment_id"), str)
-        and bool(payload["deployment_id"].strip())
+        and payload["deployment_id"].strip()
         and payload.get("git_sha") == expected_git_sha
         and isinstance(payload.get("snapshot_fingerprint"), str)
-        and bool(payload["snapshot_fingerprint"].strip())
+        and payload["snapshot_fingerprint"].strip()
     )
-    if not health_ready:
-        return {"status": "failed", "reason": "rag_health_contract_failed"}
 
+
+def _health_scope_result(payload: dict) -> dict:
     scope = str(payload.get("activation_scope") or "")
     if scope not in {"controlled_demo", "default_rollout"}:
         return {
@@ -211,12 +283,46 @@ def check_rag_health(url: str, *, expected_git_sha: str | None = None) -> dict:
     production_ready = scope == "default_rollout"
     return {
         "status": "passed",
-        "reason": (
-            "ready" if production_ready else "controlled_demo_health_only"
-        ),
+        "reason": "ready" if production_ready else "controlled_demo_health_only",
         "scope": scope,
         "production_ready": production_ready,
     }
+
+
+def check_rag_health(
+    url: str,
+    *,
+    expected_git_sha: str | None = None,
+    expected_profile: str | None = None,
+    expected_deployment_id: str | None = None,
+    expected_bundle_sha256: str | None = None,
+    expect_no_bundle: bool = False,
+    expected_enabled_features: tuple[str, ...] | None = None,
+    expect_all_features_off: bool = False,
+) -> dict:
+    expected_git_sha = expected_git_sha or _current_git_sha()
+    if expected_git_sha is None:
+        return {"status": "failed", "reason": "rag_health_contract_failed"}
+    if not _health_url_is_local(url):
+        return {"status": "failed", "reason": "rag_health_url_not_local"}
+    payload = _load_health_payload(url)
+    if payload is None:
+        return {"status": "failed", "reason": "rag_health_unavailable"}
+    if not isinstance(payload, dict):
+        return {"status": "failed", "reason": "rag_health_contract_failed"}
+    if not _base_health_valid(payload, expected_git_sha):
+        return {"status": "failed", "reason": "rag_health_contract_failed"}
+    if not _health_expectations_match(
+        payload,
+        expected_profile=expected_profile,
+        expected_deployment_id=expected_deployment_id,
+        expected_bundle_sha256=expected_bundle_sha256,
+        expect_no_bundle=expect_no_bundle,
+        expected_enabled_features=expected_enabled_features,
+        expect_all_features_off=expect_all_features_off,
+    ):
+        return {"status": "failed", "reason": "rag_health_expectation_failed"}
+    return _health_scope_result(payload)
 
 
 def _checks_passed(checks: dict, *, health_only: bool) -> bool:
@@ -227,7 +333,7 @@ def _checks_passed(checks: dict, *, health_only: bool) -> bool:
     return not any(check.get("production_ready") is False for check in checks.values())
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--health-only", action="store_true")
@@ -236,25 +342,95 @@ def main() -> int:
         "--rag-health-url",
         default="http://127.0.0.1:8100/health",
     )
-    args = parser.parse_args()
+    parser.add_argument("--expected-git-sha")
+    parser.add_argument("--expected-profile", choices=ACTIVATION_PROFILE_NAMES)
+    parser.add_argument("--expected-deployment-id")
+    bundle_expectation = parser.add_mutually_exclusive_group()
+    bundle_expectation.add_argument("--expected-bundle-sha256")
+    bundle_expectation.add_argument("--expect-no-bundle", action="store_true")
+    feature_expectation = parser.add_mutually_exclusive_group()
+    feature_expectation.add_argument(
+        "--expect-enabled-feature",
+        action="append",
+        dest="expected_enabled_features",
+        choices=FEATURE_FLAGS,
+    )
+    feature_expectation.add_argument(
+        "--expect-all-features-off",
+        action="store_true",
+    )
+    return parser
 
+
+def _validate_health_arguments(parser, args) -> None:
+    health_expectations = (
+        args.expected_git_sha,
+        args.expected_profile,
+        args.expected_deployment_id,
+        args.expected_bundle_sha256,
+        args.expect_no_bundle,
+        args.expected_enabled_features,
+        args.expect_all_features_off,
+    )
+    expectations_requested = any(
+        value is not None and value is not False
+        for value in health_expectations
+    )
+    if args.skip_health and expectations_requested:
+        parser.error("health expectations cannot be used with --skip-health")
+    if args.expected_git_sha is not None and not _GIT_SHA.fullmatch(
+        args.expected_git_sha
+    ):
+        parser.error("--expected-git-sha must be a 40-character hex digest")
+    if args.expected_bundle_sha256 is not None and not _SHA256.fullmatch(
+        args.expected_bundle_sha256
+    ):
+        parser.error("--expected-bundle-sha256 must be a SHA-256 digest")
+
+
+def _health_options(args) -> dict:
+    return {
+        "expected_git_sha": args.expected_git_sha,
+        "expected_profile": args.expected_profile,
+        "expected_deployment_id": args.expected_deployment_id,
+        "expected_bundle_sha256": args.expected_bundle_sha256,
+        "expect_no_bundle": args.expect_no_bundle,
+        "expected_enabled_features": (
+            tuple(args.expected_enabled_features)
+            if args.expected_enabled_features is not None
+            else None
+        ),
+        "expect_all_features_off": args.expect_all_features_off,
+    }
+
+
+def _run_checks(args, health_options: dict) -> dict:
     if args.health_only:
-        checks = {"rag_health": check_rag_health(args.rag_health_url)}
-    else:
-        pre_runtime_checks = {
-            "migration": check_migration_state(),
-            "qdrant": check_qdrant_readiness(),
-            "activation": check_activation_status(),
-            "seeded_dev_accounts": check_seeded_dev_accounts(),
+        return {
+            "rag_health": check_rag_health(
+                args.rag_health_url,
+                **health_options,
+            )
         }
-        checks = (
-            pre_runtime_checks
-            if args.skip_health
-            else {
-                **pre_runtime_checks,
-                "rag_health": check_rag_health(args.rag_health_url),
-            }
-        )
+    checks = {
+        "migration": check_migration_state(),
+        "qdrant": check_qdrant_readiness(),
+        "activation": check_activation_status(),
+        "seeded_dev_accounts": check_seeded_dev_accounts(),
+    }
+    if args.skip_health:
+        return checks
+    return {
+        **checks,
+        "rag_health": check_rag_health(args.rag_health_url, **health_options),
+    }
+
+
+def main() -> int:
+    parser = _build_parser()
+    args = parser.parse_args()
+    _validate_health_arguments(parser, args)
+    checks = _run_checks(args, _health_options(args))
 
     report = {
         "schema": "production-preflight-v1",

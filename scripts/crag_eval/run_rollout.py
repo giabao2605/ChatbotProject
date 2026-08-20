@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -139,13 +140,13 @@ def build_rollout_pair(
 
 def require_clean_worktree() -> None:
     status = subprocess.check_output(
-        ["git", "status", "--porcelain", "--untracked-files=no"],
+        ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=ROOT,
         text=True,
     ).strip()
     if status:
         raise RuntimeError(
-            "CRAG rollout requires a clean tracked worktree so artifact git_sha "
+            "CRAG rollout requires a clean worktree so artifact git_sha "
             "identifies the code that actually ran"
         )
 
@@ -167,8 +168,8 @@ def build_evaluation_environment(*, enabled: bool, router_mode: str) -> dict[str
     """
     if router_mode not in {"offline", "provider"}:
         raise ValueError(f"unsupported router mode: {router_mode}")
-    env = os.environ.copy()
-    env.update({
+    env = {
+        **os.environ,
         "RAG_EXECUTION_CONTEXT": "evaluation",
         "RAG_CRAG_ENABLED": str(enabled).lower(),
         "RAG_CLAIM_REPAIR_ENABLED": str(enabled).lower(),
@@ -176,11 +177,178 @@ def build_evaluation_environment(*, enabled: bool, router_mode: str) -> dict[str
         "STRICT_REALTIME_STREAMING": "false",
         "QDRANT_COLLECTION": FIXTURE_COLLECTION,
         "RAG_EVAL_ROUTER_MODE": router_mode,
-    })
+    }
     if router_mode == "offline":
-        env["LLM_ROUTER_ENABLED"] = "false"
-        env["SEMANTIC_ROUTER_ENABLED"] = "false"
+        return {
+            **env,
+            "LLM_ROUTER_ENABLED": "false",
+            "SEMANTIC_ROUTER_ENABLED": "false",
+        }
     return env
+
+
+def _manifest_trace_ids(
+    manifest: Path,
+    label: str,
+    selected_case_id: str | None = None,
+) -> list[str]:
+    try:
+        case_ids = tuple(
+            str(json.loads(raw).get("id") or "")
+            for raw in manifest.read_text(encoding="utf-8-sig").splitlines()
+            if raw.strip()
+        )
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("frozen manifest contains invalid JSON") from exc
+    if any(not manifest_case_id for manifest_case_id in case_ids):
+        raise RuntimeError("frozen manifest contains a case without an id")
+    if not case_ids or len(case_ids) != len(set(case_ids)):
+        raise RuntimeError("frozen manifest case identities are invalid")
+    if selected_case_id is not None:
+        if selected_case_id not in case_ids:
+            raise RuntimeError("selected case is absent from frozen manifest")
+        case_ids = (selected_case_id,)
+    return [f"eval:{label}:{manifest_case_id}" for manifest_case_id in case_ids]
+
+
+def _validate_arm_artifacts(
+    label: str,
+    manifest: Path,
+    evaluation_path: Path,
+    snapshot_path: Path,
+    *,
+    case_id: str | None = None,
+) -> None:
+    expected_trace_ids = _manifest_trace_ids(manifest, label, case_id)
+    evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    observed = [
+        str(case.get("trace_id") or "")
+        for case in evaluation.get("cases") or []
+    ]
+    if (
+        int(evaluation.get("total_cases") or 0) != len(expected_trace_ids)
+        or Counter(observed) != Counter(expected_trace_ids)
+    ):
+        raise RuntimeError(f"{label} eval artifact does not match frozen manifest")
+    query_count = int((snapshot.get("system_metrics") or {}).get("query_count") or 0)
+    observed_range = snapshot.get("observed_range") or {}
+    if (
+        query_count != len(expected_trace_ids)
+        or not observed_range.get("first")
+        or not observed_range.get("last")
+    ):
+        raise RuntimeError(f"trace snapshot does not cover every {label} case")
+    for field in ("parse_errors", "error_event_count", "retry_event_count"):
+        if int(snapshot.get(field) or 0):
+            raise RuntimeError(f"trace snapshot contains {field} for {label}")
+
+
+def _read_appended_trace(trace: Path, start_offset: int, label: str) -> tuple[dict, ...]:
+    events = ()
+    with trace.open("rb") as trace_file:
+        trace_file.seek(start_offset)
+        for raw in trace_file.read().decode("utf-8").splitlines():
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"appended trace contains invalid JSON for {label}"
+                ) from exc
+            if not isinstance(event, dict):
+                raise RuntimeError(
+                    f"appended trace contains invalid event for {label}"
+                )
+            events = (*events, event)
+    return events
+
+
+def _validate_appended_trace_identities(
+    label: str,
+    manifest: Path,
+    events: tuple[dict, ...],
+    *,
+    case_id: str | None = None,
+) -> None:
+    observed = [
+        str(event.get("trace_id") or "")
+        for event in events
+        if event.get("execution_context") == "evaluation"
+        and event.get("event") == "rag_end"
+    ]
+    if Counter(observed) != Counter(_manifest_trace_ids(manifest, label, case_id)):
+        raise RuntimeError(f"appended trace identities do not match {label} manifest")
+
+
+def _load_successful_gate(gate_path: Path, gate_result) -> dict:
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    passed = gate.get("passed")
+    expected_exit = 0 if passed is True else 1 if passed is False else None
+    if expected_exit is None or gate_result.returncode != expected_exit:
+        raise RuntimeError("CRAG gate exit/artifact mismatch")
+    return gate
+
+
+def _invoke_evaluation(manifest, output, label, case_id, environment):
+    command = [
+        sys.executable, "-m", "scripts.eval.run_eval",
+        "--manifest", str(manifest), "--output-dir", str(output),
+        "--run-label", label,
+        *(("--case-id", case_id) if case_id else ()),
+    ]
+    return subprocess.run(command, cwd=ROOT, env=environment, check=False)
+
+
+def _write_trace_snapshot(trace, started_at, completed_at, run_dir, environment):
+    return subprocess.run([
+        sys.executable, "-m", "scripts.eval.rag_trace_snapshot", str(trace),
+        "--start", started_at, "--end", completed_at,
+        "--context", "evaluation",
+        "--json-output", str(run_dir / "trace.json"),
+        "--markdown-output", str(run_dir / "trace.md"),
+    ], cwd=ROOT, env=environment, check=False)
+
+
+def _arm_environment(
+    *, enabled, router_mode, provider_environment,
+    provider_configuration_sha256, governance_scope_sha256_value, trace,
+):
+    return {
+        **build_evaluation_environment(enabled=enabled, router_mode=router_mode),
+        **(provider_environment or {}),
+        "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256": provider_configuration_sha256,
+        "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_scope_sha256_value,
+        "RAG_EVAL_CONCURRENCY": "1",
+        "RAG_TRACE_LOG_FILE": str(trace),
+    }
+
+
+def _validate_completed_arm(
+    *, label, manifest, run_dir, trace, trace_start_offset, case_id,
+):
+    _validate_arm_artifacts(
+        label,
+        manifest,
+        run_dir / "eval.json",
+        run_dir / "trace.json",
+        case_id=case_id,
+    )
+    _validate_appended_trace_identities(
+        label,
+        manifest,
+        _read_appended_trace(trace, trace_start_offset, label),
+        case_id=case_id,
+    )
+
+
+def _require_evaluation_artifact(label, run_dir, eval_result):
+    if eval_result.returncode not in (0, 2):
+        raise RuntimeError(f"{label} evaluation exited {eval_result.returncode}")
+    if not (run_dir / "eval.json").exists():
+        raise RuntimeError(
+            f"{label} failed before writing eval artifacts "
+            f"(exit {eval_result.returncode})"
+        )
 
 
 def _run(
@@ -197,37 +365,184 @@ def _run(
     started_at: str | None = None,
     case_id: str | None = None,
 ) -> dict:
-    env = build_evaluation_environment(enabled=enabled, router_mode=router_mode)
-    env.update(provider_environment or {})
-    env.update({
-        "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256": provider_configuration_sha256,
-        "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_scope_sha256_value,
-        "RAG_EVAL_CONCURRENCY": "1",
-        "RAG_TRACE_LOG_FILE": str(trace),
-    })
-    started_at = started_at or _utc_now()
-    eval_command = [
-        sys.executable, "-m", "scripts.eval.run_eval",
-        "--manifest", str(manifest), "--output-dir", str(output), "--run-label", label,
-    ]
-    if case_id:
-        eval_command.extend(("--case-id", case_id))
-    eval_result = subprocess.run(
-        eval_command, cwd=ROOT, env=env, check=False,
-    )
-    completed_at = _utc_now()
     run_dir = output / label
-    if not (run_dir / "eval.json").exists():
-        raise RuntimeError(f"{label} failed before writing eval artifacts (exit {eval_result.returncode})")
-    snapshot_result = subprocess.run([
-        sys.executable, "-m", "scripts.eval.rag_trace_snapshot", str(trace),
-        "--start", started_at, "--end", completed_at, "--context", "evaluation",
-        "--json-output", str(run_dir / "trace.json"),
-        "--markdown-output", str(run_dir / "trace.md"),
-    ], cwd=ROOT, env=env, check=False)
+    if run_dir.exists():
+        raise ValueError(f"refusing to reuse run directory: {run_dir}")
+    env = _arm_environment(
+        enabled=enabled,
+        router_mode=router_mode,
+        provider_environment=provider_environment,
+        provider_configuration_sha256=provider_configuration_sha256,
+        governance_scope_sha256_value=governance_scope_sha256_value,
+        trace=trace,
+    )
+    trace_start_offset = trace.stat().st_size
+    started_at = started_at or _utc_now()
+    eval_result = _invoke_evaluation(manifest, output, label, case_id, env)
+    completed_at = _utc_now()
+    _require_evaluation_artifact(label, run_dir, eval_result)
+    snapshot_result = _write_trace_snapshot(
+        trace, started_at, completed_at, run_dir, env,
+    )
     if snapshot_result.returncode:
         raise RuntimeError(f"trace snapshot failed for {label}")
-    return {"label": label, "started_at": started_at, "completed_at": completed_at, "runner_exit": eval_result.returncode}
+    _validate_completed_arm(
+        label=label,
+        manifest=manifest,
+        run_dir=run_dir,
+        trace=trace,
+        trace_start_offset=trace_start_offset,
+        case_id=case_id,
+    )
+    return {
+        "label": label,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "runner_exit": eval_result.returncode,
+    }
+
+
+def _validate_rollout_paths(manifest, output, trace, arm_order):
+    if not manifest.is_file() or not trace.is_file():
+        raise ValueError("manifest and trace files must exist")
+    if trace.stat().st_size != 0 or output.exists():
+        raise ValueError(
+            "CRAG rollout requires a fresh zero-byte trace and nonexistent output directory"
+        )
+    if arm_order not in {"baseline-first", "candidate-first"}:
+        raise ValueError(f"unsupported arm order: {arm_order}")
+
+
+def _run_arms(
+    *, manifest, output, trace, provider_smoke_artifact, router_mode,
+    arm_order, git_sha, manifest_sha, provider_config_sha,
+    provider_environment, governance_sha,
+):
+    arm_specs = (
+        (("baseline", False), ("candidate", True))
+        if arm_order == "baseline-first"
+        else (("candidate", True), ("baseline", False))
+    )
+    results = {}
+    starts = ()
+    for label, enabled in arm_specs:
+        started_at = _utc_now()
+        starts = (*starts, started_at)
+        validate_provider_smoke_for_arms(
+            provider_smoke_artifact,
+            expected_provider_sha256=provider_config_sha,
+            arm_started_at=starts,
+        )
+        result = _run(
+            label, manifest, output, trace, enabled=enabled,
+            router_mode=router_mode,
+            provider_configuration_sha256=provider_config_sha,
+            governance_scope_sha256_value=governance_sha,
+            provider_environment=provider_environment,
+            started_at=started_at,
+        )
+        results = {**results, label: result}
+        require_clean_worktree()
+        if _sha(manifest) != manifest_sha:
+            raise RuntimeError(f"manifest changed after {label}")
+        require_source_commit(git_sha)
+    return results
+
+
+def _fixture_fingerprint(output: Path) -> str:
+    baseline = json.loads(
+        (output / "baseline" / "preflight.json").read_text(encoding="utf-8")
+    )
+    candidate = json.loads(
+        (output / "candidate" / "preflight.json").read_text(encoding="utf-8")
+    )
+    fingerprint = baseline["fixture_fingerprint"]
+    if fingerprint != candidate["fixture_fingerprint"]:
+        raise RuntimeError("fixture snapshot changed between baseline and candidate")
+    return fingerprint
+
+
+def _run_gate(output: Path):
+    gate_path = output / "gate.json"
+    result = subprocess.run([
+        sys.executable, "-m", "scripts.eval.crag_rollout_gate",
+        str(output / "baseline" / "eval.json"),
+        str(output / "candidate" / "eval.json"),
+        str(output / "baseline" / "trace.json"),
+        str(output / "candidate" / "trace.json"),
+        "--output", str(gate_path),
+    ], cwd=ROOT, check=False)
+    return gate_path, result, _load_successful_gate(gate_path, result)
+
+
+def _arm_evidence(output: Path, label: str, result: dict) -> dict:
+    return {
+        **_artifact_reference(output / label / "eval.json"),
+        **_artifact_reference(output / label / "trace.json", prefix="trace"),
+        "started_at": result["started_at"],
+        "completed_at": result["completed_at"],
+    }
+
+
+def _write_pair(
+    *, output, git_sha, manifest_sha, fingerprint, provider_config_sha,
+    governance_sha, arm_results, gate_path, rollback_test_artifact,
+    arm_order, provider_smoke_artifact,
+):
+    pair = {
+        **build_rollout_pair(
+            run_id=output.name, git_sha=git_sha,
+            manifest_sha256=manifest_sha,
+            snapshot_fingerprint=fingerprint,
+            provider_configuration_sha256=provider_config_sha,
+            governance_scope_sha256_value=governance_sha,
+            baseline_evidence=_arm_evidence(
+                output, "baseline", arm_results["baseline"],
+            ),
+            candidate_evidence=_arm_evidence(
+                output, "candidate", arm_results["candidate"],
+            ),
+            gate_artifact=gate_path,
+            rollback_test_artifact=rollback_test_artifact,
+            arm_order=arm_order,
+        ),
+        "provider_smoke": _artifact_reference(provider_smoke_artifact),
+    }
+    path = output / "rollout_pair.json"
+    path.write_text(
+        json.dumps(pair, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return pair, path
+
+
+def _write_run_report(
+    *, output, git_sha, manifest_sha, provider_config_sha, fingerprint,
+    router_mode, arm_order, arm_results, gate_result, gate, pair_path,
+    pair_guardrail,
+):
+    metadata = {
+        "schema": "crag-rollout-run-v1",
+        "git_sha": git_sha,
+        "manifest_sha256": manifest_sha,
+        "provider_configuration_sha256": provider_config_sha,
+        "concurrency": 1,
+        "fixture_fingerprint": fingerprint,
+        "router_mode": router_mode,
+        "arm_order": arm_order,
+        "baseline": arm_results["baseline"],
+        "candidate": arm_results["candidate"],
+        "gate_exit": gate_result.returncode,
+        "passed": bool(gate["passed"])
+        and bool(pair_guardrail["production_eligible"]),
+        "rollout_pair_sha256": _sha(pair_path),
+        "production_eligible": bool(pair_guardrail["production_eligible"]),
+        "guardrail_checks": pair_guardrail["checks"],
+    }
+    (output / "run.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return metadata
 
 
 def run_rollout(
@@ -242,117 +557,42 @@ def run_rollout(
 ) -> dict:
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 before running live staging evaluation")
-    if not manifest.is_file() or not trace.is_file():
-        raise ValueError("manifest and trace files must exist")
-    if arm_order not in {"baseline-first", "candidate-first"}:
-        raise ValueError(f"unsupported arm order: {arm_order}")
+    _validate_rollout_paths(manifest, output, trace, arm_order)
     require_clean_worktree()
-    for label in ("baseline", "candidate"):
-        run_dir = output / label
-        if run_dir.exists() and any(run_dir.iterdir()):
-            raise ValueError(f"refusing to overwrite non-empty run directory: {run_dir}")
-    git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
+    ).strip()
     manifest_sha = _sha(manifest)
     from mech_chatbot.config.settings import load_settings
     settings = load_settings()
     provider_config_sha = provider_configuration_sha256_for_settings(settings)
     provider_environment = provider_environment_for_settings(settings)
     governance_sha = governance_scope_sha256(manifest)
-    arm_specs = (
-        (("baseline", False), ("candidate", True))
-        if arm_order == "baseline-first"
-        else (("candidate", True), ("baseline", False))
+    arm_results = _run_arms(
+        manifest=manifest, output=output, trace=trace,
+        provider_smoke_artifact=provider_smoke_artifact,
+        router_mode=router_mode, arm_order=arm_order, git_sha=git_sha,
+        manifest_sha=manifest_sha, provider_config_sha=provider_config_sha,
+        provider_environment=provider_environment, governance_sha=governance_sha,
     )
-    arm_results = {}
-    arm_starts = []
-    for label, enabled in arm_specs:
-        started_at = _utc_now()
-        arm_starts.append(started_at)
-        validate_provider_smoke_for_arms(
-            provider_smoke_artifact,
-            expected_provider_sha256=provider_config_sha,
-            arm_started_at=tuple(arm_starts),
-        )
-        arm_results[label] = _run(
-            label,
-            manifest,
-            output,
-            trace,
-            enabled=enabled,
-            router_mode=router_mode,
-            provider_configuration_sha256=provider_config_sha,
-            governance_scope_sha256_value=governance_sha,
-            provider_environment=provider_environment,
-            started_at=started_at,
-        )
-        require_clean_worktree()
-        if _sha(manifest) != manifest_sha:
-            raise RuntimeError(f"manifest changed after {label}")
-        require_source_commit(git_sha)
-    baseline = arm_results["baseline"]
-    candidate = arm_results["candidate"]
-    baseline_preflight = json.loads((output / "baseline" / "preflight.json").read_text(encoding="utf-8"))
-    candidate_preflight = json.loads((output / "candidate" / "preflight.json").read_text(encoding="utf-8"))
-    if baseline_preflight["fixture_fingerprint"] != candidate_preflight["fixture_fingerprint"]:
-        raise RuntimeError("fixture snapshot changed between baseline and candidate")
-    gate_path = output / "gate.json"
-    gate_result = subprocess.run([
-        sys.executable, "-m", "scripts.eval.crag_rollout_gate",
-        str(output / "baseline" / "eval.json"), str(output / "candidate" / "eval.json"),
-        str(output / "baseline" / "trace.json"), str(output / "candidate" / "trace.json"),
-        "--output", str(gate_path),
-    ], cwd=ROOT, check=False)
-    gate = json.loads(gate_path.read_text(encoding="utf-8"))
-    pair = {
-        **build_rollout_pair(
-            run_id=output.name,
-            git_sha=git_sha,
-            manifest_sha256=manifest_sha,
-            snapshot_fingerprint=baseline_preflight["fixture_fingerprint"],
-            provider_configuration_sha256=provider_config_sha,
-            governance_scope_sha256_value=governance_sha,
-            baseline_evidence={
-                **_artifact_reference(output / "baseline" / "eval.json"),
-                **_artifact_reference(
-                    output / "baseline" / "trace.json", prefix="trace"
-                ),
-                "started_at": baseline["started_at"],
-                "completed_at": baseline["completed_at"],
-            },
-            candidate_evidence={
-                **_artifact_reference(output / "candidate" / "eval.json"),
-                **_artifact_reference(
-                    output / "candidate" / "trace.json", prefix="trace"
-                ),
-                "started_at": candidate["started_at"],
-                "completed_at": candidate["completed_at"],
-            },
-            gate_artifact=gate_path,
-            rollback_test_artifact=rollback_test_artifact,
-            arm_order=arm_order,
-        ),
-        "provider_smoke": _artifact_reference(provider_smoke_artifact),
-    }
-    pair_path = output / "rollout_pair.json"
-    pair_path.write_text(
-        json.dumps(pair, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    fingerprint = _fixture_fingerprint(output)
+    gate_path, gate_result, gate = _run_gate(output)
+    pair, pair_path = _write_pair(
+        output=output, git_sha=git_sha, manifest_sha=manifest_sha,
+        fingerprint=fingerprint, provider_config_sha=provider_config_sha,
+        governance_sha=governance_sha, arm_results=arm_results,
+        gate_path=gate_path, rollback_test_artifact=rollback_test_artifact,
+        arm_order=arm_order, provider_smoke_artifact=provider_smoke_artifact,
     )
     from mech_chatbot.evaluation.rollout_guardrails import evaluate_rollout_pair
     pair_guardrail = evaluate_rollout_pair(pair)
-    metadata = {
-        "schema": "crag-rollout-run-v1", "git_sha": git_sha, "manifest_sha256": manifest_sha,
-        "provider_configuration_sha256": provider_config_sha, "concurrency": 1,
-        "fixture_fingerprint": baseline_preflight["fixture_fingerprint"],
-        "router_mode": router_mode,
-        "arm_order": arm_order,
-        "baseline": baseline, "candidate": candidate, "gate_exit": gate_result.returncode,
-        "passed": bool(gate["passed"]) and bool(pair_guardrail["production_eligible"]),
-        "rollout_pair_sha256": _sha(pair_path),
-        "production_eligible": bool(pair_guardrail["production_eligible"]),
-        "guardrail_checks": pair_guardrail["checks"],
-    }
-    (output / "run.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return metadata
+    return _write_run_report(
+        output=output, git_sha=git_sha, manifest_sha=manifest_sha,
+        provider_config_sha=provider_config_sha, fingerprint=fingerprint,
+        router_mode=router_mode, arm_order=arm_order,
+        arm_results=arm_results, gate_result=gate_result, gate=gate,
+        pair_path=pair_path, pair_guardrail=pair_guardrail,
+    )
 
 
 def main() -> int:
