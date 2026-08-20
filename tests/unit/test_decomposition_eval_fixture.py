@@ -913,6 +913,124 @@ def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize(
+    "event_update, enabled, allowed",
+    [
+        ({}, True, True),
+        ({}, False, False),
+        ({"planner_count": 1}, True, False),
+        (
+            {
+                "subquery_count": 4,
+                "intent_count": 4,
+                "intent_coverage": [True] * 4,
+            },
+            True,
+            False,
+        ),
+        ({"intent_coverage": [True, False]}, True, False),
+        ({"intent_overflow": True}, True, False),
+        ({"deadline_exceeded": True}, True, False),
+        ({"estimated_cost": 0.001}, True, False),
+        ({"exclusive_estimated_cost": 0.001}, True, False),
+        ({"input_tokens": 1}, True, False),
+        ({"output_tokens": 1}, True, False),
+        ({"fallback_reason": "planner_error"}, True, False),
+    ],
+)
+def test_decomposition_candidate_only_allows_strict_deterministic_local_split(
+    monkeypatch, tmp_path, event_update, enabled, allowed
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("{}\n", encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "rollout"
+
+    def fake_run(command, **_kwargs):
+        run_dir = output / "candidate"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if "scripts.eval.run_eval" in command:
+            (run_dir / "eval.json").write_text(
+                json.dumps({
+                    "schema": "rag-labeled-eval-v4",
+                    "total_cases": 1,
+                    "cases": [{"trace_id": "eval:candidate:case-1"}],
+                }),
+                encoding="utf-8",
+            )
+            events = [
+                {
+                    "ts": "2026-08-20T00:00:01Z",
+                    "execution_context": "evaluation",
+                    "event": "query_decomposition",
+                    "trace_id": "eval:candidate:case-1",
+                    "planner_count": 0,
+                    "subquery_count": 2,
+                    "intent_count": 2,
+                    "intent_coverage": [True, True],
+                    "deterministic_fallback": True,
+                    "intent_overflow": False,
+                    "deadline_exceeded": False,
+                    "estimated_cost": 0.0,
+                    "exclusive_estimated_cost": 0.0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    **event_update,
+                },
+                {
+                    "ts": "2026-08-20T00:00:02Z",
+                    "execution_context": "evaluation",
+                    "event": "rag_end",
+                    "trace_id": "eval:candidate:case-1",
+                },
+            ]
+            with trace.open("a", encoding="utf-8") as trace_file:
+                for event in events:
+                    trace_file.write(json.dumps(event) + "\n")
+        else:
+            (run_dir / "trace.json").write_text(
+                json.dumps({
+                    "schema": "rag-refusal-snapshot-v1",
+                    "system_metrics": {"query_count": 1},
+                    "observed_range": {
+                        "first": "2026-08-20T00:00:01Z",
+                        "last": "2026-08-20T00:00:02Z",
+                    },
+                    "parse_errors": 0,
+                    "error_event_count": 0,
+                    "fallback_event_count": 1,
+                    "fallback_events": {"query_decomposition": 1},
+                    "retry_event_count": 0,
+                }),
+                encoding="utf-8",
+            )
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(rollout.subprocess, "run", fake_run)
+
+    def run():
+        return rollout._run(
+            "candidate",
+            manifest,
+            output,
+            trace,
+            enabled=enabled,
+            provider_sha="provider",
+            governance_sha="scope",
+            collection=FIXTURE_COLLECTION,
+            fixture_batch="crag-eval-v1",
+        )
+
+    if allowed:
+        assert run()["runner_exit"] == 0
+    else:
+        with pytest.raises(RuntimeError, match="fallback events"):
+            run()
+
+
+@pytest.mark.parametrize(
     "snapshot_update, appended_trace_id, reason",
     [
         ({"system_metrics": {"query_count": 0}}, "eval:baseline:case-1", "does not cover"),

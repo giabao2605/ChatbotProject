@@ -65,6 +65,41 @@ def build_evaluation_environment(
     return environment
 
 
+def _is_strict_deterministic_local_split(event, expected_trace_ids):
+    coverage = event.get("intent_coverage")
+    intent_count = event.get("intent_count")
+    subquery_count = event.get("subquery_count")
+    zero_fields = (
+        event.get("planner_count"),
+        event.get("input_tokens"),
+        event.get("output_tokens"),
+        event.get("estimated_cost"),
+        event.get("exclusive_estimated_cost"),
+    )
+    fallback_fields = {
+        str(key).casefold()
+        for key, value in event.items()
+        if "fallback" in str(key).casefold() and bool(value)
+    }
+    return bool(
+        event.get("execution_context") == "evaluation"
+        and event.get("event") == "query_decomposition"
+        and str(event.get("trace_id") or "") in expected_trace_ids
+        and event.get("deterministic_fallback") is True
+        and fallback_fields == {"deterministic_fallback"}
+        and type(intent_count) is int
+        and type(subquery_count) is int
+        and 2 <= intent_count <= 3
+        and subquery_count == intent_count
+        and isinstance(coverage, list)
+        and len(coverage) == intent_count
+        and all(value is True for value in coverage)
+        and event.get("intent_overflow") is False
+        and event.get("deadline_exceeded") is False
+        and all(type(value) in (int, float) and value == 0 for value in zero_fields)
+    )
+
+
 def _run(
     label,
     manifest,
@@ -121,11 +156,10 @@ def _run(
         raise RuntimeError(f"trace snapshot contains parse errors for {label}")
     if int(trace_snapshot.get("error_event_count") or 0):
         raise RuntimeError(f"trace snapshot contains error events for {label}")
-    if int(trace_snapshot.get("fallback_event_count") or 0):
-        raise RuntimeError(f"trace snapshot contains fallback events for {label}")
     if int(trace_snapshot.get("retry_event_count") or 0):
         raise RuntimeError(f"trace snapshot contains retry events for {label}")
     observed_trace_ids = []
+    appended_events = []
     with trace.open("rb") as trace_file:
         trace_file.seek(trace_start_offset)
         for raw in trace_file.read().decode("utf-8").splitlines():
@@ -133,8 +167,25 @@ def _run(
                 event = json.loads(raw)
             except json.JSONDecodeError as exc:
                 raise RuntimeError(f"appended trace contains invalid JSON for {label}") from exc
+            appended_events.append(event)
             if event.get("execution_context") == "evaluation" and event.get("event") == "rag_end":
                 observed_trace_ids.append(str(event.get("trace_id") or ""))
+    fallback_count = int(trace_snapshot.get("fallback_event_count") or 0)
+    deterministic_splits = [
+        event for event in appended_events
+        if event.get("event") == "query_decomposition"
+        and event.get("deterministic_fallback") is True
+    ]
+    expected_trace_id_set = set(expected_trace_ids)
+    if (
+        (deterministic_splits and not enabled)
+        or not all(
+            _is_strict_deterministic_local_split(event, expected_trace_id_set)
+            for event in deterministic_splits
+        )
+        or fallback_count != len(deterministic_splits)
+    ):
+        raise RuntimeError(f"trace snapshot contains fallback events for {label}")
     if Counter(observed_trace_ids) != Counter(expected_trace_ids):
         raise RuntimeError(f"trace identities do not match every {label} case")
     return {"started_at": started_at, "completed_at": completed_at, "runner_exit": result.returncode}
