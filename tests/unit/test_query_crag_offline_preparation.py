@@ -116,7 +116,7 @@ def test_query_preparation_is_offline_and_fail_closed():
         "manifest_reference"
     ]["prepared_sha256"]
     assert query["execution_bindings"]["runner_sha256"] == (
-        "5176a118163d09ee89b9d59c08037460c01315eb427bc6a221b54a4854548e4e"
+        "88b6159dae19a34c89237572231a5603a223dd02169f51cb7712f95b82e874b0"
     )
     assert query["execution_bindings"]["release_decisions_sha256"] == (
         RELEASE_DECISIONS_SHA256

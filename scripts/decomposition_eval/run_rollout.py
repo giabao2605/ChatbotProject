@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 from scripts.crag_eval.run_rollout import (
@@ -88,7 +89,9 @@ def _run(
         "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256": provider_sha,
         "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_sha,
         "RAG_EVAL_CONCURRENCY": "1",
+        "RAG_TRACE_LOG_FILE": str(trace),
     })
+    trace_start_offset = trace.stat().st_size
     started_at = started_at or _utc_now()
     result = subprocess.run([sys.executable, "-m", "scripts.eval.run_eval", "--manifest", str(manifest), "--output-dir", str(output), "--run-label", label], cwd=ROOT, env=environment, check=False)
     completed_at = _utc_now()
@@ -98,6 +101,42 @@ def _run(
     snapshot = subprocess.run([sys.executable, "-m", "scripts.eval.rag_trace_snapshot", str(trace), "--start", started_at, "--end", completed_at, "--context", "evaluation", "--json-output", str(run_dir / "trace.json"), "--markdown-output", str(run_dir / "trace.md")], cwd=ROOT, env=environment, check=False)
     if snapshot.returncode:
         raise RuntimeError(f"trace snapshot failed for {label}")
+    evaluation = json.loads((run_dir / "eval.json").read_text(encoding="utf-8"))
+    trace_snapshot = json.loads((run_dir / "trace.json").read_text(encoding="utf-8"))
+    expected_cases = int(evaluation.get("total_cases") or 0)
+    expected_trace_ids = [str(case.get("trace_id") or "") for case in evaluation.get("cases") or []]
+    query_count = int((trace_snapshot.get("system_metrics") or {}).get("query_count") or 0)
+    observed_range = trace_snapshot.get("observed_range") or {}
+    if (
+        expected_cases <= 0
+        or len(expected_trace_ids) != expected_cases
+        or not all(expected_trace_ids)
+        or len(set(expected_trace_ids)) != expected_cases
+        or query_count != expected_cases
+        or not observed_range.get("first")
+        or not observed_range.get("last")
+    ):
+        raise RuntimeError(f"trace snapshot does not cover every {label} case")
+    if int(trace_snapshot.get("parse_errors") or 0):
+        raise RuntimeError(f"trace snapshot contains parse errors for {label}")
+    if int(trace_snapshot.get("error_event_count") or 0):
+        raise RuntimeError(f"trace snapshot contains error events for {label}")
+    if int(trace_snapshot.get("fallback_event_count") or 0):
+        raise RuntimeError(f"trace snapshot contains fallback events for {label}")
+    if int(trace_snapshot.get("retry_event_count") or 0):
+        raise RuntimeError(f"trace snapshot contains retry events for {label}")
+    observed_trace_ids = []
+    with trace.open("rb") as trace_file:
+        trace_file.seek(trace_start_offset)
+        for raw in trace_file.read().decode("utf-8").splitlines():
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"appended trace contains invalid JSON for {label}") from exc
+            if event.get("execution_context") == "evaluation" and event.get("event") == "rag_end":
+                observed_trace_ids.append(str(event.get("trace_id") or ""))
+    if Counter(observed_trace_ids) != Counter(expected_trace_ids):
+        raise RuntimeError(f"trace identities do not match every {label} case")
     return {"started_at": started_at, "completed_at": completed_at, "runner_exit": result.returncode}
 
 
