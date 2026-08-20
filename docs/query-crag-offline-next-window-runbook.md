@@ -165,26 +165,55 @@ Từ clean final-RC worktree:
 ```powershell
 $env:PYTHONPATH = "$PWD;$PWD\src"
 $env:RUN_DECOMPOSITION_EVAL_FIXTURE = '1'
+$env:QDRANT_COLLECTION = 'MechChatbot_CRAG_Eval_v1'
+$env:RAG_EVAL_EXPECTED_COLLECTION = 'MechChatbot_CRAG_Eval_v1'
 $python = 'C:\Users\bao.nguyen\Documents\ChatBotProject\chat_env\Scripts\python.exe'
-$runRoot = '<new-empty-query-window>'
-New-Item -ItemType Directory -Path $runRoot -ErrorAction Stop
+$runRoot = '<new-absolute-query-window-path>'
+$expectedSourceCommit = '<exact-40-character-final-rc-commit>'
 $mathCampaignRoot = 'C:\Users\bao.nguyen\Documents\ChatBotProject\.local\worktrees\advanced-rag-post-burst-disposition\.local\math-pilot-7b9d575-operator-window-13-campaign'
 $mathTaskName = 'ChatBotProject-GroundedMath-Operator-Window13'
 $mathReleaseRoot = 'C:\Users\bao.nguyen\Documents\ChatBotProject\.local\worktrees\advanced-rag-post-burst-disposition\.local\grounded-math-interaction-matrix-20260818-02\release-candidate'
 
-Assert-MathCampaignTerminal -CampaignRoot $mathCampaignRoot -TaskName $mathTaskName
-Assert-MathDefaultRollout -MathReleaseRoot $mathReleaseRoot
+& .\scripts\ops\prepare_query_formal_window.ps1 `
+  -RunRoot $runRoot `
+  -ExpectedSourceCommit $expectedSourceCommit `
+  -PythonPath $python `
+  -CampaignRoot $mathCampaignRoot `
+  -TaskName $mathTaskName `
+  -MathReleaseRoot $mathReleaseRoot
+if ($LASTEXITCODE -ne 0) { throw 'Query offline readiness failed.' }
+```
 
-& $python -m scripts.decomposition_eval.preflight `
-  --manifest data/decomposition_eval_v1/eval_manifest.jsonl `
-  --output "$runRoot\preflight.json"
+Authorization boundary: stop here. The entrypoint above never calls a provider
+and creates only `preflight.json` plus `rollback.json`. Do not run the next
+block until the owner has approved provider traffic for this exact commit and
+fresh run-root.
 
-& $python -m scripts.decomposition_eval.verify_rollback `
-  --output "$runRoot\rollback.json"
+```powershell
+& .\scripts\ops\prepare_query_formal_window.ps1 `
+  -RunRoot $runRoot `
+  -ExpectedSourceCommit $expectedSourceCommit `
+  -PythonPath $python `
+  -CampaignRoot $mathCampaignRoot `
+  -TaskName $mathTaskName `
+  -MathReleaseRoot $mathReleaseRoot `
+  -RevalidateForProviderTraffic
+if ($LASTEXITCODE -ne 0) { throw 'Query provider-boundary revalidation failed.' }
 
 & $python -m scripts.eval.provider_smoke `
   --output "$runRoot\provider-smoke.json"
 ```
+
+`prepare_query_formal_window.ps1` rejects missing/mismatched collection
+bindings, an existing run-root, source/worktree drift, manifest/runner hash
+drift, non-terminal Math campaign, active Scheduled Task, signed Math release
+drift and failed offline preflight/rollback. A failed attempt leaves the
+run-root non-reusable. Do not delete or repair it to continue the same window.
+The `-RevalidateForProviderTraffic` call immediately before smoke rechecks all
+bindings and reruns offline preflight/rollback into
+`*-provider-boundary.json`; it refuses a root containing anything beyond the
+two original offline artifacts. Any failure tombstones the root before
+provider traffic.
 
 Sau smoke, derive execution declaration mới và điền toàn bộ binding động bằng
 hash thực tế. Owner ký và baseline phải bắt đầu trong 30 phút từ smoke;
@@ -199,7 +228,7 @@ New-Item -ItemType File -Path "$runRoot\rag-trace.jsonl" -ErrorAction Stop
   --output-dir "$runRoot\formal-pair-01" `
   --trace "$runRoot\rag-trace.jsonl" `
   --provider-smoke-artifact "$runRoot\provider-smoke.json" `
-  --rollback-test-artifact "$runRoot\rollback.json"
+  --rollback-test-artifact "$runRoot\rollback-provider-boundary.json"
 ```
 
 Dừng và tombstone toàn window khi provider failure/retry, binding drift, dirty
@@ -265,6 +294,74 @@ New-Item -ItemType File -Path "$runRoot\rag-trace.jsonl" -ErrorAction Stop
 Dừng và tombstone khi có provider failure/retry, correction error, binding
 drift, output reuse hoặc feature flag ngoài CRAG + Claim Repair. Không resume
 V3 `3/9`, không carry-forward pair và không rerun cùng design để chọn kết quả.
+
+### Phân tích offline tombstone CRAG V3 window-02
+
+Kết luận từ metadata đã đóng băng: trigger dừng là provider-side, còn evidence
+không đủ để kết luận toàn bộ CRAG là provider-only hay đã đạt gate kỹ thuật.
+
+- Preflight đã pass đủ `9/9`; provider smoke đã pass `5/5`, timeout 30 giây,
+  zero retry.
+- Diagnostic chạy tuần tự, hoàn thành 3 case pair và 8 arm. Ở
+  `series-01/crag-version-citation`, baseline ghi một ProxyLLM `RuntimeError`
+  rồi một `llm_retry`; vì vậy `provider_failure_count=2` là event count của
+  cùng episode, không phải hai outage độc lập. `execution_failure_count=0`
+  không cho thấy lỗi runner ở các arm đã hoàn thành.
+- Outcome đúng là `inconclusive`, không có formal/feature/pilot/default
+  authorization và yêu cầu window + declaration mới sau provider recovery.
+- Vì mới dừng ở `3/9`, evidence không chứng minh được full quality,
+  latency/cost hoặc loại trừ lỗi code-controlled ở các case chưa chạy. Không có
+  căn cứ để sửa code CRAG hay retry diagnostic từ tombstone này.
+
+## Checklist Query cho window kế tiếp
+
+Checklist này chỉ chuẩn bị offline; không phải authorization:
+
+- [ ] Clean final-RC worktree, HEAD đúng exact 40-character commit đã review.
+- [ ] `QDRANT_COLLECTION` và `RAG_EVAL_EXPECTED_COLLECTION` cùng bằng
+  `MechChatbot_CRAG_Eval_v1` trước khi tạo run-root.
+- [ ] Run-root chưa từng tồn tại; không reuse trace, output, smoke, declaration
+  hoặc pair từ hai window tombstone trước.
+- [ ] Query packet, manifest 13 case và runner hash khớp byte-for-byte.
+- [ ] Math campaign terminal `100/100`, stop marker tồn tại, base/operator gate
+  pass, Scheduled Task `Disabled`.
+- [ ] Signed Math release ledger/bundle khớp và chỉ Math đang ON.
+- [ ] Offline Query preflight và rollback pass trên exact commit.
+- [ ] Owner authorization envelope đã được điền và ký cho exact commit,
+  run-root, provider configuration và giới hạn traffic.
+- [ ] Fresh smoke đúng 5 request, một attempt/request, timeout 30 giây, zero
+  retry; baseline bắt đầu trong 30 phút.
+- [ ] Formal pair chạy tuần tự, tối đa 3 pair; dừng và tombstone ngay khi có
+  provider failure/retry, drift, duplicate/mismatched trace ID hoặc fallback
+  ngoài deterministic local split contract.
+
+### Authorization envelope chưa ký
+
+Mẫu dưới đây cố ý không phải declaration/evidence và không authorize traffic:
+
+```text
+status: NOT_AUTHORIZED_TEMPLATE
+scope: query_decomposition_formal_window_only
+source_commit: <exact-40-character-reviewed-commit>
+run_root: <new-absolute-never-used-path>
+manifest_sha256: <verified-query-13-case-manifest-sha256>
+runner_sha256: <verified-query-rollout-runner-sha256>
+provider_configuration_sha256: <verified-provider-configuration-sha256>
+collection: MechChatbot_CRAG_Eval_v1
+max_provider_smoke_requests: 5
+max_attempts_per_smoke_request: 1
+smoke_timeout_seconds: 30
+max_formal_pairs: 3
+concurrency: 1
+authorization_excludes: pilot,feature_activation,default_rollout,push,merge
+owner_authorization_id: <required>
+owner_signature_or_approval_reference: <required>
+authorized_at: <required>
+expires_at: <required>
+```
+
+Nếu một placeholder còn trống, exact binding đã drift hoặc owner chưa ký thì
+giữ `status: NOT_AUTHORIZED_TEMPLATE` và không tạo smoke/declaration.
 
 ## Sau formal window
 

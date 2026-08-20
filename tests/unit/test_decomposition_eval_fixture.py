@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
@@ -847,11 +848,52 @@ def test_diagnostic_cli_returns_nonzero_for_inconclusive_result(monkeypatch, tmp
     ]) == 2
 
 
+def _write_arm_eval(run_dir, label, case_ids=("case-1",)):
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "eval.json").write_text(
+        json.dumps({
+            "schema": "rag-labeled-eval-v4",
+            "total_cases": len(case_ids),
+            "cases": [
+                {"trace_id": f"eval:{label}:{case_id}"} for case_id in case_ids
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+
+def _query_manifest_text():
+    return "".join(
+        json.dumps({"id": f"case-{index:02d}"}) + "\n"
+        for index in range(1, 14)
+    )
+
+
+def _append_trace_events(trace, events):
+    with trace.open("a", encoding="utf-8") as trace_file:
+        for event in events:
+            trace_file.write(json.dumps(event) + "\n")
+
+
+def _write_arm_trace_snapshot(run_dir, **overrides):
+    snapshot = {
+        "schema": "rag-refusal-snapshot-v1",
+        "system_metrics": {"query_count": 1},
+        "observed_range": {"first": "start", "last": "end"},
+        "parse_errors": 0,
+        "error_event_count": 0,
+        "fallback_event_count": 0,
+        "retry_event_count": 0,
+        **overrides,
+    }
+    (run_dir / "trace.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+
 def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
     from scripts.decomposition_eval import run_rollout as rollout
 
     manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text("{}\n", encoding="utf-8")
+    manifest.write_text('{"id":"case-1"}\n', encoding="utf-8")
     trace = tmp_path / "rag_trace.jsonl"
     trace.write_text("", encoding="utf-8")
     output = tmp_path / "rollout"
@@ -860,39 +902,16 @@ def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
         trace_environments.append(kwargs["env"].get("RAG_TRACE_LOG_FILE"))
         run_dir = output / "baseline"
-        run_dir.mkdir(parents=True, exist_ok=True)
         if "scripts.eval.run_eval" in command:
-            (run_dir / "eval.json").write_text(
-                json.dumps({
-                    "schema": "rag-labeled-eval-v4",
-                    "total_cases": 1,
-                    "cases": [{"trace_id": "eval:baseline:case-1"}],
-                }),
-                encoding="utf-8",
-            )
-            with trace.open("a", encoding="utf-8") as trace_file:
-                trace_file.write(json.dumps({
+            _write_arm_eval(run_dir, "baseline")
+            _append_trace_events(trace, [{
                     "ts": "2026-08-20T00:00:01Z",
                     "execution_context": "evaluation",
                     "event": "rag_end",
                     "trace_id": "eval:baseline:case-1",
-                }) + "\n")
+                }])
         else:
-            (run_dir / "trace.json").write_text(
-                json.dumps({
-                    "schema": "rag-refusal-snapshot-v1",
-                    "system_metrics": {"query_count": 1},
-                    "observed_range": {
-                        "first": "2026-08-20T00:00:01Z",
-                        "last": "2026-08-20T00:00:01Z",
-                    },
-                    "parse_errors": 0,
-                    "error_event_count": 0,
-                    "fallback_event_count": 0,
-                    "retry_event_count": 0,
-                }),
-                encoding="utf-8",
-            )
+            _write_arm_trace_snapshot(run_dir)
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(rollout.subprocess, "run", fake_run)
@@ -910,6 +929,323 @@ def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
     )
 
     assert trace_environments == [str(trace), str(trace)]
+
+
+def test_decomposition_rollout_arm_rejects_nonzero_evaluator_exit(
+    monkeypatch, tmp_path
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text('{"id":"case-1"}\n', encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "rollout"
+
+    def fake_run(command, **_kwargs):
+        run_dir = output / "baseline"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "eval.json").write_text(
+            json.dumps({
+                "total_cases": 1,
+                "cases": [{"trace_id": "eval:baseline:case-1"}],
+            }),
+            encoding="utf-8",
+        )
+        with trace.open("a", encoding="utf-8") as trace_file:
+            trace_file.write(json.dumps({
+                "execution_context": "evaluation",
+                "event": "rag_end",
+                "trace_id": "eval:baseline:case-1",
+            }) + "\n")
+        return type("Result", (), {"returncode": 1})()
+
+    monkeypatch.setattr(rollout.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="baseline evaluation exited 1"):
+        rollout._run(
+            "baseline",
+            manifest,
+            output,
+            trace,
+            enabled=False,
+            provider_sha="provider",
+            governance_sha="scope",
+            collection=FIXTURE_COLLECTION,
+            fixture_batch="crag-eval-v1",
+        )
+
+
+def test_decomposition_rollout_arm_accepts_quality_failed_evaluator_exit(
+    monkeypatch, tmp_path
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text('{"id":"case-1"}\n', encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "rollout"
+
+    def fake_run(command, **_kwargs):
+        run_dir = output / "baseline"
+        if "scripts.eval.run_eval" in command:
+            _write_arm_eval(run_dir, "baseline")
+            _append_trace_events(trace, [{
+                "execution_context": "evaluation",
+                "event": "rag_end",
+                "trace_id": "eval:baseline:case-1",
+            }])
+            return type("Result", (), {"returncode": 2})()
+        _write_arm_trace_snapshot(run_dir)
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(rollout.subprocess, "run", fake_run)
+
+    result = rollout._run(
+        "baseline",
+        manifest,
+        output,
+        trace,
+        enabled=False,
+        provider_sha="provider",
+        governance_sha="scope",
+        collection=FIXTURE_COLLECTION,
+        fixture_batch="crag-eval-v1",
+    )
+
+    assert result["runner_exit"] == 2
+
+
+def test_decomposition_rollout_rejects_gate_crash_after_pass_artifact(tmp_path):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    gate_path = tmp_path / "gate.json"
+    gate_path.write_text('{"passed":true}\n', encoding="utf-8")
+    crashed = type("Result", (), {"returncode": 1})()
+
+    with pytest.raises(RuntimeError, match="retrieval gate exit/artifact mismatch"):
+        rollout._load_successful_gate(gate_path, crashed)
+
+
+def test_decomposition_rollout_accepts_consistent_failed_gate_artifact(tmp_path):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    gate_path = tmp_path / "gate.json"
+    gate_path.write_text('{"passed":false}\n', encoding="utf-8")
+    failed = type("Result", (), {"returncode": 1})()
+
+    assert rollout._load_successful_gate(gate_path, failed) == {"passed": False}
+
+
+def test_decomposition_rollout_clean_guard_includes_untracked_files(monkeypatch):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    captured = {}
+
+    def fake_status(command, **_kwargs):
+        captured["command"] = command
+        return "?? untracked-module.py\n"
+
+    monkeypatch.setattr(rollout.subprocess, "check_output", fake_status)
+
+    with pytest.raises(RuntimeError, match="clean worktree"):
+        rollout.require_clean_worktree()
+    assert captured["command"] == [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+    ]
+
+
+def test_decomposition_rollout_arm_binds_case_set_to_frozen_manifest(
+    monkeypatch, tmp_path
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        '{"id":"case-1"}\n{"id":"case-2"}\n',
+        encoding="utf-8",
+    )
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "rollout"
+
+    def fake_run(command, **_kwargs):
+        run_dir = output / "baseline"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if "scripts.eval.run_eval" in command:
+            (run_dir / "eval.json").write_text(
+                json.dumps({
+                    "total_cases": 1,
+                    "cases": [{"trace_id": "eval:baseline:case-1"}],
+                }),
+                encoding="utf-8",
+            )
+            with trace.open("a", encoding="utf-8") as trace_file:
+                trace_file.write(json.dumps({
+                    "execution_context": "evaluation",
+                    "event": "rag_end",
+                    "trace_id": "eval:baseline:case-1",
+                }) + "\n")
+        else:
+            (run_dir / "trace.json").write_text(
+                json.dumps({
+                    "system_metrics": {"query_count": 1},
+                    "observed_range": {"first": "start", "last": "end"},
+                    "parse_errors": 0,
+                    "error_event_count": 0,
+                    "fallback_event_count": 0,
+                    "retry_event_count": 0,
+                }),
+                encoding="utf-8",
+            )
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(rollout.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="eval artifact does not match frozen manifest"):
+        rollout._run(
+            "baseline",
+            manifest,
+            output,
+            trace,
+            enabled=False,
+            provider_sha="provider",
+            governance_sha="scope",
+            collection=FIXTURE_COLLECTION,
+            fixture_batch="crag-eval-v1",
+        )
+
+
+@pytest.mark.parametrize("reuse", ["trace", "output"])
+def test_decomposition_rollout_rejects_reused_window_paths(
+    monkeypatch, tmp_path, reuse
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text('{"id":"case-1"}\n', encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("old-event\n" if reuse == "trace" else "", encoding="utf-8")
+    output = tmp_path / "rollout"
+    if reuse == "output":
+        output.mkdir()
+    monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+
+    with pytest.raises(
+        ValueError,
+        match="fresh zero-byte trace and nonexistent output directory",
+    ):
+        rollout.run_rollout(
+            manifest,
+            output,
+            trace,
+            provider_smoke_artifact=tmp_path / "provider-smoke.json",
+        )
+
+
+def test_decomposition_rollout_rejects_duplicate_deterministic_split_identity(
+    monkeypatch, tmp_path
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text('{"id":"case-1"}\n', encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    output = tmp_path / "rollout"
+    split_event = {
+        "execution_context": "evaluation",
+        "event": "query_decomposition",
+        "trace_id": "eval:candidate:case-1",
+        "planner_count": 0,
+        "subquery_count": 2,
+        "intent_count": 2,
+        "intent_coverage": [True, True],
+        "deterministic_fallback": True,
+        "intent_overflow": False,
+        "deadline_exceeded": False,
+        "estimated_cost": 0.0,
+        "exclusive_estimated_cost": 0.0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+
+    def fake_run(command, **_kwargs):
+        run_dir = output / "candidate"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if "scripts.eval.run_eval" in command:
+            (run_dir / "eval.json").write_text(
+                json.dumps({
+                    "total_cases": 1,
+                    "cases": [{"trace_id": "eval:candidate:case-1"}],
+                }),
+                encoding="utf-8",
+            )
+            events = [
+                split_event,
+                split_event,
+                {
+                    "execution_context": "evaluation",
+                    "event": "rag_end",
+                    "trace_id": "eval:candidate:case-1",
+                },
+            ]
+            trace.write_text(
+                "".join(json.dumps(event) + "\n" for event in events),
+                encoding="utf-8",
+            )
+        else:
+            (run_dir / "trace.json").write_text(
+                json.dumps({
+                    "system_metrics": {"query_count": 1},
+                    "observed_range": {"first": "start", "last": "end"},
+                    "parse_errors": 0,
+                    "error_event_count": 0,
+                    "fallback_event_count": 2,
+                    "retry_event_count": 0,
+                }),
+                encoding="utf-8",
+            )
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(rollout.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="duplicate deterministic split identities"):
+        rollout._run(
+            "candidate",
+            manifest,
+            output,
+            trace,
+            enabled=True,
+            provider_sha="provider",
+            governance_sha="scope",
+            collection=FIXTURE_COLLECTION,
+            fixture_batch="crag-eval-v1",
+        )
+
+
+def test_decomposition_rollout_requires_exact_frozen_query_case_set(
+    monkeypatch, tmp_path
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text('{"id":"case-1"}\n', encoding="utf-8")
+    trace = tmp_path / "rag_trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+
+    with pytest.raises(ValueError, match="exactly 13 frozen Query cases"):
+        rollout.run_rollout(
+            manifest,
+            tmp_path / "rollout",
+            trace,
+            provider_smoke_artifact=tmp_path / "provider-smoke.json",
+        )
 
 
 @pytest.mark.parametrize(
@@ -943,23 +1279,15 @@ def test_decomposition_candidate_only_allows_strict_deterministic_local_split(
     from scripts.decomposition_eval import run_rollout as rollout
 
     manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text("{}\n", encoding="utf-8")
+    manifest.write_text('{"id":"case-1"}\n', encoding="utf-8")
     trace = tmp_path / "rag_trace.jsonl"
     trace.write_text("", encoding="utf-8")
     output = tmp_path / "rollout"
 
     def fake_run(command, **_kwargs):
         run_dir = output / "candidate"
-        run_dir.mkdir(parents=True, exist_ok=True)
         if "scripts.eval.run_eval" in command:
-            (run_dir / "eval.json").write_text(
-                json.dumps({
-                    "schema": "rag-labeled-eval-v4",
-                    "total_cases": 1,
-                    "cases": [{"trace_id": "eval:candidate:case-1"}],
-                }),
-                encoding="utf-8",
-            )
+            _write_arm_eval(run_dir, "candidate")
             events = [
                 {
                     "ts": "2026-08-20T00:00:01Z",
@@ -986,25 +1314,12 @@ def test_decomposition_candidate_only_allows_strict_deterministic_local_split(
                     "trace_id": "eval:candidate:case-1",
                 },
             ]
-            with trace.open("a", encoding="utf-8") as trace_file:
-                for event in events:
-                    trace_file.write(json.dumps(event) + "\n")
+            _append_trace_events(trace, events)
         else:
-            (run_dir / "trace.json").write_text(
-                json.dumps({
-                    "schema": "rag-refusal-snapshot-v1",
-                    "system_metrics": {"query_count": 1},
-                    "observed_range": {
-                        "first": "2026-08-20T00:00:01Z",
-                        "last": "2026-08-20T00:00:02Z",
-                    },
-                    "parse_errors": 0,
-                    "error_event_count": 0,
-                    "fallback_event_count": 1,
-                    "fallback_events": {"query_decomposition": 1},
-                    "retry_event_count": 0,
-                }),
-                encoding="utf-8",
+            _write_arm_trace_snapshot(
+                run_dir,
+                fallback_event_count=1,
+                fallback_events={"query_decomposition": 1},
             )
         return type("Result", (), {"returncode": 0})()
 
@@ -1051,7 +1366,7 @@ def test_decomposition_rollout_arm_rejects_invalid_trace_snapshot(
     from scripts.decomposition_eval import run_rollout as rollout
 
     manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text("{}\n", encoding="utf-8")
+    manifest.write_text('{"id":"case-1"}\n', encoding="utf-8")
     trace = tmp_path / "rag_trace.jsonl"
     trace.write_text("", encoding="utf-8")
     output = tmp_path / "rollout"
@@ -1069,31 +1384,18 @@ def test_decomposition_rollout_arm_rejects_invalid_trace_snapshot(
 
     def fake_run(command, **_kwargs):
         run_dir = output / "baseline"
-        run_dir.mkdir(parents=True, exist_ok=True)
         if "scripts.eval.run_eval" in command:
-            (run_dir / "eval.json").write_text(
-                json.dumps({
-                    "schema": "rag-labeled-eval-v4",
-                    "total_cases": 1,
-                    "cases": [{"trace_id": "eval:baseline:case-1"}],
-                }),
-                encoding="utf-8",
-            )
-            with trace.open("a", encoding="utf-8") as trace_file:
-                trace_file.write(json.dumps({
+            _write_arm_eval(run_dir, "baseline")
+            _append_trace_events(trace, [{
                     "ts": "2026-08-20T00:00:01Z",
                     "execution_context": "evaluation",
                     "event": "rag_end",
                     "trace_id": appended_trace_id,
-                }) + "\n")
+                }])
         else:
-            (run_dir / "trace.json").write_text(
-                json.dumps({
-                    "schema": "rag-refusal-snapshot-v1",
-                    **valid_snapshot,
-                    **snapshot_update,
-                }),
-                encoding="utf-8",
+            _write_arm_trace_snapshot(
+                run_dir,
+                **{**valid_snapshot, **snapshot_update},
             )
         return type("Result", (), {"returncode": 0})()
 
@@ -1120,7 +1422,7 @@ def test_decomposition_rollout_records_runtime_provider_hash(monkeypatch, tmp_pa
     from scripts.decomposition_eval import run_rollout as rollout
 
     manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text("{}\n", encoding="utf-8")
+    manifest.write_text(_query_manifest_text(), encoding="utf-8")
     trace = tmp_path / "rag_trace.jsonl"
     trace.write_text("", encoding="utf-8")
     output = tmp_path / "rollout"
@@ -1220,7 +1522,7 @@ def test_decomposition_rollout_rejects_mismatched_provider_smoke(
     from scripts.decomposition_eval import run_rollout as rollout
 
     manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text("{}\n", encoding="utf-8")
+    manifest.write_text(_query_manifest_text(), encoding="utf-8")
     trace = tmp_path / "rag_trace.jsonl"
     trace.write_text("", encoding="utf-8")
     smoke = tmp_path / "provider-smoke.json"
@@ -1268,7 +1570,7 @@ def test_decomposition_rollout_rejects_stale_provider_smoke_before_eval(
     from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
 
     manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text("{}\n", encoding="utf-8")
+    manifest.write_text(_query_manifest_text(), encoding="utf-8")
     trace = tmp_path / "rag_trace.jsonl"
     trace.write_text("", encoding="utf-8")
     snapshot = Settings.from_env({})
@@ -1314,3 +1616,61 @@ def test_decomposition_rollout_rejects_stale_provider_smoke_before_eval(
             trace,
             provider_smoke_artifact=smoke,
         )
+
+
+@pytest.mark.parametrize(("passed", "expected_exit"), [(True, 0), (False, 1)])
+def test_decomposition_rollout_cli_forwards_frozen_bindings_and_exit_status(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    passed,
+    expected_exit,
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    output = tmp_path / "output"
+    trace = tmp_path / "trace.jsonl"
+    smoke = tmp_path / "provider-smoke.json"
+    rollback = tmp_path / "rollback.json"
+    captured = {}
+
+    def fake_run_rollout(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"passed": passed}
+
+    monkeypatch.setattr(rollout, "run_rollout", fake_run_rollout)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_rollout.py",
+            "--manifest",
+            str(manifest),
+            "--output-dir",
+            str(output),
+            "--trace",
+            str(trace),
+            "--provider-smoke-artifact",
+            str(smoke),
+            "--rollback-test-artifact",
+            str(rollback),
+            "--collection",
+            "MechChatbot_CRAG_Eval_v1",
+            "--fixture-batch",
+            "department-decomposition-eval-v1",
+        ],
+    )
+
+    assert rollout.main() == expected_exit
+    assert captured == {
+        "args": (manifest, output, trace),
+        "kwargs": {
+            "provider_smoke_artifact": smoke,
+            "rollback_test_artifact": rollback,
+            "collection": "MechChatbot_CRAG_Eval_v1",
+            "fixture_batch": "department-decomposition-eval-v1",
+        },
+    }
+    assert json.loads(capsys.readouterr().out) == {"passed": passed}
