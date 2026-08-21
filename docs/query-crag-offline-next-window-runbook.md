@@ -219,19 +219,25 @@ provider traffic.
 
 Sau smoke, derive execution declaration mới và điền toàn bộ binding động bằng
 hash thực tế. Owner ký và baseline phải bắt đầu trong 30 phút từ smoke;
-`run_rollout` revalidate freshness trước baseline. Sau đó mới tạo trace mới và
-chạy:
+`run_rollout` revalidate freshness trước baseline. Sau đó chỉ dispatch qua
+entrypoint bind interpreter và chạy:
 
 ```powershell
-New-Item -ItemType File -Path "$runRoot\rag-trace.jsonl" -ErrorAction Stop
-
-& $python -m scripts.decomposition_eval.run_rollout `
-  --manifest data/decomposition_eval_v1/eval_manifest.jsonl `
-  --output-dir "$runRoot\formal-pair-01" `
-  --trace "$runRoot\rag-trace.jsonl" `
-  --provider-smoke-artifact "$runRoot\provider-smoke.json" `
-  --rollback-test-artifact "$runRoot\rollback-provider-boundary.json"
+& .\scripts\ops\start_query_formal_pair.ps1 `
+  -PythonPath $python `
+  -Manifest data/decomposition_eval_v1/eval_manifest.jsonl `
+  -OutputDir "$runRoot\formal-pair-01" `
+  -Trace "$runRoot\rag-trace.jsonl" `
+  -ProviderSmokeArtifact "$runRoot\provider-smoke.json" `
+  -RollbackTestArtifact "$runRoot\rollback-provider-boundary.json"
 ```
+
+`start_query_formal_pair.ps1` từ chối relative/missing interpreter, resolve và
+probe exact absolute executable, kiểm tra input cùng fresh trace/output, rồi
+mới atomically tạo zero-byte trace và gọi runner bằng chính executable đã
+probe. Probe/input failure không tạo trace hoặc output. Bất kỳ failure nào sau
+khi trace được tạo vẫn là first failure và làm window terminal; không sửa lệnh
+rồi tiếp tục cùng root.
 
 Dừng và tombstone toàn window khi provider failure/retry, binding drift, dirty
 worktree, output reuse hoặc bất kỳ governed flag ngoài Query được bật. Không
@@ -337,8 +343,9 @@ Checklist này chỉ chuẩn bị offline; không phải authorization:
   run-root, provider configuration và giới hạn traffic.
 - [ ] Fresh smoke đúng 5 request, một attempt/request, timeout 30 giây, zero
   retry; baseline bắt đầu trong 30 phút.
-- [ ] Resolve và probe exact absolute Python interpreter trước khi tạo zero-byte
-  trace; không dùng relative executable path ở formal dispatch.
+- [ ] Chỉ dispatch Query pair qua `start_query_formal_pair.ps1`; entrypoint phải
+  resolve và probe exact absolute Python interpreter trước khi tạo zero-byte
+  trace, không dùng relative executable path.
 - [ ] Formal pair chạy tuần tự, tối đa 3 pair; dừng và tombstone ngay khi formal
   gate trả false (gồm latency/cost), runner không launch, có provider
   failure/retry, drift, duplicate/mismatched trace ID hoặc fallback ngoài
@@ -421,10 +428,10 @@ Disposition SHA-256
 được bảo toàn; canonical adjudication SHA-256
 `3313e5dc4e3dec91b3c31d12976aca99cc6545e074bd6b42ceac8e3c767ec08e`
 sửa terminal reason. Không rerun smoke/pair, không nới threshold, không
-catch-up/carry-forward/reuse artifact. Query tiếp tục OFF. Trước window mới phải
-harden/verify absolute interpreter binding; formal attempt tương lai cần owner
-authorization, never-used root, evidence, smoke, declaration, trace và series
-hoàn toàn mới.
+catch-up/carry-forward/reuse artifact. Query tiếp tục OFF. Absolute interpreter
+binding nay phải được enforce bởi `start_query_formal_pair.ps1`; formal attempt
+tương lai vẫn cần owner authorization, never-used root, evidence, smoke,
+declaration, trace và series hoàn toàn mới.
 
 ## Sau formal window
 

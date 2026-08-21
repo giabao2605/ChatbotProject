@@ -19,6 +19,7 @@ PREPARATION = (
 )
 RUNBOOK = ROOT / "docs" / "query-crag-offline-next-window-runbook.md"
 QUERY_WINDOW_ENTRYPOINT = ROOT / "scripts" / "ops" / "prepare_query_formal_window.ps1"
+QUERY_PAIR_ENTRYPOINT = ROOT / "scripts" / "ops" / "start_query_formal_pair.ps1"
 GOVERNED_FLAGS = {
     "RAG_CRAG_ENABLED",
     "RAG_CLAIM_REPAIR_ENABLED",
@@ -310,6 +311,301 @@ function Get-ScheduledTask {{
         text=True,
         check=False,
     )
+
+
+def test_query_pair_entrypoint_binds_absolute_python_before_creating_trace(tmp_path):
+    project = tmp_path / "repo"
+    module_root = project / "scripts" / "decomposition_eval"
+    module_root.mkdir(parents=True)
+    (project / "scripts" / "__init__.py").write_text("", encoding="utf-8")
+    (module_root / "__init__.py").write_text("", encoding="utf-8")
+    (module_root / "run_rollout.py").write_text(
+        "import argparse, json, sys\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--manifest', required=True)\n"
+        "parser.add_argument('--output-dir', required=True)\n"
+        "parser.add_argument('--trace', required=True)\n"
+        "parser.add_argument('--provider-smoke-artifact', required=True)\n"
+        "parser.add_argument('--rollback-test-artifact', required=True)\n"
+        "parser.add_argument('--validate-inputs-only', action='store_true')\n"
+        "args = parser.parse_args()\n"
+        "if args.validate_inputs_only:\n"
+        "    raise SystemExit(0)\n"
+        "trace = Path(args.trace)\n"
+        "assert trace.is_file() and trace.stat().st_size == 0\n"
+        "output = Path(args.output_dir)\n"
+        "output.mkdir()\n"
+        "(output / 'invocation.json').write_text(json.dumps({\n"
+        "    'python': sys.executable,\n"
+        "    'trace': str(trace),\n"
+        "}), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    manifest = project / "manifest.jsonl"
+    manifest.write_text('{"id":"case-01"}\n', encoding="utf-8")
+    provider_smoke = project / "provider-smoke.json"
+    rollback = project / "rollback.json"
+    _write_json(provider_smoke, {"passed": True})
+    _write_json(rollback, {"passed": True})
+    trace = project / "rag-trace.jsonl"
+    output = project / "formal-pair-01"
+
+    relative_python = project / "chat_env" / "Scripts" / "python.exe"
+    relative_python.parent.mkdir(parents=True)
+    relative_python.write_text("not executable", encoding="utf-8")
+    common_arguments = [
+        "-Manifest",
+        str(manifest),
+        "-OutputDir",
+        str(output),
+        "-Trace",
+        str(trace),
+        "-ProviderSmokeArtifact",
+        str(provider_smoke),
+        "-RollbackTestArtifact",
+        str(rollback),
+    ]
+    environment = {**os.environ, "PYTHONPATH": str(project)}
+
+    rejected = subprocess.run(
+        [
+            _powershell(),
+            "-NoProfile",
+            "-File",
+            str(QUERY_PAIR_ENTRYPOINT),
+            "-PythonPath",
+            str(relative_python.relative_to(project)),
+            *common_arguments,
+        ],
+        cwd=project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert rejected.returncode != 0
+    assert "query_formal_pair_python_path_must_be_absolute" in rejected.stderr
+    assert not trace.exists()
+    assert not output.exists()
+
+    launched = subprocess.run(
+        [
+            _powershell(),
+            "-NoProfile",
+            "-File",
+            str(QUERY_PAIR_ENTRYPOINT),
+            "-PythonPath",
+            str(Path(sys.executable).resolve()),
+            *common_arguments,
+        ],
+        cwd=project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert launched.returncode == 0, launched.stderr
+    assert trace.is_file() and trace.stat().st_size == 0
+    invocation = json.loads((output / "invocation.json").read_text(encoding="utf-8"))
+    assert Path(invocation["python"]).resolve() == Path(sys.executable).resolve()
+    assert Path(invocation["trace"]).resolve() == trace.resolve()
+
+
+def test_query_pair_entrypoint_probe_failure_does_not_create_trace(tmp_path):
+    project = tmp_path / "repo"
+    project.mkdir()
+    failing_python = project / "python-probe-fails.cmd"
+    failing_python.write_text("@echo off\r\nexit /b 17\r\n", encoding="utf-8")
+    manifest = project / "manifest.jsonl"
+    provider_smoke = project / "provider-smoke.json"
+    rollback = project / "rollback.json"
+    manifest.write_text('{"id":"case-01"}\n', encoding="utf-8")
+    _write_json(provider_smoke, {"passed": True})
+    _write_json(rollback, {"passed": True})
+    trace = project / "rag-trace.jsonl"
+    output = project / "formal-pair-01"
+
+    result = subprocess.run(
+        [
+            _powershell(),
+            "-NoProfile",
+            "-File",
+            str(QUERY_PAIR_ENTRYPOINT),
+            "-PythonPath",
+            str(failing_python),
+            "-Manifest",
+            str(manifest),
+            "-OutputDir",
+            str(output),
+            "-Trace",
+            str(trace),
+            "-ProviderSmokeArtifact",
+            str(provider_smoke),
+            "-RollbackTestArtifact",
+            str(rollback),
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "query_formal_pair_python_probe_failed" in result.stderr
+    assert not trace.exists()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("invalid_parameter", "input_name"),
+    [
+        ("-Manifest", "manifest"),
+        ("-ProviderSmokeArtifact", "provider_smoke_artifact"),
+        ("-RollbackTestArtifact", "rollback_test_artifact"),
+    ],
+)
+def test_query_pair_entrypoint_rejects_directory_inputs_before_trace(
+    tmp_path,
+    invalid_parameter,
+    input_name,
+):
+    project = tmp_path / "repo"
+    project.mkdir()
+    manifest = project / "manifest.jsonl"
+    provider_smoke = project / "provider-smoke.json"
+    rollback = project / "rollback.json"
+    manifest.write_text('{"id":"case-01"}\n', encoding="utf-8")
+    _write_json(provider_smoke, {"passed": True})
+    _write_json(rollback, {"passed": True})
+    invalid_input = project / f"{input_name}-directory"
+    invalid_input.mkdir()
+    arguments = {
+        parameter: invalid_input if parameter == invalid_parameter else path
+        for parameter, path in {
+            "-Manifest": manifest,
+            "-ProviderSmokeArtifact": provider_smoke,
+            "-RollbackTestArtifact": rollback,
+        }.items()
+    }
+    trace = project / "rag-trace.jsonl"
+    output = project / "formal-pair-01"
+
+    result = subprocess.run(
+        [
+            _powershell(),
+            "-NoProfile",
+            "-File",
+            str(QUERY_PAIR_ENTRYPOINT),
+            "-PythonPath",
+            str(Path(sys.executable).resolve()),
+            "-Manifest",
+            str(arguments["-Manifest"]),
+            "-OutputDir",
+            str(output),
+            "-Trace",
+            str(trace),
+            "-ProviderSmokeArtifact",
+            str(arguments["-ProviderSmokeArtifact"]),
+            "-RollbackTestArtifact",
+            str(arguments["-RollbackTestArtifact"]),
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert f"query_formal_pair_input_must_be_file:{input_name}" in result.stderr
+    assert not trace.exists()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "invalid_parameter",
+    ["-Manifest", "-ProviderSmokeArtifact", "-RollbackTestArtifact"],
+)
+def test_query_pair_entrypoint_semantically_validates_inputs_before_trace(
+    tmp_path,
+    invalid_parameter,
+):
+    project = tmp_path / "repo"
+    module_root = project / "scripts" / "decomposition_eval"
+    module_root.mkdir(parents=True)
+    (project / "scripts" / "__init__.py").write_text("", encoding="utf-8")
+    (module_root / "__init__.py").write_text("", encoding="utf-8")
+    (module_root / "run_rollout.py").write_text(
+        "import argparse, json\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--manifest', required=True)\n"
+        "parser.add_argument('--output-dir', required=True)\n"
+        "parser.add_argument('--trace', required=True)\n"
+        "parser.add_argument('--provider-smoke-artifact', required=True)\n"
+        "parser.add_argument('--rollback-test-artifact', required=True)\n"
+        "parser.add_argument('--validate-inputs-only', action='store_true')\n"
+        "args = parser.parse_args()\n"
+        "if args.validate_inputs_only:\n"
+        "    try:\n"
+        "        [json.loads(line) for line in Path(args.manifest).read_text().splitlines()]\n"
+        "        json.loads(Path(args.provider_smoke_artifact).read_text())\n"
+        "        json.loads(Path(args.rollback_test_artifact).read_text())\n"
+        "    except (json.JSONDecodeError, OSError):\n"
+        "        raise SystemExit(17)\n"
+        "    raise SystemExit(0)\n"
+        "Path('provider-called.marker').write_text('called', encoding='utf-8')\n"
+        "Path(args.output_dir).mkdir()\n",
+        encoding="utf-8",
+    )
+    manifest = project / "manifest.jsonl"
+    provider_smoke = project / "provider-smoke.json"
+    rollback = project / "rollback.json"
+    manifest.write_text('{"id":"case-01"}\n', encoding="utf-8")
+    _write_json(provider_smoke, {"passed": True})
+    _write_json(rollback, {"passed": True})
+    inputs = {
+        "-Manifest": manifest,
+        "-ProviderSmokeArtifact": provider_smoke,
+        "-RollbackTestArtifact": rollback,
+    }
+    inputs[invalid_parameter].write_text("not-json", encoding="utf-8")
+    trace = project / "rag-trace.jsonl"
+    output = project / "formal-pair-01"
+
+    result = subprocess.run(
+        [
+            _powershell(),
+            "-NoProfile",
+            "-File",
+            str(QUERY_PAIR_ENTRYPOINT),
+            "-PythonPath",
+            str(Path(sys.executable).resolve()),
+            "-Manifest",
+            str(manifest),
+            "-OutputDir",
+            str(output),
+            "-Trace",
+            str(trace),
+            "-ProviderSmokeArtifact",
+            str(provider_smoke),
+            "-RollbackTestArtifact",
+            str(rollback),
+        ],
+        cwd=project,
+        env={**os.environ, "PYTHONPATH": str(project)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "query_formal_pair_input_validation_failed" in result.stderr
+    assert not (project / "provider-called.marker").exists()
+    assert not trace.exists()
+    assert not output.exists()
 
 
 def test_query_window_entrypoint_rejects_missing_collection_before_run_root(tmp_path):
@@ -810,6 +1106,21 @@ def test_query_smoke_revalidates_bindings_at_the_authorization_boundary():
         "scripts.eval.provider_smoke",
         runbook.index("Authorization boundary: stop here"),
     )
+
+
+def test_query_formal_dispatch_uses_the_bound_interpreter_entrypoint():
+    powershell_blocks = _runbook_powershell_blocks()
+    dispatch_block = next(
+        block
+        for block in powershell_blocks
+        if "start_query_formal_pair.ps1" in block
+    )
+
+    assert "New-Item -ItemType File" not in dispatch_block
+    assert "scripts.decomposition_eval.run_rollout" not in dispatch_block
+    assert "-PythonPath $python" in dispatch_block
+    assert '-Trace "$runRoot\\rag-trace.jsonl"' in dispatch_block
+    assert '-OutputDir "$runRoot\\formal-pair-01"' in dispatch_block
 
 
 def test_crag_smoke_keeps_both_math_terminal_guards():

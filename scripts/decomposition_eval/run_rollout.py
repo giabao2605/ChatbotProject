@@ -297,6 +297,89 @@ def _run(
     return {"started_at": started_at, "completed_at": completed_at, "runner_exit": result.returncode}
 
 
+def _validate_rollback_evidence(path: Path, git_sha: str) -> dict:
+    evidence = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        evidence.get("schema") != "rollback-test-evidence-v1"
+        or evidence.get("passed") is not True
+        or evidence.get("git_sha") != git_sha
+        or set(evidence.get("flags") or [])
+        != {"RAG_QUERY_DECOMPOSITION_ENABLED"}
+    ):
+        raise ValueError(
+            "rollback evidence must pass for this commit and decomposition flag"
+        )
+    return _artifact_reference(path)
+
+
+def validate_formal_pair_inputs(
+    manifest,
+    output,
+    trace,
+    *,
+    provider_smoke_artifact,
+    rollback_test_artifact=None,
+    trace_must_exist: bool,
+):
+    if os.getenv(LIVE_OPT_IN) != "1":
+        raise RuntimeError(f"set {LIVE_OPT_IN}=1 before running live staging evaluation")
+    manifest, output, trace = Path(manifest), Path(output), Path(trace)
+    provider_smoke_artifact = Path(provider_smoke_artifact)
+    rollback_test_artifact = (
+        Path(rollback_test_artifact) if rollback_test_artifact else None
+    )
+    if not manifest.is_file():
+        raise ValueError("manifest must be a file")
+    if trace_must_exist:
+        if not trace.is_file():
+            raise ValueError("trace must be a file")
+        if trace.stat().st_size != 0 or output.exists():
+            raise ValueError(
+                "decomposition rollout requires a fresh zero-byte trace "
+                "and nonexistent output directory"
+            )
+    elif trace.exists():
+        raise ValueError("pre-dispatch validation requires a nonexistent trace")
+    if not trace_must_exist and output.exists():
+        raise ValueError("decomposition rollout requires a nonexistent output directory")
+    if len(_manifest_trace_ids(manifest, "baseline")) != 13:
+        raise ValueError("decomposition rollout requires exactly 13 frozen Query cases")
+
+    require_clean_worktree()
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    from mech_chatbot.config.settings import load_settings
+    settings = load_settings()
+    provider_sha = provider_configuration_sha256_for_settings(settings)
+    baseline_started_at = _utc_now()
+    validate_provider_smoke_for_baseline(
+        provider_smoke_artifact,
+        expected_provider_sha256=provider_sha,
+        baseline_started_at=baseline_started_at,
+    )
+    rollback = (
+        _validate_rollback_evidence(rollback_test_artifact, git_sha)
+        if rollback_test_artifact is not None
+        else {}
+    )
+    return {
+        "manifest": manifest,
+        "output": output,
+        "trace": trace,
+        "provider_smoke_artifact": provider_smoke_artifact,
+        "git_sha": git_sha,
+        "manifest_sha": _sha(manifest),
+        "provider_sha": provider_sha,
+        "provider_environment": provider_environment_for_settings(settings),
+        "governance_sha": governance_scope_sha256(manifest),
+        "baseline_started_at": baseline_started_at,
+        "rollback": rollback,
+    }
+
+
 def run_rollout(
     manifest,
     output,
@@ -307,35 +390,26 @@ def run_rollout(
     collection=FIXTURE_COLLECTION,
     fixture_batch=FIXTURE_BATCH,
 ):
-    if os.getenv(LIVE_OPT_IN) != "1":
-        raise RuntimeError(f"set {LIVE_OPT_IN}=1 before running live staging evaluation")
-    manifest, output, trace = Path(manifest), Path(output), Path(trace)
-    if not manifest.is_file() or not trace.is_file():
-        raise ValueError("manifest and trace files must exist")
-    if trace.stat().st_size != 0 or output.exists():
-        raise ValueError(
-            "decomposition rollout requires a fresh zero-byte trace and nonexistent output directory"
-        )
-    if len(_manifest_trace_ids(manifest, "baseline")) != 13:
-        raise ValueError("decomposition rollout requires exactly 13 frozen Query cases")
-    require_clean_worktree()
-    git_sha = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        text=True,
-    ).strip()
-    manifest_sha = _sha(manifest)
-    from mech_chatbot.config.settings import load_settings
-    settings = load_settings()
-    provider_sha = provider_configuration_sha256_for_settings(settings)
-    provider_environment = provider_environment_for_settings(settings)
-    governance_sha = governance_scope_sha256(manifest)
-    baseline_started_at = _utc_now()
-    validate_provider_smoke_for_baseline(
-        provider_smoke_artifact,
-        expected_provider_sha256=provider_sha,
-        baseline_started_at=baseline_started_at,
+    inputs = validate_formal_pair_inputs(
+        manifest,
+        output,
+        trace,
+        provider_smoke_artifact=provider_smoke_artifact,
+        rollback_test_artifact=rollback_test_artifact,
+        trace_must_exist=True,
     )
+    manifest = inputs["manifest"]
+    output = inputs["output"]
+    output.mkdir(exist_ok=False)
+    trace = inputs["trace"]
+    provider_smoke_artifact = inputs["provider_smoke_artifact"]
+    git_sha = inputs["git_sha"]
+    manifest_sha = inputs["manifest_sha"]
+    provider_sha = inputs["provider_sha"]
+    provider_environment = inputs["provider_environment"]
+    governance_sha = inputs["governance_sha"]
+    baseline_started_at = inputs["baseline_started_at"]
+    rollback = inputs["rollback"]
     baseline = _run(
         "baseline",
         manifest,
@@ -403,18 +477,6 @@ def run_rollout(
         "concurrency": 1, "governance_scope_sha256": governance_sha,
         "collection": collection,
     }
-    rollback = {}
-    if rollback_test_artifact:
-        rollback_test_artifact = Path(rollback_test_artifact)
-        evidence = json.loads(rollback_test_artifact.read_text(encoding="utf-8"))
-        if (
-            evidence.get("schema") != "rollback-test-evidence-v1"
-            or evidence.get("passed") is not True
-            or evidence.get("git_sha") != git_sha
-            or set(evidence.get("flags") or []) != {"RAG_QUERY_DECOMPOSITION_ENABLED"}
-        ):
-            raise ValueError("rollback evidence must pass for this commit and decomposition flag")
-        rollback = _artifact_reference(rollback_test_artifact)
     production_collection = os.getenv(
         "RAG_PRODUCTION_QDRANT_COLLECTION",
         "TaiLieuKyThuat_v2",
@@ -492,7 +554,19 @@ def main():
     parser.add_argument("--rollback-test-artifact", type=Path)
     parser.add_argument("--collection", default=FIXTURE_COLLECTION)
     parser.add_argument("--fixture-batch", default=FIXTURE_BATCH)
+    parser.add_argument("--validate-inputs-only", action="store_true")
     args = parser.parse_args()
+    if args.validate_inputs_only:
+        validate_formal_pair_inputs(
+            args.manifest,
+            args.output_dir,
+            args.trace,
+            provider_smoke_artifact=args.provider_smoke_artifact,
+            rollback_test_artifact=args.rollback_test_artifact,
+            trace_must_exist=False,
+        )
+        print(json.dumps({"status": "validated"}))
+        return 0
     report = run_rollout(
         args.manifest,
         args.output_dir,

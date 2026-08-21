@@ -1147,6 +1147,49 @@ def test_decomposition_rollout_rejects_reused_window_paths(
         )
 
 
+def test_decomposition_rollout_atomically_claims_output_before_arms(
+    monkeypatch,
+    tmp_path,
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    trace = tmp_path / "rag-trace.jsonl"
+    smoke = tmp_path / "provider-smoke.json"
+    output = tmp_path / "formal-pair-01"
+
+    def fake_validate(*args, **kwargs):
+        output.mkdir()
+        return {
+            "manifest": manifest,
+            "output": output,
+            "trace": trace,
+            "provider_smoke_artifact": smoke,
+            "git_sha": "abc123",
+            "manifest_sha": "manifest-sha",
+            "provider_sha": "provider-sha",
+            "provider_environment": {},
+            "governance_sha": "governance-sha",
+            "baseline_started_at": "2026-08-21T00:00:00Z",
+            "rollback": {},
+        }
+
+    monkeypatch.setattr(rollout, "validate_formal_pair_inputs", fake_validate)
+    monkeypatch.setattr(
+        rollout,
+        "_run",
+        lambda *args, **kwargs: pytest.fail("formal arm was dispatched"),
+    )
+
+    with pytest.raises(FileExistsError):
+        rollout.run_rollout(
+            manifest,
+            output,
+            trace,
+            provider_smoke_artifact=smoke,
+        )
+
+
 def test_decomposition_rollout_rejects_duplicate_deterministic_split_identity(
     monkeypatch, tmp_path
 ):
@@ -1616,6 +1659,151 @@ def test_decomposition_rollout_rejects_stale_provider_smoke_before_eval(
             trace,
             provider_smoke_artifact=smoke,
         )
+
+
+@pytest.mark.parametrize(
+    ("invalid_artifact", "error"),
+    [
+        ("manifest", "case without an id"),
+        ("smoke", "provider smoke artifact is invalid"),
+        ("rollback", "rollback evidence must pass"),
+    ],
+)
+def test_decomposition_formal_input_validation_precedes_trace_creation(
+    monkeypatch,
+    tmp_path,
+    invalid_artifact,
+    error,
+):
+    from mech_chatbot.config import settings as settings_module
+    from mech_chatbot.config.settings import Settings
+    from scripts.decomposition_eval import run_rollout as rollout
+    from scripts.eval.provider_smoke import provider_configuration_sha256_for_settings
+
+    git_sha = "abc123"
+    snapshot = Settings.from_env({})
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(_query_manifest_text(), encoding="utf-8")
+    smoke = tmp_path / "provider-smoke.json"
+    smoke.write_text(
+        json.dumps({
+            "schema": "provider-smoke-v1",
+            "passed": True,
+            "request_count": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+            "provider_retries": 0,
+            "completed_at": "2026-07-28T00:00:00Z",
+            "provider_configuration_sha256": (
+                provider_configuration_sha256_for_settings(snapshot)
+            ),
+            "provider_outcome": {"provider_blocked": False},
+        }),
+        encoding="utf-8",
+    )
+    rollback = tmp_path / "rollback.json"
+    rollback.write_text(
+        json.dumps({
+            "schema": "rollback-test-evidence-v1",
+            "passed": True,
+            "git_sha": git_sha,
+            "flags": ["RAG_QUERY_DECOMPOSITION_ENABLED"],
+        }),
+        encoding="utf-8",
+    )
+    invalid_payloads = {
+        "manifest": '{"id":""}\n',
+        "smoke": "{}",
+        "rollback": "{}",
+    }
+    {
+        "manifest": manifest,
+        "smoke": smoke,
+        "rollback": rollback,
+    }[invalid_artifact].write_text(
+        invalid_payloads[invalid_artifact],
+        encoding="utf-8",
+    )
+    trace = tmp_path / "rag-trace.jsonl"
+    output = tmp_path / "formal-pair-01"
+
+    monkeypatch.setenv(rollout.LIVE_OPT_IN, "1")
+    monkeypatch.setattr(settings_module, "load_settings", lambda: snapshot)
+    monkeypatch.setattr(rollout, "require_clean_worktree", lambda: None)
+    monkeypatch.setattr(rollout, "_utc_now", lambda: "2026-07-28T00:01:00Z")
+    monkeypatch.setattr(
+        rollout.subprocess,
+        "check_output",
+        lambda *args, **kwargs: f"{git_sha}\n",
+    )
+
+    with pytest.raises((RuntimeError, ValueError), match=error):
+        rollout.validate_formal_pair_inputs(
+            manifest,
+            output,
+            trace,
+            provider_smoke_artifact=smoke,
+            rollback_test_artifact=rollback,
+            trace_must_exist=False,
+        )
+
+    assert not trace.exists()
+    assert not output.exists()
+
+
+def test_decomposition_rollout_cli_validates_inputs_without_dispatch(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from scripts.decomposition_eval import run_rollout as rollout
+
+    manifest = tmp_path / "manifest.jsonl"
+    output = tmp_path / "output"
+    trace = tmp_path / "trace.jsonl"
+    smoke = tmp_path / "provider-smoke.json"
+    rollback = tmp_path / "rollback.json"
+    captured = None
+
+    def fake_validate(*args, **kwargs):
+        nonlocal captured
+        captured = {"args": args, "kwargs": kwargs}
+
+    monkeypatch.setattr(rollout, "validate_formal_pair_inputs", fake_validate)
+    monkeypatch.setattr(
+        rollout,
+        "run_rollout",
+        lambda *args, **kwargs: pytest.fail("formal arms were dispatched"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_rollout.py",
+            "--manifest",
+            str(manifest),
+            "--output-dir",
+            str(output),
+            "--trace",
+            str(trace),
+            "--provider-smoke-artifact",
+            str(smoke),
+            "--rollback-test-artifact",
+            str(rollback),
+            "--validate-inputs-only",
+        ],
+    )
+
+    assert rollout.main() == 0
+    assert captured == {
+        "args": (manifest, output, trace),
+        "kwargs": {
+            "provider_smoke_artifact": smoke,
+            "rollback_test_artifact": rollback,
+            "trace_must_exist": False,
+        },
+    }
+    assert json.loads(capsys.readouterr().out) == {"status": "validated"}
 
 
 @pytest.mark.parametrize(("passed", "expected_exit"), [(True, 0), (False, 1)])

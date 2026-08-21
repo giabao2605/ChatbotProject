@@ -152,7 +152,7 @@ collections inside one pair:
 ```powershell
 .\chat_env\Scripts\python.exe -m scripts.crag_eval.run_rollout ...
 .\chat_env\Scripts\python.exe -m scripts.grounded_math_eval.run_rollout ...
-.\chat_env\Scripts\python.exe -m scripts.decomposition_eval.run_rollout ...
+.\scripts\ops\start_query_formal_pair.ps1 -PythonPath <absolute-python-path> ...
 .\chat_env\Scripts\python.exe -m scripts.graph_eval.run_rollout ...
 ```
 
@@ -161,6 +161,12 @@ For Query Decomposition formal pairs, use only
 Query-only scope with 10 complex and 3 simple cases. The decomposition runner
 forces Grounded Math and every other advanced capability off in both arms; the
 candidate enables only Query Decomposition.
+
+Do not invoke the Query runner module directly. The Query pair entrypoint
+rejects a relative interpreter path, resolves and probes the exact absolute
+executable before creating the fresh trace, and uses that same executable for
+the single runner invocation. A probe/input failure must leave trace and output
+absent; any failure after trace creation is terminal for that formal window.
 
 Do not combine that manifest with
 `data/decomposition_eval_v1/math_query_interaction_manifest.jsonl` in one
