@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -268,6 +269,48 @@ def _create_query_window_fixture(tmp_path: Path) -> dict:
     }
 
 
+def _write_query_window_authorization(
+    fixture: dict,
+    run_root: Path,
+    *,
+    authorized_at=None,
+    expires_at=None,
+) -> Path:
+    now = datetime.now(timezone.utc)
+    authorized_at = authorized_at or (now - timedelta(minutes=1)).isoformat()
+    expires_at = expires_at or (now + timedelta(minutes=59)).isoformat()
+    draft = run_root.parent / "authorization-draft.json"
+    draft.write_text('{"status":"NOT_AUTHORIZED_DRAFT"}\n', encoding="utf-8")
+    authorization = run_root.parent / "authorization.json"
+    _write_json(
+        authorization,
+        {
+            "schema": "query-formal-window-owner-authorization-v1",
+            "status": "authorized",
+            "source_commit": fixture["commit"],
+            "run_root": str(run_root),
+            "authorized_at": authorized_at,
+            "expires_at": expires_at,
+            "approved_draft": {
+                "path": str(draft),
+                "sha256": _sha256(draft),
+            },
+            "authorization": {
+                "provider_traffic_authorized": True,
+                "formal_window_authorized": True,
+                "retry_or_catch_up_authorized": False,
+                "pilot_authorized": False,
+                "feature_activation_authorized": False,
+                "default_rollout_authorized": False,
+                "push_authorized": False,
+                "merge_authorized": False,
+                "file_deletion_authorized": False,
+            },
+        },
+    )
+    return authorization
+
+
 def _run_query_window_fixture(
     fixture: dict,
     run_root: Path,
@@ -275,14 +318,31 @@ def _run_query_window_fixture(
     *,
     revalidate=False,
     extra_environment=None,
+    authorization_path=None,
+    culture=None,
 ):
     def escaped(value) -> str:
         return str(value).replace("'", "''")
 
+    authorization_path = authorization_path or _write_query_window_authorization(
+        fixture, run_root
+    )
     revalidate_argument = (
         " `\n  -RevalidateForProviderTraffic" if revalidate else ""
     )
+    authorization_argument = (
+        f" `\n  -OwnerAuthorizationPath '{escaped(authorization_path)}'"
+        if authorization_path
+        else ""
+    )
+    culture_binding = (
+        "[System.Threading.Thread]::CurrentThread.CurrentCulture = "
+        f"[System.Globalization.CultureInfo]::GetCultureInfo('{culture}')"
+        if culture
+        else ""
+    )
     probe = f"""
+{culture_binding}
 function Get-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     [pscustomobject]@{{ State = '{task_state}' }}
@@ -293,7 +353,7 @@ function Get-ScheduledTask {{
   -PythonPath '{escaped(Path(sys.executable))}' `
   -CampaignRoot '{escaped(fixture['campaign'])}' `
   -TaskName 'Math-Test' `
-  -MathReleaseRoot '{escaped(fixture['release'])}'{revalidate_argument}
+  -MathReleaseRoot '{escaped(fixture['release'])}'{authorization_argument}{revalidate_argument}
 """
     environment = {
         **os.environ,
@@ -311,6 +371,93 @@ function Get-ScheduledTask {{
         text=True,
         check=False,
     )
+
+
+def test_query_window_entrypoint_accepts_iso_authorization_expiry_independent_of_locale(
+    tmp_path,
+):
+    fixture = _create_query_window_fixture(tmp_path)
+    run_root = tmp_path / "query-window"
+    authorization = _write_query_window_authorization(fixture, run_root)
+
+    result = _run_query_window_fixture(
+        fixture,
+        run_root,
+        authorization_path=authorization,
+        culture="vi-VN",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (run_root / "preflight.json").is_file()
+    assert (run_root / "rollback.json").is_file()
+
+
+def test_query_window_expired_authorization_tombstones_provider_boundary(tmp_path):
+    fixture = _create_query_window_fixture(tmp_path)
+    run_root = tmp_path / "query-window"
+    authorization = _write_query_window_authorization(fixture, run_root)
+    prepared = _run_query_window_fixture(
+        fixture,
+        run_root,
+        authorization_path=authorization,
+    )
+    _write_query_window_authorization(
+        fixture,
+        run_root,
+        expires_at="2026-08-21T00:00:00+07:00",
+    )
+
+    expired = _run_query_window_fixture(
+        fixture,
+        run_root,
+        revalidate=True,
+        authorization_path=authorization,
+        extra_environment={"EXTERNAL_PROCESSING_POLICY": "all_external"},
+    )
+
+    assert prepared.returncode == 0, prepared.stderr
+    assert expired.returncode != 0
+    assert "query_window_owner_authorization_invalid" in expired.stderr
+    assert sorted(path.name for path in run_root.iterdir()) == [
+        "owner-authorization-failure.json",
+        "preflight.json",
+        "rollback.json",
+    ]
+
+    _write_query_window_authorization(fixture, run_root)
+    corrected_retry = _run_query_window_fixture(
+        fixture,
+        run_root,
+        revalidate=True,
+        authorization_path=authorization,
+        extra_environment={"EXTERNAL_PROCESSING_POLICY": "all_external"},
+    )
+    assert corrected_retry.returncode != 0
+    assert "query_window_provider_boundary_root_invalid" in corrected_retry.stderr
+
+
+def test_query_window_entrypoint_rejects_authorization_longer_than_sixty_minutes(
+    tmp_path,
+):
+    fixture = _create_query_window_fixture(tmp_path)
+    run_root = tmp_path / "query-window"
+    now = datetime.now(timezone.utc)
+    authorization = _write_query_window_authorization(
+        fixture,
+        run_root,
+        authorized_at=(now - timedelta(minutes=1)).isoformat(),
+        expires_at=(now + timedelta(minutes=60)).isoformat(),
+    )
+
+    result = _run_query_window_fixture(
+        fixture,
+        run_root,
+        authorization_path=authorization,
+    )
+
+    assert result.returncode != 0
+    assert "query_window_owner_authorization_invalid" in result.stderr
+    assert not run_root.exists()
 
 
 def test_query_pair_entrypoint_binds_absolute_python_before_creating_trace(tmp_path):
@@ -1098,6 +1245,7 @@ def test_query_smoke_revalidates_bindings_at_the_authorization_boundary():
         "prepare_query_formal_window.ps1"
     )
     assert "scripts.eval.provider_smoke" not in query_preparation_block
+    assert "-OwnerAuthorizationPath $ownerAuthorization" in query_preparation_block
     assert query_smoke_block.index(
         "prepare_query_formal_window.ps1"
     ) < query_smoke_block.index("-RevalidateForProviderTraffic")
@@ -1105,14 +1253,15 @@ def test_query_smoke_revalidates_bindings_at_the_authorization_boundary():
         "-RevalidateForProviderTraffic"
     ) < query_smoke_block.index("scripts.eval.provider_smoke")
     assert "$env:EXTERNAL_PROCESSING_POLICY = 'all_external'" in query_smoke_block
+    assert "-OwnerAuthorizationPath $ownerAuthorization" in query_smoke_block
     assert query_smoke_block.index(
         "$env:EXTERNAL_PROCESSING_POLICY = 'all_external'"
     ) < query_smoke_block.index("prepare_query_formal_window.ps1")
     assert runbook.index("prepare_query_formal_window.ps1") < runbook.index(
-        "Authorization boundary: stop here"
+        "Chỉ chạy block trên sau khi owner"
     ) < runbook.index(
         "scripts.eval.provider_smoke",
-        runbook.index("Authorization boundary: stop here"),
+        runbook.index("Chỉ chạy block trên sau khi owner"),
     )
 
 

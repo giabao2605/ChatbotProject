@@ -170,6 +170,7 @@ $env:RAG_EVAL_EXPECTED_COLLECTION = 'MechChatbot_CRAG_Eval_v1'
 $python = 'C:\Users\bao.nguyen\Documents\ChatBotProject\chat_env\Scripts\python.exe'
 $runRoot = '<new-absolute-query-window-path>'
 $expectedSourceCommit = '<exact-40-character-final-rc-commit>'
+$ownerAuthorization = '<absolute-owner-authorization-json-path>'
 $mathCampaignRoot = 'C:\Users\bao.nguyen\Documents\ChatBotProject\.local\worktrees\advanced-rag-post-burst-disposition\.local\math-pilot-7b9d575-operator-window-13-campaign'
 $mathTaskName = 'ChatBotProject-GroundedMath-Operator-Window13'
 $mathReleaseRoot = 'C:\Users\bao.nguyen\Documents\ChatBotProject\.local\worktrees\advanced-rag-post-burst-disposition\.local\grounded-math-interaction-matrix-20260818-02\release-candidate'
@@ -178,16 +179,19 @@ $mathReleaseRoot = 'C:\Users\bao.nguyen\Documents\ChatBotProject\.local\worktree
   -RunRoot $runRoot `
   -ExpectedSourceCommit $expectedSourceCommit `
   -PythonPath $python `
+  -OwnerAuthorizationPath $ownerAuthorization `
   -CampaignRoot $mathCampaignRoot `
   -TaskName $mathTaskName `
   -MathReleaseRoot $mathReleaseRoot
 if ($LASTEXITCODE -ne 0) { throw 'Query offline readiness failed.' }
 ```
 
-Authorization boundary: stop here. The entrypoint above never calls a provider
-and creates only `preflight.json` plus `rollback.json`. Do not run the next
-block until the owner has approved provider traffic for this exact commit and
-fresh run-root.
+Chỉ chạy block trên sau khi owner đã approve exact draft/commit/fresh root và
+authorization vẫn còn hiệu lực. Entry point tự kiểm schema, draft hash,
+commit/root, expiry tối đa 60 phút và toàn bộ allow/deny scope bằng parse không
+phụ thuộc locale; block offline không gọi provider và chỉ tạo `preflight.json` cùng
+`rollback.json`. Trước block tiếp theo, cùng authorization phải vẫn còn hiệu
+lực; không suy diễn standing authority hoặc sửa expiry.
 
 ```powershell
 $env:EXTERNAL_PROCESSING_POLICY = 'all_external'
@@ -196,6 +200,7 @@ $env:EXTERNAL_PROCESSING_POLICY = 'all_external'
   -RunRoot $runRoot `
   -ExpectedSourceCommit $expectedSourceCommit `
   -PythonPath $python `
+  -OwnerAuthorizationPath $ownerAuthorization `
   -CampaignRoot $mathCampaignRoot `
   -TaskName $mathTaskName `
   -MathReleaseRoot $mathReleaseRoot `
@@ -207,10 +212,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Query provider-boundary revalidation failed.' 
 ```
 
 `prepare_query_formal_window.ps1` rejects missing/mismatched collection
-bindings, an existing run-root, source/worktree drift, manifest/runner hash
-drift, non-terminal Math campaign, active Scheduled Task, signed Math release
-drift and failed offline preflight/rollback. A failed attempt leaves the
-run-root non-reusable. Do not delete or repair it to continue the same window.
+bindings, invalid/expired owner authorization, an existing run-root,
+source/worktree drift, manifest/runner hash drift, non-terminal Math campaign,
+active Scheduled Task, signed Math release drift and failed offline
+preflight/rollback. Authorization failure tại provider boundary ghi
+`owner-authorization-failure.json`, làm root không thể revalidate lại sau khi
+sửa expiry. A failed attempt leaves the run-root non-reusable. Do not delete or
+repair it to continue the same window.
 Before presenting any future authorization draft, recompute and compare both
 the manifest and runner hashes stored in
 `data/integrated_hardening_v1/evidence/query-crag-offline-preparation.json`

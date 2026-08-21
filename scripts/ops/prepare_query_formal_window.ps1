@@ -6,6 +6,7 @@ param(
     [string]$CampaignRoot,
     [string]$TaskName,
     [string]$MathReleaseRoot,
+    [string]$OwnerAuthorizationPath,
     [switch]$RevalidateForProviderTraffic
 )
 
@@ -27,6 +28,63 @@ function Get-Sha256 {
         throw "query_window_required_artifact_missing"
     }
     return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+}
+
+function ConvertTo-AuthorizationInstant {
+    param([Parameter(Mandatory = $true)]$Value)
+    try {
+        if ($Value -is [datetime]) {
+            return [DateTimeOffset]$Value
+        }
+        return [DateTimeOffset]::Parse(
+            [string]$Value,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+    }
+    catch {
+        throw "query_window_owner_authorization_time_invalid"
+    }
+}
+
+function Assert-OwnerAuthorization {
+    param(
+        [string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedCommit,
+        [Parameter(Mandatory = $true)][string]$ExpectedRunRoot
+    )
+    if ([string]::IsNullOrWhiteSpace($Path) -or !(Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "query_window_owner_authorization_invalid"
+    }
+    $ownerAuthorization = Get-JsonFile -Path $Path
+    $approvedDraftPath = [string]$ownerAuthorization.approved_draft.path
+    $authorizedAt = ConvertTo-AuthorizationInstant -Value $ownerAuthorization.authorized_at
+    $expiresAt = ConvertTo-AuthorizationInstant -Value $ownerAuthorization.expires_at
+    $authorization = $ownerAuthorization.authorization
+    if (
+        $ownerAuthorization.schema -ne "query-formal-window-owner-authorization-v1" -or
+        $ownerAuthorization.status -ne "authorized" -or
+        $ownerAuthorization.source_commit -ne $ExpectedCommit -or
+        [IO.Path]::GetFullPath([string]$ownerAuthorization.run_root) -ne [IO.Path]::GetFullPath($ExpectedRunRoot) -or
+        [string]::IsNullOrWhiteSpace($approvedDraftPath) -or
+        !(Test-Path -LiteralPath $approvedDraftPath -PathType Leaf) -or
+        (Get-Sha256 -Path $approvedDraftPath) -ne $ownerAuthorization.approved_draft.sha256 -or
+        $authorizedAt -gt [DateTimeOffset]::Now -or
+        $expiresAt -le [DateTimeOffset]::Now -or
+        $expiresAt -le $authorizedAt -or
+        ($expiresAt - $authorizedAt) -gt [TimeSpan]::FromMinutes(60) -or
+        $authorization.provider_traffic_authorized -ne $true -or
+        $authorization.formal_window_authorized -ne $true -or
+        $authorization.retry_or_catch_up_authorized -ne $false -or
+        $authorization.pilot_authorized -ne $false -or
+        $authorization.feature_activation_authorized -ne $false -or
+        $authorization.default_rollout_authorized -ne $false -or
+        $authorization.push_authorized -ne $false -or
+        $authorization.merge_authorized -ne $false -or
+        $authorization.file_deletion_authorized -ne $false
+    ) {
+        throw "query_window_owner_authorization_invalid"
+    }
 }
 
 function Assert-SourceState {
@@ -199,6 +257,23 @@ elseif (Test-Path -LiteralPath $RunRoot) {
     throw "query_window_run_root_must_not_exist"
 }
 Assert-SourceState -Root $projectRoot -ExpectedCommit $ExpectedSourceCommit
+try {
+    Assert-OwnerAuthorization -Path $OwnerAuthorizationPath `
+        -ExpectedCommit $ExpectedSourceCommit -ExpectedRunRoot $RunRoot
+}
+catch {
+    if ($RevalidateForProviderTraffic -and (Test-Path -LiteralPath $RunRoot -PathType Container)) {
+        [ordered]@{
+            schema = "query-owner-authorization-failure-v1"
+            status = "tombstoned"
+            source_commit = $ExpectedSourceCommit
+            reason = "owner_authorization_invalid"
+        } | ConvertTo-Json | Set-Content -LiteralPath (
+            Join-Path $RunRoot "owner-authorization-failure.json"
+        ) -Encoding utf8
+    }
+    throw
+}
 if (
     [string]::IsNullOrWhiteSpace($PythonPath) -or
     [string]::IsNullOrWhiteSpace($CampaignRoot) -or
