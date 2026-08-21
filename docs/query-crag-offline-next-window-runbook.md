@@ -513,6 +513,42 @@ scope riêng cho batched/isolated branch retrieval + parent context; sau đó v�
 cần clean commit, authorization, never-used root, preparation, provider-boundary,
 fresh smoke, declaration, trace và series hoàn toàn mới.
 
+### Batched retrieval design delta `9e48ddc`
+
+Owner đã mở riêng architecture scope sau disposition trên. Exact design commit
+`9e48ddcf6e9533958c241ac1ae68e2fa31507070` gom tối đa ba branch thành một dense
+batch và một sparse batch có thứ tự; strict miss hoặc BOM chỉ mở broad batch cho
+những branch cần thiết. Không có call chồng lấn trên shared Qdrant client, không
+tạo thêm client/credential copy và không đổi project-owned RRF, query embedding,
+strict/broad/RBAC/lifecycle filters, base-k, retrieval mode hoặc direct/simple
+retrieval contract.
+
+Parent hydration chỉ batch khi request thực tế đã tạo retrieval mode
+`decomposed_*`. Mỗi `QueryRequest(query=None)` bind exact parent key và lặp lại
+site, department, security/clearance, published/approved/current, serving epoch
+và publication version. Baseline và simple/direct request tiếp tục dùng path cũ.
+Branch/parent batch failure là terminal; không serial/scroll fallback, retry,
+replacement hoặc catch-up. Mỗi Qdrant batch nhận remaining request deadline và
+không được tăng timeout cũ.
+
+Offline validation: full unit `3015/3015`, compile, `pip-audit --local` và ba
+review correctness/security/complexity đều pass; provider traffic bằng `0`.
+Telemetry mới đánh dấu per-branch latency là `shared_batch` và ghi một
+`retrieval_batch` aggregate. Đây chỉ là design/offline safety evidence, không
+phải formal latency/quality evidence và không authorize Query traffic.
+
+Planning target từ tombstone pair 02: baseline cũ cho phép candidate tối đa
+`12622.245 ms`; branch-only counterfactual còn `16543.61 ms`. Nếu các stage khác
+không đổi, parent tail cũ `6089 ms` phải giảm xuống khoảng `2167.635 ms` hoặc
+thấp hơn. Không được dùng phép tính này thay measured gate, nới ratio `1.5` hoặc
+chọn case đẹp.
+
+Formal attempt kế tiếp phải bắt đầu từ exact clean tracked commit chứa design và
+docs này, draft/owner authorization còn hiệu lực, never-used root, offline
+preparation, provider-boundary revalidation, fresh `5/5` smoke, signed
+declaration, empty trace và tối đa ba pair tuần tự mới. Không reuse bất kỳ
+authorization, root, smoke, declaration, trace hoặc output của `d424628`.
+
 ## Sau formal window
 
 - `passed` chỉ là technical evidence; không tự authorize controlled-demo hay
