@@ -476,6 +476,7 @@ def test_query_window_entrypoint_revalidates_immediately_before_provider_boundar
         fixture,
         run_root,
         revalidate=True,
+        extra_environment={"EXTERNAL_PROCESSING_POLICY": "all_external"},
     )
 
     assert prepared.returncode == 0, prepared.stderr
@@ -492,6 +493,41 @@ def test_query_window_entrypoint_revalidates_immediately_before_provider_boundar
     assert {
         name: _sha256(run_root / name) for name in original_hashes
     } == original_hashes
+
+
+def test_query_window_provider_boundary_rejects_unbound_external_processing_policy(
+    tmp_path,
+):
+    fixture = _create_query_window_fixture(tmp_path)
+    run_root = tmp_path / "query-window"
+    prepared = _run_query_window_fixture(fixture, run_root)
+
+    revalidated = _run_query_window_fixture(
+        fixture,
+        run_root,
+        revalidate=True,
+    )
+
+    assert prepared.returncode == 0, prepared.stderr
+    assert revalidated.returncode != 0
+    assert "query_window_external_processing_policy_invalid" in revalidated.stderr
+    assert sorted(path.name for path in run_root.iterdir()) == [
+        "preflight.json",
+        "provider-boundary-policy-failure.json",
+        "rollback.json",
+    ]
+
+    corrected_policy_retry = _run_query_window_fixture(
+        fixture,
+        run_root,
+        revalidate=True,
+        extra_environment={"EXTERNAL_PROCESSING_POLICY": "all_external"},
+    )
+
+    assert corrected_policy_retry.returncode != 0
+    assert "query_window_provider_boundary_root_invalid" in (
+        corrected_policy_retry.stderr
+    )
 
 
 def test_query_window_entrypoint_rejects_concurrent_commit_during_preparation(
@@ -764,6 +800,10 @@ def test_query_smoke_revalidates_bindings_at_the_authorization_boundary():
     assert query_smoke_block.index(
         "-RevalidateForProviderTraffic"
     ) < query_smoke_block.index("scripts.eval.provider_smoke")
+    assert "$env:EXTERNAL_PROCESSING_POLICY = 'all_external'" in query_smoke_block
+    assert query_smoke_block.index(
+        "$env:EXTERNAL_PROCESSING_POLICY = 'all_external'"
+    ) < query_smoke_block.index("prepare_query_formal_window.ps1")
     assert runbook.index("prepare_query_formal_window.ps1") < runbook.index(
         "Authorization boundary: stop here"
     ) < runbook.index(
@@ -788,6 +828,10 @@ def test_crag_smoke_keeps_both_math_terminal_guards():
     assert crag_block.index("Assert-MathDefaultRollout") < crag_block.index(
         "scripts.eval.provider_smoke"
     )
+    assert "$env:EXTERNAL_PROCESSING_POLICY = 'all_external'" in crag_block
+    assert crag_block.index(
+        "$env:EXTERNAL_PROCESSING_POLICY = 'all_external'"
+    ) < crag_block.index("scripts.eval.provider_smoke")
 
 
 def test_offline_entrypoint_and_shared_math_guards_remain_fail_closed():

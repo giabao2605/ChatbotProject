@@ -183,6 +183,17 @@ if ($RevalidateForProviderTraffic) {
     if (!(Test-Path -LiteralPath $RunRoot -PathType Container)) {
         throw "query_window_run_root_missing"
     }
+    if ($env:EXTERNAL_PROCESSING_POLICY -ne "all_external") {
+        [ordered]@{
+            schema = "query-provider-boundary-failure-v1"
+            status = "tombstoned"
+            source_commit = $ExpectedSourceCommit
+            reason = "external_processing_policy_invalid"
+        } | ConvertTo-Json | Set-Content -LiteralPath (
+            Join-Path $RunRoot "provider-boundary-policy-failure.json"
+        ) -Encoding utf8
+        throw "query_window_external_processing_policy_invalid"
+    }
 }
 elseif (Test-Path -LiteralPath $RunRoot) {
     throw "query_window_run_root_must_not_exist"

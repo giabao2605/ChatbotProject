@@ -190,6 +190,8 @@ block until the owner has approved provider traffic for this exact commit and
 fresh run-root.
 
 ```powershell
+$env:EXTERNAL_PROCESSING_POLICY = 'all_external'
+
 & .\scripts\ops\prepare_query_formal_window.ps1 `
   -RunRoot $runRoot `
   -ExpectedSourceCommit $expectedSourceCommit `
@@ -269,6 +271,8 @@ Assert-MathDefaultRollout -MathReleaseRoot $mathReleaseRoot
 
 & $python -m scripts.crag_eval.verify_rollback `
   --output "$runRoot\rollback.json"
+
+$env:EXTERNAL_PROCESSING_POLICY = 'all_external'
 
 & $python -m scripts.eval.provider_smoke `
   --output "$runRoot\provider-smoke.json"

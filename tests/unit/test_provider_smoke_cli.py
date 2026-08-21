@@ -29,6 +29,7 @@ def _settings_snapshot() -> Settings:
             "PROXYLLM_BASE_URL": "https://provider.example/v1",
             "GPT_MODEL_NAME": "snapshot-model",
             "MAX_CONCURRENT_RAG": "7",
+            "EXTERNAL_PROCESSING_POLICY": "all_external",
         }
     )
 
@@ -163,6 +164,25 @@ def test_configured_smoke_builds_and_uses_snapshot_owned_adapter():
     assert captured["llm_settings"].max_output_tokens == 16
     assert captured["llm_settings"].timeout_seconds == 30.0
     assert captured["external_ai_settings"].application_environment == settings.APP_ENV
+
+
+def test_configured_smoke_rejects_unbound_external_processing_policy_before_client_build():
+    settings = Settings.from_env(
+        {
+            "PROXYLLM_API_KEY": "test-provider-key",
+            "PROXYLLM_BASE_URL": "https://provider.example/v1",
+            "GPT_MODEL_NAME": "snapshot-model",
+        }
+    )
+
+    def build_adapter(*_args, **_kwargs):
+        raise AssertionError("invalid policy must stop before building the client")
+
+    with pytest.raises(ValueError, match="explicitly set to all_external"):
+        run_configured_provider_smoke(
+            settings,
+            adapter_builder=build_adapter,
+        )
 
 
 def test_llm_adapter_invoke_once_disables_tenacity_retries(monkeypatch):

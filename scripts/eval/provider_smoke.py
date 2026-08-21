@@ -239,6 +239,13 @@ def run_configured_provider_smoke(
     from mech_chatbot.config.settings import ExternalAiSettings, LlmSettings
     from mech_chatbot.llm.llm_client import build_llm_adapter
 
+    if (
+        not settings.EXTERNAL_PROCESSING_POLICY_EXPLICIT
+        or str(settings.EXTERNAL_PROCESSING_POLICY).strip().casefold() != "all_external"
+    ):
+        raise ValueError(
+            "EXTERNAL_PROCESSING_POLICY must be explicitly set to all_external"
+        )
     builder = adapter_builder or build_llm_adapter
     smoke_settings = replace(
         LlmSettings.from_settings(settings),
