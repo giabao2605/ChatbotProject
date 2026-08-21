@@ -655,6 +655,7 @@ def _run_complex_plan(
         plan,
         retrieve_branch,
         access_context,
+        max_workers=1,
         deadline_monotonic=state.budget.deadline_monotonic,
         on_timeout=lambda _query: _empty_deadline_branch(),
     )

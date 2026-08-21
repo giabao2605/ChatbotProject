@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import replace
 from types import SimpleNamespace
@@ -264,6 +265,95 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
         forbidden in serialized
         for forbidden in ("subquery", "question", "prompt", "document_text", "answer")
     )
+
+
+def test_query_decomposition_avoids_overlapping_shared_qdrant_calls(monkeypatch):
+    from qdrant_client.http.exceptions import ResponseHandlingException
+
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+
+    request = _prepared_request(
+        question=(
+            "Đối chiếu định mức CRAG-EVAL-NUM-001, tổng BOM "
+            "CRAG-EVAL-BOM-001 và quy trình lắp CRAG-EVAL-PART-C."
+        )
+    )
+    decision = replace(
+        _route_decision(
+            request,
+            part_ids=(
+                "CRAG-EVAL-NUM-001",
+                "CRAG-EVAL-BOM-001",
+                "CRAG-EVAL-PART-C",
+            ),
+        ),
+        is_bom_query=True,
+    )
+    active_calls = 0
+    call_lock = threading.Lock()
+
+    def retrieve(**kwargs):
+        nonlocal active_calls
+        with call_lock:
+            active_calls += 1
+            overlapping = active_calls > 1
+        try:
+            if overlapping:
+                raise ResponseHandlingException(
+                    RuntimeError("simulated shared Qdrant client overlap")
+                )
+            time.sleep(0.03)
+            query = kwargs["query_to_search"]
+            return (
+                [
+                    Document(
+                        page_content=f"Approved evidence for {query}",
+                        metadata={"doc_id": query, "trang_so": 1},
+                    )
+                ],
+                5,
+                "strict_exact:explicit_dense_bm25_rrf",
+                time.time(),
+                object(),
+            )
+        finally:
+            with call_lock:
+                active_calls -= 1
+
+    monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
+    monkeypatch.setattr(
+        retrieval_phase,
+        "_assemble_context",
+        lambda docs, _query: "\n".join(doc.page_content for doc in docs),
+    )
+    monkeypatch.setattr(
+        retrieval_phase,
+        "evaluate_answerability",
+        lambda *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.SUFFICIENT,
+            reason="covered",
+        ),
+    )
+
+    outcome = _run_phase(
+        lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(
+            retrieve=retrieve,
+            query_decomposition_enabled=True,
+        ),
+        provider=SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: SimpleNamespace(
+                content=(
+                    '{"subqueries":["định mức CRAG-EVAL-NUM-001",'
+                    '"tổng BOM CRAG-EVAL-BOM-001",'
+                    '"quy trình lắp CRAG-EVAL-PART-C"]}'
+                )
+            )
+        ),
+    )
+
+    assert len(outcome.decomposition_branches) == 3
 
 
 def test_decomposition_scopes_only_router_validated_branch_codes(
