@@ -211,6 +211,12 @@ bindings, an existing run-root, source/worktree drift, manifest/runner hash
 drift, non-terminal Math campaign, active Scheduled Task, signed Math release
 drift and failed offline preflight/rollback. A failed attempt leaves the
 run-root non-reusable. Do not delete or repair it to continue the same window.
+Before presenting any future authorization draft, recompute and compare both
+the manifest and runner hashes stored in
+`data/integrated_hardening_v1/evidence/query-crag-offline-preparation.json`
+against the exact proposed commit. A stale preparation-packet binding is a
+terminal first failure even when it is detected before the script creates the
+run-root; do not refresh the packet and continue under the same authorization.
 The `-RevalidateForProviderTraffic` call immediately before smoke rechecks all
 bindings and reruns offline preflight/rollback into
 `*-provider-boundary.json`; it refuses a root containing anything beyond the
@@ -432,6 +438,36 @@ catch-up/carry-forward/reuse artifact. Query tiếp tục OFF. Absolute interpre
 binding nay phải được enforce bởi `start_query_formal_pair.ps1`; formal attempt
 tương lai vẫn cần owner authorization, never-used root, evidence, smoke,
 declaration, trace và series hoàn toàn mới.
+
+### Formal window `0eaddfa` đã terminal
+
+Owner đã approve exact draft SHA-256
+`4146fdb19e5d507a964c9d79f16fc2e3b06960345cc98897c45726b72c8895b9`
+cho `query-formal-0eaddfa-20260821-01` trên clean commit
+`0eaddfa3998ce4ee5cc2d17aa4c3b8e1e605bd90`. Exact Python, runtime snapshot,
+tracked lock, manifest, runner và operator hashes đều khớp draft; root chưa
+từng tồn tại tại authorization boundary.
+
+Offline preparation đầu tiên fail với
+`query_window_preparation_binding_drift` trước khi tạo preparation artifact.
+Manifest binding vẫn khớp, nhưng tracked packet
+`query-crag-offline-preparation.json` bind runner SHA-256 cũ
+`5bfdbaa23c8dd7902dcc4042d2c5c371683c1fe79a4662018373460716418e4a` thay vì
+exact approved runner SHA-256
+`4d970dbf0d8ff3aea68a56c808ce70239f958e6cd1930781ea16fe350d71e5f0`.
+
+Contract `stop_on_first_failure` làm authorization/window consumed và
+tombstone tại offline pre-root validation. Root sau adjudication chỉ chứa
+`window-disposition.json`; không có boundary, smoke, declaration, trace hoặc
+formal-pair output. Provider traffic bằng `0`, provider health và Query quality
+chưa được evaluate, Query tiếp tục OFF. Disposition SHA-256
+`9a3a9ded829e95605e09267404c1c77cc3b9f55612483047c533ee549ecaeda3`.
+
+Không refresh packet rồi chạy lại cùng authorization/root. Bước kế tiếp là
+design delta + regression cho preparation binding trên commit mới; sau đó phải
+có draft/owner authorization/never-used root/preparation/provider-boundary/
+fresh smoke/declaration/trace/series hoàn toàn mới. Không reuse hoặc
+carry-forward artifact từ `d76ad9c` hay `0eaddfa`.
 
 ## Sau formal window
 

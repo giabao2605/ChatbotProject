@@ -986,7 +986,7 @@ def test_query_preparation_is_offline_and_fail_closed():
         "manifest_reference"
     ]["prepared_sha256"]
     assert query["execution_bindings"]["runner_sha256"] == (
-        "5bfdbaa23c8dd7902dcc4042d2c5c371683c1fe79a4662018373460716418e4a"
+        "4d970dbf0d8ff3aea68a56c808ce70239f958e6cd1930781ea16fe350d71e5f0"
     )
     assert query["execution_bindings"]["release_decisions_sha256"] == (
         RELEASE_DECISIONS_SHA256
@@ -1012,6 +1012,14 @@ def test_query_preparation_is_offline_and_fail_closed():
         "required_branch_accuracy": 1.0,
         "required_branch_citation_accuracy": 1.0,
     }
+
+
+def test_query_preparation_runner_binding_matches_current_runner():
+    query = _load()["capabilities"]["query_decomposition"]
+
+    assert query["execution_bindings"]["runner_sha256"] == _sha256(
+        ROOT / "scripts" / "decomposition_eval" / "run_rollout.py"
+    )
 
 
 def test_crag_preparation_is_offline_and_isolates_both_candidate_flags():
