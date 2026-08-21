@@ -557,6 +557,30 @@ preparation, provider-boundary revalidation, fresh `5/5` smoke, signed
 declaration, empty trace và tối đa ba pair tuần tự mới. Không reuse bất kỳ
 authorization, root, smoke, declaration, trace hoặc output của `d424628`.
 
+### Formal window `6a566e1` đã terminal ở fresh smoke
+
+Sau authorization-gate hardening `802aa90`, window
+`query-formal-6a566e1-20260821-01` bind exact clean commit
+`6a566e17729022ea060d3a61ef65986b6b8562da`, draft SHA-256
+`721f34befa9011513c1c7d95069d4164523f3e1dfde8c2aa341ee075bcf15da8` và
+authorization lifetime đúng 60 phút. Offline/provider-boundary preflight pass
+`13/13`; rollback pass trên exact commit và xác nhận Query flag OFF.
+
+Fresh formal-window smoke duy nhất fail `0/5`: cả năm request trả HTTP `502
+InternalServerError`, zero retry, một attempt/request, timeout 30 giây. Smoke
+SHA-256 `5d5cc9994790b8d03e0e9ed9eead6fb835592bb9f1fcd97269cbe37181f1ec66`;
+provider configuration SHA-256 vẫn là
+`9d978ec3fb533f7316eb98928ec0f3cbbde9f6e52b33ae3b45aff15d1d61416f`.
+Đây là provider availability failure, không phải Query quality result.
+
+Contract dừng ngay trước declaration/trace/formal pair. Disposition SHA-256
+`ba3b3e9a4129bbcd8385619240a1eae6f46c6e967bffbcffcfc38eadf5de1f9b` khóa
+authorization/window ở consumed+tombstoned; Query tiếp tục OFF. Không rerun
+smoke, không reuse preparation/boundary artifact và không mở formal pair trên
+root này. Future attempt chỉ được xem xét sau independent provider recovery
+signal, rồi phải dùng fresh draft/authorization/never-used root/preparation/
+boundary/smoke/declaration/trace/pair artifacts hoàn toàn mới.
+
 ## Sau formal window
 
 - `passed` chỉ là technical evidence; không tự authorize controlled-demo hay
