@@ -322,6 +322,8 @@ Checklist này chỉ chuẩn bị offline; không phải authorization:
   `MechChatbot_CRAG_Eval_v1` trước khi tạo run-root.
 - [ ] Run-root chưa từng tồn tại; không reuse trace, output, smoke, declaration
   hoặc pair từ bất kỳ window/smoke tombstone trước.
+- [ ] Health smoke `5/5` gần nhất chỉ là consumed recovery signal; không copy
+  artifact hoặc hash đó vào fresh formal run-root/declaration.
 - [ ] Query packet, manifest 13 case và runner hash khớp byte-for-byte.
 - [ ] Math campaign terminal `100/100`, stop marker tồn tại, base/operator gate
   pass, Scheduled Task `Disabled`.
@@ -363,14 +365,29 @@ expires_at: <required>
 Nếu một placeholder còn trống, exact binding đã drift hoặc owner chưa ký thì
 giữ `status: NOT_AUTHORIZED_TEMPLATE` và không tạo smoke/declaration.
 
-### Recovery/cooldown gate sau smoke `58dbb08`
+### Recovery/cooldown gate sau các health smoke
 
 Run-root `query-provider-smoke-58dbb08-20260820-141914` đã tombstone sau
 offline/provider-boundary guards xanh nhưng smoke `0/5`, năm HTTP `502`, zero
-retry. Không chạy smoke theo timer, manual retry hoặc same-root retry. Chỉ owner
-được mở một smoke mới sau khi có recovery signal bên ngoài ghi rõ timestamp và
-provider identity; signal đó không phải formal evidence và vẫn cần run-root,
-authorization, preparation và boundary revalidation mới.
+retry. Health root `provider-health-smoke-d28be06-20260820T083329Z` sau đó
+cũng tombstone ở `0/5` với năm HTTP `502`, zero retry. Health root
+`provider-health-smoke-d28be06-20260821T004535Z` kế tiếp tombstone ở `4/5`
+vì một `APITimeoutError`, zero retry.
+
+Recovery signal mới nhất tại
+`provider-health-smoke-d28be06-20260821T011357Z` đạt `5/5`, zero retry, P95
+`3.13s`, provider configuration SHA-256
+`9d978ec3fb533f7316eb98928ec0f3cbbde9f6e52b33ae3b45aff15d1d61416f`.
+Provider-smoke artifact SHA-256 là
+`01f4f2dd39502762ea0585518123a23e879f19c47f173f8b58affe78fd6b03a4`.
+Disposition khóa lượt này thành `health_proof_only`, `formal_evidence=false`,
+`reuse_authorized=false` và `consumed=true`.
+
+Không chạy thêm standalone health smoke. Fresh Query formal window chỉ được mở
+sau khi owner ký envelope bind exact clean commit và run-root chưa từng tồn
+tại. Window đó phải chạy lại preparation, provider-boundary revalidation và
+fresh formal-window smoke riêng; không copy health artifact/hash ở trên vào
+declaration hoặc run-root mới.
 
 ## Sau formal window
 
