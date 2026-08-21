@@ -469,6 +469,50 @@ có draft/owner authorization/never-used root/preparation/provider-boundary/
 fresh smoke/declaration/trace/series hoàn toàn mới. Không reuse hoặc
 carry-forward artifact từ `d76ad9c` hay `0eaddfa`.
 
+### Formal window `d424628` đã terminal
+
+Preparation-packet binding được sửa test-first trên exact clean commit
+`d42462866b9d5905642bc518d34e29c18d7b7802`. Window mới
+`query-formal-d424628-20260821-01` pass offline/provider-boundary preflight
+`13/13`, rollback và fresh provider smoke `5/5`, zero retry, một
+attempt/request. Declaration bind exact draft, authorization, source, manifest,
+packet, runner, launcher, Python/runtime, provider configuration và Math release
+hashes; không reuse evidence từ window trước.
+
+Pair 01 pass toàn bộ gate với latency P95 `16748.04 → 11720.63` ms, ratio
+`0.699820994`, cost ratio `1.249319684`; đây chỉ là một technical pair,
+`production_eligible=false` và không authorize pilot/activation/default.
+
+Pair 02 fail duy nhất `latency_within_budget`: latency P95
+`8414.83 → 21364.61` ms, ratio `2.538923543 > 1.5`. Cost ratio
+`1.211159875`, mọi non-latency gate pass, provider failure/retry và prohibited
+trace event đều bằng `0`. Đây là terminal formal failure theo
+`stop_on_first_failure`; pair 03 không được tạo. Disposition SHA-256
+`b66c871b67e43b0f017472743fb455d99d8f5a90d18c9621a98090e924c22419`.
+
+Authorization/window đã consumed và tombstone, Query tiếp tục OFF. Không rerun
+pair 02/03, không chọn pair đẹp, không nới threshold và không reuse/carry-forward
+smoke, declaration, trace hay output. Chẩn đoán latency chỉ dùng evidence bất
+biến.
+
+Offline exact-gate replay tái tạo byte-for-byte gate SHA-256
+`363c7038b8682c07d568c51eda32312c3afa2b17ed859662e343a52c19705730`.
+Minimized tail case có branch retrieval tuần tự `2354 + 2467 + 2532 ms`, parent
+context `6089 ms` và generation `7736 ms`. Counterfactual lý tưởng chỉ thay tổng
+branch bằng branch max vẫn cho P95 `16543.61 ms`, ratio
+`1.966006443 > 1.5`; do đó hoàn tác serialization vừa không đủ đạt gate vừa mở
+lại regression shared-client `ResponseHandlingException`. Bỏ parent hydration
+hoặc cấp client riêng cho từng branch là architecture/evidence-semantics change,
+không có public deterministic seam chứng minh an toàn trong scope này.
+
+Diagnosis SHA-256
+`8589ec36d4d3728755d79c8823715dbe2cad0df17b6367a25b8480c57bb8b25a`
+đặt disposition `keep_off_technical_limit_current_design`. Không tạo speculative
+code fix/test và Query giữ OFF. Future attempt chỉ được xem xét sau một design
+scope riêng cho batched/isolated branch retrieval + parent context; sau đó vẫn
+cần clean commit, authorization, never-used root, preparation, provider-boundary,
+fresh smoke, declaration, trace và series hoàn toàn mới.
+
 ## Sau formal window
 
 - `passed` chỉ là technical evidence; không tự authorize controlled-demo hay
