@@ -337,9 +337,13 @@ Checklist này chỉ chuẩn bị offline; không phải authorization:
   run-root, provider configuration và giới hạn traffic.
 - [ ] Fresh smoke đúng 5 request, một attempt/request, timeout 30 giây, zero
   retry; baseline bắt đầu trong 30 phút.
-- [ ] Formal pair chạy tuần tự, tối đa 3 pair; dừng và tombstone ngay khi có
-  provider failure/retry, drift, duplicate/mismatched trace ID hoặc fallback
-  ngoài deterministic local split contract.
+- [ ] Resolve và probe exact absolute Python interpreter trước khi tạo zero-byte
+  trace; không dùng relative executable path ở formal dispatch.
+- [ ] Formal pair chạy tuần tự, tối đa 3 pair; dừng và tombstone ngay khi formal
+  gate trả false (gồm latency/cost), runner không launch, có provider
+  failure/retry, drift, duplicate/mismatched trace ID hoặc fallback ngoài
+  deterministic local split contract. Local pre-run failure sau khi tạo trace
+  vẫn là first failure; không sửa command rồi tiếp tục cùng window.
 
 ### Authorization envelope chưa ký
 
@@ -392,6 +396,35 @@ sau khi owner ký envelope bind exact clean commit và run-root chưa từng t�
 tại. Window đó phải chạy lại preparation, provider-boundary revalidation và
 fresh formal-window smoke riêng; không copy health artifact/hash ở trên vào
 declaration hoặc run-root mới.
+
+### Formal window `d76ad9c` đã terminal
+
+Window `query-formal-d76ad9c-20260821-01` bind exact commit
+`d76ad9c64ab684f138f1c589e04b2e1f17707a2d`, pass offline/provider-boundary
+preflight `13/13`, rollback `33/33` và fresh smoke `5/5`, zero retry. Pair 01
+pass toàn bộ gate với latency P95 ratio `1.035668005`; kết quả này chỉ là một
+technical pair, không authorize pilot/activation/default rollout.
+
+Pre-run dispatch cho pair 02 sau đó fail vì PowerShell không resolve được
+relative Python interpreter path. Python chưa khởi động, output chưa được tạo,
+không có provider traffic và trace còn `0` byte; tuy nhiên contract
+`stop_on_first_failure` không có ngoại lệ. Canonical terminal vì vậy là local
+dispatch failure, authorization/window bị consumed và chỉ pair 01 là formal
+evidence hợp lệ.
+
+Corrected launch sau terminal là out-of-contract. Raw pair-02 output được giữ
+nguyên chỉ làm non-formal diagnostic residue, không phải formal/rollout evidence
+và không được reuse/carry-forward. Observation residue có latency P95 ratio
+`1.511066968 > 1.5`, zero provider failure/retry; pair 03 không tồn tại.
+Disposition SHA-256
+`8c22265d301e37d7169ad8c28ad84a2b21bfdb5eaa00aac9004c8fbbc054c64d`
+được bảo toàn; canonical adjudication SHA-256
+`3313e5dc4e3dec91b3c31d12976aca99cc6545e074bd6b42ceac8e3c767ec08e`
+sửa terminal reason. Không rerun smoke/pair, không nới threshold, không
+catch-up/carry-forward/reuse artifact. Query tiếp tục OFF. Trước window mới phải
+harden/verify absolute interpreter binding; formal attempt tương lai cần owner
+authorization, never-used root, evidence, smoke, declaration, trace và series
+hoàn toàn mới.
 
 ## Sau formal window
 
