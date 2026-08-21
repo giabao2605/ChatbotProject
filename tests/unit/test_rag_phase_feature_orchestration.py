@@ -58,6 +58,7 @@ def test_decomposition_usage_debug_boundary_strips_unsafe_branch_fields():
     assert set(usage["branches"][0]) == {"branch_id", "retrieval", "correction"}
     assert set(usage["branches"][0]["retrieval"]) == {
         "latency_ms",
+        "latency_scope",
         "document_count",
         "estimated_input_tokens",
         "estimated_cost",
@@ -68,6 +69,11 @@ def test_decomposition_usage_debug_boundary_strips_unsafe_branch_fields():
         "input_tokens",
         "output_tokens",
         "estimated_cost",
+    }
+    assert usage["retrieval_batch"] == {
+        "latency_ms": 0,
+        "branch_count": 0,
+        "shared": False,
     }
 
 
@@ -267,9 +273,7 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
     )
 
 
-def test_query_decomposition_avoids_overlapping_shared_qdrant_calls(monkeypatch):
-    from qdrant_client.http.exceptions import ResponseHandlingException
-
+def test_query_decomposition_batches_shared_qdrant_reads(monkeypatch):
     from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
     from mech_chatbot.rag.phases import retrieval as retrieval_phase
 
@@ -290,26 +294,25 @@ def test_query_decomposition_avoids_overlapping_shared_qdrant_calls(monkeypatch)
         ),
         is_bom_query=True,
     )
-    active_calls = 0
-    call_lock = threading.Lock()
+    batch_calls = []
 
-    def retrieve(**kwargs):
-        nonlocal active_calls
-        with call_lock:
-            active_calls += 1
-            overlapping = active_calls > 1
-        try:
-            if overlapping:
-                raise ResponseHandlingException(
-                    RuntimeError("simulated shared Qdrant client overlap")
-                )
-            time.sleep(0.03)
-            query = kwargs["query_to_search"]
-            return (
+    def retrieve(**_kwargs):
+        raise AssertionError("decomposed retrieval must use the batch boundary")
+
+    def retrieve_many(requests, *, deadline_monotonic=None):
+        assert deadline_monotonic is not None
+        batch_calls.append(tuple(requests))
+        return tuple(
+            (
                 [
                     Document(
-                        page_content=f"Approved evidence for {query}",
-                        metadata={"doc_id": query, "trang_so": 1},
+                        page_content=(
+                            f"Approved evidence for {request['query_to_search']}"
+                        ),
+                        metadata={
+                            "doc_id": request["query_to_search"],
+                            "trang_so": 1,
+                        },
                     )
                 ],
                 5,
@@ -317,9 +320,8 @@ def test_query_decomposition_avoids_overlapping_shared_qdrant_calls(monkeypatch)
                 time.time(),
                 object(),
             )
-        finally:
-            with call_lock:
-                active_calls -= 1
+            for request in requests
+        )
 
     monkeypatch.setattr(retrieval_phase, "tokenize_cached", lambda value: str(value))
     monkeypatch.setattr(
@@ -340,6 +342,7 @@ def test_query_decomposition_avoids_overlapping_shared_qdrant_calls(monkeypatch)
         lambda state: retrieval_phase.retrieve_primary(decision, state),
         retrieval=_retrieval_adapter(
             retrieve=retrieve,
+            retrieve_many=retrieve_many,
             query_decomposition_enabled=True,
         ),
         provider=SimpleNamespace(
@@ -353,7 +356,27 @@ def test_query_decomposition_avoids_overlapping_shared_qdrant_calls(monkeypatch)
         ),
     )
 
+    assert len(batch_calls) == 1
+    assert len(batch_calls[0]) == 3
+    assert [
+        code in request["query_to_search"]
+        for code, request in zip(
+            (
+                "CRAG-EVAL-NUM-001",
+                "CRAG-EVAL-BOM-001",
+                "CRAG-EVAL-PART-C",
+            ),
+            batch_calls[0],
+            strict=True,
+        )
+    ] == [True, True, True]
     assert len(outcome.decomposition_branches) == 3
+    assert outcome.decomposition_usage["retrieval_batch"]["branch_count"] == 3
+    assert outcome.decomposition_usage["retrieval_batch"]["shared"] is True
+    assert all(
+        branch["retrieval"]["latency_scope"] == "shared_batch"
+        for branch in outcome.decomposition_usage["branches"]
+    )
 
 
 def test_decomposition_scopes_only_router_validated_branch_codes(

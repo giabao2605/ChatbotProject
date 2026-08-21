@@ -158,6 +158,7 @@ def make_phase_diagnostics(
 def make_decomposition_usage(primary, context_text: str) -> dict[str, Any]:
     source = dict(getattr(primary, "decomposition_usage", None) or {})
     planner = dict(source.get("planner") or {})
+    retrieval_batch = dict(source.get("retrieval_batch") or {})
     branches = []
     for branch in source.get("branches") or ():
         retrieval = dict(branch.get("retrieval") or {})
@@ -167,6 +168,9 @@ def make_decomposition_usage(primary, context_text: str) -> dict[str, Any]:
                 "branch_id": str(branch.get("branch_id") or ""),
                 "retrieval": {
                     "latency_ms": int(retrieval.get("latency_ms") or 0),
+                    "latency_scope": str(
+                        retrieval.get("latency_scope") or "branch"
+                    ),
                     "document_count": int(retrieval.get("document_count") or 0),
                     "estimated_input_tokens": int(
                         retrieval.get("estimated_input_tokens") or 0
@@ -194,6 +198,11 @@ def make_decomposition_usage(primary, context_text: str) -> dict[str, Any]:
             "estimated_cost": float(planner.get("estimated_cost") or 0.0),
         },
         "branches": branches,
+        "retrieval_batch": {
+            "latency_ms": int(retrieval_batch.get("latency_ms") or 0),
+            "branch_count": int(retrieval_batch.get("branch_count") or 0),
+            "shared": bool(retrieval_batch.get("shared")),
+        },
         "final_context": {
             "estimated_input_tokens": context_tokens,
             "estimated_input_cost": context_tokens * 2.5 / 1_000_000,

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
@@ -23,6 +24,13 @@ from mech_chatbot.rag.execution_contracts import RagRuntimeContract
 class RagRetrievalAdapter(Protocol):
     def retrieve(self, **kwargs: Any) -> Any: ...
 
+    def retrieve_many(
+        self,
+        requests: tuple[Mapping[str, Any], ...],
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> Any: ...
+
 
 class RagProviderAdapter(Protocol):
     def invoke(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -32,6 +40,22 @@ class RagDatabaseRuntime(Protocol):
     engine: Any
 
     def close(self) -> None: ...
+
+
+def _serial_retrieve_many(
+    retrieve: Callable[..., Any],
+    requests: tuple[Mapping[str, Any], ...],
+    deadline_monotonic: float | None,
+) -> tuple[Any, ...]:
+    results = []
+    for request in requests:
+        if (
+            deadline_monotonic is not None
+            and time.monotonic() >= deadline_monotonic
+        ):
+            raise TimeoutError("RAG request deadline reached before serial retrieval")
+        results.append(retrieve(**request))
+    return tuple(results)
 
 
 def build_rag_database_runtime(settings: SqlSettings) -> RagDatabaseRuntime:
@@ -49,12 +73,25 @@ class FunctionRetrievalAdapter:
     def retrieve(self, **kwargs: Any) -> Any:
         return self.retrieve_function(**kwargs)
 
+    def retrieve_many(
+        self,
+        requests: tuple[Mapping[str, Any], ...],
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> Any:
+        return _serial_retrieve_many(
+            self.retrieve,
+            requests,
+            deadline_monotonic,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class RagRetrievalRuntime:
     """Qdrant, embeddings and retrieval policy for one RAG process."""
 
     retrieve_function: Callable[..., Any]
+    retrieve_many_function: Callable[..., Any] | None = field(repr=False)
     client: Any = field(repr=False)
     vectorstore: Any = field(repr=False)
     vision_model: Any = field(default=None, repr=False)
@@ -119,6 +156,23 @@ class RagRetrievalRuntime:
 
     def retrieve(self, **kwargs: Any) -> Any:
         return self.retrieve_function(**kwargs)
+
+    def retrieve_many(
+        self,
+        requests: tuple[Mapping[str, Any], ...],
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> Any:
+        if self.retrieve_many_function is None:
+            return _serial_retrieve_many(
+                self.retrieve,
+                requests,
+                deadline_monotonic,
+            )
+        return self.retrieve_many_function(
+            requests,
+            deadline_monotonic=deadline_monotonic,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,6 +510,7 @@ def _retrieval_policy_settings(
 def _build_default_adapters(
     settings: Settings,
     retrieve_function: Callable[..., Any],
+    retrieve_many_function: Callable[..., Any],
     *,
     qdrant_builder: Callable[[Any], Any] | None = None,
     llm_builder: Callable[[Any], Any] | None = None,
@@ -484,9 +539,16 @@ def _build_default_adapters(
         client=vector_runtime.qdrant_client,
         collection_name=vector_runtime.collection_name,
     )
+    composed_retrieve_many = partial(
+        retrieve_many_function,
+        vectorstore=vector_runtime.vector_store,
+        client=vector_runtime.qdrant_client,
+        collection_name=vector_runtime.collection_name,
+    )
     return (
         RagRetrievalRuntime(
             retrieve_function=composed_retrieve,
+            retrieve_many_function=composed_retrieve_many,
             client=vector_runtime.qdrant_client,
             vectorstore=vector_runtime.vector_store,
             vision_model=vision_model,
@@ -539,10 +601,12 @@ def build_rag_runtime(
         resolved_execute = pipeline.execute_pipeline
 
     retrieve_function: Callable[..., Any] | None = None
+    retrieve_many_function: Callable[..., Any] | None = None
     if retrieval is None:
-        from mech_chatbot.rag.pipeline_steps import _retrieve
+        from mech_chatbot.rag.pipeline_steps import _retrieve, _retrieve_many
 
         retrieve_function = _retrieve
+        retrieve_many_function = _retrieve_many
 
     if retrieval is None or provider is None:
         if not isinstance(existing_settings, Settings):
@@ -552,6 +616,7 @@ def build_rag_runtime(
         default_retrieval, default_provider = _build_default_adapters(
             existing_settings,
             retrieve_function or (lambda **_kwargs: ()),
+            retrieve_many_function or (lambda _requests, **_kwargs: ()),
             qdrant_builder=qdrant_builder,
             llm_builder=llm_builder,
             vision_builder=vision_builder,

@@ -169,6 +169,136 @@ def test_parent_hydration_loads_unique_sections_concurrently_and_preserves_order
     ]
 
 
+def test_parent_hydration_batches_qdrant_reads_and_preserves_order():
+    selected = [
+        SimpleNamespace(
+            page_content=f"selected {index}",
+            metadata=_metadata(
+                doc_id=90 + index,
+                parent_section=f"Procedure {index:02d}",
+            ),
+        )
+        for index in range(1, 4)
+    ]
+
+    class _BatchClient:
+        def __init__(self):
+            self.calls = []
+
+        def query_batch_points(self, **kwargs):
+            self.calls.append(kwargs)
+            return [
+                SimpleNamespace(
+                    points=[
+                        _point(
+                            {**document.metadata, "chunk_index": chunk_index},
+                            f"parent {index}.{chunk_index}",
+                        )
+                        for chunk_index in (1, 2)
+                    ]
+                )
+                for index, document in enumerate(selected, 1)
+            ]
+
+        def scroll(self, **_kwargs):
+            raise AssertionError("batch-capable clients must not use scroll workers")
+
+    client = _BatchClient()
+    hydrated = context_builders.hydrate_parent_context(
+        selected,
+        max_sections=3,
+        max_chunks_per_section=2,
+        max_workers=3,
+        client=client,
+        collection_name="test-knowledge",
+        batch_enabled=True,
+    )
+
+    assert [doc.metadata["doc_id"] for doc in hydrated] == [91, 92, 93]
+    assert [doc.page_content for doc in hydrated] == [
+        "parent 1.1\n\nparent 1.2",
+        "parent 2.1\n\nparent 2.2",
+        "parent 3.1\n\nparent 3.2",
+    ]
+    assert len(client.calls) == 1
+    assert len(client.calls[0]["requests"]) == 3
+    assert all(request.query is None for request in client.calls[0]["requests"])
+    assert client.calls[0]["timeout"] == 5
+    for index, request in enumerate(client.calls[0]["requests"], 1):
+        conditions = {
+            condition.key: condition.match
+            for condition in request.filter.must
+        }
+        assert conditions["metadata.doc_id"].value == 90 + index
+        assert conditions["metadata.parent_section"].value == f"Procedure {index:02d}"
+        assert conditions["metadata.site"].value == "HQ"
+        assert conditions["metadata.security_level"].value == "internal"
+        assert conditions["metadata.phong_ban_quyen"].any == [
+            "Technical",
+            "CHUNG",
+        ]
+        assert conditions["metadata.serving_epoch"].value == 18
+        assert conditions["metadata.publication_version"].value == 4
+
+
+def test_parent_hydration_batch_failure_is_terminal_without_scroll_retry():
+    selected = SimpleNamespace(
+        page_content="selected",
+        metadata=_metadata(),
+    )
+
+    class _FailureClient:
+        def __init__(self):
+            self.batch_calls = 0
+            self.scroll_calls = 0
+
+        def query_batch_points(self, **_kwargs):
+            self.batch_calls += 1
+            raise RuntimeError("batch unavailable")
+
+        def scroll(self, **_kwargs):
+            self.scroll_calls += 1
+            raise AssertionError("failed batches must not be retried with scroll")
+
+    client = _FailureClient()
+    with pytest.raises(RuntimeError, match="batch unavailable"):
+        context_builders.hydrate_parent_context(
+            [selected],
+            max_workers=1,
+            client=client,
+            collection_name="test-knowledge",
+            batch_enabled=True,
+        )
+
+    assert client.batch_calls == 1
+    assert client.scroll_calls == 0
+
+
+def test_parent_hydration_keeps_legacy_path_when_batch_is_disabled():
+    selected = SimpleNamespace(
+        page_content="selected",
+        metadata=_metadata(),
+    )
+
+    class _LegacyClient(_ScrollClient):
+        def query_batch_points(self, **_kwargs):
+            raise AssertionError("baseline parent hydration must remain unchanged")
+
+    client = _LegacyClient(
+        [_point(_metadata(chunk_index=2), "legacy parent")]
+    )
+    hydrated = context_builders.hydrate_parent_context(
+        [selected],
+        max_workers=1,
+        client=client,
+        collection_name="test-knowledge",
+        batch_enabled=False,
+    )
+
+    assert [document.page_content for document in hydrated] == ["selected"]
+    assert len(client.calls) == 1
+
+
 def test_parent_hydration_worker_one_is_sequential_rollback(monkeypatch):
     selected = [
         SimpleNamespace(

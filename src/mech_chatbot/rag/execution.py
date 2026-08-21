@@ -300,6 +300,20 @@ class _ExecutionState:
 
         return _retrieve(**kwargs)
 
+    def retrieve_many(self, requests: tuple[dict[str, Any], ...]) -> Any:
+        if self.retrieval_adapter is not None:
+            retrieve_many = getattr(self.retrieval_adapter, "retrieve_many", None)
+            if callable(retrieve_many):
+                return retrieve_many(
+                    requests,
+                    deadline_monotonic=self.budget.deadline_monotonic,
+                )
+        results = []
+        for request in requests:
+            self.checkpoint("branch_retrieval")
+            results.append(self.retrieve(**request))
+        return tuple(results)
+
     def invoke_provider(self, *args: Any, **kwargs: Any) -> Any:
         if self.provider_adapter is not None:
             return self.provider_adapter.invoke(*args, **kwargs)

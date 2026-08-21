@@ -364,10 +364,16 @@ def _hydrate_reranked_context(
     served_graph_docs: list[Any],
     trace_id: str,
     runtime: Any,
+    deadline_monotonic: float | None,
+    decomposition_used: bool,
 ) -> tuple[list[Any], list[Any]]:
     started = time.time()
     parent_workers = parent_context_max_workers(
         getattr(runtime, "parent_context_max_workers", 4)
+    )
+    parent_client = getattr(runtime, "client", None)
+    parent_batch = bool(decomposition_used) and callable(
+        getattr(parent_client, "query_batch_points", None)
     )
     real_docs = hydrate_parent_context(
         real_docs,
@@ -379,8 +385,10 @@ def _hydrate_reranked_context(
             6,
         ),
         enabled=bool(getattr(runtime, "parent_context_enabled", True)),
-        client=getattr(runtime, "client", None),
+        client=parent_client,
         collection_name=getattr(runtime, "collection_name", None),
+        batch_enabled=parent_batch,
+        deadline_monotonic=deadline_monotonic,
     )
     if graph_docs:
         from mech_chatbot.rag.graph_retrieval import attach_served_graph_context
@@ -395,7 +403,8 @@ def _hydrate_reranked_context(
         trace_id,
         latency_ms=int((time.time() - started) * 1000),
         sections=len(real_docs),
-        max_workers=parent_workers,
+        max_workers=1 if parent_batch else parent_workers,
+        transport_mode="qdrant_batch" if parent_batch else "legacy",
     )
     return real_docs, served_graph_docs
 
@@ -476,6 +485,12 @@ def rerank_retrieval(
             served_graph_docs,
             trace_id,
             runtime,
+            getattr(
+                getattr(state, "budget", None),
+                "deadline_monotonic",
+                None,
+            ),
+            str(enrichment.retrieval_mode).startswith("decomposed_"),
         )
         retrieved_docs = fake_docs + real_docs
         retrieved_docs = long_context_reorder(retrieved_docs)

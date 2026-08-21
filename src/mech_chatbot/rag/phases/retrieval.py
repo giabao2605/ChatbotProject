@@ -378,35 +378,28 @@ def _log_branch_correction_failure(
     )
 
 
-def _retrieve_branch(
+def _finish_retrieved_branch(
     context: _RetrievalContext,
     state: Any,
     subquery: str,
     inherited_access: Mapping[str, Any],
     correction_budget: Any,
     branch_deadline_monotonic: float | None,
+    part_ids: list[str],
+    strict_filter: Any,
+    broad_filter: Any,
+    result: tuple[Any, ...],
+    retrieval_started_at: float,
+    retrieval_latency_ms: int | None = None,
 ) -> Any:
     from mech_chatbot.rag.query_decomposition import served_branch_documents
 
-    state.checkpoint("branch_retrieval")
-    if _deadline_exceeded(branch_deadline_monotonic):
-        return _empty_deadline_branch()
-    part_ids, strict_filter, broad_filter = _branch_filters(context, subquery)
-    retrieval_started_at = time.perf_counter()
-    result = state.retrieve(
-        new_part_ids=part_ids,
-        strict_filter=strict_filter,
-        broad_filter=broad_filter,
-        is_bom_query=is_bom_lookup(subquery),
-        query_to_search=tokenize_cached(subquery),
-        rbac_filter=context.decision.rbac_filter,
-        trace_id=context.trace_id,
-    )
     raw_documents = tuple(result[0])
     state.checkpoint("branch_retrieval")
-    retrieval_latency_ms = max(
-        0,
-        int((time.perf_counter() - retrieval_started_at) * 1000),
+    retrieval_latency_ms = (
+        max(0, int((time.perf_counter() - retrieval_started_at) * 1000))
+        if retrieval_latency_ms is None
+        else max(0, int(retrieval_latency_ms))
     )
     deadline_exceeded = _deadline_exceeded(branch_deadline_monotonic)
     if deadline_exceeded:
@@ -603,6 +596,10 @@ def _decomposition_usage(
     planner_result: _PlannerResult,
     branch_results: Sequence[Any],
 ) -> Mapping[str, Any]:
+    batch_latency_ms = max(
+        (result.retrieval_latency_ms for result in branch_results),
+        default=0,
+    )
     return {
         "schema": "rag-decomposition-usage-v1",
         "planner": {
@@ -616,6 +613,7 @@ def _decomposition_usage(
                 "branch_id": f"branch-{index}",
                 "retrieval": {
                     "latency_ms": result.retrieval_latency_ms,
+                    "latency_scope": "shared_batch",
                     "document_count": result.retrieval_document_count,
                     "estimated_input_tokens": (
                         result.retrieval_estimated_input_tokens
@@ -632,6 +630,11 @@ def _decomposition_usage(
             }
             for index, result in enumerate(branch_results, 1)
         ],
+        "retrieval_batch": {
+            "latency_ms": batch_latency_ms,
+            "branch_count": len(branch_results),
+            "shared": bool(branch_results),
+        },
     }
 
 
@@ -642,23 +645,62 @@ def _run_complex_plan(
     planner_result: _PlannerResult,
 ) -> _DecompositionResult:
     from mech_chatbot.rag.query_decomposition import (
-        CorrectionBudget, build_decomposition_instruction, execute_plan,
+        CorrectionBudget, build_decomposition_instruction,
     )
 
     plan = planner_result.plan
     correction_budget = CorrectionBudget(state.budget.limits.corrections)
-
-    def retrieve_branch(subquery: str, access: Any, budget: Any, deadline: Any) -> Any:
-        return _retrieve_branch(context, state, subquery, access, budget, deadline)
-
-    branch_results = execute_plan(
-        plan,
-        retrieve_branch,
-        access_context,
-        max_workers=1,
-        deadline_monotonic=state.budget.deadline_monotonic,
-        on_timeout=lambda _query: _empty_deadline_branch(),
+    prepared = tuple(
+        (subquery, *_branch_filters(context, subquery))
+        for subquery in plan.subqueries[:3]
     )
+    requests = tuple(
+        {
+            "new_part_ids": part_ids,
+            "strict_filter": strict_filter,
+            "broad_filter": broad_filter,
+            "is_bom_query": is_bom_lookup(subquery),
+            "query_to_search": tokenize_cached(subquery),
+            "rbac_filter": context.decision.rbac_filter,
+            "trace_id": context.trace_id,
+        }
+        for subquery, part_ids, strict_filter, broad_filter in prepared
+    )
+    state.checkpoint("branch_retrieval")
+    retrieval_started_at = time.perf_counter()
+    raw_results = tuple(state.retrieve_many(requests))
+    if len(raw_results) != len(prepared):
+        raise RuntimeError("Decomposition batch result count mismatch")
+    retrieval_latency_ms = max(
+        0,
+        int((time.perf_counter() - retrieval_started_at) * 1000),
+    )
+    if _deadline_exceeded(state.budget.deadline_monotonic):
+        branch_results = tuple(_empty_deadline_branch() for _item in prepared)
+    else:
+        state.checkpoint("branch_retrieval")
+        branch_results = tuple(
+            _finish_retrieved_branch(
+                context,
+                state,
+                subquery,
+                access_context,
+                correction_budget,
+                state.budget.deadline_monotonic,
+                part_ids,
+                strict_filter,
+                broad_filter,
+                result,
+                retrieval_started_at,
+                retrieval_latency_ms,
+            )
+            for (
+                subquery,
+                part_ids,
+                strict_filter,
+                broad_filter,
+            ), result in zip(prepared, raw_results, strict=True)
+        )
     correction_cost, input_tokens, output_tokens = _record_decomposition_usage(
         state, plan, planner_result, branch_results
     )

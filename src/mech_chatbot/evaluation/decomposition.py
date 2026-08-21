@@ -296,11 +296,12 @@ def normalize_decomposition_usage(value: Any) -> dict[str, Any] | None:
     if value.get("schema") != "rag-decomposition-usage-v1":
         raise ValueError("decomposition_usage schema is invalid")
     planner = value.get("planner") or {}
+    retrieval_batch = value.get("retrieval_batch") or {}
     final_context = value.get("final_context") or {}
     final_generation = value.get("final_generation") or {}
     if not all(
         isinstance(item, Mapping)
-        for item in (planner, final_context, final_generation)
+        for item in (planner, retrieval_batch, final_context, final_generation)
     ):
         raise ValueError("decomposition_usage stage buckets must be objects")
     branches = []
@@ -311,6 +312,11 @@ def normalize_decomposition_usage(value: Any) -> dict[str, Any] | None:
         correction = raw.get("correction") or {}
         if not isinstance(retrieval, Mapping) or not isinstance(correction, Mapping):
             raise ValueError(f"decomposition_usage branch {index} buckets are invalid")
+        latency_scope = str(retrieval.get("latency_scope") or "branch")
+        if latency_scope not in {"branch", "shared_batch"}:
+            raise ValueError(
+                f"decomposition_usage branch {index} latency_scope is invalid"
+            )
         cost_status = str(retrieval.get("cost_status") or "unpriced")
         if cost_status not in {"unpriced", "priced"}:
             raise ValueError(f"decomposition_usage branch {index} cost_status is invalid")
@@ -328,6 +334,7 @@ def normalize_decomposition_usage(value: Any) -> dict[str, Any] | None:
                         retrieval.get("latency_ms"),
                         f"branches[{index}].retrieval.latency_ms",
                     ),
+                    "latency_scope": latency_scope,
                     "document_count": _usage_int(
                         retrieval.get("document_count"),
                         f"branches[{index}].retrieval.document_count",
@@ -371,6 +378,17 @@ def normalize_decomposition_usage(value: Any) -> dict[str, Any] | None:
             ),
         },
         "branches": branches,
+        "retrieval_batch": {
+            "latency_ms": _usage_int(
+                retrieval_batch.get("latency_ms"),
+                "retrieval_batch.latency_ms",
+            ),
+            "branch_count": _usage_int(
+                retrieval_batch.get("branch_count"),
+                "retrieval_batch.branch_count",
+            ),
+            "shared": bool(retrieval_batch.get("shared")),
+        },
         "final_context": {
             "estimated_input_tokens": _usage_int(
                 final_context.get("estimated_input_tokens"),

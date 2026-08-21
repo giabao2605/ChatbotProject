@@ -238,6 +238,245 @@ def _rrf_fuse(rankings, result_cap, k=60):
     return out
 
 
+@dataclass(frozen=True, slots=True)
+class _HybridBatchRequest:
+    query: str
+    payload_filter: Any
+    dense_top_k: int
+    sparse_top_k: int
+    result_cap: int
+    trace_id: str | None
+    phase: str
+
+
+def _batch_documents(response, vectorstore, collection_name):
+    from langchain_qdrant import QdrantVectorStore
+
+    return [
+        QdrantVectorStore._document_from_point(
+            point,
+            collection_name,
+            getattr(vectorstore, "content_payload_key", "page_content"),
+            getattr(vectorstore, "metadata_payload_key", "metadata"),
+        )
+        for point in (getattr(response, "points", None) or ())
+    ]
+
+
+def _log_hybrid_batch(
+    requests,
+    dense_docs,
+    sparse_docs,
+    fused_docs,
+    *,
+    dense_ms,
+    sparse_ms,
+    rrf_ms,
+):
+    for request, dense, sparse, fused in zip(
+        requests,
+        dense_docs,
+        sparse_docs,
+        fused_docs,
+        strict=True,
+    ):
+        if not request.trace_id:
+            continue
+        shared = {"batch_size": len(requests), "batch_shared_latency": True}
+        log_trace(
+            "dense_retrieval",
+            request.trace_id,
+            latency_ms=dense_ms,
+            phase=request.phase,
+            docs_count=len(dense),
+            **shared,
+        )
+        bm25_fields = {
+            "latency_ms": sparse_ms,
+            "phase": request.phase,
+            "docs_count": len(sparse),
+            **shared,
+        }
+        log_trace("bm25_retrieval", request.trace_id, **bm25_fields)
+        log_trace(
+            "rrf_grouping",
+            request.trace_id,
+            latency_ms=rrf_ms,
+            phase=request.phase,
+            docs_count=len(fused),
+            ranks=[
+                {
+                    "doc_id": (getattr(doc, "metadata", {}) or {}).get("doc_id"),
+                    "rrf_score": (getattr(doc, "metadata", {}) or {}).get(
+                        "retrieval_rrf_score"
+                    ),
+                    "dense_rank": (getattr(doc, "metadata", {}) or {}).get(
+                        "retrieval_dense_rank"
+                    ),
+                    "bm25_rank": (getattr(doc, "metadata", {}) or {}).get(
+                        "retrieval_bm25_rank"
+                    ),
+                }
+                for doc in fused[:20]
+            ],
+            **shared,
+        )
+
+
+def _remaining_qdrant_timeout(limit_seconds, deadline_monotonic):
+    limit = max(1, int(limit_seconds))
+    if deadline_monotonic is None:
+        return limit
+    remaining = int(float(deadline_monotonic) - time.monotonic())
+    if remaining < 1:
+        raise TimeoutError("RAG request deadline reached before Qdrant batch")
+    return min(limit, remaining)
+
+
+def _explicit_hybrid_rrf_batch(
+    requests,
+    *,
+    vectorstore,
+    client,
+    collection_name,
+    deadline_monotonic=None,
+):
+    """Batch dense and sparse reads without overlapping one Qdrant client."""
+    requests = tuple(requests)
+    if not requests:
+        return ()
+    try:
+        from qdrant_client import models
+
+        dense_embedding = getattr(vectorstore, "embeddings", None)
+        sparse_embedding = getattr(vectorstore, "sparse_embeddings", None)
+        if dense_embedding is None or sparse_embedding is None:
+            raise RuntimeError("Qdrant vectorstore khong expose dense/sparse embeddings")
+
+        queries = [request.query for request in requests]
+        dense_started = time.perf_counter()
+        dense_vectors = [dense_embedding.embed_query(query) for query in queries]
+        if len(dense_vectors) != len(requests):
+            raise RuntimeError("Qdrant batch embedding result count mismatch")
+
+        dense_responses = client.query_batch_points(
+            collection_name=collection_name,
+            requests=[
+                models.QueryRequest(
+                    query=vector,
+                    using=getattr(vectorstore, "vector_name", ""),
+                    filter=request.payload_filter,
+                    limit=max(1, int(request.dense_top_k)),
+                    with_payload=True,
+                    with_vector=False,
+                )
+                for request, vector in zip(requests, dense_vectors, strict=True)
+            ],
+            timeout=_remaining_qdrant_timeout(
+                _QDRANT_SEARCH_TIMEOUT_SECONDS,
+                deadline_monotonic,
+            ),
+        )
+        dense_ms = int((time.perf_counter() - dense_started) * 1000)
+        if len(dense_responses) != len(requests):
+            raise RuntimeError("Qdrant dense batch result count mismatch")
+        dense_docs = tuple(
+            _batch_documents(response, vectorstore, collection_name)
+            for response in dense_responses
+        )
+
+        sparse_started = time.perf_counter()
+        try:
+            sparse_vectors = [
+                sparse_embedding.embed_query(query)
+                for query in queries
+            ]
+            if len(sparse_vectors) != len(requests):
+                raise RuntimeError("Qdrant sparse embedding result count mismatch")
+            sparse_responses = client.query_batch_points(
+                collection_name=collection_name,
+                requests=[
+                    models.QueryRequest(
+                        query=models.SparseVector(
+                            indices=list(vector.indices),
+                            values=list(vector.values),
+                        ),
+                        using=getattr(vectorstore, "sparse_vector_name", "sparse"),
+                        filter=request.payload_filter,
+                        limit=max(1, int(request.sparse_top_k)),
+                        with_payload=True,
+                        with_vector=False,
+                    )
+                    for request, vector in zip(
+                        requests,
+                        sparse_vectors,
+                        strict=True,
+                    )
+                ],
+                timeout=_remaining_qdrant_timeout(
+                    _BM25_SEARCH_TIMEOUT_SECONDS,
+                    deadline_monotonic,
+                ),
+            )
+            if len(sparse_responses) != len(requests):
+                raise RuntimeError("Qdrant sparse batch result count mismatch")
+            sparse_docs = tuple(
+                _batch_documents(response, vectorstore, collection_name)
+                for response in sparse_responses
+            )
+        except Exception as exc:
+            logger.warning(
+                "BM25 batch retrieval unavailable: %s",
+                type(exc).__name__,
+            )
+            raise
+        sparse_ms = int((time.perf_counter() - sparse_started) * 1000)
+
+        rrf_started = time.perf_counter()
+        fused_docs = tuple(
+            _rrf_fuse(
+                (("dense", dense), ("bm25", sparse)),
+                result_cap=request.result_cap,
+            )
+            for request, dense, sparse in zip(
+                requests,
+                dense_docs,
+                sparse_docs,
+                strict=True,
+            )
+        )
+        rrf_ms = int((time.perf_counter() - rrf_started) * 1000)
+        _log_hybrid_batch(
+            requests,
+            dense_docs,
+            sparse_docs,
+            fused_docs,
+            dense_ms=dense_ms,
+            sparse_ms=sparse_ms,
+            rrf_ms=rrf_ms,
+        )
+        return tuple(
+            (documents, "explicit_dense_bm25_rrf")
+            for documents in fused_docs
+        )
+    except Exception as exc:
+        logger.warning(
+            "Batched dense+BM25 RRF failed closed: %s",
+            type(exc).__name__,
+        )
+        for request in requests:
+            if request.trace_id:
+                log_trace(
+                    "retrieval_batch",
+                    request.trace_id,
+                    phase=request.phase,
+                    status="failed",
+                    error=type(exc).__name__,
+                    retry_attempted=False,
+                )
+        raise
+
+
 def _explicit_hybrid_rrf(
     query,
     payload_filter,
@@ -1165,6 +1404,172 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=retrieved_file_goc, version_no=version_no, variant_code=variant_code, is_current=is_current, lifecycle_status=lifecycle_status, review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
         stream = normal_stream()
     return stream
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchRetrievalPlan:
+    new_part_ids: tuple[str, ...]
+    strict_filter: Any
+    broad_filter: Any
+    is_bom_query: bool
+    query: str
+    rbac_filter: Any
+    trace_id: str | None
+    base_k: int
+    dense_top_k: int | None
+    sparse_top_k: int | None
+    started_at: float
+
+
+def _batch_retrieval_plan(request):
+    part_ids = tuple(request.get("new_part_ids") or ())
+    if part_ids:
+        base_k = 15 * len(part_ids)
+    else:
+        try:
+            from mech_chatbot.db.repositories.settings import get_app_setting_int
+
+            base_k = get_app_setting_int("rag_general_top_k", 30)
+        except Exception:
+            base_k = 30
+        if not base_k or base_k < 1:
+            base_k = 30
+    return _BatchRetrievalPlan(
+        new_part_ids=part_ids,
+        strict_filter=request.get("strict_filter"),
+        broad_filter=request.get("broad_filter"),
+        is_bom_query=bool(request.get("is_bom_query")),
+        query=str(request.get("query_to_search") or ""),
+        rbac_filter=request.get("rbac_filter"),
+        trace_id=request.get("trace_id"),
+        base_k=int(base_k),
+        dense_top_k=request.get("dense_top_k"),
+        sparse_top_k=request.get("sparse_top_k"),
+        started_at=time.time(),
+    )
+
+
+def _initial_hybrid_request(plan):
+    is_strict = bool(plan.new_part_ids)
+    return _HybridBatchRequest(
+        query=plan.query,
+        payload_filter=(
+            plan.strict_filter
+            if is_strict
+            else current_published_filter(plan.rbac_filter)
+        ),
+        dense_top_k=plan.dense_top_k or plan.base_k,
+        sparse_top_k=plan.sparse_top_k or plan.base_k,
+        result_cap=plan.base_k,
+        trace_id=plan.trace_id,
+        phase="strict_exact" if is_strict else "general",
+    )
+
+
+def _broad_hybrid_request(plan):
+    return _HybridBatchRequest(
+        query=plan.query,
+        payload_filter=plan.broad_filter,
+        dense_top_k=plan.dense_top_k or plan.base_k * 2,
+        sparse_top_k=plan.sparse_top_k or plan.base_k * 2,
+        result_cap=plan.base_k * 2,
+        trace_id=plan.trace_id,
+        phase="broad_fallback",
+    )
+
+
+def _merge_batched_documents(strict_docs, broad_docs):
+    seen = set()
+    merged = []
+    for document in tuple(strict_docs) + tuple(broad_docs):
+        key = str(getattr(document, "page_content", "") or "")[:200]
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(document)
+    return merged
+
+
+def _finish_batched_retrieval(plan, initial, broad=None):
+    from mech_chatbot.domain.serving_state import filter_currently_servable
+
+    initial_docs, initial_mode = initial
+    if not plan.new_part_ids:
+        documents = initial_docs
+        mode = f"general:{initial_mode}"
+        active_filter = current_published_filter(plan.rbac_filter)
+    elif broad is None:
+        documents = initial_docs
+        mode = f"strict_exact:{initial_mode}"
+        active_filter = plan.strict_filter
+    else:
+        broad_docs, broad_mode = broad
+        documents = (
+            _merge_batched_documents(initial_docs, broad_docs)
+            if initial_docs
+            else broad_docs
+        )
+        mode = f"broad_fallback:{broad_mode}"
+        active_filter = plan.broad_filter
+    return (
+        filter_currently_servable(documents),
+        plan.base_k,
+        mode,
+        plan.started_at,
+        active_filter,
+    )
+
+
+def _retrieve_many(
+    requests,
+    *,
+    vectorstore,
+    client,
+    collection_name,
+    deadline_monotonic=None,
+):
+    """Retrieve up to three decomposition branches through Qdrant batches."""
+    requests = tuple(requests)
+    if not requests:
+        return ()
+    if len(requests) > 3:
+        raise ValueError("Query decomposition retrieval is limited to three branches")
+    plans = tuple(_batch_retrieval_plan(request) for request in requests)
+    initial = _explicit_hybrid_rrf_batch(
+        tuple(_initial_hybrid_request(plan) for plan in plans),
+        vectorstore=vectorstore,
+        client=client,
+        collection_name=collection_name,
+        deadline_monotonic=deadline_monotonic,
+    )
+    broad_indices = tuple(
+        index
+        for index, (plan, (documents, _mode)) in enumerate(
+            zip(plans, initial, strict=True)
+        )
+        if plan.new_part_ids and (plan.is_bom_query or not documents)
+    )
+    broad_results = _explicit_hybrid_rrf_batch(
+        tuple(_broad_hybrid_request(plans[index]) for index in broad_indices),
+        vectorstore=vectorstore,
+        client=client,
+        collection_name=collection_name,
+        deadline_monotonic=deadline_monotonic,
+    )
+    broad_by_index = {
+        index: result
+        for index, result in zip(broad_indices, broad_results, strict=True)
+    }
+    return tuple(
+        _finish_batched_retrieval(
+            plan,
+            initial_result,
+            broad_by_index.get(index),
+        )
+        for index, (plan, initial_result) in enumerate(
+            zip(plans, initial, strict=True)
+        )
+    )
 
 
 def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
