@@ -898,11 +898,13 @@ def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
     trace.write_text("", encoding="utf-8")
     output = tmp_path / "rollout"
     trace_environments = []
+    evaluation_commands = []
 
     def fake_run(command, **kwargs):
         trace_environments.append(kwargs["env"].get("RAG_TRACE_LOG_FILE"))
         run_dir = output / "baseline"
         if "scripts.eval.run_eval" in command:
+            evaluation_commands.append(command)
             _write_arm_eval(run_dir, "baseline")
             _append_trace_events(trace, [{
                     "ts": "2026-08-20T00:00:01Z",
@@ -929,6 +931,20 @@ def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
     )
 
     assert trace_environments == [str(trace), str(trace)]
+    assert evaluation_commands == [[
+        sys.executable,
+        "-m",
+        "scripts.eval.run_eval",
+        "--manifest",
+        str(manifest),
+        "--output-dir",
+        str(output),
+        "--run-label",
+        "baseline",
+        "--maximum-provider-retries",
+        "0",
+        "--stop-on-provider-failure",
+    ]]
 
 
 def test_decomposition_rollout_arm_rejects_nonzero_evaluator_exit(

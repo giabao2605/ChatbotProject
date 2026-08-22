@@ -14,6 +14,7 @@ from mech_chatbot.rag.execution import (
     RagPrepared,
     RagRequest,
     RagToken,
+    RequestBudgetLimits,
     attributed_citations,
     collect_rag_events,
     consume_rag_events,
@@ -529,6 +530,51 @@ def test_request_wide_retry_budget_stops_third_retry_before_any_token(monkeypatc
     assert [type(event) for event in events] == [RagPrepared, RagFailed]
     assert len(attempts) == 3
     assert "provider_retries" in str(events[-1].cause)
+
+
+def test_zero_retry_budget_stops_before_second_provider_attempt(monkeypatch):
+    from tenacity import stop_after_attempt, wait_none
+
+    from mech_chatbot.llm import llm_client
+
+    attempts = []
+
+    class FailingLlm:
+        def invoke(self, _messages):
+            attempts.append("call")
+            raise RuntimeError("502 service_unavailable")
+
+    monkeypatch.setattr(llm_client, "_get_runtime_llm", lambda: FailingLlm())
+    monkeypatch.setattr(
+        llm_client,
+        "audited_external_call",
+        lambda **_kwargs: nullcontext(),
+    )
+    invoke = llm_client.gpt_invoke.retry_with(
+        wait=wait_none(),
+        stop=stop_after_attempt(4),
+    )
+
+    def scripted_pipeline(state):
+        def failing_stream():
+            invoke(["prompt"], surface="test", trace_id=state.trace_id)
+            yield "unreachable"
+
+        return state.prepared((failing_stream(), "", [], [], {}))
+
+    events = list(
+        DefaultRagExecutor(
+            execute_pipeline=scripted_pipeline,
+            budget_limits=RequestBudgetLimits(provider_retries=0),
+        ).run(
+            RagRequest("question", AccessScope()),
+            RagInvocation(trace_id="rag-contract-zero-retry", mode="evaluation"),
+        )
+    )
+
+    assert [type(event) for event in events] == [RagPrepared, RagFailed]
+    assert attempts == ["call"]
+    assert events[-1].code == "RequestBudgetExceeded"
 
 
 def test_parallel_decomposition_retries_share_atomic_request_budget(monkeypatch):

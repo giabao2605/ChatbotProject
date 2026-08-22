@@ -585,6 +585,7 @@ def build_rag_runtime(
     voyage_runtime_builder: Callable[..., Any] | None = None,
     jina_runtime_builder: Callable[..., Any] | None = None,
     trace_persist: Callable[[str, dict[str, Any]], None] | None = None,
+    provider_retry_limit: int | None = None,
 ) -> RagRuntime:
     """Build RAG dependencies without a singleton or service locator.
 
@@ -593,6 +594,11 @@ def build_rag_runtime(
     production implementation until Phase 4 private phases consume these
     adapters directly.
     """
+
+    if provider_retry_limit is not None and (
+        type(provider_retry_limit) is not int or provider_retry_limit < 0
+    ):
+        raise ValueError("provider retry limit must be a non-negative integer")
 
     resolved_execute = execute_pipeline
     if resolved_execute is None:
@@ -666,6 +672,11 @@ def build_rag_runtime(
             provider_adapter=resolved_provider,
             budget_limits=RequestBudgetLimits(
                 deadline_seconds=process_settings.request_deadline_seconds,
+                provider_retries=(
+                    RequestBudgetLimits().provider_retries
+                    if provider_retry_limit is None
+                    else provider_retry_limit
+                ),
             ),
         ),
         retrieval=resolved_retrieval,

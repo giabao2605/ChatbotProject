@@ -86,12 +86,18 @@ def _git_sha() -> str | None:
 
 
 def _is_provider_failure(exc: BaseException) -> bool:
+    from mech_chatbot.rag.execution import RequestBudgetExceeded
+
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if (
             isinstance(current, PROVIDER_FAILURE_TYPES)
+            or (
+                isinstance(current, RequestBudgetExceeded)
+                and str(current) == "RAG request budget exceeded: provider_retries"
+            )
             or any(marker in str(current).casefold() for marker in PROVIDER_FAILURE_MARKERS)
         ):
             return True
@@ -332,6 +338,7 @@ def run_evaluation(
     number_normalizer=None,
     preflight_runner=None,
     case_ids: list[str] | None = None,
+    stop_on_provider_failure: bool = False,
 ) -> tuple[dict, bool]:
     cases = select_cases(load_manifest_files(manifest_files), case_ids)
     paths = resolve_output_paths(output_dir, run_label)
@@ -733,6 +740,8 @@ def run_evaluation(
         level = case.get("level", "fixture")
         levels[level]["total"] += 1
         levels[level]["pass"] += int(row["passed"])
+        if stop_on_provider_failure and row.get("provider_failure"):
+            break
 
     completed_at = _utc_now()
     retrieval_rows = [row for row in rows if row.get("retrieval_expected")]
@@ -953,6 +962,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--run-label", choices=RUN_LABELS, required=True)
     parser.add_argument("--case-id", action="append")
+    parser.add_argument("--maximum-provider-retries", type=int)
+    parser.add_argument("--stop-on-provider-failure", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -979,7 +990,10 @@ def main(argv: list[str] | None = None) -> int:
             configure_logging,
         )
         configure_logging(LoggingConfig.from_settings(settings))
-        runtime = build_rag_runtime(settings)
+        runtime = build_rag_runtime(
+            settings,
+            provider_retry_limit=getattr(args, "maximum_provider_retries", None),
+        )
         try:
             with bind_trace_runtime(runtime.trace_runtime):
                 _, passed = run_evaluation(
@@ -989,6 +1003,9 @@ def main(argv: list[str] | None = None) -> int:
                     rag_executor=runtime.executor,
                     preflight_runner=cached_preflight,
                     case_ids=case_ids,
+                    stop_on_provider_failure=getattr(
+                        args, "stop_on_provider_failure", False
+                    ),
                 )
         finally:
             runtime.close()

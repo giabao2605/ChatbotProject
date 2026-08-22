@@ -559,6 +559,61 @@ def test_eval_artifact_marks_generation_provider_errors_inconclusive(
     assert report["failure_family_evaluation"]["decision"] == "inconclusive"
 
 
+def test_eval_stops_before_next_case_after_provider_failure_when_requested(tmp_path):
+    from mech_chatbot.rag.execution import RequestBudgetExceeded
+
+    runner = _load("run_eval_provider_fail_fast", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "cases.jsonl"
+    manifest.write_text(
+        "\n".join(
+            json.dumps(_case(id=case_id))
+            for case_id in ("case-1", "case-2")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def failed_stream():
+        raise RequestBudgetExceeded("RAG request budget exceeded: provider_retries")
+        yield "unreachable"
+
+    def rag_chat(*args, **kwargs):
+        calls.append(args[0])
+        return failed_stream(), "", [], [], {"generation_metrics": {}}
+
+    report, passed = runner.run_evaluation(
+        [manifest],
+        tmp_path / "output",
+        "candidate",
+        preflight=False,
+        intent_extractor=lambda *args, **kwargs: (
+            None, None, None, None, None, {"version_policy": "current_only"}
+        ),
+        rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+        stop_on_provider_failure=True,
+    )
+
+    assert passed is False
+    assert calls == ["Gia tri la bao nhieu?"]
+    assert [case["id"] for case in report["cases"]] == ["case-1"]
+    assert report["provider_failure_count"] == 1
+
+
+def test_eval_does_not_classify_other_request_budgets_as_provider_failures():
+    from mech_chatbot.rag.execution import RequestBudgetExceeded
+
+    runner = _load("run_eval_budget_classification", "scripts/eval/run_eval.py")
+
+    assert runner._is_provider_failure(
+        RequestBudgetExceeded("RAG request budget exceeded: provider_retries")
+    )
+    assert not runner._is_provider_failure(
+        RequestBudgetExceeded("RAG request budget exceeded: subqueries")
+    )
+
+
 def test_eval_does_not_hide_non_rag_timeout_as_provider_failure(tmp_path):
     runner = _load(
         "run_eval_non_rag_timeout",
@@ -1676,11 +1731,12 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
         lambda: lambda _cases: {"passed": True},
     )
     monkeypatch.setattr(runner, "configured_repository_runtime", bind_runtime)
-    monkeypatch.setattr(
-        runner,
-        "build_rag_runtime",
-        lambda value: runtime if value is settings else None,
-    )
+    def build_runtime(value, *, provider_retry_limit=None):
+        assert value is settings
+        events.append(("build", provider_retry_limit))
+        return runtime
+
+    monkeypatch.setattr(runner, "build_rag_runtime", build_runtime)
     monkeypatch.setattr(
         runner,
         "parse_args",
@@ -1688,11 +1744,14 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
             manifest=[tmp_path / "manifest.jsonl"],
             output_dir=tmp_path,
             run_label="baseline",
+            maximum_provider_retries=0,
+            stop_on_provider_failure=True,
         ),
     )
 
     def run_evaluation(*args, **kwargs):
         assert kwargs["rag_executor"] is executor
+        assert kwargs["stop_on_provider_failure"] is True
         events.append("run")
         return {}, True
 
@@ -1700,7 +1759,7 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
 
     assert runner.main([]) == 0
     assert events == [
-        "bind", "logging", "trace-bind", "run",
+        "bind", "logging", ("build", 0), "trace-bind", "run",
         "trace-unbind", "close", "unbind",
     ]
 
