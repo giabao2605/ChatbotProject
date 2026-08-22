@@ -412,11 +412,23 @@ Provider-smoke artifact SHA-256 là
 Disposition khóa lượt này thành `health_proof_only`, `formal_evidence=false`,
 `reuse_authorized=false` và `consumed=true`.
 
-Không chạy thêm standalone health smoke. Fresh Query formal window chỉ được mở
-sau khi owner ký envelope bind exact clean commit và run-root chưa từng tồn
-tại. Window đó phải chạy lại preparation, provider-boundary revalidation và
-fresh formal-window smoke riêng; không copy health artifact/hash ở trên vào
-declaration hoặc run-root mới.
+Formal window `query-formal-6a566e1-20260821-01` sau đó tombstone tại fresh
+smoke `0/5` với năm HTTP `502`, zero retry. Theo authorization mới chỉ để kiểm
+recovery, independent root `provider-health-smoke-e14b02f-20260822T004512Z`
+trên clean commit `e14b02ff24d7ebe16e05f938f50d79f47101f985` đạt `5/5`,
+zero retry, một attempt/request, P50 `1.54s`, P95 `16.45s`. Provider
+configuration SHA-256 vẫn là
+`9d978ec3fb533f7316eb98928ec0f3cbbde9f6e52b33ae3b45aff15d1d61416f`;
+artifact SHA-256 là
+`b4a994186b51a85b710780ced854a8fd133b6914dafcb24e73dfe304119e9fe0`.
+Disposition khóa kết quả thành `health_proof_only`, `consumed=true`, không
+đánh giá Query quality và không cho reuse/carry-forward.
+
+Không chạy thêm standalone health smoke sau signal này. Fresh Query formal
+window chỉ được mở sau khi owner ký envelope bind exact clean commit và
+run-root chưa từng tồn tại. Window đó phải chạy lại preparation,
+provider-boundary revalidation và fresh formal-window smoke riêng; không copy
+health artifact/hash ở trên vào declaration hoặc run-root mới.
 
 ### Formal window `d76ad9c` đã terminal
 
