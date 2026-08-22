@@ -603,6 +603,38 @@ root này. Future attempt chỉ được xem xét sau independent provider recov
 signal, rồi phải dùng fresh draft/authorization/never-used root/preparation/
 boundary/smoke/declaration/trace/pair artifacts hoàn toàn mới.
 
+### Formal window `d728931` đã terminal sau fresh smoke
+
+Window `query-formal-d728931-20260822-01` bind exact clean commit
+`d72893168f160d83b3df1a863af5429438e07dde`, draft SHA-256
+`8de7011388c01b49e06c652173709c2f687ef83ba45a05c4833e5e87fb5e977a` và
+authorization lifetime đúng 60 phút. Offline/provider-boundary preflight pass
+`13/13`; rollback pass và xác nhận Query flag OFF.
+
+Fresh formal smoke duy nhất pass `5/5`, zero retry, một attempt/request, timeout
+30 giây; P50 `2301.94 ms`, P95 `3962.53 ms`. Smoke SHA-256
+`62d9b0a6fa30b46b2c7ba623795b6f32b2d6933f3c02655da3b74195e00e0f`;
+provider configuration SHA-256 vẫn là
+`9d978ec3fb533f7316eb98928ec0f3cbbde9f6e52b33ae3b45aff15d1d61416f`.
+Provider đã hồi phục ở smoke này, nhưng artifact thuộc window đã consumed nên
+không được dùng lại.
+
+Sau smoke, local operator stringify `completed_at` đã được `ConvertFrom-Json`
+materialize thành `[datetime]`, rồi gọi invariant `DateTimeOffset.Parse` trên
+chuỗi locale. Parse failure xảy ra trước declaration. Contract dừng ngay: không
+có declaration, trace hoặc formal-pair directory; formal pair bắt đầu bằng `0`,
+không có provider traffic tiếp theo và Query quality chưa được evaluate.
+Disposition SHA-256
+`763b70369d9f6427ed699d8ddc033d84437a3506de78ffb202e2a5dc48ea2ae0` khóa
+authorization/window ở consumed+tombstoned; Query tiếp tục OFF.
+
+Hardening `e2b072e` thêm `resolve_query_formal_smoke_binding.ps1` để kiểm exact
+smoke contract, đọc timestamp không phụ thuộc locale và tính deadline baseline
+30 phút. Formal attempt kế tiếp phải bind helper này trên clean commit mới và
+dùng draft/authorization/never-used root/preparation/boundary/fresh smoke/
+declaration/trace/pair artifacts hoàn toàn mới; không sửa lệnh rồi tiếp tục,
+retry hoặc carry-forward từ root `d728931`.
+
 ## Sau formal window
 
 - `passed` chỉ là technical evidence; không tự authorize controlled-demo hay
