@@ -193,6 +193,12 @@ phụ thuộc locale; block offline không gọi provider và chỉ tạo `prefl
 `rollback.json`. Trước block tiếp theo, cùng authorization phải vẫn còn hiệu
 lực; không suy diễn standing authority hoặc sửa expiry.
 
+Không chạy probe ad hoc dùng `ConvertFrom-Json` rồi stringify `authorized_at`
+hoặc `expires_at` để gọi `DateTimeOffset.Parse` trước entrypoint. Chính
+`prepare_query_formal_window.ps1` là authorization validator canonical; failure
+của một pre-entrypoint probe vẫn terminal và không được sửa lệnh để tiếp tục
+cùng authorization/root.
+
 ```powershell
 $env:EXTERNAL_PROCESSING_POLICY = 'all_external'
 
@@ -634,6 +640,27 @@ smoke contract, đọc timestamp không phụ thuộc locale và tính deadline 
 dùng draft/authorization/never-used root/preparation/boundary/fresh smoke/
 declaration/trace/pair artifacts hoàn toàn mới; không sửa lệnh rồi tiếp tục,
 retry hoặc carry-forward từ root `d728931`.
+
+### Formal window `5a923e5` đã terminal trước preparation
+
+Owner approve exact draft SHA-256
+`c028f615db52920df2ce34abfa821c6af224867b1bc7c25c12ab98d51a798cba`
+cho root `query-formal-5a923e5-20260822-01`. Authorization lifetime đúng 60
+phút, bind exact clean commit `5a923e5255e15b9d3816ca45d4e10e64f4ea9c40` và
+toàn bộ quyền retry, dependency change, activation, push, merge đều false.
+
+Trước khi gọi preparation entrypoint, một probe read-only ad hoc lại stringify
+`expires_at` đã được `ConvertFrom-Json` materialize thành `[datetime]`, rồi gọi
+`DateTimeOffset.Parse` trên chuỗi locale. Contract first-failure làm
+authorization/window terminal ngay tại `post_authorization_pre_preparation_operator_probe`.
+Offline preparation, provider boundary, smoke, declaration, trace và formal pair
+đều chưa bắt đầu; provider traffic bằng `0`, Query tiếp tục OFF. Disposition
+SHA-256 `0b48ddab8ee0c04139fb323556797e87c3adfa2d2f0673312de9534cbf25686f`.
+
+Không sửa probe rồi tiếp tục cùng authorization/root. Future attempt phải dùng
+clean commit, unsigned draft, exact owner authorization, never-used root và toàn
+bộ preparation/boundary/smoke/declaration/trace/pair artifact mới; entrypoint
+canonical phải là bước đầu tiên đọc expiry.
 
 ## Sau formal window
 
