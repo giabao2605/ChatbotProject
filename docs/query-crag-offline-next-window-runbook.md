@@ -662,6 +662,28 @@ clean commit, unsigned draft, exact owner authorization, never-used root và to�
 bộ preparation/boundary/smoke/declaration/trace/pair artifact mới; entrypoint
 canonical phải là bước đầu tiên đọc expiry.
 
+### Formal window `e3e31ca` đã terminal tại collection binding
+
+Owner approve exact draft SHA-256
+`7147c2d9fab3c7df62b088ce8413f1c05ab20eaa1483dcecb00b6d0e54b61690`
+cho root `query-formal-e3e31ca-20260822-01` trên clean commit
+`e3e31ca18d53615f8ca2c15bbe7919d3ad22cef2`. Canonical preparation entrypoint
+được gọi trực tiếp, không còn probe expiry ad hoc, nhưng process chưa bind
+`QDRANT_COLLECTION` và `RAG_EVAL_EXPECTED_COLLECTION` như hai dòng đầu trong
+runbook block.
+
+Entrypoint dừng với `query_eval_collection_binding_invalid` trước khi tạo
+run-root artifact. Contract first-failure làm authorization/window consumed và
+tombstone; không được set biến rồi retry cùng authorization/root. Offline
+preparation chưa complete, provider boundary/smoke/declaration/trace/formal pair
+chưa bắt đầu, provider traffic bằng `0`, Query tiếp tục OFF. Disposition SHA-256
+`eb938ea85b79d06eea7059f82e562c740b1add252e0461a3c49dd30ca4fa881e`.
+
+Không tách invocation khỏi bốn process binding đầu block: `PYTHONPATH`,
+`RUN_DECOMPOSITION_EVAL_FIXTURE`, `QDRANT_COLLECTION` và
+`RAG_EVAL_EXPECTED_COLLECTION`. Future attempt vẫn cần clean commit, exact
+unsigned draft/owner authorization, never-used root và toàn bộ artifact mới.
+
 ## Sau formal window
 
 - `passed` chỉ là technical evidence; không tự authorize controlled-demo hay
