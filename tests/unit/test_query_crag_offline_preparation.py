@@ -21,6 +21,9 @@ PREPARATION = (
 RUNBOOK = ROOT / "docs" / "query-crag-offline-next-window-runbook.md"
 QUERY_WINDOW_ENTRYPOINT = ROOT / "scripts" / "ops" / "prepare_query_formal_window.ps1"
 QUERY_PAIR_ENTRYPOINT = ROOT / "scripts" / "ops" / "start_query_formal_pair.ps1"
+QUERY_SMOKE_BINDING_ENTRYPOINT = (
+    ROOT / "scripts" / "ops" / "resolve_query_formal_smoke_binding.ps1"
+)
 GOVERNED_FLAGS = {
     "RAG_CRAG_ENABLED",
     "RAG_CLAIM_REPAIR_ENABLED",
@@ -390,6 +393,123 @@ def test_query_window_entrypoint_accepts_iso_authorization_expiry_independent_of
     assert result.returncode == 0, result.stderr
     assert (run_root / "preflight.json").is_file()
     assert (run_root / "rollback.json").is_file()
+
+
+def test_query_smoke_binding_is_locale_independent(tmp_path):
+    smoke = tmp_path / "provider-smoke.json"
+    _write_json(
+        smoke,
+        {
+            "schema": "provider-smoke-v1",
+            "completed_at": "2026-08-22T01:11:42.378540Z",
+            "passed": True,
+            "request_count": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+            "provider_retries": 0,
+            "max_attempts_per_request": 1,
+            "request_timeout_seconds": 30.0,
+            "provider_configuration_sha256": "9" * 64,
+            "provider_outcome": {"reason": "provider_available"},
+        },
+    )
+    probe = f"""
+$ErrorActionPreference = 'Stop'
+[System.Threading.Thread]::CurrentThread.CurrentCulture = `
+  [System.Globalization.CultureInfo]::GetCultureInfo('vi-VN')
+$binding = & '{QUERY_SMOKE_BINDING_ENTRYPOINT}' `
+  -ProviderSmokeArtifact '{smoke}'
+$binding | ConvertTo-Json -Compress
+"""
+
+    result = subprocess.run(
+        [_powershell(), "-NoProfile", "-Command", probe],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    binding = json.loads(result.stdout)
+    assert binding == {
+        "provider_smoke_sha256": _sha256(smoke),
+        "provider_configuration_sha256": "9" * 64,
+        "completed_at": "2026-08-22T01:11:42.3785400Z",
+        "baseline_must_start_before": "2026-08-22T01:41:42.3785400Z",
+    }
+
+
+def test_query_smoke_binding_rejects_inconsistent_provider_outcome(tmp_path):
+    smoke = tmp_path / "provider-smoke.json"
+    _write_json(
+        smoke,
+        {
+            "schema": "provider-smoke-v1",
+            "completed_at": "2026-08-22T01:11:42.378540Z",
+            "passed": True,
+            "request_count": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+            "provider_retries": 0,
+            "max_attempts_per_request": 1,
+            "request_timeout_seconds": 30.0,
+            "provider_configuration_sha256": "9" * 64,
+            "provider_outcome": {"reason": "non_capacity_failure"},
+        },
+    )
+    probe = f"""
+$ErrorActionPreference = 'Stop'
+& '{QUERY_SMOKE_BINDING_ENTRYPOINT}' -ProviderSmokeArtifact '{smoke}'
+"""
+
+    result = subprocess.run(
+        [_powershell(), "-NoProfile", "-Command", probe],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "query_formal_provider_smoke_invalid" in result.stderr
+
+
+@pytest.mark.parametrize("timeout_value", [29.9, None])
+def test_query_smoke_binding_requires_exact_thirty_second_timeout(
+    tmp_path, timeout_value
+):
+    smoke = tmp_path / "provider-smoke.json"
+    payload = {
+        "schema": "provider-smoke-v1",
+        "completed_at": "2026-08-22T01:11:42.378540Z",
+        "passed": True,
+        "request_count": 5,
+        "successful_requests": 5,
+        "failed_requests": 0,
+        "provider_retries": 0,
+        "max_attempts_per_request": 1,
+        "provider_configuration_sha256": "9" * 64,
+        "provider_outcome": {"reason": "provider_available"},
+    }
+    if timeout_value is not None:
+        payload["request_timeout_seconds"] = timeout_value
+    _write_json(smoke, payload)
+    probe = f"""
+$ErrorActionPreference = 'Stop'
+& '{QUERY_SMOKE_BINDING_ENTRYPOINT}' -ProviderSmokeArtifact '{smoke}'
+"""
+
+    result = subprocess.run(
+        [_powershell(), "-NoProfile", "-Command", probe],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "query_formal_provider_smoke_invalid" in result.stderr
 
 
 def test_query_window_expired_authorization_tombstones_provider_boundary(tmp_path):
@@ -1252,6 +1372,9 @@ def test_query_smoke_revalidates_bindings_at_the_authorization_boundary():
     assert query_smoke_block.index(
         "-RevalidateForProviderTraffic"
     ) < query_smoke_block.index("scripts.eval.provider_smoke")
+    assert query_smoke_block.index(
+        "scripts.eval.provider_smoke"
+    ) < query_smoke_block.index("resolve_query_formal_smoke_binding.ps1")
     assert "$env:EXTERNAL_PROCESSING_POLICY = 'all_external'" in query_smoke_block
     assert "-OwnerAuthorizationPath $ownerAuthorization" in query_smoke_block
     assert query_smoke_block.index(

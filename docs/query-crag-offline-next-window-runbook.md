@@ -209,6 +209,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Query provider-boundary revalidation failed.' 
 
 & $python -m scripts.eval.provider_smoke `
   --output "$runRoot\provider-smoke.json"
+if ($LASTEXITCODE -ne 0) { throw 'Query provider smoke failed.' }
+
+$smokeBinding = & .\scripts\ops\resolve_query_formal_smoke_binding.ps1 `
+  -ProviderSmokeArtifact "$runRoot\provider-smoke.json"
+$smokeBinding | Format-List
 ```
 
 `prepare_query_formal_window.ps1` rejects missing/mismatched collection
@@ -231,8 +236,13 @@ bindings and reruns offline preflight/rollback into
 two original offline artifacts. Any failure tombstones the root before
 provider traffic.
 
-Sau smoke, derive execution declaration mới và điền toàn bộ binding động bằng
-hash thực tế. Owner ký và baseline phải bắt đầu trong 30 phút từ smoke;
+Sau smoke, chỉ lấy `completed_at`, deadline baseline, provider hash và artifact
+hash từ `resolve_query_formal_smoke_binding.ps1`. Helper xử lý trực tiếp giá trị
+`[datetime]` do `ConvertFrom-Json` materialize và chỉ parse invariant round-trip
+khi input còn là string; không stringify timestamp theo locale rồi gọi
+`DateTimeOffset.Parse`. Bất kỳ failure nào của helper cũng terminal, không sửa
+lệnh rồi tiếp tục cùng window. Derive execution declaration mới bằng các binding
+đã resolve. Owner ký và baseline phải bắt đầu trong 30 phút từ smoke;
 `run_rollout` revalidate freshness trước baseline. Sau đó chỉ dispatch qua
 entrypoint bind interpreter và chạy:
 
