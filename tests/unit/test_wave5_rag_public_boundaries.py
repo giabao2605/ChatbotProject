@@ -330,7 +330,7 @@ def test_parent_hydration_preserves_opted_out_and_unkeyed_documents():
     assert hydrate_parent_context([opted_out, unkeyed]) == [opted_out, unkeyed]
 
 
-def test_parent_hydration_fails_closed_when_vector_storage_is_unavailable(monkeypatch):
+def test_parent_hydration_is_terminal_when_vector_storage_is_unavailable(monkeypatch):
     class UnavailableVectorStore:
         def scroll(self, **_kwargs):
             raise RuntimeError("vector store unavailable")
@@ -351,12 +351,13 @@ def test_parent_hydration_fails_closed_when_vector_storage_is_unavailable(monkey
         },
     )
 
-    assert hydrate_parent_context(
-        [selected],
-        max_workers=1,
-        client=UnavailableVectorStore(),
-        collection_name="test-knowledge",
-    ) == [selected]
+    with pytest.raises(RuntimeError, match="vector store unavailable"):
+        hydrate_parent_context(
+            [selected],
+            max_workers=1,
+            client=UnavailableVectorStore(),
+            collection_name="test-knowledge",
+        )
 
 
 def test_document_formatter_supports_list_material_codes_and_string_btp_codes():

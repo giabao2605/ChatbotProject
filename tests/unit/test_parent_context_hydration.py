@@ -299,6 +299,33 @@ def test_parent_hydration_keeps_legacy_path_when_batch_is_disabled():
     assert len(client.calls) == 1
 
 
+def test_parent_hydration_legacy_transport_failure_is_terminal_without_retry():
+    selected = SimpleNamespace(
+        page_content="selected",
+        metadata=_metadata(),
+    )
+
+    class _FailureClient:
+        def __init__(self):
+            self.scroll_calls = 0
+
+        def scroll(self, **_kwargs):
+            self.scroll_calls += 1
+            raise TimeoutError("TLS handshake timed out")
+
+    client = _FailureClient()
+    with pytest.raises(TimeoutError, match="TLS handshake timed out"):
+        context_builders.hydrate_parent_context(
+            [selected],
+            max_workers=1,
+            client=client,
+            collection_name="test-knowledge",
+            batch_enabled=False,
+        )
+
+    assert client.scroll_calls == 1
+
+
 def test_parent_hydration_worker_one_is_sequential_rollback(monkeypatch):
     selected = [
         SimpleNamespace(

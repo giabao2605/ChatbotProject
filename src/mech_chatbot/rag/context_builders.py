@@ -411,33 +411,29 @@ def _load_parent_section_chunks(
     repeats serving-state constraints so unpublished staging chunks can never be
     pulled into context.
     """
-    try:
-        if client is None or not str(collection_name or "").strip():
-            raise RuntimeError("Parent-context Qdrant runtime is not configured")
+    if client is None or not str(collection_name or "").strip():
+        raise RuntimeError("Parent-context Qdrant runtime is not configured")
 
-        query_filter, selected_scope = _parent_context_filter(
+    query_filter, selected_scope = _parent_context_filter(
+        parent_key,
+        selected_metadata,
+    )
+    if selected_scope is None:
+        logger.warning(
+            "Bo qua parent hydration cho %s vi selected chunk thieu scope metadata",
             parent_key,
-            selected_metadata,
         )
-        if selected_scope is None:
-            logger.warning(
-                "Bo qua parent hydration cho %s vi selected chunk thieu scope metadata",
-                parent_key,
-            )
-            return []
-
-        points, _ = client.scroll(
-            collection_name=collection_name,
-            scroll_filter=query_filter,
-            limit=max(1, int(limit)),
-            with_payload=True,
-            with_vectors=False,
-            timeout=5,
-        )
-        return _parent_documents(points, parent_key, selected_scope)
-    except Exception as exc:
-        logger.warning("Khong hydrate duoc parent context %s: %s", parent_key, exc)
         return []
+
+    points, _ = client.scroll(
+        collection_name=collection_name,
+        scroll_filter=query_filter,
+        limit=max(1, int(limit)),
+        with_payload=True,
+        with_vectors=False,
+        timeout=5,
+    )
+    return _parent_documents(points, parent_key, selected_scope)
 
 
 def parent_context_max_workers(value=4):
