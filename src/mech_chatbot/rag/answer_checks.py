@@ -28,15 +28,26 @@ _POSITIVE_DOCUMENT_COVERAGE = re.compile(
     r"(?:describes?|covers?|confirms?\s+(?:that\s+)?)\b",
     re.IGNORECASE,
 )
+_ANSWER_SECTION_BOUNDARY = re.compile(
+    r"(?m)(?=^[ \t]*(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+))"
+)
+
+
+def _answer_sections(answer):
+    """Group prose paragraphs while keeping separate list items isolated."""
+    return [
+        section.strip()
+        for section in _ANSWER_SECTION_BOUNDARY.split(str(answer or ""))
+        if section.strip()
+    ]
 
 
 def has_self_contradictory_missing_data_claim(answer):
-    """Detect one answer block that both acknowledges and globally denies coverage."""
-    blocks = re.split(r"\n\s*\n+", str(answer or ""))
+    """Detect one answer section that both acknowledges and globally denies coverage."""
     return any(
-        _GENERIC_MISSING_CLAIM.search(block)
-        and _POSITIVE_DOCUMENT_COVERAGE.search(block)
-        for block in blocks
+        _GENERIC_MISSING_CLAIM.search(section)
+        and _POSITIVE_DOCUMENT_COVERAGE.search(section)
+        for section in _answer_sections(answer)
     )
 
 

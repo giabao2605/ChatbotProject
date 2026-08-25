@@ -239,7 +239,7 @@ def test_strict_buffered_stream_never_yields_self_contradictory_missing_claim(
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     contradictory = (
         "Tài liệu xác nhận có mô tả quy trình lắp, nhưng không nêu các bước "
-        "cụ thể. Tài liệu nội bộ hiện có không đề cập đến thông tin này."
+        "cụ thể.\n\nTài liệu nội bộ hiện có không đề cập đến thông tin này."
     )
     runtime = _prepare(module, monkeypatch, _FakeChain([contradictory]))
     monkeypatch.setattr(
@@ -253,6 +253,24 @@ def test_strict_buffered_stream_never_yields_self_contradictory_missing_claim(
     assert contradictory not in emitted
     assert events[-1].outcome == "refused"
     assert events[-1].refusal_reason == "post_check_self_contradiction"
+
+
+def test_strict_buffered_stream_keeps_separate_multi_part_coverage_claims(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    separate_topics = (
+        "- Tài liệu mô tả quy trình lắp PART-A nhưng không nêu các bước cụ thể.\n\n"
+        "- Tài liệu nội bộ hiện có không đề cập đến thông tin này cho PART-B."
+    )
+    runtime = _prepare(module, monkeypatch, _FakeChain([separate_topics]))
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == [separate_topics]
+    assert events[-1].outcome == "answered"
 
 
 def test_strict_buffered_stream_keeps_scoped_missing_detail_answer(monkeypatch):
