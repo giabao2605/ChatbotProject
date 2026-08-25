@@ -1,8 +1,9 @@
-"""Prepare and finalize an exact-evidence Query controlled-demo decision."""
+"""Prepare and finalize an exact-evidence Query controlled-demo owner decision."""
 
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -14,18 +15,14 @@ from mech_chatbot.governance.artifact_references import (
     load_json_reference,
     read_json_object,
 )
-from mech_chatbot.rag.feature_activation import (
-    validate_controlled_demo_decision_ledger,
-)
 from scripts.decomposition_eval.human_review_pack import pack_sha256
-from scripts.ops.build_activation_bundle import build_activation_bundle
 
 
 REQUESTED_AUTHORIZATION = {
-    "materialize_controlled_demo_decision": True,
-    "build_offline_activation_bundle": True,
+    "materialize_controlled_demo_owner_decision": True,
     "provider_traffic_authorized": False,
     "pilot_dispatch_authorized": False,
+    "feature_activation_authorized": False,
     "runtime_start_authorized": False,
     "default_rollout_authorized": False,
     "push_authorized": False,
@@ -50,12 +47,18 @@ def _write_json(path: str | Path, value: dict) -> tuple[Path, str]:
     return resolved, hashlib.sha256(raw).hexdigest()
 
 
+def _inside(path: Path, base: Path) -> bool:
+    try:
+        path.resolve().relative_to(base.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def _inside_dot_local(path: str | Path, root: Path) -> Path:
     resolved = Path(path).resolve()
-    try:
-        resolved.relative_to((root / ".local").resolve())
-    except ValueError as exc:
-        raise ValueError("query controlled-demo artifacts must stay under .local") from exc
+    if not _inside(resolved, root / ".local"):
+        raise ValueError("query controlled-demo artifacts must stay under .local")
     return resolved
 
 
@@ -110,43 +113,15 @@ def _reference(path: Path, *, root: Path, schema: str) -> dict:
     return build_json_reference(path, root=root, expected_schema=schema)
 
 
-def prepare_decision_draft(
-    *,
-    source_root: str | Path,
-    disposition_path: str | Path,
-    review_result_path: str | Path,
-    output: str | Path,
-    owner: str,
-) -> tuple[dict, str]:
-    root = Path(source_root).resolve()
-    commit = _source_commit(root)
-    disposition, disposition_raw, disposition_path = _json(disposition_path)
-    review, _, review_result_path = _json(review_result_path)
-    pack_path = review_result_path.with_name("pack.json")
-    pack, _, pack_path = _json(pack_path)
-    disposition_sha = hashlib.sha256(disposition_raw).hexdigest()
-    pack_sha = pack_sha256(pack)
+def _validate_disposition(disposition: dict, disposition_sha: str) -> None:
     execution = disposition.get("execution") or {}
     eligibility = disposition.get("evidence_eligibility") or {}
     governance = disposition.get("governance") or {}
-    normalized_owner = str(owner or "").strip()
-    reviewer = str(review.get("reviewer") or "").strip()
-
     _require({
-        "owner_required": bool(normalized_owner),
-        "owner_matches_source_owner": normalized_owner.casefold()
-        == str(pack.get("source_owner") or "").strip().casefold(),
         "disposition_schema": disposition.get("schema")
         == "query-decomposition-formal-window-disposition-v2",
-        "review_schema": review.get("schema")
-        == "query-decomposition-human-review-result-v1",
-        "pack_schema": pack.get("schema")
-        == "query-decomposition-human-review-pack-v2",
-        "source_commit_matches_checkout": disposition.get("source_commit") == commit,
-        "review_source_commit": review.get("source_commit") == commit,
-        "pack_source_commit": pack.get("source_commit") == commit,
-        "run_id_matches": disposition.get("run_id") == review.get("run_id")
-        == pack.get("run_id"),
+        "disposition_status": disposition.get("status")
+        == "completed_technical_eligible_pending_human_review",
         "disposition_terminal": disposition.get("terminal") is True,
         "disposition_consumed": disposition.get("consumed") is True,
         "disposition_immutable": disposition.get("immutable") is True,
@@ -159,13 +134,63 @@ def prepare_decision_draft(
         "provider_failures_zero": execution.get("provider_failures") == 0,
         "provider_retries_zero": execution.get("provider_retries") == 0,
         "disallowed_fallback_zero": execution.get("disallowed_fallback_count") == 0,
-        "window_contract_passed": eligibility.get("full_window_contract_passed") is True,
+        "formal_evidence": eligibility.get("formal_evidence") is True,
+        "rollout_evidence": eligibility.get("rollout_evidence") is True,
+        "provider_health_passed": eligibility.get("provider_health_passed") is True,
+        "query_quality_evaluated": eligibility.get("query_quality_evaluated") is True,
+        "zero_retry_formal_path": eligibility.get(
+            "zero_retry_formal_path_exercised"
+        ) is True,
+        "three_pair_gate_passed": eligibility.get("three_pair_gate_passed") is True,
+        "window_contract_passed": eligibility.get(
+            "full_window_contract_passed"
+        ) is True,
         "technical_eligible": eligibility.get("technical_eligible") is True,
-        "predecision_production_false": eligibility.get("production_eligible") is False,
+        "predecision_production_false": eligibility.get(
+            "production_eligible"
+        ) is False,
         "predecision_status": eligibility.get("decision_status")
         == "pending_human_review",
+        "reuse_not_authorized": eligibility.get("reuse_authorized") is False,
+        "carry_forward_not_authorized": eligibility.get(
+            "carry_forward_authorized"
+        ) is False,
+        "governance_fail_closed": all(
+            governance.get(name) is False
+            for name in (
+                "provider_smoke_rerun_authorized", "retry_or_catch_up_authorized",
+                "same_root_reuse_authorized", "additional_formal_pairs_authorized",
+                "pilot_authorized", "feature_activation_authorized",
+                "default_rollout_authorized", "push_authorized", "merge_authorized",
+            )
+        ),
+        "query_still_off": governance.get("query_decomposition_remains_off") is True,
+        "disposition_sha256_format": len(disposition_sha) == 64,
+    })
+
+
+def _validate_review(review: dict, pack: dict, disposition_sha: str) -> None:
+    canonical_pack_sha = pack_sha256(pack)
+    reviewer = str(review.get("reviewer") or "").strip()
+    owner = str(pack.get("source_owner") or "").strip()
+    _require({
+        "review_schema": review.get("schema")
+        == "query-decomposition-human-review-result-v1",
+        "pack_schema": pack.get("schema")
+        == "query-decomposition-human-review-pack-v2",
+        "review_scope": review.get("scope") == "controlled_demo_quality_review",
+        "review_capability": review.get("capability") == "query_decomposition",
+        "review_mode": review.get("review_mode") == "independent_human",
+        "reviewer_independent": bool(reviewer)
+        and reviewer.casefold() not in {owner.casefold(), "codex"},
         "review_disposition_sha256": review.get("disposition_sha256")
-        == disposition_sha == pack.get("disposition_sha256"),
+        == pack.get("disposition_sha256") == disposition_sha,
+        "pack_hash_matches": review.get("pack_hash_matches") is True
+        and review.get("pack_sha256") == canonical_pack_sha
+        and review.get("expected_pack_sha256") == canonical_pack_sha,
+        "review_contract_matches": bool(review.get("review_contract_sha256"))
+        and review.get("review_contract_sha256")
+        == pack.get("review_contract_sha256"),
         "review_validation_passed": review.get("validation_passed") is True,
         "review_complete": review.get("review_complete") is True,
         "review_quality_passed": review.get("quality_passed") is True,
@@ -174,27 +199,95 @@ def prepare_decision_draft(
         and review.get("accepted_count") == 39
         and review.get("rejected_count") == 0
         and review.get("needs_discussion_count") == 0,
-        "reviewer_independent": bool(reviewer)
-        and reviewer.casefold() != str(pack.get("source_owner") or "").strip().casefold(),
-        "pack_hash_matches": review.get("pack_hash_matches") is True
-        and review.get("pack_sha256") == pack_sha
-        and review.get("expected_pack_sha256") == pack_sha,
-        "review_contract_matches": bool(review.get("review_contract_sha256"))
-        and review.get("review_contract_sha256") == pack.get("review_contract_sha256"),
-        "query_still_off": governance.get("query_decomposition_remains_off") is True
-        and review.get("query_decomposition_remains_off") is True,
-        "prior_authorizations_false": all(
+        "review_production_false": review.get("production_eligible") is False
+        and pack.get("production_eligible") is False,
+        "review_authorizations_false": all(
             item.get(name) is False
-            for item in (governance, review, pack)
+            for item in (review, pack)
             for name in (
                 "pilot_authorized", "feature_activation_authorized",
-                "default_rollout_authorized",
+                "default_rollout_authorized", "push_authorized", "merge_authorized",
             )
         ),
-        "review_push_merge_false": review.get("push_authorized") is False
-        and review.get("merge_authorized") is False,
+        "review_query_still_off": review.get(
+            "query_decomposition_remains_off"
+        ) is True and pack.get("query_decomposition_remains_off") is True,
     })
 
+
+def _artifact_bindings_valid(pack: dict, *, run_root: Path, source_root: Path) -> bool:
+    bindings = pack.get("artifact_bindings")
+    if not isinstance(bindings, dict) or not bindings:
+        return False
+    bases = {"run_root": run_root.resolve(), "source_root": source_root.resolve()}
+    for binding in bindings.values():
+        if not isinstance(binding, dict) or binding.get("base") not in bases:
+            return False
+        base = bases[binding["base"]]
+        path = (base / str(binding.get("path") or "")).resolve()
+        expected = str(binding.get("sha256") or "")
+        if not _inside(path, base) or not path.is_file() or len(expected) != 64:
+            return False
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            return False
+    return True
+
+
+def _validate_exact_identity(
+    *, commit: str, disposition: dict, disposition_sha: str, review: dict,
+    review_sha: str, pack: dict, expected_source_commit: str,
+    expected_run_id: str, expected_disposition_sha256: str,
+    expected_review_result_sha256: str, expected_reviewer: str,
+) -> None:
+    _require({
+        "expected_source_commit": commit == expected_source_commit
+        == disposition.get("source_commit") == review.get("source_commit")
+        == pack.get("source_commit"),
+        "expected_run_id": expected_run_id == disposition.get("run_id")
+        == review.get("run_id") == pack.get("run_id"),
+        "expected_disposition_sha256": disposition_sha
+        == expected_disposition_sha256,
+        "expected_review_result_sha256": review_sha
+        == expected_review_result_sha256,
+        "expected_reviewer": str(review.get("reviewer") or "").strip()
+        == str(expected_reviewer or "").strip(),
+    })
+
+
+def prepare_decision_draft(
+    *, source_root: str | Path, disposition_path: str | Path,
+    review_result_path: str | Path, output: str | Path, owner: str,
+    expected_source_commit: str, expected_run_id: str,
+    expected_disposition_sha256: str, expected_review_result_sha256: str,
+    expected_reviewer: str,
+) -> tuple[dict, str]:
+    root = Path(source_root).resolve()
+    commit = _source_commit(root)
+    disposition, disposition_raw, disposition_path = _json(disposition_path)
+    review, review_raw, review_result_path = _json(review_result_path)
+    pack, _, pack_path = _json(review_result_path.with_name("pack.json"))
+    disposition_sha = hashlib.sha256(disposition_raw).hexdigest()
+    review_sha = hashlib.sha256(review_raw).hexdigest()
+    normalized_owner = str(owner or "").strip()
+    _validate_exact_identity(
+        commit=commit, disposition=disposition, disposition_sha=disposition_sha,
+        review=review, review_sha=review_sha, pack=pack,
+        expected_source_commit=expected_source_commit,
+        expected_run_id=expected_run_id,
+        expected_disposition_sha256=expected_disposition_sha256,
+        expected_review_result_sha256=expected_review_result_sha256,
+        expected_reviewer=expected_reviewer,
+    )
+    _validate_disposition(disposition, disposition_sha)
+    _validate_review(review, pack, disposition_sha)
+    _require({
+        "owner_required": bool(normalized_owner),
+        "owner_matches_source_owner": normalized_owner.casefold()
+        == str(pack.get("source_owner") or "").strip().casefold(),
+        "pack_artifact_bindings": _artifact_bindings_valid(
+            pack, run_root=disposition_path.parent, source_root=root,
+        ),
+    })
     evidence = {
         "window_disposition": _reference(
             disposition_path, root=root,
@@ -209,50 +302,48 @@ def prepare_decision_draft(
             schema="query-decomposition-human-review-result-v1",
         ),
     }
-    proposed_technical_evidence = {
-        "schema": "decomposition-rollout-run-v1",
-        "git_sha": commit,
-        "run_id": disposition["run_id"],
-        "scope": "controlled_demo",
-        "passed": True,
-        "technical_eligible": True,
-        "production_eligible": True,
-        "decision_status": "accepted_for_controlled_demo",
-        "formal_pair_count": 3,
-        "provider_calls": 111,
-        "provider_failures": 0,
-        "provider_retries": 0,
-        "disallowed_fallback_count": 0,
-        "human_review": {
-            "mode": "independent_human",
-            "reviewer": reviewer,
-            "accepted_count": 39,
-            "rejected_count": 0,
-            "needs_discussion_count": 0,
-        },
-        "evidence": evidence,
-        "pilot_authorized": False,
-        "runtime_start_authorized": False,
-        "default_rollout_authorized": False,
-    }
-    draft = {
-        "schema": "query-controlled-demo-decision-draft-v1",
-        "status": "AWAITING_EXACT_OWNER_APPROVAL",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "owner": normalized_owner,
+    proposed_decision = {
+        "schema": "query-controlled-demo-owner-decision-v1",
+        "status": "accepted_for_controlled_demo_quality_only",
+        "decision": "accepted_for_controlled_demo_quality_only",
         "source_commit": commit,
         "run_id": disposition["run_id"],
         "scope": "controlled_demo",
         "capability": "query_decomposition",
         "pilot_contract": "query-decomposition-24h-100-v1",
+        "evidence": evidence,
+        "technical_eligible": True,
+        "human_review_accepted": True,
+        "production_eligible": False,
+        "independent_human_review": {
+            "reviewer": review["reviewer"],
+            "evaluated_at": review["evaluated_at"],
+            "review_result": evidence["review_result"],
+        },
+        "provider_traffic_authorized": False,
+        "pilot_dispatch_authorized": False,
+        "feature_activation_authorized": False,
+        "runtime_start_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+        "query_decomposition_remains_off": True,
+    }
+    draft = {
+        "schema": "query-controlled-demo-owner-decision-draft-v1",
+        "status": "AWAITING_EXACT_OWNER_APPROVAL",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "owner": normalized_owner,
+        "source_commit": commit,
+        "run_id": disposition["run_id"],
+        "scope": "controlled_demo_owner_decision_only",
+        "capability": "query_decomposition",
         "preparation_tool": _preparation_tool_binding(),
         "evidence": evidence,
-        "proposed_technical_evidence": proposed_technical_evidence,
+        "proposed_owner_decision": proposed_decision,
         "requested_authorization": dict(REQUESTED_AUTHORIZATION),
         "maximum_approval_lifetime_minutes": MAX_APPROVAL_MINUTES,
-        "post_approval_gate": (
-            "materialize_and_validate_query_only_decision_ledger_and_offline_bundle"
-        ),
+        "post_approval_gate": "materialize_owner_decision_only",
     }
     output = _inside_dot_local(output, root)
     if output.exists():
@@ -261,12 +352,29 @@ def prepare_decision_draft(
     return draft, digest
 
 
+def _validate_approval(
+    *, draft: dict, draft_sha: str, approval: dict,
+    authorized_at: datetime, expires_at: datetime, observed_at: datetime,
+) -> None:
+    _require({
+        "draft_schema": draft.get("schema")
+        == "query-controlled-demo-owner-decision-draft-v1",
+        "draft_status": draft.get("status") == "AWAITING_EXACT_OWNER_APPROVAL",
+        "approval_schema": approval.get("schema")
+        == "query-controlled-demo-owner-approval-v1",
+        "approval_draft_sha256": approval.get("draft_sha256") == draft_sha,
+        "approval_actor": approval.get("actor") == draft.get("owner"),
+        "approval_authorization_exact": approval.get("authorization")
+        == REQUESTED_AUTHORIZATION == draft.get("requested_authorization"),
+        "approval_time_order": authorized_at <= observed_at <= expires_at,
+        "approval_lifetime": (expires_at - authorized_at).total_seconds()
+        <= MAX_APPROVAL_MINUTES * 60,
+    })
+
+
 def finalize_decision(
-    *,
-    source_root: str | Path,
-    draft_path: str | Path,
-    approval_path: str | Path,
-    output_dir: str | Path,
+    *, source_root: str | Path, draft_path: str | Path,
+    approval_path: str | Path, output_dir: str | Path,
     now: datetime | None = None,
 ) -> dict:
     root = Path(source_root).resolve()
@@ -281,107 +389,42 @@ def finalize_decision(
     output_dir = _inside_dot_local(output_dir, root)
     if output_dir.exists():
         raise ValueError("final_output_dir_must_not_exist")
-
+    _validate_approval(
+        draft=draft, draft_sha=draft_sha, approval=approval,
+        authorized_at=authorized_at, expires_at=expires_at,
+        observed_at=observed_at,
+    )
     _require({
-        "draft_schema": draft.get("schema")
-        == "query-controlled-demo-decision-draft-v1",
-        "draft_status": draft.get("status") == "AWAITING_EXACT_OWNER_APPROVAL",
         "draft_source_commit": draft.get("source_commit") == current_commit,
         "preparation_tool_binding": draft.get("preparation_tool")
         == _preparation_tool_binding(),
-        "approval_schema": approval.get("schema")
-        == "query-controlled-demo-owner-approval-v1",
-        "approval_draft_sha256": approval.get("draft_sha256") == draft_sha,
-        "approval_actor": approval.get("actor") == draft.get("owner"),
-        "approval_authorization_exact": approval.get("authorization")
-        == REQUESTED_AUTHORIZATION == draft.get("requested_authorization"),
-        "approval_time_order": authorized_at <= observed_at <= expires_at,
-        "approval_lifetime": (
-            expires_at - authorized_at
-        ).total_seconds() <= MAX_APPROVAL_MINUTES * 60,
     })
-    for reference in draft["evidence"].values():
+    for reference in draft.get("evidence", {}).values():
         if load_json_reference(reference, root=root) is None:
             raise ValueError("draft_evidence_reference_invalid")
-
-    technical_path, technical_sha = _write_json(
-        output_dir / "query-controlled-demo-technical-evidence.json",
-        draft["proposed_technical_evidence"],
-    )
-    decision = {
-        "schema": "milestone-decision-v2",
-        "milestone": "query_decomposition",
-        "scope": "controlled_demo",
-        "decision": "accepted",
-        "source_commit": current_commit,
-        "evidence": [
-            _reference(
-                technical_path, root=root, schema="decomposition-rollout-run-v1",
-            ),
-            *draft["evidence"].values(),
-        ],
-        "reason": (
-            "Three exact-commit formal pairs passed with 111/111 provider calls "
-            "and independent reviewer tran.nghi accepted all 39 outputs."
-        ),
-        "approval_binding": {
-            "draft_path": str(draft_path),
-            "draft_sha256": draft_sha,
-            "approval_path": str(approval_path),
-            "approval_sha256": approval_sha,
-        },
-        "reviewer_signoff": {
-            "reviewer": approval["actor"],
-            "signed_at": approval["authorized_at"],
-        },
-        "pilot_dispatch_authorized": False,
-        "runtime_start_authorized": False,
-        "default_rollout_authorized": False,
+    decision = deepcopy(draft["proposed_owner_decision"])
+    decision["owner_approval"] = {
+        "owner": approval["actor"],
+        "accepted_at": approval["authorized_at"],
+        "scope": "controlled_demo_owner_decision_only",
+        "draft": {"path": str(draft_path), "sha256": draft_sha},
+        "approval": {"path": str(approval_path), "sha256": approval_sha},
     }
     decision_path, decision_sha = _write_json(
-        output_dir / "query-controlled-demo-decision.json", decision,
-    )
-    ledger = {
-        "schema": "controlled-demo-decision-ledger-v2",
-        "status": "complete",
-        "decisions": {
-            "query_decomposition": _reference(
-                decision_path, root=root, schema="milestone-decision-v2",
-            )
-        },
-    }
-    ledger_path, ledger_sha = _write_json(
-        output_dir / "query-controlled-demo-decision-ledger.json", ledger,
-    )
-    if not validate_controlled_demo_decision_ledger(
-        ledger,
-        active_milestones={"query_decomposition"},
-        root=root,
-        source_commit=current_commit,
-    ):
-        raise ValueError("query_controlled_demo_decision_ledger_invalid")
-    bundle_path = output_dir / "query-controlled-demo-selective-bundle.json"
-    _, bundle_sha = build_activation_bundle(
-        scope="controlled_demo",
-        profile="selective",
-        enabled_features={"RAG_QUERY_DECOMPOSITION_ENABLED"},
-        source_commit=current_commit,
-        decision_ledger=ledger_path,
-        output=bundle_path,
-        root=root,
+        output_dir / "query-controlled-demo-owner-decision.json", decision,
     )
     receipt = {
-        "schema": "query-controlled-demo-decision-finalization-v1",
+        "schema": "query-controlled-demo-owner-decision-finalization-v1",
         "source_commit": current_commit,
-        "technical_evidence": {"path": str(technical_path), "sha256": technical_sha},
-        "decision": {"path": str(decision_path), "sha256": decision_sha},
-        "decision_ledger": {"path": str(ledger_path), "sha256": ledger_sha},
-        "activation_bundle": {"path": str(bundle_path), "sha256": bundle_sha},
+        "owner_decision": {"path": str(decision_path), "sha256": decision_sha},
         "provider_traffic_authorized": False,
         "pilot_dispatch_authorized": False,
+        "feature_activation_authorized": False,
         "runtime_start_authorized": False,
         "default_rollout_authorized": False,
-        "next_gate": "fresh_activation_preflight_and_rollback_before_pilot_authorization",
+        "push_authorized": False,
+        "merge_authorized": False,
+        "next_gate": "separate_activation_contract_and_preflight_authorization",
     }
     _write_json(output_dir / "finalization-receipt.json", receipt)
     return receipt
@@ -396,6 +439,11 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--review-result", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--owner", required=True)
+    prepare.add_argument("--expected-source-commit", required=True)
+    prepare.add_argument("--expected-run-id", required=True)
+    prepare.add_argument("--expected-disposition-sha256", required=True)
+    prepare.add_argument("--expected-review-result-sha256", required=True)
+    prepare.add_argument("--expected-reviewer", required=True)
     finalize = subparsers.add_parser("finalize")
     finalize.add_argument("--source-root", type=Path, required=True)
     finalize.add_argument("--draft", type=Path, required=True)
@@ -409,6 +457,11 @@ def main(argv: list[str] | None = None) -> int:
             review_result_path=args.review_result,
             output=args.output,
             owner=args.owner,
+            expected_source_commit=args.expected_source_commit,
+            expected_run_id=args.expected_run_id,
+            expected_disposition_sha256=args.expected_disposition_sha256,
+            expected_review_result_sha256=args.expected_review_result_sha256,
+            expected_reviewer=args.expected_reviewer,
         )
         print(json.dumps({
             "path": str(args.output), "sha256": digest, "status": draft["status"],
