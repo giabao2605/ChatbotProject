@@ -346,6 +346,7 @@ def _explicit_hybrid_rrf_batch(
     requests = tuple(requests)
     if not requests:
         return ()
+    batch_stage = "setup"
     try:
         from qdrant_client import models
 
@@ -355,11 +356,13 @@ def _explicit_hybrid_rrf_batch(
             raise RuntimeError("Qdrant vectorstore khong expose dense/sparse embeddings")
 
         queries = [request.query for request in requests]
+        batch_stage = "dense_embedding"
         dense_started = time.perf_counter()
         dense_vectors = [dense_embedding.embed_query(query) for query in queries]
         if len(dense_vectors) != len(requests):
             raise RuntimeError("Qdrant batch embedding result count mismatch")
 
+        batch_stage = "dense_query"
         dense_responses = client.query_batch_points(
             collection_name=collection_name,
             requests=[
@@ -381,6 +384,7 @@ def _explicit_hybrid_rrf_batch(
         dense_ms = int((time.perf_counter() - dense_started) * 1000)
         if len(dense_responses) != len(requests):
             raise RuntimeError("Qdrant dense batch result count mismatch")
+        batch_stage = "dense_decode"
         dense_docs = tuple(
             _batch_documents(response, vectorstore, collection_name)
             for response in dense_responses
@@ -388,12 +392,14 @@ def _explicit_hybrid_rrf_batch(
 
         sparse_started = time.perf_counter()
         try:
+            batch_stage = "sparse_embedding"
             sparse_vectors = [
                 sparse_embedding.embed_query(query)
                 for query in queries
             ]
             if len(sparse_vectors) != len(requests):
                 raise RuntimeError("Qdrant sparse embedding result count mismatch")
+            batch_stage = "sparse_query"
             sparse_responses = client.query_batch_points(
                 collection_name=collection_name,
                 requests=[
@@ -421,6 +427,7 @@ def _explicit_hybrid_rrf_batch(
             )
             if len(sparse_responses) != len(requests):
                 raise RuntimeError("Qdrant sparse batch result count mismatch")
+            batch_stage = "sparse_decode"
             sparse_docs = tuple(
                 _batch_documents(response, vectorstore, collection_name)
                 for response in sparse_responses
@@ -433,6 +440,7 @@ def _explicit_hybrid_rrf_batch(
             raise
         sparse_ms = int((time.perf_counter() - sparse_started) * 1000)
 
+        batch_stage = "rrf_fusion"
         rrf_started = time.perf_counter()
         fused_docs = tuple(
             _rrf_fuse(
@@ -461,9 +469,13 @@ def _explicit_hybrid_rrf_batch(
             for documents in fused_docs
         )
     except Exception as exc:
+        source = getattr(exc, "source", None)
+        source_type = type(source).__name__ if source is not None else None
         logger.warning(
-            "Batched dense+BM25 RRF failed closed: %s",
+            "Batched dense+BM25 RRF failed closed: %s source=%s stage=%s",
             type(exc).__name__,
+            source_type or "none",
+            batch_stage,
         )
         for request in requests:
             if request.trace_id:
@@ -473,6 +485,8 @@ def _explicit_hybrid_rrf_batch(
                     phase=request.phase,
                     status="failed",
                     error=type(exc).__name__,
+                    error_source=source_type,
+                    batch_stage=batch_stage,
                     retry_attempted=False,
                 )
         raise

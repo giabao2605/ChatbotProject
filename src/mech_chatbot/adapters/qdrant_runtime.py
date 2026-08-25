@@ -13,6 +13,12 @@ from mech_chatbot.application.vector_ingestion import (
 from mech_chatbot.config.settings import QdrantSettings
 
 
+def _retrieval_http_limits():
+    from httpx import Limits
+
+    return Limits(max_keepalive_connections=0)
+
+
 def _validate(settings: QdrantSettings) -> None:
     missing = []
     if not str(settings.url or "").strip():
@@ -161,6 +167,7 @@ def build_qdrant_runtime(
         url=settings.url,
         api_key=settings.api_key,
         timeout=120,
+        limits=_retrieval_http_limits(),
     )
     _ensure_collection(client, settings)
     vector_store = _build_vector_store(

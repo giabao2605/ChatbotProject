@@ -59,13 +59,15 @@ def test_qdrant_runtime_builds_explicit_vector_dependencies():
     assert dependencies.qdrant_client is client
     assert dependencies.vector_store is vector_store
     assert dependencies.collection_name == "KnowledgeBase"
-    assert client_calls == [
-        {
-            "url": "https://qdrant.example",
-            "api_key": "secret",
-            "timeout": 120,
-        }
-    ]
+    assert len(client_calls) == 1
+    assert {
+        key: client_calls[0][key]
+        for key in ("url", "api_key", "timeout")
+    } == {
+        "url": "https://qdrant.example",
+        "api_key": "secret",
+        "timeout": 120,
+    }
     assert dense_calls[0]["model_name"] == "BAAI/bge-m3"
     assert dense_calls[0]["model_kwargs"] == {"device": "cpu"}
     assert sparse_calls == [{"model_name": "Qdrant/bm25"}]
@@ -74,6 +76,22 @@ def test_qdrant_runtime_builds_explicit_vector_dependencies():
 
     with pytest.raises(FrozenInstanceError):
         dependencies.collection_name = "other"
+
+
+def test_qdrant_runtime_disables_http_keepalive_reuse():
+    client = _Client(collection_exists=True)
+    client_calls = []
+
+    build_qdrant_runtime(
+        _settings(),
+        client_factory=lambda **kwargs: client_calls.append(kwargs) or client,
+        dense_embedding_factory=lambda **_: object(),
+        sparse_embedding_factory=lambda **_: object(),
+        vector_store_factory=lambda **_: object(),
+    )
+
+    limits = client_calls[0]["limits"]
+    assert limits.max_keepalive_connections == 0
 
 
 def test_qdrant_admin_runtime_accepts_operation_timeout():

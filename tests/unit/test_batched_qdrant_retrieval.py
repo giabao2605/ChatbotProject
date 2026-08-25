@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.documents import Document
 from qdrant_client import models
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from mech_chatbot.rag import pipeline_steps
 from mech_chatbot.rag.pipeline_steps import _retrieve, _retrieve_many
@@ -195,7 +196,7 @@ def test_retrieve_many_batches_broad_reads_only_for_bom_or_empty_strict():
     assert results[2][2] == "broad_fallback:explicit_dense_bm25_rrf"
 
 
-def test_retrieve_many_sparse_batch_failure_is_terminal_without_retry():
+def test_retrieve_many_sparse_batch_failure_is_terminal_without_retry(monkeypatch):
     class _SparseFailureClient(_BatchClient):
         def query_batch_points(self, **kwargs):
             if self.calls:
@@ -203,6 +204,14 @@ def test_retrieve_many_sparse_batch_failure_is_terminal_without_retry():
                 raise RuntimeError("sparse unavailable")
             return super().query_batch_points(**kwargs)
 
+    trace_events = []
+    monkeypatch.setattr(
+        pipeline_steps,
+        "log_trace",
+        lambda event, trace_id, **fields: trace_events.append(
+            {"event": event, "trace_id": trace_id, **fields}
+        ),
+    )
     client = _SparseFailureClient()
     vectorstore = SimpleNamespace(
         embeddings=_DenseEmbeddings(),
@@ -223,7 +232,7 @@ def test_retrieve_many_sparse_batch_failure_is_terminal_without_retry():
                     "is_bom_query": False,
                     "query_to_search": "query 1",
                     "rbac_filter": models.Filter(),
-                    "trace_id": None,
+                    "trace_id": "sparse-failure-trace",
                 },
             ),
             vectorstore=vectorstore,
@@ -232,6 +241,15 @@ def test_retrieve_many_sparse_batch_failure_is_terminal_without_retry():
         )
 
     assert len(client.calls) == 2
+    failure = next(
+        event
+        for event in trace_events
+        if event["event"] == "retrieval_batch" and event["status"] == "failed"
+    )
+    assert failure["error"] == "RuntimeError"
+    assert failure["error_source"] is None
+    assert failure["batch_stage"] == "sparse_query"
+    assert failure["retry_attempted"] is False
 
 
 def test_retrieve_many_dense_batch_failure_does_not_issue_serial_reads():
@@ -278,6 +296,59 @@ def test_retrieve_many_dense_batch_failure_does_not_issue_serial_reads():
 
     assert client.batch_calls == 1
     assert client.serial_calls == 0
+
+
+def test_retrieve_many_dense_batch_failure_traces_sanitized_source_and_stage(
+    monkeypatch,
+):
+    class _DenseWrappedFailureClient:
+        def query_batch_points(self, **_kwargs):
+            raise ResponseHandlingException(ConnectionResetError("socket reset"))
+
+    trace_events = []
+    monkeypatch.setattr(
+        pipeline_steps,
+        "log_trace",
+        lambda event, trace_id, **fields: trace_events.append(
+            {"event": event, "trace_id": trace_id, **fields}
+        ),
+    )
+    vectorstore = SimpleNamespace(
+        embeddings=_DenseEmbeddings(),
+        sparse_embeddings=_SparseEmbeddings(),
+        vector_name="",
+        sparse_vector_name="sparse",
+        content_payload_key="page_content",
+        metadata_payload_key="metadata",
+    )
+
+    with pytest.raises(ResponseHandlingException):
+        _retrieve_many(
+            (
+                {
+                    "new_part_ids": ["PART-1"],
+                    "strict_filter": models.Filter(),
+                    "broad_filter": models.Filter(),
+                    "is_bom_query": False,
+                    "query_to_search": "query 1",
+                    "rbac_filter": models.Filter(),
+                    "trace_id": "wrapped-failure-trace",
+                },
+            ),
+            vectorstore=vectorstore,
+            client=_DenseWrappedFailureClient(),
+            collection_name="test-knowledge",
+        )
+
+    failure = next(
+        event
+        for event in trace_events
+        if event["event"] == "retrieval_batch" and event["status"] == "failed"
+    )
+    assert failure["error"] == "ResponseHandlingException"
+    assert failure["error_source"] == "ConnectionResetError"
+    assert failure["batch_stage"] == "dense_query"
+    assert failure["retry_attempted"] is False
 
 
 def test_retrieve_many_expired_deadline_stops_before_qdrant_traffic():
