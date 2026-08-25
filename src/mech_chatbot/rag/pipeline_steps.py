@@ -24,6 +24,7 @@ from langchain_core.output_parsers import StrOutputParser
 from mech_chatbot.llm.llm_client import get_llm_endpoint, get_llm_model_name
 from mech_chatbot.llm.external_ai import audited_external_call, ExternalAICallCancelled
 from mech_chatbot.rag.answer_checks import (
+    has_self_contradictory_missing_data_claim,
     has_unsupported_units_symbols,
     has_unsupported_materials,
     has_unsupported_codes,
@@ -1135,6 +1136,9 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
                 retrieval_scores = [d.metadata.get("relevance_score") for d in retrieved_docs]
                 
+                self_contradiction = has_self_contradictory_missing_data_claim(
+                    answer
+                )
                 if _ctx_is_mech:
                     bad_mats, unsupported_mats = has_unsupported_materials(answer, context_text)
                     bad_codes, unsupported_codes = has_unsupported_codes(answer, context_text, user_question)
@@ -1155,7 +1159,9 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     user_question,
                     strict_mode=is_high_risk_question(user_question),
                 )
-                if bad_mats or bad_codes:
+                if self_contradiction:
+                    violation_reason = "self_contradiction"
+                elif bad_mats or bad_codes:
                     violation_reason = "materials_codes"
                 elif bad_units:
                     violation_reason = "units"
@@ -1164,7 +1170,11 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 else:
                     violation_reason = ""
                 if violation_reason:
-                    if _claim_repair_enabled and budget is not None:
+                    if (
+                        violation_reason != "self_contradiction"
+                        and _claim_repair_enabled
+                        and budget is not None
+                    ):
                         budget.record("repairs", 1, cumulative=True)
                     repair_started = time.time()
                     repair_result = _attempt_claim_repair(
@@ -1173,7 +1183,10 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         user_question=user_question,
                         retrieved_docs=retrieved_docs,
                         trace_id=trace_id,
-                        enabled=_claim_repair_enabled,
+                        enabled=(
+                            _claim_repair_enabled
+                            and violation_reason != "self_contradiction"
+                        ),
                         retry_counter=budget,
                         auto_source_cards=bool(
                             getattr(
@@ -1215,6 +1228,10 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         "numbers": (
                             "cau tra loi sinh ra co so lieu khong truy vet duoc "
                             "trong tai lieu"
+                        ),
+                        "self_contradiction": (
+                            "câu trả lời vừa xác nhận tài liệu có nội dung vừa "
+                            "phủ định chung rằng tài liệu không đề cập nội dung đó"
                         ),
                     }[violation_reason]
                     refusal_reason = f"post_check_{violation_reason}"

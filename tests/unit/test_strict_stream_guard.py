@@ -233,6 +233,66 @@ def test_strict_buffered_stream_never_yields_unsupported_factual_token(monkeypat
     assert events[-1].refusal_reason == "post_check_numbers"
 
 
+def test_strict_buffered_stream_never_yields_self_contradictory_missing_claim(
+    monkeypatch,
+):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    contradictory = (
+        "Tài liệu xác nhận có mô tả quy trình lắp, nhưng không nêu các bước "
+        "cụ thể. Tài liệu nội bộ hiện có không đề cập đến thông tin này."
+    )
+    runtime = _prepare(module, monkeypatch, _FakeChain([contradictory]))
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == ["REFUSAL"]
+    assert contradictory not in emitted
+    assert events[-1].outcome == "refused"
+    assert events[-1].refusal_reason == "post_check_self_contradiction"
+
+
+def test_strict_buffered_stream_keeps_scoped_missing_detail_answer(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    scoped_limitation = (
+        "Tài liệu mô tả quy trình lắp nhưng không nêu các bước cụ thể."
+    )
+    runtime = _prepare(module, monkeypatch, _FakeChain([scoped_limitation]))
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == [scoped_limitation]
+    assert events[-1].outcome == "answered"
+
+
+def test_strict_buffered_stream_keeps_scoped_access_denied_partial_answer(
+    monkeypatch,
+):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    partial_answer = (
+        "Giá trị được phép xem là 1,500.\n\n"
+        "Tài liệu nội bộ hiện có không đề cập đến thông tin này.\n"
+        "Phần bị chặn chưa thể trả lời do không có nguồn được phép truy cập."
+    )
+    runtime = _prepare(module, monkeypatch, _FakeChain([partial_answer]))
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == [partial_answer]
+    assert events[-1].outcome == "answered"
+
+
 def test_claim_repair_removes_unsupported_code_before_serving(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     repair_calls = []

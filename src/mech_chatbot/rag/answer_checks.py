@@ -11,6 +11,34 @@ import re
 
 _QUANTITY_UNIT_PATTERN = r"(?:mm|kg|piece|cái|cai)"
 
+_GENERIC_MISSING_CLAIM = re.compile(
+    r"(?:tài liệu|tai lieu)[^.!?\n]{0,80}(?:không|khong|chưa|chua)\s+"
+    r"(?:đề cập|de cap|ghi|nêu|neu|cung cấp|cung cap)\s+(?:đến\s+|den\s+)?"
+    r"(?:thông tin|thong tin|nội dung|noi dung|vấn đề|van de)\s+này\b"
+    r"|(?:available\s+)?(?:internal\s+)?documents?[^.!?\n]{0,80}"
+    r"(?:do(?:es)?\s+not|don't)\s+(?:contain|cover|mention|provide)\s+"
+    r"(?:this\s+)?(?:information|content|topic)\b",
+    re.IGNORECASE,
+)
+_POSITIVE_DOCUMENT_COVERAGE = re.compile(
+    r"(?:tài liệu|tai lieu)"
+    r"(?:(?!\b(?:không|khong|chưa|chua)\b)[^.!?\n]){0,100}"
+    r"(?:mô tả|mo ta|xác nhận\s+(?:có|rằng)|xac nhan\s+(?:co|rang))\b"
+    r"|documents?(?:(?!\b(?:not|no)\b)[^.!?\n]){0,100}"
+    r"(?:describes?|covers?|confirms?\s+(?:that\s+)?)\b",
+    re.IGNORECASE,
+)
+
+
+def has_self_contradictory_missing_data_claim(answer):
+    """Detect one answer block that both acknowledges and globally denies coverage."""
+    blocks = re.split(r"\n\s*\n+", str(answer or ""))
+    return any(
+        _GENERIC_MISSING_CLAIM.search(block)
+        and _POSITIVE_DOCUMENT_COVERAGE.search(block)
+        for block in blocks
+    )
+
 
 def _safe_json_loads(raw):
     raw = str(raw or "").strip().replace("```json", "").replace("```", "").strip()

@@ -219,6 +219,20 @@ def test_common_prompt_limits_answers_to_the_requested_attribute():
     assert "không thêm mã, vật liệu hoặc thông số" in _COMMON_RULES_VI.lower()
 
 
+def test_common_prompt_scopes_missing_details_without_contradicting_evidence():
+    from mech_chatbot.rag.prompt import _COMMON_RULES_EN, _COMMON_RULES_VI
+
+    vietnamese = _COMMON_RULES_VI.lower()
+    english = _COMMON_RULES_EN.lower()
+
+    assert "nêu chính xác chi tiết còn thiếu" in vietnamese
+    assert "không được đồng thời khẳng định tài liệu có nội dung" in vietnamese
+    assert "đánh giá và trả lời từng ý riêng" in vietnamese
+    assert "state the exact missing detail" in english
+    assert "must not both acknowledge that the document covers a topic" in english
+    assert "evaluate and answer each requested item separately" in english
+
+
 def test_grounded_negative_branch_is_reported_as_missing():
     instruction = build_decomposition_instruction([
         {"outcome": "insufficient_evidence", "grounded_negative": True},
