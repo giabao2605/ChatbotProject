@@ -75,6 +75,9 @@ function Assert-OwnerAuthorization {
         ($expiresAt - $authorizedAt) -gt [TimeSpan]::FromMinutes(60) -or
         $authorization.provider_traffic_authorized -ne $true -or
         $authorization.formal_window_authorized -ne $true -or
+        $authorization.local_raw_review_capture_authorized -ne $true -or
+        $authorization.raw_review_content_external_transmission_authorized -ne $false -or
+        $authorization.raw_review_content_git_tracking_authorized -ne $false -or
         $authorization.retry_or_catch_up_authorized -ne $false -or
         $authorization.pilot_authorized -ne $false -or
         $authorization.feature_activation_authorized -ne $false -or

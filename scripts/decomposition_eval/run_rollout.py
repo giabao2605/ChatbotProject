@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -208,6 +209,62 @@ def _load_successful_gate(gate_path, gate_result):
     return gate
 
 
+def _validate_review_capture(label, expected_trace_ids, evaluation, path, output):
+    expected_case_ids = {
+        trace_id.removeprefix(f"eval:{label}:") for trace_id in expected_trace_ids
+    }
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    cases = {
+        str(case.get("id") or ""): case for case in evaluation.get("cases") or []
+    }
+    row_ids = [str(row.get("case_id") or "") for row in rows]
+    required_keys = {
+        "schema",
+        "run_label",
+        "case_id",
+        "question",
+        "answer",
+        "answer_sha256",
+        "answer_char_count",
+    }
+    valid = (
+        len(rows) == len(expected_case_ids)
+        and len(row_ids) == len(set(row_ids))
+        and set(row_ids) == expected_case_ids == set(cases)
+        and all(
+            set(row) == required_keys
+            and row.get("schema")
+            == "query-decomposition-local-review-content-v1"
+            and row.get("run_label") == label
+            and isinstance(row.get("question"), str)
+            and bool(row["question"])
+            and isinstance(row.get("answer"), str)
+            and row.get("answer_sha256")
+            == hashlib.sha256(row["answer"].encode("utf-8")).hexdigest()
+            and row.get("answer_char_count") == len(row["answer"])
+            and cases[row["case_id"]].get("answer_metadata")
+            == {
+                "sha256": row["answer_sha256"],
+                "char_count": row["answer_char_count"],
+            }
+            for row in rows
+        )
+    )
+    if not valid:
+        raise RuntimeError(f"local review capture is invalid for {label}")
+    return {
+        "path": path.relative_to(output).as_posix(),
+        "sha256": _sha(path),
+        "row_count": len(rows),
+        "contains_raw_review_content": True,
+        "local_only": True,
+    }
+
+
 def _invoke_evaluation(manifest, output, label, environment):
     return subprocess.run(
         [
@@ -223,6 +280,7 @@ def _invoke_evaluation(manifest, output, label, environment):
             "--maximum-provider-retries",
             "0",
             "--stop-on-provider-failure",
+            "--capture-local-review-content",
         ],
         cwd=ROOT,
         env=environment,
@@ -283,6 +341,7 @@ def _run(
         "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_sha,
         "RAG_EVAL_CONCURRENCY": "1",
         "RAG_TRACE_LOG_FILE": str(trace),
+        "RAG_EVAL_RAW_REVIEW_CAPTURE": "1",
     })
     trace_start_offset = trace.stat().st_size
     started_at = started_at or _utc_now()
@@ -304,11 +363,19 @@ def _run(
     fallback_contract = _validate_appended_trace(
         label, expected_trace_ids, events, trace_snapshot, enabled
     )
+    review_capture = _validate_review_capture(
+        label,
+        expected_trace_ids,
+        evaluation,
+        run_dir / "review-content.jsonl",
+        output,
+    )
     return {
         "started_at": started_at,
         "completed_at": completed_at,
         "runner_exit": result.returncode,
         "fallback_contract": fallback_contract,
+        "review_capture": review_capture,
     }
 
 

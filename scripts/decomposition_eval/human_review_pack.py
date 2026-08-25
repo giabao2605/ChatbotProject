@@ -15,7 +15,7 @@ from pathlib import Path
 from scripts.controlled_demo_eval.review_pack import pair_provenance
 
 
-PACK_SCHEMA = "query-decomposition-human-review-pack-v1"
+PACK_SCHEMA = "query-decomposition-human-review-pack-v2"
 RESULT_SCHEMA = "query-decomposition-human-review-result-v1"
 PAIR_IDS = tuple(f"formal-pair-{index:02d}" for index in range(1, 4))
 REASON_CODES = (
@@ -67,8 +67,10 @@ REQUIRED_ARTIFACT_BINDINGS = {
             "gate",
             "baseline_eval",
             "baseline_trace",
+            "baseline_review_capture",
             "candidate_eval",
             "candidate_trace",
+            "candidate_review_capture",
         )
     ),
 }
@@ -184,12 +186,50 @@ def _case_index(evaluation: dict) -> dict[str, dict]:
     return result
 
 
-def _answer_metadata(case: dict) -> dict:
-    answer = str(case.get("answer") or "")
+def _capture_index(rows: list[dict], *, label: str) -> dict[str, dict]:
+    result = {}
+    required_keys = {
+        "schema",
+        "run_label",
+        "case_id",
+        "question",
+        "answer",
+        "answer_sha256",
+        "answer_char_count",
+    }
+    for row in rows:
+        case_id = str(row.get("case_id") or "")
+        answer = row.get("answer")
+        valid = (
+            set(row) == required_keys
+            and row.get("schema")
+            == "query-decomposition-local-review-content-v1"
+            and row.get("run_label") == label
+            and case_id
+            and case_id not in result
+            and isinstance(row.get("question"), str)
+            and bool(row["question"])
+            and isinstance(answer, str)
+            and row.get("answer_sha256") == _text_sha256(answer)
+            and row.get("answer_char_count") == len(answer)
+        )
+        if not valid:
+            raise ValueError("review_capture_contract_invalid")
+        result[case_id] = row
+    return result
+
+
+def _answer_metadata(case: dict, captured: dict) -> dict:
+    answer_metadata = case.get("answer_metadata") or {}
+    if answer_metadata != {
+        "sha256": captured["answer_sha256"],
+        "char_count": captured["answer_char_count"],
+    }:
+        raise ValueError("review_capture_answer_mismatch")
     return {
         "case_sha256": _canonical_sha256(case),
-        "answer_sha256": _text_sha256(answer),
-        "answer_char_count": len(answer),
+        "answer_sha256": answer_metadata["sha256"],
+        "answer_char_count": answer_metadata["char_count"],
         "passed": case.get("passed") is True,
         "leaked": case.get("leaked") is True,
         "actual_outcome_sha256": _text_sha256(case.get("actual_outcome")),
@@ -275,13 +315,45 @@ def build_locked_review_pack(
         candidate_by_id = _case_index(candidate)
         if set(baseline_by_id) != manifest_ids or set(candidate_by_id) != manifest_ids:
             raise ValueError("pair_case_set_mismatch")
-        pair_indexes.append((pair, baseline_by_id, candidate_by_id))
+        baseline_capture = _capture_index(
+            pair["baseline_review_capture"], label="baseline"
+        )
+        candidate_capture = _capture_index(
+            pair["candidate_review_capture"], label="candidate"
+        )
+        if (
+            set(baseline_capture) != manifest_ids
+            or set(candidate_capture) != manifest_ids
+            or any(
+                baseline_capture[case_id]["question"]
+                != manifest_by_id[case_id]["question"]
+                or candidate_capture[case_id]["question"]
+                != manifest_by_id[case_id]["question"]
+                for case_id in manifest_ids
+            )
+        ):
+            raise ValueError("review_capture_case_set_mismatch")
+        pair_indexes.append(
+            (
+                pair,
+                baseline_by_id,
+                candidate_by_id,
+                baseline_capture,
+                candidate_capture,
+            )
+        )
 
     rows = []
     for case_id in manifest_by_id:
         manifest_case = manifest_by_id[case_id]
         instances = []
-        for pair, baseline_by_id, candidate_by_id in pair_indexes:
+        for (
+            pair,
+            baseline_by_id,
+            candidate_by_id,
+            baseline_capture,
+            candidate_capture,
+        ) in pair_indexes:
             instances.append(
                 {
                     "pair_id": pair["pair_id"],
@@ -289,8 +361,24 @@ def build_locked_review_pack(
                     "baseline_eval_sha256": pair["baseline_eval_sha256"],
                     "candidate_eval_path": pair["candidate_eval_path"],
                     "candidate_eval_sha256": pair["candidate_eval_sha256"],
-                    "baseline": _answer_metadata(baseline_by_id[case_id]),
-                    "candidate": _answer_metadata(candidate_by_id[case_id]),
+                    "baseline_review_capture_path": pair[
+                        "baseline_review_capture_path"
+                    ],
+                    "baseline_review_capture_sha256": pair[
+                        "baseline_review_capture_sha256"
+                    ],
+                    "candidate_review_capture_path": pair[
+                        "candidate_review_capture_path"
+                    ],
+                    "candidate_review_capture_sha256": pair[
+                        "candidate_review_capture_sha256"
+                    ],
+                    "baseline": _answer_metadata(
+                        baseline_by_id[case_id], baseline_capture[case_id]
+                    ),
+                    "candidate": _answer_metadata(
+                        candidate_by_id[case_id], candidate_capture[case_id]
+                    ),
                     "human_review": dict(HUMAN_REVIEW_TEMPLATE),
                 }
             )
@@ -471,7 +559,7 @@ def _readme(pack: dict) -> str:
             "Pack metadata-only da khoa cho 13 case va ca 3 formal pair.",
             "Chi sua object `human_review` trong tung `pair_instances` cua `review.jsonl`.",
             "Reviewer phai la mot con nguoi doc lap, khong phai source owner va khong phai Codex.",
-            "Mo artifact eval theo path/hash trong pack de xem noi dung; khong chep raw question, answer hoac document text vao pack.",
+            "Mo file review-content.jsonl theo path/hash trong tung pair instance de xem question va answer; raw content chi nam trong .local.",
             "Review accepted chi khi answer, citation va safety deu true; needs_discussion khong qua quality gate.",
             "Pack nay khong authorize pilot, activation, default rollout, push, merge hoac provider traffic.",
             "",
@@ -655,6 +743,7 @@ def load_bound_run(
             "candidate": run_root / pair_id / "candidate" / "trace.json",
         }
         eval_raw = {}
+        capture_raw = {}
         for arm in ("baseline", "candidate"):
             eval_raw[arm] = _bind(
                 bindings,
@@ -672,6 +761,15 @@ def load_bound_run(
                 base="run_root",
                 root=run_root,
             )
+            capture_path = run_root / section[f"{arm}_review_capture_path"]
+            capture_raw[arm] = _bind(
+                bindings,
+                name=f"{pair_id}_{arm}_review_capture",
+                path=capture_path,
+                expected_sha256=section[f"{arm}_review_capture_sha256"],
+                base="run_root",
+                root=run_root,
+            )
         pair_inputs.append(
             {
                 "pair_id": pair_id,
@@ -685,6 +783,24 @@ def load_bound_run(
                 "candidate_eval_path": eval_paths["candidate"].relative_to(run_root).as_posix(),
                 "baseline_eval_sha256": section["baseline_eval_sha256"],
                 "candidate_eval_sha256": section["candidate_eval_sha256"],
+                "baseline_review_capture": _jsonl_from_bytes(
+                    capture_raw["baseline"]
+                ),
+                "candidate_review_capture": _jsonl_from_bytes(
+                    capture_raw["candidate"]
+                ),
+                "baseline_review_capture_path": section[
+                    "baseline_review_capture_path"
+                ],
+                "candidate_review_capture_path": section[
+                    "candidate_review_capture_path"
+                ],
+                "baseline_review_capture_sha256": section[
+                    "baseline_review_capture_sha256"
+                ],
+                "candidate_review_capture_sha256": section[
+                    "candidate_review_capture_sha256"
+                ],
             }
         )
 

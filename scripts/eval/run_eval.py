@@ -274,6 +274,22 @@ def resolve_output_paths(output_dir: Path, run_label: str) -> dict[str, Path]:
     return {"directory": run_dir, "json": run_dir / "eval.json", "markdown": run_dir / "eval.md"}
 
 
+def resolve_local_review_capture_path(output_dir: Path, run_label: str) -> Path:
+    if os.environ.get("RAG_EVAL_RAW_REVIEW_CAPTURE") != "1":
+        raise RuntimeError("raw_review_capture_not_authorized")
+    if run_label not in RUN_LABELS:
+        raise ValueError("raw_review_capture_run_label_invalid")
+    output = Path(output_dir).resolve()
+    path = output / run_label / "review-content.jsonl"
+    try:
+        path.parent.resolve(strict=False).relative_to((ROOT / ".local").resolve())
+    except ValueError as exc:
+        raise ValueError("raw_review_capture_must_be_under_dot_local") from exc
+    if path.exists():
+        raise FileExistsError("raw_review_capture_already_exists")
+    return path
+
+
 def _render_markdown(report: dict) -> str:
     lines = [
         f"# CRAG evaluation: {report['run_label']}", "",
@@ -339,9 +355,15 @@ def run_evaluation(
     preflight_runner=None,
     case_ids: list[str] | None = None,
     stop_on_provider_failure: bool = False,
+    capture_local_review_content: bool = False,
 ) -> tuple[dict, bool]:
     cases = select_cases(load_manifest_files(manifest_files), case_ids)
     paths = resolve_output_paths(output_dir, run_label)
+    review_capture_path = (
+        resolve_local_review_capture_path(output_dir, run_label)
+        if capture_local_review_content
+        else None
+    )
     if paths["directory"].exists() and any(paths["directory"].iterdir()):
         raise ValueError(f"refusing to overwrite non-empty run directory: {paths['directory']}")
     paths["directory"].mkdir(parents=True, exist_ok=True)
@@ -406,6 +428,7 @@ def run_evaluation(
 
     started_at = _utc_now()
     rows: list[dict] = []
+    review_rows: list[dict] = []
     outcome_rows: list[dict] = []
     latencies: list[float] = []
     levels = defaultdict(lambda: {"total": 0, "pass": 0})
@@ -694,6 +717,19 @@ def run_evaluation(
                 ),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
+            review_rows.append(
+                {
+                    "schema": "query-decomposition-local-review-content-v1",
+                    "run_label": run_label,
+                    "case_id": case["id"],
+                    "question": case["question"],
+                    "answer": answer,
+                    **{
+                        f"answer_{key}": value
+                        for key, value in _content_metadata(answer).items()
+                    },
+                }
+            )
         except Exception as exc:
             latency_ms = round((time.perf_counter() - before) * 1000, 2)
             latencies.append(latency_ms)
@@ -953,6 +989,10 @@ def run_evaluation(
     }
     paths["json"].write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     paths["markdown"].write_text(_render_markdown(report), encoding="utf-8")
+    if review_capture_path is not None:
+        with review_capture_path.open("x", encoding="utf-8", newline="\n") as stream:
+            for review_row in review_rows:
+                stream.write(json.dumps(review_row, ensure_ascii=False) + "\n")
     return report, all(row["passed"] for row in rows)
 
 
@@ -964,6 +1004,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--case-id", action="append")
     parser.add_argument("--maximum-provider-retries", type=int)
     parser.add_argument("--stop-on-provider-failure", action="store_true")
+    parser.add_argument("--capture-local-review-content", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -1005,6 +1046,9 @@ def main(argv: list[str] | None = None) -> int:
                     case_ids=case_ids,
                     stop_on_provider_failure=getattr(
                         args, "stop_on_provider_failure", False
+                    ),
+                    capture_local_review_content=getattr(
+                        args, "capture_local_review_content", False
                     ),
                 )
         finally:

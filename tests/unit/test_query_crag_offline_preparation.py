@@ -301,6 +301,9 @@ def _write_query_window_authorization(
             "authorization": {
                 "provider_traffic_authorized": True,
                 "formal_window_authorized": True,
+                "local_raw_review_capture_authorized": True,
+                "raw_review_content_external_transmission_authorized": False,
+                "raw_review_content_git_tracking_authorized": False,
                 "retry_or_catch_up_authorized": False,
                 "pilot_authorized": False,
                 "feature_activation_authorized": False,
@@ -312,6 +315,27 @@ def _write_query_window_authorization(
         },
     )
     return authorization
+
+
+def test_query_window_requires_explicit_local_raw_review_capture_authorization(
+    tmp_path,
+):
+    fixture = _create_query_window_fixture(tmp_path)
+    run_root = tmp_path / "query-window"
+    authorization = _write_query_window_authorization(fixture, run_root)
+    payload = json.loads(authorization.read_text(encoding="utf-8"))
+    payload["authorization"].pop("local_raw_review_capture_authorized")
+    _write_json(authorization, payload)
+
+    result = _run_query_window_fixture(
+        fixture,
+        run_root,
+        authorization_path=authorization,
+    )
+
+    assert result.returncode != 0
+    assert "query_window_owner_authorization_invalid" in result.stderr
+    assert not run_root.exists()
 
 
 def _run_query_window_fixture(
@@ -1253,7 +1277,7 @@ def test_query_preparation_is_offline_and_fail_closed():
         "manifest_reference"
     ]["prepared_sha256"]
     assert query["execution_bindings"]["runner_sha256"] == (
-        "dc9eecfc7f9204613f9bc97d3a065ed7c1bd603bfdc04451936ed84cb834e3b1"
+        "907ab3ee713f75ef4027510f174020857f4997adbafc0fa3ed4c35f25bd85a21"
     )
     assert query["execution_bindings"]["release_decisions_sha256"] == (
         RELEASE_DECISIONS_SHA256

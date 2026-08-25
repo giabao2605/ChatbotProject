@@ -263,6 +263,89 @@ def test_main_evaluator_uses_typed_evaluation_invocation(tmp_path, monkeypatch):
     assert report["pipeline_variants"]["typed-evaluation"]["cases"] == 1
 
 
+def test_local_review_capture_requires_explicit_opt_in_and_stays_out_of_eval_artifact(
+    tmp_path,
+    monkeypatch,
+):
+    from mech_chatbot.rag.execution import (
+        RagCompleted,
+        RagDiagnostics,
+        RagPrepared,
+        RagToken,
+    )
+
+    runner = _load("run_eval_local_review_capture", "scripts/eval/run_eval.py")
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    manifest = tmp_path / "cases.jsonl"
+    manifest.write_text(json.dumps(_case()) + "\n", encoding="utf-8")
+    diagnostics = RagDiagnostics.from_mapping({"generation_metrics": {}})
+
+    class FakeExecutor:
+        def run(self, request, invocation, cancellation=None):
+            yield RagPrepared("", (), (), diagnostics)
+            yield RagToken("Cau tra loi can review [D41P1]")
+            yield RagCompleted("answered", invocation.trace_id, diagnostics)
+
+    output = tmp_path / ".local" / "query-review" / "formal-pair-01"
+    common = {
+        "preflight": False,
+        "intent_extractor": lambda *args, **kwargs: (
+            None, None, None, None, None, {"version_policy": "current_only"}
+        ),
+        "rag_executor": FakeExecutor(),
+        "number_normalizer": lambda _value: set(),
+        "capture_local_review_content": True,
+    }
+
+    with pytest.raises(RuntimeError, match="raw_review_capture_not_authorized"):
+        runner.run_evaluation([manifest], output, "candidate", **common)
+
+    monkeypatch.setenv("RAG_EVAL_RAW_REVIEW_CAPTURE", "1")
+    report, _ = runner.run_evaluation([manifest], output, "candidate", **common)
+
+    capture = output / "candidate" / "review-content.jsonl"
+    rows = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()]
+    assert rows == [
+        {
+            "schema": "query-decomposition-local-review-content-v1",
+            "run_label": "candidate",
+            "case_id": "case-1",
+            "question": "Gia tri la bao nhieu?",
+            "answer": "Cau tra loi can review [D41P1]",
+            "answer_sha256": hashlib.sha256(
+                "Cau tra loi can review [D41P1]".encode("utf-8")
+            ).hexdigest(),
+            "answer_char_count": 30,
+        }
+    ]
+    assert "Cau tra loi can review" not in json.dumps(report)
+    with pytest.raises(FileExistsError, match="raw_review_capture_already_exists"):
+        runner.run_evaluation([manifest], output, "candidate", **common)
+
+
+def test_local_review_capture_rejects_output_outside_dot_local(tmp_path, monkeypatch):
+    runner = _load("run_eval_local_review_path", "scripts/eval/run_eval.py")
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    monkeypatch.setenv("RAG_EVAL_RAW_REVIEW_CAPTURE", "1")
+
+    with pytest.raises(ValueError, match="raw_review_capture_must_be_under_dot_local"):
+        runner.resolve_local_review_capture_path(tmp_path / "reports", "candidate")
+
+
+@pytest.mark.parametrize("run_label", ["..", "../candidate", "candidate/.."])
+def test_local_review_capture_rejects_path_like_run_label(
+    tmp_path,
+    monkeypatch,
+    run_label,
+):
+    runner = _load("run_eval_local_review_label", "scripts/eval/run_eval.py")
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    monkeypatch.setenv("RAG_EVAL_RAW_REVIEW_CAPTURE", "1")
+
+    with pytest.raises(ValueError, match="raw_review_capture_run_label_invalid"):
+        runner.resolve_local_review_capture_path(tmp_path / ".local" / "query-review", run_label)
+
+
 def test_typed_evaluator_preserves_failure_diagnostics(tmp_path):
     from mech_chatbot.rag.execution import RagDiagnostics, RagFailed, RagPrepared
 

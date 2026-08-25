@@ -850,14 +850,45 @@ def test_diagnostic_cli_returns_nonzero_for_inconclusive_result(monkeypatch, tmp
 
 def _write_arm_eval(run_dir, label, case_ids=("case-1",)):
     run_dir.mkdir(parents=True, exist_ok=True)
+    answers = {case_id: f"answer for {case_id}" for case_id in case_ids}
     (run_dir / "eval.json").write_text(
         json.dumps({
             "schema": "rag-labeled-eval-v4",
             "total_cases": len(case_ids),
             "cases": [
-                {"trace_id": f"eval:{label}:{case_id}"} for case_id in case_ids
+                {
+                    "id": case_id,
+                    "trace_id": f"eval:{label}:{case_id}",
+                    "answer_metadata": {
+                        "sha256": hashlib.sha256(
+                            answers[case_id].encode("utf-8")
+                        ).hexdigest(),
+                        "char_count": len(answers[case_id]),
+                    },
+                }
+                for case_id in case_ids
             ],
         }),
+        encoding="utf-8",
+    )
+    (run_dir / "review-content.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "schema": "query-decomposition-local-review-content-v1",
+                    "run_label": label,
+                    "case_id": case_id,
+                    "question": f"question for {case_id}",
+                    "answer": answers[case_id],
+                    "answer_sha256": hashlib.sha256(
+                        answers[case_id].encode("utf-8")
+                    ).hexdigest(),
+                    "answer_char_count": len(answers[case_id]),
+                }
+            )
+            + "\n"
+            for case_id in case_ids
+        ),
         encoding="utf-8",
     )
 
@@ -898,10 +929,14 @@ def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
     trace.write_text("", encoding="utf-8")
     output = tmp_path / "rollout"
     trace_environments = []
+    review_capture_environments = []
     evaluation_commands = []
 
     def fake_run(command, **kwargs):
         trace_environments.append(kwargs["env"].get("RAG_TRACE_LOG_FILE"))
+        review_capture_environments.append(
+            kwargs["env"].get("RAG_EVAL_RAW_REVIEW_CAPTURE")
+        )
         run_dir = output / "baseline"
         if "scripts.eval.run_eval" in command:
             evaluation_commands.append(command)
@@ -918,7 +953,7 @@ def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
 
     monkeypatch.setattr(rollout.subprocess, "run", fake_run)
 
-    rollout._run(
+    result = rollout._run(
         "baseline",
         manifest,
         output,
@@ -931,6 +966,7 @@ def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
     )
 
     assert trace_environments == [str(trace), str(trace)]
+    assert review_capture_environments == ["1", "1"]
     assert evaluation_commands == [[
         sys.executable,
         "-m",
@@ -944,7 +980,10 @@ def test_decomposition_rollout_arm_binds_declared_trace(monkeypatch, tmp_path):
         "--maximum-provider-retries",
         "0",
         "--stop-on-provider-failure",
+        "--capture-local-review-content",
     ]]
+    assert result["review_capture"]["row_count"] == 1
+    assert result["review_capture"]["path"] == "baseline/review-content.jsonl"
 
 
 def test_decomposition_rollout_arm_rejects_nonzero_evaluator_exit(

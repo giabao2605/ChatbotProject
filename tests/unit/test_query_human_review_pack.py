@@ -47,8 +47,14 @@ def _evaluation(label, pair_index):
             {
                 "id": case["id"],
                 "evaluation_group": case["evaluation_group"],
-                "answer": f"raw {label} answer {pair_index} {case['id']}",
-                "reference_answer": f"raw reference {case['id']}",
+                "answer_metadata": {
+                    "sha256": hashlib.sha256(
+                        f"raw {label} answer {pair_index} {case['id']}".encode()
+                    ).hexdigest(),
+                    "char_count": len(
+                        f"raw {label} answer {pair_index} {case['id']}"
+                    ),
+                },
                 "passed": True,
                 "actual_outcome": "full_answer",
                 "leaked": False,
@@ -59,6 +65,25 @@ def _evaluation(label, pair_index):
             for case in _cases()
         ],
     }
+
+
+def _capture(label, pair_index):
+    return [
+        {
+            "schema": "query-decomposition-local-review-content-v1",
+            "run_label": label,
+            "case_id": case["id"],
+            "question": case["question"],
+            "answer": f"raw {label} answer {pair_index} {case['id']}",
+            "answer_sha256": hashlib.sha256(
+                f"raw {label} answer {pair_index} {case['id']}".encode()
+            ).hexdigest(),
+            "answer_char_count": len(
+                f"raw {label} answer {pair_index} {case['id']}"
+            ),
+        }
+        for case in _cases()
+    ]
 
 
 def _disposition():
@@ -115,6 +140,16 @@ def _pair_inputs():
             "candidate_eval_path": f"formal-pair-{index:02d}/candidate/eval.json",
             "baseline_eval_sha256": str(index) * 64,
             "candidate_eval_sha256": str(index + 3) * 64,
+            "baseline_review_capture": _capture("baseline", index),
+            "candidate_review_capture": _capture("candidate", index),
+            "baseline_review_capture_path": (
+                f"formal-pair-{index:02d}/baseline/review-content.jsonl"
+            ),
+            "candidate_review_capture_path": (
+                f"formal-pair-{index:02d}/candidate/review-content.jsonl"
+            ),
+            "baseline_review_capture_sha256": str(index + 6) * 64,
+            "candidate_review_capture_sha256": str(index + 9) * 64,
         }
         for index in range(1, 4)
     ]
@@ -141,8 +176,10 @@ def _artifact_bindings():
                 "gate",
                 "baseline_eval",
                 "baseline_trace",
+                "baseline_review_capture",
                 "candidate_eval",
                 "candidate_trace",
+                "candidate_review_capture",
             )
         )
     bindings = {
@@ -172,7 +209,7 @@ def _build():
 def test_build_locked_review_pack_is_metadata_only_and_covers_three_pairs():
     pack, rows = _build()
 
-    assert pack["schema"] == "query-decomposition-human-review-pack-v1"
+    assert pack["schema"] == "query-decomposition-human-review-pack-v2"
     assert pack["status"] == "locked_unreviewed"
     assert pack["source_commit"] == SOURCE_COMMIT
     assert pack["disposition_sha256"] == DISPOSITION_SHA256
@@ -188,6 +225,9 @@ def test_build_locked_review_pack_is_metadata_only_and_covers_three_pairs():
         instance["human_review"] == HUMAN_REVIEW_TEMPLATE
         for row in rows
         for instance in row["pair_instances"]
+    )
+    assert rows[0]["pair_instances"][0]["candidate_review_capture_path"].endswith(
+        "candidate/review-content.jsonl"
     )
 
     serialized = json.dumps([pack, rows])
@@ -414,8 +454,17 @@ def _write_bound_run(tmp_path):
             )
             trace_path = pair_root / arm / "trace.json"
             trace_path.write_text("{}\n", encoding="utf-8")
+            capture_path = pair_root / arm / "review-content.jsonl"
+            capture_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in _capture(arm, index)),
+                encoding="utf-8",
+            )
             section[f"{arm}_eval_sha256"] = _sha256(eval_path)
             section[f"{arm}_trace_sha256"] = _sha256(trace_path)
+            section[f"{arm}_review_capture_path"] = (
+                f"{pair_id}/{arm}/review-content.jsonl"
+            )
+            section[f"{arm}_review_capture_sha256"] = _sha256(capture_path)
         disposition[f"formal_pair_{index:02d}"] = section
 
     disposition_path = run_root / "window-disposition.json"
