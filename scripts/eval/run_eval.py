@@ -101,7 +101,11 @@ def _is_provider_failure(exc: BaseException) -> bool:
             or any(marker in str(current).casefold() for marker in PROVIDER_FAILURE_MARKERS)
         ):
             return True
-        current = current.__cause__ or current.__context__
+        current = (
+            current.__cause__
+            or current.__context__
+            or getattr(current, "source", None)
+        )
     return False
 
 

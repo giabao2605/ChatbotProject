@@ -394,6 +394,49 @@ def test_slow_bm25_search_uses_bounded_dense_fallback(
     assert bm25_event["error"] == "TimeoutError"
 
 
+def test_evaluation_bm25_transport_failure_is_terminal(
+    load_steps,
+    monkeypatch,
+):
+    steps = load_steps()
+
+    class Store:
+        def __init__(self, **kwargs):
+            self.mode = getattr(
+                kwargs["retrieval_mode"],
+                "value",
+                kwargs["retrieval_mode"],
+            )
+
+        def similarity_search(self, *_args, **_kwargs):
+            if self.mode == "sparse":
+                raise TimeoutError("simulated sparse transport failure")
+            return [_doc("Dense result")]
+
+    class VectorStore:
+        embeddings = object()
+        sparse_embeddings = object()
+
+        def as_retriever(self, **_kwargs):
+            pytest.fail("formal evaluation must not use a retrieval fallback")
+
+    monkeypatch.setattr("langchain_qdrant.QdrantVectorStore", Store)
+    monkeypatch.setattr(steps, "current_execution_context", lambda: "evaluation")
+
+    with pytest.raises(TimeoutError, match="sparse transport failure"):
+        steps._explicit_hybrid_rrf(
+            "approved query",
+            payload_filter=object(),
+            dense_top_k=5,
+            sparse_top_k=5,
+            result_cap=5,
+            trace_id="formal-bm25-timeout",
+            vectorstore=VectorStore(),
+            client=object(),
+            collection_name="test",
+        )
+
+
 def test_dense_search_uses_bounded_qdrant_timeout(load_steps, monkeypatch):
     steps = load_steps()
     dense_calls = []

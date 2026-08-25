@@ -684,6 +684,51 @@ def test_eval_stops_before_next_case_after_provider_failure_when_requested(tmp_p
     assert report["provider_failure_count"] == 1
 
 
+def test_eval_stops_after_qdrant_source_timeout_when_requested(tmp_path):
+    runner = _load("run_eval_qdrant_source_fail_fast", "scripts/eval/run_eval.py")
+    manifest = tmp_path / "cases.jsonl"
+    manifest.write_text(
+        "\n".join(
+            json.dumps(_case(id=case_id))
+            for case_id in ("case-1", "case-2")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    class ResponseHandlingException(Exception):
+        def __init__(self):
+            super().__init__("response handling failed")
+            self.source = TimeoutError("TLS handshake timed out")
+
+    def failed_stream():
+        raise ResponseHandlingException()
+        yield "unreachable"
+
+    def rag_chat(*args, **kwargs):
+        calls.append(args[0])
+        return failed_stream(), "", [], [], {"generation_metrics": {}}
+
+    report, passed = runner.run_evaluation(
+        [manifest],
+        tmp_path / "output",
+        "candidate",
+        preflight=False,
+        intent_extractor=lambda *args, **kwargs: (
+            None, None, None, None, None, {"version_policy": "current_only"}
+        ),
+        rag_chat=rag_chat,
+        number_normalizer=lambda _value: set(),
+        stop_on_provider_failure=True,
+    )
+
+    assert passed is False
+    assert calls == ["Gia tri la bao nhieu?"]
+    assert [case["id"] for case in report["cases"]] == ["case-1"]
+    assert report["provider_failure_count"] == 1
+
+
 def test_eval_does_not_classify_other_request_budgets_as_provider_failures():
     from mech_chatbot.rag.execution import RequestBudgetExceeded
 

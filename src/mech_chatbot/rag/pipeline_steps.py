@@ -557,6 +557,8 @@ def _explicit_hybrid_rrf(
                 timeout=_BM25_SEARCH_TIMEOUT_SECONDS,
             )
         except Exception as exc:
+            if current_execution_context() == "evaluation":
+                raise
             sparse_error = exc
             sparse_docs = []
             logger.warning(
@@ -612,6 +614,12 @@ def _explicit_hybrid_rrf(
             else "explicit_dense_bm25_rrf"
         )
     except Exception as exc:
+        if current_execution_context() == "evaluation":
+            logger.warning(
+                "Explicit dense+BM25 RRF failed closed in evaluation: %s",
+                type(exc).__name__,
+            )
+            raise
         logger.warning("Explicit dense+BM25 RRF unavailable, fallback HYBRID: %s", exc)
         if trace_id:
             log_trace("hybrid_fallback", trace_id, phase=phase, error=type(exc).__name__)
