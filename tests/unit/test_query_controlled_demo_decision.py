@@ -8,7 +8,10 @@ import subprocess
 
 import pytest
 
-from scripts.decomposition_eval.human_review_pack import pack_sha256
+from scripts.decomposition_eval.human_review_pack import (
+    REQUIRED_ARTIFACT_BINDINGS,
+    pack_sha256,
+)
 from scripts.ops.query_controlled_demo_decision import (
     finalize_decision,
     prepare_decision_draft,
@@ -33,6 +36,7 @@ def _source_repo(tmp_path: Path) -> tuple[Path, str]:
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
     (root / ".gitignore").write_text(".local/\n", encoding="utf-8")
     (root / "source.txt").write_text("locked\n", encoding="utf-8")
+    _write_json(root / "data" / "manifest.json", {"schema": "fixture-v1"})
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(["git", "commit", "-qm", "test source"], cwd=root, check=True)
     commit = subprocess.run(
@@ -78,8 +82,26 @@ def _evidence(tmp_path: Path) -> dict[str, Path | str]:
     }
     disposition_path = run_root / "window-disposition.json"
     disposition_sha = _write_json(disposition_path, disposition)
-    artifact_path = run_root / "artifact.json"
-    artifact_sha = _write_json(artifact_path, {"schema": "fixture-v1"})
+    artifact_bindings = {}
+    for name in REQUIRED_ARTIFACT_BINDINGS:
+        if name == "window_disposition":
+            path = disposition_path
+        elif name == "manifest":
+            path = root / "data" / "manifest.json"
+        else:
+            path = run_root / "artifacts" / f"{name}.json"
+        if name == "window_disposition":
+            digest = disposition_sha
+        elif name == "manifest":
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            digest = _write_json(path, {"schema": "fixture-v1", "name": name})
+        base = root if name == "manifest" else run_root
+        artifact_bindings[name] = {
+            "base": "source_root" if name == "manifest" else "run_root",
+            "path": str(path.relative_to(base)).replace("\\", "/"),
+            "sha256": digest,
+        }
     pack = {
         "schema": "query-decomposition-human-review-pack-v2",
         "status": "locked_unreviewed", "scope": "controlled_demo_quality_review",
@@ -89,9 +111,7 @@ def _evidence(tmp_path: Path) -> dict[str, Path | str]:
         "output_instance_count": 39, "review_mode": "independent_human",
         "minimum_reviewers": 1, "source_owner_may_review": False,
         "codex_may_review": False, "review_contract_sha256": "a" * 64,
-        "artifact_bindings": {
-            "fixture": {"base": "run_root", "path": "artifact.json", "sha256": artifact_sha},
-        },
+        "artifact_bindings": artifact_bindings,
         "pilot_authorized": False, "feature_activation_authorized": False,
         "default_rollout_authorized": False, "push_authorized": False,
         "merge_authorized": False, "query_decomposition_remains_off": True,
@@ -204,13 +224,30 @@ def test_prepare_rejects_incomplete_review_or_wrong_owner(tmp_path):
 
 def test_prepare_rejects_bad_artifact_binding_and_output_path(tmp_path):
     fixture = _evidence(tmp_path)
-    (fixture["disposition"].parent / "artifact.json").write_text("drift", encoding="utf-8")
+    artifact = fixture["disposition"].parent / "artifacts" / "owner_declaration.json"
+    artifact.write_text("drift", encoding="utf-8")
     with pytest.raises(ValueError, match="pack_artifact_bindings"):
         _prepare(fixture, fixture["root"] / ".local" / "draft.json")
 
     fixture = _evidence(tmp_path / "second")
     with pytest.raises(ValueError, match="must stay under .local"):
         _prepare(fixture, fixture["root"] / "draft.json")
+
+
+def test_prepare_rejects_incomplete_artifact_binding_set(tmp_path):
+    fixture = _evidence(tmp_path)
+    pack_path = fixture["review"].with_name("pack.json")
+    pack = json.loads(pack_path.read_text(encoding="utf-8"))
+    pack["artifact_bindings"].pop("owner_declaration")
+    _write_json(pack_path, pack)
+    canonical_pack_sha = pack_sha256(pack)
+    review = json.loads(fixture["review"].read_text(encoding="utf-8"))
+    review["pack_sha256"] = canonical_pack_sha
+    review["expected_pack_sha256"] = canonical_pack_sha
+    fixture["review_sha"] = _write_json(fixture["review"], review)
+
+    with pytest.raises(ValueError, match="pack_artifact_bindings"):
+        _prepare(fixture, fixture["root"] / ".local" / "draft.json")
 
 
 def test_finalize_rejects_hash_tool_authorization_and_time_drift(tmp_path):
@@ -248,6 +285,20 @@ def test_finalize_rejects_hash_tool_authorization_and_time_drift(tmp_path):
             approval_path=expired, output_dir=root / "expired", now=NOW,
         )
 
+    contradictory = json.loads(json.dumps(draft))
+    contradictory["proposed_owner_decision"]["feature_activation_authorized"] = True
+    contradictory_sha = _write_json(draft_path, contradictory)
+    bad_decision = root / "bad-decision.json"
+    _approval(
+        bad_decision, contradictory_sha,
+        authorization=draft["requested_authorization"],
+    )
+    with pytest.raises(ValueError, match="proposed_owner_decision_fail_closed"):
+        finalize_decision(
+            source_root=fixture["root"], draft_path=draft_path,
+            approval_path=bad_decision, output_dir=root / "bad-decision", now=NOW,
+        )
+
     altered = dict(draft)
     altered["preparation_tool"] = {**altered["preparation_tool"], "sha256": "0" * 64}
     altered_sha = _write_json(draft_path, altered)
@@ -282,6 +333,23 @@ def test_finalize_materializes_decision_but_no_activation_artifact(tmp_path):
     assert "activation_bundle" not in receipt
     assert "decision_ledger" not in receipt
     assert receipt["next_gate"] == "separate_activation_contract_and_preflight_authorization"
+
+
+def test_finalize_rejects_nested_artifact_drift_during_approval_window(tmp_path):
+    fixture = _evidence(tmp_path)
+    root = fixture["root"] / ".local" / "decision"
+    draft_path = root / "draft.json"
+    draft, draft_sha = _prepare(fixture, draft_path)
+    approval_path = root / "approval.json"
+    _approval(approval_path, draft_sha, authorization=draft["requested_authorization"])
+    artifact = fixture["disposition"].parent / "artifacts" / "owner_declaration.json"
+    artifact.write_text("drift", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="pack_artifact_bindings"):
+        finalize_decision(
+            source_root=fixture["root"], draft_path=draft_path,
+            approval_path=approval_path, output_dir=root / "final", now=NOW,
+        )
 
 
 def test_finalize_rejects_existing_output_directory(tmp_path):

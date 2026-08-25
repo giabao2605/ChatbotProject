@@ -14,8 +14,12 @@ from mech_chatbot.governance.artifact_references import (
     build_json_reference,
     load_json_reference,
     read_json_object,
+    resolve_path,
 )
-from scripts.decomposition_eval.human_review_pack import pack_sha256
+from scripts.decomposition_eval.human_review_pack import (
+    REQUIRED_ARTIFACT_BINDINGS,
+    pack_sha256,
+)
 
 
 REQUESTED_AUTHORIZATION = {
@@ -29,6 +33,17 @@ REQUESTED_AUTHORIZATION = {
     "merge_authorized": False,
 }
 MAX_APPROVAL_MINUTES = 60
+ELIGIBILITY_TRUE_FIELDS = (
+    "formal_evidence", "rollout_evidence", "provider_health_passed",
+    "query_quality_evaluated", "zero_retry_formal_path_exercised",
+    "three_pair_gate_passed", "full_window_contract_passed", "technical_eligible",
+)
+GOVERNANCE_FALSE_FIELDS = (
+    "provider_smoke_rerun_authorized", "retry_or_catch_up_authorized",
+    "same_root_reuse_authorized", "additional_formal_pairs_authorized",
+    "pilot_authorized", "feature_activation_authorized", "default_rollout_authorized",
+    "push_authorized", "merge_authorized",
+)
 
 
 def _json(path: str | Path) -> tuple[dict, bytes, Path]:
@@ -134,18 +149,9 @@ def _validate_disposition(disposition: dict, disposition_sha: str) -> None:
         "provider_failures_zero": execution.get("provider_failures") == 0,
         "provider_retries_zero": execution.get("provider_retries") == 0,
         "disallowed_fallback_zero": execution.get("disallowed_fallback_count") == 0,
-        "formal_evidence": eligibility.get("formal_evidence") is True,
-        "rollout_evidence": eligibility.get("rollout_evidence") is True,
-        "provider_health_passed": eligibility.get("provider_health_passed") is True,
-        "query_quality_evaluated": eligibility.get("query_quality_evaluated") is True,
-        "zero_retry_formal_path": eligibility.get(
-            "zero_retry_formal_path_exercised"
-        ) is True,
-        "three_pair_gate_passed": eligibility.get("three_pair_gate_passed") is True,
-        "window_contract_passed": eligibility.get(
-            "full_window_contract_passed"
-        ) is True,
-        "technical_eligible": eligibility.get("technical_eligible") is True,
+        "eligibility_required_true": all(
+            eligibility.get(name) is True for name in ELIGIBILITY_TRUE_FIELDS
+        ),
         "predecision_production_false": eligibility.get(
             "production_eligible"
         ) is False,
@@ -156,13 +162,7 @@ def _validate_disposition(disposition: dict, disposition_sha: str) -> None:
             "carry_forward_authorized"
         ) is False,
         "governance_fail_closed": all(
-            governance.get(name) is False
-            for name in (
-                "provider_smoke_rerun_authorized", "retry_or_catch_up_authorized",
-                "same_root_reuse_authorized", "additional_formal_pairs_authorized",
-                "pilot_authorized", "feature_activation_authorized",
-                "default_rollout_authorized", "push_authorized", "merge_authorized",
-            )
+            governance.get(name) is False for name in GOVERNANCE_FALSE_FIELDS
         ),
         "query_still_off": governance.get("query_decomposition_remains_off") is True,
         "disposition_sha256_format": len(disposition_sha) == 64,
@@ -215,13 +215,20 @@ def _validate_review(review: dict, pack: dict, disposition_sha: str) -> None:
     })
 
 
-def _artifact_bindings_valid(pack: dict, *, run_root: Path, source_root: Path) -> bool:
+def _artifact_bindings_valid(
+    pack: dict, *, run_root: Path, source_root: Path, disposition_sha: str,
+) -> bool:
     bindings = pack.get("artifact_bindings")
-    if not isinstance(bindings, dict) or not bindings:
+    if not isinstance(bindings, dict) or set(bindings) != REQUIRED_ARTIFACT_BINDINGS:
         return False
     bases = {"run_root": run_root.resolve(), "source_root": source_root.resolve()}
-    for binding in bindings.values():
-        if not isinstance(binding, dict) or binding.get("base") not in bases:
+    for name, binding in bindings.items():
+        expected_base = "source_root" if name == "manifest" else "run_root"
+        if (
+            not isinstance(binding, dict)
+            or set(binding) != {"base", "path", "sha256"}
+            or binding.get("base") != expected_base
+        ):
             return False
         base = bases[binding["base"]]
         path = (base / str(binding.get("path") or "")).resolve()
@@ -230,7 +237,53 @@ def _artifact_bindings_valid(pack: dict, *, run_root: Path, source_root: Path) -
             return False
         if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             return False
-    return True
+    return bindings["window_disposition"]["sha256"] == disposition_sha
+
+
+def _validate_proposed_decision(
+    proposed: object, *, draft: dict, reviewer: str, evaluated_at: str,
+) -> None:
+    expected_keys = {
+        "schema", "status", "decision", "source_commit", "run_id", "scope",
+        "capability", "pilot_contract", "evidence", "technical_eligible",
+        "human_review_accepted", "production_eligible",
+        "independent_human_review", "provider_traffic_authorized",
+        "pilot_dispatch_authorized", "feature_activation_authorized",
+        "runtime_start_authorized", "default_rollout_authorized",
+        "push_authorized", "merge_authorized", "query_decomposition_remains_off",
+    }
+    value = proposed if isinstance(proposed, dict) else {}
+    _require({
+        "proposed_owner_decision_keys": set(value) == expected_keys,
+        "proposed_owner_decision_schema": value.get("schema")
+        == "query-controlled-demo-owner-decision-v1",
+        "proposed_owner_decision_status": value.get("status")
+        == "accepted_for_controlled_demo_quality_only"
+        and value.get("decision") == "accepted_for_controlled_demo_quality_only",
+        "proposed_owner_decision_identity": value.get("source_commit")
+        == draft.get("source_commit") and value.get("run_id") == draft.get("run_id")
+        and value.get("scope") == "controlled_demo"
+        and value.get("capability") == "query_decomposition"
+        and value.get("pilot_contract") == "query-decomposition-24h-100-v1",
+        "proposed_owner_decision_evidence": value.get("evidence")
+        == draft.get("evidence"),
+        "proposed_owner_decision_eligibility": value.get("technical_eligible") is True
+        and value.get("human_review_accepted") is True
+        and value.get("production_eligible") is False,
+        "proposed_owner_decision_review": value.get("independent_human_review") == {
+            "reviewer": reviewer,
+            "evaluated_at": evaluated_at,
+            "review_result": (draft.get("evidence") or {}).get("review_result"),
+        },
+        "proposed_owner_decision_fail_closed": all(
+            value.get(name) is False
+            for name in (
+                "provider_traffic_authorized", "pilot_dispatch_authorized",
+                "feature_activation_authorized", "runtime_start_authorized",
+                "default_rollout_authorized", "push_authorized", "merge_authorized",
+            )
+        ) and value.get("query_decomposition_remains_off") is True,
+    })
 
 
 def _validate_exact_identity(
@@ -254,13 +307,13 @@ def _validate_exact_identity(
     })
 
 
-def prepare_decision_draft(
+def _validated_prepare_inputs(
     *, source_root: str | Path, disposition_path: str | Path,
-    review_result_path: str | Path, output: str | Path, owner: str,
+    review_result_path: str | Path, owner: str,
     expected_source_commit: str, expected_run_id: str,
     expected_disposition_sha256: str, expected_review_result_sha256: str,
     expected_reviewer: str,
-) -> tuple[dict, str]:
+) -> dict:
     root = Path(source_root).resolve()
     commit = _source_commit(root)
     disposition, disposition_raw, disposition_path = _json(disposition_path)
@@ -286,35 +339,29 @@ def prepare_decision_draft(
         == str(pack.get("source_owner") or "").strip().casefold(),
         "pack_artifact_bindings": _artifact_bindings_valid(
             pack, run_root=disposition_path.parent, source_root=root,
+            disposition_sha=disposition_sha,
         ),
     })
-    evidence = {
-        "window_disposition": _reference(
-            disposition_path, root=root,
-            schema="query-decomposition-formal-window-disposition-v2",
-        ),
-        "human_review_pack": _reference(
-            pack_path, root=root,
-            schema="query-decomposition-human-review-pack-v2",
-        ),
-        "review_result": _reference(
-            review_result_path, root=root,
-            schema="query-decomposition-human-review-result-v1",
-        ),
+    return {
+        "root": root, "commit": commit, "disposition": disposition,
+        "disposition_path": disposition_path, "review": review,
+        "review_result_path": review_result_path, "pack_path": pack_path,
+        "owner": normalized_owner,
     }
-    proposed_decision = {
+
+
+def _build_proposed_decision(context: dict, evidence: dict) -> dict:
+    review = context["review"]
+    return {
         "schema": "query-controlled-demo-owner-decision-v1",
         "status": "accepted_for_controlled_demo_quality_only",
         "decision": "accepted_for_controlled_demo_quality_only",
-        "source_commit": commit,
-        "run_id": disposition["run_id"],
-        "scope": "controlled_demo",
-        "capability": "query_decomposition",
+        "source_commit": context["commit"],
+        "run_id": context["disposition"]["run_id"],
+        "scope": "controlled_demo", "capability": "query_decomposition",
         "pilot_contract": "query-decomposition-24h-100-v1",
-        "evidence": evidence,
-        "technical_eligible": True,
-        "human_review_accepted": True,
-        "production_eligible": False,
+        "evidence": evidence, "technical_eligible": True,
+        "human_review_accepted": True, "production_eligible": False,
         "independent_human_review": {
             "reviewer": review["reviewer"],
             "evaluated_at": review["evaluated_at"],
@@ -325,17 +372,55 @@ def prepare_decision_draft(
         "feature_activation_authorized": False,
         "runtime_start_authorized": False,
         "default_rollout_authorized": False,
-        "push_authorized": False,
-        "merge_authorized": False,
+        "push_authorized": False, "merge_authorized": False,
         "query_decomposition_remains_off": True,
     }
+
+
+def _build_evidence(context: dict) -> dict:
+    root = context["root"]
+    return {
+        "window_disposition": _reference(
+            context["disposition_path"], root=root,
+            schema="query-decomposition-formal-window-disposition-v2",
+        ),
+        "human_review_pack": _reference(
+            context["pack_path"], root=root,
+            schema="query-decomposition-human-review-pack-v2",
+        ),
+        "review_result": _reference(
+            context["review_result_path"], root=root,
+            schema="query-decomposition-human-review-result-v1",
+        ),
+    }
+
+
+def prepare_decision_draft(
+    *, source_root: str | Path, disposition_path: str | Path,
+    review_result_path: str | Path, output: str | Path, owner: str,
+    expected_source_commit: str, expected_run_id: str,
+    expected_disposition_sha256: str, expected_review_result_sha256: str,
+    expected_reviewer: str,
+) -> tuple[dict, str]:
+    context = _validated_prepare_inputs(
+        source_root=source_root, disposition_path=disposition_path,
+        review_result_path=review_result_path, owner=owner,
+        expected_source_commit=expected_source_commit,
+        expected_run_id=expected_run_id,
+        expected_disposition_sha256=expected_disposition_sha256,
+        expected_review_result_sha256=expected_review_result_sha256,
+        expected_reviewer=expected_reviewer,
+    )
+    root = context["root"]
+    evidence = _build_evidence(context)
+    proposed_decision = _build_proposed_decision(context, evidence)
     draft = {
         "schema": "query-controlled-demo-owner-decision-draft-v1",
         "status": "AWAITING_EXACT_OWNER_APPROVAL",
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "owner": normalized_owner,
-        "source_commit": commit,
-        "run_id": disposition["run_id"],
+        "owner": context["owner"],
+        "source_commit": context["commit"],
+        "run_id": context["disposition"]["run_id"],
         "scope": "controlled_demo_owner_decision_only",
         "capability": "query_decomposition",
         "preparation_tool": _preparation_tool_binding(),
@@ -345,6 +430,12 @@ def prepare_decision_draft(
         "maximum_approval_lifetime_minutes": MAX_APPROVAL_MINUTES,
         "post_approval_gate": "materialize_owner_decision_only",
     }
+    _validate_proposed_decision(
+        proposed_decision,
+        draft=draft,
+        reviewer=str(context["review"]["reviewer"]),
+        evaluated_at=str(context["review"]["evaluated_at"]),
+    )
     output = _inside_dot_local(output, root)
     if output.exists():
         raise ValueError("draft_output_must_not_exist")
@@ -372,7 +463,31 @@ def _validate_approval(
     })
 
 
-def finalize_decision(
+def _load_draft_evidence(draft: dict, *, root: Path) -> dict:
+    evidence = draft.get("evidence")
+    _require({
+        "draft_evidence_keys": isinstance(evidence, dict) and set(evidence) == {
+            "window_disposition", "human_review_pack", "review_result",
+        },
+    })
+    loaded = {}
+    for name, reference in evidence.items():
+        value = load_json_reference(reference, root=root)
+        if value is None:
+            raise ValueError("draft_evidence_reference_invalid")
+        loaded[name] = value
+    disposition_reference = evidence["window_disposition"]
+    disposition_path = resolve_path(disposition_reference["path"], root)
+    _require({
+        "pack_artifact_bindings": _artifact_bindings_valid(
+            loaded["human_review_pack"], run_root=disposition_path.parent,
+            source_root=root, disposition_sha=disposition_reference["sha256"],
+        ),
+    })
+    return loaded
+
+
+def _validated_finalization_context(
     *, source_root: str | Path, draft_path: str | Path,
     approval_path: str | Path, output_dir: str | Path,
     now: datetime | None = None,
@@ -399,23 +514,44 @@ def finalize_decision(
         "preparation_tool_binding": draft.get("preparation_tool")
         == _preparation_tool_binding(),
     })
-    for reference in draft.get("evidence", {}).values():
-        if load_json_reference(reference, root=root) is None:
-            raise ValueError("draft_evidence_reference_invalid")
+    loaded_evidence = _load_draft_evidence(draft, root=root)
+    review = loaded_evidence["review_result"]
+    _validate_proposed_decision(
+        draft.get("proposed_owner_decision"),
+        draft=draft,
+        reviewer=str(review.get("reviewer") or ""),
+        evaluated_at=str(review.get("evaluated_at") or ""),
+    )
+    return {
+        "root": root, "source_commit": current_commit, "draft": draft,
+        "draft_path": draft_path, "draft_sha": draft_sha, "approval": approval,
+        "approval_path": approval_path, "approval_sha": approval_sha,
+        "output_dir": output_dir,
+    }
+
+
+def _materialize_owner_decision(context: dict) -> dict:
+    draft = context["draft"]
+    approval = context["approval"]
     decision = deepcopy(draft["proposed_owner_decision"])
     decision["owner_approval"] = {
         "owner": approval["actor"],
         "accepted_at": approval["authorized_at"],
         "scope": "controlled_demo_owner_decision_only",
-        "draft": {"path": str(draft_path), "sha256": draft_sha},
-        "approval": {"path": str(approval_path), "sha256": approval_sha},
+        "draft": {
+            "path": str(context["draft_path"]), "sha256": context["draft_sha"],
+        },
+        "approval": {
+            "path": str(context["approval_path"]),
+            "sha256": context["approval_sha"],
+        },
     }
     decision_path, decision_sha = _write_json(
-        output_dir / "query-controlled-demo-owner-decision.json", decision,
+        context["output_dir"] / "query-controlled-demo-owner-decision.json", decision,
     )
     receipt = {
         "schema": "query-controlled-demo-owner-decision-finalization-v1",
-        "source_commit": current_commit,
+        "source_commit": context["source_commit"],
         "owner_decision": {"path": str(decision_path), "sha256": decision_sha},
         "provider_traffic_authorized": False,
         "pilot_dispatch_authorized": False,
@@ -426,8 +562,20 @@ def finalize_decision(
         "merge_authorized": False,
         "next_gate": "separate_activation_contract_and_preflight_authorization",
     }
-    _write_json(output_dir / "finalization-receipt.json", receipt)
+    _write_json(context["output_dir"] / "finalization-receipt.json", receipt)
     return receipt
+
+
+def finalize_decision(
+    *, source_root: str | Path, draft_path: str | Path,
+    approval_path: str | Path, output_dir: str | Path,
+    now: datetime | None = None,
+) -> dict:
+    context = _validated_finalization_context(
+        source_root=source_root, draft_path=draft_path,
+        approval_path=approval_path, output_dir=output_dir, now=now,
+    )
+    return _materialize_owner_decision(context)
 
 
 def main(argv: list[str] | None = None) -> int:
