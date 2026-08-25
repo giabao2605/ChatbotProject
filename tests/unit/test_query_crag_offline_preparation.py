@@ -996,37 +996,13 @@ def test_query_window_entrypoint_rejects_source_commit_mismatch_before_run_root(
 
 
 def test_query_window_entrypoint_rejects_dirty_worktree_before_run_root(tmp_path):
+    fixture = _create_query_window_fixture(tmp_path)
     run_root = tmp_path / "query-window"
-    source_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    environment = {
-        **os.environ,
-        "QDRANT_COLLECTION": "MechChatbot_CRAG_Eval_v1",
-        "RAG_EVAL_EXPECTED_COLLECTION": "MechChatbot_CRAG_Eval_v1",
-    }
-
-    result = subprocess.run(
-        [
-            _powershell(),
-            "-NoProfile",
-            "-File",
-            str(QUERY_WINDOW_ENTRYPOINT),
-            "-RunRoot",
-            str(run_root),
-            "-ExpectedSourceCommit",
-            source_commit,
-        ],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
+    (fixture["project"] / "untracked-marker.txt").write_text(
+        "dirty", encoding="utf-8"
     )
+
+    result = _run_query_window_fixture(fixture, run_root)
 
     assert result.returncode != 0
     assert "query_window_worktree_dirty" in result.stderr
