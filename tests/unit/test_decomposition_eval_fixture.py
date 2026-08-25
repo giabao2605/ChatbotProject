@@ -1398,7 +1398,13 @@ def test_decomposition_candidate_only_allows_strict_deterministic_local_split(
         )
 
     if allowed:
-        assert run()["runner_exit"] == 0
+        result = run()
+        assert result["runner_exit"] == 0
+        assert result["fallback_contract"] == {
+            "allowed_strict_deterministic_local_split_count": 1,
+            "disallowed_fallback_count": 0,
+            "passed": True,
+        }
     else:
         with pytest.raises(RuntimeError, match="fallback events"):
             run()

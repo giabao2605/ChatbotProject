@@ -192,6 +192,11 @@ def _validate_appended_trace(label, expected_trace_ids, events, snapshot, enable
         or fallback_count != len(deterministic_splits)
     ):
         raise RuntimeError(f"trace snapshot contains fallback events for {label}")
+    return {
+        "allowed_strict_deterministic_local_split_count": len(deterministic_splits),
+        "disallowed_fallback_count": 0,
+        "passed": True,
+    }
 
 
 def _load_successful_gate(gate_path, gate_result):
@@ -296,8 +301,15 @@ def _run(
     trace_snapshot = json.loads((run_dir / "trace.json").read_text(encoding="utf-8"))
     _validate_trace_snapshot(label, expected_trace_ids, evaluation, trace_snapshot)
     events = _read_appended_trace(trace, trace_start_offset, label)
-    _validate_appended_trace(label, expected_trace_ids, events, trace_snapshot, enabled)
-    return {"started_at": started_at, "completed_at": completed_at, "runner_exit": result.returncode}
+    fallback_contract = _validate_appended_trace(
+        label, expected_trace_ids, events, trace_snapshot, enabled
+    )
+    return {
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "runner_exit": result.returncode,
+        "fallback_contract": fallback_contract,
+    }
 
 
 def _validate_rollback_evidence(path: Path, git_sha: str) -> dict:
