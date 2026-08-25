@@ -159,10 +159,13 @@ def _prepare(fixture, output: Path, **overrides):
     return prepare_decision_draft(**arguments)
 
 
-def _approval(path: Path, draft_sha: str, *, authorization: dict, expires_at=None):
+def _approval(
+    path: Path, draft_sha: str, *, authorization: dict,
+    expires_at=None, actor="bao.nguyen",
+):
     return _write_json(path, {
         "schema": "query-controlled-demo-owner-approval-v1",
-        "draft_sha256": draft_sha, "actor": "bao.nguyen",
+        "draft_sha256": draft_sha, "actor": actor,
         "authorized_at": "2026-08-25T09:55:00Z",
         "expires_at": expires_at or "2026-08-25T10:55:00Z",
         "authorization": authorization,
@@ -349,6 +352,39 @@ def test_finalize_rejects_nested_artifact_drift_during_approval_window(tmp_path)
         finalize_decision(
             source_root=fixture["root"], draft_path=draft_path,
             approval_path=approval_path, output_dir=root / "final", now=NOW,
+        )
+
+
+def test_finalize_rebinds_run_and_owner_to_loaded_evidence(tmp_path):
+    fixture = _evidence(tmp_path)
+    root = fixture["root"] / ".local" / "decision"
+    draft_path = root / "draft.json"
+    draft, _ = _prepare(fixture, draft_path)
+
+    run_drift = json.loads(json.dumps(draft))
+    run_drift["run_id"] = "other-run"
+    run_drift["proposed_owner_decision"]["run_id"] = "other-run"
+    run_sha = _write_json(draft_path, run_drift)
+    run_approval = root / "run-approval.json"
+    _approval(run_approval, run_sha, authorization=draft["requested_authorization"])
+    with pytest.raises(ValueError, match="draft_evidence_run_id"):
+        finalize_decision(
+            source_root=fixture["root"], draft_path=draft_path,
+            approval_path=run_approval, output_dir=root / "run-final", now=NOW,
+        )
+
+    owner_drift = json.loads(json.dumps(draft))
+    owner_drift["owner"] = "other.owner"
+    owner_sha = _write_json(draft_path, owner_drift)
+    owner_approval = root / "owner-approval.json"
+    _approval(
+        owner_approval, owner_sha, authorization=draft["requested_authorization"],
+        actor="other.owner",
+    )
+    with pytest.raises(ValueError, match="owner_matches_source_owner"):
+        finalize_decision(
+            source_root=fixture["root"], draft_path=draft_path,
+            approval_path=owner_approval, output_dir=root / "owner-final", now=NOW,
         )
 
 

@@ -487,6 +487,28 @@ def _load_draft_evidence(draft: dict, *, root: Path) -> dict:
     return loaded
 
 
+def _validate_draft_evidence_identity(
+    draft: dict, loaded: dict, *, source_commit: str, disposition_sha: str,
+) -> None:
+    disposition = loaded["window_disposition"]
+    pack = loaded["human_review_pack"]
+    review = loaded["review_result"]
+    _validate_disposition(disposition, disposition_sha)
+    _validate_review(review, pack, disposition_sha)
+    _require({
+        "draft_evidence_source_commit": draft.get("source_commit")
+        == source_commit == disposition.get("source_commit")
+        == pack.get("source_commit") == review.get("source_commit"),
+        "draft_evidence_run_id": draft.get("run_id") == disposition.get("run_id")
+        == pack.get("run_id") == review.get("run_id"),
+        "owner_matches_source_owner": bool(str(draft.get("owner") or "").strip())
+        and str(draft.get("owner")).strip().casefold()
+        == str(pack.get("source_owner") or "").strip().casefold(),
+        "draft_scope": draft.get("scope") == "controlled_demo_owner_decision_only",
+        "draft_capability": draft.get("capability") == "query_decomposition",
+    })
+
+
 def _validated_finalization_context(
     *, source_root: str | Path, draft_path: str | Path,
     approval_path: str | Path, output_dir: str | Path,
@@ -515,6 +537,10 @@ def _validated_finalization_context(
         == _preparation_tool_binding(),
     })
     loaded_evidence = _load_draft_evidence(draft, root=root)
+    _validate_draft_evidence_identity(
+        draft, loaded_evidence, source_commit=current_commit,
+        disposition_sha=draft["evidence"]["window_disposition"]["sha256"],
+    )
     review = loaded_evidence["review_result"]
     _validate_proposed_decision(
         draft.get("proposed_owner_decision"),
