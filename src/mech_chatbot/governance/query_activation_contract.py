@@ -643,6 +643,12 @@ def _pilot_authorization_window(
         consolidated_draft = _load_contained_reference(
             consolidated_draft_reference, project_root,
         )
+        consolidated_authorized_at = _timestamp(
+            (consolidated_approval or {}).get("authorized_at")
+        )
+        consolidated_expires_at = _timestamp(
+            (consolidated_approval or {}).get("expires_at")
+        )
         consolidated_valid = all((
             isinstance(consolidated_approval, dict),
             isinstance(consolidated_draft, dict),
@@ -656,10 +662,12 @@ def _pilot_authorization_window(
             == consolidated_draft_reference.get("sha256"),
             (consolidated_approval or {}).get("actor")
             == approval.get("actor"),
-            (consolidated_approval or {}).get("authorized_at")
-            == approval.get("authorized_at"),
-            (consolidated_approval or {}).get("expires_at")
-            == approval.get("expires_at"),
+            consolidated_authorized_at is not None
+            and consolidated_authorized_at.replace(microsecond=0)
+            == authorized_at,
+            consolidated_expires_at is not None
+            and consolidated_expires_at.replace(microsecond=0)
+            == expires_at,
             (consolidated_approval or {}).get("authorization")
             == (consolidated_draft or {}).get("requested_authorization")
             == {

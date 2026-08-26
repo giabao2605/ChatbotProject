@@ -9,7 +9,9 @@ from pathlib import Path
 
 from mech_chatbot.governance.artifact_references import (
     build_json_reference,
+    load_bytes_reference,
     load_json_reference,
+    read_bytes_with_reference,
 )
 from mech_chatbot.governance.query_activation_contract import (
     QUERY_ACTIVATION_AUTHORIZATION,
@@ -88,6 +90,11 @@ def prepare_consolidated_launch(
     rollback_path, rollback_sha = _write_json(
         target / "rollback-plan.json", _offline_rollback(commit),
     )
+    _, operator_reference = read_bytes_with_reference(
+        root / "scripts" / "ops" / "query_decomposition_pilot_operator.py",
+        root=root,
+        expected_format="python",
+    )
     draft = {
         "schema": "query-decomposition-consolidated-launch-draft-v1",
         "status": "AWAITING_ONE_CONSOLIDATED_APPROVAL",
@@ -112,6 +119,7 @@ def prepare_consolidated_launch(
             rollback_path, root=root,
             expected_schema="query-decomposition-pilot-offline-rollback-v1",
         ),
+        "operator_runner": operator_reference,
         "requested_authorization": CONSOLIDATED_AUTHORIZATION,
     }
     draft_path, draft_sha = _write_json(
@@ -128,6 +136,7 @@ def prepare_consolidated_launch(
         "rollback_plan": {
             "path": str(rollback_path), "sha256": rollback_sha,
         },
+        "operator_runner": operator_reference,
         "consolidated_launch_draft": {
             "path": str(draft_path), "sha256": draft_sha,
         },
@@ -171,11 +180,21 @@ def finalize_consolidated_launch(
         draft.get("operator_runbook"), root=root,
     )
     rollback_plan = load_json_reference(draft.get("rollback_plan"), root=root)
+    operator_reference = draft.get("operator_runner")
+    operator_path = (
+        Path(str(operator_reference.get("path") or "")).as_posix()
+        if isinstance(operator_reference, dict) else ""
+    )
+    operator_runner = load_bytes_reference(
+        operator_reference, root=root, expected_format="python",
+    )
     if not isinstance(schedule_plan, dict):
         raise ValueError("schedule_plan_invalid")
     if not all((
         isinstance(operator_runbook, dict),
         isinstance(rollback_plan, dict),
+        operator_path == "scripts/ops/query_decomposition_pilot_operator.py",
+        operator_runner is not None,
         operator_runbook == _operator_runbook(draft["source_commit"])
         and rollback_plan == _offline_rollback(draft["source_commit"]),
     )):

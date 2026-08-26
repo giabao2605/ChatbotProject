@@ -33,7 +33,6 @@ def _write_json(path: Path, value: object) -> str:
     path.write_bytes(raw)
     return hashlib.sha256(raw).hexdigest()
 
-
 def _answered_evidence() -> dict:
     return {
         "route": "query_decomposition", "query_result_status": "valid",
@@ -64,7 +63,6 @@ def _accept_synthetic_activation_fixture(monkeypatch):
         lambda *_args, **_kwargs: True,
     )
 
-
 def _git_root(path: Path) -> str:
     (path / ".gitignore").write_text(".local/\n", encoding="utf-8")
     (path / "source.txt").write_text("query pilot\n", encoding="utf-8")
@@ -81,7 +79,6 @@ def _git_root(path: Path) -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=path, text=True,
     ).strip()
-
 
 def _inputs(tmp_path: Path):
     manifest = tmp_path / "data" / "decomposition.jsonl"
@@ -108,6 +105,9 @@ def _inputs(tmp_path: Path):
     manifest.write_text(
         "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
     )
+    operator_runner = tmp_path / "scripts/ops/query_decomposition_pilot_operator.py"
+    operator_runner.parent.mkdir(parents=True)
+    operator_runner.write_text("# query pilot operator\n", encoding="utf-8")
     commit = _git_root(tmp_path)
     activation = tmp_path / ".local" / "activation.json"
     activation_sha = _write_json(activation, {
@@ -698,8 +698,8 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
         "schema": "query-decomposition-consolidated-launch-approval-v1",
         "draft_sha256": hashlib.sha256(draft.read_bytes()).hexdigest(),
         "actor": "bao.nguyen",
-        "authorized_at": "2026-08-27T00:00:00Z",
-        "expires_at": "2026-08-28T02:00:00Z",
+        "authorized_at": "2026-08-27T00:00:00.1234567Z",
+        "expires_at": "2026-08-28T02:00:00.1234567Z",
         "authorization": CONSOLIDATED_AUTHORIZATION,
     })
     def materialize_activation(**kwargs):

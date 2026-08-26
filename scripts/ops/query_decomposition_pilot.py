@@ -218,6 +218,12 @@ def _operator_runbook(commit: str) -> dict:
             "required_profile": "selective",
             "required_scope": "controlled_demo",
             "required_enabled_flags": ["RAG_QUERY_DECOMPOSITION_ENABLED"],
+            "runtime_topology": "candidate_only",
+            "control_runtime_started": False,
+            "operator_entrypoint": (
+                "scripts/ops/query_decomposition_pilot_operator.py"
+            ),
+            "supervisor_stops_runtime_in_finally": True,
             "health_and_runtime_identity_preflight_required": True,
             "dispatch_contract": PILOT_CONTRACT_VERSION,
         },
