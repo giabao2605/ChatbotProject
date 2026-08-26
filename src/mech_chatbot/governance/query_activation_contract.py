@@ -17,6 +17,9 @@ from mech_chatbot.governance.artifact_references import (
 
 
 MAX_APPROVAL_DURATION = timedelta(minutes=60)
+QUERY_PILOT_CONTRACT_VERSION = "query-decomposition-24h-100-v1"
+QUERY_PILOT_MINIMUM_DURATION = timedelta(hours=24, minutes=10)
+QUERY_PILOT_MAXIMUM_DURATION = timedelta(hours=26)
 QUERY_OWNER_DECISION_AUTHORIZATION = {
     "materialize_controlled_demo_owner_decision": True,
     "provider_traffic_authorized": False,
@@ -37,6 +40,22 @@ QUERY_ACTIVATION_AUTHORIZATION = {
     "default_rollout_authorized": False,
     "push_authorized": False,
     "merge_authorized": False,
+}
+QUERY_PILOT_AUTHORIZATION = {
+    "runtime_consumption_authorized": True,
+    "runtime_start_authorized": True,
+    "provider_traffic_authorized": True,
+    "pilot_dispatch_authorized": True,
+    "default_rollout_authorized": False,
+    "push_authorized": False,
+    "merge_authorized": False,
+    "pilot_contract_version": QUERY_PILOT_CONTRACT_VERSION,
+    "eligible_request_count": 100,
+    "minimum_elapsed_hours": 24,
+    "max_concurrency": 1,
+    "retry_policy": "none",
+    "replacement_policy": "none",
+    "catch_up_policy": "none",
 }
 _FALSE_RUNTIME_BOUNDARIES = (
     "provider_traffic_authorized",
@@ -510,6 +529,201 @@ def validate_query_owner_decision(
     )
 
 
+def _pilot_schedule_valid(
+    schedule: dict, template: dict, *, source_commit: str,
+    activation_bundle_sha256: str, authorized_at: datetime,
+    expires_at: datetime,
+) -> bool:
+    cards = schedule.get("cards")
+    template_cards = template.get("cards")
+    if not isinstance(cards, list) or not isinstance(template_cards, list):
+        return False
+    if len(cards) != 100 or len(template_cards) != 100:
+        return False
+    starts_at = _timestamp(schedule.get("starts_at"))
+    minimum_until = _timestamp(schedule.get("minimum_runtime_until"))
+    if starts_at is None or minimum_until is None:
+        return False
+    if not all((
+        schedule.get("schema") == "query-decomposition-pilot-schedule-v1",
+        template.get("schema")
+        == "query-decomposition-pilot-schedule-template-v1",
+        schedule.get("pilot_contract_version")
+        == template.get("pilot_contract_version")
+        == QUERY_PILOT_CONTRACT_VERSION,
+        schedule.get("source_commit") == template.get("source_commit")
+        == source_commit,
+        schedule.get("activation_bundle_sha256")
+        == template.get("activation_bundle_sha256")
+        == activation_bundle_sha256,
+        schedule.get("authorized_at")
+        == authorized_at.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        schedule.get("expires_at")
+        == expires_at.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        starts_at - authorized_at == timedelta(minutes=5),
+        minimum_until - starts_at == timedelta(hours=24),
+        schedule.get("card_count") == 100,
+        schedule.get("minimum_elapsed_seconds") == 86400,
+        schedule.get("max_concurrency") == 1,
+        all(
+            schedule.get(name) == "none"
+            for name in (
+                "retry_policy", "replacement_policy", "catch_up_policy",
+            )
+        ),
+    )):
+        return False
+    for card, template_card in zip(cards, template_cards, strict=True):
+        if not isinstance(card, dict) or not isinstance(template_card, dict):
+            return False
+        scheduled = _timestamp(card.get("scheduled_at"))
+        offset = template_card.get("offset_seconds")
+        if not all((
+            set(card) == {*template_card, "scheduled_at"},
+            all(card.get(name) == value for name, value in template_card.items()),
+            type(offset) is int,
+            scheduled is not None,
+            scheduled is not None
+            and scheduled == starts_at + timedelta(seconds=offset),
+        )):
+            return False
+    return True
+
+
+def _pilot_authorization_window(
+    authorization: dict, *, project_root: Path, source_commit: str,
+    activation_bundle_sha256: str, enabled_flags: tuple[str, ...],
+) -> tuple[datetime, datetime] | None:
+    draft_reference = authorization.get("pilot_draft")
+    approval_reference = authorization.get("pilot_approval")
+    schedule_reference = authorization.get("schedule")
+    draft = _load_contained_reference(draft_reference, project_root)
+    approval = _load_contained_reference(approval_reference, project_root)
+    schedule = _load_contained_reference(schedule_reference, project_root)
+    if not all(isinstance(value, dict) for value in (
+        draft_reference, approval_reference, draft, approval, schedule,
+    )):
+        return None
+    assert draft is not None and approval is not None and schedule is not None
+    template = _load_contained_reference(
+        draft.get("schedule_template"), project_root,
+    )
+    finalization = _load_contained_reference(
+        draft.get("activation_finalization"), project_root,
+    )
+    if template is None or finalization is None:
+        return None
+    activation = _load_contained_reference(
+        finalization.get("authorization"), project_root,
+    )
+    if activation is None:
+        return None
+    authorized_at = _timestamp(approval.get("authorized_at"))
+    expires_at = _timestamp(approval.get("expires_at"))
+    materialized_at = _timestamp(authorization.get("materialized_at"))
+    if authorized_at is None or expires_at is None or materialized_at is None:
+        return None
+    duration = expires_at - authorized_at
+    expected_flags = sorted(enabled_flags)
+    activation_owner = str(activation.get("activation_owner") or "").strip()
+    consolidated_approval_reference = approval.get(
+        "consolidated_launch_approval"
+    )
+    consolidated_draft_reference = approval.get("consolidated_launch_draft")
+    consolidated_valid = (
+        consolidated_approval_reference is None
+        and consolidated_draft_reference is None
+    )
+    if isinstance(consolidated_approval_reference, dict) and isinstance(
+        consolidated_draft_reference, dict,
+    ):
+        consolidated_approval = _load_contained_reference(
+            consolidated_approval_reference, project_root,
+        )
+        consolidated_draft = _load_contained_reference(
+            consolidated_draft_reference, project_root,
+        )
+        consolidated_valid = all((
+            isinstance(consolidated_approval, dict),
+            isinstance(consolidated_draft, dict),
+            (consolidated_approval or {}).get("schema")
+            == "query-decomposition-consolidated-launch-approval-v1",
+            (consolidated_draft or {}).get("schema")
+            == "query-decomposition-consolidated-launch-draft-v1",
+            (consolidated_draft or {}).get("source_commit") == source_commit,
+            (consolidated_draft or {}).get("owner") == approval.get("actor"),
+            (consolidated_approval or {}).get("draft_sha256")
+            == consolidated_draft_reference.get("sha256"),
+            (consolidated_approval or {}).get("actor")
+            == approval.get("actor"),
+            (consolidated_approval or {}).get("authorized_at")
+            == approval.get("authorized_at"),
+            (consolidated_approval or {}).get("expires_at")
+            == approval.get("expires_at"),
+            (consolidated_approval or {}).get("authorization")
+            == (consolidated_draft or {}).get("requested_authorization")
+            == {
+                "activation": QUERY_ACTIVATION_AUTHORIZATION,
+                "pilot": QUERY_PILOT_AUTHORIZATION,
+            },
+        ))
+    if not all((
+        authorization.get("schema")
+        == "query-controlled-demo-pilot-authorization-v1",
+        authorization.get("source_commit") == source_commit,
+        authorization.get("scope") == "controlled_demo",
+        authorization.get("capability") == "query_decomposition",
+        authorization.get("activation_bundle_sha256")
+        == activation_bundle_sha256,
+        authorization.get("enabled_flags") == expected_flags
+        == ["RAG_QUERY_DECOMPOSITION_ENABLED"],
+        all(
+            authorization.get(name) == value
+            for name, value in QUERY_PILOT_AUTHORIZATION.items()
+        ),
+        authorization.get("actor") == approval.get("actor"),
+        authorization.get("authorized_at")
+        == authorized_at.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        authorization.get("expires_at")
+        == expires_at.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        draft.get("schema")
+        == "query-decomposition-pilot-authorization-draft-v1",
+        draft.get("source_commit") == source_commit,
+        draft.get("scope") == "controlled_demo",
+        draft.get("capability") == "query_decomposition",
+        draft.get("activation_bundle_sha256") == activation_bundle_sha256,
+        draft.get("requested_authorization") == QUERY_PILOT_AUTHORIZATION,
+        approval.get("schema") == "query-decomposition-pilot-approval-v1",
+        approval.get("draft_sha256") == draft_reference.get("sha256"),
+        approval.get("authorization") == QUERY_PILOT_AUTHORIZATION,
+        consolidated_valid,
+        bool(activation_owner),
+        validate_query_activation_authorization(
+            activation, root=project_root, source_commit=source_commit,
+        ),
+        approval.get("actor") == draft.get("owner") == activation_owner,
+        finalization.get("schema")
+        == "query-controlled-demo-activation-finalization-v1",
+        finalization.get("source_commit") == source_commit,
+        finalization.get("bundle", {}).get("sha256")
+        == activation_bundle_sha256,
+        finalization.get("runtime_consumption_authorized") is False,
+        finalization.get("runtime_start_authorized") is False,
+        finalization.get("provider_traffic_authorized") is False,
+        finalization.get("pilot_dispatch_authorized") is False,
+        QUERY_PILOT_MINIMUM_DURATION <= duration
+        <= QUERY_PILOT_MAXIMUM_DURATION,
+        authorized_at <= materialized_at <= expires_at,
+        _pilot_schedule_valid(
+            schedule, template, source_commit=source_commit,
+            activation_bundle_sha256=activation_bundle_sha256,
+            authorized_at=authorized_at, expires_at=expires_at,
+        ),
+    )):
+        return None
+    return authorized_at, expires_at
+
+
 def runtime_consumption_authorization_status(
     environ: Mapping[str, str],
     *,
@@ -542,6 +756,21 @@ def runtime_consumption_authorization_status(
     )):
         return "invalid"
     assert authorization is not None
+    if authorization.get("schema") == "query-controlled-demo-pilot-authorization-v1":
+        window = _pilot_authorization_window(
+            authorization,
+            project_root=project_root,
+            source_commit=source_commit,
+            activation_bundle_sha256=activation_bundle_sha256,
+            enabled_flags=enabled_flags,
+        )
+        if window is None:
+            return "invalid"
+        authorized_at, expires_at = window
+        evaluation_time = now.astimezone(timezone.utc)
+        if evaluation_time < authorized_at:
+            return "invalid"
+        return "expired" if evaluation_time > expires_at else "authorized"
     draft_reference = authorization.get("runtime_draft")
     approval_reference = authorization.get("runtime_approval")
     draft = _load_contained_reference(draft_reference, project_root)
@@ -641,6 +870,8 @@ def runtime_consumption_authorization_status(
 __all__ = [
     "QUERY_ACTIVATION_AUTHORIZATION",
     "QUERY_OWNER_DECISION_AUTHORIZATION",
+    "QUERY_PILOT_AUTHORIZATION",
+    "QUERY_PILOT_CONTRACT_VERSION",
     "runtime_consumption_authorization_status",
     "validate_query_activation_authorization",
     "validate_query_owner_decision",

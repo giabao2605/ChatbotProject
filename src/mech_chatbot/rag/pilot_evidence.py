@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from mech_chatbot.evaluation.decomposition import normalize_decomposition_usage
 from mech_chatbot.governance.graph_pilot_review import APPROVED_GRAPH_REFUSALS
 from mech_chatbot.rag.evidence_gate import make_insufficient_evidence_message
 
@@ -327,6 +328,101 @@ def calculation_pilot_event_fields(
     }
 
 
+def query_decomposition_pilot_event_fields(
+    diagnostics: Mapping[str, Any],
+    answer: str,
+    budget: Any,
+    *,
+    final_latency_ms: int,
+    completion_outcome: str,
+    refusal_reason: str | None,
+) -> dict[str, Any] | None:
+    """Return metadata-only evidence for an actually decomposed request."""
+    if not 2 <= budget.subqueries <= 3:
+        return None
+    try:
+        usage = normalize_decomposition_usage(
+            diagnostics.get("decomposition_usage")
+        )
+    except ValueError:
+        usage = None
+    validation = diagnostics.get("pilot_request_validation")
+    validation = validation if isinstance(validation, Mapping) else {}
+    branches = usage["branches"] if usage is not None else ()
+    try:
+        intent_count = int(diagnostics.get("decomposition_intent_count") or 0)
+    except (OverflowError, TypeError, ValueError):
+        intent_count = 0
+    coverage = diagnostics.get("decomposition_intent_coverage")
+    coverage_complete = bool(
+        isinstance(coverage, Sequence)
+        and not isinstance(coverage, (str, bytes))
+        and len(coverage) == intent_count
+        and all(value is True for value in coverage)
+    )
+    security_passed = validation.get("access_scope_passed") is True
+    citation_passed = validation.get("citation_structure_passed") is True
+    provenance_passed = validation.get("provenance_passed") is True
+    leakage_detected = validation.get("leakage_passed") is not True
+    execution_contract_passed = all((
+        usage is not None,
+        len(branches) == budget.subqueries == intent_count,
+        coverage_complete,
+        diagnostics.get("decomposition_intent_overflow") is False,
+        budget.planners <= 1,
+        budget.corrections <= 1,
+        budget.provider_retries == 0,
+        not budget.deadline_exceeded,
+        security_passed,
+        not leakage_detected,
+    ))
+    answered = all((
+        execution_contract_passed,
+        completion_outcome == "answered",
+        budget.final_generations == 1,
+        citation_passed,
+        provenance_passed,
+    ))
+    safe_refusal = all((
+        execution_contract_passed,
+        diagnostics.get("answer_outcome") == "insufficient_evidence",
+        diagnostics.get("evidence_stage") == "terminal",
+        completion_outcome == "refused",
+        _approved_refusal_code(refusal_reason) is not None,
+        _refusal_template_valid(answer, refusal_reason),
+        budget.final_generations == 0,
+    ))
+    result_status = (
+        "valid" if answered else "safe_refusal" if safe_refusal else "invalid"
+    )
+    return {
+        "route": "query_decomposition",
+        "query_result_status": result_status,
+        "completion_outcome": completion_outcome,
+        "refusal_reason_code": _approved_refusal_code(refusal_reason),
+        "refusal_template_passed": _refusal_template_valid(
+            answer, refusal_reason
+        ),
+        "owner_review_required": result_status != "valid",
+        "security_passed": security_passed,
+        "citation_structure_passed": citation_passed,
+        "provenance_passed": provenance_passed,
+        "leakage_detected": leakage_detected,
+        "planner_calls": budget.planners,
+        "subquery_count": budget.subqueries,
+        "correction_count": budget.corrections,
+        "intent_count": intent_count,
+        "intent_coverage_complete": coverage_complete,
+        "deterministic_split_used": bool(
+            diagnostics.get("decomposition_used_fallback")
+        ),
+        "intent_overflow": bool(
+            diagnostics.get("decomposition_intent_overflow")
+        ),
+        **_budget_fields(diagnostics, budget, final_latency_ms),
+    }
+
+
 def pilot_request_event_fields(
     diagnostics: Mapping[str, Any],
     answer: str,
@@ -349,6 +445,15 @@ def pilot_request_event_fields(
             completion_outcome=completion_outcome,
             refusal_reason=refusal_reason,
         )
+    if budget.subqueries > 1:
+        return query_decomposition_pilot_event_fields(
+            diagnostics,
+            answer,
+            budget,
+            final_latency_ms=final_latency_ms,
+            completion_outcome=completion_outcome,
+            refusal_reason=refusal_reason,
+        )
     return None
 
 
@@ -358,4 +463,5 @@ __all__ = [
     "graph_pilot_event_fields",
     "graph_pilot_validation",
     "pilot_request_event_fields",
+    "query_decomposition_pilot_event_fields",
 ]

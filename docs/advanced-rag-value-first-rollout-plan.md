@@ -9,6 +9,15 @@
 - Theo đến cùng bốn tính năng chính: Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair. Chỉ dừng khi `accepted` hoặc chứng minh kỹ thuật rằng muốn tiến xa hơn phải phá ngưỡng đã khóa.
 - Community Summaries chỉ bắt đầu sau Graph accepted. Late Interaction giữ OFF vô thời hạn.
 
+## Checkpoint Query controlled-demo pilot preparation — 2026-08-26
+
+- Formal Query-only evidence trên `fe4dc37647b8078a2df4a73459c8ef65929b6de8` đã hoàn tất technical gate `3/3`, provider path `111/111` và human review `39/39`. Evidence này chỉ chứng minh quality; không tự authorize activation, runtime, traffic, pilot hoặc default rollout.
+- Activation bundle lịch sử bind `c22411a9be6c5edfd6869bb1c71dfc2add5f5864`; bundle đó không được dùng cho commit mới chứa pilot harness. Commit mới phải có activation draft và bundle mới bind exact source commit.
+- Offline pilot harness dùng contract `query-decomposition-24h-100-v1`: đúng `100` card freeze trước dispatch, từ card đầu đến card cuối đủ `24` giờ, concurrency `1`, zero retry/replacement/catch-up. WAL metadata-only khóa card và trace exactly-once; raw question, answer và trace ID không được lưu.
+- Per-request gate chấp nhận câu trả lời đầy đủ hợp lệ hoặc terminal `evidence_gate` safe refusal. Mọi safe refusal, invalid/failure và tối thiểu `20` trace phân tầng phải được owner review; automated gate không thể tự cấp default rollout.
+- Operator runbook và rollback giữ `.env`, Scheduled Task và Git remote nguyên trạng. Rollback dừng candidate runtime, chuyển về `all_off`, kiểm không còn flag bật và bảo toàn WAL/artifact.
+- Gate kế tiếp được gom thành một consolidated approval bind exact clean source commit, activation draft, frozen schedule plan và thời hạn `24h10m–26h`. Approval đó chỉ cho finalizer materialize activation + pilot authorization; finalizer không start runtime, không phát provider traffic và không dispatch pilot. Actual runtime launch/traffic chỉ xảy ra ở bước operator launch sau khi exact consolidated approval đã được ghi nhận.
+
 ## Checkpoint Grounded Math default rollout và Query readiness — 2026-08-22
 
 - Grounded Math đã hoàn tất campaign `19aacefbe67b1aa3907a490c` đúng `100/100`, owner review `20/20`, interaction matrix `64/64`, rollback live và same-bundle restart. Signed default-rollout ledger chỉ accept `RAG_GROUNDED_MATH_ENABLED`; bundle `selective` bind exact commit `67265a0bd6135f9f205521e99bd51870a955b014`. Control `8210` giữ `all_off`, candidate `8200` là Math-only; Scheduled Task `ChatBotProject-GroundedMath-Operator-Window13` đã `Disabled`.
