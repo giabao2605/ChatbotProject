@@ -113,7 +113,7 @@ def test_retrieve_many_batches_dense_and_sparse_for_three_strict_branches():
     assert sparse.calls == ["query 1", "query 2", "query 3"]
     assert len(client.calls) == 2
     assert [len(call["requests"]) for call in client.calls] == [3, 3]
-    assert all(call["timeout"] == 3 for call in client.calls)
+    assert all(call["timeout"] == 10 for call in client.calls)
     assert all(
         request.filter == strict_filter
         for call in client.calls
@@ -128,6 +128,39 @@ def test_retrieve_many_batches_dense_and_sparse_for_three_strict_branches():
         for result in results
     )
     assert [len(result[0]) for result in results] == [1, 1, 1]
+
+
+def test_retrieve_many_uses_configured_qdrant_timeout_without_retry():
+    client = _BatchClient()
+    vectorstore = SimpleNamespace(
+        embeddings=_DenseEmbeddings(),
+        sparse_embeddings=_SparseEmbeddings(),
+        vector_name="",
+        sparse_vector_name="sparse",
+        content_payload_key="page_content",
+        metadata_payload_key="metadata",
+    )
+
+    _retrieve_many(
+        (
+            {
+                "new_part_ids": ["PART-1"],
+                "strict_filter": models.Filter(),
+                "broad_filter": models.Filter(),
+                "is_bom_query": False,
+                "query_to_search": "query 1",
+                "rbac_filter": models.Filter(),
+                "trace_id": "configured-timeout-trace",
+            },
+        ),
+        vectorstore=vectorstore,
+        client=client,
+        collection_name="test-knowledge",
+        qdrant_timeout_seconds=10,
+    )
+
+    assert len(client.calls) == 2
+    assert [call["timeout"] for call in client.calls] == [10, 10]
 
 
 def test_retrieve_many_batches_broad_reads_only_for_bom_or_empty_strict():
@@ -338,6 +371,7 @@ def test_retrieve_many_dense_batch_failure_traces_sanitized_source_and_stage(
             vectorstore=vectorstore,
             client=_DenseWrappedFailureClient(),
             collection_name="test-knowledge",
+            qdrant_timeout_seconds=10,
         )
 
     failure = next(
@@ -348,6 +382,8 @@ def test_retrieve_many_dense_batch_failure_traces_sanitized_source_and_stage(
     assert failure["error"] == "ResponseHandlingException"
     assert failure["error_source"] == "ConnectionResetError"
     assert failure["batch_stage"] == "dense_query"
+    assert failure["timeout_seconds"] == 10
+    assert failure["batch_size"] == 1
     assert failure["retry_attempted"] is False
 
 
@@ -423,6 +459,7 @@ def test_retrieve_many_deadline_after_initial_batch_prevents_broad_traffic(
         )
 
     assert len(client.calls) == 2
+    assert [call["timeout"] for call in client.calls] == [4, 4]
 
 
 @pytest.mark.parametrize(

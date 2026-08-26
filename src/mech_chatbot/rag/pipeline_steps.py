@@ -63,7 +63,7 @@ from mech_chatbot.rag.execution import (
 )
 
 _RETRIEVE_UNSET = object()
-_QDRANT_SEARCH_TIMEOUT_SECONDS = 3
+_QDRANT_SEARCH_TIMEOUT_SECONDS = 10
 _BM25_SEARCH_TIMEOUT_SECONDS = _QDRANT_SEARCH_TIMEOUT_SECONDS
 
 _PROVIDER_ERROR_PREFIXES = (
@@ -340,6 +340,7 @@ def _explicit_hybrid_rrf_batch(
     vectorstore,
     client,
     collection_name,
+    qdrant_timeout_seconds=_QDRANT_SEARCH_TIMEOUT_SECONDS,
     deadline_monotonic=None,
 ):
     """Batch dense and sparse reads without overlapping one Qdrant client."""
@@ -347,6 +348,7 @@ def _explicit_hybrid_rrf_batch(
     if not requests:
         return ()
     batch_stage = "setup"
+    effective_timeout_seconds = None
     try:
         from qdrant_client import models
 
@@ -363,6 +365,10 @@ def _explicit_hybrid_rrf_batch(
             raise RuntimeError("Qdrant batch embedding result count mismatch")
 
         batch_stage = "dense_query"
+        effective_timeout_seconds = _remaining_qdrant_timeout(
+            qdrant_timeout_seconds,
+            deadline_monotonic,
+        )
         dense_responses = client.query_batch_points(
             collection_name=collection_name,
             requests=[
@@ -376,10 +382,7 @@ def _explicit_hybrid_rrf_batch(
                 )
                 for request, vector in zip(requests, dense_vectors, strict=True)
             ],
-            timeout=_remaining_qdrant_timeout(
-                _QDRANT_SEARCH_TIMEOUT_SECONDS,
-                deadline_monotonic,
-            ),
+            timeout=effective_timeout_seconds,
         )
         dense_ms = int((time.perf_counter() - dense_started) * 1000)
         if len(dense_responses) != len(requests):
@@ -400,6 +403,10 @@ def _explicit_hybrid_rrf_batch(
             if len(sparse_vectors) != len(requests):
                 raise RuntimeError("Qdrant sparse embedding result count mismatch")
             batch_stage = "sparse_query"
+            effective_timeout_seconds = _remaining_qdrant_timeout(
+                qdrant_timeout_seconds,
+                deadline_monotonic,
+            )
             sparse_responses = client.query_batch_points(
                 collection_name=collection_name,
                 requests=[
@@ -420,10 +427,7 @@ def _explicit_hybrid_rrf_batch(
                         strict=True,
                     )
                 ],
-                timeout=_remaining_qdrant_timeout(
-                    _BM25_SEARCH_TIMEOUT_SECONDS,
-                    deadline_monotonic,
-                ),
+                timeout=effective_timeout_seconds,
             )
             if len(sparse_responses) != len(requests):
                 raise RuntimeError("Qdrant sparse batch result count mismatch")
@@ -487,6 +491,8 @@ def _explicit_hybrid_rrf_batch(
                     error=type(exc).__name__,
                     error_source=source_type,
                     batch_stage=batch_stage,
+                    timeout_seconds=effective_timeout_seconds,
+                    batch_size=len(requests),
                     retry_attempted=False,
                 )
         raise
@@ -504,6 +510,7 @@ def _explicit_hybrid_rrf(
     vectorstore,
     client,
     collection_name,
+    qdrant_timeout_seconds=_QDRANT_SEARCH_TIMEOUT_SECONDS,
 ):
     """Run dense and BM25 independently, then fuse their ranks explicitly.
 
@@ -544,7 +551,7 @@ def _explicit_hybrid_rrf(
             query,
             k=dense_top_k,
             filter=payload_filter,
-            timeout=_QDRANT_SEARCH_TIMEOUT_SECONDS,
+            timeout=qdrant_timeout_seconds,
         )
         dense_ms = int((time.perf_counter() - t_dense) * 1000)
         t_bm25 = time.perf_counter()
@@ -554,7 +561,7 @@ def _explicit_hybrid_rrf(
                 query,
                 k=sparse_top_k,
                 filter=payload_filter,
-                timeout=_BM25_SEARCH_TIMEOUT_SECONDS,
+                timeout=qdrant_timeout_seconds,
             )
         except Exception as exc:
             if current_execution_context() == "evaluation":
@@ -628,7 +635,7 @@ def _explicit_hybrid_rrf(
             search_kwargs={
                 "k": result_cap,
                 "filter": payload_filter,
-                "timeout": _BM25_SEARCH_TIMEOUT_SECONDS,
+                "timeout": qdrant_timeout_seconds,
             },
         ).invoke(query)
         return list(fallback or []), "hybrid_fallback"
@@ -1565,6 +1572,7 @@ def _retrieve_many(
     vectorstore,
     client,
     collection_name,
+    qdrant_timeout_seconds=_QDRANT_SEARCH_TIMEOUT_SECONDS,
     deadline_monotonic=None,
 ):
     """Retrieve up to three decomposition branches through Qdrant batches."""
@@ -1579,6 +1587,7 @@ def _retrieve_many(
         vectorstore=vectorstore,
         client=client,
         collection_name=collection_name,
+        qdrant_timeout_seconds=qdrant_timeout_seconds,
         deadline_monotonic=deadline_monotonic,
     )
     broad_indices = tuple(
@@ -1593,6 +1602,7 @@ def _retrieve_many(
         vectorstore=vectorstore,
         client=client,
         collection_name=collection_name,
+        qdrant_timeout_seconds=qdrant_timeout_seconds,
         deadline_monotonic=deadline_monotonic,
     )
     broad_by_index = {
@@ -1613,7 +1623,8 @@ def _retrieve_many(
 
 def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
               query_to_search, rbac_filter, trace_id=None, vectorstore,
-              client, collection_name, dense_top_k=None, sparse_top_k=None):
+              client, collection_name, dense_top_k=None, sparse_top_k=None,
+              qdrant_timeout_seconds=_QDRANT_SEARCH_TIMEOUT_SECONDS):
     """BUOC: truy xuat tai lieu (strict_exact / broad_fallback / general).
     Tra ve (retrieved_docs, base_k, retrieval_mode, t_retrieval, active_filter_or_sentinel).
     active_filter tra _RETRIEVE_UNSET neu chua set (duong hiem) de caller bind co dieu kien,
@@ -1639,6 +1650,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                 vectorstore=vectorstore,
                 client=client,
                 collection_name=collection_name,
+                qdrant_timeout_seconds=qdrant_timeout_seconds,
             )
             retrieval_mode = f"strict_exact:{strict_mode}"
             active_filter = strict_filter
@@ -1656,14 +1668,15 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                 broad_docs, broad_mode = _explicit_hybrid_rrf(
                     query_to_search,
                     broad_filter,
-                dense_top_k=dense_top_k or base_k * 2,
-                sparse_top_k=sparse_top_k or base_k * 2,
-                result_cap=base_k * 2,
-                trace_id=trace_id,
-                phase="broad_fallback",
-                vectorstore=vectorstore,
-                client=client,
-                collection_name=collection_name,
+                    dense_top_k=dense_top_k or base_k * 2,
+                    sparse_top_k=sparse_top_k or base_k * 2,
+                    result_cap=base_k * 2,
+                    trace_id=trace_id,
+                    phase="broad_fallback",
+                    vectorstore=vectorstore,
+                    client=client,
+                    collection_name=collection_name,
+                    qdrant_timeout_seconds=qdrant_timeout_seconds,
                 )
                 retrieval_mode = f"broad_fallback:{broad_mode}"
                 active_filter = broad_filter
@@ -1708,6 +1721,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
             vectorstore=vectorstore,
             client=client,
             collection_name=collection_name,
+            qdrant_timeout_seconds=qdrant_timeout_seconds,
         )
         retrieval_mode = f"general:{general_mode}"
         active_filter = general_filter
@@ -1808,6 +1822,7 @@ def _route(*, user_question, conversation_context, response_language,
         crag_fast_routes_enabled=bool(
             getattr(runtime, "crag_enabled", False)
         ),
+        semantic_router=getattr(runtime, "semantic_router", None),
     )
     is_chitchat = _route_result.is_chitchat()
     log_trace("route", trace_id, route=_route_result.route, layer=_route_result.layer,

@@ -32,6 +32,7 @@ def test_settings_parse_one_explicit_environment_snapshot():
         "SERVING_RECONCILE_BATCH_SIZE": "250",
         "QDRANT_URL": "https://qdrant.example",
         "QDRANT_API_KEY": "qdrant-secret",
+        "QDRANT_SEARCH_TIMEOUT_SECONDS": "12",
         "PROXYLLM_API_KEY": "llm-secret",
         "PROXYLLM_BASE_URL": "https://llm.example/v1",
         "GPT_VISION_JPEG_QUALITY": "90",
@@ -47,6 +48,7 @@ def test_settings_parse_one_explicit_environment_snapshot():
         "https://two.example",
     )
     assert settings.PUBLICATION_RECONCILE_INTERVAL_SECONDS == 21
+    assert settings.QDRANT_SEARCH_TIMEOUT_SECONDS == 12
     assert settings.LLM_API_KEY == "llm-secret"
 
 

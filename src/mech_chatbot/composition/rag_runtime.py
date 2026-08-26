@@ -137,6 +137,7 @@ class RagRetrievalRuntime:
     semantic_router_enabled: bool = True
     semantic_router_threshold: float = 0.62
     semantic_router_margin: float = 0.04
+    semantic_router: Any = field(default=None, repr=False)
     safety_block_enabled: bool = True
     safety_extra_injection: tuple[str, ...] = ()
     safety_extra_abuse: tuple[str, ...] = ()
@@ -263,6 +264,9 @@ def _runtime_identity(
             retrieval,
             "collection_name",
             settings.QDRANT_COLLECTION,
+        ),
+        "qdrant_search_timeout_seconds": (
+            settings.QDRANT_SEARCH_TIMEOUT_SECONDS
         ),
         "sql_database": settings.SQL_DATABASE,
         "activation_bundle_sha256": settings.RAG_ACTIVATION_BUNDLE_SHA256,
@@ -522,9 +526,26 @@ def _build_default_adapters(
 ) -> tuple[RagRetrievalRuntime, RagProviderAdapter]:
     """Construct external adapters only when the composition root is called."""
     process = RagProcessSettings.from_settings(settings)
+    qdrant_timeout_seconds = settings.QDRANT_SEARCH_TIMEOUT_SECONDS
+    if qdrant_timeout_seconds <= 0:
+        raise ValueError("Qdrant search timeout must be a positive integer")
     vector_runtime, provider, vision_model = _build_external_stack(
         settings, qdrant_builder, llm_builder, vision_builder
     )
+    semantic_embedder = getattr(
+        getattr(vector_runtime.vector_store, "embeddings", None),
+        "embed_query",
+        None,
+    )
+    semantic_router = None
+    if process.semantic_router_enabled and callable(semantic_embedder):
+        from mech_chatbot.rag.interaction_router import SemanticRouter
+
+        semantic_router = SemanticRouter(
+            semantic_embedder,
+            threshold=process.semantic_router_threshold,
+            margin=process.semantic_router_margin,
+        ).prepare()
     late_config, late_query_encoder = _build_late_dependencies(
         settings, process, late_encoder_builder
     )
@@ -538,12 +559,14 @@ def _build_default_adapters(
         vectorstore=vector_runtime.vector_store,
         client=vector_runtime.qdrant_client,
         collection_name=vector_runtime.collection_name,
+        qdrant_timeout_seconds=qdrant_timeout_seconds,
     )
     composed_retrieve_many = partial(
         retrieve_many_function,
         vectorstore=vector_runtime.vector_store,
         client=vector_runtime.qdrant_client,
         collection_name=vector_runtime.collection_name,
+        qdrant_timeout_seconds=qdrant_timeout_seconds,
     )
     return (
         RagRetrievalRuntime(
@@ -553,6 +576,7 @@ def _build_default_adapters(
             vectorstore=vector_runtime.vector_store,
             vision_model=vision_model,
             collection_name=vector_runtime.collection_name,
+            semantic_router=semantic_router,
             late_interaction_config=late_config,
             late_query_encoder=late_query_encoder,
             intent_runtime=intent_runtime,

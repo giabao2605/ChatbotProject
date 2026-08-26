@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from mech_chatbot.rag import chitchat
@@ -51,6 +52,7 @@ LAYER_RULE = "L0_rule"
 LAYER_SEMANTIC = "L1_semantic"
 LAYER_LLM = "L2_llm"
 LAYER_DEFAULT = "default"
+_UNSET = object()
 
 DEFAULT_ROUTE = ROUTE_TECHNICAL
 
@@ -234,15 +236,16 @@ class SemanticRouter:
         self._margin = margin
         self._proto_vecs = None
 
-    def _safe_embed(self, text):
+    @staticmethod
+    def _safe_vector(value):
         try:
-            v = self._embedder(text)
+            return [float(x) for x in value]
         except Exception:
             return None
-        if v is None:
-            return None
+
+    def _safe_embed(self, text):
         try:
-            return [float(x) for x in v]
+            return self._safe_vector(self._embedder(text))
         except Exception:
             return None
 
@@ -255,15 +258,24 @@ class SemanticRouter:
             for s in samples:
                 v = self._safe_embed(s)
                 if v:
-                    rv.append(v)
+                    rv.append(tuple(v))
             if rv:
-                vecs[route] = rv
-        self._proto_vecs = vecs
+                vecs[route] = tuple(rv)
+        self._proto_vecs = MappingProxyType(vecs)
 
-    def route_scores(self, text) -> List[Tuple[str, float]]:
+    def prepare(self):
+        """Build the immutable process-owned prototype index before serving."""
+        self._ensure_prototypes()
+        return self
+
+    def route_scores(self, text, *, query_vector=_UNSET) -> List[Tuple[str, float]]:
         if not text or not str(text).strip():
             return []
-        q = self._safe_embed(text)
+        q = (
+            self._safe_embed(text)
+            if query_vector is _UNSET
+            else self._safe_vector(query_vector)
+        )
         if not q:
             return []
         self._ensure_prototypes()
@@ -278,8 +290,8 @@ class SemanticRouter:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores
 
-    def classify(self, text) -> Tuple[Optional[str], float, float]:
-        scores = self.route_scores(text)
+    def classify(self, text, *, query_vector=_UNSET) -> Tuple[Optional[str], float, float]:
+        scores = self.route_scores(text, query_vector=query_vector)
         if not scores:
             return (None, 0.0, 0.0)
         top_route, top_score = scores[0]
@@ -332,6 +344,7 @@ def classify(
     semantic_threshold=0.62,
     semantic_margin=0.04,
     crag_fast_routes_enabled=False,
+    semantic_router=None,
 ) -> RouteResult:
     """L-1 safety -> L0 (luat) -> L1 (semantic) -> L2 (LLM fallback) -> fallback technical."""
     # L-1: safety guard chay TRUOC tien.
@@ -361,7 +374,7 @@ def classify(
 
     # L1: semantic router (neu bat + co embedder).
     if semantic_enabled:
-        router = (
+        router = semantic_router or (
             SemanticRouter(
                 embedder,
                 threshold=semantic_threshold,
@@ -371,7 +384,16 @@ def classify(
             else None
         )
         if router is not None:
-            route, score, _second = router.classify(text)
+            query_vector = _UNSET
+            if semantic_router is not None:
+                try:
+                    query_vector = embedder(text)
+                except Exception:
+                    query_vector = None
+            route, score, _second = router.classify(
+                text,
+                query_vector=query_vector,
+            )
             if route in ALL_ROUTES:
                 return RouteResult(route, LAYER_SEMANTIC, confidence=float(score))
 

@@ -149,6 +149,7 @@ def test_rag_runtime_binds_trace_events_to_the_live_runtime_identity():
         RAG_REQUEST_DEADLINE_SECONDS=90.0,
         SQL_DATABASE="pilot-sql",
         QDRANT_COLLECTION="configured-collection",
+        QDRANT_SEARCH_TIMEOUT_SECONDS=11,
         LLM_BASE_URL="https://llm.invalid/v1",
     )
     retrieval = SimpleNamespace(collection_name="live-collection")
@@ -172,6 +173,7 @@ def test_rag_runtime_binds_trace_events_to_the_live_runtime_identity():
             provider_configuration_sha256_for_settings(settings)
         ),
         "qdrant_collection": "live-collection",
+        "qdrant_search_timeout_seconds": 11,
         "sql_database": "pilot-sql",
         "activation_bundle_sha256": "a" * 64,
         "restore_evidence_sha256": "b" * 64,
@@ -228,6 +230,118 @@ def test_rag_runtime_composes_provider_vector_and_vision_adapters_explicitly():
     assert runtime.retrieval.late_query_encoder is None
     assert runtime.provider is provider
     assert set(observed) == {"qdrant", "llm", "vision"}
+
+    runtime.close()
+
+
+def test_rag_runtime_binds_configured_qdrant_timeout_to_batch_retrieval():
+    from qdrant_client import models
+
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+
+    calls = []
+
+    class Client:
+        def query_batch_points(self, **kwargs):
+            calls.append(kwargs)
+            return [SimpleNamespace(points=[]) for _ in kwargs["requests"]]
+
+        def close(self):
+            return None
+
+    vectorstore = SimpleNamespace(
+        embeddings=SimpleNamespace(embed_query=lambda _text: [0.1, 0.2]),
+        sparse_embeddings=SimpleNamespace(
+            embed_query=lambda _text: SimpleNamespace(
+                indices=[1],
+                values=[1.0],
+            )
+        ),
+        vector_name="",
+        sparse_vector_name="sparse",
+        content_payload_key="page_content",
+        metadata_payload_key="metadata",
+    )
+    runtime = build_rag_runtime(
+        Settings(
+            QDRANT_SEARCH_TIMEOUT_SECONDS=11,
+            RERANK_PROVIDER="local_fusion",
+            USE_VOYAGE_RERANK=False,
+        ),
+        execute_pipeline=lambda state: state.prepared((iter(()), "", [], [], {})),
+        qdrant_builder=lambda settings: SimpleNamespace(
+            qdrant_client=Client(),
+            vector_store=vectorstore,
+            collection_name=settings.collection,
+        ),
+        llm_builder=lambda _settings: SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: None
+        ),
+        vision_builder=lambda _settings: object(),
+        intent_runtime_builder=lambda **_kwargs: None,
+    )
+
+    runtime.retrieval.retrieve_many(
+        (
+            {
+                "new_part_ids": [],
+                "strict_filter": models.Filter(),
+                "broad_filter": models.Filter(),
+                "is_bom_query": False,
+                "query_to_search": "query 1",
+                "rbac_filter": models.Filter(),
+                "trace_id": "runtime-timeout-trace",
+            },
+        )
+    )
+
+    assert [call["timeout"] for call in calls] == [11, 11]
+
+    runtime.close()
+
+
+def test_rag_runtime_owns_one_semantic_router_prototype_index():
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+    from mech_chatbot.rag import interaction_router, route_config
+
+    calls = []
+
+    def embed(text):
+        calls.append(text)
+        return [1.0, 0.0]
+
+    runtime = build_rag_runtime(
+        Settings(
+            RERANK_PROVIDER="local_fusion",
+            USE_VOYAGE_RERANK=False,
+        ),
+        execute_pipeline=lambda state: state.prepared((iter(()), "", [], [], {})),
+        qdrant_builder=lambda settings: SimpleNamespace(
+            qdrant_client=SimpleNamespace(close=lambda: None),
+            vector_store=SimpleNamespace(
+                embeddings=SimpleNamespace(embed_query=embed),
+            ),
+            collection_name=settings.collection,
+        ),
+        llm_builder=lambda _settings: SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: None
+        ),
+        vision_builder=lambda _settings: object(),
+        intent_runtime_builder=lambda **_kwargs: None,
+    )
+
+    prototype_count = sum(len(items) for items in route_config.ROUTE_PROTOTYPES.values())
+    assert len(calls) == prototype_count
+
+    for question in ("ambiguous alpha", "ambiguous beta"):
+        interaction_router.classify(
+            question,
+            embedder=embed,
+            llm_classifier=lambda *_args: None,
+            semantic_router=runtime.retrieval.semantic_router,
+        )
+
+    assert len(calls) == prototype_count + 2
 
     runtime.close()
 

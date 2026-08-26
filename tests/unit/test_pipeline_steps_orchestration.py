@@ -14,6 +14,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from mech_chatbot.rag import interaction_router
+
 
 pytestmark = pytest.mark.unit
 
@@ -96,6 +98,29 @@ def _route(steps, question, lifecycle, *, runtime=None):
         runtime=runtime or _route_runtime(),
         invoke_provider=lambda *_args, **_kwargs: None,
     )
+
+
+def test_route_reuses_one_process_owned_semantic_prototype_index(steps):
+    calls = []
+
+    def embed(text):
+        calls.append(text)
+        return [1.0, 0.0]
+
+    semantic_router = interaction_router.SemanticRouter(
+        embed,
+        prototypes={interaction_router.ROUTE_OUT_OF_SCOPE: ["prototype"]},
+        threshold=0.9,
+        margin=0.1,
+    )
+    runtime = _route_runtime(embed_query=embed)
+    runtime.semantic_router_enabled = True
+    runtime.semantic_router = semantic_router
+
+    _route(steps, "ambiguous alpha", _Lifecycle(), runtime=runtime)
+    _route(steps, "ambiguous beta", _Lifecycle(), runtime=runtime)
+
+    assert calls == ["ambiguous alpha", "prototype", "ambiguous beta"]
 
 
 def test_history_window_keeps_recent_turns_within_the_configured_budget(

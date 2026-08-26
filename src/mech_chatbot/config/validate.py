@@ -29,6 +29,7 @@ NUMERIC_INT = [
     "GPT_MAX_OUTPUT_TOKENS", "RERANK_TOP_N_CAP",
     "INTENT_MAX_WORKERS", "PARENT_CONTEXT_MAX_WORKERS", "METADATA_TEXT_LIMIT", "PDF_RENDER_DPI",
     "GPT_VISION_MAX_OUTPUT_TOKENS", "GPT_VISION_JPEG_QUALITY", "RAG_WORKER_TIMEOUT",
+    "QDRANT_SEARCH_TIMEOUT_SECONDS",
 ]
 NUMERIC_FLOAT = [
     "GPT_TEMPERATURE", "GPT_TIMEOUT_SECONDS", "GPT_MIN_INTERVAL_SECONDS",
@@ -49,7 +50,8 @@ _SUMMARY_KEYS = (
         "EMBEDDING_DEVICE",
         "SQL_SERVER", "SQL_DATABASE", "SQL_DRIVER", "SQL_USERNAME",
         "SQL_TRUSTED_CONNECTION", "SQL_PASSWORD",
-        "QDRANT_COLLECTION", "GPT_MODEL_NAME", "MAX_CONCURRENT_RAG",
+        "QDRANT_COLLECTION", "QDRANT_SEARCH_TIMEOUT_SECONDS",
+        "GPT_MODEL_NAME", "MAX_CONCURRENT_RAG",
         "RAG_SERVER_HOST", "RAG_SERVER_PORT", "RAG_REQUIRE_SERVICE_AUTH",
         "RAG_SERVICE_TOKEN", "RERANK_PROVIDER", "USE_VOYAGE_RERANK",
         "VOYAGE_RERANK_MODEL", "VOYAGE_RERANK_TIMEOUT_SECONDS", "VOYAGE_API_KEY",
@@ -155,6 +157,10 @@ def validate_config(env=None, *, require_qdrant=True, require_llm=True,
         v = _get(env, k)
         if v and not _is_float(v):
             errors.append(f"{k}='{v}' phai la so thuc")
+
+    qdrant_timeout = _get(env, "QDRANT_SEARCH_TIMEOUT_SECONDS")
+    if qdrant_timeout and _is_int(qdrant_timeout) and int(qdrant_timeout) <= 0:
+        errors.append("QDRANT_SEARCH_TIMEOUT_SECONDS phai lon hon 0")
 
     return errors, warnings
 

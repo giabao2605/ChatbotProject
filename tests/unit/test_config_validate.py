@@ -90,6 +90,18 @@ class TestValidateConfig:
         errors, _ = cfg.validate_config(env)
         assert any("VOYAGE_RERANK_TIMEOUT_SECONDS" in e for e in errors)
 
+    @pytest.mark.parametrize("value", ["0", "-1"])
+    def test_qdrant_search_timeout_must_be_positive(self, value):
+        env = _full_env()
+        env["QDRANT_SEARCH_TIMEOUT_SECONDS"] = value
+
+        errors, _ = cfg.validate_config(env)
+
+        assert any(
+            "QDRANT_SEARCH_TIMEOUT_SECONDS" in error and "lon hon 0" in error
+            for error in errors
+        )
+
     def test_can_skip_groups(self):
         # Chi kiem qdrant, bo qua llm/sql/embedding
         env = {"QDRANT_URL": "x", "QDRANT_API_KEY": "y"}

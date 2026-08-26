@@ -385,7 +385,7 @@ def test_slow_bm25_search_uses_bounded_dense_fallback(
 
     assert documents == [dense_document]
     assert mode == "explicit_dense_fallback"
-    assert sparse_calls[0]["timeout"] == 3
+    assert sparse_calls[0]["timeout"] == 10
     bm25_event = next(
         event for event in trace_events if event["event"] == "bm25_retrieval"
     )
@@ -471,7 +471,7 @@ def test_dense_search_uses_bounded_qdrant_timeout(load_steps, monkeypatch):
         collection_name="test",
     )
 
-    assert dense_calls[0]["timeout"] == 3
+    assert dense_calls[0]["timeout"] == 10
 
 
 def test_empty_exact_retrieval_broadens_without_exposing_unservable_documents(

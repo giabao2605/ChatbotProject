@@ -337,6 +337,7 @@ VOYAGE_RERANK_TIMEOUT_SECONDS=15
 # Vector Database
 QDRANT_URL=<your-qdrant-cloud-url>
 QDRANT_API_KEY=<your-qdrant-api-key>
+QDRANT_SEARCH_TIMEOUT_SECONDS=10
 
 # Embedding
 EMBEDDING_MODEL=BAAI/bge-m3

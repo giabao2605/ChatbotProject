@@ -55,6 +55,7 @@ class Settings(BaseModel):
     QDRANT_COLLECTION: str = "TaiLieuKyThuat_v2"
     QDRANT_URL: Optional[str] = None
     QDRANT_API_KEY: Optional[str] = None
+    QDRANT_SEARCH_TIMEOUT_SECONDS: int = 10
 
     # --- Embedding (ingestion/pdf/config, rag/bootstrap, ui/pages/settings) -
     EMBEDDING_MODEL: str = "BAAI/bge-m3"
@@ -279,6 +280,10 @@ class Settings(BaseModel):
             QDRANT_COLLECTION=_str("QDRANT_COLLECTION", "TaiLieuKyThuat_v2"),
             QDRANT_URL=_str("QDRANT_URL"),
             QDRANT_API_KEY=_str("QDRANT_API_KEY"),
+            QDRANT_SEARCH_TIMEOUT_SECONDS=_int(
+                "QDRANT_SEARCH_TIMEOUT_SECONDS",
+                10,
+            ),
             # Embedding
             EMBEDDING_MODEL=_str("EMBEDDING_MODEL", "BAAI/bge-m3"),
             EMBEDDING_DEVICE=_str("EMBEDDING_DEVICE", "cpu"),

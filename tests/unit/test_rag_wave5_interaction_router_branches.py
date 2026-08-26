@@ -113,6 +113,30 @@ def test_semantic_router_handles_one_route_and_reuses_prototype_vectors():
     assert calls.count("capability") == 1
 
 
+def test_prepared_semantic_router_fails_closed_when_request_embedding_raises():
+    semantic = router.SemanticRouter(
+        lambda _text: [1.0, 0.0],
+        prototypes={router.ROUTE_CAPABILITY: ["capability"]},
+        threshold=0.9,
+        margin=0.1,
+    ).prepare()
+
+    result = router.classify(
+        "ambiguous public question",
+        embedder=lambda _text: (_ for _ in ()).throw(
+            RuntimeError("embedding failed")
+        ),
+        llm_classifier=lambda *_args: None,
+        semantic_router=semantic,
+    )
+
+    assert result == router.RouteResult(
+        router.DEFAULT_ROUTE,
+        router.LAYER_DEFAULT,
+        confidence=0.0,
+    )
+
+
 def test_explicit_embedder_is_request_scoped_and_malformed_llm_results_fail_closed():
     embedder = lambda text: [1.0, 0.0]
     first = router.classify("ambiguous public question", embedder=embedder)
