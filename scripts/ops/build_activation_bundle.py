@@ -152,7 +152,9 @@ def build_activation_bundle(
         output_path = project_root / output_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
     raw = (json.dumps(bundle, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    output_path.write_bytes(raw)
+    temporary_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    temporary_path.write_bytes(raw)
+    temporary_path.replace(output_path)
     return bundle, hashlib.sha256(raw).hexdigest()
 
 

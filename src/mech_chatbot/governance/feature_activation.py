@@ -9,6 +9,7 @@ import base64
 import binascii
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import os
 from pathlib import Path
@@ -27,6 +28,10 @@ from mech_chatbot.governance.artifact_references import (
 )
 from mech_chatbot.governance.crag_demo_authorization import (
     validate_crag_demo_authorization,
+)
+from mech_chatbot.governance.query_activation_contract import (
+    runtime_consumption_authorization_status,
+    validate_query_activation_authorization,
 )
 from mech_chatbot.governance.review_governance import review_governance_status
 from mech_chatbot.governance.rollout_guardrails import (
@@ -117,8 +122,13 @@ _CONTROLLED_DEMO_SCHEMAS = {
         for milestone, flags in MILESTONE_FLAGS.items()
     },
     "crag": "crag-controlled-demo-authorization-v1",
+    "query_decomposition": "query-controlled-demo-activation-authorization-v1",
     "graph_retrieval": "rollout-guardrail-series-v1",
 }
+_RUNTIME_CONSUMPTION_ENV = (
+    "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH",
+    "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256",
+)
 _RELEASE_AUTHORITY_PUBLIC_KEY = (
     Path("data") / "integrated_hardening_v1"
     / "release-authority-public-key.pem"
@@ -258,6 +268,10 @@ def _milestone_artifact_valid(
         validate_crag_demo_authorization(artifact, root=root).get("passed") is True
     ):
         return False
+    if expected_schema == "query-controlled-demo-activation-authorization-v1":
+        return validate_query_activation_authorization(
+            artifact, root=root, source_commit=source_commit,
+        )
     if (
         expected_schema == "retrieval-intelligence-gate-v1"
         and artifact.get("stage") != milestone
@@ -524,6 +538,9 @@ def _activation_preflight(
 ) -> tuple[ActivationStatus | None, str | None]:
     execution_context = str(env.get("RAG_EXECUTION_CONTEXT", "production")).strip().casefold()
     declared_profile = str(env.get("RAG_ACTIVATION_PROFILE") or "").strip().casefold()
+    runtime_authorization_declared = any(
+        str(env.get(name) or "").strip() for name in _RUNTIME_CONSUMPTION_ENV
+    )
     def invalid(reason: str) -> tuple[ActivationStatus, None]:
         return _status(False, False, scope, reason, enabled), None
 
@@ -537,6 +554,8 @@ def _activation_preflight(
     )
     if structural_failure:
         return invalid(structural_failure)
+    if runtime_authorization_declared and scope != "controlled_demo":
+        return invalid("runtime_consumption_authorization_scope_invalid")
     enabled_set = frozenset(enabled)
     if declared_profile and (
         declared_profile not in ACTIVATION_PROFILE_NAMES
@@ -549,7 +568,10 @@ def _activation_preflight(
             return invalid("evaluation_scope_requires_non_live_context")
         return _status(True, False, scope, "evaluation_override", enabled, profile=declared_profile or None), None
     if not enabled:
-        bundle_keys = ("RAG_ACTIVATION_BUNDLE_PATH", "RAG_ACTIVATION_BUNDLE_SHA256")
+        bundle_keys = (
+            "RAG_ACTIVATION_BUNDLE_PATH", "RAG_ACTIVATION_BUNDLE_SHA256",
+            *_RUNTIME_CONSUMPTION_ENV,
+        )
         if any(str(env.get(name) or "").strip() for name in bundle_keys):
             return invalid("all_off_bundle_forbidden")
         return _status(True, True, scope, "all_features_disabled", enabled,
@@ -758,6 +780,7 @@ def activation_status(
     *,
     root: str | Path = ".",
     current_commit: str | None = None,
+    now: datetime | None = None,
 ) -> ActivationStatus:
     """Validate one process activation without trusting mutable env flags alone."""
     env = os.environ if environ is None else environ
@@ -787,9 +810,43 @@ def activation_status(
     )
     if failure is not None:
         return failure
-    return _authorize_activation(
+    status = _authorize_activation(
         bundle, ledger, project_root, source_commit, scope, enabled, profile,
         review_mode, digest,
+    )
+    if scope != "controlled_demo" or not status.valid:
+        return status
+    evaluation_time = now or datetime.now(timezone.utc)
+    if evaluation_time.tzinfo is None:
+        return _activation_evidence_failure(
+            scope, "runtime_consumption_authorization_invalid", enabled,
+            profile=profile, review_mode=review_mode,
+            source_commit=source_commit, digest=digest,
+        )
+    runtime_authorization = runtime_consumption_authorization_status(
+        env,
+        root=project_root,
+        source_commit=source_commit,
+        activation_bundle_sha256=digest,
+        enabled_flags=enabled,
+        now=evaluation_time.astimezone(timezone.utc),
+    )
+    if runtime_authorization == "authorized":
+        return status
+    if runtime_authorization == "missing":
+        return _status(
+            True, False, scope, "runtime_consumption_not_authorized", enabled,
+            profile=profile, review_mode=review_mode,
+            decision_source_commit=source_commit, bundle_sha256=digest,
+        )
+    reason = (
+        "runtime_consumption_authorization_expired"
+        if runtime_authorization == "expired"
+        else "runtime_consumption_authorization_invalid"
+    )
+    return _activation_evidence_failure(
+        scope, reason, enabled, profile=profile, review_mode=review_mode,
+        source_commit=source_commit, digest=digest,
     )
 
 

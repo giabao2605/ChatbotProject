@@ -126,6 +126,8 @@ class Settings(BaseModel):
     RAG_ACTIVATION_SCOPE: str = "default_rollout"
     RAG_ACTIVATION_BUNDLE_PATH: Optional[str] = None
     RAG_ACTIVATION_BUNDLE_SHA256: Optional[str] = None
+    RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH: Optional[str] = None
+    RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256: Optional[str] = None
     RAG_RESTORE_EVIDENCE_SHA256: Optional[str] = None
     RAG_PLANNER_VERSION: str = "planner-v1"
     RAG_LATE_INDEX_VERSION: str = "late-v2"
@@ -363,6 +365,12 @@ class Settings(BaseModel):
             RAG_ACTIVATION_SCOPE=_str("RAG_ACTIVATION_SCOPE", "default_rollout"),
             RAG_ACTIVATION_BUNDLE_PATH=_str("RAG_ACTIVATION_BUNDLE_PATH"),
             RAG_ACTIVATION_BUNDLE_SHA256=_str("RAG_ACTIVATION_BUNDLE_SHA256"),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH=_str(
+                "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH"
+            ),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256=_str(
+                "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256"
+            ),
             RAG_RESTORE_EVIDENCE_SHA256=_str("RAG_RESTORE_EVIDENCE_SHA256"),
             RAG_PLANNER_VERSION=_str("RAG_PLANNER_VERSION", "planner-v1"),
             RAG_LATE_INDEX_VERSION=_str("RAG_LATE_INDEX_VERSION", "late-v2"),

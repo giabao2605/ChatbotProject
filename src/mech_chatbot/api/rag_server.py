@@ -111,8 +111,16 @@ def _bind_rag_repository_runtime(state: RagServerState):
         yield
 
 
-def _activation_for(state: RagServerState) -> ActivationStatus:
-    if state.activation is not None:
+def _activation_for(
+    state: RagServerState, *, refresh_controlled_demo: bool = False,
+) -> ActivationStatus:
+    should_refresh = (
+        refresh_controlled_demo
+        and state.activation is not None
+        and state.activation.scope == "controlled_demo"
+        and bool(state.settings.RAG_ACTIVATION_BUNDLE_PATH)
+    )
+    if state.activation is not None and not should_refresh:
         return state.activation
     from mech_chatbot.governance.feature_activation import (
         activation_status,
@@ -138,11 +146,17 @@ async def lifespan(app: FastAPI):
     configure_logging(LoggingConfig.from_settings(state.settings))
     activation = _activation_for(state)
     app.state.rag_server = replace(state, activation=activation)
-    if not activation.valid:
+    activation_rejected = not activation.valid or (
+        activation.scope == "controlled_demo"
+        and not activation.live_authorized
+    )
+    if activation_rejected:
         logger.error(
-            "RAG activation rejected: scope=%s reason=%s enabled_flags=%s",
+            "RAG activation rejected: scope=%s reason=%s "
+            "live_authorized=%s enabled_flags=%s",
             activation.scope,
             activation.reason,
+            activation.live_authorized,
             list(activation.enabled_flags),
         )
         yield
@@ -433,7 +447,9 @@ async def health_check(
             }
         )
     )
-    activation = _activation_for(server_state)
+    activation = _activation_for(
+        server_state, refresh_controlled_demo=True,
+    )
     environment = _environment_snapshot(server_state.settings)
     semaphore = getattr(server_state.runtime, "semaphore", None)
     retrieval = getattr(server_state.runtime, "retrieval", None)
@@ -496,7 +512,18 @@ async def chat_endpoint(
     This endpoint uses models loaded at startup — no cold start per request.
     Concurrency is limited by MAX_CONCURRENT_RAG semaphore.
     """
-    if not server_state.ready or server_state.runtime is None:
+    activation = _activation_for(
+        server_state, refresh_controlled_demo=True,
+    )
+    if (
+        not server_state.ready
+        or server_state.runtime is None
+        or not activation.valid
+        or (
+            activation.scope == "controlled_demo"
+            and not activation.live_authorized
+        )
+    ):
         _lang_pre = (getattr(req, "response_language", None) or "vi").lower()
         raise HTTPException(
             status_code=503,
@@ -612,7 +639,18 @@ async def chat_stream_endpoint(
     server_state: RagServerState = Depends(get_rag_server_state),
 ):
     """Stream real pipeline chunks and final metadata over SSE."""
-    if not server_state.ready or server_state.runtime is None:
+    activation = _activation_for(
+        server_state, refresh_controlled_demo=True,
+    )
+    if (
+        not server_state.ready
+        or server_state.runtime is None
+        or not activation.valid
+        or (
+            activation.scope == "controlled_demo"
+            and not activation.live_authorized
+        )
+    ):
         raise HTTPException(status_code=503, detail="RAG system is not loaded yet.")
     user_profile = resolve_user_profile(req)
     replay = isinstance(x_rag_pilot_replay, str) and x_rag_pilot_replay.strip().lower() in {

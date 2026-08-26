@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,17 @@ from mech_chatbot.governance.rollout_guardrails import evaluate_rollout_series
 from mech_chatbot.evaluation.milestone_decisions import verify_milestone_decision
 from scripts.ops.build_activation_bundle import build_activation_bundle
 from scripts.ops.render_activation_profile import build_profile_environment
+from scripts.ops.query_controlled_demo_activation import (
+    RUNTIME_AUTHORIZATION,
+    finalize_activation,
+    finalize_runtime_authorization,
+    prepare_activation_draft,
+    prepare_runtime_draft,
+)
+from scripts.decomposition_eval.human_review_pack import (
+    REQUIRED_ARTIFACT_BINDINGS,
+    pack_sha256,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -192,6 +204,25 @@ def _environment(**overrides):
     environ.update({name: "false" for name in FEATURE_FLAGS})
     environ.update(overrides)
     return environ
+
+
+def _clean_git_root(path):
+    (path / ".gitignore").write_text(
+        ".local/\ndata/\n*.json\n", encoding="utf-8",
+    )
+    (path / "source.txt").write_text("activation contract\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=path, check=True,
+    )
+    subprocess.run(["git", "add", ".gitignore", "source.txt"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-qm", "test source"], cwd=path, check=True)
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=path, text=True,
+    ).strip()
 
 
 def _write_release_signature(tmp_path, ledger_path, private_key):
@@ -460,6 +491,476 @@ def _controlled_crag_bundle(
         }
     bundle_path = tmp_path / "controlled-activation-bundle.json"
     return bundle_path, _write_json(bundle_path, bundle)
+
+
+def _runtime_consumption_authorization(
+    tmp_path, bundle_sha, *, source_commit="a" * 40,
+    enabled_flags=None, authorized_at="2026-08-26T01:00:00Z",
+    expires_at="2026-08-26T02:00:00Z", runtime_approval=True,
+    actor="bao.nguyen", draft_owner="bao.nguyen",
+):
+    enabled = sorted(enabled_flags or {
+        "RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED",
+    })
+    requested = {
+        "runtime_consumption_authorized": True,
+        "runtime_start_authorized": True,
+        "provider_traffic_authorized": False,
+        "pilot_dispatch_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+    }
+    preflight_path = tmp_path / "runtime-offline-preflight.json"
+    preflight_sha = _write_json(preflight_path, {
+        "schema": "query-controlled-demo-offline-preflight-v1",
+        "source_commit": source_commit,
+        "activation_bundle_sha256": bundle_sha,
+        "valid": True,
+        "live_authorized": False,
+        "reason": "runtime_consumption_not_authorized",
+    })
+    rollback_path = tmp_path / "runtime-offline-rollback.json"
+    rollback_sha = _write_json(rollback_path, {
+        "schema": "query-controlled-demo-offline-rollback-v1",
+        "source_commit": source_commit,
+        "query_decomposition_enabled": False,
+        "valid": True,
+        "live_authorized": True,
+    })
+    activation_authorization_path = tmp_path / "query-activation-authorization.json"
+    activation_authorization_sha = _write_json(
+        activation_authorization_path,
+        {
+            "schema": "query-controlled-demo-activation-authorization-v1",
+            "activation_owner": "bao.nguyen",
+        },
+    )
+    finalization_path = tmp_path / "runtime-activation-finalization.json"
+    finalization_sha = _write_json(finalization_path, {
+        "schema": "query-controlled-demo-activation-finalization-v1",
+        "source_commit": source_commit,
+        "bundle": {"sha256": bundle_sha},
+        "offline_preflight": {"sha256": preflight_sha},
+        "offline_rollback": {"sha256": rollback_sha},
+        "authorization": {
+            "path": str(activation_authorization_path),
+            "sha256": activation_authorization_sha,
+            "schema": "query-controlled-demo-activation-authorization-v1",
+        },
+        "runtime_consumption_authorized": False,
+        "runtime_start_authorized": False,
+        "provider_traffic_authorized": False,
+        "pilot_dispatch_authorized": False,
+    })
+    draft_path = tmp_path / "runtime-consumption-draft.json"
+    draft_sha = _write_json(draft_path, {
+        "schema": "controlled-demo-runtime-consumption-draft-v1",
+        "source_commit": source_commit,
+        "scope": "controlled_demo",
+        "activation_bundle_sha256": bundle_sha,
+        "enabled_flags": enabled,
+        "owner": draft_owner,
+        "offline_preflight": {
+            "path": str(preflight_path), "sha256": preflight_sha,
+            "schema": "query-controlled-demo-offline-preflight-v1",
+        },
+        "offline_rollback": {
+            "path": str(rollback_path), "sha256": rollback_sha,
+            "schema": "query-controlled-demo-offline-rollback-v1",
+        },
+        "activation_finalization": {
+            "path": str(finalization_path), "sha256": finalization_sha,
+            "schema": "query-controlled-demo-activation-finalization-v1",
+        },
+        "requested_authorization": requested,
+    })
+    approval_path = tmp_path / "runtime-consumption-approval.json"
+    approval_sha = _write_json(approval_path, {
+        "schema": "controlled-demo-runtime-consumption-approval-v1",
+        "draft_sha256": draft_sha,
+        "actor": actor,
+        "authorized_at": authorized_at,
+        "expires_at": expires_at,
+        "authorization": requested,
+    })
+    authorization = {
+        "schema": "controlled-demo-runtime-consumption-authorization-v1",
+        "source_commit": source_commit,
+        "scope": "controlled_demo",
+        "activation_bundle_sha256": bundle_sha,
+        "enabled_flags": enabled,
+        "actor": actor,
+        "authorized_at": authorized_at,
+        "expires_at": expires_at,
+        "materialized_at": authorized_at,
+        "runtime_draft": {
+            "path": str(draft_path), "sha256": draft_sha,
+            "schema": "controlled-demo-runtime-consumption-draft-v1",
+        },
+        "runtime_approval": {
+            "path": str(approval_path), "sha256": approval_sha,
+            "schema": "controlled-demo-runtime-consumption-approval-v1",
+        } if runtime_approval else None,
+        "runtime_consumption_authorized": True,
+        "runtime_start_authorized": True,
+        "provider_traffic_authorized": False,
+        "pilot_dispatch_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+    }
+    path = tmp_path / "runtime-consumption-authorization.json"
+    return path, _write_json(path, authorization)
+
+
+def _controlled_query_evidence(
+    tmp_path, *, owner_decision=True, activation_approval=True,
+    evidence_source_commit="e" * 40, activation_actor="bao.nguyen",
+):
+    source_commit = "a" * 40
+    run_id = "query-window"
+    run_root = tmp_path / ".local" / run_id
+    pack_dir = run_root / "human-review-pack"
+    pack_dir.mkdir(parents=True)
+    disposition = {
+        "schema": "query-decomposition-formal-window-disposition-v2",
+        "run_id": run_id,
+        "source_commit": evidence_source_commit,
+        "status": "completed_technical_eligible_pending_human_review",
+        "terminal": True,
+        "consumed": True,
+        "immutable": True,
+        "tombstoned": False,
+        "execution": {
+            "formal_pairs_started": 3,
+            "formal_pairs_completed": 3,
+            "formal_pairs_gate_passed": 3,
+            "provider_calls": 111,
+            "provider_successes": 111,
+            "provider_failures": 0,
+            "provider_retries": 0,
+            "disallowed_fallback_count": 0,
+        },
+        "evidence_eligibility": {
+            "formal_evidence": True,
+            "rollout_evidence": True,
+            "provider_health_passed": True,
+            "query_quality_evaluated": True,
+            "zero_retry_formal_path_exercised": True,
+            "three_pair_gate_passed": True,
+            "full_window_contract_passed": True,
+            "technical_eligible": True,
+            "production_eligible": False,
+            "decision_status": "pending_human_review",
+            "reuse_authorized": False,
+            "carry_forward_authorized": False,
+        },
+        "governance": {
+            "provider_smoke_rerun_authorized": False,
+            "retry_or_catch_up_authorized": False,
+            "same_root_reuse_authorized": False,
+            "additional_formal_pairs_authorized": False,
+            "pilot_authorized": False,
+            "feature_activation_authorized": False,
+            "default_rollout_authorized": False,
+            "push_authorized": False,
+            "merge_authorized": False,
+            "query_decomposition_remains_off": True,
+        },
+    }
+    disposition_path = run_root / "window-disposition.json"
+    disposition_sha = _write_json(disposition_path, disposition)
+    bindings = {}
+    manifest_path = tmp_path / "data" / "query-manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    _write_json(manifest_path, {"schema": "fixture-v1"})
+    for name in REQUIRED_ARTIFACT_BINDINGS:
+        if name == "window_disposition":
+            path, digest, base = disposition_path, disposition_sha, run_root
+        elif name == "manifest":
+            path, base = manifest_path, tmp_path
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            path, base = run_root / "artifacts" / f"{name}.json", run_root
+            path.parent.mkdir(parents=True, exist_ok=True)
+            digest = _write_json(path, {"schema": "fixture-v1", "name": name})
+        bindings[name] = {
+            "base": "source_root" if name == "manifest" else "run_root",
+            "path": str(path.relative_to(base)).replace("\\", "/"),
+            "sha256": digest,
+        }
+    pack = {
+        "schema": "query-decomposition-human-review-pack-v2",
+        "status": "locked_unreviewed",
+        "scope": "controlled_demo_quality_review",
+        "capability": "query_decomposition",
+        "source_commit": evidence_source_commit,
+        "source_owner": "bao.nguyen",
+        "run_id": run_id,
+        "disposition_sha256": disposition_sha,
+        "case_count": 13,
+        "output_instance_count": 39,
+        "review_mode": "independent_human",
+        "minimum_reviewers": 1,
+        "source_owner_may_review": False,
+        "codex_may_review": False,
+        "review_contract_sha256": "c" * 64,
+        "artifact_bindings": bindings,
+        "pilot_authorized": False,
+        "feature_activation_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+        "query_decomposition_remains_off": True,
+        "production_eligible": False,
+    }
+    pack_path = pack_dir / "pack.json"
+    _write_json(pack_path, pack)
+    review = {
+        "schema": "query-decomposition-human-review-result-v1",
+        "scope": "controlled_demo_quality_review",
+        "capability": "query_decomposition",
+        "source_commit": evidence_source_commit,
+        "run_id": run_id,
+        "disposition_sha256": disposition_sha,
+        "review_mode": "independent_human",
+        "reviewer": "tran.nghi",
+        "evaluated_at": "2026-08-26T00:30:00Z",
+        "pack_sha256": pack_sha256(pack),
+        "expected_pack_sha256": pack_sha256(pack),
+        "pack_hash_matches": True,
+        "review_contract_sha256": "c" * 64,
+        "validation_passed": True,
+        "review_complete": True,
+        "quality_passed": True,
+        "case_count": 13,
+        "reviewed_output_count": 39,
+        "accepted_count": 39,
+        "rejected_count": 0,
+        "needs_discussion_count": 0,
+        "production_eligible": False,
+        "pilot_authorized": False,
+        "feature_activation_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+        "query_decomposition_remains_off": True,
+    }
+    review_path = pack_dir / "review-result.json"
+    review_sha = _write_json(review_path, review)
+    evidence = {
+        "window_disposition": {
+            "path": str(disposition_path), "sha256": disposition_sha,
+            "schema": disposition["schema"],
+        },
+        "human_review_pack": {
+            "path": str(pack_path),
+            "sha256": hashlib.sha256(pack_path.read_bytes()).hexdigest(),
+            "schema": pack["schema"],
+        },
+        "review_result": {
+            "path": str(review_path), "sha256": review_sha,
+            "schema": review["schema"],
+        },
+    }
+    proposed_owner = {
+        "schema": "query-controlled-demo-owner-decision-v1",
+        "status": "accepted_for_controlled_demo_quality_only",
+        "decision": "accepted_for_controlled_demo_quality_only",
+        "source_commit": evidence_source_commit,
+        "run_id": run_id,
+        "scope": "controlled_demo",
+        "capability": "query_decomposition",
+        "pilot_contract": "query-decomposition-24h-100-v1",
+        "evidence": evidence,
+        "technical_eligible": True,
+        "human_review_accepted": True,
+        "production_eligible": False,
+        "independent_human_review": {
+            "reviewer": "tran.nghi",
+            "evaluated_at": review["evaluated_at"],
+            "review_result": evidence["review_result"],
+        },
+        "provider_traffic_authorized": False,
+        "pilot_dispatch_authorized": False,
+        "feature_activation_authorized": False,
+        "runtime_start_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+        "query_decomposition_remains_off": True,
+    }
+    owner_auth = {
+        "materialize_controlled_demo_owner_decision": True,
+        "provider_traffic_authorized": False,
+        "pilot_dispatch_authorized": False,
+        "feature_activation_authorized": False,
+        "runtime_start_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+    }
+    owner_draft_path = run_root / "owner-decision-draft.json"
+    owner_draft_sha = _write_json(owner_draft_path, {
+        "schema": "query-controlled-demo-owner-decision-draft-v1",
+        "proposed_owner_decision": proposed_owner,
+        "requested_authorization": owner_auth,
+    })
+    owner_approval_path = run_root / "owner-decision-approval.json"
+    owner_approval_sha = _write_json(owner_approval_path, {
+        "schema": "query-controlled-demo-owner-approval-v1",
+        "draft_sha256": owner_draft_sha,
+        "actor": "bao.nguyen",
+        "authorized_at": "2026-08-26T00:40:00Z",
+        "expires_at": "2026-08-26T01:40:00Z",
+        "authorization": owner_auth,
+    })
+    owner = {
+        **proposed_owner,
+        "owner_approval": {
+            "owner": "bao.nguyen",
+            "accepted_at": "2026-08-26T00:40:00Z",
+            "scope": "controlled_demo_owner_decision_only",
+            "draft": {"path": str(owner_draft_path), "sha256": owner_draft_sha},
+            "approval": {
+                "path": str(owner_approval_path), "sha256": owner_approval_sha,
+            },
+        },
+    }
+    owner_path = run_root / "query-owner-decision.json"
+    owner_sha = _write_json(owner_path, owner)
+    owner_reference = {
+        "path": str(owner_path),
+        "sha256": owner_sha,
+        "schema": owner["schema"],
+    } if owner_decision else None
+    receipt_path = run_root / "owner-decision-finalization.json"
+    receipt_sha = _write_json(receipt_path, {
+        "schema": "query-controlled-demo-owner-decision-finalization-v1",
+        "source_commit": evidence_source_commit,
+        "owner_decision": {"path": str(owner_path), "sha256": owner_sha},
+        "provider_traffic_authorized": False,
+        "pilot_dispatch_authorized": False,
+        "feature_activation_authorized": False,
+        "runtime_start_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+    })
+    activation_requested = {
+        "materialize_query_controlled_demo_activation_contract": True,
+        "feature_activation_authorized": True,
+        "runtime_consumption_authorized": False,
+        "runtime_start_authorized": False,
+        "provider_traffic_authorized": False,
+        "pilot_dispatch_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+    }
+    activation_draft_path = run_root / "query-activation-draft.json"
+    activation_draft_sha = _write_json(activation_draft_path, {
+        "schema": "query-controlled-demo-activation-draft-v1",
+        "source_commit": source_commit,
+        "evidence_source_commit": evidence_source_commit,
+        "scope": "controlled_demo",
+        "capability": "query_decomposition",
+        "owner": activation_actor,
+        "owner_decision_sha256": owner_sha,
+        "owner_decision_finalization_sha256": receipt_sha,
+        "requested_authorization": activation_requested,
+    })
+    activation_approval_path = run_root / "query-activation-approval.json"
+    activation_approval_sha = _write_json(activation_approval_path, {
+        "schema": "query-controlled-demo-activation-approval-v1",
+        "draft_sha256": activation_draft_sha,
+        "actor": activation_actor,
+        "authorized_at": "2026-08-26T00:45:00Z",
+        "expires_at": "2026-08-26T01:45:00Z",
+        "authorization": activation_requested,
+    })
+    authorization = {
+        "schema": "query-controlled-demo-activation-authorization-v1",
+        "source_commit": source_commit,
+        "evidence_source_commit": evidence_source_commit,
+        "scope": "controlled_demo",
+        "capability": "query_decomposition",
+        "passed": True,
+        "decision": "accepted",
+        "technical_eligible": True,
+        "human_review_accepted": True,
+        "production_eligible": False,
+        "feature_activation_authorized": True,
+        "runtime_consumption_authorized": False,
+        "runtime_start_authorized": False,
+        "provider_traffic_authorized": False,
+        "pilot_dispatch_authorized": False,
+        "default_rollout_authorized": False,
+        "push_authorized": False,
+        "merge_authorized": False,
+        "owner_decision_root": str(tmp_path),
+        "owner_decision": owner_reference,
+        "owner_decision_finalization": {
+            "path": str(receipt_path), "sha256": receipt_sha,
+            "schema": "query-controlled-demo-owner-decision-finalization-v1",
+        },
+        "activation_owner": activation_actor,
+        "materialized_at": "2026-08-26T00:50:00Z",
+        "activation_draft": {
+            "path": str(activation_draft_path), "sha256": activation_draft_sha,
+            "schema": "query-controlled-demo-activation-draft-v1",
+        },
+        "activation_approval": {
+            "path": str(activation_approval_path),
+            "sha256": activation_approval_sha,
+            "schema": "query-controlled-demo-activation-approval-v1",
+        } if activation_approval else None,
+    }
+    path = tmp_path / "query-controlled-demo-activation-authorization.json"
+    return path, _write_json(path, authorization)
+
+
+def _controlled_query_ledger(
+    tmp_path, *, owner_decision=True, activation_approval=True,
+    activation_actor="bao.nguyen",
+):
+    evidence_path, evidence_sha = _controlled_query_evidence(
+        tmp_path,
+        owner_decision=owner_decision,
+        activation_approval=activation_approval,
+        activation_actor=activation_actor,
+    )
+    decision = {
+        "schema": "milestone-decision-v2",
+        "milestone": "query_decomposition",
+        "scope": "controlled_demo",
+        "decision": "accepted",
+        "source_commit": "a" * 40,
+        "evidence": [{
+            "path": str(evidence_path),
+            "sha256": evidence_sha,
+            "schema": "query-controlled-demo-activation-authorization-v1",
+        }],
+        "reason": "Owner-approved offline activation contract.",
+        "reviewer_signoff": {
+            "reviewer": "bao.nguyen",
+            "signed_at": "2026-08-26T01:00:00Z",
+        },
+    }
+    decision_path = tmp_path / "controlled-query-decision.json"
+    decision_sha = _write_json(decision_path, decision)
+    ledger_path = tmp_path / "controlled-query-decisions.json"
+    _write_json(ledger_path, {
+        "schema": "controlled-demo-decision-ledger-v2",
+        "status": "complete",
+        "decisions": {
+            "query_decomposition": {
+                "path": str(decision_path), "sha256": decision_sha,
+            },
+        },
+    })
+    return ledger_path
 
 
 def test_all_disabled_is_live_safe_without_a_decision_bundle(tmp_path):
@@ -869,6 +1370,9 @@ def test_controlled_demo_crag_uses_pre_pilot_authorization_not_pilot_outcome(tmp
     bundle_path, bundle_sha = _controlled_crag_bundle(
         tmp_path, single_owner=True, bind_governance=True,
     )
+    authorization_path, authorization_sha = _runtime_consumption_authorization(
+        tmp_path, bundle_sha,
+    )
 
     result = activation_status(
         _environment(
@@ -877,9 +1381,12 @@ def test_controlled_demo_crag_uses_pre_pilot_authorization_not_pilot_outcome(tmp
             RAG_CLAIM_REPAIR_ENABLED="true",
             RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
             RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH=str(authorization_path),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256=authorization_sha,
         ),
         root=tmp_path,
         current_commit="a" * 40,
+        now=datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc),
     )
 
     assert result.valid is True
@@ -1482,6 +1989,337 @@ def test_controlled_bundle_builder_rejects_explicit_multi_reviewer_governance(
         )
 
 
+def test_query_controlled_demo_uses_dedicated_non_production_evidence_schema(
+    tmp_path,
+):
+    ledger_path = _controlled_query_ledger(tmp_path)
+
+    bundle, _ = build_activation_bundle(
+        scope="controlled_demo",
+        profile="selective",
+        enabled_features={"RAG_QUERY_DECOMPOSITION_ENABLED"},
+        source_commit="a" * 40,
+        decision_ledger=ledger_path,
+        output=tmp_path / "controlled-query-bundle.json",
+        root=tmp_path,
+    )
+
+    assert bundle["scope"] == "controlled_demo"
+    assert bundle["feature_flags"]["RAG_QUERY_DECOMPOSITION_ENABLED"] is True
+
+
+def test_query_controlled_demo_rejects_missing_owner_decision(tmp_path):
+    ledger_path = _controlled_query_ledger(tmp_path, owner_decision=False)
+
+    with pytest.raises(
+        ValueError,
+        match="controlled_demo requires a verified controlled-demo decision ledger",
+    ):
+        build_activation_bundle(
+            scope="controlled_demo",
+            profile="selective",
+            enabled_features={"RAG_QUERY_DECOMPOSITION_ENABLED"},
+            source_commit="a" * 40,
+            decision_ledger=ledger_path,
+            output=tmp_path / "controlled-query-bundle.json",
+            root=tmp_path,
+        )
+
+
+def test_query_controlled_demo_rejects_missing_activation_approval(tmp_path):
+    ledger_path = _controlled_query_ledger(tmp_path, activation_approval=False)
+
+    with pytest.raises(
+        ValueError,
+        match="controlled_demo requires a verified controlled-demo decision ledger",
+    ):
+        build_activation_bundle(
+            scope="controlled_demo",
+            profile="selective",
+            enabled_features={"RAG_QUERY_DECOMPOSITION_ENABLED"},
+            source_commit="a" * 40,
+            decision_ledger=ledger_path,
+            output=tmp_path / "controlled-query-bundle.json",
+            root=tmp_path,
+        )
+
+
+def test_query_controlled_demo_rejects_rebound_activation_owner(tmp_path):
+    ledger_path = _controlled_query_ledger(
+        tmp_path, activation_actor="other.owner",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="controlled_demo requires a verified controlled-demo decision ledger",
+    ):
+        build_activation_bundle(
+            scope="controlled_demo",
+            profile="selective",
+            enabled_features={"RAG_QUERY_DECOMPOSITION_ENABLED"},
+            source_commit="a" * 40,
+            decision_ledger=ledger_path,
+            output=tmp_path / "controlled-query-bundle.json",
+            root=tmp_path,
+        )
+
+
+def test_query_controlled_demo_rechecks_nested_owner_evidence(tmp_path):
+    ledger_path = _controlled_query_ledger(tmp_path)
+    _write_json(
+        tmp_path / ".local" / "query-window" / "human-review-pack"
+        / "review-result.json",
+        {
+        "schema": "query-decomposition-human-review-result-v1",
+        "source_commit": "b" * 40,
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="controlled_demo requires a verified controlled-demo decision ledger",
+    ):
+        build_activation_bundle(
+            scope="controlled_demo",
+            profile="selective",
+            enabled_features={"RAG_QUERY_DECOMPOSITION_ENABLED"},
+            source_commit="a" * 40,
+            decision_ledger=ledger_path,
+            output=tmp_path / "controlled-query-bundle.json",
+            root=tmp_path,
+        )
+
+
+def test_query_controlled_demo_evidence_cannot_satisfy_default_rollout(tmp_path):
+    evidence_path, evidence_sha = _controlled_query_evidence(tmp_path)
+    _default_bundle(tmp_path)
+    ledger_path = tmp_path / "release-decisions.json"
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["decisions"]["RAG_QUERY_DECOMPOSITION_ENABLED"] = {
+        "decision": "accepted",
+        "source_commit": "a" * 40,
+        "evidence": {
+            "path": str(evidence_path),
+            "sha256": evidence_sha,
+            "schema": "query-controlled-demo-activation-authorization-v1",
+        },
+    }
+    _write_json(ledger_path, ledger)
+
+    with pytest.raises(
+        ValueError,
+        match="default_rollout requires a verified release decision ledger",
+    ):
+        build_activation_bundle(
+            scope="default_rollout",
+            profile="selective",
+            enabled_features={"RAG_QUERY_DECOMPOSITION_ENABLED"},
+            source_commit="a" * 40,
+            decision_ledger=ledger_path,
+            release_signature=tmp_path / "unused-signature.txt",
+            output=tmp_path / "default-query-bundle.json",
+            root=tmp_path,
+        )
+
+
+def test_query_activation_workflow_stops_before_runtime_approval(tmp_path):
+    source_commit = _clean_git_root(tmp_path)
+    _controlled_query_evidence(
+        tmp_path, evidence_source_commit=source_commit,
+    )
+    draft_path = tmp_path / ".local" / "activation" / "draft.json"
+    draft, draft_sha = prepare_activation_draft(
+        source_root=tmp_path,
+        source_commit=source_commit,
+        evidence_root=tmp_path,
+        owner_decision=(
+            tmp_path / ".local" / "query-window" / "query-owner-decision.json"
+        ),
+        owner_decision_finalization=(
+            tmp_path / ".local" / "query-window"
+            / "owner-decision-finalization.json"
+        ),
+        output=draft_path,
+        owner="bao.nguyen",
+    )
+    assert draft["status"] == "AWAITING_EXACT_OWNER_APPROVAL"
+    approval_path = tmp_path / ".local" / "activation" / "approval.json"
+    _write_json(approval_path, {
+        "schema": "query-controlled-demo-activation-approval-v1",
+        "draft_sha256": draft_sha,
+        "actor": "bao.nguyen",
+        "authorized_at": "2026-08-26T01:00:00Z",
+        "expires_at": "2026-08-26T02:00:00Z",
+        "authorization": draft["requested_authorization"],
+    })
+
+    receipt = finalize_activation(
+        draft_path=draft_path,
+        approval_path=approval_path,
+        output_dir=tmp_path / ".local" / "activation" / "final",
+        now=datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc),
+    )
+
+    assert receipt["runtime_consumption_authorized"] is False
+    assert receipt["runtime_start_authorized"] is False
+    assert receipt["next_gate"] == "exact_runtime_consumption_authorization"
+    runtime_draft_path = tmp_path / ".local" / "activation" / "runtime-draft.json"
+    source_path = tmp_path / "source.txt"
+    source_path.write_text("dirty checkout\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="source_worktree_must_be_clean"):
+        prepare_runtime_draft(
+            source_root=tmp_path,
+            bundle_path=receipt["bundle"]["path"],
+            preflight_path=receipt["offline_preflight"]["path"],
+            rollback_path=receipt["offline_rollback"]["path"],
+            finalization_receipt_path=receipt["receipt"]["path"],
+            output=runtime_draft_path,
+        )
+    source_path.write_text("activation contract\n", encoding="utf-8")
+    runtime_draft, _ = prepare_runtime_draft(
+        source_root=tmp_path,
+        bundle_path=receipt["bundle"]["path"],
+        preflight_path=receipt["offline_preflight"]["path"],
+        rollback_path=receipt["offline_rollback"]["path"],
+        finalization_receipt_path=receipt["receipt"]["path"],
+        output=runtime_draft_path,
+    )
+    assert runtime_draft["requested_authorization"] == RUNTIME_AUTHORIZATION
+    assert not (tmp_path / ".local" / "activation" / "runtime.json").exists()
+
+
+def test_query_activation_draft_rejects_commit_or_owner_approval_drift(tmp_path):
+    source_commit = _clean_git_root(tmp_path)
+    _controlled_query_evidence(
+        tmp_path, evidence_source_commit=source_commit,
+    )
+    arguments = {
+        "source_root": tmp_path,
+        "evidence_root": tmp_path,
+        "owner_decision": (
+            tmp_path / ".local" / "query-window" / "query-owner-decision.json"
+        ),
+        "owner_decision_finalization": (
+            tmp_path / ".local" / "query-window"
+            / "owner-decision-finalization.json"
+        ),
+        "output": tmp_path / ".local" / "activation" / "draft.json",
+        "owner": "bao.nguyen",
+    }
+    with pytest.raises(ValueError, match="source_commit_mismatch"):
+        prepare_activation_draft(source_commit="0" * 40, **arguments)
+    draft, draft_sha = prepare_activation_draft(
+        source_commit=source_commit, **arguments,
+    )
+    approval_path = tmp_path / ".local" / "activation" / "approval.json"
+    _write_json(approval_path, {
+        "schema": "query-controlled-demo-activation-approval-v1",
+        "draft_sha256": draft_sha,
+        "actor": "not-the-owner",
+        "authorized_at": "2026-08-26T01:00:00Z",
+        "expires_at": "2026-08-26T02:00:00Z",
+        "authorization": draft["requested_authorization"],
+    })
+
+    with pytest.raises(ValueError, match="approval_actor_not_owner"):
+        finalize_activation(
+            draft_path=arguments["output"],
+            approval_path=approval_path,
+            output_dir=tmp_path / ".local" / "activation" / "final",
+            now=datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc),
+        )
+
+
+def test_exact_runtime_approval_makes_only_bound_bundle_live(tmp_path):
+    source_commit = _clean_git_root(tmp_path)
+    _controlled_query_evidence(
+        tmp_path, evidence_source_commit=source_commit,
+    )
+    draft_path = tmp_path / ".local" / "activation" / "draft.json"
+    draft, draft_sha = prepare_activation_draft(
+        source_root=tmp_path,
+        source_commit=source_commit,
+        evidence_root=tmp_path,
+        owner_decision=(
+            tmp_path / ".local" / "query-window" / "query-owner-decision.json"
+        ),
+        owner_decision_finalization=(
+            tmp_path / ".local" / "query-window"
+            / "owner-decision-finalization.json"
+        ),
+        output=draft_path,
+        owner="bao.nguyen",
+    )
+    activation_approval = tmp_path / ".local" / "activation" / "approval.json"
+    _write_json(activation_approval, {
+        "schema": "query-controlled-demo-activation-approval-v1",
+        "draft_sha256": draft_sha,
+        "actor": "bao.nguyen",
+        "authorized_at": "2026-08-26T01:00:00Z",
+        "expires_at": "2026-08-26T02:00:00Z",
+        "authorization": draft["requested_authorization"],
+    })
+    receipt = finalize_activation(
+        draft_path=draft_path,
+        approval_path=activation_approval,
+        output_dir=tmp_path / ".local" / "activation" / "final",
+        now=datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc),
+    )
+    runtime_draft_path = tmp_path / ".local" / "activation" / "runtime-draft.json"
+    runtime_draft, runtime_draft_sha = prepare_runtime_draft(
+        source_root=tmp_path,
+        bundle_path=receipt["bundle"]["path"],
+        preflight_path=receipt["offline_preflight"]["path"],
+        rollback_path=receipt["offline_rollback"]["path"],
+        finalization_receipt_path=receipt["receipt"]["path"],
+        output=runtime_draft_path,
+    )
+    runtime_approval = tmp_path / ".local" / "activation" / "runtime-approval.json"
+    _write_json(runtime_approval, {
+        "schema": "controlled-demo-runtime-consumption-approval-v1",
+        "draft_sha256": runtime_draft_sha,
+        "actor": "bao.nguyen",
+        "authorized_at": "2026-08-26T01:35:00Z",
+        "expires_at": "2026-08-26T02:35:00Z",
+        "authorization": runtime_draft["requested_authorization"],
+    })
+    runtime_path = tmp_path / ".local" / "activation" / "runtime.json"
+    source_path = tmp_path / "source.txt"
+    source_path.write_text("dirty checkout\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="source_worktree_must_be_clean"):
+        finalize_runtime_authorization(
+            draft_path=runtime_draft_path,
+            approval_path=runtime_approval,
+            output=runtime_path,
+            now=datetime(2026, 8, 26, 1, 40, tzinfo=timezone.utc),
+        )
+    source_path.write_text("activation contract\n", encoding="utf-8")
+    _, runtime_sha = finalize_runtime_authorization(
+        draft_path=runtime_draft_path,
+        approval_path=runtime_approval,
+        output=runtime_path,
+        now=datetime(2026, 8, 26, 1, 40, tzinfo=timezone.utc),
+    )
+    bundle_path = Path(receipt["bundle"]["path"])
+    status = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_ACTIVATION_PROFILE="selective",
+            RAG_DEPLOYMENT_GIT_SHA=source_commit,
+            RAG_QUERY_DECOMPOSITION_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=receipt["bundle"]["sha256"],
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH=str(runtime_path),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256=runtime_sha,
+        ),
+        root=tmp_path,
+        current_commit=source_commit,
+        now=datetime(2026, 8, 26, 2, 0, tzinfo=timezone.utc),
+    )
+    assert status.valid is True
+    assert status.live_authorized is True
+
+
 def test_controlled_demo_runtime_accepts_independent_review_without_governance(
     tmp_path,
 ):
@@ -1500,7 +2338,190 @@ def test_controlled_demo_runtime_accepts_independent_review_without_governance(
     )
 
     assert result.valid is True
+    assert result.live_authorized is False
+    assert result.reason == "runtime_consumption_not_authorized"
     assert result.review_mode == "multi_reviewer"
+
+
+def test_controlled_demo_runtime_accepts_exact_unexpired_consumption_authorization(
+    tmp_path,
+):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    authorization_path, authorization_sha = _runtime_consumption_authorization(
+        tmp_path, bundle_sha,
+    )
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH=str(authorization_path),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256=authorization_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+        now=datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc),
+    )
+
+    assert result.valid is True
+    assert result.live_authorized is True
+    assert result.reason == "live_decisions_accepted"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "reason"),
+    [
+        (lambda value: value.update(source_commit="b" * 40),
+         "runtime_consumption_authorization_invalid"),
+        (lambda value: value.update(activation_bundle_sha256="0" * 64),
+         "runtime_consumption_authorization_invalid"),
+        (lambda value: value.update(enabled_flags=["RAG_CRAG_ENABLED"]),
+         "runtime_consumption_authorization_invalid"),
+        (lambda value: value.update(actor=""),
+         "runtime_consumption_authorization_invalid"),
+        (lambda value: value.update(runtime_start_authorized=False),
+         "runtime_consumption_authorization_invalid"),
+        (lambda value: value.update(provider_traffic_authorized=True),
+         "runtime_consumption_authorization_invalid"),
+        (lambda value: value.update(expires_at="2026-08-26T02:00:01Z"),
+         "runtime_consumption_authorization_invalid"),
+    ],
+)
+def test_controlled_demo_runtime_rejects_invalid_consumption_authorization(
+    tmp_path, mutate, reason,
+):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    authorization_path, authorization_sha = _runtime_consumption_authorization(
+        tmp_path, bundle_sha,
+    )
+    authorization = json.loads(authorization_path.read_text(encoding="utf-8"))
+    mutate(authorization)
+    authorization_sha = _write_json(authorization_path, authorization)
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH=str(authorization_path),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256=authorization_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+        now=datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc),
+    )
+
+    assert result.valid is False
+    assert result.live_authorized is False
+    assert result.reason == reason
+
+
+def test_controlled_demo_runtime_rejects_expired_consumption_authorization(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    authorization_path, authorization_sha = _runtime_consumption_authorization(
+        tmp_path, bundle_sha,
+    )
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH=str(authorization_path),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256=authorization_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+        now=datetime(2026, 8, 26, 2, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert result.valid is False
+    assert result.reason == "runtime_consumption_authorization_expired"
+
+
+def test_controlled_demo_runtime_rejects_missing_consumption_approval(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    authorization_path, authorization_sha = _runtime_consumption_authorization(
+        tmp_path, bundle_sha, runtime_approval=False,
+    )
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH=str(authorization_path),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256=authorization_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+        now=datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc),
+    )
+
+    assert result.valid is False
+    assert result.reason == "runtime_consumption_authorization_invalid"
+
+
+def test_controlled_demo_runtime_rejects_consumption_approval_by_other_actor(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    authorization_path, authorization_sha = _runtime_consumption_authorization(
+        tmp_path, bundle_sha, actor="other.owner",
+    )
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH=str(authorization_path),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256=authorization_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+        now=datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc),
+    )
+
+    assert result.valid is False
+    assert result.reason == "runtime_consumption_authorization_invalid"
+
+
+def test_controlled_demo_runtime_rejects_rebound_runtime_owner(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    authorization_path, authorization_sha = _runtime_consumption_authorization(
+        tmp_path,
+        bundle_sha,
+        actor="other.owner",
+        draft_owner="other.owner",
+    )
+
+    result = activation_status(
+        _environment(
+            RAG_ACTIVATION_SCOPE="controlled_demo",
+            RAG_CRAG_ENABLED="true",
+            RAG_CLAIM_REPAIR_ENABLED="true",
+            RAG_ACTIVATION_BUNDLE_PATH=str(bundle_path),
+            RAG_ACTIVATION_BUNDLE_SHA256=bundle_sha,
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH=str(authorization_path),
+            RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256=authorization_sha,
+        ),
+        root=tmp_path,
+        current_commit="a" * 40,
+        now=datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc),
+    )
+
+    assert result.valid is False
+    assert result.reason == "runtime_consumption_authorization_invalid"
 
 
 def test_controlled_demo_runtime_rejects_stripped_single_owner_governance(
@@ -1592,6 +2613,108 @@ def test_health_is_degraded_when_activation_is_valid_but_not_live_authorized(
     assert health.status == "degraded"
 
 
+def test_settings_preserve_runtime_consumption_authorization_bindings():
+    settings = Settings.from_env({
+        "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH": "private/runtime.json",
+        "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256": "a" * 64,
+    })
+
+    assert (
+        settings.RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH
+        == "private/runtime.json"
+    )
+    assert settings.RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256 == "a" * 64
+
+
+def test_controlled_demo_health_and_chat_revalidate_expired_authorization(
+    monkeypatch,
+):
+    from fastapi.testclient import TestClient
+    from mech_chatbot.api import rag_server
+
+    expired = activation_policy.ActivationStatus(
+        valid=False,
+        live_authorized=False,
+        scope="controlled_demo",
+        reason="runtime_consumption_authorization_expired",
+        enabled_flags=("RAG_QUERY_DECOMPOSITION_ENABLED",),
+        profile="selective",
+    )
+    refreshes = []
+    monkeypatch.setattr(
+        activation_policy,
+        "activation_status",
+        lambda *_a, **_k: refreshes.append(True) or expired,
+    )
+    settings = Settings.from_env({
+        "RAG_REQUIRE_SERVICE_AUTH": "false",
+        "RAG_ACTIVATION_SCOPE": "controlled_demo",
+        "RAG_ACTIVATION_BUNDLE_PATH": "private/bundle.json",
+        "RAG_ACTIVATION_BUNDLE_SHA256": "a" * 64,
+        "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH": "private/runtime.json",
+        "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256": "b" * 64,
+    })
+    application = rag_server.create_rag_app(settings)
+    application.state.rag_server = replace(
+        application.state.rag_server,
+        activation=replace(expired, valid=True, live_authorized=True),
+        runtime=None,
+        ready=True,
+    )
+
+    health = asyncio.run(rag_server.health_check(
+        server_state=application.state.rag_server,
+    ))
+    response = TestClient(application).post(
+        "/chat", json={"user_question": "query controlled demo"},
+    )
+
+    assert health.status == "degraded"
+    assert health.live_authorized is False
+    assert health.activation_reason == "runtime_consumption_authorization_expired"
+    assert response.status_code == 503
+    assert refreshes == [True, True]
+
+
+def test_controlled_demo_startup_does_not_build_runtime_without_live_authorization(
+    monkeypatch,
+):
+    from fastapi.testclient import TestClient
+    from mech_chatbot.api import rag_server
+
+    settings = Settings(
+        QDRANT_URL="https://qdrant.invalid",
+        QDRANT_API_KEY="test-qdrant-key",
+        LLM_BASE_URL="https://llm.invalid",
+        LLM_API_KEY="test-llm-key",
+        RAG_REQUIRE_SERVICE_AUTH=False,
+    )
+    application = rag_server.create_rag_app(
+        settings,
+        runtime_builder=lambda _settings: pytest.fail("runtime must not build"),
+        database_builder=lambda _settings: pytest.fail("database must not build"),
+    )
+    application.state.rag_server = replace(
+        application.state.rag_server,
+        activation=activation_policy.ActivationStatus(
+            valid=True,
+            live_authorized=False,
+            scope="controlled_demo",
+            reason="runtime_consumption_not_authorized",
+            enabled_flags=("RAG_QUERY_DECOMPOSITION_ENABLED",),
+            profile="selective",
+        ),
+    )
+    monkeypatch.setattr(rag_server, "configure_logging", lambda _config: None)
+
+    with TestClient(application) as client:
+        health = client.get("/health").json()
+
+    assert health["rag_loaded"] is False
+    assert health["activation_valid"] is True
+    assert health["live_authorized"] is False
+
+
 @pytest.mark.parametrize(
     "enabled_features",
     [
@@ -1641,6 +2764,52 @@ def test_selective_live_renderer_uses_exact_hashed_bundle_flags(tmp_path):
     assert {
         name for name in FEATURE_FLAGS if environment[name] == "true"
     } == {"RAG_GROUNDED_MATH_ENABLED"}
+
+
+def test_controlled_renderer_binds_runtime_consumption_authorization(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    authorization_path, authorization_sha = _runtime_consumption_authorization(
+        tmp_path, bundle_sha,
+    )
+
+    environment = build_profile_environment(
+        profile="crag_claim",
+        scope="controlled_demo",
+        activation_bundle=bundle_path,
+        activation_bundle_sha256=bundle_sha,
+        runtime_consumption_authorization=authorization_path,
+        runtime_consumption_authorization_sha256=authorization_sha,
+    )
+
+    assert environment["RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH"] == str(
+        authorization_path.resolve()
+    )
+    assert environment["RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256"] == (
+        authorization_sha
+    )
+
+
+def test_renderer_rejects_partial_or_out_of_scope_consumption_authorization(tmp_path):
+    bundle_path, bundle_sha = _controlled_crag_bundle(tmp_path)
+    authorization_path, authorization_sha = _runtime_consumption_authorization(
+        tmp_path, bundle_sha,
+    )
+
+    with pytest.raises(ValueError, match="must be provided together"):
+        build_profile_environment(
+            profile="crag_claim", scope="controlled_demo",
+            activation_bundle=bundle_path,
+            activation_bundle_sha256=bundle_sha,
+            runtime_consumption_authorization=authorization_path,
+        )
+    with pytest.raises(ValueError, match="controlled_demo only"):
+        build_profile_environment(
+            profile="crag_claim", scope="default_rollout",
+            activation_bundle=bundle_path,
+            activation_bundle_sha256=bundle_sha,
+            runtime_consumption_authorization=authorization_path,
+            runtime_consumption_authorization_sha256=authorization_sha,
+        )
 
 
 def test_profile_launcher_environment_uses_canonical_flags_and_isolated_scopes(tmp_path):
