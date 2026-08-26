@@ -276,7 +276,7 @@ def validate_operator_inputs(
     paths = (schedule_path, authorization_path, bundle_path, manifest_path)
     if not all(_inside(path, source_root) for path in paths):
         raise OperatorStopped("operator_input_outside_source_root")
-    authorization, auth_raw, schedule, _ = _authorization_and_schedule(
+    authorization, auth_sha, schedule, _ = _authorization_and_schedule(
         authorization_path, schedule_path
     )
     bundle_raw = bundle_path.read_bytes()
@@ -285,7 +285,7 @@ def validate_operator_inputs(
         _digest(authorization_sha256),
         _digest(bundle_sha256),
         _digest(manifest_sha256),
-        _sha256(auth_raw) == authorization_sha256,
+        auth_sha == authorization_sha256,
         _sha256(bundle_raw) == bundle_sha256,
         authorization.get("activation_bundle_sha256") == bundle_sha256,
         schedule.get("manifest", {}).get("sha256") == manifest_sha256,

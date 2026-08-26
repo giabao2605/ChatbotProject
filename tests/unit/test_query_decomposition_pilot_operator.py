@@ -214,6 +214,7 @@ def test_validate_operator_inputs_binds_authorization_bundle_and_schedule(
 ):
     paths = _operator_files(tmp_path)
     auth_raw = paths["authorization"].read_bytes()
+    auth_sha = hashlib.sha256(auth_raw).hexdigest()
     bundle_raw = paths["bundle"].read_bytes()
     question = "private question"
     authorization = {
@@ -230,7 +231,7 @@ def test_validate_operator_inputs_binds_authorization_bundle_and_schedule(
     monkeypatch.setattr(
         operator,
         "_authorization_and_schedule",
-        lambda *_args: (authorization, auth_raw, schedule, b"schedule"),
+        lambda *_args: (authorization, auth_sha, schedule, "f" * 64),
     )
     monkeypatch.setattr(operator, "_source_commit", lambda _root: "c" * 40)
     monkeypatch.setattr(
@@ -245,7 +246,7 @@ def test_validate_operator_inputs_binds_authorization_bundle_and_schedule(
         source_root=tmp_path,
         schedule_path=paths["schedule"],
         authorization_path=paths["authorization"],
-        authorization_sha256=hashlib.sha256(auth_raw).hexdigest(),
+        authorization_sha256=auth_sha,
         bundle_path=paths["bundle"],
         bundle_sha256=hashlib.sha256(bundle_raw).hexdigest(),
         manifest_path=paths["manifest"],
