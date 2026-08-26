@@ -22,6 +22,8 @@ from scripts.ops.query_decomposition_pilot import (
     _dot_local,
     _format,
     _manifest,
+    _offline_rollback,
+    _operator_runbook,
     _read_json,
     _schedule_template,
     _sha256,
@@ -80,6 +82,12 @@ def prepare_consolidated_launch(
         "schema": "query-decomposition-pilot-schedule-plan-v1",
     }
     plan_path, plan_sha = _write_json(target / "schedule-plan.json", plan)
+    runbook_path, runbook_sha = _write_json(
+        target / "operator-runbook.json", _operator_runbook(commit),
+    )
+    rollback_path, rollback_sha = _write_json(
+        target / "rollback-plan.json", _offline_rollback(commit),
+    )
     draft = {
         "schema": "query-decomposition-consolidated-launch-draft-v1",
         "status": "AWAITING_ONE_CONSOLIDATED_APPROVAL",
@@ -96,6 +104,14 @@ def prepare_consolidated_launch(
             plan_path, root=root,
             expected_schema="query-decomposition-pilot-schedule-plan-v1",
         ),
+        "operator_runbook": build_json_reference(
+            runbook_path, root=root,
+            expected_schema="query-decomposition-pilot-operator-runbook-v1",
+        ),
+        "rollback_plan": build_json_reference(
+            rollback_path, root=root,
+            expected_schema="query-decomposition-pilot-offline-rollback-v1",
+        ),
         "requested_authorization": CONSOLIDATED_AUTHORIZATION,
     }
     draft_path, draft_sha = _write_json(
@@ -106,6 +122,12 @@ def prepare_consolidated_launch(
         "status": "AWAITING_ONE_CONSOLIDATED_APPROVAL",
         "source_commit": commit,
         "schedule_plan": {"path": str(plan_path), "sha256": plan_sha},
+        "operator_runbook": {
+            "path": str(runbook_path), "sha256": runbook_sha,
+        },
+        "rollback_plan": {
+            "path": str(rollback_path), "sha256": rollback_sha,
+        },
         "consolidated_launch_draft": {
             "path": str(draft_path), "sha256": draft_sha,
         },
@@ -145,8 +167,19 @@ def finalize_consolidated_launch(
     )):
         raise ValueError("consolidated_launch_approval_invalid")
     schedule_plan = load_json_reference(draft.get("schedule_plan"), root=root)
+    operator_runbook = load_json_reference(
+        draft.get("operator_runbook"), root=root,
+    )
+    rollback_plan = load_json_reference(draft.get("rollback_plan"), root=root)
     if not isinstance(schedule_plan, dict):
         raise ValueError("schedule_plan_invalid")
+    if not all((
+        isinstance(operator_runbook, dict),
+        isinstance(rollback_plan, dict),
+        operator_runbook == _operator_runbook(draft["source_commit"])
+        and rollback_plan == _offline_rollback(draft["source_commit"]),
+    )):
+        raise ValueError("operator_contract_invalid")
     manifest_path = root / str(schedule_plan.get("manifest", {}).get("path"))
     try:
         complex_rows, manifest_sha = _manifest(manifest_path)

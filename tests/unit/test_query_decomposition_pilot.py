@@ -35,27 +35,16 @@ def _write_json(path: Path, value: object) -> str:
 
 def _answered_evidence() -> dict:
     return {
-        "route": "query_decomposition",
-        "query_result_status": "valid",
-        "completion_outcome": "answered",
-        "refusal_reason_code": None,
-        "refusal_template_passed": False,
-        "owner_review_required": False,
-        "security_passed": True,
-        "citation_structure_passed": True,
-        "provenance_passed": True,
-        "leakage_detected": False,
-        "planner_calls": 0,
-        "subquery_count": 2,
-        "correction_count": 0,
-        "intent_count": 2,
-        "intent_coverage_complete": True,
-        "deterministic_split_used": True,
-        "intent_overflow": False,
-        "final_latency_ms": 250,
-        "request_deadline_ms": 120000,
-        "estimated_cost": 0.0003,
-        "provider_retries": 0,
+        "route": "query_decomposition", "query_result_status": "valid",
+        "completion_outcome": "answered", "refusal_reason_code": None,
+        "refusal_template_passed": False, "owner_review_required": False,
+        "security_passed": True, "citation_structure_passed": True,
+        "provenance_passed": True, "leakage_detected": False,
+        "planner_calls": 0, "subquery_count": 2, "correction_count": 0,
+        "intent_count": 2, "intent_coverage_complete": True,
+        "deterministic_split_used": True, "intent_overflow": False,
+        "final_latency_ms": 250, "request_deadline_ms": 120000,
+        "estimated_cost": 0.0003, "provider_retries": 0,
         "final_generations": 1,
     }
 
@@ -676,7 +665,6 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
         "requested_authorization": QUERY_ACTIVATION_AUTHORIZATION,
     })
     output = tmp_path / ".local" / "consolidated"
-
     packet = prepare_consolidated_launch(
         source_root=tmp_path,
         source_commit=commit,
@@ -685,6 +673,24 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
         output_dir=output,
         owner="bao.nguyen",
     )
+    runbook = json.loads((output / "operator-runbook.json").read_text())
+    rollback = json.loads((output / "rollback-plan.json").read_text())
+    assert packet["operator_runbook"]["sha256"] == hashlib.sha256(
+        (output / "operator-runbook.json").read_bytes()
+    ).hexdigest()
+    assert packet["rollback_plan"]["sha256"] == hashlib.sha256(
+        (output / "rollback-plan.json").read_bytes()
+    ).hexdigest()
+    assert runbook["launch"]["required_enabled_flags"] == [
+        "RAG_QUERY_DECOMPOSITION_ENABLED"]
+    assert runbook["launch"]["dispatch_contract"] == "query-decomposition-24h-100-v1"
+    assert runbook["mutations"] == {
+        "env_file": False,
+        "scheduled_task": False,
+        "git_remote": False,
+    }
+    assert rollback["target_profile"] == "all_off"
+    assert rollback["preserve_wal_and_artifacts"] is True
     draft = output / "consolidated-launch-draft.json"
     approval = output / "consolidated-launch-approval.json"
     _write_json(approval, {
@@ -695,7 +701,6 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
         "expires_at": "2026-08-28T02:00:00Z",
         "authorization": CONSOLIDATED_AUTHORIZATION,
     })
-
     def materialize_activation(**kwargs):
         target = Path(kwargs["output_dir"])
         authorization_path = target / "query-activation-authorization.json"
@@ -730,12 +735,10 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
             "bundle": {"path": str(bundle_path), "sha256": bundle_sha},
             "receipt": {"path": str(receipt_path)},
         }
-
     monkeypatch.setattr(
         "scripts.ops.query_decomposition_pilot_launch.finalize_activation",
         materialize_activation,
     )
-
     schedule_plan = output / "schedule-plan.json"
     schedule_plan_raw = schedule_plan.read_bytes()
     schedule_plan.write_bytes(schedule_plan_raw + b" ")
@@ -748,14 +751,12 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
         )
     assert not (output / "materialized").exists()
     schedule_plan.write_bytes(schedule_plan_raw)
-
     receipt = finalize_consolidated_launch(
         draft_path=draft,
         approval_path=approval,
         output_dir=output / "materialized",
         now=datetime(2026, 8, 27, 0, 1, tzinfo=timezone.utc),
     )
-
     assert packet["runtime_started"] is False
     assert packet["provider_traffic_generated"] is False
     assert receipt["activation_materialized"] is True

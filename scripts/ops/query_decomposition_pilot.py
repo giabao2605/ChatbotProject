@@ -188,6 +188,49 @@ def _schedule_template(
     }
 
 
+def _offline_rollback(commit: str) -> dict:
+    return {
+        "schema": "query-decomposition-pilot-offline-rollback-v1",
+        "source_commit": commit,
+        "query_decomposition_enabled": False,
+        "feature_flags": {},
+        "runtime_stop_required": True,
+        "target_profile": "all_off",
+        "verify_no_enabled_flags": True,
+        "preserve_wal_and_artifacts": True,
+        "env_file_mutation_required": False,
+        "scheduled_task_mutation_required": False,
+        "provider_traffic_authorized": False,
+    }
+
+
+def _operator_runbook(commit: str) -> dict:
+    return {
+        "schema": "query-decomposition-pilot-operator-runbook-v1",
+        "source_commit": commit,
+        "launch": {
+            "runtime_start_requires_fresh_approval": True,
+            "provider_traffic_requires_fresh_approval": True,
+            "required_profile": "selective",
+            "required_scope": "controlled_demo",
+            "required_enabled_flags": ["RAG_QUERY_DECOMPOSITION_ENABLED"],
+            "health_and_runtime_identity_preflight_required": True,
+            "dispatch_contract": PILOT_CONTRACT_VERSION,
+        },
+        "rollback": {
+            "stop_candidate_runtime": True,
+            "target_profile": "all_off",
+            "verify_no_enabled_flags": True,
+            "preserve_wal_and_artifacts": True,
+        },
+        "mutations": {
+            "env_file": False,
+            "scheduled_task": False,
+            "git_remote": False,
+        },
+    }
+
+
 def _activation_inputs(
     *, root: Path, commit: str, bundle_path: Path, finalization_path: Path,
 ) -> tuple[str, dict]:
@@ -272,40 +315,12 @@ def prepare_pilot_launch_packet(
         "all_invalid_refusal_or_failure_required": True,
         "raw_question_or_answer_forbidden": True,
     })
-    rollback_path, rollback_sha = _write_json(target / "rollback.json", {
-        "schema": "query-decomposition-pilot-offline-rollback-v1",
-        "source_commit": commit,
-        "query_decomposition_enabled": False,
-        "feature_flags": {},
-        "runtime_stop_required": True,
-        "env_file_mutation_required": False,
-        "scheduled_task_mutation_required": False,
-        "provider_traffic_authorized": False,
-    })
-    runbook_path, runbook_sha = _write_json(target / "operator-runbook.json", {
-        "schema": "query-decomposition-pilot-operator-runbook-v1",
-        "source_commit": commit,
-        "launch": {
-            "runtime_start_requires_fresh_approval": True,
-            "provider_traffic_requires_fresh_approval": True,
-            "required_profile": "selective",
-            "required_scope": "controlled_demo",
-            "required_enabled_flags": ["RAG_QUERY_DECOMPOSITION_ENABLED"],
-            "health_and_runtime_identity_preflight_required": True,
-            "dispatch_contract": PILOT_CONTRACT_VERSION,
-        },
-        "rollback": {
-            "stop_candidate_runtime": True,
-            "target_profile": "all_off",
-            "verify_no_enabled_flags": True,
-            "preserve_wal_and_artifacts": True,
-        },
-        "mutations": {
-            "env_file": False,
-            "scheduled_task": False,
-            "git_remote": False,
-        },
-    })
+    rollback_path, rollback_sha = _write_json(
+        target / "rollback.json", _offline_rollback(commit),
+    )
+    runbook_path, runbook_sha = _write_json(
+        target / "operator-runbook.json", _operator_runbook(commit),
+    )
     draft = {
         "schema": "query-decomposition-pilot-authorization-draft-v1",
         "status": "AWAITING_CONSOLIDATED_PILOT_APPROVAL",
