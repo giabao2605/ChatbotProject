@@ -17,6 +17,8 @@
 - Per-request gate chấp nhận câu trả lời đầy đủ hợp lệ hoặc terminal `evidence_gate` safe refusal. Mọi safe refusal, invalid/failure và tối thiểu `20` trace phân tầng phải được owner review; automated gate không thể tự cấp default rollout.
 - Operator runbook và rollback giữ `.env`, Scheduled Task và Git remote nguyên trạng. Rollback dừng candidate runtime, chuyển về `all_off`, kiểm không còn flag bật và bảo toàn WAL/artifact.
 - Gate kế tiếp được gom thành một consolidated approval bind exact clean source commit, activation draft, frozen schedule plan và thời hạn `24h10m–26h`. Approval đó chỉ cho finalizer materialize activation + pilot authorization; finalizer không start runtime, không phát provider traffic và không dispatch pilot. Actual runtime launch/traffic chỉ xảy ra ở bước operator launch sau khi exact consolidated approval đã được ghi nhận.
+- Consolidated root `query-pilot-launch-edc92d3-20260826-01` đã consume exact approval nhưng dừng fail-closed tại `pilot_authorization_materialization`: canonical activation bundle có đủ bảy feature flags, còn pilot validator cũ chỉ chấp nhận map một key. Activation chỉ materialize một phần; pilot authorization, runtime, provider traffic và dispatch đều chưa xảy ra. Root và approval này là tombstone, cấm retry/reuse.
+- Root fix đổi pilot validator sang canonical `selective` profile Query-only và regression dùng đúng full bundle shape. Lượt pilot kế tiếp bắt buộc clean commit, fresh consolidated draft/approval và never-used run root; không carry-forward partial materialization.
 
 ## Checkpoint Grounded Math default rollout và Query readiness — 2026-08-22
 

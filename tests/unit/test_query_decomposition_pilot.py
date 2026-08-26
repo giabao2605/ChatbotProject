@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from mech_chatbot.governance.feature_activation import FEATURE_FLAGS
 from mech_chatbot.governance.query_activation_contract import (
     QUERY_ACTIVATION_AUTHORIZATION,
     runtime_consumption_authorization_status,
@@ -128,7 +129,7 @@ def _inputs(tmp_path: Path):
         "scope": "controlled_demo",
         "activation_profile": "selective",
         "source_commit": commit,
-        "feature_flags": {"RAG_QUERY_DECOMPOSITION_ENABLED": True},
+        "feature_flags": {name: name == "RAG_QUERY_DECOMPOSITION_ENABLED" for name in FEATURE_FLAGS},
     })
     finalization = tmp_path / ".local" / "finalization.json"
     _write_json(finalization, {
@@ -716,7 +717,8 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
             "scope": "controlled_demo",
             "activation_profile": "selective",
             "source_commit": commit,
-            "feature_flags": {"RAG_QUERY_DECOMPOSITION_ENABLED": True},
+            "feature_flags": {name: name == "RAG_QUERY_DECOMPOSITION_ENABLED"
+                              for name in FEATURE_FLAGS},
         })
         receipt_path = target / "finalization-receipt.json"
         _write_json(receipt_path, {

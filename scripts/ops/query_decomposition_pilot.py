@@ -16,6 +16,10 @@ from mech_chatbot.governance.artifact_references import (
     build_json_reference,
     load_json_reference,
 )
+from mech_chatbot.governance.feature_activation import (
+    SELECTIVE_PROFILE,
+    profile_environment,
+)
 from mech_chatbot.governance.query_activation_contract import (
     QUERY_PILOT_AUTHORIZATION,
     validate_query_activation_authorization,
@@ -240,7 +244,11 @@ def _activation_inputs(
     authorization = load_json_reference(
         finalization.get("authorization"), root=root,
     )
-    expected_flags = {"RAG_QUERY_DECOMPOSITION_ENABLED": True}
+    expected_flags = {
+        name: value == "true" for name, value in profile_environment(
+            SELECTIVE_PROFILE, {"RAG_QUERY_DECOMPOSITION_ENABLED"},
+        ).items()
+    }
     if not all((
         bundle.get("schema") == "rag-activation-bundle-v1",
         bundle.get("scope") == "controlled_demo",
