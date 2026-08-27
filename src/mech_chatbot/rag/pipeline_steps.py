@@ -62,6 +62,7 @@ from mech_chatbot.rag.execution import (
     RequestDeadlineExceeded,
     current_execution_context,
     remaining_request_timeout,
+    remaining_request_timeout_int,
 )
 
 _RETRIEVE_UNSET = object()
@@ -327,7 +328,7 @@ def _log_hybrid_batch(
 
 
 def _remaining_qdrant_timeout(limit_seconds, deadline_monotonic):
-    return remaining_request_timeout(
+    return remaining_request_timeout_int(
         max(1, int(limit_seconds)),
         stage="Qdrant batch",
         deadline_monotonic=deadline_monotonic,
@@ -522,7 +523,7 @@ def _explicit_hybrid_rrf(
     dense_top_k = max(1, int(dense_top_k))
     sparse_top_k = max(1, int(sparse_top_k))
     result_cap = max(1, int(result_cap))
-    effective_timeout = remaining_request_timeout(
+    effective_timeout = remaining_request_timeout_int(
         qdrant_timeout_seconds,
         stage=f"Qdrant {phase} dense retrieval",
     )
@@ -561,7 +562,7 @@ def _explicit_hybrid_rrf(
         t_bm25 = time.perf_counter()
         sparse_error = None
         try:
-            effective_timeout = remaining_request_timeout(
+            effective_timeout = remaining_request_timeout_int(
                 qdrant_timeout_seconds,
                 stage=f"Qdrant {phase} sparse retrieval",
             )
@@ -647,7 +648,7 @@ def _explicit_hybrid_rrf(
             search_kwargs={
                 "k": result_cap,
                 "filter": payload_filter,
-                "timeout": remaining_request_timeout(
+                "timeout": remaining_request_timeout_int(
                     qdrant_timeout_seconds,
                     stage=f"Qdrant {phase} fallback retrieval",
                 ),

@@ -10,7 +10,7 @@ from qdrant_client import models
 from mech_chatbot.domain.serving_state import is_currently_servable
 from mech_chatbot.rag.answer_policy import AnswerDecision
 from mech_chatbot.rag.context_builders import _payload_document
-from mech_chatbot.rag.execution import remaining_request_timeout
+from mech_chatbot.rag.execution import remaining_request_timeout_int
 
 
 MAX_CORRECTION_PASSES = 1
@@ -116,7 +116,7 @@ def load_metadata_corrected_documents(
         limit=30,
         with_payload=True,
         with_vectors=False,
-        timeout=remaining_request_timeout(
+        timeout=remaining_request_timeout_int(
             qdrant_timeout_seconds,
             stage="corrective Qdrant scroll",
             deadline_monotonic=deadline_monotonic,

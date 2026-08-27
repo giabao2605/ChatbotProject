@@ -14,16 +14,42 @@ from mech_chatbot.rag.execution import (
     RagPrepared,
     RagRequest,
     RagToken,
+    RequestDeadlineExceeded,
     RequestBudgetLimits,
     attributed_citations,
     collect_rag_events,
     consume_rag_events,
     current_execution_context,
     current_request_budget,
+    remaining_request_timeout_int,
 )
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_integer_external_timeout_matches_qdrant_wire_contract():
+    assert remaining_request_timeout_int(10.0, stage="Qdrant batch") == 10
+    with pytest.raises(ValueError, match="at least one second"):
+        remaining_request_timeout_int(0.5, stage="Qdrant batch")
+
+
+def test_integer_external_timeout_floors_remaining_deadline(monkeypatch):
+    from mech_chatbot.rag import execution
+
+    monkeypatch.setattr(execution.time, "monotonic", lambda: 100.0)
+
+    assert remaining_request_timeout_int(
+        10.0,
+        stage="Qdrant batch",
+        deadline_monotonic=104.9,
+    ) == 4
+    with pytest.raises(RequestDeadlineExceeded, match="before Qdrant batch"):
+        remaining_request_timeout_int(
+            10.0,
+            stage="Qdrant batch",
+            deadline_monotonic=100.5,
+        )
 
 
 def test_evaluation_overrides_are_rejected_outside_evaluation_mode():

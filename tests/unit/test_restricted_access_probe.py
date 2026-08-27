@@ -115,7 +115,7 @@ def test_probe_propagates_request_deadline_without_failing_open(monkeypatch):
     def expired(*_args, **_kwargs):
         raise RequestDeadlineExceeded("request deadline reached")
 
-    monkeypatch.setattr(retrieval, "remaining_request_timeout", expired)
+    monkeypatch.setattr(retrieval, "remaining_request_timeout_int", expired)
 
     with pytest.raises(TimeoutError, match="request deadline reached"):
         _probe(monkeypatch, {})

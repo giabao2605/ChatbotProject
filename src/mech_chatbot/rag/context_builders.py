@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from mech_chatbot.config.logging import logger
-from mech_chatbot.rag.execution import remaining_request_timeout
+from mech_chatbot.rag.execution import remaining_request_timeout_int
 
 
 def _context_is_mechanical(docs, part_ids=None):
@@ -434,7 +434,7 @@ def _load_parent_section_chunks(
         limit=max(1, int(limit)),
         with_payload=True,
         with_vectors=False,
-        timeout=remaining_request_timeout(
+        timeout=remaining_request_timeout_int(
             qdrant_timeout_seconds,
             stage="parent-context Qdrant scroll",
             deadline_monotonic=deadline_monotonic,
@@ -506,7 +506,7 @@ def _load_parent_sections_batch(
     if not valid:
         return {parent_key: [] for parent_key, _filter, _scope in prepared}
     try:
-        timeout = remaining_request_timeout(
+        timeout = remaining_request_timeout_int(
             qdrant_timeout_seconds,
             stage="parent-context Qdrant batch",
             deadline_monotonic=deadline_monotonic,

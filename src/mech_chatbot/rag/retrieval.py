@@ -11,7 +11,7 @@ from mech_chatbot.rag.rbac import (
 )
 from mech_chatbot.rag.execution import (
     RequestDeadlineExceeded,
-    remaining_request_timeout,
+    remaining_request_timeout_int,
 )
 
 def current_published_filter(rbac_filter=None):
@@ -97,7 +97,7 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
                 "metadata.phong_ban_quyen",
             ],
             with_vectors=False,
-            timeout=remaining_request_timeout(
+            timeout=remaining_request_timeout_int(
                 qdrant_timeout_seconds,
                 stage="restricted-access Qdrant probe",
             ),

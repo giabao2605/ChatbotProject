@@ -91,6 +91,32 @@ def remaining_request_timeout(
     return min(limit, remaining)
 
 
+def remaining_request_timeout_int(
+    limit_seconds: float,
+    *,
+    stage: str,
+    deadline_monotonic: float | None = None,
+) -> int:
+    """Return an integer timeout for APIs whose wire contract requires one."""
+    limit = float(limit_seconds)
+    if limit < 1:
+        raise ValueError("integer external call timeout must be at least one second")
+    effective = remaining_request_timeout(
+        limit,
+        stage=stage,
+        deadline_monotonic=deadline_monotonic,
+    )
+    timeout = int(effective)
+    if timeout < 1:
+        budget = current_request_budget()
+        if budget is not None:
+            budget.deadline_exceeded = True
+        raise RequestDeadlineExceeded(
+            f"RAG request deadline reached before {stage}"
+        )
+    return timeout
+
+
 @dataclass(frozen=True, slots=True)
 class AccessScope:
     department: str | None = None
@@ -836,4 +862,5 @@ __all__ = [
     "current_execution_context",
     "current_request_budget",
     "remaining_request_timeout",
+    "remaining_request_timeout_int",
 ]

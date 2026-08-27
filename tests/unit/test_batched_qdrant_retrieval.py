@@ -161,6 +161,7 @@ def test_retrieve_many_uses_configured_qdrant_timeout_without_retry():
 
     assert len(client.calls) == 2
     assert [call["timeout"] for call in client.calls] == [10, 10]
+    assert all(type(call["timeout"]) is int for call in client.calls)
 
 
 def test_retrieve_many_batches_broad_reads_only_for_bom_or_empty_strict():
