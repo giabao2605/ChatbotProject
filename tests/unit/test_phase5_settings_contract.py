@@ -117,6 +117,7 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
             "RERANK_CANDIDATE_CAP": "24",
             "RAG_AUTO_SOURCE_CARDS": "false",
             "GPT_STREAM_MAX_ATTEMPTS": "4",
+            "RAG_PROVIDER_RETRY_LIMIT": "0",
             "STRICT_STREAMING_HOLDBACK_CHARS": "192",
             "RAG_EVAL_DRAFT_OVERRIDE": "controlled draft",
             "PARENT_CONTEXT_ENABLED": "false",
@@ -155,6 +156,7 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
     assert rag.rerank_candidate_cap == 24
     assert rag.auto_source_cards is False
     assert rag.stream_max_attempts == 4
+    assert rag.provider_retry_limit == 0
     assert rag.streaming_holdback_chars == 192
     assert rag.eval_draft_override == "controlled draft"
     assert rag.parent_context_enabled is False

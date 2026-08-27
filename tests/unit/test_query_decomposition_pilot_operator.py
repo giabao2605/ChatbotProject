@@ -529,7 +529,12 @@ def test_candidate_environment_overrides_parent_with_exact_query_scope(
     monkeypatch.setattr(operator, "_source_commit", lambda _root: "d" * 40)
 
     result = operator.build_candidate_environment(
-        {"RAG_QUERY_DECOMPOSITION_ENABLED": "false", "SAFE_PARENT": "1"},
+        {
+            "RAG_QUERY_DECOMPOSITION_ENABLED": "false",
+            "GPT_STREAM_MAX_ATTEMPTS": "9",
+            "RAG_PROVIDER_RETRY_LIMIT": "9",
+            "SAFE_PARENT": "1",
+        },
         source_root=tmp_path,
         bundle_path=bundle,
         bundle_sha256="b" * 64,
@@ -550,6 +555,8 @@ def test_candidate_environment_overrides_parent_with_exact_query_scope(
         authorization
     )
     assert result["EXTERNAL_PROCESSING_POLICY"] == "all_external"
+    assert result["GPT_STREAM_MAX_ATTEMPTS"] == "1"
+    assert result["RAG_PROVIDER_RETRY_LIMIT"] == "0"
     assert result["SQL_DATABASE"] == "MechChatbot_CRAG_Eval_v1"
     assert result["RAG_DEPLOYMENT_GIT_SHA"] == "d" * 40
 

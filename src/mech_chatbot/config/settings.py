@@ -137,6 +137,7 @@ class Settings(BaseModel):
     RERANK_CANDIDATE_CAP: int = 20
     RAG_AUTO_SOURCE_CARDS: bool = True
     GPT_STREAM_MAX_ATTEMPTS: int = 3
+    RAG_PROVIDER_RETRY_LIMIT: int = 2
     STRICT_STREAMING_HOLDBACK_CHARS: int = 160
     RAG_EVAL_DRAFT_OVERRIDE: Optional[str] = None
     PARENT_CONTEXT_ENABLED: bool = True
@@ -394,6 +395,7 @@ class Settings(BaseModel):
                 _TRUTHY_5,
             ),
             GPT_STREAM_MAX_ATTEMPTS=_int("GPT_STREAM_MAX_ATTEMPTS", 3),
+            RAG_PROVIDER_RETRY_LIMIT=_int("RAG_PROVIDER_RETRY_LIMIT", 2),
             STRICT_STREAMING_HOLDBACK_CHARS=_int(
                 "STRICT_STREAMING_HOLDBACK_CHARS",
                 160,
@@ -814,6 +816,7 @@ class RagProcessSettings:
     rerank_candidate_cap: int
     auto_source_cards: bool
     stream_max_attempts: int
+    provider_retry_limit: int
     streaming_holdback_chars: int
     eval_draft_override: str | None
     parent_context_enabled: bool
@@ -870,6 +873,7 @@ class RagProcessSettings:
             rerank_candidate_cap=settings.RERANK_CANDIDATE_CAP,
             auto_source_cards=settings.RAG_AUTO_SOURCE_CARDS,
             stream_max_attempts=max(1, settings.GPT_STREAM_MAX_ATTEMPTS),
+            provider_retry_limit=max(0, settings.RAG_PROVIDER_RETRY_LIMIT),
             streaming_holdback_chars=max(
                 64,
                 settings.STRICT_STREAMING_HOLDBACK_CHARS,

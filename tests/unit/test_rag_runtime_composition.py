@@ -109,6 +109,104 @@ def test_rag_runtime_owns_process_concurrency_until_close():
     assert shutdown_calls == [(True, True)]
 
 
+def test_rag_runtime_projects_zero_provider_retry_limit_from_settings():
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+
+    runtime = build_rag_runtime(
+        Settings(RAG_PROVIDER_RETRY_LIMIT=0),
+        execute_pipeline=lambda state: state.prepared((iter(()), "", [], [], {})),
+        retrieval=object(),
+        provider=object(),
+    )
+
+    assert runtime.executor._budget_limits.provider_retries == 0
+
+    runtime.close()
+
+
+def test_zero_retry_runtime_stops_retryable_provider_error_after_one_call(
+    monkeypatch,
+):
+    from contextlib import nullcontext
+
+    from tenacity import stop_after_attempt, wait_none
+
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+    from mech_chatbot.llm import llm_client
+    from mech_chatbot.rag.execution import RagFailed
+
+    attempts = []
+
+    class FailingLlm:
+        def invoke(self, _messages, **_kwargs):
+            attempts.append("call")
+            raise RuntimeError("502 service_unavailable")
+
+    monkeypatch.setattr(llm_client, "_get_runtime_llm", lambda: FailingLlm())
+    monkeypatch.setattr(
+        llm_client,
+        "audited_external_call",
+        lambda **_kwargs: nullcontext(),
+    )
+    invoke = llm_client.gpt_invoke.retry_with(
+        wait=wait_none(),
+        stop=stop_after_attempt(4),
+    )
+
+    def execute_pipeline(state):
+        def failing_stream():
+            invoke(["prompt"], surface="test", trace_id=state.trace_id)
+            yield "unreachable"
+
+        return state.prepared((failing_stream(), "", [], [], {}))
+
+    runtime = build_rag_runtime(
+        Settings(
+            GPT_STREAM_MAX_ATTEMPTS=1,
+            RAG_PROVIDER_RETRY_LIMIT=0,
+        ),
+        execute_pipeline=execute_pipeline,
+        retrieval=object(),
+        provider=object(),
+    )
+    events = list(runtime.executor.run(
+        RagRequest("question", AccessScope()),
+        RagInvocation(trace_id="controlled-demo-zero-retry", mode="evaluation"),
+    ))
+
+    assert [type(event) for event in events] == [RagPrepared, RagFailed]
+    assert attempts == ["call"]
+    assert runtime.process_settings.stream_max_attempts == 1
+    assert events[-1].code == "RequestBudgetExceeded"
+
+    runtime.close()
+
+
+def test_rag_runtime_identity_binds_effective_provider_retry_override():
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+
+    settings = Settings()
+    runtimes = [
+        build_rag_runtime(
+            settings,
+            execute_pipeline=lambda state: state.prepared(
+                (iter(()), "", [], [], {})
+            ),
+            retrieval=object(),
+            provider=object(),
+            provider_retry_limit=limit,
+        )
+        for limit in (0, 1)
+    ]
+
+    assert len({
+        runtime.trace_runtime.runtime_identity_sha256 for runtime in runtimes
+    }) == 2
+
+    for runtime in runtimes:
+        runtime.close()
+
+
 def test_rag_runtime_projects_health_contract_from_one_settings_snapshot():
     from mech_chatbot.composition.rag_runtime import build_rag_runtime
 
@@ -178,6 +276,8 @@ def test_rag_runtime_binds_trace_events_to_the_live_runtime_identity():
         "activation_bundle_sha256": "a" * 64,
         "restore_evidence_sha256": "b" * 64,
         "request_deadline_seconds": 90.0,
+        "stream_max_attempts": 3,
+        "provider_retry_limit": 2,
     })
 
 

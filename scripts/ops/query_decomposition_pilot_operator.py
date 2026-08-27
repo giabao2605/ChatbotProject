@@ -530,6 +530,8 @@ def build_candidate_environment(
         "RAG_SNAPSHOT_FINGERPRINT": snapshot_fingerprint,
         "RAG_EVAL_FORCE_AMBIGUOUS": "false",
         "RAG_REQUEST_DEADLINE_SECONDS": "120",
+        "GPT_STREAM_MAX_ATTEMPTS": "1",
+        "RAG_PROVIDER_RETRY_LIMIT": "0",
         "PARENT_CONTEXT_MAX_WORKERS": "4",
         "QDRANT_COLLECTION": qdrant_collection,
         "RAG_EVAL_EXPECTED_COLLECTION": qdrant_collection,

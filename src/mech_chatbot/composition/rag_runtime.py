@@ -242,6 +242,8 @@ def _runtime_identity(
     settings: Settings,
     process: RagProcessSettings,
     retrieval: RagRetrievalAdapter,
+    *,
+    provider_retry_limit: int,
 ) -> str:
     from mech_chatbot.governance.feature_activation import FEATURE_FLAGS
     from mech_chatbot.governance.provider_smoke import (
@@ -277,6 +279,8 @@ def _runtime_identity(
             None,
         ),
         "request_deadline_seconds": process.request_deadline_seconds,
+        "stream_max_attempts": process.stream_max_attempts,
+        "provider_retry_limit": provider_retry_limit,
     })
 
 
@@ -664,6 +668,11 @@ def build_rag_runtime(
         resolved_provider = provider
 
     process_settings = _process_settings(existing_settings)
+    resolved_provider_retry_limit = (
+        process_settings.provider_retry_limit
+        if provider_retry_limit is None
+        else provider_retry_limit
+    )
     identity_settings = (
         existing_settings if isinstance(existing_settings, Settings) else Settings()
     )
@@ -690,6 +699,7 @@ def build_rag_runtime(
                 identity_settings,
                 process_settings,
                 resolved_retrieval,
+                provider_retry_limit=resolved_provider_retry_limit,
             ),
         ),
         executor=DefaultRagExecutor(
@@ -698,11 +708,7 @@ def build_rag_runtime(
             provider_adapter=resolved_provider,
             budget_limits=RequestBudgetLimits(
                 deadline_seconds=process_settings.request_deadline_seconds,
-                provider_retries=(
-                    RequestBudgetLimits().provider_retries
-                    if provider_retry_limit is None
-                    else provider_retry_limit
-                ),
+                provider_retries=resolved_provider_retry_limit,
             ),
         ),
         retrieval=resolved_retrieval,
