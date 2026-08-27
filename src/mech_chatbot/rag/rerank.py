@@ -13,6 +13,7 @@ from mech_chatbot.llm.external_ai import (
     external_error_metadata,
     normalize_rerank_result,
 )
+from mech_chatbot.rag.execution import remaining_request_timeout
 
 
 _VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
@@ -119,6 +120,10 @@ def voyage_rerank_documents(
         raise RuntimeError("VOYAGE_API_KEY chua resolve duoc tu secret reference cua Voyage")
 
     top_n = max(1, min(int(top_n or 10), len(docs)))
+    timeout_seconds = remaining_request_timeout(
+        timeout_seconds,
+        stage="Voyage reranking",
+    )
     model = runtime.model
     rerank_url = _voyage_rerank_url(runtime.endpoint)
     texts = [
@@ -221,6 +226,10 @@ def jina_rerank_documents(
         )
 
     top_n = max(1, min(int(top_n or 10), len(docs)))
+    timeout_seconds = remaining_request_timeout(
+        timeout_seconds,
+        stage="Jina reranking",
+    )
     model = runtime.model
     texts = [
         str(

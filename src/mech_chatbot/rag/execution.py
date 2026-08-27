@@ -42,6 +42,10 @@ _REQUEST_BUDGET: ContextVar["RequestBudgetLedger | None"] = ContextVar(
 )
 
 
+class RequestDeadlineExceeded(TimeoutError):
+    """The request-wide deadline expired before another external call."""
+
+
 def current_execution_context() -> str:
     """Return the request-local trace/evaluation context.
 
@@ -59,6 +63,32 @@ def current_execution_context() -> str:
 
 def current_request_budget() -> "RequestBudgetLedger | None":
     return _REQUEST_BUDGET.get()
+
+
+def remaining_request_timeout(
+    limit_seconds: float,
+    *,
+    stage: str,
+    deadline_monotonic: float | None = None,
+) -> float:
+    """Bound an external call by its configured limit and request deadline."""
+    limit = float(limit_seconds)
+    if limit <= 0 or limit != limit or limit == float("inf"):
+        raise ValueError("external call timeout must be finite and positive")
+    budget = current_request_budget()
+    deadline = deadline_monotonic
+    if deadline is None and budget is not None:
+        deadline = budget.deadline_monotonic
+    if deadline is None:
+        return limit
+    remaining = float(deadline) - time.monotonic()
+    if remaining <= 0:
+        if budget is not None:
+            budget.deadline_exceeded = True
+        raise RequestDeadlineExceeded(
+            f"RAG request deadline reached before {stage}"
+        )
+    return min(limit, remaining)
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,7 +362,9 @@ class _ExecutionState:
             raise ExternalAICallCancelled(f"RAG request cancelled during {stage}")
         if time.monotonic() >= self.budget.deadline_monotonic:
             self.budget.deadline_exceeded = True
-            raise TimeoutError(f"RAG request deadline exceeded during {stage}")
+            raise RequestDeadlineExceeded(
+                f"RAG request deadline exceeded during {stage}"
+            )
 
     def refuse(self, reason: str) -> None:
         if not self.refusal_reason:
@@ -796,10 +828,12 @@ __all__ = [
     "RagToken",
     "RequestBudgetLedger",
     "RequestBudgetLimits",
+    "RequestDeadlineExceeded",
     "CONTROLLED_DEMO_REQUEST_DEADLINE_SECONDS",
     "attributed_citations",
     "collect_rag_events",
     "consume_rag_events",
     "current_execution_context",
     "current_request_budget",
+    "remaining_request_timeout",
 ]

@@ -10,6 +10,7 @@ from qdrant_client import models
 from mech_chatbot.domain.serving_state import is_currently_servable
 from mech_chatbot.rag.answer_policy import AnswerDecision
 from mech_chatbot.rag.context_builders import _payload_document
+from mech_chatbot.rag.execution import remaining_request_timeout
 
 
 MAX_CORRECTION_PASSES = 1
@@ -83,6 +84,8 @@ def load_metadata_corrected_documents(
     collection_name,
     strict_filter,
     base_code,
+    qdrant_timeout_seconds=10,
+    deadline_monotonic=None,
 ):
     """Load a bounded, payload-only correction without relaxing governance."""
     code = str(base_code or "").strip()
@@ -113,7 +116,11 @@ def load_metadata_corrected_documents(
         limit=30,
         with_payload=True,
         with_vectors=False,
-        timeout=3,
+        timeout=remaining_request_timeout(
+            qdrant_timeout_seconds,
+            stage="corrective Qdrant scroll",
+            deadline_monotonic=deadline_monotonic,
+        ),
     )
     documents = []
     for point in points or ():

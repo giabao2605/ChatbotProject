@@ -10,7 +10,10 @@ from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.context_builders import hydrate_parent_context, parent_context_max_workers
 from mech_chatbot.rag.corrective import merge_corrected_documents
-from mech_chatbot.rag.execution import RequestBudgetExceeded
+from mech_chatbot.rag.execution import (
+    RequestBudgetExceeded,
+    RequestDeadlineExceeded,
+)
 from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.diagnostics import make_terminal_debug as _make_terminal_debug
 from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
@@ -239,7 +242,11 @@ def _provider_rerank(
                 current_provider,
                 top_n,
             )
-        except (ExternalAICallCancelled, RequestBudgetExceeded):
+        except (
+            ExternalAICallCancelled,
+            RequestBudgetExceeded,
+            RequestDeadlineExceeded,
+        ):
             raise
         except Exception as exc:
             logger.error("Loi khi su dung %s rerank: %s.", current_provider, exc)
@@ -388,6 +395,9 @@ def _hydrate_reranked_context(
         client=parent_client,
         collection_name=getattr(runtime, "collection_name", None),
         batch_enabled=parent_batch,
+        qdrant_timeout_seconds=getattr(
+            runtime, "qdrant_timeout_seconds", 10,
+        ),
         deadline_monotonic=deadline_monotonic,
     )
     if graph_docs:

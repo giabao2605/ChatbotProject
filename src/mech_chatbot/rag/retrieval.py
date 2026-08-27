@@ -9,6 +9,10 @@ from mech_chatbot.rag.rbac import (
     create_rbac_filter,
     LEVEL_ORDER,
 )
+from mech_chatbot.rag.execution import (
+    RequestDeadlineExceeded,
+    remaining_request_timeout,
+)
 
 def current_published_filter(rbac_filter=None):
     must = [
@@ -51,7 +55,8 @@ def current_published_filter(rbac_filter=None):
 
 def probe_restricted_access(query_text, user_department=None, allowed_departments=None,
                             max_security_level="public", allowed_sites=None, part_ids=None,
-                            *, client=None, collection_name=None):
+                            *, client=None, collection_name=None,
+                            qdrant_timeout_seconds=10):
     """Detect an exact-code document blocked by security or site policy.
 
     The probe reads only security/site payload fields and never returns evidence.
@@ -92,6 +97,10 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
                 "metadata.phong_ban_quyen",
             ],
             with_vectors=False,
+            timeout=remaining_request_timeout(
+                qdrant_timeout_seconds,
+                stage="restricted-access Qdrant probe",
+            ),
         )
         levels_above = []
         site_restricted = False
@@ -128,6 +137,8 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
         if site_restricted:
             return True, "site_restricted"
         return False, None
+    except RequestDeadlineExceeded:
+        raise
     except Exception as e:
         logger.warning(f"probe_restricted_access loi: {e}")
         return False, None

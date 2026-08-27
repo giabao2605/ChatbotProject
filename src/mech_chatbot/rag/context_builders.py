@@ -9,6 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from mech_chatbot.config.logging import logger
+from mech_chatbot.rag.execution import remaining_request_timeout
 
 
 def _context_is_mechanical(docs, part_ids=None):
@@ -403,6 +404,8 @@ def _load_parent_section_chunks(
     *,
     client=None,
     collection_name=None,
+    qdrant_timeout_seconds=10,
+    deadline_monotonic=None,
 ):
     """Load bounded chunks for an already-authorized document parent.
 
@@ -431,7 +434,11 @@ def _load_parent_section_chunks(
         limit=max(1, int(limit)),
         with_payload=True,
         with_vectors=False,
-        timeout=5,
+        timeout=remaining_request_timeout(
+            qdrant_timeout_seconds,
+            stage="parent-context Qdrant scroll",
+            deadline_monotonic=deadline_monotonic,
+        ),
     )
     return _parent_documents(points, parent_key, selected_scope)
 
@@ -473,6 +480,7 @@ def _load_parent_sections_batch(
     *,
     client,
     collection_name,
+    qdrant_timeout_seconds=10,
     deadline_monotonic=None,
 ):
     from qdrant_client import models
@@ -498,14 +506,11 @@ def _load_parent_sections_batch(
     if not valid:
         return {parent_key: [] for parent_key, _filter, _scope in prepared}
     try:
-        timeout = 5
-        if deadline_monotonic is not None:
-            remaining = int(float(deadline_monotonic) - time.monotonic())
-            if remaining < 1:
-                raise TimeoutError(
-                    "RAG request deadline reached before parent-context batch"
-                )
-            timeout = min(timeout, remaining)
+        timeout = remaining_request_timeout(
+            qdrant_timeout_seconds,
+            stage="parent-context Qdrant batch",
+            deadline_monotonic=deadline_monotonic,
+        )
         responses = client.query_batch_points(
             collection_name=collection_name,
             requests=[
@@ -555,6 +560,7 @@ def hydrate_parent_context(
     client=None,
     collection_name=None,
     batch_enabled=False,
+    qdrant_timeout_seconds=10,
     deadline_monotonic=None,
 ):
     """Replace selected child chunks with bounded parent section/page context.
@@ -601,6 +607,7 @@ def hydrate_parent_context(
                 loadable,
                 max_chunks_per_section,
                 **qdrant_kwargs,
+                qdrant_timeout_seconds=qdrant_timeout_seconds,
                 deadline_monotonic=deadline_monotonic,
             )
         elif qdrant_kwargs or max_workers == 1 or len(loadable) == 1:
@@ -610,6 +617,8 @@ def hydrate_parent_context(
                     max_chunks_per_section,
                     metadata,
                     **qdrant_kwargs,
+                    qdrant_timeout_seconds=qdrant_timeout_seconds,
+                    deadline_monotonic=deadline_monotonic,
                 )
         else:
             with ThreadPoolExecutor(

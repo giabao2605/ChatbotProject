@@ -498,7 +498,7 @@ def test_request_wide_retry_budget_stops_third_retry_before_any_token(monkeypatc
     attempts = []
 
     class FailingLlm:
-        def invoke(self, _messages):
+        def invoke(self, _messages, **_kwargs):
             attempts.append("call")
             raise RuntimeError("429 no_capacity")
 
@@ -540,7 +540,7 @@ def test_zero_retry_budget_stops_before_second_provider_attempt(monkeypatch):
     attempts = []
 
     class FailingLlm:
-        def invoke(self, _messages):
+        def invoke(self, _messages, **_kwargs):
             attempts.append("call")
             raise RuntimeError("502 service_unavailable")
 
@@ -590,7 +590,7 @@ def test_parallel_decomposition_retries_share_atomic_request_budget(monkeypatch)
     ledgers = []
 
     class FailingLlm:
-        def invoke(self, _messages):
+        def invoke(self, _messages, **_kwargs):
             with attempts_lock:
                 attempts.append(threading.get_ident())
             raise RuntimeError("429 no_capacity")

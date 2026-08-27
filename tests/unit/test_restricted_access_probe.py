@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from mech_chatbot.rag import retrieval
+from mech_chatbot.rag.execution import RequestDeadlineExceeded
 from mech_chatbot.rag.retrieval import probe_restricted_access
 QDRANT_COLLECTION = "test-knowledge"
 
@@ -61,6 +63,7 @@ def test_probe_uses_exact_code_governance_filter_and_payload_only(monkeypatch):
         "metadata.phong_ban_quyen",
     ]
     assert request["with_vectors"] is False
+    assert request["timeout"] == 10
     assert "restricted-fixture" in serialized_filter
     assert "RESTRICTED-FIXTURE" in serialized_filter
     assert "metadata.phong_ban_quyen" not in serialized_filter
@@ -106,3 +109,13 @@ def test_probe_reports_cross_department_document_as_access_denied(monkeypatch):
 
     assert blocked is True
     assert reason == "department_restricted"
+
+
+def test_probe_propagates_request_deadline_without_failing_open(monkeypatch):
+    def expired(*_args, **_kwargs):
+        raise RequestDeadlineExceeded("request deadline reached")
+
+    monkeypatch.setattr(retrieval, "remaining_request_timeout", expired)
+
+    with pytest.raises(TimeoutError, match="request deadline reached"):
+        _probe(monkeypatch, {})

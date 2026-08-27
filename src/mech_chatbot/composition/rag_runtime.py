@@ -96,6 +96,7 @@ class RagRetrievalRuntime:
     vectorstore: Any = field(repr=False)
     vision_model: Any = field(default=None, repr=False)
     collection_name: str = "TaiLieuKyThuat_v2"
+    qdrant_timeout_seconds: float = 10.0
     strict_answer_mode: bool = True
     strict_realtime_streaming: bool = False
     rerank_per_part: int = 8
@@ -576,6 +577,7 @@ def _build_default_adapters(
             vectorstore=vector_runtime.vector_store,
             vision_model=vision_model,
             collection_name=vector_runtime.collection_name,
+            qdrant_timeout_seconds=qdrant_timeout_seconds,
             semantic_router=semantic_router,
             late_interaction_config=late_config,
             late_query_encoder=late_query_encoder,

@@ -77,7 +77,25 @@ def test_llm_adapter_uses_only_the_explicit_settings_snapshot(monkeypatch):
         timeout=17.0,
         max_retries=0,
     )
-    client.invoke.assert_called_once_with(["prompt"])
+    client.invoke.assert_called_once_with(["prompt"], timeout=17.0)
+
+
+def test_llm_adapter_bounds_provider_timeout_by_request_budget(monkeypatch):
+    client = SimpleNamespace(invoke=Mock(return_value=object()))
+    monkeypatch.setattr(llm_client, "ChatOpenAI", Mock(return_value=client))
+    monkeypatch.setattr(
+        llm_client,
+        "audited_external_call",
+        lambda **_kwargs: nullcontext(),
+    )
+    remaining = Mock(return_value=4.25)
+    monkeypatch.setattr(llm_client, "remaining_request_timeout", remaining)
+
+    adapter = llm_client.build_llm_adapter(_llm_settings())
+    adapter.invoke(["prompt"], timeout_seconds=6.0)
+
+    remaining.assert_called_once_with(6.0, stage="provider generation")
+    client.invoke.assert_called_once_with(["prompt"], timeout=4.25)
 
 
 def test_provider_builders_preserve_proxy_endpoint_default(monkeypatch):

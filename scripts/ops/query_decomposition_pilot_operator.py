@@ -261,6 +261,33 @@ def _manifest_questions(path: Path, expected_sha: str) -> dict[str, str]:
     return questions
 
 
+def validate_manifest_routing(questions: Mapping[str, str]) -> None:
+    """Fail closed unless every pilot case remains a technical request."""
+    from mech_chatbot.rag import interaction_router, route_safety
+
+    for question in questions.values():
+        if route_safety.detect(question) is not None:
+            raise OperatorStopped("manifest_routing_invalid")
+        classifier_called = False
+
+        def probabilistic_classifier(_text, _context=None):
+            nonlocal classifier_called
+            classifier_called = True
+            return interaction_router.ROUTE_TECHNICAL, 1.0
+
+        result = interaction_router.classify(
+            question,
+            semantic_enabled=False,
+            llm_classifier=probabilistic_classifier,
+        )
+        if (
+            classifier_called
+            or result.route != interaction_router.ROUTE_TECHNICAL
+            or result.layer != interaction_router.LAYER_RULE
+        ):
+            raise OperatorStopped("manifest_routing_invalid")
+
+
 def validate_operator_inputs(
     *,
     source_root: Path,
@@ -307,6 +334,7 @@ def validate_operator_inputs(
     )):
         raise OperatorStopped("operator_authorization_invalid")
     questions = _manifest_questions(manifest_path, manifest_sha256)
+    validate_manifest_routing(questions)
     for card in schedule.get("cards") or ():
         question = questions.get(card.get("case_id"))
         if question is None or _sha256(question.encode("utf-8")) != card.get(

@@ -244,7 +244,7 @@ def test_metadata_corrected_retrieval_narrows_strict_filter_and_returns_servable
     assert observed["limit"] == 30
     assert observed["with_payload"] is True
     assert observed["with_vectors"] is False
-    assert observed["timeout"] == 3
+    assert observed["timeout"] == 10
     assert strict_filter in observed["scroll_filter"].must
     exact_conditions = [
         condition
@@ -254,6 +254,25 @@ def test_metadata_corrected_retrieval_narrows_strict_filter_and_returns_servable
     assert len(exact_conditions) == 1
     assert exact_conditions[0].key == "metadata.base_code"
     assert exact_conditions[0].match.value == "crag-eval-alias-001"
+
+
+def test_metadata_corrected_retrieval_uses_configured_timeout():
+    observed = {}
+
+    class Client:
+        def scroll(self, **kwargs):
+            observed.update(kwargs)
+            return [], None
+
+    load_metadata_corrected_documents(
+        client=Client(),
+        collection_name="test-knowledge",
+        strict_filter=models.Filter(),
+        base_code="CRAG-EVAL-NUM-001",
+        qdrant_timeout_seconds=9,
+    )
+
+    assert observed["timeout"] == 9
 
 
 def test_corrective_query_rewrites_use_approved_disambiguation_surface():

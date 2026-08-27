@@ -32,7 +32,11 @@ from mech_chatbot.rag.evidence_gate import (
     EvidenceState,
     evaluate_answerability,
 )
-from mech_chatbot.rag.execution import RequestBudgetExceeded, current_execution_context
+from mech_chatbot.rag.execution import (
+    RequestBudgetExceeded,
+    RequestDeadlineExceeded,
+    current_execution_context,
+)
 from mech_chatbot.rag.intent import serialize_qdrant_filter
 from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.diagnostics import (
@@ -380,8 +384,15 @@ def _probe_exact_code_access(
             part_ids=list(part_ids),
             client=getattr(context.runtime, "client", None),
             collection_name=getattr(context.runtime, "collection_name", None),
+            qdrant_timeout_seconds=getattr(
+                context.runtime, "qdrant_timeout_seconds", 10,
+            ),
         )
-    except (ExternalAICallCancelled, RequestBudgetExceeded):
+    except (
+        ExternalAICallCancelled,
+        RequestBudgetExceeded,
+        RequestDeadlineExceeded,
+    ):
         raise
     except Exception:
         return False, None
@@ -678,8 +689,16 @@ def _correct_retrieval(
                     ),
                     strict_filter=context.decision.strict_filter,
                     base_code=base_code,
+                    qdrant_timeout_seconds=getattr(
+                        context.runtime, "qdrant_timeout_seconds", 10,
+                    ),
+                    deadline_monotonic=state.budget.deadline_monotonic,
                 )
-            except (ExternalAICallCancelled, RequestBudgetExceeded):
+            except (
+                ExternalAICallCancelled,
+                RequestBudgetExceeded,
+                RequestDeadlineExceeded,
+            ):
                 raise
             except Exception:
                 corrected_documents = []

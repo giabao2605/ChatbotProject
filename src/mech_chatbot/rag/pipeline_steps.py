@@ -59,7 +59,9 @@ from mech_chatbot.rag.entity_resolver import (
 )
 from mech_chatbot.rag.execution import (
     RequestBudgetExceeded,
+    RequestDeadlineExceeded,
     current_execution_context,
+    remaining_request_timeout,
 )
 
 _RETRIEVE_UNSET = object()
@@ -325,13 +327,11 @@ def _log_hybrid_batch(
 
 
 def _remaining_qdrant_timeout(limit_seconds, deadline_monotonic):
-    limit = max(1, int(limit_seconds))
-    if deadline_monotonic is None:
-        return limit
-    remaining = int(float(deadline_monotonic) - time.monotonic())
-    if remaining < 1:
-        raise TimeoutError("RAG request deadline reached before Qdrant batch")
-    return min(limit, remaining)
+    return remaining_request_timeout(
+        max(1, int(limit_seconds)),
+        stage="Qdrant batch",
+        deadline_monotonic=deadline_monotonic,
+    )
 
 
 def _explicit_hybrid_rrf_batch(
@@ -522,6 +522,10 @@ def _explicit_hybrid_rrf(
     dense_top_k = max(1, int(dense_top_k))
     sparse_top_k = max(1, int(sparse_top_k))
     result_cap = max(1, int(result_cap))
+    effective_timeout = remaining_request_timeout(
+        qdrant_timeout_seconds,
+        stage=f"Qdrant {phase} dense retrieval",
+    )
     try:
         from langchain_qdrant import QdrantVectorStore, RetrievalMode
         dense_embedding = getattr(vectorstore, "embeddings", None)
@@ -551,18 +555,24 @@ def _explicit_hybrid_rrf(
             query,
             k=dense_top_k,
             filter=payload_filter,
-            timeout=qdrant_timeout_seconds,
+            timeout=effective_timeout,
         )
         dense_ms = int((time.perf_counter() - t_dense) * 1000)
         t_bm25 = time.perf_counter()
         sparse_error = None
         try:
+            effective_timeout = remaining_request_timeout(
+                qdrant_timeout_seconds,
+                stage=f"Qdrant {phase} sparse retrieval",
+            )
             sparse_docs = sparse_store.similarity_search(
                 query,
                 k=sparse_top_k,
                 filter=payload_filter,
-                timeout=qdrant_timeout_seconds,
+                timeout=effective_timeout,
             )
+        except RequestDeadlineExceeded:
+            raise
         except Exception as exc:
             if current_execution_context() == "evaluation":
                 raise
@@ -620,6 +630,8 @@ def _explicit_hybrid_rrf(
             if sparse_error is not None
             else "explicit_dense_bm25_rrf"
         )
+    except RequestDeadlineExceeded:
+        raise
     except Exception as exc:
         if current_execution_context() == "evaluation":
             logger.warning(
@@ -635,7 +647,10 @@ def _explicit_hybrid_rrf(
             search_kwargs={
                 "k": result_cap,
                 "filter": payload_filter,
-                "timeout": qdrant_timeout_seconds,
+                "timeout": remaining_request_timeout(
+                    qdrant_timeout_seconds,
+                    stage=f"Qdrant {phase} fallback retrieval",
+                ),
             },
         ).invoke(query)
         return list(fallback or []), "hybrid_fallback"
@@ -1023,6 +1038,20 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     _ctx_domain = _context_domain(retrieved_docs, new_part_ids)
     if provider_model is None:
         raise RuntimeError("RAG generation provider is not configured")
+    bind_provider = getattr(provider_model, "bind", None)
+    if callable(bind_provider):
+        provider_timeout = getattr(
+            getattr(provider_adapter, "settings", None),
+            "timeout_seconds",
+            120.0,
+        )
+        provider_model = bind_provider(
+            timeout=remaining_request_timeout(
+                provider_timeout,
+                stage="provider generation",
+                deadline_monotonic=plan.control.deadline_monotonic,
+            )
+        )
     chain = (
         _build_prompt_template(_ctx_domain, response_language)
         | provider_model

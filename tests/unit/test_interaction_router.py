@@ -123,7 +123,7 @@ def test_generic_calculation_still_reaches_llm_router():
     classifier.assert_called_once()
 
 
-def test_configuration_code_fast_route_is_disabled_by_default(monkeypatch):
+def test_configuration_code_rejects_l2_safety_when_fast_route_is_disabled(monkeypatch):
     monkeypatch.delenv("RAG_CRAG_ENABLED", raising=False)
     calls = {"llm": 0}
 
@@ -136,8 +136,8 @@ def test_configuration_code_fast_route_is_disabled_by_default(monkeypatch):
         llm_classifier=classifier,
     )
 
-    assert result.route == router.ROUTE_SAFETY_BLOCK
-    assert result.layer == router.LAYER_LLM
+    assert result.route == router.ROUTE_TECHNICAL
+    assert result.layer == router.LAYER_DEFAULT
     assert calls["llm"] == 1
 
 
@@ -159,7 +159,7 @@ def test_configuration_code_question_skips_llm_when_fast_route_enabled():
     assert calls["llm"] == 0
 
 
-def test_system_configuration_question_still_reaches_llm_router():
+def test_system_configuration_question_rejects_l2_safety_verdict():
     calls = {"llm": 0}
 
     def classifier(_, __=None):
@@ -171,8 +171,8 @@ def test_system_configuration_question_still_reaches_llm_router():
         llm_classifier=classifier,
     )
 
-    assert result.route == router.ROUTE_SAFETY_BLOCK
-    assert result.layer == router.LAYER_LLM
+    assert result.route == router.ROUTE_TECHNICAL
+    assert result.layer == router.LAYER_DEFAULT
     assert calls["llm"] == 1
 
 
@@ -191,17 +191,20 @@ def test_system_configuration_question_still_reaches_llm_router():
         "Tổng PRIVATE-KEY-123 và CD-34",
     ],
 )
-def test_code_shaped_system_credential_still_reaches_llm_router(q):
+def test_code_shaped_request_rejects_l2_safety_verdict(q):
     classifier = Mock(return_value=(router.ROUTE_SAFETY_BLOCK, 1.0))
 
     result = router.classify(q, llm_classifier=classifier)
 
-    assert result.route == router.ROUTE_SAFETY_BLOCK
-    assert result.layer == router.LAYER_LLM
-    classifier.assert_called_once()
+    assert result.route == router.ROUTE_TECHNICAL
+    assert result.layer in {router.LAYER_RULE, router.LAYER_DEFAULT}
+    if result.layer == router.LAYER_RULE:
+        classifier.assert_not_called()
+    else:
+        classifier.assert_called_once()
 
 
-def test_multi_segment_client_secret_still_reaches_llm_router():
+def test_multi_segment_client_secret_rejects_l2_safety_verdict():
     calls = {"llm": 0}
 
     def classifier(_, __=None):
@@ -213,8 +216,8 @@ def test_multi_segment_client_secret_still_reaches_llm_router():
         llm_classifier=classifier,
     )
 
-    assert result.route == router.ROUTE_SAFETY_BLOCK
-    assert result.layer == router.LAYER_LLM
+    assert result.route == router.ROUTE_TECHNICAL
+    assert result.layer == router.LAYER_DEFAULT
     assert calls["llm"] == 1
 
 

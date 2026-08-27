@@ -95,6 +95,9 @@ def test_llm_parse_response_ok():
     assert route_llm.parse_response('{"route":"out_of_scope","confidence":0.9}') == ("out_of_scope", 0.9)
     # Co rac / code fence van parse duoc
     assert route_llm.parse_response('```json\n{"route":"capability","confidence":1.5}\n```') == ("capability", 1.0)
+    assert route_llm.parse_response(
+        '{"route":"safety_block","confidence":0.93}'
+    ) is None
 
 
 def test_llm_parse_response_invalid():
@@ -134,6 +137,56 @@ def test_router_uses_l2_when_l1_unavailable():
     assert r.route == router.ROUTE_OUT_OF_SCOPE
     assert r.layer == router.LAYER_LLM
     assert abs(r.confidence - 0.8) < 1e-9
+
+
+def test_benign_multi_code_question_routes_before_l2_safety_false_positive():
+    question = (
+        "Giá trị CRAG-EVAL-NUM-001 và mã cấu hình "
+        "CRAG-EVAL-SECRET-001 là gì?"
+    )
+    calls = 0
+
+    def classifier(_text, _context=None):
+        nonlocal calls
+        calls += 1
+        return router.ROUTE_SAFETY_BLOCK, 0.93
+
+    result = router.classify(
+        question,
+        llm_classifier=classifier,
+    )
+
+    assert route_safety.detect(question) is None
+    assert result == router.RouteResult(
+        router.ROUTE_TECHNICAL,
+        router.LAYER_RULE,
+        confidence=0.98,
+        reason="multiple_explicit_codes",
+    )
+    assert calls == 0
+
+
+def test_benign_internal_code_question_rejects_l1_safety_false_positive():
+    question = "Phiên bản CRAG-EVAL-NUM-001 hiện hành là gì?"
+    semantic = router.SemanticRouter(
+        lambda _text: [1.0, 0.0],
+        prototypes={router.ROUTE_SAFETY_BLOCK: ["unsafe prototype"]},
+        threshold=0.9,
+        margin=0.1,
+    ).prepare()
+
+    result = router.classify(
+        question,
+        embedder=lambda _text: [1.0, 0.0],
+        semantic_router=semantic,
+    )
+
+    assert route_safety.detect(question) is None
+    assert result == router.RouteResult(
+        router.ROUTE_TECHNICAL,
+        router.LAYER_DEFAULT,
+        confidence=0.0,
+    )
 
 
 def test_router_l2_none_falls_back_technical():

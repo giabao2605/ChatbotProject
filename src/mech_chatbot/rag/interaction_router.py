@@ -28,7 +28,10 @@ from typing import Callable, List, Optional, Sequence, Tuple
 from mech_chatbot.rag import chitchat
 from mech_chatbot.rag import route_config
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
-from mech_chatbot.rag.entity_resolver import has_explicit_code
+from mech_chatbot.rag.entity_resolver import (
+    extract_explicit_codes,
+    has_explicit_code,
+)
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.grounded_math import detect_calculation_operation
 
@@ -43,6 +46,7 @@ ALL_ROUTES = frozenset({
     ROUTE_CHITCHAT, ROUTE_CAPABILITY, ROUTE_HOW_TO_USE,
     ROUTE_TECHNICAL, ROUTE_OUT_OF_SCOPE, ROUTE_SAFETY_BLOCK,
 })
+CLASSIFIER_ROUTES = ALL_ROUTES - {ROUTE_SAFETY_BLOCK}
 
 # Route "meta": tra loi bang template, BO QUA retrieval RAG.
 META_ROUTES = frozenset({ROUTE_CHITCHAT, ROUTE_CAPABILITY, ROUTE_HOW_TO_USE, ROUTE_OUT_OF_SCOPE})
@@ -144,6 +148,13 @@ def _fast_technical_route(
             LAYER_RULE,
             confidence=0.98,
             reason="internal_keyword",
+        )
+    if len(extract_explicit_codes(text)) >= 2:
+        return RouteResult(
+            ROUTE_TECHNICAL,
+            LAYER_RULE,
+            confidence=0.98,
+            reason="multiple_explicit_codes",
         )
     if _is_internal_calculation_code(text, q):
         return RouteResult(
@@ -394,7 +405,9 @@ def classify(
                 text,
                 query_vector=query_vector,
             )
-            if route in ALL_ROUTES:
+            # Safety is authoritative only at L-1.  A probabilistic classifier
+            # cannot turn a benign request into a terminal safety decision.
+            if route in CLASSIFIER_ROUTES:
                 return RouteResult(route, LAYER_SEMANTIC, confidence=float(score))
 
     # L2: LLM classifier fallback (chi khi duoc TIEM classifier vao).
@@ -410,7 +423,7 @@ def classify(
                 r, conf = res
             except Exception:
                 r, conf = None, 0.0
-            if r in ALL_ROUTES:
+            if r in CLASSIFIER_ROUTES:
                 return RouteResult(r, LAYER_LLM, confidence=float(conf))
 
     # Fallback AN TOAN: technical_query (pipeline RAG day du guardrail).

@@ -510,6 +510,9 @@ def _probe_branch_access(
         part_ids=part_ids,
         client=getattr(context.runtime, "client", None),
         collection_name=getattr(context.runtime, "collection_name", None),
+        qdrant_timeout_seconds=getattr(
+            context.runtime, "qdrant_timeout_seconds", 10,
+        ),
     )
     return bool(access_denied)
 

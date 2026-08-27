@@ -16,6 +16,7 @@ from mech_chatbot.llm.external_ai import (
     text_byte_count,
     text_char_count,
 )
+from mech_chatbot.rag.execution import remaining_request_timeout
 
 
 _MISSING_PROVIDER_KEY = "provider API key is not configured"
@@ -75,6 +76,7 @@ class LlmAdapter:
         security_levels=None,
         policies=None,
         retry_counter=None,
+        timeout_seconds=None,
     ):
         return gpt_invoke(
             messages,
@@ -84,6 +86,7 @@ class LlmAdapter:
             security_levels=security_levels,
             policies=policies,
             retry_counter=retry_counter,
+            timeout_seconds=timeout_seconds,
             adapter=self,
         )
 
@@ -96,6 +99,7 @@ class LlmAdapter:
         security_levels=None,
         policies=None,
         retry_counter=None,
+        timeout_seconds=None,
     ):
         return gpt_invoke.retry_with(stop=stop_after_attempt(1))(
             messages,
@@ -105,6 +109,7 @@ class LlmAdapter:
             security_levels=security_levels,
             policies=policies,
             retry_counter=retry_counter,
+            timeout_seconds=timeout_seconds,
             adapter=self,
         )
 
@@ -200,10 +205,22 @@ def gpt_invoke(
     security_levels=None,
     policies=None,
     retry_counter=None,
+    timeout_seconds=None,
     *,
     adapter: LlmAdapter | None = None,
 ):
     client = _get_runtime_llm() if adapter is None else adapter.client
+    configured_timeout = (
+        float(adapter.settings.timeout_seconds)
+        if adapter is not None
+        else 120.0
+    )
+    if timeout_seconds is not None:
+        configured_timeout = min(configured_timeout, float(timeout_seconds))
+    effective_timeout = remaining_request_timeout(
+        configured_timeout,
+        stage="provider generation",
+    )
     model = get_llm_model_name(adapter)
     endpoint = get_llm_endpoint(adapter)
     with audited_external_call(
@@ -223,7 +240,7 @@ def gpt_invoke(
             else DEFAULT_EXTERNAL_AI_SETTINGS
         ),
     ):
-        return client.invoke(messages)
+        return client.invoke(messages, timeout=effective_timeout)
 
 
 def cohere_invoke(
@@ -234,6 +251,7 @@ def cohere_invoke(
     security_levels=None,
     policies=None,
     retry_counter=None,
+    timeout_seconds=None,
     *,
     adapter: LlmAdapter | None = None,
 ):
@@ -245,6 +263,7 @@ def cohere_invoke(
         security_levels=security_levels,
         policies=policies,
         retry_counter=retry_counter,
+        timeout_seconds=timeout_seconds,
         adapter=adapter,
     )
 

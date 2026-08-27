@@ -96,7 +96,7 @@ def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(
 
     assert [doc.page_content for doc in docs] == ["safe parent evidence"]
     assert len(client.calls) == 1
-    assert client.calls[0]["timeout"] == 5
+    assert client.calls[0]["timeout"] == 10
     conditions = {
         condition.key: condition.match
         for condition in client.calls[0]["scroll_filter"].must
@@ -129,7 +129,10 @@ def test_parent_hydration_passes_selected_metadata_and_preserves_selected(monkey
     )
 
     assert hydrated == [selected]
-    assert called == [((PARENT_KEY, 2, selected.metadata), {})]
+    assert called == [((PARENT_KEY, 2, selected.metadata), {
+        "qdrant_timeout_seconds": 10,
+        "deadline_monotonic": None,
+    })]
 
 
 def test_parent_hydration_loads_unique_sections_concurrently_and_preserves_order(monkeypatch):
@@ -212,6 +215,7 @@ def test_parent_hydration_batches_qdrant_reads_and_preserves_order():
         client=client,
         collection_name="test-knowledge",
         batch_enabled=True,
+        qdrant_timeout_seconds=9,
     )
 
     assert [doc.metadata["doc_id"] for doc in hydrated] == [91, 92, 93]
@@ -223,7 +227,7 @@ def test_parent_hydration_batches_qdrant_reads_and_preserves_order():
     assert len(client.calls) == 1
     assert len(client.calls[0]["requests"]) == 3
     assert all(request.query is None for request in client.calls[0]["requests"])
-    assert client.calls[0]["timeout"] == 5
+    assert client.calls[0]["timeout"] == 9
     for index, request in enumerate(client.calls[0]["requests"], 1):
         conditions = {
             condition.key: condition.match
@@ -341,7 +345,7 @@ def test_parent_hydration_worker_one_is_sequential_rollback(monkeypatch):
     max_active = 0
     lock = threading.Lock()
 
-    def _loader(_parent_key, _limit, metadata):
+    def _loader(_parent_key, _limit, metadata, **_kwargs):
         nonlocal active, max_active
         with lock:
             active += 1
