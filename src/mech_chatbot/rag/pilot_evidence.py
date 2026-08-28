@@ -46,6 +46,8 @@ class GraphPilotValidation:
 
 
 def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
     try:
         normalized = int(value)
     except (TypeError, ValueError):
@@ -157,6 +159,61 @@ def _request_safety(payload: Mapping[str, Any]) -> tuple[bool, bool]:
     return (
         validation.get("access_scope_passed") is True,
         validation.get("leakage_passed") is True,
+    )
+
+
+def _declared_source_ids(value: object) -> set[str] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return None
+    normalized = tuple(str(item or "").strip().upper() for item in value)
+    if not normalized or any(
+        re.fullmatch(r"D[1-9]\d*P[1-9]\d*", item) is None
+        for item in normalized
+    ):
+        return None
+    return set(normalized)
+
+
+def _query_answer_contract(
+    diagnostics: Mapping[str, Any], answer: str
+) -> tuple[bool, bool]:
+    rendered = {
+        match.group("source_id").upper()
+        for match in _SOURCE_ID_RE.finditer(str(answer or ""))
+    }
+    available = _source_ids(
+        _metadata_rows(diagnostics.get("citation_docs")),
+        require_version=True,
+    )
+    full_answer_branches = tuple(
+        branch
+        for branch in _metadata_rows(diagnostics.get("decomposition_branches"))
+        if branch.get("outcome") == "full_answer"
+    )
+    branch_citation_ids: set[str] = set()
+    branch_rendered_ids: set[str] = set()
+    branch_provenance_passed = bool(full_answer_branches)
+    for branch in full_answer_branches:
+        citations = _source_ids(
+            _metadata_rows(branch.get("citations")), require_version=True
+        )
+        branch_rendered = _declared_source_ids(
+            branch.get("rendered_source_ids")
+        )
+        branch_citation_ids.update(citations)
+        branch_rendered_ids.update(branch_rendered or set())
+        if branch_rendered is None:
+            branch_provenance_passed = False
+            continue
+        branch_provenance_passed = branch_provenance_passed and all((
+            branch_rendered <= citations,
+            branch_rendered <= rendered,
+        ))
+    return (
+        bool(rendered) and rendered <= available,
+        branch_provenance_passed
+        and rendered <= branch_citation_ids
+        and rendered <= branch_rendered_ids,
     )
 
 
@@ -361,12 +418,15 @@ def query_decomposition_pilot_event_fields(
         and all(value is True for value in coverage)
     )
     security_passed = validation.get("access_scope_passed") is True
-    citation_passed = validation.get("citation_structure_passed") is True
-    provenance_passed = validation.get("provenance_passed") is True
+    citation_passed, provenance_passed = _query_answer_contract(
+        diagnostics, answer
+    )
     leakage_detected = validation.get("leakage_passed") is not True
     execution_contract_passed = all((
         usage is not None,
         len(branches) == budget.subqueries == intent_count,
+        len(_metadata_rows(diagnostics.get("decomposition_branches")))
+        == budget.subqueries,
         coverage_complete,
         diagnostics.get("decomposition_intent_overflow") is False,
         budget.planners <= 1,

@@ -16,6 +16,7 @@ from mech_chatbot.governance.query_activation_contract import (
 from scripts.ops.query_decomposition_pilot import (
     PILOT_AUTHORIZATION,
     finalize_pilot_authorization,
+    pilot_evidence_valid,
     prepare_pilot_launch_packet,
     record_pilot_completion,
 )
@@ -47,6 +48,28 @@ def _answered_evidence() -> dict:
         "estimated_cost": 0.0003, "provider_retries": 0,
         "final_generations": 1,
     }
+
+
+@pytest.mark.parametrize("candidate", [None, {"route": "query_decomposition"}])
+def test_pilot_evidence_validator_rejects_non_contract_values(candidate):
+    assert pilot_evidence_valid(candidate) is False
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"request_deadline_ms": None},
+        {"request_deadline_ms": "120000"},
+        {"final_latency_ms": True},
+        {"estimated_cost": float("nan")},
+        {"planner_calls": True},
+        {"provider_retries": False},
+        {"final_generations": True},
+        {"deterministic_split_used": "true"},
+    ],
+)
+def test_pilot_evidence_validator_fails_closed_without_raising(update):
+    assert pilot_evidence_valid({**_answered_evidence(), **update}) is False
 
 
 @pytest.fixture(autouse=True)

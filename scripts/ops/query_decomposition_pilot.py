@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -49,19 +50,37 @@ def pilot_evidence_valid(value: object) -> bool:
     """Return whether one Query pilot row is eligible for the final gate."""
     if not isinstance(value, dict) or set(value) != _EVIDENCE_FIELDS:
         return False
+    final_latency_ms = value.get("final_latency_ms")
+    request_deadline_ms = value.get("request_deadline_ms")
+    if type(final_latency_ms) is not int or type(request_deadline_ms) is not int:
+        return False
+    estimated_cost = value.get("estimated_cost")
+    if (
+        isinstance(estimated_cost, bool)
+        or not isinstance(estimated_cost, (int, float))
+        or not math.isfinite(estimated_cost)
+    ):
+        return False
+    valid_latency = 0 <= final_latency_ms <= request_deadline_ms
     common = all((
         value.get("route") == "query_decomposition",
         value.get("security_passed") is True,
         value.get("leakage_detected") is False,
+        type(value.get("subquery_count")) is int,
         value.get("subquery_count") in {2, 3},
+        type(value.get("intent_count")) is int,
         value.get("intent_count") == value.get("subquery_count"),
         value.get("intent_coverage_complete") is True,
+        type(value.get("deterministic_split_used")) is bool,
         value.get("intent_overflow") is False,
+        type(value.get("planner_calls")) is int,
         value.get("planner_calls") in {0, 1},
+        type(value.get("correction_count")) is int,
         value.get("correction_count") in {0, 1},
+        type(value.get("provider_retries")) is int,
         value.get("provider_retries") == 0,
-        type(value.get("final_latency_ms")) is int,
-        0 <= value.get("final_latency_ms") <= value.get("request_deadline_ms"),
+        estimated_cost >= 0,
+        valid_latency,
     ))
     answered = all((
         value.get("query_result_status") == "valid",
@@ -71,6 +90,7 @@ def pilot_evidence_valid(value: object) -> bool:
         value.get("owner_review_required") is False,
         value.get("citation_structure_passed") is True,
         value.get("provenance_passed") is True,
+        type(value.get("final_generations")) is int,
         value.get("final_generations") == 1,
     ))
     safe_refusal = all((
@@ -79,6 +99,7 @@ def pilot_evidence_valid(value: object) -> bool:
         value.get("refusal_reason_code") == "evidence_gate",
         value.get("refusal_template_passed") is True,
         value.get("owner_review_required") is True,
+        type(value.get("final_generations")) is int,
         value.get("final_generations") == 0,
     ))
     return common and (answered or safe_refusal)

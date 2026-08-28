@@ -198,6 +198,123 @@ def test_completed_refused_calculation_route_emits_failed_validation_evidence(
     assert evidence[0]["leakage_detected"] is True
 
 
+def test_query_pilot_event_reconciles_sources_after_stream_completion(monkeypatch):
+    from mech_chatbot.config import logging as trace_logging
+
+    trace_messages = []
+    monkeypatch.setattr(trace_logging.trace_logger, "info", trace_messages.append)
+    source = {
+        "doc_id": 7,
+        "trang": 1,
+        "source_id": "D7P1",
+        "version_no": 1,
+    }
+    branches = [
+        {
+            "outcome": "full_answer",
+            "citations": [source],
+            "rendered_source_ids": [],
+        },
+        {
+            "outcome": "full_answer",
+            "citations": [source],
+            "rendered_source_ids": [],
+        },
+    ]
+
+    def scripted_pipeline(state):
+        state.budget.record("subqueries", 2)
+        state.budget.record("final_generations", 1)
+
+        def stream():
+            yield "SourceID: D7P1"
+            for branch in branches:
+                branch["rendered_source_ids"] = ["D7P1"]
+
+        usage = {
+            "schema": "rag-decomposition-usage-v1",
+            "planner": {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "estimated_cost": 0.0,
+            },
+            "branches": [
+                {
+                    "branch_id": f"branch-{index}",
+                    "retrieval": {
+                        "latency_ms": 1,
+                        "latency_scope": "shared_batch",
+                        "document_count": 1,
+                        "estimated_input_tokens": 1,
+                        "estimated_cost": None,
+                        "cost_status": "unpriced",
+                    },
+                    "correction": {
+                        "attempted": False,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "estimated_cost": 0.0,
+                    },
+                }
+                for index in (1, 2)
+            ],
+            "retrieval_batch": {
+                "latency_ms": 1,
+                "branch_count": 2,
+                "shared": True,
+            },
+            "final_context": {
+                "estimated_input_tokens": 1,
+                "estimated_input_cost": 0.0,
+                "included_in_final_generation": True,
+            },
+            "final_generation": {
+                "calls": 1,
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "estimated_cost": 0.0,
+            },
+        }
+        return state.prepared((
+            stream(),
+            "",
+            [],
+            [],
+            {
+                "decomposition_usage": usage,
+                "decomposition_intent_count": 2,
+                "decomposition_intent_coverage": [True, True],
+                "decomposition_used_fallback": True,
+                "decomposition_intent_overflow": False,
+                "decomposition_branches": branches,
+                "citation_docs": [source],
+                "generation_metrics": {"estimated_cost": 0.0},
+                "pilot_request_validation": {
+                    "access_scope_passed": True,
+                    "leakage_passed": True,
+                },
+            },
+        ))
+
+    events = list(
+        DefaultRagExecutor(execute_pipeline=scripted_pipeline).run(
+            RagRequest("query", AccessScope()),
+            RagInvocation(trace_id="query-after-stream", mode="test"),
+        )
+    )
+
+    assert isinstance(events[-1], RagCompleted)
+    evidence = [
+        json.loads(message)
+        for message in trace_messages
+        if json.loads(message)["event"] == "pilot_request_evidence"
+    ]
+    assert evidence[0]["query_result_status"] == "valid"
+    assert evidence[0]["citation_structure_passed"] is True
+    assert evidence[0]["provenance_passed"] is True
+
+
 def test_safety_refusal_obeys_public_event_order_without_external_calls():
     executor = DefaultRagExecutor()
     request = RagRequest(

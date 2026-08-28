@@ -492,6 +492,8 @@ def test_high_risk_grounded_negative_partial_stops_before_final_generation(
     assert debug["generation_metrics"]["decomposition_usage"][
         "final_generation"
     ]["calls"] == 0
+    assert debug["answer_outcome"] == "insufficient_evidence"
+    assert debug["evidence_stage"] == "terminal"
 
 
 @pytest.mark.parametrize("missing_outcome", ["insufficient_evidence", "access_denied"])

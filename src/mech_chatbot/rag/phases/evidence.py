@@ -415,6 +415,7 @@ def _make_refusal_debug(
             primary, enrichment, reranked, state, answer_policy,
             evidence_decision, evidence_quotes,
         ),
+        "evidence_stage": "terminal",
         "citation_docs": base_debug["retrieved_docs"],
         "generation_metrics": generation_metrics,
         "decomposition_usage": generation_metrics["decomposition_usage"],

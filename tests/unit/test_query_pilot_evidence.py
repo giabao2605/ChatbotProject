@@ -54,6 +54,12 @@ def _usage(branch_count: int = 2) -> dict:
 
 
 def _diagnostics(**updates) -> dict:
+    source = {
+        "doc_id": 7,
+        "trang": 1,
+        "source_id": "D7P1",
+        "version_no": 1,
+    }
     return {
         "decomposition_usage": _usage(),
         "decomposition_intent_count": 2,
@@ -61,6 +67,19 @@ def _diagnostics(**updates) -> dict:
         "decomposition_used_fallback": True,
         "decomposition_intent_overflow": False,
         "generation_metrics": {"estimated_cost": 0.0003},
+        "citation_docs": [source],
+        "decomposition_branches": [
+            {
+                "outcome": "full_answer",
+                "citations": [source],
+                "rendered_source_ids": ["D7P1"],
+            },
+            {
+                "outcome": "full_answer",
+                "citations": [source],
+                "rendered_source_ids": ["D7P1"],
+            },
+        ],
         "pilot_request_validation": {
             "access_scope_passed": True,
             "citation_structure_passed": True,
@@ -85,7 +104,7 @@ def _budget(
 def test_query_route_emits_complete_metadata_only_pilot_evidence():
     evidence = pilot_request_event_fields(
         _diagnostics(),
-        "SECRET ANSWER",
+        "SECRET ANSWER. SourceID: D7P1",
         _budget(),
         final_latency_ms=250,
         completion_outcome="answered",
@@ -120,6 +139,187 @@ def test_query_route_emits_complete_metadata_only_pilot_evidence():
     assert "SECRET ANSWER" not in serialized
     assert "question" not in serialized
     assert "subquery" not in serialized.replace("subquery_count", "")
+
+
+def test_query_answer_reconciles_final_rendered_sources_after_streaming():
+    first = {
+        "doc_id": 7,
+        "trang": 1,
+        "source_id": "D7P1",
+        "version_no": 1,
+    }
+    second = {
+        "doc_id": 8,
+        "trang": 2,
+        "source_id": "D8P2",
+        "version_no": 3,
+    }
+    evidence = pilot_request_event_fields(
+        _diagnostics(
+            citation_docs=[first, second],
+            decomposition_branches=[
+                {
+                    "outcome": "full_answer",
+                    "citations": [first],
+                    "rendered_source_ids": ["D7P1"],
+                },
+                {
+                    "outcome": "full_answer",
+                    "citations": [second],
+                    "rendered_source_ids": ["D8P2"],
+                },
+            ],
+            pilot_request_validation={
+                "access_scope_passed": True,
+                "leakage_passed": True,
+            },
+        ),
+        "Nguồn: tài liệu A, trang 1, version 1, SourceID: D7P1. "
+        "Nguồn: tài liệu B, trang 2, version 3, SourceID: D8P2.",
+        _budget(),
+        final_latency_ms=250,
+        completion_outcome="answered",
+        refusal_reason=None,
+    )
+
+    assert evidence["query_result_status"] == "valid"
+    assert evidence["citation_structure_passed"] is True
+    assert evidence["provenance_passed"] is True
+
+
+def test_query_answer_rejects_rendered_source_missing_from_citation_docs():
+    source = {
+        "doc_id": 7,
+        "trang": 1,
+        "source_id": "D7P1",
+        "version_no": 1,
+    }
+    evidence = pilot_request_event_fields(
+        _diagnostics(
+            citation_docs=[source],
+            decomposition_branches=[
+                {
+                    "outcome": "full_answer",
+                    "citations": [source],
+                    "rendered_source_ids": ["D7P1"],
+                }
+            ],
+        ),
+        "SourceID: D99P1",
+        _budget(),
+        final_latency_ms=250,
+        completion_outcome="answered",
+        refusal_reason=None,
+    )
+
+    assert evidence["query_result_status"] == "invalid"
+    assert evidence["citation_structure_passed"] is False
+
+
+def test_query_answer_rejects_full_branch_without_rendered_provenance():
+    source = {
+        "doc_id": 7,
+        "trang": 1,
+        "source_id": "D7P1",
+        "version_no": 1,
+    }
+    evidence = pilot_request_event_fields(
+        _diagnostics(
+            citation_docs=[source],
+            decomposition_branches=[
+                {
+                    "outcome": "full_answer",
+                    "citations": [source],
+                    "rendered_source_ids": [],
+                }
+            ],
+        ),
+        "SourceID: D7P1",
+        _budget(),
+        final_latency_ms=250,
+        completion_outcome="answered",
+        refusal_reason=None,
+    )
+
+    assert evidence["query_result_status"] == "invalid"
+    assert evidence["citation_structure_passed"] is True
+    assert evidence["provenance_passed"] is False
+
+
+def test_query_answer_rejects_source_not_rendered_by_any_branch():
+    first = {
+        "doc_id": 7,
+        "trang": 1,
+        "source_id": "D7P1",
+        "version_no": 1,
+    }
+    second = {
+        "doc_id": 8,
+        "trang": 2,
+        "source_id": "D8P2",
+        "version_no": 3,
+    }
+    evidence = pilot_request_event_fields(
+        _diagnostics(
+            citation_docs=[first, second],
+            decomposition_branches=[
+                {
+                    "outcome": "full_answer",
+                    "citations": [first],
+                    "rendered_source_ids": ["D7P1"],
+                },
+                {
+                    "outcome": "full_answer",
+                    "citations": [first, second],
+                    "rendered_source_ids": ["D7P1"],
+                },
+            ],
+        ),
+        "SourceID: D7P1 SourceID: D8P2",
+        _budget(),
+        final_latency_ms=250,
+        completion_outcome="answered",
+        refusal_reason=None,
+    )
+
+    assert evidence["query_result_status"] == "invalid"
+    assert evidence["citation_structure_passed"] is True
+    assert evidence["provenance_passed"] is False
+
+
+def test_query_answer_rejects_bool_source_metadata():
+    bool_source = {
+        "doc_id": True,
+        "trang": True,
+        "source_id": "D1P1",
+        "version_no": True,
+    }
+    evidence = pilot_request_event_fields(
+        _diagnostics(
+            citation_docs=[bool_source],
+            decomposition_branches=[
+                {
+                    "outcome": "full_answer",
+                    "citations": [bool_source],
+                    "rendered_source_ids": ["D1P1"],
+                },
+                {
+                    "outcome": "full_answer",
+                    "citations": [bool_source],
+                    "rendered_source_ids": ["D1P1"],
+                },
+            ],
+        ),
+        "SourceID: D1P1",
+        _budget(),
+        final_latency_ms=250,
+        completion_outcome="answered",
+        refusal_reason=None,
+    )
+
+    assert evidence["query_result_status"] == "invalid"
+    assert evidence["citation_structure_passed"] is False
+    assert evidence["provenance_passed"] is False
 
 
 def test_query_pilot_evidence_fails_closed_on_intent_overflow():
