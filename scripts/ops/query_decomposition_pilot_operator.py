@@ -26,6 +26,7 @@ from scripts.ops.query_decomposition_pilot import (
     _source_commit,
     _timestamp,
     _wal_rows,
+    pilot_evidence_valid,
     record_pilot_completion,
 )
 
@@ -454,6 +455,8 @@ def run_pilot(
         completed = now_fn().astimezone(timezone.utc)
         if completed > next_scheduled:
             raise OperatorStopped("request_crossed_schedule_boundary")
+        if not pilot_evidence_valid(evidence):
+            raise OperatorStopped("per_request_evidence_invalid")
         record_pilot_completion(
             schedule_path=schedule_file,
             authorization_path=authorization_file,

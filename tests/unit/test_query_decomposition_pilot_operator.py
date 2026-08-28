@@ -506,6 +506,76 @@ def test_run_pilot_stops_root_when_provider_retry_is_observed(
         )
 
 
+def test_run_pilot_stops_invalid_evidence_before_wal_and_next_card(
+    tmp_path, monkeypatch,
+):
+    start = datetime(2026, 8, 27, tzinfo=timezone.utc)
+    clock = Clock(start)
+    paths = _operator_files(tmp_path)
+    local = tmp_path / ".local"
+    cards = [
+        {
+            "card_id": f"query-pilot-{index:03d}",
+            "case_id": f"case-{index}",
+            "request_sha256": str(index) * 64,
+            "scheduled_at": operator._format(
+                start + timedelta(seconds=10 * (index - 1))
+            ),
+        }
+        for index in (1, 2)
+    ]
+    monkeypatch.setattr(
+        operator,
+        "validate_operator_inputs",
+        lambda **_kwargs: (
+            {"expires_at": operator._format(start + timedelta(seconds=30))},
+            {"cards": cards},
+            {"case-1": "private one", "case-2": "private two"},
+        ),
+    )
+    monkeypatch.setattr(operator, "_wal_rows", lambda _path: [])
+    sent = []
+    monkeypatch.setattr(
+        operator,
+        "record_pilot_completion",
+        lambda **_kwargs: pytest.fail("invalid evidence must not enter WAL"),
+    )
+    invalid = {
+        **_evidence(),
+        "query_result_status": "invalid",
+        "owner_review_required": True,
+        "citation_structure_passed": False,
+        "provenance_passed": False,
+    }
+
+    with pytest.raises(
+        operator.OperatorStopped, match="per_request_evidence_invalid",
+    ):
+        operator.run_pilot(
+            source_root=tmp_path,
+            schedule_path=paths["schedule"],
+            authorization_path=paths["authorization"],
+            authorization_sha256="a" * 64,
+            bundle_path=paths["bundle"],
+            bundle_sha256="b" * 64,
+            manifest_path=paths["manifest"],
+            manifest_sha256="m" * 64,
+            runtime_url="http://127.0.0.1:8302",
+            frozen_health=_health(),
+            trace_path=local / "trace.jsonl",
+            wal_path=local / "wal.jsonl",
+            claim_dir=local / "claims",
+            service_token="token",
+            clock=clock,
+            sleeper=clock.sleep,
+            health=_health,
+            send=lambda question: sent.append(question) or "trace-1",
+            evidence_loader=lambda _trace: invalid,
+        )
+
+    assert sent == ["private one"]
+
+
 def test_candidate_environment_overrides_parent_with_exact_query_scope(
     tmp_path, monkeypatch,
 ):

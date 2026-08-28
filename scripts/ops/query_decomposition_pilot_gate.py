@@ -8,51 +8,13 @@ from scripts.ops.query_decomposition_pilot import (
     PILOT_CONTRACT_VERSION,
     PILOT_DURATION,
     PILOT_REQUEST_COUNT,
-    _EVIDENCE_FIELDS,
     _authorization_and_schedule,
     _read_json,
     _sha256_digest,
     _timestamp,
     _wal_rows,
+    pilot_evidence_valid,
 )
-
-
-def _evidence_valid(value: object) -> bool:
-    if not isinstance(value, dict) or set(value) != _EVIDENCE_FIELDS:
-        return False
-    common = all((
-        value.get("route") == "query_decomposition",
-        value.get("security_passed") is True,
-        value.get("leakage_detected") is False,
-        value.get("subquery_count") in {2, 3},
-        value.get("intent_count") == value.get("subquery_count"),
-        value.get("intent_coverage_complete") is True,
-        value.get("intent_overflow") is False,
-        value.get("planner_calls") in {0, 1},
-        value.get("correction_count") in {0, 1},
-        value.get("provider_retries") == 0,
-        type(value.get("final_latency_ms")) is int,
-        0 <= value.get("final_latency_ms") <= value.get("request_deadline_ms"),
-    ))
-    answered = all((
-        value.get("query_result_status") == "valid",
-        value.get("completion_outcome") == "answered",
-        value.get("refusal_reason_code") is None,
-        value.get("refusal_template_passed") is False,
-        value.get("owner_review_required") is False,
-        value.get("citation_structure_passed") is True,
-        value.get("provenance_passed") is True,
-        value.get("final_generations") == 1,
-    ))
-    safe_refusal = all((
-        value.get("query_result_status") == "safe_refusal",
-        value.get("completion_outcome") == "refused",
-        value.get("refusal_reason_code") == "evidence_gate",
-        value.get("refusal_template_passed") is True,
-        value.get("owner_review_required") is True,
-        value.get("final_generations") == 0,
-    ))
-    return common and (answered or safe_refusal)
 
 
 def _review_valid(
@@ -134,7 +96,7 @@ def _row_contract_valid(
             and _timestamp(row.get("completed_at")) <= _timestamp(expires_at)
             and _sha256_digest(row.get("trace_id_sha256"))
             and row.get("runtime_identity_sha256") == runtime_identity_sha256
-            and _evidence_valid(row.get("evidence"))
+            and pilot_evidence_valid(row.get("evidence"))
             for row in rows
         )
         cadence = len(rows) == len(cards) and all(
