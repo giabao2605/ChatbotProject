@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import argparse
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
-import socket
 import subprocess
 import time
-from urllib.parse import urlparse
 
 from mech_chatbot.governance.feature_activation import FEATURE_FLAGS
 from mech_chatbot.governance.query_activation_contract import (
@@ -29,6 +26,25 @@ from scripts.ops.query_decomposition_pilot import (
     pilot_evidence_valid,
     record_pilot_completion,
 )
+from scripts.ops.query_pilot_operator_support import (
+    OperatorStopped,
+    consolidated_binding_valid as _consolidated_binding_valid,
+    ensure_port_free as _ensure_port_free,
+    fetch_runtime_health,
+    inside as _inside, loopback_url as _loopback_url,
+    operator_outputs_fresh as _operator_outputs_fresh,
+    pilot_run_paths as _pilot_run_paths,
+    pilot_run_root as _pilot_run_root,
+    send_query_sse,
+    terminal_reason as _terminal_reason,
+)
+from scripts.ops.query_pilot_review_capture import (
+    capture_answer,
+    prepare_capture_directory,
+    review_capture_cards,
+    validate_capture_chain,
+)
+from scripts.ops.query_pilot_capture_lifecycle import cleanup_terminal_captures
 
 
 _HEALTH_BINDINGS = (
@@ -48,12 +64,6 @@ _HEALTH_BINDINGS = (
 _QUERY_ONLY_FLAGS = {
     name: name == "RAG_QUERY_DECOMPOSITION_ENABLED" for name in FEATURE_FLAGS
 }
-
-
-class OperatorStopped(RuntimeError):
-    """Terminal pilot stop; the same root must not be resumed."""
-
-
 def _sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
@@ -63,14 +73,6 @@ def _digest(value: object) -> bool:
     return len(normalized) == 64 and not (
         set(normalized) - set("0123456789abcdef")
     )
-
-
-def _inside(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
 
 
 def _exclusive_json(path: Path, value: object) -> None:
@@ -83,127 +85,6 @@ def _exclusive_json(path: Path, value: object) -> None:
             os.fsync(stream.fileno())
     except FileExistsError:
         raise OperatorStopped("artifact_already_exists") from None
-
-
-def _loopback_url(value: object) -> str:
-    raw = str(value or "")
-    try:
-        parsed = urlparse(raw)
-        valid = all((
-            parsed.scheme == "http",
-            parsed.hostname == "127.0.0.1",
-            parsed.username is None,
-            parsed.password is None,
-            parsed.path in {"", "/"},
-            not parsed.query,
-            not parsed.fragment,
-            parsed.port is not None and 0 < parsed.port <= 65535,
-        ))
-    except ValueError:
-        valid = False
-    if not valid:
-        raise OperatorStopped("runtime_url_invalid")
-    return raw.rstrip("/")
-
-
-def _ensure_port_free(port: int) -> None:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-            raise OperatorStopped("runtime_port_already_in_use")
-    except OperatorStopped:
-        raise
-    except OSError:
-        return
-
-
-def send_query_sse(
-    base_url: str,
-    service_token: str,
-    question: str,
-    *,
-    post=None,
-    timeout_seconds: float = 150.0,
-) -> str:
-    if not service_token or not isinstance(question, str) or not question.strip():
-        raise OperatorStopped("request_input_invalid")
-    session = None
-    if post is None:
-        import requests
-
-        session = requests.Session()
-        session.trust_env = False
-        post = session.post
-    from mech_chatbot.adapters.pilot_replay import iter_sse_events
-
-    response = None
-    try:
-        response = post(
-            _loopback_url(base_url) + "/chat/stream",
-            headers={"X-RAG-Service-Token": service_token},
-            json={
-                "user_id": 81,
-                "username": "admin_bao",
-                "user_question": question,
-                "current_part_ids": [],
-                "response_language": "vi",
-            },
-            stream=True,
-            allow_redirects=False,
-            timeout=(10, timeout_seconds),
-        )
-        response.raise_for_status()
-        trace_id = ""
-        for event, payload in iter_sse_events(response):
-            if event == "error":
-                raise OperatorStopped("rag_stream_error")
-            if event == "done" and payload.get("ok") is True:
-                trace_id = str(payload.get("trace_id") or "").strip()
-        if not trace_id:
-            raise OperatorStopped("rag_trace_missing")
-        return trace_id
-    except OperatorStopped:
-        raise
-    except Exception:
-        raise OperatorStopped("rag_request_failed") from None
-    finally:
-        if response is not None:
-            response.close()
-        if session is not None:
-            session.close()
-
-
-def fetch_runtime_health(base_url: str, service_token: str, *, get=None) -> dict:
-    if not service_token:
-        raise OperatorStopped("service_token_missing")
-    session = None
-    if get is None:
-        import requests
-
-        session = requests.Session()
-        session.trust_env = False
-        get = session.get
-    response = None
-    try:
-        response = get(
-            _loopback_url(base_url) + "/health",
-            headers={"X-RAG-Service-Token": service_token},
-            timeout=5,
-            allow_redirects=False,
-        )
-        response.raise_for_status()
-        value = response.json()
-        if not isinstance(value, dict):
-            raise OperatorStopped("runtime_health_invalid")
-        return value
-    except OperatorStopped:
-        raise
-    except Exception:
-        raise OperatorStopped("runtime_health_unavailable") from None
-    finally:
-        if response is not None:
-            response.close()
-        if session is not None:
-            session.close()
 
 
 def validate_runtime_health(live: Mapping[str, object], frozen: Mapping[str, object]) -> None:
@@ -316,6 +197,12 @@ def validate_operator_inputs(
         auth_sha == authorization_sha256,
         _sha256(bundle_raw) == bundle_sha256,
         authorization.get("activation_bundle_sha256") == bundle_sha256,
+        _consolidated_binding_valid(authorization, source_root),
+        _digest(
+            (authorization.get("consolidated_launch_draft") or {}).get(
+                "sha256"
+            )
+        ),
         schedule.get("manifest", {}).get("sha256") == manifest_sha256,
         runtime_consumption_authorization_status(
             {
@@ -336,6 +223,7 @@ def validate_operator_inputs(
         raise OperatorStopped("operator_authorization_invalid")
     questions = _manifest_questions(manifest_path, manifest_sha256)
     validate_manifest_routing(questions)
+    review_capture_cards(schedule)
     for card in schedule.get("cards") or ():
         question = questions.get(card.get("case_id"))
         if question is None or _sha256(question.encode("utf-8")) != card.get(
@@ -385,8 +273,10 @@ def run_pilot(
     clock: Callable[[], datetime] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     health: Callable[[], dict] | None = None,
-    send: Callable[[str], str] | None = None,
+    send: Callable[[str], str | tuple[str, bytearray | None]] | None = None,
     evidence_loader: Callable[[str], dict] | None = None,
+    capture_writer: Callable[..., dict] = capture_answer,
+    capture_directory_preparer: Callable[..., Path] = prepare_capture_directory,
 ) -> dict:
     root = Path(source_root).resolve()
     schedule_file = Path(schedule_path).resolve()
@@ -416,16 +306,34 @@ def run_pilot(
     if _wal_rows(wal_file) or (claims.exists() and any(claims.iterdir())):
         raise OperatorStopped("pilot_root_not_fresh")
     schedule_sha = _sha256(schedule_file.read_bytes())
+    selected_cards = (
+        review_capture_cards(schedule)
+        if "review_capture_card_ids" in schedule
+        else frozenset()
+    )
+    captured_metadata: list[dict] = []
+    capture_dir = wal_file.parent / "review-captures"
+    if selected_cards:
+        try:
+            capture_dir = capture_directory_preparer(
+                capture_dir, source_root=root,
+            )
+        except (OSError, RuntimeError, ValueError):
+            raise OperatorStopped("review_capture_preflight_failed") from None
     health_fn = health or (
         lambda: fetch_runtime_health(runtime_url, service_token)
-    )
-    send_fn = send or (
-        lambda question: send_query_sse(runtime_url, service_token, question)
     )
     evidence_fn = evidence_loader or (
         lambda trace_id: trace_evidence(trace_file, trace_id)
     )
     for index, card in enumerate(cards):
+        if selected_cards:
+            try:
+                validate_capture_chain(
+                    capture_dir, expected=tuple(captured_metadata),
+                )
+            except (OSError, TypeError, ValueError):
+                raise OperatorStopped("review_capture_chain_invalid") from None
         scheduled = _timestamp(card.get("scheduled_at"))
         next_scheduled = (
             _timestamp(cards[index + 1].get("scheduled_at"))
@@ -447,29 +355,101 @@ def run_pilot(
             authorization_sha256=authorization_sha256,
             schedule_sha256=schedule_sha,
         )
-        trace_id = send_fn(questions[card["case_id"]])
-        evidence = evidence_fn(trace_id)
-        retries = evidence.get("provider_retries")
-        if type(retries) is not int or retries != 0:
-            raise OperatorStopped("provider_retry_observed")
-        completed = now_fn().astimezone(timezone.utc)
-        if completed > next_scheduled:
-            raise OperatorStopped("request_crossed_schedule_boundary")
-        if not pilot_evidence_valid(evidence):
-            raise OperatorStopped("per_request_evidence_invalid")
-        record_pilot_completion(
-            schedule_path=schedule_file,
-            authorization_path=authorization_file,
-            wal_path=wal_file,
-            card_id=card["card_id"],
-            attempted_at=_format(attempted),
-            completed_at=_format(completed),
-            trace_id=trace_id,
-            runtime_identity_sha256=str(
-                frozen_health.get("runtime_identity_sha256") or ""
-            ),
-            evidence=evidence,
+        capture_required = card["card_id"] in selected_cards
+        stream_result = (
+            send(questions[card["case_id"]])
+            if send is not None
+            else send_query_sse(
+                runtime_url,
+                service_token,
+                questions[card["case_id"]],
+                capture_answer=capture_required,
+            )
         )
+        citations = ()
+        if isinstance(stream_result, tuple) and len(stream_result) == 3:
+            trace_id, answer, citations = stream_result
+        elif isinstance(stream_result, tuple) and len(stream_result) == 2:
+            trace_id, answer = stream_result
+        elif isinstance(stream_result, str):
+            trace_id, answer = stream_result, None
+        else:
+            raise OperatorStopped("rag_stream_result_invalid")
+        if not isinstance(trace_id, str) or not trace_id:
+            if isinstance(answer, bytearray):
+                answer[:] = b"\0" * len(answer)
+            raise OperatorStopped("rag_stream_result_invalid")
+        try:
+            evidence = evidence_fn(trace_id)
+            retries = evidence.get("provider_retries")
+            if type(retries) is not int or retries != 0:
+                raise OperatorStopped("provider_retry_observed")
+            completed = now_fn().astimezone(timezone.utc)
+            if completed > next_scheduled:
+                raise OperatorStopped("request_crossed_schedule_boundary")
+            if not pilot_evidence_valid(evidence):
+                raise OperatorStopped("per_request_evidence_invalid")
+            if capture_required:
+                if not isinstance(answer, bytearray):
+                    raise OperatorStopped("review_capture_answer_missing")
+                try:
+                    captured = capture_writer(
+                        capture_dir=capture_dir,
+                        source_commit=str(
+                            authorization.get("source_commit") or ""
+                        ),
+                        pilot_draft_sha256=str(
+                            (authorization.get("pilot_draft") or {}).get(
+                                "sha256"
+                            ) or ""
+                        ),
+                        consolidated_launch_draft_sha256=str(
+                            (
+                                authorization.get(
+                                    "consolidated_launch_draft"
+                                ) or {}
+                            ).get("sha256") or ""
+                        ),
+                        pilot_authorization_sha256=authorization_sha256,
+                        schedule_sha256=schedule_sha,
+                        card=card,
+                        trace_id=trace_id,
+                        answer=answer,
+                        citations=citations,
+                    )
+                    captured_metadata.append(dict(captured))
+                except (OSError, RuntimeError, ValueError):
+                    raise OperatorStopped("review_capture_failed") from None
+            record_pilot_completion(
+                schedule_path=schedule_file,
+                authorization_path=authorization_file,
+                wal_path=wal_file,
+                card_id=card["card_id"],
+                attempted_at=_format(attempted),
+                completed_at=_format(completed),
+                trace_id=trace_id,
+                runtime_identity_sha256=str(
+                    frozen_health.get("runtime_identity_sha256") or ""
+                ),
+                evidence=evidence,
+            )
+        except OperatorStopped:
+            raise
+        except Exception:
+            raise OperatorStopped("pilot_request_post_stream_failed") from None
+        finally:
+            if isinstance(answer, bytearray):
+                answer[:] = b"\0" * len(answer)
+            for citation in citations:
+                if isinstance(citation, dict):
+                    citation.clear()
+    if selected_cards:
+        try:
+            validate_capture_chain(capture_dir, expected=tuple(captured_metadata))
+        except (OSError, TypeError, ValueError):
+            raise OperatorStopped("review_capture_chain_invalid") from None
+    if len(captured_metadata) != len(selected_cards):
+        raise OperatorStopped("review_capture_chain_invalid")
     return {
         "schema": "query-decomposition-pilot-operator-result-v1",
         "status": "completed",
@@ -477,6 +457,7 @@ def run_pilot(
         "provider_retries": 0,
         "replacement_requests": 0,
         "catch_up_requests": 0,
+        "review_capture_count": len(selected_cards),
         "runtime_identity_sha256": frozen_health.get(
             "runtime_identity_sha256"
         ),
@@ -600,6 +581,8 @@ def supervise_pilot(
     runtime_stop_path: str | Path,
     runtime_out_log: str | Path,
     runtime_err_log: str | Path,
+    result_path: str | Path,
+    terminal_path: str | Path,
     service_token: str,
     popen: Callable[..., object] = subprocess.Popen,
     health_fetcher: Callable[[], dict] | None = None,
@@ -612,22 +595,31 @@ def supervise_pilot(
     bundle = Path(bundle_path).resolve()
     manifest = Path(manifest_path).resolve()
     trace = Path(trace_path).resolve()
+    wal = Path(wal_path).resolve()
+    claims = Path(claim_dir).resolve()
+    captures = wal.parent / "review-captures"
     frozen_path = Path(frozen_health_path).resolve()
     state_path = Path(runtime_state_path).resolve()
     stop_path = Path(runtime_stop_path).resolve()
     out_path = Path(runtime_out_log).resolve()
     err_path = Path(runtime_err_log).resolve()
+    result = Path(result_path).resolve()
+    terminal = Path(terminal_path).resolve()
     if not all((
         executable.is_file(),
-        _inside(frozen_path, root / ".local"),
-        _inside(state_path, root / ".local"),
-        _inside(stop_path, root / ".local"),
-        _inside(out_path, root / ".local"),
-        _inside(err_path, root / ".local"),
+        all(_inside(path, root / ".local") for path in (
+            trace, wal, claims, captures, frozen_path, state_path, stop_path,
+            out_path, err_path, result, terminal,
+        )),
     )):
         raise OperatorStopped("runtime_path_invalid")
+    if not _operator_outputs_fresh((
+        trace, wal, claims, captures, frozen_path, state_path, stop_path,
+        out_path, err_path, result, terminal,
+    )):
+        raise OperatorStopped("runtime_output_not_fresh")
     now_fn = pilot_injections.get("clock") or (lambda: datetime.now(timezone.utc))
-    validate_operator_inputs(
+    authorization_value, _, _ = validate_operator_inputs(
         source_root=root,
         schedule_path=schedule,
         authorization_path=authorization,
@@ -638,6 +630,19 @@ def supervise_pilot(
         manifest_sha256=manifest_sha256,
         now=now_fn(),
     )
+    run_root = _pilot_run_root(authorization_value, root)
+    expected_paths = _pilot_run_paths(run_root)
+    supplied_paths = {
+        "trace": trace, "wal": wal, "claims": claims, "captures": captures,
+        "frozen_health": frozen_path, "runtime_state": state_path,
+        "runtime_stop": stop_path, "runtime_out": out_path,
+        "runtime_err": err_path, "result": result, "terminal": terminal,
+    }
+    if (
+        os.path.lexists(run_root)
+        or any(supplied_paths[name] != expected_paths[name] for name in supplied_paths)
+    ):
+        raise OperatorStopped("pilot_run_root_invalid")
     environment = build_candidate_environment(
         os.environ,
         source_root=root,
@@ -653,13 +658,22 @@ def supervise_pilot(
         trace_path=trace,
     )
     _ensure_port_free(port)
+    run_root.mkdir(parents=False)
+    _exclusive_json(expected_paths["consumed"], {
+        "schema": "query-decomposition-pilot-consumed-v1",
+        "authorization_sha256": authorization_sha256,
+        "consolidated_launch_draft_sha256": (
+            authorization_value["consolidated_launch_draft"]["sha256"]
+        ),
+        "consumed_at": _format(now_fn()),
+        "retry_authorized": False,
+    })
     for path in (trace, out_path, err_path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            raise OperatorStopped("runtime_output_not_fresh")
     out_stream = out_path.open("xb")
     err_stream = err_path.open("xb")
     process = None
+    pilot_completed = False
     try:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = popen(
@@ -709,7 +723,7 @@ def supervise_pilot(
         if live is None:
             raise OperatorStopped("runtime_health_preflight_failed")
         _exclusive_json(frozen_path, live)
-        return run_pilot(
+        pilot_result = run_pilot(
             source_root=root,
             schedule_path=schedule,
             authorization_path=authorization,
@@ -727,6 +741,8 @@ def supervise_pilot(
             health=fetch,
             **pilot_injections,
         )
+        pilot_completed = True
+        return pilot_result
     finally:
         out_stream.close()
         err_stream.close()
@@ -749,84 +765,28 @@ def supervise_pilot(
             })
         except OperatorStopped:
             pass
+        if not pilot_completed and captures.exists():
+            try:
+                cleanup_terminal_captures(
+                    capture_dir=captures,
+                    authorization_sha256=authorization_sha256,
+                )
+            except (OSError, RuntimeError, ValueError):
+                try:
+                    _exclusive_json(run_root / "capture-cleanup-failure.json", {
+                        "schema": "query-pilot-capture-cleanup-failure-v1",
+                        "status": "terminal_failure",
+                        "pilot_accepted": False,
+                        "retry_authorized": False,
+                    })
+                except OperatorStopped:
+                    pass
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--source-root", type=Path, required=True)
-    parser.add_argument("--schedule", type=Path, required=True)
-    parser.add_argument("--authorization", type=Path, required=True)
-    parser.add_argument("--authorization-sha256", required=True)
-    parser.add_argument("--bundle", type=Path, required=True)
-    parser.add_argument("--bundle-sha256", required=True)
-    parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--manifest-sha256", required=True)
-    parser.add_argument("--trace", type=Path, required=True)
-    parser.add_argument("--wal", type=Path, required=True)
-    parser.add_argument("--claims", type=Path, required=True)
-    parser.add_argument("--result", type=Path, required=True)
-    parser.add_argument("--terminal", type=Path, required=True)
-    parser.add_argument("--python-exe", type=Path, required=True)
-    parser.add_argument("--snapshot-fingerprint", required=True)
-    parser.add_argument("--deployment-id", required=True)
-    parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--qdrant-collection", required=True)
-    parser.add_argument("--sql-database", required=True)
-    parser.add_argument("--frozen-health-output", type=Path, required=True)
-    parser.add_argument("--runtime-state", type=Path, required=True)
-    parser.add_argument("--runtime-stop", type=Path, required=True)
-    parser.add_argument("--runtime-out-log", type=Path, required=True)
-    parser.add_argument("--runtime-err-log", type=Path, required=True)
-    args = parser.parse_args(argv)
-    token = os.environ.get("RAG_SERVICE_TOKEN", "")
-    try:
-        root = args.source_root.resolve()
-        if not all(_inside(path.resolve(), root / ".local") for path in (
-            args.result, args.terminal,
-        )):
-            raise OperatorStopped("operator_output_outside_dot_local")
-        result = supervise_pilot(
-            python_exe=args.python_exe,
-            source_root=args.source_root,
-            schedule_path=args.schedule,
-            authorization_path=args.authorization,
-            authorization_sha256=args.authorization_sha256,
-            bundle_path=args.bundle,
-            bundle_sha256=args.bundle_sha256,
-            manifest_path=args.manifest,
-            manifest_sha256=args.manifest_sha256,
-            snapshot_fingerprint=args.snapshot_fingerprint,
-            deployment_id=args.deployment_id,
-            port=args.port,
-            qdrant_collection=args.qdrant_collection,
-            sql_database=args.sql_database,
-            trace_path=args.trace,
-            wal_path=args.wal,
-            claim_dir=args.claims,
-            frozen_health_path=args.frozen_health_output,
-            runtime_state_path=args.runtime_state,
-            runtime_stop_path=args.runtime_stop,
-            runtime_out_log=args.runtime_out_log,
-            runtime_err_log=args.runtime_err_log,
-            service_token=token,
-        )
-        _exclusive_json(args.result.resolve(), result)
-        return 0
-    except Exception as exc:
-        reason = str(exc) if isinstance(exc, OperatorStopped) else type(exc).__name__
-        try:
-            _exclusive_json(args.terminal.resolve(), {
-                "schema": "query-decomposition-pilot-operator-terminal-v1",
-                "status": "terminal_failure",
-                "reason": reason,
-                "recorded_at": _format(datetime.now(timezone.utc)),
-                "retry_authorized": False,
-                "catch_up_authorized": False,
-                "raw_question_persisted": False,
-            })
-        except OperatorStopped:
-            pass
-        return 1
+    from scripts.ops.query_decomposition_pilot_operator_cli import operator_main
+
+    return operator_main(argv)
 
 
 if __name__ == "__main__":

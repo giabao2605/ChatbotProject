@@ -92,7 +92,7 @@ def _operator_files(tmp_path: Path):
     return paths
 
 
-def test_send_query_sse_uses_loopback_and_returns_only_trace_identity():
+def test_send_query_sse_captures_selected_answer_in_mutable_buffer():
     captured = {}
 
     class Response:
@@ -102,7 +102,10 @@ def test_send_query_sse_uses_loopback_and_returns_only_trace_identity():
         def iter_lines(self, decode_unicode=True):
             assert decode_unicode is True
             yield 'event: token'
-            yield 'data: {"text":"private answer"}'
+            yield 'data: {"text":"private "}'
+            yield ""
+            yield 'event: token'
+            yield 'data: {"text":"answer [SRC:D41P1]"}'
             yield ""
             yield 'event: done'
             yield 'data: {"ok":true,"trace_id":"trace-01"}'
@@ -115,14 +118,18 @@ def test_send_query_sse_uses_loopback_and_returns_only_trace_identity():
         captured.update({"url": url, **kwargs})
         return Response()
 
-    trace_id = operator.send_query_sse(
+    trace_id, answer, citations = operator.send_query_sse(
         "http://127.0.0.1:8302",
         "service-token",
         "private question",
         post=post,
+        capture_answer=True,
     )
 
     assert trace_id == "trace-01"
+    assert isinstance(answer, bytearray)
+    assert answer.decode() == "private answer [SRC:D41P1]"
+    assert citations == ()
     assert captured["url"] == "http://127.0.0.1:8302/chat/stream"
     assert captured["headers"] == {
         "X-RAG-Service-Token": "service-token"
@@ -136,6 +143,34 @@ def test_send_query_sse_uses_loopback_and_returns_only_trace_identity():
     }
     assert captured["allow_redirects"] is False
     assert captured["closed"] is True
+
+
+def test_send_query_sse_discards_unselected_answer_tokens():
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield 'event: token'
+            yield 'data: {"text":"private answer"}'
+            yield ""
+            yield 'event: done'
+            yield 'data: {"ok":true,"trace_id":"trace-01"}'
+            yield ""
+
+        def close(self):
+            return None
+
+    trace_id, answer = operator.send_query_sse(
+        "http://127.0.0.1:8302",
+        "service-token",
+        "private question",
+        post=lambda *_args, **_kwargs: Response(),
+        capture_answer=False,
+    )
+
+    assert trace_id == "trace-01"
+    assert answer is None
 
 
 def test_fetch_runtime_health_uses_authenticated_loopback_and_closes():
@@ -244,6 +279,7 @@ def test_validate_operator_inputs_binds_authorization_bundle_and_schedule(
     authorization = {
         "source_commit": "c" * 40,
         "activation_bundle_sha256": hashlib.sha256(bundle_raw).hexdigest(),
+        "consolidated_launch_draft": {"sha256": "e" * 64},
     }
     schedule = {
         "manifest": {"sha256": "d" * 64},
@@ -266,6 +302,12 @@ def test_validate_operator_inputs_binds_authorization_bundle_and_schedule(
         operator, "_manifest_questions", lambda *_args: {"case-1": question},
     )
     monkeypatch.setattr(operator, "validate_manifest_routing", lambda _questions: None)
+    monkeypatch.setattr(
+        operator, "review_capture_cards", lambda _schedule: frozenset(),
+    )
+    monkeypatch.setattr(
+        operator, "_consolidated_binding_valid", lambda *_args: True,
+    )
 
     result = operator.validate_operator_inputs(
         source_root=tmp_path,
@@ -281,16 +323,88 @@ def test_validate_operator_inputs_binds_authorization_bundle_and_schedule(
     assert result == (authorization, schedule, {"case-1": question})
 
 
-@pytest.mark.parametrize("pilot_fails", [False, True])
-def test_main_writes_exclusive_result_or_terminal(tmp_path, monkeypatch, pilot_fails):
-    local = tmp_path / ".local"
-    local.mkdir()
+def test_consolidated_binding_matches_hash_bound_pilot_approval(tmp_path):
+    draft_path = tmp_path / ".local" / "consolidated-launch-draft.json"
+    draft_path.parent.mkdir(parents=True)
+    draft_raw = json.dumps({
+        "schema": "query-decomposition-consolidated-launch-draft-v1",
+        "source_commit": "c" * 40,
+    }).encode()
+    draft_path.write_bytes(draft_raw)
+    consolidated_reference = {
+        "path": str(draft_path.relative_to(tmp_path)),
+        "sha256": hashlib.sha256(draft_raw).hexdigest(),
+        "schema": "query-decomposition-consolidated-launch-draft-v1",
+    }
+    approval_path = tmp_path / ".local" / "pilot-approval.json"
+    approval_raw = json.dumps({
+        "schema": "query-decomposition-pilot-approval-v1",
+        "consolidated_launch_draft": consolidated_reference,
+    }).encode()
+    approval_path.write_bytes(approval_raw)
+    authorization = {
+        "source_commit": "c" * 40,
+        "pilot_approval": {
+            "path": str(approval_path.relative_to(tmp_path)),
+            "sha256": hashlib.sha256(approval_raw).hexdigest(),
+            "schema": "query-decomposition-pilot-approval-v1",
+        },
+        "consolidated_launch_draft": consolidated_reference,
+    }
+
+    assert operator._consolidated_binding_valid(authorization, tmp_path)
+
+    authorization["consolidated_launch_draft"] = {
+        **consolidated_reference,
+        "sha256": "f" * 64,
+    }
+    assert not operator._consolidated_binding_valid(authorization, tmp_path)
+
+    authorization["consolidated_launch_draft"] = consolidated_reference
+    draft_path.write_text("{}\n", encoding="utf-8")
+    assert not operator._consolidated_binding_valid(authorization, tmp_path)
+
+
+def test_consolidated_binding_rejects_approval_outside_source_root(tmp_path):
+    outside = tmp_path.parent / "outside-pilot-approval.json"
+    outside.write_text("{}\n", encoding="utf-8")
+    authorization = {
+        "pilot_approval": {
+            "path": str(outside),
+            "sha256": hashlib.sha256(outside.read_bytes()).hexdigest(),
+        },
+        "consolidated_launch_draft": {"sha256": "e" * 64},
+    }
+
+    assert not operator._consolidated_binding_valid(authorization, tmp_path)
+
+
+def test_consolidated_binding_rejects_malformed_approval_reference(tmp_path):
+    assert not operator._consolidated_binding_valid(
+        {
+            "pilot_approval": "not-an-artifact-reference",
+            "consolidated_launch_draft": {"sha256": "e" * 64},
+        },
+        tmp_path,
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure_message", "expected_reason"),
+    ((None, None), ("preflight_failed", "preflight_failed"),
+     ("private answer leaked", "operator_failure")),
+)
+def test_main_writes_exclusive_result_or_terminal(
+    tmp_path, monkeypatch, failure_message, expected_reason,
+):
+    local = tmp_path / ".local" / "run"
+    local.parent.mkdir()
     result_path = local / "result.json"
     terminal_path = local / "terminal.json"
 
     def supervise(**_kwargs):
-        if pilot_fails:
-            raise operator.OperatorStopped("preflight_failed")
+        if failure_message is not None:
+            raise operator.OperatorStopped(failure_message)
         return {"status": "completed"}
 
     monkeypatch.setattr(operator, "supervise_pilot", supervise)
@@ -321,12 +435,15 @@ def test_main_writes_exclusive_result_or_terminal(tmp_path, monkeypatch, pilot_f
         "--runtime-err-log", str(local / "runtime.err.log"),
     ]
 
+    pilot_fails = failure_message is not None
     assert operator.main(argv) == (1 if pilot_fails else 0)
     output = terminal_path if pilot_fails else result_path
     value = json.loads(output.read_text())
-    assert value["reason"] == "preflight_failed" if pilot_fails else (
-        value["status"] == "completed"
-    )
+    if pilot_fails:
+        assert value["reason"] == expected_reason
+        assert "private answer" not in output.read_text(encoding="utf-8")
+    else:
+        assert value["status"] == "completed"
 
 
 def test_run_pilot_claims_before_egress_and_never_persists_questions(
@@ -576,6 +693,123 @@ def test_run_pilot_stops_invalid_evidence_before_wal_and_next_card(
     assert sent == ["private one"]
 
 
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_type", "expected_error"),
+    (
+        ("evidence", operator.OperatorStopped, "pilot_request_post_stream_failed"),
+        ("provider_retry", operator.OperatorStopped, "provider_retry_observed"),
+        ("capture", operator.OperatorStopped, "review_capture_failed"),
+    ),
+)
+def test_run_pilot_zeroes_selected_answer_on_post_stream_terminal(
+    tmp_path, monkeypatch, failure_stage, expected_type, expected_error,
+):
+    start = datetime(2026, 8, 27, tzinfo=timezone.utc)
+    clock = Clock(start)
+    paths = _operator_files(tmp_path)
+    local = tmp_path / ".local"
+    cards = [
+        {
+            "card_id": f"query-pilot-{index:03d}",
+            "case_id": f"case-{index}",
+            "request_sha256": str(index) * 64,
+            "scheduled_at": operator._format(
+                start + timedelta(seconds=10 * (index - 1))
+            ),
+            "review_capture_required": index == 1,
+        }
+        for index in (1, 2)
+    ]
+    authorization = {
+        "source_commit": "a" * 40,
+        "expires_at": operator._format(start + timedelta(seconds=30)),
+        "pilot_draft": {"sha256": "b" * 64},
+        "consolidated_launch_draft": {"sha256": "e" * 64},
+    }
+    schedule = {
+        "cards": cards,
+        "review_capture_card_ids": ["query-pilot-001"],
+    }
+    monkeypatch.setattr(
+        operator,
+        "validate_operator_inputs",
+        lambda **_kwargs: (
+            authorization,
+            schedule,
+            {"case-1": "private one", "case-2": "private two"},
+        ),
+    )
+    monkeypatch.setattr(operator, "_wal_rows", lambda _path: [])
+    monkeypatch.setattr(
+        operator,
+        "review_capture_cards",
+        lambda _schedule: frozenset({"query-pilot-001"}),
+    )
+    monkeypatch.setattr(
+        operator,
+        "record_pilot_completion",
+        lambda **_kwargs: pytest.fail("capture failure must not enter WAL"),
+    )
+    sent = []
+    captured_buffers = []
+    answer_buffer = bytearray(b"private answer")
+
+    def fail_capture(**kwargs):
+        captured_buffers.append(kwargs["answer"])
+        raise ValueError("synthetic encryption failure")
+
+    def load_evidence(_trace):
+        if failure_stage == "evidence":
+            raise ValueError("synthetic evidence failure")
+        if failure_stage == "provider_retry":
+            return {**_evidence(), "provider_retries": 1}
+        return _evidence()
+
+    def prepare_capture_dir(path, **_kwargs):
+        path.mkdir(parents=True, exist_ok=False)
+        return path
+
+    with pytest.raises(expected_type, match=expected_error):
+        operator.run_pilot(
+            source_root=tmp_path,
+            schedule_path=paths["schedule"],
+            authorization_path=paths["authorization"],
+            authorization_sha256="c" * 64,
+            bundle_path=paths["bundle"],
+            bundle_sha256="d" * 64,
+            manifest_path=paths["manifest"],
+            manifest_sha256="e" * 64,
+            runtime_url="http://127.0.0.1:8302",
+            frozen_health=_health(),
+            trace_path=local / "trace.jsonl",
+            wal_path=local / "wal.jsonl",
+            claim_dir=local / "claims",
+            service_token="token",
+            clock=clock,
+            sleeper=clock.sleep,
+            health=_health,
+            send=lambda question: (
+                sent.append(question) or "trace-1",
+                answer_buffer,
+            ),
+            evidence_loader=load_evidence,
+            capture_writer=(
+                fail_capture
+                if failure_stage == "capture"
+                else lambda **_kwargs: pytest.fail("capture must not be reached")
+            ),
+            capture_directory_preparer=prepare_capture_dir,
+        )
+
+    assert sent == ["private one"]
+    assert answer_buffer == bytearray(len(b"private answer"))
+    assert captured_buffers == (
+        [bytearray(len(b"private answer"))]
+        if failure_stage == "capture"
+        else []
+    )
+
+
 def test_candidate_environment_overrides_parent_with_exact_query_scope(
     tmp_path, monkeypatch,
 ):
@@ -656,15 +890,23 @@ def test_fixed_health_requires_exact_sql_database():
 
 def test_supervisor_refuses_occupied_port_before_start(tmp_path, monkeypatch):
     paths = _operator_files(tmp_path)
-    local = tmp_path / ".local"
-    local.mkdir()
+    local = tmp_path / ".local" / "run"
+    local.parent.mkdir()
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
     port = listener.getsockname()[1]
     monkeypatch.setattr(operator, "_source_commit", lambda _root: "c" * 40)
-    monkeypatch.setattr(operator, "validate_operator_inputs", lambda **_kwargs: ({}, {}, {}))
-    monkeypatch.setattr(operator, "build_candidate_environment", lambda *_args, **_kwargs: {"SAFE": "1"})
+    monkeypatch.setattr(
+        operator,
+        "validate_operator_inputs",
+        lambda **_kwargs: ({"pilot_run_root": ".local/run"}, {}, {}),
+    )
+    monkeypatch.setattr(
+        operator,
+        "build_candidate_environment",
+        lambda *_args, **_kwargs: {"SAFE": "1"},
+    )
     try:
         with pytest.raises(operator.OperatorStopped, match="runtime_port_already_in_use"):
             operator.supervise_pilot(
@@ -683,13 +925,15 @@ def test_supervisor_refuses_occupied_port_before_start(tmp_path, monkeypatch):
                 qdrant_collection="MechChatbot_CRAG_Eval_v1",
                 sql_database="MechChatbot_CRAG_Eval_v1",
                 trace_path=local / "trace.jsonl",
-                wal_path=local / "wal.jsonl",
+                wal_path=local / "pilot.wal.jsonl",
                 claim_dir=local / "claims",
-                frozen_health_path=local / "health.json",
-                runtime_state_path=local / "state.json",
-                runtime_stop_path=local / "stop.json",
+                frozen_health_path=local / "frozen-health.json",
+                runtime_state_path=local / "runtime-state.json",
+                runtime_stop_path=local / "runtime-stop.json",
                 runtime_out_log=local / "runtime.out.log",
                 runtime_err_log=local / "runtime.err.log",
+                result_path=local / "result.json",
+                terminal_path=local / "terminal.json",
                 service_token="token",
                 popen=lambda *_args, **_kwargs: pytest.fail("must not start"),
             )
@@ -697,13 +941,28 @@ def test_supervisor_refuses_occupied_port_before_start(tmp_path, monkeypatch):
         listener.close()
 
 
+def test_operator_output_freshness_rejects_any_prior_root_artifact(tmp_path):
+    targets = tuple(
+        tmp_path / name
+        for name in (
+            "trace.jsonl", "wal.jsonl", "claims", "review-captures",
+            "health.json", "state.json", "stop.json", "runtime.out.log",
+            "runtime.err.log", "result.json", "terminal.json",
+        )
+    )
+    assert operator._operator_outputs_fresh(targets) is True
+
+    (tmp_path / "stop.json").write_text("tombstoned", encoding="utf-8")
+    assert operator._operator_outputs_fresh(targets) is False
+
+
 @pytest.mark.parametrize("pilot_fails", [False, True])
 def test_supervisor_starts_only_candidate_and_always_stops_it(
     tmp_path, monkeypatch, pilot_fails,
 ):
     paths = _operator_files(tmp_path)
-    local = tmp_path / ".local"
-    local.mkdir()
+    local = tmp_path / ".local" / "run"
+    local.parent.mkdir()
     process_events = []
 
     class Process:
@@ -732,8 +991,20 @@ def test_supervisor_starts_only_candidate_and_always_stops_it(
         return Process()
 
     monkeypatch.setattr(operator, "_source_commit", lambda _root: "c" * 40)
-    monkeypatch.setattr(operator, "validate_operator_inputs", lambda **_kwargs: ({}, {}, {}))
-    monkeypatch.setattr(operator, "build_candidate_environment", lambda *_args, **_kwargs: {"SAFE": "1"})
+    monkeypatch.setattr(
+        operator,
+        "validate_operator_inputs",
+        lambda **_kwargs: ({
+            "pilot_run_root": ".local/run",
+            "consolidated_launch_draft": {"sha256": "f" * 64},
+        }, {}, {}),
+    )
+    monkeypatch.setattr(
+        operator,
+        "build_candidate_environment",
+        lambda *_args, **_kwargs: {"SAFE": "1"},
+    )
+
     def run_pilot(**_kwargs):
         if pilot_fails:
             raise operator.OperatorStopped("terminal_request_failure")
@@ -757,13 +1028,15 @@ def test_supervisor_starts_only_candidate_and_always_stops_it(
         "qdrant_collection": "MechChatbot_CRAG_Eval_v1",
         "sql_database": "MechChatbot_CRAG_Eval_v1",
         "trace_path": local / "trace.jsonl",
-        "wal_path": local / "wal.jsonl",
+        "wal_path": local / "pilot.wal.jsonl",
         "claim_dir": local / "claims",
-        "frozen_health_path": local / "health.json",
-        "runtime_state_path": local / "state.json",
-        "runtime_stop_path": local / "stop.json",
+        "frozen_health_path": local / "frozen-health.json",
+        "runtime_state_path": local / "runtime-state.json",
+        "runtime_stop_path": local / "runtime-stop.json",
         "runtime_out_log": local / "runtime.out.log",
         "runtime_err_log": local / "runtime.err.log",
+        "result_path": local / "result.json",
+        "terminal_path": local / "terminal.json",
         "service_token": "token",
         "popen": popen,
         "health_fetcher": _health,
@@ -780,15 +1053,15 @@ def test_supervisor_starts_only_candidate_and_always_stops_it(
     ]
     assert launched[0][1]["env"] == {"SAFE": "1"}
     assert process_events == ["terminate", ("wait", 15)]
-    state = json.loads((local / "state.json").read_text())
+    state = json.loads((local / "runtime-state.json").read_text())
     assert state["supervisor_pid"] == os.getpid()
-    assert json.loads((local / "stop.json").read_text())["runtime_stopped"] is True
+    assert json.loads((local / "runtime-stop.json").read_text())["runtime_stopped"] is True
 
 
 def test_supervisor_stops_immediately_on_health_drift(tmp_path, monkeypatch):
     paths = _operator_files(tmp_path)
-    local = tmp_path / ".local"
-    local.mkdir()
+    local = tmp_path / ".local" / "run"
+    local.parent.mkdir()
     process_events = []
 
     class Process:
@@ -807,8 +1080,19 @@ def test_supervisor_stops_immediately_on_health_drift(tmp_path, monkeypatch):
             return self.returncode
 
     monkeypatch.setattr(operator, "_source_commit", lambda _root: "c" * 40)
-    monkeypatch.setattr(operator, "validate_operator_inputs", lambda **_kwargs: ({}, {}, {}))
-    monkeypatch.setattr(operator, "build_candidate_environment", lambda *_args, **_kwargs: {"SAFE": "1"})
+    monkeypatch.setattr(
+        operator,
+        "validate_operator_inputs",
+        lambda **_kwargs: ({
+            "pilot_run_root": ".local/run",
+            "consolidated_launch_draft": {"sha256": "f" * 64},
+        }, {}, {}),
+    )
+    monkeypatch.setattr(
+        operator,
+        "build_candidate_environment",
+        lambda *_args, **_kwargs: {"SAFE": "1"},
+    )
     drifted = {**_health(), "deployment_id": "wrong"}
 
     with pytest.raises(operator.OperatorStopped, match="runtime_health_drift"):
@@ -828,13 +1112,15 @@ def test_supervisor_stops_immediately_on_health_drift(tmp_path, monkeypatch):
             qdrant_collection="MechChatbot_CRAG_Eval_v1",
             sql_database="MechChatbot_CRAG_Eval_v1",
             trace_path=local / "trace.jsonl",
-            wal_path=local / "wal.jsonl",
+            wal_path=local / "pilot.wal.jsonl",
             claim_dir=local / "claims",
-            frozen_health_path=local / "health.json",
-            runtime_state_path=local / "state.json",
-            runtime_stop_path=local / "stop.json",
+            frozen_health_path=local / "frozen-health.json",
+            runtime_state_path=local / "runtime-state.json",
+            runtime_stop_path=local / "runtime-stop.json",
             runtime_out_log=local / "runtime.out.log",
             runtime_err_log=local / "runtime.err.log",
+            result_path=local / "result.json",
+            terminal_path=local / "terminal.json",
             service_token="token",
             popen=lambda *_args, **_kwargs: Process(),
             health_fetcher=lambda: drifted,

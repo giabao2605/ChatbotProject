@@ -9,42 +9,90 @@ from scripts.ops.query_decomposition_pilot import (
     PILOT_DURATION,
     PILOT_REQUEST_COUNT,
     _authorization_and_schedule,
-    _read_json,
     _sha256_digest,
     _timestamp,
     _wal_rows,
     pilot_evidence_valid,
 )
+from scripts.ops.query_pilot_review_artifacts import (
+    DELETION_RECEIPT_SCHEMA,
+    REVIEW_PACK_SCHEMA,
+    REVIEW_RESULT_SCHEMA,
+    load_metadata_artifact,
+    review_artifacts_valid,
+)
+from scripts.ops.query_pilot_capture_lifecycle import JOURNAL_SCHEMA
+from scripts.ops.query_pilot_review_capture import _sha256
+from scripts.ops.query_pilot_review_integrity import review_tool_hashes
 
 
 def _review_valid(
-    path: str | Path | None, *, authorization: dict,
-    schedule_sha: str, rows: list[dict],
+    *, pack_path: str | Path | None, result_path: str | Path | None,
+    receipt_path: str | Path | None, capture_dir: str | Path | None,
+    trace_path: str | Path | None, journal_path: str | Path | None,
+    source_root: str | Path | None, wal_path: Path,
+    authorization: dict, authorization_sha: str,
+    schedule: dict, schedule_sha: str, rows: list[dict], run_root: Path,
 ) -> bool:
-    if path is None:
+    if any(
+        value is None
+        for value in (
+            pack_path, result_path, receipt_path, capture_dir, trace_path,
+            journal_path, source_root,
+        )
+    ):
         return False
     try:
-        review, _, _ = _read_json(path)
+        pack_file = Path(pack_path).resolve()
+        result_file = Path(result_path).resolve()
+        receipt_file = Path(receipt_path).resolve()
+        captures = Path(capture_dir).resolve()
+        trace_file = Path(trace_path).resolve()
+        journal_file = Path(journal_path).resolve()
+        source = Path(source_root).resolve()
+        bound_run_root = (
+            source / str(authorization.get("pilot_run_root") or "")
+        ).resolve()
+        if not all((
+            run_root == bound_run_root,
+            pack_file.parent == run_root,
+            result_file.parent == run_root,
+            receipt_file.parent == run_root,
+            captures == run_root / "review-captures",
+            trace_file == run_root / "trace.jsonl",
+            wal_path == run_root / "pilot.wal.jsonl",
+            journal_file == run_root / "capture-deletion.journal.json",
+            captures.is_dir(),
+        )):
+            return False
+        pack = load_metadata_artifact(pack_file, schema=REVIEW_PACK_SCHEMA)
+        result = load_metadata_artifact(result_file, schema=REVIEW_RESULT_SCHEMA)
+        receipt = load_metadata_artifact(
+            receipt_file, schema=DELETION_RECEIPT_SCHEMA,
+        )
+        journal = load_metadata_artifact(journal_file, schema=JOURNAL_SCHEMA)
+        wal_sha256 = _sha256(wal_path.read_bytes())
+        trace_sha256 = _sha256(trace_file.read_bytes())
+        tools = review_tool_hashes(source)
+        journal_sha256 = _sha256(journal_file.read_bytes())
+        captures_empty = not any(captures.iterdir())
     except (OSError, ValueError):
         return False
-    reviewed = review.get("accepted_trace_sha256")
-    actual = {row["trace_id_sha256"] for row in rows}
-    required = {
-        row["trace_id_sha256"] for row in rows
-        if row.get("evidence", {}).get("owner_review_required") is True
-    }
-    return all((
-        review.get("schema") == "query-decomposition-pilot-review-result-v1",
-        review.get("source_commit") == authorization.get("source_commit"),
-        review.get("schedule_sha256") == schedule_sha,
-        review.get("reviewer") == authorization.get("actor"),
-        isinstance(reviewed, list),
-        len(set(reviewed or ())) >= 20,
-        set(reviewed or ()) <= actual,
-        required <= set(reviewed or ()),
-        review.get("all_accepted") is True,
-        not any(name in review for name in ("question", "answer", "content")),
-    ))
+    return captures_empty and review_artifacts_valid(
+        pack=pack,
+        review_result=result,
+        deletion_receipt=receipt,
+        authorization=authorization,
+        authorization_sha256=authorization_sha,
+        schedule=schedule,
+        schedule_sha256=schedule_sha,
+        rows=rows,
+        wal_sha256=wal_sha256,
+        trace_artifact_sha256=trace_sha256,
+        review_tool_sha256=tools,
+        deletion_journal=journal,
+        deletion_journal_sha256=journal_sha256,
+    )
 
 
 def _failed_gate(reason: str) -> dict:
@@ -122,6 +170,12 @@ def build_pilot_gate(
     *, schedule_path: str | Path, authorization_path: str | Path,
     wal_path: str | Path, runtime_identity_sha256: str,
     review_result_path: str | Path | None = None,
+    review_pack_path: str | Path | None = None,
+    deletion_receipt_path: str | Path | None = None,
+    capture_dir: str | Path | None = None,
+    trace_path: str | Path | None = None,
+    deletion_journal_path: str | Path | None = None,
+    source_root: str | Path | None = None,
 ) -> dict:
     """Reconcile the exact 100-request contract without authorizing rollout."""
     try:
@@ -133,7 +187,8 @@ def build_pilot_gate(
     except (OSError, ValueError):
         return _failed_gate("authorization_or_schedule_invalid")
     try:
-        rows = _wal_rows(Path(wal_path).resolve())
+        wal_file = Path(wal_path).resolve()
+        rows = _wal_rows(wal_file)
         parse_valid = True
     except (OSError, ValueError):
         rows, parse_valid = [], False
@@ -173,8 +228,20 @@ def build_pilot_gate(
     }
     automated = all(checks.values())
     human_review = automated and _review_valid(
-        review_result_path, authorization=authorization,
-        schedule_sha=schedule_sha, rows=rows,
+        pack_path=review_pack_path,
+        result_path=review_result_path,
+        receipt_path=deletion_receipt_path,
+        capture_dir=capture_dir,
+        trace_path=trace_path,
+        journal_path=deletion_journal_path,
+        source_root=source_root,
+        wal_path=wal_file,
+        authorization=authorization,
+        authorization_sha=auth_sha,
+        schedule=schedule,
+        schedule_sha=schedule_sha,
+        rows=rows,
+        run_root=wal_file.parent,
     )
     return {
         "schema": "query-decomposition-production-pilot-gate-v1",

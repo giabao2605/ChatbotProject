@@ -1,5 +1,6 @@
 """Offline Query Decomposition pilot contract and gate."""
 
+from collections import Counter
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -21,6 +22,13 @@ from scripts.ops.query_decomposition_pilot import (
     record_pilot_completion,
 )
 from scripts.ops.query_decomposition_pilot_gate import build_pilot_gate
+from scripts.ops.query_pilot_review_artifacts import (
+    build_review_pack,
+    delete_review_captures,
+    finalize_review_result,
+    write_metadata_artifact,
+)
+from scripts.ops.query_pilot_review_capture import capture_answer
 from scripts.ops.query_decomposition_pilot_launch import (
     CONSOLIDATED_AUTHORIZATION,
     finalize_consolidated_launch,
@@ -60,6 +68,8 @@ def test_pilot_evidence_validator_rejects_non_contract_values(candidate):
     [
         {"request_deadline_ms": None},
         {"request_deadline_ms": "120000"},
+        {"citation_structure_passed": "false"},
+        {"provenance_passed": "false"},
         {"final_latency_ms": True},
         {"estimated_cost": float("nan")},
         {"planner_calls": True},
@@ -152,7 +162,10 @@ def _inputs(tmp_path: Path):
         "scope": "controlled_demo",
         "activation_profile": "selective",
         "source_commit": commit,
-        "feature_flags": {name: name == "RAG_QUERY_DECOMPOSITION_ENABLED" for name in FEATURE_FLAGS},
+        "feature_flags": {
+            name: name == "RAG_QUERY_DECOMPOSITION_ENABLED"
+            for name in FEATURE_FLAGS
+        },
     })
     finalization = tmp_path / ".local" / "finalization.json"
     _write_json(finalization, {
@@ -185,6 +198,24 @@ def _prepared(tmp_path: Path):
     return commit, output, packet
 
 
+def _consolidated_reference(tmp_path: Path) -> dict[str, str]:
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True,
+    ).strip()
+    path = tmp_path / ".local" / "consolidated-launch-draft.json"
+    sha256 = _write_json(path, {
+        "schema": "query-decomposition-consolidated-launch-draft-v1",
+        "source_commit": commit,
+        "owner": "bao.nguyen",
+        "pilot_run_root": ".local/run",
+    })
+    return {
+        "path": ".local/consolidated-launch-draft.json",
+        "sha256": sha256,
+        "schema": "query-decomposition-consolidated-launch-draft-v1",
+    }
+
+
 def test_prepare_freezes_100_metadata_only_slots_over_24_hours(tmp_path):
     commit, output, packet = _prepared(tmp_path)
     template = json.loads(
@@ -196,6 +227,9 @@ def test_prepare_freezes_100_metadata_only_slots_over_24_hours(tmp_path):
     runbook = json.loads(
         (output / "operator-runbook.json").read_text(encoding="utf-8")
     )
+    review_contract = json.loads(
+        (output / "review-contract.json").read_text(encoding="utf-8")
+    )
 
     assert packet["status"] == "AWAITING_CONSOLIDATED_PILOT_APPROVAL"
     assert template["source_commit"] == commit
@@ -206,9 +240,36 @@ def test_prepare_freezes_100_metadata_only_slots_over_24_hours(tmp_path):
     assert {card["case_id"] for card in template["cards"]} == {
         f"complex-{index:02d}" for index in range(1, 11)
     }
+    review_cards = [
+        card for card in template["cards"]
+        if card.get("review_capture_required") is True
+    ]
+    assert len(review_cards) == 20
+    assert Counter(card["case_id"] for card in review_cards) == {
+        f"complex-{index:02d}": 2 for index in range(1, 11)
+    }
+    assert template["review_capture_card_ids"] == [
+        card["card_id"] for card in review_cards
+    ]
     assert all("question" not in card for card in template["cards"])
     assert draft["requested_authorization"] == PILOT_AUTHORIZATION
     assert draft["activation_bundle_sha256"] == packet["bundle_sha256"]
+    assert review_contract["review_capture"] == {
+        "design_draft_sha256": (
+            "885886bdb18a249c36cffd5e2acf9684dac59d1daa74930b36792269a77840da"
+        ),
+        "selected_card_count": 20,
+        "selection": "two_per_each_complex_case",
+        "encryption": "windows_dpapi_current_user",
+        "plaintext_on_disk": False,
+        "plaintext_in_logs_or_wal": False,
+        "deletion_receipt_required": True,
+        "bind_consolidated_launch_draft_sha256": True,
+    }
+    assert review_contract["labels_per_item"] == [
+        "answer_correct", "citation_correct", "safety_correct",
+        "decision", "reason_code",
+    ]
     assert runbook["launch"]["runtime_start_requires_fresh_approval"] is True
     assert runbook["launch"]["provider_traffic_requires_fresh_approval"] is True
     assert runbook["rollback"]["target_profile"] == "all_off"
@@ -220,6 +281,38 @@ def test_prepare_freezes_100_metadata_only_slots_over_24_hours(tmp_path):
     assert packet["operator_runbook"]["sha256"] == hashlib.sha256(
         (output / "operator-runbook.json").read_bytes()
     ).hexdigest()
+
+
+def test_consolidated_draft_binds_one_never_used_pilot_run_root(tmp_path):
+    commit, manifest, _, _ = _inputs(tmp_path)
+    activation_draft = tmp_path / ".local" / "activation-draft.json"
+    _write_json(activation_draft, {
+        "schema": "query-controlled-demo-activation-draft-v1",
+        "status": "AWAITING_EXACT_OWNER_APPROVAL",
+        "source_root": str(tmp_path),
+        "source_commit": commit,
+        "scope": "controlled_demo",
+        "capability": "query_decomposition",
+        "owner": "bao.nguyen",
+        "requested_authorization": QUERY_ACTIVATION_AUTHORIZATION,
+    })
+    output = tmp_path / ".local" / "launch-01" / "consolidated"
+
+    packet = prepare_consolidated_launch(
+        source_root=tmp_path,
+        source_commit=commit,
+        activation_draft_path=activation_draft,
+        manifest_path=manifest,
+        output_dir=output,
+        owner="bao.nguyen",
+    )
+    draft = json.loads(
+        (output / "consolidated-launch-draft.json").read_text(encoding="utf-8")
+    )
+
+    assert draft["pilot_run_root"] == ".local/launch-01/run"
+    assert packet["pilot_run_root"] == ".local/launch-01/run"
+    assert not (tmp_path / draft["pilot_run_root"]).exists()
 
 
 def test_prepare_rejects_activation_that_fails_full_governance_validation(
@@ -256,6 +349,8 @@ def test_finalize_creates_one_26_hour_authorization_and_absolute_schedule(tmp_pa
         "authorized_at": "2026-08-27T00:00:00Z",
         "expires_at": "2026-08-28T02:00:00Z",
         "authorization": PILOT_AUTHORIZATION,
+        "consolidated_launch_draft": _consolidated_reference(tmp_path),
+        "pilot_run_root": ".local/run",
     })
 
     authorization, _ = finalize_pilot_authorization(
@@ -276,7 +371,33 @@ def test_finalize_creates_one_26_hour_authorization_and_absolute_schedule(tmp_pa
     assert schedule["minimum_runtime_until"] == "2026-08-28T00:05:00Z"
 
 
-def test_collector_and_gate_require_exactly_once_100_request_contract(tmp_path):
+def test_finalize_rejects_approval_without_consolidated_launch_draft(tmp_path):
+    _, output, _ = _prepared(tmp_path)
+    draft_path = output / "pilot-authorization-draft.json"
+    approval = output / "pilot-approval.json"
+    _write_json(approval, {
+        "schema": "query-decomposition-pilot-approval-v1",
+        "draft_sha256": hashlib.sha256(draft_path.read_bytes()).hexdigest(),
+        "actor": "bao.nguyen",
+        "authorized_at": "2026-08-27T00:00:00Z",
+        "expires_at": "2026-08-28T02:00:00Z",
+        "authorization": PILOT_AUTHORIZATION,
+    })
+
+    with pytest.raises(ValueError, match="pilot_approval_invalid"):
+        finalize_pilot_authorization(
+            draft_path=draft_path,
+            approval_path=approval,
+            output_dir=output / "authorized",
+            now=datetime(2026, 8, 27, 0, 1, tzinfo=timezone.utc),
+        )
+
+    assert not (output / "authorized").exists()
+
+
+def test_collector_and_gate_require_exactly_once_100_request_contract(
+    tmp_path, monkeypatch,
+):
     _, output, _ = _prepared(tmp_path)
     draft = output / "pilot-authorization-draft.json"
     approval = output / "pilot-approval.json"
@@ -287,6 +408,8 @@ def test_collector_and_gate_require_exactly_once_100_request_contract(tmp_path):
         "authorized_at": "2026-08-27T00:00:00Z",
         "expires_at": "2026-08-28T02:00:00Z",
         "authorization": PILOT_AUTHORIZATION,
+        "consolidated_launch_draft": _consolidated_reference(tmp_path),
+        "pilot_run_root": ".local/run",
     })
     authorization, _ = finalize_pilot_authorization(
         draft_path=draft,
@@ -296,7 +419,11 @@ def test_collector_and_gate_require_exactly_once_100_request_contract(tmp_path):
     )
     schedule_path = output / "authorized" / "schedule.json"
     schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
-    wal_path = output / "pilot.wal.jsonl"
+    run_root = tmp_path / ".local" / "run"
+    run_root.mkdir()
+    wal_path = run_root / "pilot.wal.jsonl"
+    trace_path = run_root / "trace.jsonl"
+    trace_path.write_text('{"event":"metadata-only"}\n', encoding="utf-8")
     for index, card in enumerate(schedule["cards"]):
         evidence = {
             "route": "query_decomposition",
@@ -424,14 +551,124 @@ def test_collector_and_gate_require_exactly_once_100_request_contract(tmp_path):
         ],
         "all_accepted": True,
     })
-    accepted_gate = build_pilot_gate(
+    legacy_review_gate = build_pilot_gate(
         schedule_path=schedule_path,
         authorization_path=output / "authorized" / "pilot-authorization.json",
         wal_path=wal_path,
         runtime_identity_sha256="a" * 64,
         review_result_path=review_path,
     )
+    assert legacy_review_gate["pilot_accepted"] is False
+
+    authorization_path = output / "authorized" / "pilot-authorization.json"
+    authorization_sha = hashlib.sha256(authorization_path.read_bytes()).hexdigest()
+    schedule_sha = hashlib.sha256(schedule_path.read_bytes()).hexdigest()
+    capture_dir = run_root / "review-captures"
+    capture_dir.mkdir()
+    for index, card in enumerate(schedule["cards"][:20]):
+        capture_answer(
+            capture_dir=capture_dir,
+            source_commit=authorization["source_commit"],
+            pilot_draft_sha256=authorization["pilot_draft"]["sha256"],
+            consolidated_launch_draft_sha256=(
+                authorization["consolidated_launch_draft"]["sha256"]
+            ),
+            pilot_authorization_sha256=authorization_sha,
+            schedule_sha256=schedule_sha,
+            card=card,
+            trace_id=f"private-trace-{index}",
+            answer=bytearray(f"private answer {index}".encode()),
+            protect=lambda raw: b"protected:" + bytes(reversed(raw)),
+            unprotect=lambda raw: bytearray(reversed(raw.removeprefix(b"protected:"))),
+        )
+    tools = {"scripts/ops/review.py": "8" * 64}
+    monkeypatch.setattr(
+        "scripts.ops.query_decomposition_pilot_gate.review_tool_hashes",
+        lambda *_args: tools,
+    )
+    pack = build_review_pack(
+        authorization=authorization,
+        authorization_sha256=authorization_sha,
+        schedule=schedule,
+        schedule_sha256=schedule_sha,
+        rows=wal_rows,
+        capture_dir=capture_dir,
+        wal_sha256=hashlib.sha256(wal_path.read_bytes()).hexdigest(),
+        trace_artifact_sha256=hashlib.sha256(trace_path.read_bytes()).hexdigest(),
+        review_tool_sha256=tools,
+    )
+    labels = [{
+        "card_id": item["card_id"],
+        "trace_id_sha256": item["trace_id_sha256"],
+        "answer_correct": True,
+        "citation_correct": True,
+        "safety_correct": True,
+        "decision": "accepted",
+        "reason_code": "pass",
+    } for item in pack["items"]]
+    review = finalize_review_result(
+        pack,
+        labels,
+        reviewer=authorization["actor"],
+        evaluated_at="2026-08-28T00:06:00Z",
+    )
+    receipt = delete_review_captures(
+        capture_dir,
+        pack=pack,
+        review_result=review,
+        deleted_at="2026-08-28T00:07:00Z",
+    )
+    pack_path = run_root / "review-pack.json"
+    review_path = run_root / "review-result.json"
+    receipt_path = run_root / "capture-deletion-receipt.json"
+    write_metadata_artifact(pack_path, pack)
+    write_metadata_artifact(review_path, review)
+    write_metadata_artifact(receipt_path, receipt)
+    accepted_gate = build_pilot_gate(
+        schedule_path=schedule_path,
+        authorization_path=authorization_path,
+        wal_path=wal_path,
+        runtime_identity_sha256="a" * 64,
+        review_pack_path=pack_path,
+        review_result_path=review_path,
+        deletion_receipt_path=receipt_path,
+        capture_dir=capture_dir,
+        trace_path=trace_path,
+        deletion_journal_path=run_root / "capture-deletion.journal.json",
+        source_root=tmp_path,
+    )
     assert accepted_gate["pilot_accepted"] is True
+    unrelated_empty = output / "unrelated-empty"
+    unrelated_empty.mkdir()
+    wrong_capture_dir_gate = build_pilot_gate(
+        schedule_path=schedule_path,
+        authorization_path=authorization_path,
+        wal_path=wal_path,
+        runtime_identity_sha256="a" * 64,
+        review_pack_path=pack_path,
+        review_result_path=review_path,
+        deletion_receipt_path=receipt_path,
+        capture_dir=unrelated_empty,
+        trace_path=trace_path,
+        deletion_journal_path=run_root / "capture-deletion.journal.json",
+        source_root=tmp_path,
+    )
+    assert wrong_capture_dir_gate["pilot_accepted"] is False
+    capture_dir.rmdir()
+    missing_capture_dir_gate = build_pilot_gate(
+        schedule_path=schedule_path,
+        authorization_path=authorization_path,
+        wal_path=wal_path,
+        runtime_identity_sha256="a" * 64,
+        review_pack_path=pack_path,
+        review_result_path=review_path,
+        deletion_receipt_path=receipt_path,
+        capture_dir=capture_dir,
+        trace_path=trace_path,
+        deletion_journal_path=run_root / "capture-deletion.journal.json",
+        source_root=tmp_path,
+    )
+    assert missing_capture_dir_gate["pilot_accepted"] is False
     with pytest.raises(ValueError, match="card_already_recorded"):
         record_pilot_completion(
             schedule_path=schedule_path,
@@ -457,6 +694,8 @@ def test_gate_returns_failed_artifact_for_malformed_wal_timestamp(tmp_path):
         "authorized_at": "2026-08-27T00:00:00Z",
         "expires_at": "2026-08-28T02:00:00Z",
         "authorization": PILOT_AUTHORIZATION,
+        "consolidated_launch_draft": _consolidated_reference(tmp_path),
+        "pilot_run_root": ".local/run",
     })
     finalize_pilot_authorization(
         draft_path=draft,
@@ -494,6 +733,8 @@ def test_collector_rejects_authorization_boundary_drift(tmp_path):
         "authorized_at": "2026-08-27T00:00:00Z",
         "expires_at": "2026-08-28T02:00:00Z",
         "authorization": PILOT_AUTHORIZATION,
+        "consolidated_launch_draft": _consolidated_reference(tmp_path),
+        "pilot_run_root": ".local/run",
     })
     finalize_pilot_authorization(
         draft_path=draft,
@@ -545,6 +786,8 @@ def test_collector_rejects_non_hex_runtime_identity(tmp_path):
         "authorized_at": "2026-08-27T00:00:00Z",
         "expires_at": "2026-08-28T02:00:00Z",
         "authorization": PILOT_AUTHORIZATION,
+        "consolidated_launch_draft": _consolidated_reference(tmp_path),
+        "pilot_run_root": ".local/run",
     })
     finalize_pilot_authorization(
         draft_path=draft,
@@ -600,6 +843,23 @@ def test_runtime_accepts_bound_pilot_authorization_for_whole_window(
     commit, output, packet = _prepared(tmp_path)
     draft = output / "pilot-authorization-draft.json"
     approval = output / "pilot-approval.json"
+    consolidated_draft = tmp_path / ".local" / "consolidated-launch-draft.json"
+    consolidated_draft_sha = _write_json(consolidated_draft, {
+        "schema": "query-decomposition-consolidated-launch-draft-v1",
+        "source_commit": commit,
+        "owner": "bao.nguyen",
+        "pilot_run_root": ".local/run",
+        "requested_authorization": CONSOLIDATED_AUTHORIZATION,
+    })
+    consolidated_approval = tmp_path / ".local" / "consolidated-approval.json"
+    consolidated_approval_sha = _write_json(consolidated_approval, {
+        "schema": "query-decomposition-consolidated-launch-approval-v1",
+        "draft_sha256": consolidated_draft_sha,
+        "actor": "bao.nguyen",
+        "authorized_at": "2026-08-27T00:00:00Z",
+        "expires_at": "2026-08-28T02:00:00Z",
+        "authorization": CONSOLIDATED_AUTHORIZATION,
+    })
     _write_json(approval, {
         "schema": "query-decomposition-pilot-approval-v1",
         "draft_sha256": hashlib.sha256(draft.read_bytes()).hexdigest(),
@@ -607,6 +867,17 @@ def test_runtime_accepts_bound_pilot_authorization_for_whole_window(
         "authorized_at": "2026-08-27T00:00:00Z",
         "expires_at": "2026-08-28T02:00:00Z",
         "authorization": PILOT_AUTHORIZATION,
+        "consolidated_launch_draft": {
+            "path": ".local/consolidated-launch-draft.json",
+            "sha256": consolidated_draft_sha,
+            "schema": "query-decomposition-consolidated-launch-draft-v1",
+        },
+        "consolidated_launch_approval": {
+            "path": ".local/consolidated-approval.json",
+            "sha256": consolidated_approval_sha,
+            "schema": "query-decomposition-consolidated-launch-approval-v1",
+        },
+        "pilot_run_root": ".local/run",
     })
     _, authorization_sha = finalize_pilot_authorization(
         draft_path=draft,
@@ -708,6 +979,19 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
     assert runbook["launch"]["required_enabled_flags"] == [
         "RAG_QUERY_DECOMPOSITION_ENABLED"]
     assert runbook["launch"]["dispatch_contract"] == "query-decomposition-24h-100-v1"
+    assert runbook["owner_review"] == {
+        "capture_sample_count": 20,
+        "capture_storage": "dpapi_current_user_ciphertext_only",
+        "review_pack_entrypoint": (
+            "scripts/ops/query_pilot_review_pack.py"
+        ),
+        "local_review_entrypoint": "scripts/ops/query_pilot_review_ui.py",
+        "metadata_result_required": True,
+        "encrypted_capture_deletion_receipt_required": True,
+        "rejected_review_deletes_encrypted_captures": True,
+        "pilot_acceptance_requires_all_labels_accepted": True,
+        "default_rollout_authorized": False,
+    }
     assert runbook["mutations"] == {
         "env_file": False,
         "scheduled_task": False,
@@ -791,6 +1075,14 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
     assert receipt["pilot_dispatched"] is False
     assert receipt["next_gate"] == "authorized_operator_runtime_launch"
     authorization_path = Path(receipt["pilot_authorization"]["path"])
+    materialized_authorization = json.loads(
+        authorization_path.read_text(encoding="utf-8")
+    )
+    assert materialized_authorization["consolidated_launch_draft"] == {
+        "path": str(draft.relative_to(tmp_path)),
+        "sha256": hashlib.sha256(draft.read_bytes()).hexdigest(),
+        "schema": "query-decomposition-consolidated-launch-draft-v1",
+    }
     environment = {
         "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_PATH": str(authorization_path),
         "RAG_RUNTIME_CONSUMPTION_AUTHORIZATION_SHA256": (

@@ -13,22 +13,18 @@ from pathlib import Path
 import subprocess
 from typing import Iterator
 
-from mech_chatbot.governance.artifact_references import (
-    build_json_reference,
-    load_json_reference,
-)
-from mech_chatbot.governance.feature_activation import (
-    SELECTIVE_PROFILE,
-    profile_environment,
-)
+from mech_chatbot.governance.artifact_references import build_json_reference
+from mech_chatbot.governance.artifact_references import load_json_reference
+from mech_chatbot.governance.feature_activation import SELECTIVE_PROFILE
+from mech_chatbot.governance.feature_activation import profile_environment
 from mech_chatbot.governance.query_activation_contract import (
-    QUERY_PILOT_AUTHORIZATION,
-    validate_query_activation_authorization,
+    QUERY_PILOT_AUTHORIZATION, validate_query_activation_authorization,
 )
-
+from scripts.ops.query_pilot_review_capture import REVIEW_CAPTURE_DESIGN_SHA256
 
 PILOT_CONTRACT_VERSION = "query-decomposition-24h-100-v1"
 PILOT_REQUEST_COUNT = 100
+PILOT_REVIEW_CAPTURE_COUNT = 20
 PILOT_DURATION = timedelta(hours=24)
 PILOT_START_DELAY = timedelta(minutes=5)
 MINIMUM_AUTHORIZATION_DURATION = timedelta(hours=24, minutes=10)
@@ -66,6 +62,8 @@ def pilot_evidence_valid(value: object) -> bool:
         value.get("route") == "query_decomposition",
         value.get("security_passed") is True,
         value.get("leakage_detected") is False,
+        type(value.get("citation_structure_passed")) is bool,
+        type(value.get("provenance_passed")) is bool,
         type(value.get("subquery_count")) is int,
         value.get("subquery_count") in {2, 3},
         type(value.get("intent_count")) is int,
@@ -129,10 +127,23 @@ def _write_json(path: Path, value: object) -> tuple[Path, str]:
     return path, _sha256(raw)
 
 
+def _reject_duplicate_fields(pairs: list[tuple[str, object]]) -> dict:
+    value = {}
+    for name, item in pairs:
+        if name in value:
+            raise ValueError("json_duplicate_field")
+        value[name] = item
+    return value
+
+
+def _strict_json_loads(raw: str | bytes) -> object:
+    return json.loads(raw, object_pairs_hook=_reject_duplicate_fields)
+
+
 def _read_json(path: str | Path) -> tuple[dict, bytes, Path]:
     resolved = Path(path).resolve()
     raw = resolved.read_bytes()
-    value = json.loads(raw)
+    value = _strict_json_loads(raw)
     if not isinstance(value, dict):
         raise ValueError("json_artifact_must_be_object")
     return value, raw, resolved
@@ -192,7 +203,7 @@ def _manifest(path: Path) -> tuple[list[dict], str]:
     for line in raw.decode("utf-8").splitlines():
         if not line.strip():
             continue
-        value = json.loads(line)
+        value = _strict_json_loads(line)
         if not isinstance(value, dict):
             raise ValueError("query_manifest_row_invalid")
         rows.append(value)
@@ -230,6 +241,7 @@ def _schedule_template(
                 index * PILOT_DURATION.total_seconds()
                 / (PILOT_REQUEST_COUNT - 1)
             ),
+            "review_capture_required": index < PILOT_REVIEW_CAPTURE_COUNT,
         })
     return {
         "schema": "query-decomposition-pilot-schedule-template-v1",
@@ -248,6 +260,10 @@ def _schedule_template(
         "retry_policy": "none",
         "replacement_policy": "none",
         "catch_up_policy": "none",
+        "review_capture_card_ids": [
+            card["card_id"] for card in cards
+            if card["review_capture_required"]
+        ],
         "cards": cards,
     }
 
@@ -292,6 +308,19 @@ def _operator_runbook(commit: str) -> dict:
             "target_profile": "all_off",
             "verify_no_enabled_flags": True,
             "preserve_wal_and_artifacts": True,
+        },
+        "owner_review": {
+            "capture_sample_count": PILOT_REVIEW_CAPTURE_COUNT,
+            "capture_storage": "dpapi_current_user_ciphertext_only",
+            "review_pack_entrypoint": (
+                "scripts/ops/query_pilot_review_pack.py"
+            ),
+            "local_review_entrypoint": "scripts/ops/query_pilot_review_ui.py",
+            "metadata_result_required": True,
+            "encrypted_capture_deletion_receipt_required": True,
+            "rejected_review_deletes_encrypted_captures": True,
+            "pilot_acceptance_requires_all_labels_accepted": True,
+            "default_rollout_authorized": False,
         },
         "mutations": {
             "env_file": False,
@@ -381,13 +410,26 @@ def prepare_pilot_launch_packet(
         target / "schedule-template.json", template,
     )
     review_path, review_sha = _write_json(target / "review-contract.json", {
-        "schema": "query-decomposition-pilot-review-contract-v1",
+        "schema": "query-decomposition-pilot-review-contract-v2",
         "source_commit": commit,
         "review_mode": "single_owner",
         "reviewer": normalized_owner,
         "minimum_review_count": 20,
         "all_invalid_refusal_or_failure_required": True,
-        "raw_question_or_answer_forbidden": True,
+        "review_capture": {
+            "design_draft_sha256": REVIEW_CAPTURE_DESIGN_SHA256,
+            "selected_card_count": PILOT_REVIEW_CAPTURE_COUNT,
+            "selection": "two_per_each_complex_case",
+            "encryption": "windows_dpapi_current_user",
+            "plaintext_on_disk": False,
+            "plaintext_in_logs_or_wal": False,
+            "deletion_receipt_required": True,
+            "bind_consolidated_launch_draft_sha256": True,
+        },
+        "labels_per_item": [
+            "answer_correct", "citation_correct", "safety_correct",
+            "decision", "reason_code",
+        ],
     })
     rollback_path, rollback_sha = _write_json(
         target / "rollback.json", _offline_rollback(commit),
@@ -417,7 +459,7 @@ def prepare_pilot_launch_packet(
         ),
         "review_contract": build_json_reference(
             review_path, root=root,
-            expected_schema="query-decomposition-pilot-review-contract-v1",
+            expected_schema="query-decomposition-pilot-review-contract-v2",
         ),
         "offline_rollback": build_json_reference(
             rollback_path, root=root,
@@ -468,6 +510,27 @@ def finalize_pilot_authorization(
     expires_at = _timestamp(approval.get("expires_at"))
     duration = expires_at - authorized_at
     draft_sha = _sha256(draft_raw)
+    consolidated_draft = approval.get("consolidated_launch_draft")
+    pilot_run_root_value = str(approval.get("pilot_run_root") or "")
+    pilot_run_root = (root / pilot_run_root_value).resolve()
+    consolidated_draft_valid = (
+        isinstance(consolidated_draft, dict)
+        and set(consolidated_draft) == {"path", "sha256", "schema"}
+        and consolidated_draft.get("schema")
+        == "query-decomposition-consolidated-launch-draft-v1"
+        and _sha256_digest(consolidated_draft.get("sha256"))
+    )
+    try:
+        consolidated_value = load_json_reference(consolidated_draft, root=root)
+    except (OSError, TypeError, ValueError):
+        consolidated_value = None
+    consolidated_binding_valid = bool(
+        consolidated_draft_valid
+        and isinstance(consolidated_value, dict)
+        and consolidated_value.get("source_commit") == draft.get("source_commit")
+        and consolidated_value.get("owner") == approval.get("actor")
+        and consolidated_value.get("pilot_run_root") == pilot_run_root_value
+    )
     if not all((
         draft.get("schema") == "query-decomposition-pilot-authorization-draft-v1",
         approval.get("schema") == "query-decomposition-pilot-approval-v1",
@@ -478,6 +541,10 @@ def finalize_pilot_authorization(
         authorized_at <= current <= expires_at,
         MINIMUM_AUTHORIZATION_DURATION <= duration
         <= MAXIMUM_AUTHORIZATION_DURATION,
+        consolidated_binding_valid,
+        pilot_run_root_value == Path(pilot_run_root_value).as_posix(),
+        _inside(pilot_run_root, root / ".local"),
+        not os.path.lexists(pilot_run_root),
     )):
         raise ValueError("pilot_approval_invalid")
     target = _dot_local(output_dir, root)
@@ -533,6 +600,8 @@ def finalize_pilot_authorization(
             approval_path, root=root,
             expected_schema="query-decomposition-pilot-approval-v1",
         ),
+        "consolidated_launch_draft": consolidated_draft,
+        "pilot_run_root": pilot_run_root_value,
         "schedule": {
             "path": str(schedule_path.relative_to(root)),
             "sha256": schedule_sha,
@@ -566,7 +635,7 @@ def _wal_rows(path: Path) -> list[dict]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        value = json.loads(line)
+        value = _strict_json_loads(line)
         if not isinstance(value, dict):
             raise ValueError("pilot_wal_invalid")
         rows.append(value)
@@ -691,7 +760,10 @@ def main(argv: list[str] | None = None) -> int:
     gate.add_argument("--authorization", type=Path, required=True)
     gate.add_argument("--wal", type=Path, required=True)
     gate.add_argument("--runtime-identity-sha256", required=True)
+    gate.add_argument("--review-pack", type=Path)
     gate.add_argument("--review-result", type=Path)
+    gate.add_argument("--deletion-receipt", type=Path)
+    gate.add_argument("--capture-dir", type=Path)
     gate.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "prepare":
@@ -725,7 +797,10 @@ def main(argv: list[str] | None = None) -> int:
             schedule_path=args.schedule, authorization_path=args.authorization,
             wal_path=args.wal,
             runtime_identity_sha256=args.runtime_identity_sha256,
+            review_pack_path=args.review_pack,
             review_result_path=args.review_result,
+            deletion_receipt_path=args.deletion_receipt,
+            capture_dir=args.capture_dir,
         )
         _write_json(args.output, result)
     print(json.dumps(result, ensure_ascii=False))
