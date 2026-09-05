@@ -43,6 +43,11 @@
   "capabilities": {
     "query_decomposition": {
       "status": "off_pending_fresh_declared_window",
+      "binding_readiness": {
+        "status": "historical_stale",
+        "current_execution_ready": false,
+        "fresh_binding_required": true
+      },
       "previous_outcome": "provider_smoke_58dbb08_tombstoned_0_of_5_http_502",
       "manifest_reference": {
         "path": "data/decomposition_eval_v1/eval_manifest.jsonl",

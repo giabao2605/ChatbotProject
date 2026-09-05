@@ -159,7 +159,10 @@ def require_source_commit(expected: str) -> None:
         raise RuntimeError("commit changed during rollout")
 
 
-def build_evaluation_environment(*, enabled: bool, router_mode: str) -> dict[str, str]:
+def build_evaluation_environment(
+    *, enabled: bool, router_mode: str,
+    provider_environment: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Build one controlled evaluation environment without mutating the caller.
 
     Offline mode bypasses both semantic prototypes and the provider-backed L2
@@ -170,9 +173,15 @@ def build_evaluation_environment(*, enabled: bool, router_mode: str) -> dict[str
         raise ValueError(f"unsupported router mode: {router_mode}")
     env = {
         **os.environ,
+        **(provider_environment or {}),
         "RAG_EXECUTION_CONTEXT": "evaluation",
         "RAG_CRAG_ENABLED": str(enabled).lower(),
         "RAG_CLAIM_REPAIR_ENABLED": str(enabled).lower(),
+        "RAG_GROUNDED_MATH_ENABLED": "false",
+        "RAG_QUERY_DECOMPOSITION_ENABLED": "false",
+        "RAG_GRAPH_RETRIEVAL_ENABLED": "false",
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "false",
+        "RAG_LATE_INTERACTION_ENABLED": "false",
         "SEMANTIC_CACHE_ENABLED": "false",
         "STRICT_REALTIME_STREAMING": "false",
         "QDRANT_COLLECTION": FIXTURE_COLLECTION,
@@ -294,6 +303,8 @@ def _invoke_evaluation(manifest, output, label, case_id, environment):
         sys.executable, "-m", "scripts.eval.run_eval",
         "--manifest", str(manifest), "--output-dir", str(output),
         "--run-label", label,
+        "--maximum-provider-retries", "0",
+        "--stop-on-provider-failure",
         *(("--case-id", case_id) if case_id else ()),
     ]
     return subprocess.run(command, cwd=ROOT, env=environment, check=False)
@@ -314,8 +325,10 @@ def _arm_environment(
     provider_configuration_sha256, governance_scope_sha256_value, trace,
 ):
     return {
-        **build_evaluation_environment(enabled=enabled, router_mode=router_mode),
-        **(provider_environment or {}),
+        **build_evaluation_environment(
+            enabled=enabled, router_mode=router_mode,
+            provider_environment=provider_environment,
+        ),
         "RAG_EVAL_PROVIDER_CONFIGURATION_SHA256": provider_configuration_sha256,
         "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_scope_sha256_value,
         "RAG_EVAL_CONCURRENCY": "1",

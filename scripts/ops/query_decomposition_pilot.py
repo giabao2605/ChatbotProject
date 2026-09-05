@@ -764,6 +764,9 @@ def main(argv: list[str] | None = None) -> int:
     gate.add_argument("--review-result", type=Path)
     gate.add_argument("--deletion-receipt", type=Path)
     gate.add_argument("--capture-dir", type=Path)
+    gate.add_argument("--trace", type=Path)
+    gate.add_argument("--deletion-journal", type=Path)
+    gate.add_argument("--source-root", type=Path)
     gate.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "prepare":
@@ -801,6 +804,9 @@ def main(argv: list[str] | None = None) -> int:
             review_result_path=args.review_result,
             deletion_receipt_path=args.deletion_receipt,
             capture_dir=args.capture_dir,
+            trace_path=args.trace,
+            deletion_journal_path=args.deletion_journal,
+            source_root=args.source_root,
         )
         _write_json(args.output, result)
     print(json.dumps(result, ensure_ascii=False))

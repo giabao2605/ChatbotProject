@@ -1149,6 +1149,9 @@ def test_crag_rollout_arm_binds_trace_log_file(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
         commands.append(command)
         env_values.append(kwargs["env"]["RAG_TRACE_LOG_FILE"])
+        assert kwargs["env"]["RAG_CRAG_ENABLED"] == "false"
+        assert kwargs["env"]["RAG_QUERY_DECOMPOSITION_ENABLED"] == "false"
+        assert kwargs["env"]["GPT_MODEL"] == "frozen-provider-model"
         if "scripts.eval.run_eval" in command:
             run_dir = output / "baseline"
             run_dir.mkdir(parents=True)
@@ -1193,11 +1196,19 @@ def test_crag_rollout_arm_binds_trace_log_file(monkeypatch, tmp_path):
         router_mode="offline",
         provider_configuration_sha256="provider",
         governance_scope_sha256_value="scope",
+        provider_environment={
+            "RAG_CRAG_ENABLED": "true",
+            "RAG_QUERY_DECOMPOSITION_ENABLED": "true",
+            "GPT_MODEL": "frozen-provider-model",
+        },
         case_id="case-1",
     )
 
     assert env_values == [str(trace), str(trace)]
     assert commands[0][-2:] == ["--case-id", "case-1"]
+    retry_option = commands[0].index("--maximum-provider-retries")
+    assert commands[0][retry_option + 1] == "0"
+    assert "--stop-on-provider-failure" in commands[0]
 
 
 def test_crag_rollout_rejects_abnormal_eval_exit_after_artifact(

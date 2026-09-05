@@ -586,6 +586,7 @@ def supervise_pilot(
     service_token: str,
     popen: Callable[..., object] = subprocess.Popen,
     health_fetcher: Callable[[], dict] | None = None,
+    defer_capture_cleanup: bool = False,
     **pilot_injections,
 ) -> dict:
     root = Path(source_root).resolve()
@@ -765,7 +766,7 @@ def supervise_pilot(
             })
         except OperatorStopped:
             pass
-        if not pilot_completed and captures.exists():
+        if not pilot_completed and not defer_capture_cleanup and captures.exists():
             try:
                 cleanup_terminal_captures(
                     capture_dir=captures,

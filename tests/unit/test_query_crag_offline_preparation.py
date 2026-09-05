@@ -1281,12 +1281,38 @@ def test_query_preparation_is_offline_and_fail_closed():
     }
 
 
-def test_query_preparation_runner_binding_matches_current_runner():
+def test_query_preparation_records_stale_historical_runner_binding():
     query = _load()["capabilities"]["query_decomposition"]
 
-    assert query["execution_bindings"]["runner_sha256"] == _sha256(
+    assert query["binding_readiness"] == {
+        "status": "historical_stale",
+        "current_execution_ready": False,
+        "fresh_binding_required": True,
+    }
+    assert query["execution_bindings"]["runner_sha256"] != _sha256(
         ROOT / "scripts" / "decomposition_eval" / "run_rollout.py"
     )
+
+
+def test_query_window_rejects_historical_packet_runner_binding(tmp_path):
+    fixture = _create_query_window_fixture(tmp_path)
+    runner = fixture["project"] / "scripts" / "decomposition_eval" / "run_rollout.py"
+    shutil.copy(ROOT / "scripts" / "decomposition_eval" / "run_rollout.py", runner)
+    packet_path = fixture["project"] / PREPARATION.relative_to(ROOT)
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    historical_query = _load()["capabilities"]["query_decomposition"]
+    packet["capabilities"]["query_decomposition"]["execution_bindings"][
+        "runner_sha256"
+    ] = historical_query["execution_bindings"]["runner_sha256"]
+    _write_json(packet_path, packet)
+    fixture["commit"] = _commit_fixture_repo(fixture["project"])
+    run_root = tmp_path / "query-window"
+
+    result = _run_query_window_fixture(fixture, run_root)
+
+    assert result.returncode != 0
+    assert "query_window_preparation_binding_drift" in result.stderr
+    assert not run_root.exists()
 
 
 def test_crag_preparation_is_offline_and_isolates_both_candidate_flags():

@@ -957,8 +957,9 @@ def test_operator_output_freshness_rejects_any_prior_root_artifact(tmp_path):
 
 
 @pytest.mark.parametrize("pilot_fails", [False, True])
+@pytest.mark.parametrize("defer_capture_cleanup", [False, True])
 def test_supervisor_starts_only_candidate_and_always_stops_it(
-    tmp_path, monkeypatch, pilot_fails,
+    tmp_path, monkeypatch, pilot_fails, defer_capture_cleanup,
 ):
     paths = _operator_files(tmp_path)
     local = tmp_path / ".local" / "run"
@@ -1006,6 +1007,9 @@ def test_supervisor_starts_only_candidate_and_always_stops_it(
     )
 
     def run_pilot(**_kwargs):
+        capture_dir = local / "review-captures"
+        capture_dir.mkdir()
+        (capture_dir / "test.capture.json").write_text("synthetic ciphertext")
         if pilot_fails:
             raise operator.OperatorStopped("terminal_request_failure")
         return {"status": "completed"}
@@ -1040,6 +1044,7 @@ def test_supervisor_starts_only_candidate_and_always_stops_it(
         "service_token": "token",
         "popen": popen,
         "health_fetcher": _health,
+        "defer_capture_cleanup": defer_capture_cleanup,
     }
     if pilot_fails:
         with pytest.raises(operator.OperatorStopped, match="terminal_request_failure"):
@@ -1056,6 +1061,9 @@ def test_supervisor_starts_only_candidate_and_always_stops_it(
     state = json.loads((local / "runtime-state.json").read_text())
     assert state["supervisor_pid"] == os.getpid()
     assert json.loads((local / "runtime-stop.json").read_text())["runtime_stopped"] is True
+    assert (local / "review-captures" / "test.capture.json").exists() is (
+        not pilot_fails or defer_capture_cleanup
+    )
 
 
 def test_supervisor_stops_immediately_on_health_drift(tmp_path, monkeypatch):

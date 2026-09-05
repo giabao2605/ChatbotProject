@@ -17,6 +17,7 @@ from mech_chatbot.governance.query_activation_contract import (
 from scripts.ops.query_decomposition_pilot import (
     PILOT_AUTHORIZATION,
     finalize_pilot_authorization,
+    main as pilot_main,
     pilot_evidence_valid,
     prepare_pilot_launch_packet,
     record_pilot_completion,
@@ -638,6 +639,46 @@ def test_collector_and_gate_require_exactly_once_100_request_contract(
         source_root=tmp_path,
     )
     assert accepted_gate["pilot_accepted"] is True
+    cli_output = run_root / "cli-gate.json"
+    cli_arguments = [
+        "gate", "--schedule", str(schedule_path),
+        "--authorization", str(authorization_path),
+        "--wal", str(wal_path), "--runtime-identity-sha256", "a" * 64,
+        "--review-pack", str(pack_path), "--review-result", str(review_path),
+        "--deletion-receipt", str(receipt_path),
+        "--capture-dir", str(capture_dir), "--trace", str(trace_path),
+        "--deletion-journal", str(run_root / "capture-deletion.journal.json"),
+        "--source-root", str(tmp_path), "--output", str(cli_output),
+    ]
+    assert pilot_main(cli_arguments) == 0
+    cli_gate = json.loads(cli_output.read_text(encoding="utf-8"))
+    assert cli_gate["pilot_accepted"] is True
+    assert cli_gate["default_rollout_authorized"] is False
+    for option in ("--trace", "--deletion-journal", "--source-root"):
+        position = cli_arguments.index(option)
+        missing = cli_arguments[:position] + cli_arguments[position + 2:]
+        assert pilot_main(missing) == 0
+        assert json.loads(cli_output.read_text())["human_review_passed"] is False
+        wrong_path = (
+            cli_arguments[:position + 1]
+            + [str(tmp_path / "unrelated")]
+            + cli_arguments[position + 2:]
+        )
+        assert pilot_main(wrong_path) == 0
+        assert json.loads(cli_output.read_text())["human_review_passed"] is False
+    for artifact in (trace_path, run_root / "capture-deletion.journal.json"):
+        original = artifact.read_bytes()
+        artifact.write_bytes(original + b"\n")
+        assert pilot_main(cli_arguments) == 0
+        assert json.loads(cli_output.read_text())["human_review_passed"] is False
+        artifact.write_bytes(original)
+    # Legacy automated-only invocations remain usable, never accepted by default.
+    review_start = cli_arguments.index("--review-pack")
+    automated_only = cli_arguments[:review_start] + ["--output", str(cli_output)]
+    assert pilot_main(automated_only) == 0
+    automated_gate = json.loads(cli_output.read_text())
+    assert automated_gate["automated_gate_passed"] is True
+    assert automated_gate["pilot_accepted"] is False
     unrelated_empty = output / "unrelated-empty"
     unrelated_empty.mkdir()
     wrong_capture_dir_gate = build_pilot_gate(
