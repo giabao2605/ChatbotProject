@@ -17,7 +17,6 @@ for value in (ROOT, SRC):
 
 from mech_chatbot.evaluation.integrated_hardening import (
     FEATURE_FLAGS,
-    REQUEST_LIMITS,
     REQUIRED_COMBINATIONS,
     validate_combination_matrix,
     compare_load_reports,
@@ -128,8 +127,12 @@ def _trace_matches(trace: dict, evaluation: dict) -> bool:
     )
 
 
-def _trace_budget_matches(trace: dict, evaluation: dict) -> bool:
-    report = evaluate_request_budgets(evaluation.get("cases") or [])
+def _trace_budget_matches(
+    trace: dict, evaluation: dict, *, combinations=None, maximum_provider_retries=2,
+) -> bool:
+    report = evaluate_request_budgets(
+        evaluation.get("cases") or [], combinations=combinations,
+        maximum_provider_retries=maximum_provider_retries)
     if not report["passed"]:
         return False
     observed = trace.get("observed_budget_metrics") or {}
@@ -144,7 +147,7 @@ def _trace_budget_matches(trace: dict, evaluation: dict) -> bool:
     }
     return all(
         observed.get(trace_field) == report["maxima"].get(eval_field)
-        and observed.get(trace_field) <= REQUEST_LIMITS[eval_field]
+        and observed.get(trace_field) <= report["limits"][eval_field]
         for trace_field, eval_field in mapping.items()
     )
 
@@ -178,6 +181,7 @@ def _expected_configurations(feature_matrix: dict, release_decisions: dict) -> d
 
 def evaluate_combination_evidence(
     combination_id, artifacts, digests, *, expected_configuration=None,
+    baseline_combinations=None, candidate_combinations=None, maximum_provider_retries=2,
 ) -> dict:
     baseline = artifacts["baseline_eval"]
     candidate = artifacts["candidate_eval"]
@@ -209,10 +213,12 @@ def evaluate_combination_evidence(
         "baseline_trace_bound": _trace_matches(artifacts["baseline_trace"], baseline),
         "candidate_trace_bound": _trace_matches(artifacts["candidate_trace"], candidate),
         "baseline_trace_budgets_reconciled": _trace_budget_matches(
-            artifacts["baseline_trace"], baseline
+            artifacts["baseline_trace"], baseline, combinations=baseline_combinations,
+            maximum_provider_retries=maximum_provider_retries,
         ),
         "candidate_trace_budgets_reconciled": _trace_budget_matches(
-            artifacts["candidate_trace"], candidate
+            artifacts["candidate_trace"], candidate, combinations=candidate_combinations,
+            maximum_provider_retries=maximum_provider_retries,
         ),
         "pipeline_configuration_bound": (
             expected_configuration is None
@@ -292,6 +298,96 @@ def evaluate_combination_evidence(
     }
 
 
+def _load_security_results(reference: dict, *, root: Path) -> tuple[list, dict, str]:
+    security_path = Path(str(reference.get("path") or ""))
+    if not security_path.is_absolute():
+        security_path = root / security_path
+    security_raw = security_path.read_bytes()
+    security_digest = hashlib.sha256(security_raw).hexdigest()
+    if security_digest != reference.get("sha256"):
+        raise ValueError(f"artifact hash mismatch: {security_path}")
+    security_rows = [
+        json.loads(line) for line in security_raw.decode("utf-8").splitlines()
+        if line.strip()
+    ]
+    if not security_rows:
+        raise ValueError("security results must be non-empty JSONL")
+    return security_rows, {
+        "path": str(security_path.resolve()), "sha256": security_digest,
+        "format": "jsonl",
+    }, security_digest
+
+
+def _derived_artifacts_recomputed(
+    artifacts: dict, digests: dict, security_rows: list, security_digest: str,
+    *, combinations=None, maximum_provider_retries=2,
+) -> bool:
+    expected_baseline_load = build_integrated_load_report(
+        artifacts["baseline_benchmark"], artifacts["baseline_eval"],
+        concurrency=artifacts["baseline_load"].get("concurrency"),
+        source_benchmark_sha256=digests["baseline_benchmark"],
+        source_eval_sha256=digests["baseline_eval"],
+    )
+    expected_candidate_load = build_integrated_load_report(
+        artifacts["candidate_benchmark"], artifacts["candidate_eval"],
+        concurrency=artifacts["candidate_load"].get("concurrency"),
+        source_benchmark_sha256=digests["candidate_benchmark"],
+        source_eval_sha256=digests["candidate_eval"],
+    )
+    expected_results = build_results(
+        [artifacts["candidate_eval"]], security_rows,
+        source_eval_sha256s=[digests["candidate_eval"]],
+        security_results_sha256=security_digest,
+        combinations=combinations, maximum_provider_retries=maximum_provider_retries,
+    )
+    result_fields = (
+        "schema", "passed", "eval_schemas_valid", "budget_report",
+        "security_report", "source_eval_sha256s", "security_results_sha256",
+    )
+    return (
+        artifacts["baseline_load"] == expected_baseline_load
+        and artifacts["candidate_load"] == expected_candidate_load
+        and all(
+            artifacts["results"].get(field) == expected_results.get(field)
+            for field in result_fields
+        )
+    )
+
+
+def load_row_evidence(
+    row: dict, *, expected_configuration, root: Path = ROOT,
+    baseline_combinations=None, candidate_combinations=None, maximum_provider_retries=2,
+) -> tuple[dict, list]:
+    artifacts = {}
+    digests = {}
+    references = []
+    for name in ROW_ARTIFACTS:
+        reference = row.get(name) or {}
+        artifact = require_artifact_reference(reference, root=root)
+        artifacts[name] = artifact
+        digests[name] = reference["sha256"]
+        references.append(reference)
+    security_rows, security_reference, security_digest = _load_security_results(
+        row.get("security_results") or {}, root=root,
+    )
+    references.append(security_reference)
+    if artifacts["results"].get("security_results_sha256") != security_digest:
+        raise ValueError("integrated results are not bound to security results")
+    report = evaluate_combination_evidence(
+        row["id"], artifacts, digests,
+        expected_configuration=expected_configuration,
+        baseline_combinations=baseline_combinations,
+        candidate_combinations=candidate_combinations,
+        maximum_provider_retries=maximum_provider_retries,
+    )
+    report["checks"]["derived_artifacts_recomputed"] = _derived_artifacts_recomputed(
+        artifacts, digests, security_rows, security_digest,
+        combinations=candidate_combinations, maximum_provider_retries=maximum_provider_retries,
+    )
+    report["passed"] = all(report["checks"].values())
+    return report, references
+
+
 def load_matrix_evidence(
     manifest: dict, *, feature_matrix: dict, release_decisions: dict,
     root: Path = ROOT,
@@ -305,68 +401,10 @@ def load_matrix_evidence(
     reports = []
     references = []
     for row in rows:
-        artifacts = {}
-        digests = {}
-        for name in ROW_ARTIFACTS:
-            reference = row.get(name) or {}
-            artifact = require_artifact_reference(reference, root=root)
-            artifacts[name] = artifact
-            digests[name] = reference["sha256"]
-            references.append(reference)
-        security_reference = row.get("security_results") or {}
-        security_path = Path(str(security_reference.get("path") or ""))
-        if not security_path.is_absolute():
-            security_path = root / security_path
-        security_raw = security_path.read_bytes()
-        security_digest = hashlib.sha256(security_raw).hexdigest()
-        if security_digest != security_reference.get("sha256"):
-            raise ValueError(f"artifact hash mismatch: {security_path}")
-        security_rows = [
-            json.loads(line) for line in security_raw.decode("utf-8").splitlines()
-            if line.strip()
-        ]
-        if not security_rows:
-            raise ValueError("security results must be non-empty JSONL")
-        references.append({
-            "path": str(security_path.resolve()), "sha256": security_digest,
-            "format": "jsonl",
-        })
-        if artifacts["results"].get("security_results_sha256") != security_digest:
-            raise ValueError("integrated results are not bound to security results")
-        report = evaluate_combination_evidence(
-            row["id"], artifacts, digests,
-            expected_configuration=matrix_by_id.get(row["id"]),
+        report, row_references = load_row_evidence(
+            row, expected_configuration=matrix_by_id.get(row["id"]), root=root,
         )
-        expected_baseline_load = build_integrated_load_report(
-            artifacts["baseline_benchmark"], artifacts["baseline_eval"],
-            concurrency=artifacts["baseline_load"].get("concurrency"),
-            source_benchmark_sha256=digests["baseline_benchmark"],
-            source_eval_sha256=digests["baseline_eval"],
-        )
-        expected_candidate_load = build_integrated_load_report(
-            artifacts["candidate_benchmark"], artifacts["candidate_eval"],
-            concurrency=artifacts["candidate_load"].get("concurrency"),
-            source_benchmark_sha256=digests["candidate_benchmark"],
-            source_eval_sha256=digests["candidate_eval"],
-        )
-        expected_results = build_results(
-            [artifacts["candidate_eval"]], security_rows,
-            source_eval_sha256s=[digests["candidate_eval"]],
-            security_results_sha256=security_digest,
-        )
-        result_fields = (
-            "schema", "passed", "eval_schemas_valid", "budget_report",
-            "security_report", "source_eval_sha256s", "security_results_sha256",
-        )
-        report["checks"]["derived_artifacts_recomputed"] = (
-            artifacts["baseline_load"] == expected_baseline_load
-            and artifacts["candidate_load"] == expected_candidate_load
-            and all(
-                artifacts["results"].get(field) == expected_results.get(field)
-                for field in result_fields
-            )
-        )
-        report["passed"] = all(report["checks"].values())
+        references.extend(row_references)
         reports.append(report)
     primary = str(manifest.get("primary_combination_id") or "")
     by_id = {row["combination_id"]: row for row in reports}

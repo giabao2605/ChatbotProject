@@ -58,6 +58,18 @@ def build_draft(source_root: Path) -> dict:
     }
 
 
+def evaluate_arm_budgets(cases, *, row: str, label: str) -> dict:
+    """Validate one arm's telemetry; this does not accept a matrix or permit traffic."""
+    from mech_chatbot.evaluation.integrated_hardening import evaluate_request_budgets
+
+    enabled_by_row = {name: flags for name, _, _, _, flags in ROWS}
+    if row not in enabled_by_row or label not in ("baseline", "candidate"):
+        raise ValueError("unknown matrix arm")
+    enabled = enabled_by_row[row] if label == "candidate" else frozenset()
+    return evaluate_request_budgets(
+        cases, combinations={row: enabled}, maximum_provider_retries=0)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -94,8 +106,13 @@ def build_arm_plan(source_root: Path, run_root: Path) -> dict:
     """
     from scripts.grounded_math_eval.constants import FIXTURE_COLLECTION as math_collection
     from scripts.crag_eval.constants import FIXTURE_COLLECTION as query_collection
+    from scripts.grounded_math_eval.constants import FIXTURE_BATCH as math_batch
+    from scripts.crag_eval.constants import FIXTURE_BATCH as query_batch
+    from scripts.crag_eval.run_rollout import governance_scope_sha256
 
     draft = build_draft(source_root)
+    if run_root.is_symlink():
+        raise ValueError("matrix_run_root_not_fresh")
     root, output = source_root.resolve(), run_root.resolve()
     if output.exists() or output.is_symlink():
         raise ValueError("matrix_run_root_not_fresh")
@@ -112,7 +129,10 @@ def build_arm_plan(source_root: Path, run_root: Path) -> dict:
                 "SEMANTIC_CACHE_ENABLED": "false", "STRICT_REALTIME_STREAMING": "false",
                 "LLM_ROUTER_ENABLED": "false", "SEMANTIC_ROUTER_ENABLED": "false",
                 "RAG_EVAL_ROUTER_MODE": "offline", "RAG_EVAL_CONCURRENCY": "1",
+                "RAG_EVAL_COMBINATION_ID": name,
                 "QDRANT_COLLECTION": collection, "RAG_EVAL_EXPECTED_COLLECTION": collection,
+                "RAG_EVAL_FIXTURE_BATCH": math_batch if name == "math_only" else query_batch,
+                "RAG_EVAL_GOVERNANCE_SCOPE_SHA256": governance_scope_sha256(root / row["manifest"]["path"]),
                 "RAG_EVAL_PREFLIGHT_KIND": "grounded_math" if name == "math_only" else "decomposition",
                 "RAG_TRACE_LOG_FILE": str(output / name / "rag-traces" / (label + ".jsonl")),
             }

@@ -120,19 +120,37 @@ def validate_combination_matrix(matrix: dict) -> dict:
     }
 
 
-def evaluate_request_budgets(cases) -> dict:
+def evaluate_request_budgets(
+    cases, *, combinations=None, maximum_provider_retries=2,
+) -> dict:
+    """Check telemetry against a code-supplied contract, never an authorization.
+
+    Alternate evaluation contracts may tighten retries but cannot raise the
+    existing request ceiling. Existing callers retain the five-row contract.
+    """
+    if (type(maximum_provider_retries) is not int
+            or not 0 <= maximum_provider_retries <= REQUEST_LIMITS["provider_retries"]):
+        raise ValueError("invalid provider retry ceiling")
+    combinations = REQUIRED_COMBINATIONS if combinations is None else combinations
+    if not combinations or any(
+        not isinstance(name, str) or not name
+        or not isinstance(flags, (set, frozenset)) or not flags <= set(FEATURE_FLAGS)
+        for name, flags in combinations.items()
+    ):
+        raise ValueError("invalid request budget combinations")
+    limits = {**REQUEST_LIMITS, "provider_retries": maximum_provider_retries}
     violations = []
-    maxima = {field: 0 for field in REQUEST_LIMITS}
+    maxima = {field: 0 for field in limits}
     for case in cases or ():
         case_id = str(case.get("id") or "<missing>")
         combination_id = str(case.get("combination_id") or "")
-        if combination_id not in REQUIRED_COMBINATIONS:
+        if combination_id not in combinations:
             violations.append({
                 "case_id": case_id, "combination_id": combination_id,
                 "field": "combination_id", "value": combination_id,
                 "limit": "known matrix combination",
             })
-        for field, limit in REQUEST_LIMITS.items():
+        for field, limit in limits.items():
             raw_value = case.get(field)
             if not isinstance(raw_value, int) or isinstance(raw_value, bool):
                 violations.append({
@@ -160,7 +178,7 @@ def evaluate_request_budgets(cases) -> dict:
                 "case_id": case_id, "combination_id": combination_id,
                 "field": "deadline_exceeded", "value": True, "limit": False,
             })
-        enabled = REQUIRED_COMBINATIONS.get(combination_id, set())
+        enabled = combinations.get(combination_id, set())
         inactive_budgets = {
             "planner_count": "RAG_QUERY_DECOMPOSITION_ENABLED",
             "subquery_count": "RAG_QUERY_DECOMPOSITION_ENABLED",
@@ -185,7 +203,7 @@ def evaluate_request_budgets(cases) -> dict:
             str(case.get("combination_id") or "") for case in cases or ()
             if str(case.get("combination_id") or "")
         }),
-        "limits": dict(REQUEST_LIMITS),
+        "limits": limits,
         "maxima": maxima,
         "violations": violations,
     }

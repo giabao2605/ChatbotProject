@@ -273,7 +273,6 @@ def run_packet(packet_path: Path, expected_sha256: str) -> dict:
                    "RAG_QUERY_PILOT_HOST_PACKET_SHA256": expected_sha256,
                    "RAG_QUERY_PILOT_HOST_PID": str(os.getpid()),
                    "RAG_QUERY_PILOT_HOST_CREATE_TIME": repr(host_create_time),
-                   "RAG_QUERY_PILOT_HOST_SCRIPT": str(Path(__file__).resolve()),
                    "RAG_QUERY_PILOT_HOST_OPERATOR_SHA256": packet["operator_arguments_sha256"]}
     command = [str(args.python_exe.resolve()), "-m",
                "scripts.ops.query_decomposition_pilot_operator", *_arguments(packet["operator"])]

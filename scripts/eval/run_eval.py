@@ -360,7 +360,10 @@ def run_evaluation(
     case_ids: list[str] | None = None,
     stop_on_provider_failure: bool = False,
     capture_local_review_content: bool = False,
+    quality_observer=None,
 ) -> tuple[dict, bool]:
+    if quality_observer is not None and not callable(quality_observer):
+        raise ValueError("quality_observer_must_be_callable")
     cases = select_cases(load_manifest_files(manifest_files), case_ids)
     paths = resolve_output_paths(output_dir, run_label)
     review_capture_path = (
@@ -443,6 +446,7 @@ def run_evaluation(
         roles = case["user_roles"]
         trace_id = f"eval:{run_label}:{case['id']}"
         debug: dict = {}
+        quality_observation = None
         completion_outcome = None
         refusal_reason = None
         rag_runtime_active = False
@@ -721,6 +725,9 @@ def run_evaluation(
                 ),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
+            if quality_observer is not None:
+                quality_observation = {"case_id": case["id"], "trace_id": trace_id,
+                                       "answer": answer, "debug": debug}
             review_rows.append(
                 {
                     "schema": "query-decomposition-local-review-content-v1",
@@ -776,6 +783,18 @@ def run_evaluation(
                 **_execution_metrics(debug),
                 "evaluation_group": case.get("evaluation_group") or case.get("scenario"),
             }
+        if quality_observer is not None:
+            # Outside request error handling: an observer failure terminates this
+            # window, never becomes an ordinary failed case followed by traffic.
+            if quality_observation is None:
+                raise RuntimeError("quality_observation_unavailable")
+            from copy import deepcopy
+            try:
+                quality_observer(deepcopy(case), deepcopy(row), deepcopy(quality_observation))
+            except Exception:
+                raise RuntimeError("quality_observer_failed") from None
+            finally:
+                quality_observation = None
         rows.append(row)
         level = case.get("level", "fixture")
         levels[level]["total"] += 1
@@ -1012,14 +1031,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, quality_observer=None, preflight_validator=None) -> int:
+    from copy import deepcopy
+
+    if quality_observer is not None and not callable(quality_observer):
+        raise ValueError("quality_observer_must_be_callable")
+    if preflight_validator is not None and not callable(preflight_validator):
+        raise ValueError("preflight_validator_must_be_callable")
     args = parse_args(argv)
     case_ids = getattr(args, "case_id", None)
     cases = select_cases(load_manifest_files(args.manifest), case_ids)
     settings = load_settings()
     with configured_repository_runtime(settings, include_qdrant=True):
         preflight_report = _default_preflight_runner()(cases)
-        cached_preflight = lambda _cases: preflight_report
+        def cached_preflight(candidate_cases):
+            if preflight_validator is not None:
+                try:
+                    accepted = preflight_validator(deepcopy(candidate_cases), deepcopy(preflight_report))
+                    if accepted is not True:
+                        raise ValueError("preflight validator did not accept")
+                except Exception:
+                    raise RuntimeError("evaluation_preflight_validation_failed") from None
+            return deepcopy(preflight_report) if preflight_validator is not None else preflight_report
+
+        # Revalidate at initial preflight and again after the evaluator reloads cases.
+        cached_preflight(cases)
         if not preflight_report["passed"]:
             run_evaluation(
                 args.manifest,
@@ -1054,6 +1090,7 @@ def main(argv: list[str] | None = None) -> int:
                     capture_local_review_content=getattr(
                         args, "capture_local_review_content", False
                     ),
+                    quality_observer=quality_observer,
                 )
         finally:
             runtime.close()

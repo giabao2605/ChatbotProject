@@ -1,6 +1,78 @@
 # CRAG: readiness offline ngày 05/09/2026
 
-## Checkpoint bản sửa offline
+## Checkpoint dependency hiện hành ngày 08/09/2026
+
+Đánh giá này áp dụng cho interpreter dùng chung của Query và CRAG:
+`C:/Users/bao.nguyen/Documents/ChatBotProject/chat_env/Scripts/python.exe`.
+Chạy lại `-m pip check` trả exit 0 (`No broken requirements found`);
+`-m pip_audit --local --progress-spinner off --format json` trả exit 1,
+**12 advisory ở 5 package**. Inventory được đối chiếu thêm bằng `pip show`.
+Không cài đặt, nâng cấp hoặc thay đổi môi trường dùng chung.
+
+| Package cài hiện tại | Advisory hiện hành | Fix candidate từ scanner |
+| --- | --- | --- |
+| GitPython 3.1.58 | PYSEC-2026-3785 / CVE-2026-78675 / GHSA-7833-fr7j-v32q; PYSEC-2026-3786 / CVE-2026-78676 / GHSA-284h-m62q-gf8w; PYSEC-2026-3787 / CVE-2026-78677 / GHSA-8mcc-hrx5-hvxc; PYSEC-2026-3788 / CVE-2026-78678 / GHSA-5xxx-qhh7-9287 | 3.1.59 |
+| pip 26.1.2 | PYSEC-2026-3721 / CVE-2026-13346 / GHSA-qwm4-qh6w-59xr | 26.2 |
+| pypdf 6.15.0 | CVE-2026-84309 / GHSA-jp53-mhqp-8xcg; CVE-2026-84310 / GHSA-23w6-3w8w-8484; CVE-2026-84311 / GHSA-763m-79hh-57f2 | 6.16.1 cho cả ba |
+| tornado 6.5.7 | GHSA-wwv5-g3v4-889x; GHSA-8423-8fgw-73vq; CVE-2026-82397 / GHSA-mpf4-983q-p7j4 | 6.5.8, cần xác minh discrepancy bên dưới |
+| unstructured 0.22.32 | CVE-2026-71428 / GHSA-4mvj-m6j5-pmf7 | 0.24.0 |
+
+### Reachability và disposition
+
+- GitPython và Tornado được `pip show` ghi là dependency của Streamlit.
+  Không tìm thấy import/call trực tiếp các thư viện này trong Python source
+  của repo; server hiện dùng Uvicorn/FastAPI, còn auth Streamlit là removed
+  compatibility shim. Chưa thấy đường ứng dụng đến GitPython config/clone/
+  blame/submodule hoặc Tornado cookie/form parser bị ảnh hưởng.
+  [GitPython upstream](https://github.com/gitpython-developers/GitPython/security/advisories/GHSA-7833-fr7j-v32q),
+  [Tornado cookie](https://github.com/tornadoweb/tornado/security/advisories/GHSA-wwv5-g3v4-889x),
+  [multipart](https://github.com/tornadoweb/tornado/security/advisories/GHSA-8423-8fgw-73vq),
+  [urlencoded](https://github.com/tornadoweb/tornado/security/advisories/GHSA-mpf4-983q-p7j4).
+- pypdf được cài cho unstructured-client; unstructured không có `Required-by`.
+  Không tìm thấy import pypdf, Unstructured loader hoặc URL partition trong
+  source; ingestion PDF hiện gọi `fitz`/`pdfplumber`. Chưa thấy đường trực tiếp
+  đến pypdf outline/text/writer hoặc unstructured URL SSRF. Đây là static
+  assessment, chưa chứng minh mọi dynamic/optional dependency đều unreachable.
+  [pypdf upstream](https://github.com/py-pdf/pypdf/security/advisories/GHSA-763m-79hh-57f2),
+  [unstructured upstream](https://github.com/Unstructured-IO/unstructured/security/advisories/GHSA-4mvj-m6j5-pmf7).
+- pip: scanner mô tả path traversal khi dùng malicious package index;
+  không tìm thấy runtime package installation trong source được kiểm.
+  Không tải/cài từ untrusted index. URL
+  [pip advisory](https://github.com/pypa/pip/security/advisories/GHSA-qwm4-qh6w-59xr)
+  chưa fetch được; ID/description/fix candidate hiện dựa trên scanner,
+  không claim đã xác minh riêng upstream.
+- Upstream Tornado cookie advisory đang ghi `Patched versions: None`, trong
+  khi scanner đề xuất 6.5.8. Cần đối chiếu release/source và re-audit; chưa
+  xem candidate này là remediation đã chứng minh.
+
+Disposition của **cả 12 advisory**: `assessed_open`,
+`no_direct_application_sink_found`; **security-green = false**. Không phải
+`not_affected` hoặc owner risk acceptance. Có thể lưu kết luận này trong
+local source freeze không phát hành; dependency gate vẫn chặn tuyên bố
+release-ready/security-clean và không cấp quyền launch Query/CRAG.
+
+### Điều kiện kiểm compatibility tách biệt
+
+1. Tạo venv riêng cùng Python version, không dùng `--system-site-packages`;
+   không đổi `chat_env`. Đối soát intended runtime với inventory trước:
+   lock hiện ghi cryptography 49.0.0, shared runtime là 50.0.0, nên lock
+   không được coi là bản sao môi trường đang kiểm.
+2. Kiểm fix candidate trên môi trường riêng. Nếu chọn bỏ dependency
+   Streamlit/unstructured không dùng, cần review riêng phạm vi runtime;
+   không xóa package dùng chung trong lượt này.
+3. Chạy `pip check`, fresh audit, offline imports, PDF ingestion local
+   fixtures, API/auth regression và full unit/matrix coverage. Đối chiếu
+   upstream cho Tornado và pip trước khi tuyên bố khắc phục đủ 12 advisory.
+4. Chỉ đóng gate khi inventory mới, compatibility và advisory disposition
+   được review; nếu còn advisory thì giữ gate mở và security-green false.
+   Mọi interpreter/package thay đổi cần binding mới và preflight mới cho
+   future window được owner duyệt; không tái sử dụng binding lịch sử.
+
+Các checkpoint, số test và câu `chưa commit/freeze` dưới đây là **lịch sử
+ngày 05/09**, không xác định trạng thái freeze hiện hành. Final commit/binding
+phải đọc từ gói freeze mới; không sửa source/run/hash lịch sử.
+
+## Checkpoint bản sửa offline (lịch sử 05/09)
 
 Hai lỗi harness bên dưới đã được sửa trong worktree chuẩn bị, chưa
 commit/freeze và không được áp vào source/run lịch sử `38620eb`:

@@ -1817,7 +1817,9 @@ def test_fixture_generation_is_deterministic_and_identity_complete(tmp_path):
         ))
 
 
-def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
+@pytest.mark.parametrize("observe", [False, True])
+@pytest.mark.parametrize("evaluation_fails", [False, True])
+def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path, observe, evaluation_fails):
     runner = _load("run_eval_composition", "scripts/eval/run_eval.py")
     logging_config = importlib.import_module("mech_chatbot.config.logging")
     settings = object()
@@ -1825,6 +1827,7 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
     executor = object()
     trace_runtime = object()
     events = []
+    observer = (lambda *_args: None) if observe else None
     runtime = SimpleNamespace(
         executor=executor,
         trace_runtime=trace_runtime,
@@ -1891,16 +1894,61 @@ def test_eval_main_uses_composed_rag_runtime(monkeypatch, tmp_path):
     def run_evaluation(*args, **kwargs):
         assert kwargs["rag_executor"] is executor
         assert kwargs["stop_on_provider_failure"] is True
+        assert kwargs.get("quality_observer") is observer
         events.append("run")
+        if evaluation_fails:
+            raise RuntimeError("quality_observer_failed")
         return {}, True
 
     monkeypatch.setattr(runner, "run_evaluation", run_evaluation)
 
-    assert runner.main([]) == 0
+    options = {"quality_observer": observer} if observe else {}
+    if evaluation_fails:
+        with pytest.raises(RuntimeError, match="^quality_observer_failed$"):
+            runner.main([], **options)
+    else:
+        assert runner.main([], **options) == 0
     assert events == [
         "bind", "logging", ("build", 0), "trace-bind", "run",
         "trace-unbind", "close", "unbind",
     ]
+
+
+def test_eval_main_rejects_invalid_observer_before_settings_or_manifest(monkeypatch):
+    runner = _load("run_eval_invalid_observer", "scripts/eval/run_eval.py")
+    monkeypatch.setattr(runner, "load_settings", lambda: pytest.fail("settings accessed"))
+    monkeypatch.setattr(runner, "load_manifest_files", lambda _: pytest.fail("manifest accessed"))
+    with pytest.raises(ValueError, match="quality_observer_must_be_callable"):
+        runner.main([], quality_observer=False)
+
+
+@pytest.mark.parametrize("decision", ["raise", False, None, 1])
+def test_eval_main_validates_frozen_preflight_before_creating_runtime(monkeypatch, tmp_path, decision):
+    runner = _load("run_eval_frozen_preflight", "scripts/eval/run_eval.py")
+    monkeypatch.setattr(runner, "load_settings", lambda: object())
+    monkeypatch.setattr(runner, "load_manifest_files", lambda _: [])
+    monkeypatch.setattr(runner, "_default_preflight_runner", lambda: lambda _: {"passed": True})
+
+    @contextmanager
+    def bind_runtime(*args, **kwargs):
+        yield
+
+    monkeypatch.setattr(runner, "configured_repository_runtime", bind_runtime)
+    monkeypatch.setattr(runner, "build_rag_runtime", lambda *a, **kw: pytest.fail("runtime created"))
+    checked = []
+
+    def reject(cases, preflight):
+        checked.append((cases, preflight))
+        if decision == "raise":
+            raise ValueError("private contract details")
+        return decision
+
+    with pytest.raises(RuntimeError, match="^evaluation_preflight_validation_failed$"):
+        runner.main(["--manifest", str(tmp_path / "manifest.jsonl"),
+                     "--output-dir", str(tmp_path / "output"), "--run-label", "candidate"],
+                    preflight_validator=reject)
+    assert checked == [([], {"passed": True})]
+    assert not (tmp_path / "output").exists()
 
 
 def test_eval_main_does_not_compose_runtime_before_failed_preflight(monkeypatch, tmp_path):

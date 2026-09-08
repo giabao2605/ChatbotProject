@@ -2,14 +2,43 @@
 
 ## Tóm tắt
 
-- Default rollout nội bộ hiện dùng signed `selective` Math-only trên commit `67265a0`; chỉ `RAG_GROUNDED_MATH_ENABLED=true`, sáu feature còn lại giữ OFF.
+- Default-rollout authorization đã ghi nhận là signed `selective` Math-only trên commit `67265a0`; accepted set chỉ có `RAG_GROUNDED_MATH_ENABLED`, sáu feature còn lại giữ OFF. Authorization này không tự chứng minh runtime đang chạy hoặc quyền trên RC mới.
 - Tách Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair thành các capability được đánh giá, pilot và quyết định độc lập.
 - Phát hành dần: tính năng đạt không phải chờ tính năng khác; tính năng chưa đạt tiếp tục OFF.
-- Mỗi pilot chạy trên Windows/LAN riêng theo contract của capability và đủ 100 request đúng nhóm. Mặc định vẫn tối thiểu 7 ngày; riêng Grounded Math dùng contract prospective 3 ngày/100 request được owner chấp nhận ngày `2026-08-14`.
+- Mỗi pilot chạy trên Windows/LAN riêng theo contract của capability và đủ 100 request đúng nhóm. Mặc định vẫn tối thiểu 7 ngày; Math dùng exception 72 giờ, Query/Graph/CRAG+Claim Repair/Community dùng exception riêng tối thiểu 24 giờ đã ghi nhận trong roadmap chính. Duration không tự cấp quyền mở pilot.
 - Theo đến cùng bốn tính năng chính: Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair. Chỉ dừng khi `accepted` hoặc chứng minh kỹ thuật rằng muốn tiến xa hơn phải phá ngưỡng đã khóa.
 - Community Summaries chỉ bắt đầu sau Graph accepted. Late Interaction giữ OFF vô thời hạn.
 
-## Checkpoint Query controlled-demo pilot preparation — 2026-08-26
+## Checkpoint hiện hành — 2026-09-08
+
+- Query/Math+Query đã có dispatcher sáu arm, process worker, observation ledger,
+  receipt/terminal persistence và đối soát report/trace/quality binding trong
+  worktree `query-post-pilot-prep-20260905`. Không còn ở bước chỉ lập command plan.
+- Review P1/P3 đã đóng: baseline quality âm với exit code 2 vẫn là evaluation
+  hợp lệ; worker failure dừng window; authority claims ở result và nested quality
+  bị từ chối. Checkpoint test trước freeze: 3557 pass, 2 skip, coverage tổng năm
+  module 82,74%; đây không phải coverage từng module hoặc quality acceptance.
+- Pilot `query-pilot-launch-38620eb-20260905-01/run` gián đoạn ở 6/100, đã consume,
+  thiếu terminal/result/runtime-stop receipt. Không resume, retry, replacement,
+  catch-up hoặc chuyển card/thời lượng sang run mới. Sáu capture giữ nguyên chờ
+  disposition riêng, không xử lý như full-pilot success.
+- Mốc tiếp theo là freeze offline và kiểm binding bằng validator, không tự kế
+  thừa formal/review 39/39 từ source cũ. Chi tiết triển khai, dependency disposition
+  và hồ sơ gate tiếp theo nằm trong [Query readiness](query-post-pilot-readiness-20260905.md).
+- Dependency hiện có 12 advisory/5 package được đánh giá `assessed_open`,
+  security-green=false; source checkpoint không phải release-ready.
+- Chỉ sau fresh authorization bind đúng draft/source/root/lịch mới được chạy
+  live preflight/rollback/smoke, Scheduled Task thật và pilot Query-only: đúng
+  100 eligible card, tối thiểu 24 giờ, concurrency 1, zero retry/replacement/catch-up.
+  Pilot đạt rồi mới review/deletion/final gate và interaction matrix thực tế.
+- CRAG isolation/zero-retry/stop-on-provider-failure đã sửa offline; measured
+  evidence vẫn inconclusive, cần recovery signal và window riêng. Math giữ quyền
+  exact-commit đã duyệt (không chứng minh runtime hiện đang chạy); Graph giữ
+  keep_off_technical_limit; Community/Late Interaction tiếp tục OFF.
+- Các checkpoint bên dưới là lịch sử. Không suy diễn checkpoint offline thành
+  release freeze, provider permission, matrix acceptance hoặc default activation.
+
+## Checkpoint Query controlled-demo pilot preparation — 2026-08-26 (lịch sử)
 
 - Formal Query-only evidence trên `fe4dc37647b8078a2df4a73459c8ef65929b6de8` đã hoàn tất technical gate `3/3`, provider path `111/111` và human review `39/39`. Evidence này chỉ chứng minh quality; không tự authorize activation, runtime, traffic, pilot hoặc default rollout.
 - Activation bundle lịch sử bind `c22411a9be6c5edfd6869bb1c71dfc2add5f5864`; bundle đó không được dùng cho commit mới chứa pilot harness. Commit mới phải có activation draft và bundle mới bind exact source commit.

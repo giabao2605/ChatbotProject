@@ -1,14 +1,115 @@
 # Query: gói chuẩn bị hậu-pilot ngày 2026-09-05
 
-Trạng thái bàn giao: lưu **local implementation checkpoint**, không phải
-release freeze hoặc hoàn tất toàn scope. Các checkpoint “chưa commit” bên
-dưới là lịch sử trước snapshot này. Query gate wiring, CRAG isolation,
-Scheduled Host/Job và proof đã được kiểm; matrix mới có draft validator và
-arm command planning, chưa có dispatcher hoặc evidence acceptance validator.
-Independent review binding đã đóng; review delta toàn gói còn thiếu do quota.
-Dependency advisories còn mở. Không có quyền mới để chạy pilot/matrix,
+Trạng thái pre-freeze ngày 08/09: **đang chốt checkpoint source offline**, chưa
+release freeze hoặc hoàn tất toàn roadmap. Base trước commit là `96c78e3`;
+exact commit cuối, hashes và kiểm binding được ghi bên ngoài tracked source tại
+`.local/offline-freeze-20260908/`. Không dùng base làm binding cho code mới.
+Các kết quả và mô tả
+“chưa có” trong các mục bên dưới là lịch sử từng bước, không thay cho tóm tắt
+hiện tại này.
+
+Đã có trong source hiện tại:
+
+- Query gate wiring, CRAG isolation, Scheduled Host/Job và proof của checkpoint
+  trước; review Standards/Spec checkpoint đó không có finding chặn.
+- Matrix declaration/approval/source guards, exclusive run-root claim và
+  dispatcher tuần tự sáu arm với môi trường child explicit, zero provider retry,
+  dừng window khi arm lỗi, receipt/result hashes và terminal receipt.
+- Worker observation ledger, đối soát report/quality binding và loader nối
+  execution receipts với trace/evaluation evidence của ba row.
+
+Checklist xác minh trước khi chốt delta này:
+
+1. Full unit trên code đứng yên sau sửa authority đã đạt ngày 08/09:
+   **3556 passed, 2 skipped, 0 failures/errors**, exit 0, 611.78 giây theo pytest.
+   Một warning deprecation của Starlette/httpx; không đổi dependency trong scope.
+   JUnit tại `C:/Users/bao.nguyen/AppData/Local/Temp/query-matrix-final-20260908.xml`,
+   SHA-256 `c1002336ff5215a33a59f7c3975e0d06333bfc1c80fd8d475df75ce4411fa888`.
+2. Integration qua production process bootstrap và real worker đã đạt với runtime
+   offline: child chạy hai request và đóng runtime; khi request đầu lỗi thì không
+   chạy request hai, không ghi eval report và vẫn đóng runtime. Fixture chỉ thay
+   runtime/settings/preflight/logging/intent trong package initializer của bản
+   source tạm; worker/evaluator/bootstrap giữ source production. Có network audit
+   guard trong child. Nhóm process/observer/quality đạt **47/47**, 43.70 giây sau
+   khi bổ sung hai ca này; production code không đổi so với full-unit phía trên.
+3. Coverage branch+statement cùng lượt full unit cho 5 module matrix đạt
+   **82.77%** tổng, exit 0 với ngưỡng 80%:
+   dispatcher 74%, evidence 86%, matrix 96%, quality 97%, worker 84%.
+   JSON tại `C:/Users/bao.nguyen/AppData/Local/Temp/query-matrix-final-20260908-coverage.json`,
+   SHA-256 `6acca4b34c4345619f54ebf6655d9dbe4a448c8ecbb7d9a6b1cd5f8358cf83f3`.
+   Báo cáo đo tiến trình pytest chính, không gộp source tạm trong subprocess;
+   không được diễn giải 83% tổng thành mỗi module đều đạt 80%.
+4. Hai lượt review độc lập sau đó đã hoàn tất: Spec tìm P1 (exit 2 của baseline
+   chất lượng âm bị coi là lỗi thực thi), Standards tìm P3 (coordinator quá dài).
+   Bản sửa nhận strict integer 0/2 ở dispatcher và reconciliation, vẫn giữ
+   observation binding/completeness và cấm authority claims; lỗi worker vẫn
+   dừng window. Receipt/result và terminal được tách ra, giữ exclusive create,
+   flush/fsync và append kết quả chỉ sau ghi thành công. Coordinator còn 46 dòng.
+   Regression declaration/process/evidence đạt **83/83**, 114.79 giây, gồm
+   baseline exit2 vẫn hoàn thành sáu arm và worker thật với quality âm.
+   Full unit/coverage sau sửa đã đạt **3557 passed, 2 skipped, 1 warning**, exit 0,
+   601.37 giây; coverage **82.74%** trên năm module (ngưỡng 80%). JUnit và coverage
+   JSON có prefix `query-findings-20260908` tại thư mục Temp. Hai reviewer đã xác
+   nhận P1/P3 resolved, không có finding mới trong phạm vi sửa; đây là source
+   review, không chạy test/live resource. Các số full unit/coverage ở mục 1/3
+   là lịch sử trước hai bản sửa này, được thay thế bởi kết quả tại đây.
+   Hai finding đã đóng; không suy ra quyền pilot, provider traffic hoặc rollout.
+
+Kiểm tra tại chỗ sau coverage phát hiện dispatcher chỉ chặn authority ở hai
+cờ top-level, còn reconciliation chặn cả nested quality/default rollout.
+Regression mới RED 4/6: dispatcher nay dùng cùng quy tắc false-only cho ba
+cờ ở cả result và quality, từ chối ngay trước arm kế tiếp; quality sai type
+cũng bị reject. Declaration/evidence **75/75 passed**, 73.28 giây. Full-unit
+và coverage ở checklist phía trên đã được chạy lại sau delta này.
+
+Fixture quality/trace là bằng chứng regression offline, không phải kết quả RAG
+thực hoặc owner review. `quality_acceptance_verified`, `matrix_accepted` và các
+cờ authority vẫn false. Không có CLI run hoặc tự động phát sinh quyền dispatch.
+Dependency đã được đánh giá lại: 12 advisory/5 package đều `assessed_open`,
+`no_direct_application_sink_found`, **security-green=false**; đây không phải
+`not_affected` hoặc owner risk acceptance. Kết luận và upstream references tại
+[CRAG/Query dependency assessment](crag-offline-readiness-20260905.md).
+Không có quyền mới để chạy pilot/matrix,
 không push/merge/default activation. Commit chỉ lưu code/doc/test offline,
 không chứa `.local` runtime, approval thật hoặc ciphertext của run cũ.
+
+## Hồ sơ chuyển tiếp sau source freeze ngày 08/09
+
+Lượt verification `query-offline-freeze-20260908` giữ nguyên 663 source/test/
+requirements files nhưng có 8 setup errors, 3549 pass/2 skip: Python tạo
+`scripts/ops/__pycache__` trong synthetic Git root, guard clean-source reject.
+Không sửa validator hoặc source để bỏ guard. Lượt cuối dùng
+`PYTHONDONTWRITEBYTECODE=1`, `RUN_QUERY_TASK_PROOF=0` và live-test opt-ins OFF;
+chỉ receipt có exit 0 mới được dùng làm freeze verification. Giữ JUnit lượt lỗi
+để phân biệt harness invocation failure với product regression.
+
+Lượt `query-offline-freeze-final-20260908` đã đạt **3557 pass, 2 skip,
+1 warning**, exit 0, 587,80 giây; coverage tổng năm module **82,74%**.
+Hai skip là quyền tạo symlink và Scheduled Task opt-in; không đăng ký task.
+Source/test/requirements inventory 663 file giữ nguyên. JUnit/coverage JSON
+được lưu trong gói ignored cùng receipt theo exact commit sau freeze.
+
+- Gói ignored `.local/offline-freeze-20260908/` lưu inventory source, kết quả
+  test/coverage, dependency audit, disposition proposal và binding theo commit
+  thực tế. Các file này không phải release decision hoặc owner approval.
+- Dùng validator hiện có kiểm owner decision/formal evidence/review từ evidence
+  worktree sạch. Phân biệt `evidence_source_commit` lịch sử với source RC; nếu
+  validator reject thì dừng trước activation draft, ghi rõ evidence phải tái tạo.
+  Không sửa artifact lịch sử hoặc ép validator pass.
+- Chỉ tạo activation/consolidated launch **draft** nếu đủ đầu vào; không gọi
+  finalize, register/start hoặc dispatch. Schedule plan đóng băng 100 card/hash
+  và offset tối thiểu 24 giờ; absolute start/expiry chỉ khóa khi có future exact
+  approval, không tạo lịch đã hết hạn trong lúc chờ.
+- Hồ sơ gate phải phân biệt hash source/interpreter/host đã đo offline với
+  provider identity, snapshot và live preflight chưa xác minh. Không gọi database,
+  provider hoặc runtime để biến trường pending thành green trong scope này.
+- Incident có proposal riêng khóa sáu capture; owner retention/deletion vẫn
+  pending. Pilot đạt mới mở review/deletion/final gate và matrix evidence thực.
+- CRAG có binding source/manifest/runner riêng trong gói freeze; recovery,
+  declaration, smoke và diagnostic mới vẫn phải có authorization riêng.
+
+Các mục đánh số bên dưới là lịch sử triển khai và runbook prospective; không
+thay thế checkpoint/freeze receipt hoặc cấp quyền mở window.
 
 Phạm vi: chuẩn bị offline trong worktree riêng, dựa trên source
 `38620eb02806278fb689446c34f2d99e1f6e0746`. Đây là checklist thực thi và các
@@ -573,3 +674,915 @@ validator mới tại checkpoint này.
 Host/CLI hiện dùng chung hàm canonical arguments SHA-256 thay vì hai bản
 copy; mục tiêu là không để binding drift do sửa một bên. Không thay schema,
 authorization hoặc giá trị hash được tính.
+
+## 17. Delta offline ngày 07/09: budget theo arm và bộ đọc evidence dùng chung
+
+`evaluate_arm_budgets` kiểm ba row Math-only, Query-only, Math+Query:
+baseline không được tiêu budget feature nào; candidate chỉ dùng feature đúng
+row. Interaction cho phép planner/subquery và calculation cùng hoạt động.
+Provider retry phải là integer 0 (không nhận boolean/string/float/missing).
+Shared evaluator giữ mặc định năm combination cũ và ceiling 2; contract mới
+chỉ được siết ceiling, không nâng. Standards và Spec review budget delta đều
+không có finding. Biến môi trường HOST_SCRIPT không được đọc đã bỏ; parent
+identity vẫn lấy trusted path từ source root.
+
+`load_row_evidence` tách từ loader matrix cũ, giữ kiểm hash/schema của chín
+artifact, security JSONL binding, raw trace recomputation và derived load/results
+recomputation. Loader năm combination cũ gọi lại public seam này. Regression
+bao gồm thiếu/đổi bytes, sửa derived report rồi rehash, lệch raw trace và lệch
+security binding. Fixture candidate sửa start time để nằm trong trace window;
+security fixture dùng manifest chuẩn, với observed outcomes giả lập rõ ràng.
+Đây là kiểm validator offline, không phải bằng chứng security của runtime.
+
+Kiểm trực tiếp delta: **111 passed, 1 skipped trong 47.73 giây**, gồm host
+run outcomes. Skip là OS task registration chưa opt-in ở lượt này. Coverage
+riêng **88 passed trong 7.62 giây**: matrix module 96%, integrated budget
+module 93%; compose module 65% do tập test không phủ mọi CLI/matrix path.
+Không suy ra coverage toàn repo. JSON coverage ở
+`C:/Users/bao.nguyen/AppData/Local/Temp/query-matrix-budget-path-20260907.json`.
+Lượt coverage module-name trước đó lỗi native import lúc collection; lượt
+path-based sau đó thành công, không đổi dependency hoặc bootstrap runtime.
+
+Delta chưa commit. Independent Standards/Spec review riêng extraction bị
+quota trước kết quả; parent đã kiểm diff và chạy regression, chưa thay thế
+independent signoff. Chưa chạy full unit trên delta (3323/1 là của 96c78e3).
+
+Còn phải nối budget contract mới xuyên qua row evidence/derived results,
+kiểm exact manifest cases và frozen conditions của ba row, rồi hoàn thiện
+dispatcher cùng fresh authorization/preflight/rollback/smoke gates. Không dùng
+`load_row_evidence` mặc định để chấp nhận Math+Query: legacy budget contract
+vẫn cố ý không biết combination mới. Không có provider traffic hay lệnh run
+matrix mới từ delta này. Draft đã bind hash cũ cần tạo mới sau freeze, không
+ghi đè draft lịch sử hoặc coi nó còn current sau thay đổi preparer.
+
+### Nối contract xuyên row evidence (delta tiếp theo, chưa freeze)
+
+Shared `load_row_evidence`/`evaluate_combination_evidence` nhận contract baseline
+và candidate riêng cùng ceiling retry; trace reconciliation dùng giới hạn từ
+report của contract đó. `build_results` và derived-results recomputation nhận
+cùng candidate contract. Mặc định các caller cũ vẫn giữ nguyên năm combination
+và ceiling 2; CLI cũ không nhận tùy chọn đổi contract từ artifact.
+
+Regression **93/93 pass trong 6.27 giây** gồm fixture Math+Query có planner=1,
+subquery=2, calculation=1 và raw events tương ứng. Baseline có planner hoặc
+calculation, baseline/candidate có retry đều bị reject ngay cả khi tất cả hash
+và derived artifacts đã được tái tạo. Legacy contract vẫn reject combination
+Math+Query. Đây là nối plumbing nội bộ; matrix-specific entrypoint vẫn phải
+chọn contract từ code, không từ metadata đầu vào, và còn phải khóa manifest
+cases/identity/versions trước acceptance. Chưa có dispatcher, traffic, full
+unit mới hay independent review của delta nối contract này.
+
+### Cửa kiểm ba-row evidence (delta tiếp theo, chưa freeze)
+
+`scripts/integrated_eval/math_query_evidence.py::load_math_query_evidence`
+đã chọn exact flags và baseline/candidate budget từ code, không từ evidence.
+Nó yêu cầu đúng ba row duy nhất, manifest hash khóa và exact 16/13/3 case IDs,
+không trùng/thay case; điều kiện mỗi arm phải khớp expected conditions do
+caller cung cấp độc lập. Kiểm commit, manifest, snapshot, provider/governance
+hash, collection, evaluation context và concurrency 1; provider/commit dùng
+chung giữa các row. Governance hash khóa riêng theo manifest (đã sửa lỗi
+ép global trong regression tiếp theo dưới đây). Benchmark gate cũ vẫn đòi
+cả concurrency 1/5.
+Versions đủ canonical fields, flags có kiểu boolean chính xác (0 không được
+đóng vai false), retry tổng và retry events đều zero. Chạy lại row loader
+để đối soát trace/budget/security/derived reports như trên.
+
+Regression matrix + shared gates **111/111 pass trong 13.87 giây**. Fixture
+thành công có đủ 16/13/3 case và 30 references; fixture là dữ liệu test, không
+phải provider evidence. Negative cases gồm inventory thiếu/trùng/thừa, đổi
+frozen identity, thay case, kiểu count/flag sai và contract hash/version lỗi.
+Kết quả luôn `dispatch_authorized=false`, `default_rollout_authorized=false`.
+
+Caller vẫn phải xác thực nguồn của frozen contract; hàm này không xác minh
+owner approval hoặc phát hành release decision. Chưa có dispatcher/CLI run,
+review độc lập mới hoặc commit. Full unit delta đã được khởi chạy với JUnit
+`C:/Users/bao.nguyen/AppData/Local/Temp/query-matrix-evidence-20260907-unit.xml`;
+chưa ghi nhận kết quả cuối tại thời điểm cập nhật này.
+
+### Đối soát request identity và failure telemetry
+
+Đã thêm binding `case.id -> eval:<label>:<id> -> raw rag_end` bằng exact
+multiset trong snapshot time window và evaluation context, đồng thời kiểm
+lại raw SHA khi đọc. Regression thay trace_id hoặc lặp request để bù case
+thiếu vẫn bị reject dù query_count, raw hash và rebuilt snapshot hợp lệ.
+Provider failure phải có tổng integer zero và từng case khai báo false;
+snapshot error events phải zero. Nếu artifact có `case_count`, số này phải
+khớp manifest để không đổi mẫu số cost/retry trong load report.
+
+RED đã xác nhận thiếu checks identity/provider failure và chấp nhận sai
+case_count; GREEN tập matrix/shared gates **116/116 pass trong 18.62 giây**.
+Full unit session khởi chạy trước các sửa cuối này vẫn đang chạy; vì source
+đã đổi khi session còn sống, kết quả của nó chỉ là regression tham khảo,
+không được dùng làm full-suite signoff cho delta cuối. Cần chạy full suite
+lại trên snapshot đứng yên sau khi hoàn tất review/fix.
+
+### Sửa binding governance theo manifest thực tế
+
+Đối chiếu runner hiện hữu cho thấy `governance_scope_sha256` bao gồm từng
+case ID và governance fields, không chỉ một ACL chung. Ba manifest cho ba
+hash khác nhau; điều kiện ép governance hash bằng nhau giữa row là sai.
+Regression dùng hash tính trực tiếp từ ba manifest đã RED vì global-conditions
+rejection; nay GREEN khi hash được khóa riêng theo manifest, còn commit và
+provider identity vẫn chung. Collection cũng khóa từ constants fixture Math
+hoặc CRAG/Query, không chấp nhận collection tùy ý trong frozen input.
+
+Tập matrix/shared regression hiện **118/118 pass trong 19.66 giây**.
+Full-unit process cũ vẫn sống và đang tiến triển; không restart hoặc suy ra
+stalled chỉ vì một số test chậm. Phần dispatcher chưa triển khai; cần tiếp tục
+kiểm binding quality/provenance và declaration trước freeze/live path.
+
+### Phân biệt integrity với quality acceptance
+
+Đã đối chiếu `run_eval`: artifact giữ `answer_metadata` và kết quả chấm
+calculation/decomposition, không giữ đủ observed calculation records, branch
+debug và answer để chạy lại các evaluator độc lập. `evaluate_grounded_calculation`
+cần expected contract đã resolve, actual records và answer; evaluator Query
+cần branch debug cùng answer cho terminal-answer contract. Không thể suy ra
+independent provenance/unsupported-number acceptance chỉ từ aggregate `passed`.
+
+Kết quả matrix integrity nay ghi rõ `quality_acceptance_verified=false` và
+`matrix_accepted=false`, bên cạnh hai authority flags false. Regression cho
+ranh giới này đã RED rồi GREEN (1 passed). Đây không phải thay mục tiêu bằng
+integrity: quality evidence contract và dispatcher vẫn là phần bắt buộc chưa
+xong. Không bật raw capture hoặc giữ nội dung review của run thật để lấp chỗ
+thiếu trong lượt offline này.
+
+Coverage matrix-evidence trước thay đổi hai output flags: **25/25 pass trong
+37.11 giây**, module mới **93% branch+statement**; coverage các module khác
+không đại diện full suite. JSON tại
+`C:/Users/bao.nguyen/AppData/Local/Temp/query-matrix-evidence-20260907-coverage.json`.
+Full-unit session cũ vẫn sống, đã qua 74%, chưa có kết quả cuối.
+
+### Full-unit kết thúc và recomputation quality trong bộ nhớ
+
+Session full-unit đã kết thúc **3381 passed, 1 skipped, 1 warning trong
+631.38 giây**. JUnit đã nêu phía trên, SHA-256
+`5fdf49958f4ea8abedd76f57e7530903b519e23f36329868f1c1f6846cee82da`.
+Đây là regression tham khảo của session có source thay đổi trong lúc chạy,
+không phải signoff full delta hiện tại.
+
+`math_query_quality.recompute_quality_case` nhận resolved case, reported
+evaluation và observation trong bộ nhớ; đối chiếu case/trace/answer SHA và
+char count rồi chạy lại evaluator calculation/decomposition hiện hữu. Không
+ghi/đọc file, không trả answer/debug, không cấp quyền capture. Caller vẫn
+phải bind resolved case với manifest/preflight và observation với request đã
+chạy; helper chưa tự làm được binding này hoặc acceptance toàn matrix.
+
+Regression phủ thay answer, đổi provenance/version, đổi rendered branch
+citations, sai case/trace, malformed observation và truthful failure. Đã RED
+trường hợp calculation ngoài expected contract bị bỏ qua do applicable=false;
+nay giữ kết quả fail của calculation evaluator dù không applicable. Quality
+pass khác với recomputed_matches: báo cáo trung thực về lỗi vẫn không đạt.
+Tập focused trước fix cuối **128 passed trong 23.43 giây**; quality sau fix
+**12/12 pass trong 0.91 giây, coverage module 100% branch+statement**.
+Coverage JSON `C:/Users/bao.nguyen/AppData/Local/Temp/query-quality-20260907-coverage.json`.
+
+Chưa nối observation vào evaluator/dispatcher hoặc bật raw capture. Matrix
+integrity tiếp tục `quality_acceptance_verified=false`, `matrix_accepted=false`.
+Independent review delta, dispatcher, binding nguồn observation và full suite
+trên snapshot đứng yên vẫn còn phải làm; các tests trên không thay chúng.
+
+### Observation hook tại evaluator (offline opt-in bằng Python API)
+
+`run_evaluation(..., quality_observer=...)` nay gửi resolved case, reported
+case và observation answer/debug của request vừa hoàn thành cho callback trong
+bộ nhớ. Không có CLI flag mới, không đổi mặc định và không bật raw capture.
+Callback nhận deep copies để không thể sửa case/report đang được dùng tiếp.
+Lỗi callback được sanitize thành `quality_observer_failed` và thoát ngoài
+request exception handler, trước case kế tiếp và trước eval artifact cuối.
+Request không có observation cũng dừng với `quality_observation_unavailable`.
+
+Regression qua typed fake executor đã RED vì thiếu argument rồi GREEN:
+observer dùng chính quality recomputation helper; mutation report không ảnh
+hưởng output, exception không dispatch case thứ hai, không tạo review-content.
+Tập observer/quality/existing evaluator **77 passed trong 8.67 giây**.
+Hook chưa được dispatcher gọi; callback return không phải acceptance tự động.
+Matrix integrity vẫn giữ quality/acceptance false đến khi complete observation
+coverage và frozen preflight/authorization binding được nối và review.
+
+Observer regression mở rộng: invalid callback reject trước đọc manifest/mkdir;
+request lỗi không có observation dừng trước case thứ hai (79/79 test nhóm
+observer/quality/evaluator). Arm planning nay ép `RAG_EVAL_FIXTURE_BATCH`
+theo constants Math hoặc CRAG và `RAG_EVAL_GOVERNANCE_SCOPE_SHA256` tính từ
+manifest từng row; regression ambient contamination đã RED rồi GREEN.
+Nhóm matrix/quality/observer/shared evidence mới nhất **135/135 pass trong
+17.82 giây**. Chưa thêm provider hash hoặc versions từ ambient vào plan;
+dispatcher phải lấy chúng từ verified frozen contract, vẫn chưa triển khai.
+
+### Stable full-unit checkpoint và row identity
+
+Full unit trên source giữ cố định đã kết thúc **3405 passed, 1 skipped,
+1 warning trong 530.00 giây**. Bảy module implementation theo dõi có SHA
+trước/sau trùng nhau. JUnit
+`C:/Users/bao.nguyen/AppData/Local/Temp/query-matrix-stable-20260907-unit.xml`,
+SHA-256 `7589db26167b55d399303a909a554dc1ea1d9587819f445d9df92079ff276e0f`.
+Skip là OS task registration opt-in; warning Starlette/httpx đã có trước.
+
+Sau khi session kết thúc mới thêm regression ambient wrong-row và sửa arm
+plan ép `RAG_EVAL_COMBINATION_ID` đúng tên row. RED là missing key; bản sửa
+không đổi schema/flags/authority. Full-suite trên đây là trước sửa một dòng
+binding này, không suy ra whole-goal complete. Dispatcher và review delta
+vẫn còn mở; chưa commit, push/merge hoặc provider traffic.
+
+Review Standards của delta trước sửa symlink đã trả kết quả không có finding
+chặn; review Spec đang đối chiếu. Parent phát hiện original run root symlink
+bị mất sau resolve: test filesystem-boundary mock RED vì không reject rồi
+GREEN sau kiểm is_symlink trên path gốc. Draft suite **19 pass, 1 skip trong
+2.41 giây**. Real symlink test bị OS từ chối tạo link nên skip, không coi
+mock là chứng minh hành vi native Windows. Sửa này vẫn chỉ ở arm planning;
+dispatcher phải kiểm freshness/containment tại thời điểm tạo root thực tế.
+
+### Kết luận review delta hiện tại
+
+Standards đã kiểm observer/deep-copy/sanitized termination, shared rowloader,
+budget defaults và evidence integrity: không có finding chặn. Spec đã kiểm
+toàn delta offline, bao gồm original-symlink guard cuối: không có finding
+cụ thể. Các ghi chú review pending/quota trước đây là lịch sử, không phải
+trạng thái review hiện tại. Standards review trước sửa symlink; Spec đã xem
+bản sửa. Cả hai đều read-only, không tự chạy lại suite.
+
+Kết luận chỉ áp dụng nền tảng offline (arm plan, integrity, budget, observation
+hook/recomputation). Không bao gồm dispatcher chưa viết, xác thực authority
+của frozen contract, complete quality observation coverage, provider run hay
+matrix acceptance. Giữ goal mở. Mốc full unit source cố định vẫn 3405/1
+trước hai delta nhỏ row-ID và symlink; focused row-ID 47/47, draft sau symlink
+19/1. Không suy diễn các mốc này thành full-suite signoff cho dispatcher tương lai.
+
+### Managed evaluator observation entrypoint
+
+`run_eval.main(..., quality_observer=...)` đã nối Python API callback vào
+`run_evaluation` bên trong runtime/trace context hiện hữu. Invalid callback
+bị reject trước parse args, đọc manifest hoặc load settings. Không thêm CLI
+flag, raw capture, provider traffic hay authority. Runtime đóng trong finally
+trên cả thành công và lỗi observer.
+
+Regression RED: main chưa nhận keyword mới (3 failed, 2 passed); GREEN sau
+forwarding và guard. Kiểm tra tích hợp chạy main và evaluator thật qua fake
+runtime executor: callback nhận observation thực, recomputation khớp; lỗi
+dừng trước case thứ hai, không có eval artifact cuối, không có review-content
+và runtime luôn đóng. Nhóm evaluator/quality/matrix/shared rowloader:
+**169 passed, 1 skipped trong 28.36 giây**. Skip là native symlink creation
+không được OS cho phép, không phải provider test. `git diff --check` pass.
+
+Standards review delta entrypoint không có finding mới, read-only không chạy
+test. Spec reviewer bị quota, chưa có independent Spec signoff cho entrypoint
+mới; review Spec nền tảng trước đó không bao gồm delta này. Chưa chạy lại full
+unit cho delta entrypoint, chưa commit hoặc freeze. Dispatcher, verified frozen
+authorization và complete resolved-case/observation coverage vẫn còn mở.
+
+### Immutable observation ledger và binding báo cáo cuối
+
+`QualityObservationLedger.create` chụp canonical resolved-case contracts trong
+bộ nhớ. `record` trả instance mới, yêu cầu đúng case/order/type và recomputation
+khớp; không thay đổi input hoặc ledger trước. Duplicate, extra, changed case,
+answer/report mismatch đều reject. Summary tách observation coverage với chất
+lượng: truthful quality failure vẫn có thể đủ observation nhưng không đạt.
+`finalize` yêu cầu đủ inventory và SHA-256 từng final reported case khớp chính
+xác, đúng thứ tự/count. Receipt chỉ giữ checks/hash, không giữ generated
+answer/debug. Input resolved cases vẫn nằm trong bộ nhớ, không có file capture.
+
+Đã RED ở API ledger và finalize còn thiếu, sau đó GREEN. Integration test nối
+ledger vào callback của main/evaluator thật với fake runtime executor, rồi
+finalize trên case rows trong eval artifact thật. Nhóm regression hiện
+**180 passed, 1 skipped trong 29.19 giây**; quality **23 passed trong 0.84 giây**,
+module `math_query_quality.py` 100% branch+statement. Coverage chỉ áp dụng
+module này, không phải toàn thư mục integrated_eval. `git diff --check` pass.
+
+Ledger là object Python công khai, không phải signed/trusted evidence hay
+authorization. Worker còn phải xác thực nguồn frozen manifest/preflight,
+kiểm preflight drift TRƯỚC tạo runtime/request, propagate mọi lỗi, bind run
+identity và report metadata. Callback hiện chỉ kiểm case sau request, không
+thay thế pre-dispatch guard. Matrix acceptance/dispatch flags vẫn false.
+Standards reviewer delta ledger cũng bị quota; chưa có independent review
+cho ledger, chưa full-unit/freeze/commit. Dispatcher vẫn chưa triển khai.
+
+### Pre-request frozen-preflight validation seam
+
+`run_eval.main(..., preflight_validator=...)` bổ sung Python-only validator:
+chạy trước logging/runtime composition, rồi chạy lại trong cached preflight
+sau khi evaluator reload manifest, trước request đầu tiên. Callback phải trả
+đúng boolean True; False/None/1/exception đều fail-closed với lỗi đã sanitize.
+Callback nhận deep copies, không thể thay nội dung cases hoặc cached preflight.
+Không có validator thì đường mặc định và preflight failure behavior giữ nguyên.
+
+`validate_frozen_preflight` đối chiếu canonical cases và toàn preflight report
+với expected inputs độc lập; chỉ chấp nhận preflight passed đúng boolean True.
+Fixture fingerprint, resolutions, type hoặc manifest drift đều làm mismatch.
+Helper chưa xác thực chữ ký/nguồn expected inputs; dispatcher phải lấy chúng
+từ verified frozen contract, không được lấy actual vừa đọc làm expected.
+
+TDD đã RED vì thiếu main API/helper và vì false-like callback chưa bị chặn,
+rồi GREEN. Nhóm regression **185 passed, 1 skipped trong 27.34 giây**. Sau đó
+thêm hai integration cases đổi manifest tại fake runtime construction: real
+main/evaluator reject ở reload, executor chưa nhận request nào, không có final
+eval artifact và runtime được close. Observer suite mới **8 passed trong
+7.55 giây**. `git diff --check` pass. Không có provider traffic hoặc CLI flag
+mới. Independent review/full-unit của delta này vẫn chưa có; quota reviewers
+trước đó chưa được xem là hết. Chưa commit/freeze/dispatch hay matrix acceptance.
+
+### Per-arm quality worker
+
+`scripts/integrated_eval/math_query_worker.evaluate_quality_arm` nối frozen
+inputs -> preflight validator -> managed evaluator -> immutable observation
+ledger -> final reported-case binding. Input JSON được chụp riêng trước run;
+resolutions chỉ cho phép expected calculation/citations/branches/claims,
+không cho đổi case ID, access scope hoặc thêm case lạ. Lệnh evaluator nội bộ
+ép retry 0 và stop-on-provider-failure, không bật raw review capture. Worker
+không có CLI, không sửa environment và không tạo/verify authorization.
+
+Worker chỉ được parent dispatcher gọi sau khi xác thực quyền, source, run-root
+mới và environment từng arm. Source authenticity của expected inputs chưa do
+worker chứng minh. Cơ chế Ed25519 hiện có ký release decision ledger; không
+được diễn giải lại thành quyền chạy matrix. Kết quả worker là metadata, các
+matrix acceptance/dispatch authority flags vẫn false.
+
+Integration RED vì worker chưa tồn tại, sau đó GREEN qua real main/evaluator
+với fake runtime executor. Kiểm tra frozen resolutions được áp dụng trước
+quality observation, manifest drift khi reload chặn trước request, runtime
+đóng, không raw capture. Invalid/extra resolution và failed frozen preflight
+bị reject trước đọc manifest hoặc tạo runtime. Nhóm evaluator/quality/worker
+**109 passed trong 10.09 giây**; sau thêm resolved-case fixture, observer/worker
+**14 passed trong 7.75 giây**. `git diff --check` pass. Chưa có independent
+review/full-unit cho worker; dispatcher và authenticated frozen contract vẫn
+chưa xong. Không traffic thật, commit, freeze hoặc activation trong bước này.
+
+### Stable full-unit checkpoint sau per-arm worker
+
+Full unit chạy trên source giữ nguyên đã kết thúc **3436 passed, 2 skipped,
+1 warning trong 514.27 giây**. JUnit:
+`C:/Users/bao.nguyen/AppData/Local/Temp/query-worker-stable-20260907-unit.xml`,
+SHA-256 `5ce1543a1e7b67ee57ca86fd59390a85901b4928f9dc3c8cac7f3a1cbc0c7d26`.
+Hai skip được đọc từ JUnit: Windows không cho tạo symlink và temporary
+Scheduled Task registration cần explicit opt-in. Warning Starlette/httpx
+deprecation đã có trước; không sửa dependency hoặc chạy OS proof trong suite.
+
+Ba implementation hashes theo dõi trùng trước/sau:
+
+- `scripts/eval/run_eval.py`: `c849dc203190352fda14909c32be6554e53e0b67872108b923c28831c0771947`.
+- `scripts/integrated_eval/math_query_quality.py`: `4db5194fe94955a81397ea35861f6378b847de8a9779ae48555dbe0e5c89f904`.
+- `scripts/integrated_eval/math_query_worker.py`: `190066a73a6569b4741045067224eab6479f812ed8db0ea46e8f4559fdfe976b`.
+
+Đối chiếu read-only trong lúc suite chạy: `validate_authorized_source` có
+exact clean commit check, `validate_provider_smoke_for_arms` có per-arm smoke
+checks để tái sử dụng. Query pilot authorization khóa capability Query-only,
+approval/draft/schedule/bundle và run-root; không được dùng nguyên cho matrix.
+Release signature ký decision ledger, không chứng minh matrix traffic approval.
+Dispatcher vẫn phải triển khai contract riêng và kiểm source/tool/identity,
+fresh root, owner authorization và guards trước từng arm.
+
+Kết quả full unit chứng minh regression snapshot hiện tại, không phải completion
+goal, independent review, release freeze hay permission cho provider traffic.
+Review delta ledger/preflight/worker vẫn mở do quota; chưa commit/push/merge.
+
+### Dispatcher source guard
+
+`math_query_dispatch.validate_matrix_source` kiểm exact SHA-1 commit, Git
+toplevel đúng source root, worktree sạch (kể cả untracked) và exact inventory
+SHA-256 của 10 tool files điều khiển matrix/evaluator. Kiểm source/tool paths
+trước resolve/read, reject symlink hoặc Windows reparse points ở mọi ancestor.
+Không có dispatch entrypoint hoặc authorization mới trong module này.
+
+TDD dùng Git repo tạm chứa synthetic tool files: RED thiếu module, RED nested
+root chưa bị chặn, rồi GREEN. Repo hỗ trợ Python 3.11 (README và Dockerfile),
+nên không dùng `Path.is_junction()` của Python 3.12; regression xóa API này
+đã RED rồi GREEN sau chuyển sang `lstat`/reparse attributes. Mock filesystem
+boundary kiểm source/tool reparse rejection, không thay native Windows proof.
+Temporary commits tắt signing và hooks, không commit source worktree thật.
+
+Nhóm source guard/matrix draft/worker **37 passed, 1 skipped trong 10.26 giây**;
+skip native symlink creation như trước. `git diff --check` pass. Full unit
+3436/2 phía trên là trước source guard, không dùng làm full delta signoff.
+Source validation chưa chứng minh executing module/interpreter identity,
+owner authorization, input/runtime bindings hoặc fresh root consumption;
+dispatcher phải nối các gate này trước worker. Review delta vẫn pending quota,
+không gọi lặp trước mốc reset đã được báo. Chưa freeze/commit/live traffic.
+
+### Read-only fresh run-root guard
+
+`validate_fresh_matrix_root` chỉ trả path mới dưới source `.local`, không tạo
+thư mục. Reject traversal, empty/noncanonical segments, alternate data stream,
+Windows reserved names, trailing dot, existing root và reparse ở target hoặc
+ancestor trước resolve. Regression RED thiếu API rồi GREEN; mock lstat kiểm
+reparse rejection, không tuyên bố native junction proof. Đây chưa phải atomic
+claim hay quyền tạo root: dispatcher vẫn phải xác thực authorization, tạo
+exclusive và xử lý filesystem races trước khi gọi worker. Không đụng root cũ.
+
+### Approval envelope binding (chưa phải dispatcher authorization)
+
+`validate_matrix_approval_binding` nhận approval bytes và SHA-256/owner từ
+kênh phê duyệt độc lập. Reject hash mismatch, owner/scope mismatch, draft byte
+drift, duplicate JSON keys, nonfinite JSON, naive clock, future/expired window,
+thời hạn hơn 60 phút và mọi quyền retry/replacement/catch-up/default rollout.
+Envelope dùng schema matrix riêng, không tái sử dụng Query-only approval.
+Không tạo file approval, không ký hoặc chứng nhận owner từ nội dung tự khai.
+
+Return giữ `declaration_validated=false`, `dispatch_authorized=false`: binding
+không đủ để chứng minh schema/nội dung declaration đúng, source/tool identity,
+runtime/preflight/smoke/rollback hoặc single-use claim. Caller tuyệt đối không
+tự hash approval file rồi coi đó là expected trust anchor. Deadline 60 phút
+là giới hạn prospective của envelope offline, chưa có cửa sổ thật được cấp.
+
+Regression RED missing API rồi GREEN. Session trước ngắt đã kết thúc hợp lệ
+**69 passed, 1 skipped trong 10.23 giây**; đã lấy kết quả cùng session, không
+restart. Thêm nonfinite draft regression RED vì JSON NaN được nhận, sửa parser
+GREEN; approval/source group **37 passed trong 0.98 giây**. Chưa review delta,
+full unit sau thay đổi, freeze hay provider traffic. Nội dung declaration và
+dispatch orchestration vẫn còn phải triển khai và kiểm chứng.
+
+### Code-owned traffic contract trong approval binding
+
+Declaration `traffic` nay được đối chiếu type-strict với ROWS code-owned:
+Math 16, Query 13, interaction 3; exact manifest path/hash, all-off baseline,
+candidate đúng feature set; baseline rồi candidate, concurrency 1, retry/
+replacement/catch-up 0. Không nhận extra row/field hoặc boolean thay integer.
+Approval binding gọi guard này, nên một approval rehashed cho traffic sai
+không thể vượt qua chỉ nhờ hash khớp. TDD RED missing validator và RED approval
+chưa reject concurrency 5, sau đó GREEN: **50 passed trong 3.04 giây**.
+`git diff --check` pass. Chưa xác thực toàn declaration (runtime identity,
+frozen preflight/reference/rollback/smoke), chưa dispatch hoặc tạo root;
+`declaration_validated` và `dispatch_authorized` tiếp tục false. Chưa review
+hoặc full-unit cho delta này, không freeze/commit/provider traffic.
+
+### Same-executor ON/OFF characterization
+
+Public pipeline test nay chạy ON rồi OFF trên cùng executor/retrieval adapter,
+trace riêng. ON có 2 decomposition subqueries; request OFF tiếp theo vẫn tới
+generation, không còn decomposition route/branches. Toàn file public pipeline
+characterization **9 passed trong 10.70 giây**. Chỉ đổi mutable fake adapter,
+không đổi environment hoặc runtime thật. Đây kiểm request-state carryover,
+không chứng minh deployment reload. Actual BOM calculation/provenance hợp lệ
+vẫn thiếu, nên chưa đăng ký combined rollback profile hoặc mở interaction gate.
+
+### Declaration consistency validator
+
+`validate_matrix_declaration` nối exact schema, traffic contract, clean source
+commit/tool hashes, fresh run-root, actual manifest hashes và row conditions.
+Shared `validate_matrix_conditions` được dùng chung với evidence loader, không
+nhân đôi điều kiện. Frozen preflight từng row phải đúng schema/batch/collection,
+passed boolean True, no failures, exact count, fingerprint khớp conditions;
+resolutions chỉ được tác động expected fields và case IDs đã khai báo.
+
+Test dùng Git repo tạm chứa bản sao tool/manifest, không import/execute source
+tạm, không provider/runtime access. RED missing validator rồi GREEN. Nhóm
+declaration/approval/source **57 passed trong 7.75 giây**; evidence/declaration/
+worker **58 passed trong 24.36 giây**; `git diff --check` pass.
+
+`declaration_validated=true` chỉ là consistency check của nội dung frozen:
+không chứng minh preflight live hiện tại, rollback/smoke, owner trust anchor,
+executing interpreter/module identity hoặc exclusive root claim. Dispatch vẫn
+false. Các bước này vẫn phải nối trong orchestrator trước worker; không có
+CLI dispatch, review/full-unit/freeze hoặc traffic thật từ delta này.
+
+### Unified launch-input validation
+
+`validate_matrix_launch_inputs` nhận immutable bytes cho draft/approval,
+kiểm trust-anchor/owner/time/traffic binding trước rồi parse chính draft bytes
+đó để kiểm declaration/source/preflight consistency. Không nhận mutable
+bytearray; không ghép kết quả từ hai declaration khác nhau. Output gồm hash
+đã bind và run-root đã kiểm, nhưng `dispatch_authorized=false` vì live guards,
+executing identity và exclusive root claim chưa nối. Không file/runtime writes.
+
+RED thiếu unified API rồi GREEN. Nhóm declaration/approval/source **59 passed
+trong 9.28 giây**; thêm mutable-input regression, focused launch-input **3 passed
+trong 2.02 giây**. Test đổi run-root sau approval reject trước tạo `.local`.
+`git diff --check` pass. Chưa full-unit/review cho delta này; goal còn mở.
+
+### Per-arm smoke evidence guard
+
+`validate_matrix_arm_smoke` kiểm exact bytes/hash và provider SHA, sau đó dùng
+`provider_smoke_artifact_valid` và `provider_smoke_fresh_for_arms` hiện hữu:
+5/5 successful, zero retry, not blocked, completed trước arm start và tối đa
+30 phút. Matrix boundary bổ sung strict integer counts và strict JSON parser,
+không nhận bool/string thay số. Không probe, không đọc credentials, không nới
+freshness hoặc thay đổi validator mặc định của workflow khác.
+
+RED missing API rồi GREEN; smoke mới và existing CLI tests **19 passed trong
+6.67 giây**, `git diff --check` pass. Fixture chỉ synthetic bytes. Hash smoke
+còn phải được bind vào declaration/arm packet; guard chưa được orchestration
+gọi trước mỗi arm. Rollback, executing identity, exclusive root consumption,
+review và full-unit cuối vẫn còn mở. Không live smoke hoặc dispatch.
+
+### Declared smoke inventory
+
+Declaration bắt buộc `smoke_sha256s` cho đúng ba row và hai arm mỗi row;
+reject missing/extra arm/row hoặc digest không phải lowercase SHA-256.
+Vì nằm trong draft bytes được approval bind, dispatcher không được thay hash
+smoke ngoài declaration đã duyệt. Cùng artifact có thể phục vụ nhiều arm chỉ
+khi per-arm freshness check đều đạt; hash hợp lệ không chứng minh smoke pass.
+TDD RED valid declaration chưa nhận field mới rồi GREEN. Chưa thêm quyền
+probe, refresh/retry hay live dispatch; vẫn phải gọi guard ở mỗi arm start.
+
+### Rollback evidence boundary
+
+`validate_matrix_rollback` bind exact bytes/hash và source commit rồi tái dùng
+`validate_rollback_evidence`: exact test profile/command, flags, disabled state,
+successful exit và evidence fields. Matrix wrapper reject bool exit code hoặc
+integer thay false. Không chạy command từ artifact. RED missing API rồi GREEN:
+rollback/smoke **14 passed trong 0.46 giây**.
+
+Shared profiles chưa có tổ hợp Math+Query. Guard giữ interaction rejected,
+không coi proof Math-only là combined rollback và không tự ghép hai proof riêng.
+Cần triển khai/test profile rollback kết hợp tại execution seam rồi bind hashes
+vào declaration trước khi hoàn thiện dispatcher. Chưa có rollback thật, live
+traffic, review/full-unit hoặc freeze cho delta này.
+
+### Public pipeline rollback characterization in progress
+
+Đã thêm test public DefaultRagExecutor qua fake stores/model và no-network audit
+boundary. OFF đi tới retrieval/generation hoàn tất; đối chứng ON có trace
+query_decomposition với 2 subqueries. Test ban đầu lộ fixture thiếu generation
+client/settings và policy boundary; chỉ bổ sung fake adapter/audit, không sửa
+runtime sản phẩm. Diagnostics không expose decomposition_intents nên assertion
+dùng structured pilot_request_evidence trace hiện hữu. Focused **2 passed trong
+10.70 giây**.
+
+Đây chưa phải rollback combined proof: hai test case độc lập chưa thể hiện
+ON->OFF cùng lifecycle, fixture chưa exercise actual BOM calculation và ON
+trace quality/security vẫn invalid do synthetic citations. Không đăng ký
+ROLLBACK_TEST_PROFILES cho Math+Query hoặc hạ gate từ characterization này.
+Cần fixture có nguồn BOM/provenance hợp lệ và chuyển trạng thái thực trước khi
+công nhận profile. Không provider traffic hoặc thay đổi cờ runtime thật.
+
+### Combined request transition characterization refreshed
+
+Test hiện tại đã thay hai case độc lập bằng ON rồi OFF trên cùng executor.
+Fixture BOM có 2 + 3 = 5 cái, source/version provenance và HR/HCM ACL đúng
+request. ON có 2 subqueries, calculation valid, provenance/security passed và
+no leakage; OFF tới generation nhưng không có query_decomposition hoặc
+grounded_math_generation trace, không calculation route hoặc kết quả 5 cái.
+Nguyên nhân security failure trước là thiếu phong_ban_quyen/site trong fixture,
+không phải lý do để bypass RBAC. Chỉ sửa fake metadata, không đổi policy.
+
+Toàn public pipeline characterization **9 passed trong 10.44 giây**. Đây là
+request-runtime transition với injected adapters/no-network audit, không phải
+deployment reload hoặc live rollback proof. Combined profile chưa đăng ký;
+independent review và command-bound proof tại clean commit vẫn còn mở.
+
+### Combined rollback profile registration
+
+Registered the combined ON-to-OFF characterization as an additional
+`MATH_QUERY_ROLLBACK_PROFILE`, accepted by the shared evidence validator.
+Kept the existing `ROLLBACK_TEST_PROFILES` inventory unchanged so the
+failure-family aggregate gate does not acquire a new mandatory profile.
+Matrix validation still rejects Math-only proof for the combined row.
+The missing-profile test was RED before implementation; rollback, aggregate
+gate and public pipeline characterization tests then passed 24/24 (11.14s).
+These are offline tests, not a clean-commit rollback artifact or live proof.
+Independent review, declared rollback hashes and dispatcher wiring remain open.
+
+### Declared rollback inventory
+
+Declaration now requires `rollback_sha256s` with exactly math_only, query_only
+and math_query, each a lowercase SHA-256 digest. These values are inside the
+exact draft bytes bound by approval; changing the combined rollback digest
+after approval is rejected before filesystem writes. This is hash binding,
+not a digital signature or proof that a rollback command ran successfully.
+RED: the valid declaration with the new inventory was rejected before the
+validator update. GREEN: declaration/approval/rollback 55 passed (12.54s),
+then launch-input tests including rollback hash substitution 4 passed (2.37s).
+Existing aggregate rollback and matrix rollback tests also passed 15/15 (0.51s).
+No live proof, root claim, dispatch, provider traffic or release freeze was
+performed. Actual proof validation must still be called by the orchestrator.
+
+### Launch proof validation connected
+
+`validate_matrix_launch_inputs` now requires the three rollback byte artifacts
+and exactly baseline/candidate smoke bytes for each row. After approval and
+declaration validation it calls the existing rollback and smoke validators
+using only the hashes, commit and provider identity in the approved draft.
+The result reports `proofs_validated=true`, still `dispatch_authorized=false`.
+Smoke is checked at launch time; it must be checked again at every actual arm
+start, since a long-running matrix can outlive the smoke freshness limit.
+
+RED: the public launch seam did not accept proof inputs. GREEN: declaration,
+smoke and rollback tests 46 passed (14.82s). Additional launch checks then
+passed 10/10 (7.27s), including approved-but-failed rollback, approved-but-stale
+smoke, substituted bytes, missing row and extra arm. All use synthetic bytes
+and temporary repositories; invalid proofs leave the run-root uncreated.
+Exclusive root claim, executing identity, actual worker orchestration and
+final independent review/full-suite/freeze remain outstanding.
+
+### Root claim contention checks
+
+Revalidated the existing exclusive-mkdir claim implementation without replacing
+it. Eight concurrent thread callers produce exactly one successful claim and
+seven rejected claims. A deterministic filesystem-boundary race creates a
+competing owner's directory after freshness validation; the claimant rejects
+it and preserves the competing owner's marker. Source/root tests pass 22/22
+(7.12s), and diff whitespace validation passes.
+The initial concurrency test overconstrained the loser error to not_fresh;
+Windows path resolution during creation can instead fail closed as invalid.
+The test now accepts those two rejection codes while retaining the exact
+one-winner assertion. This does not prove resistance to adversarial parent
+directory replacement, Windows ACL isolation, or cross-process orchestration.
+The combined-profile reviewer terminated on quota, with no review conclusion;
+independent review remains pending. No runtime or provider actions occurred.
+
+### Loaded entry-point identity guard
+
+Added `validate_matrix_process_identity`: the current Python executable must
+resolve to the expected interpreter, and loaded dispatcher, worker and the
+worker's evaluator module must resolve to their exact paths under the declared
+checkout without redirected module paths. This complements, not replaces,
+clean-commit/tool-hash validation. It does not attest loaded bytecode, every
+dependency, interpreter binary hashes, or resistance to a hostile same-user
+process. The eventual orchestrator must invoke it before claiming a root.
+RED missing API then GREEN: source/root/identity tests 23 passed (4.42s),
+including rejection of a different checkout and nonexistent Python executable.
+No subprocess worker, provider traffic or activation was started.
+
+### Prepare-run guard ordering
+
+`prepare_matrix_run` now connects launch-input/proof validation, loaded process
+identity validation, then exclusive root claim. It returns claim metadata but
+keeps dispatch authorization false and does not invoke a worker. A public-seam
+regression supplies valid approved artifacts for a clean temporary source but
+executes from the actual preparation checkout: identity fails and no `.local`
+directory is created. RED missing API then GREEN; declaration/source tests
+59 passed (19.32s), diff check passed.
+The positive combined prepare path still needs an isolated subprocess running
+from its own clean source; individual validator/claim tests are not sufficient
+proof of that path. Durable consumption receipt, worker orchestration and
+per-arm revalidation also remain pending. No real run root was claimed.
+
+### Isolated positive prepare and consumption receipt
+
+An isolated Python subprocess now tests the positive prepare path from a clean
+temporary Git repository containing current Python source and frozen manifests.
+It uses synthetic approvals/rollback/smoke bytes, claims one temporary root,
+and rejects a second prepare attempt. It never invokes the evaluation worker.
+The test first passed the positive claim path (15.66s), then failed because the
+durable consumption receipt was absent. Prepare now exclusively writes and
+fsyncs `consumed.json`, binding source commit and draft/approval hashes while
+keeping dispatch authorization false. Write failure leaves the directory
+consumed; no cleanup/retry is performed. Source/declaration tests then passed
+60/60 (35.42s). This is test evidence, not a formal rollback or release artifact.
+Filesystem race hardening against hostile directory replacement and receipt
+write-failure injection remain unverified; worker execution and per-arm guards
+are still outstanding, as is independent review of this delta.
+
+### Receipt durability failure regression
+
+The isolated prepare subprocess test now also injects an OSError at os.fsync,
+after the receipt write/flush. Prepare propagates failure rather than reporting
+success, leaves the claimed root consumed, and rejects a subsequent attempt
+after the injected fault is removed. Both normal and failed-fsync cases passed
+(2 tests, 19.96s). The readable receipt after flush is not evidence that fsync
+succeeded or that power-loss durability was established. No worker is invoked.
+This verifies the existing fail-closed behavior without changing product code;
+other write failures and adversarial parent replacement remain unverified.
+
+### Prepared arm input revalidation
+
+Added `validate_matrix_arm_start`, which rechecks approval time/binding, clean
+source/tool hashes, loaded entry points, contained nonredirected root/receipt,
+receipt commit/draft/approval identity, and the selected row's rollback and
+arm's smoke. It does not authorize dispatch or prove sequencing. Shared path
+containment is reused by fresh-root validation and prepared-root validation.
+An isolated subprocess first failed for the missing API, then passed prepare
+plus arm validation and rejected smoke at minute 31 after a valid minute-30
+prepare. Both subprocess cases passed (22.76s), including the prior fsync fault.
+The orchestrator must still stop on prepare failure and enforce arm order and
+exactly-once execution: a consumed receipt alone is not successful preparation
+or worker authorization. No evaluation worker or provider request was run.
+
+### Six-arm coordinator connected through explicit transport
+
+`execute_matrix_arms` validates inputs, builds the six-arm plan before claiming
+the root, prepares it, rechecks each arm, loads its frozen manifest and invokes
+an explicitly supplied worker transport sequentially. Worker exceptions,
+nonzero/invalid exit codes or incomplete observation binding stop the loop.
+An isolated subprocess verified the exact six-arm order and an exception in
+arm two stopping before arm three. Together with fsync regression, 2 subprocess
+tests passed (21.85s). Worker calls in this test are synthetic, not evaluations.
+
+The coordinator has NO default process transport yet. Environment isolation,
+actual evaluate_quality_arm invocation and persisted terminal/result artifacts
+still need implementation and verification. Returned execution coverage is not
+matrix acceptance. Provider identity/environment attestation and final evidence
+acceptance remain required before real execution. No provider traffic occurred.
+Separately, observer/worker regressions passed 15/15 (8.03s), including a timeout
+on case one leaving no eval report and dispatching no second case.
+
+### Coordinator terminal persistence
+
+The six-arm loop now writes an exclusive, flushed/fsynced metadata-only
+terminal.json on normal completion or loop failure, including draft/commit,
+last row/arm and completed-arm count. Worker/guard exceptions stop the loop;
+raw exception details are not persisted. Synthetic subprocess tests first
+failed on the missing terminal, then passed both normal completion (6 arms)
+and worker failure (1 completed arm, no third dispatch), 2 tests in 21.43s.
+Terminal completed denotes orchestration completion only, never matrix quality
+acceptance. Prepare failures remain represented by consumed-root state rather
+than this loop terminal. Terminal-write failure itself propagates and retains
+the consumed root. Process transport, result artifact persistence and final
+evidence verification/review remain outstanding. No provider traffic occurred.
+
+### Explicit worker process transport
+
+Added `run_quality_arm_process`: fixed isolated Python bootstrap, explicit env
+mapping (no automatic ambient env merge), JSON stdin frozen inputs, bounded
+subprocess timeout, hidden Windows process, and schema-checked JSON output.
+It invokes evaluate_quality_arm in the child; raw child output/errors are not
+included in raised failures. RED missing API then process/observer tests passed
+16/16 (9.45s). The new real-child negative test supplies failed preflight and
+observes sanitized rejection/no output directory. It does not independently
+prove the child reached the preflight boundary rather than failing earlier.
+Successful fake-provider child evaluation and binding this transport to the
+coordinator's provider/environment contract remain unverified and required.
+No actual evaluation/provider traffic was authorized or attempted.
+
+### Process transport success and timeout checks
+
+Real child processes against a synthetic temporary worker now verify exact
+JSON input transfer, explicit environment visibility, absence of a synthetic
+ambient secret, and separation of printed worker logs from the JSON response.
+A sleeping synthetic worker is terminated by the subprocess timeout and the
+caller receives only the sanitized process failure. Process/observer tests
+passed 18/18 (10.01s). These test the transport boundary, not a successful
+full RAG evaluation in a child; the latter remains outstanding along with
+provider/environment binding and coordinator integration.
+
+### Planned-arm process adapter
+
+Added run_planned_quality_arm to map a coordinator-owned arm's manifest,
+output, label and controlled environment overlay into run_quality_arm_process.
+Provider settings are parsed from explicit mappings and checked with the
+existing governance fingerprint; the supplied command is parsed as plan data,
+not executed. Label mismatch is rejected. A provider-drift regression was RED
+before the adapter existed, then environment/process tests passed 6/6 (8.62s).
+The process transport also rejects discoverable .env paths without reading
+their contents, preventing implicit dotenv additions to its explicit settings.
+The adapter still needs a fully bound coordinator entry point and positive
+end-to-end verification; these checks are not authorization for provider use.
+
+### Process-backed coordinator entry point
+
+execute_matrix_processes now binds the explicit environment against the
+approved provider fingerprint for all six planned arms before claiming a root,
+then supplies run_planned_quality_arm as the sequential coordinator transport.
+The existing approval/source/proof/identity/arm guards remain in the path.
+A missing-provider test failed before this entry point existed, then passed
+with no root created. Environment/process/declaration regressions passed 45/45
+(50.98s). This does not yet prove successful full process-backed evaluation:
+only its negative boundary and the prior synthetic transport/coordinator paths
+have been exercised. End-to-end fake-provider verification and independent
+review/full-unit/final artifact acceptance remain outstanding. No live traffic.
+
+### Provider fingerprint report binding
+
+The environment builder now overwrites RAG_EVAL_PROVIDER_CONFIGURATION_SHA256
+with the verified provider digest. Previously a supplied stale value could
+flow into run_eval's report despite actual settings matching the approved hash.
+Regression was RED with an untrusted supplied digest; the fix uses the verified
+digest without modifying the caller's mapping. A broader matrix suite completed
+234 passed/1 skipped (68.90s), but overlapped this edit and is not a frozen
+post-change signoff. Focused environment/process verification was rerun after
+the fix. Final stable full-suite and independent review remain required.
+
+### Process-backed coordinator integration verified with synthetic leaf
+
+The isolated clean-repository test now retains the actual coordinator, adapter,
+and process transport, while replacing only evaluate_quality_arm in that
+temporary repository with a synthetic leaf. Its exact modified tool hash and
+commit are bound to the synthetic declaration. Six real child processes
+successfully verify per-row/arm flags, collection, evaluation context and
+provider-fingerprint presence. The process-backed entry point completes all
+six and retains matrix_accepted=false (1 integration test, 26.44s).
+This proves transport wiring and settings propagation, not actual RAG quality
+or observed-answer evidence. Real worker successful child execution and final
+evidence persistence/acceptance still need validation. No provider was called.
+
+### Per-arm receipt and result persistence
+
+Successful arms now persist the worker's metadata result before its receipt,
+both exclusive writes with flush/fsync. The receipt binds row/arm, draft,
+commit and the exact stored result digest/name. Completed-arm count advances
+only after both writes succeed. Initial receipt integration passed 2/2
+(34.83s); the subsequent stored-result regression was RED before result
+persistence, then both subprocess cases passed (58.42s). Tests recompute the
+stored result hash and verify six receipts for success versus one when the
+second worker fails. Persisted results are still execution/observation metadata,
+not independent evidence acceptance. Read-only receipt reconciliation and
+final report/trace matrix integration remain pending. Independent review was
+redispatched after the earlier quota reset; no conclusion has been received.
+
+### Read-only execution reconciliation
+
+reconcile_matrix_execution checks the completed six-arm terminal against
+independently supplied draft/commit identity, exact receipt/result inventory,
+each receipt's row/arm and result hash, successful exit and observation binding.
+Redirected artifact paths and unexpected files are rejected. It returns only
+execution_complete, never matrix acceptance. The isolated process-backed test
+was RED for the missing reconciler, then passed full reconciliation and rejected
+a one-byte result change (28.74s). This is integrity/coverage evidence, not
+independent proof of quality, provider authorization or actual RAG execution.
+Quality/trace row evidence integration and review/full-suite remain pending.
+
+### Worker report-byte binding
+
+The worker now reads eval.json once as bytes, validates stored quality metadata
+against that report and the independently frozen resolved cases, and returns
+eval_sha256 with its result. This makes the persisted result/receipt chain able
+to identify the exact report bytes rather than only its case projection.
+The regression was RED for missing eval_sha256; observer/quality tests then
+passed 40/40 (8.32s). Post-run reconciliation still needs to compare the stored
+digest with the actual report and feed verified observations into the row
+evidence result. No quality or release acceptance is claimed by this change.
+
+### Quality aggregate and worker authority regressions
+
+Stored quality now rejects a summary inconsistent with per-case boolean quality
+outcomes. RED contradictory case/aggregate then observer/quality 40 passed
+(8.07s). The broader matrix run found another regression: worker results could
+assert matrix_accepted=true while retaining a matching receipt hash. That run
+finished 237 passed/1 failed/1 skipped (84.64s), not green. Reconciliation now
+rejects matrix/dispatch/default-rollout claims in worker results or nested
+quality; both subprocess regressions passed after the fix (38.24s). It also
+checks actual eval.json bytes against the stored worker eval_sha256, rejecting
+report edits independently of worker-result edits. Full stable rerun remains
+pending. Independent reviewer again hit quota and delivered no conclusion.
+
+### Matrix regression rerun, September 8
+
+After the aggregate/authority fixes, the broad matrix, observer, row loader and
+failure-family rollback group passed 238 tests with 1 skip (83.64s). No code
+edits were made during this run. JUnit:
+`C:/Users/bao.nguyen/AppData/Local/Temp/query-matrix-20260908-regression.xml`.
+This supersedes the earlier 237/1-failure run for that test selection only.
+It is not full-unit coverage, independent review, a clean commit freeze, or
+formal evidence. Successful actual-worker child integration and final quality/
+trace evidence wiring remain open; runtime/provider state was not changed.
+
+### Actual worker/evaluator in isolated Python
+
+A new subprocess regression runs the existing successful worker boundary test
+under isolated Python with an explicit environment and external tests disabled.
+Unlike the six-process synthetic-leaf test, this uses the real
+evaluate_quality_arm, run_eval.main, observation ledger and report-byte hash.
+The fixture injects a fake runtime executor/preflight/settings; it is not a live
+DefaultRagExecutor/provider/DB test and does not traverse run_quality_arm_process.
+The child passed (12.25s), then process/observer/quality tests passed 45/45
+(19.16s). This confirms the actual worker/evaluator lifecycle independently of
+the process transport test; combined production bootstrap plus fake external
+dependencies and final quality/trace acceptance still need verification.
+
+### Six-arm stored quality binding integration
+
+The execution reconciler optionally requires independently supplied resolved
+cases for all three rows, and invokes stored-quality binding on every arm's
+actual stored eval report and worker quality summary. Without those inputs it
+explicitly reports quality_binding_verified=false; an empty mapping is rejected.
+The six-process synthetic leaf now uses the real observation ledger and real
+calculation/decomposition evaluators on empty synthetic answers, rather than
+returning hardcoded observation booleans. Reconciliation with manifest-loaded
+independent cases passes quality binding for all six arms while keeping matrix
+acceptance false (integration test passed, 27.43s). Truthful quality failure is
+not confused with mismatched observations. This remains synthetic-answer
+evidence, not a real RAG quality result or approval to activate any feature.
+
+### Row evidence linked to execution reports
+
+load_math_query_evidence optionally takes execution root, independent draft
+digest and resolved cases together. It first reconciles receipts and quality
+bindings, then requires each baseline/candidate eval reference to point to
+the corresponding report under that execution root. Missing execution receipts
+are rejected rather than falling back to self-reported row evidence.
+Observed candidate quality outcomes are reported separately as
+observed_candidate_quality_passed. quality_acceptance_verified and
+matrix_accepted remain false: automated observations are not independent owner
+review. Evidence/quality/declaration tests passed 93/93 (67.54s), including
+existing integrity-only callers. Positive combined trace-and-execution fixture
+coverage, full-unit validation and independent review remain outstanding.
+
+### Combined trace/execution fixture
+
+Added a synthetic stored-metadata integration fixture over the existing
+three-row trace/evaluation fixture. All six reports are linked to matching
+execution result/receipt hashes and independently supplied case projections.
+The combined loader reports evidence passed and quality binding verified, but
+keeps quality acceptance and matrix acceptance false. Referencing an identical
+report copied to another path is rejected as execution-report mismatch.
+Focused integration passed (1.22s); evidence/quality tests passed 52/52
+(12.13s), diff check passed. The manually constructed stored metadata validates
+integrity wiring only, not authenticity or actual provider-answer correctness.
+Independent review and stable full-unit validation remain required.
+
+### Historical checkpoint: exclusive matrix run-root claim
+
+Added `claim_matrix_run_root` as the first write-capable dispatcher guard. It
+reuses the source-relative `.local/...` path validator, creates `.local` and
+the final run-root directory with an exclusive `mkdir`, rejects existing roots,
+and rechecks reparse/symlink markers around the created root. The declaration
+and launch validators remain read-only; invalid proof inputs still leave the
+run root uncreated.
+
+RED: source/root guard tests failed because no claim helper existed. GREEN:
+source/root guard tests 20 passed (0.90s). Broader focused launch contract,
+declaration, approval, rollback and public transition tests passed 83/83
+(30.76s). No worker orchestration, provider traffic, runtime flag change,
+old-root reuse, proof generation or release freeze was performed. The next
+missing dispatcher step at that checkpoint was executing identity plus wiring
+the approved launch inputs into a single-use orchestrator that claims the root
+exactly once. Those steps have since been implemented as described above; this
+paragraph retains the historical test result, not the current remaining work.

@@ -38,6 +38,14 @@ ROLLBACK_TEST_PROFILES = {
     ),
 }
 
+MATH_QUERY_ROLLBACK_PROFILE = {
+    frozenset({"RAG_GROUNDED_MATH_ENABLED", "RAG_QUERY_DECOMPOSITION_ENABLED"}): (
+        "-m", "pytest",
+        "tests/unit/test_rag_pipeline_public_characterization.py::test_math_query_flags_do_not_retain_decomposition_after_disable",
+        "-q",
+    ),
+}
+
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -71,7 +79,7 @@ def validate_rollback_evidence(artifact: dict, *, git_sha: str) -> frozenset[str
     ) or len(raw_flags) != len(set(raw_flags)):
         raise ValueError("rollback evidence has invalid flags")
     flag_group = frozenset(raw_flags)
-    expected_command = ROLLBACK_TEST_PROFILES.get(flag_group)
+    expected_command = ROLLBACK_TEST_PROFILES.get(flag_group) or MATH_QUERY_ROLLBACK_PROFILE.get(flag_group)
     if expected_command is None:
         raise ValueError("unsupported rollback flag group")
     required_values = (

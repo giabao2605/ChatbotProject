@@ -155,3 +155,50 @@ def test_arm_plan_rejects_existing_root_and_never_copies_ambient_secrets(tmp_pat
         "MechChatbot_GroundedMath_Eval_v1", "MechChatbot_GroundedMath_Eval_v1",
         "MechChatbot_CRAG_Eval_v1", "MechChatbot_CRAG_Eval_v1",
         "MechChatbot_CRAG_Eval_v1", "MechChatbot_CRAG_Eval_v1"]
+
+
+def test_arm_plan_binds_fixture_batch_and_manifest_governance(tmp_path, monkeypatch):
+    from scripts.integrated_eval.math_query_matrix import build_arm_plan
+    from scripts.crag_eval.run_rollout import governance_scope_sha256
+
+    monkeypatch.setenv("RAG_EVAL_FIXTURE_BATCH", "wrong-batch")
+    monkeypatch.setenv("RAG_EVAL_GOVERNANCE_SCOPE_SHA256", "wrong-scope")
+    monkeypatch.setenv("RAG_EVAL_COMBINATION_ID", "wrong-row")
+    source = Path(__file__).resolve().parents[2]
+    plan = build_arm_plan(source, tmp_path / "fresh")
+    for arm in plan["arms"]:
+        environment = arm["environment"]
+        assert environment["RAG_EVAL_COMBINATION_ID"] == arm["row"]
+        assert environment["RAG_EVAL_FIXTURE_BATCH"] == (
+            "grounded-math-eval-v1" if arm["row"] == "math_only" else "crag-eval-v1")
+        command = arm["command"]
+        manifest = Path(command[command.index("--manifest") + 1])
+        assert environment["RAG_EVAL_GOVERNANCE_SCOPE_SHA256"] == governance_scope_sha256(manifest)
+
+
+def test_arm_plan_rejects_dangling_symlink_root(tmp_path):
+    from scripts.integrated_eval.math_query_matrix import build_arm_plan
+
+    link = tmp_path / "consumed-link"
+    target = tmp_path / "missing-target"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"OS does not permit symlink creation: {exc.errno}")
+    with pytest.raises(ValueError, match="not_fresh"):
+        build_arm_plan(Path(__file__).resolve().parents[2], link)
+    assert link.is_symlink()
+    assert not target.exists()
+
+
+def test_arm_plan_checks_original_link_before_resolving(tmp_path, monkeypatch):
+    from scripts.integrated_eval.math_query_matrix import build_arm_plan
+
+    link, target = tmp_path / "link", tmp_path / "missing-target"
+    original_resolve, original_is_symlink = Path.resolve, Path.is_symlink
+    monkeypatch.setattr(Path, "resolve", lambda path, *a, **kw:
+                        target if path == link else original_resolve(path, *a, **kw))
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        True if path == link else original_is_symlink(path))
+    with pytest.raises(ValueError, match="not_fresh"):
+        build_arm_plan(Path(__file__).resolve().parents[2], link)

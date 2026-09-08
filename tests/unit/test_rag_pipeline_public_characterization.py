@@ -149,6 +149,65 @@ def _answer(events):
     return "".join(event.text for event in events if isinstance(event, RagToken))
 
 
+def test_math_query_flags_do_not_retain_decomposition_after_disable(offline_pipeline, caplog, monkeypatch):
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from tests.unit.test_strict_stream_guard import _no_network_audit
+    from mech_chatbot.rag import pipeline_steps
+    from decimal import Decimal
+    from mech_chatbot.rag.grounded_math import CalculationPlan, GroundedFact, derive_claim, make_calculation_provenance
+
+    monkeypatch.setattr(pipeline_steps, "audited_external_call", _no_network_audit)
+
+    documents, qdrant_calls, executor, runtime = offline_pipeline
+    executor = DefaultRagExecutor(retrieval_adapter=runtime, provider_adapter=SimpleNamespace(
+        client=FakeListChatModel(responses=["Quy trình được mô tả trong tài liệu."]),
+        settings=SimpleNamespace(timeout_seconds=30, base_url="http://offline.invalid", model_name="fake"),
+        invoke=lambda *args, **kwargs: SimpleNamespace(content="")))
+    assert runtime.query_decomposition_enabled is False
+    assert runtime.grounded_math_enabled is False
+    documents.append(_document("Quy trình BOM và phiên bản tài liệu hiện hành."))
+    calculation = CalculationPlan("sum", (
+        GroundedFact(Decimal("2"), "cái", 17, 2, 3, "BOM-1", "PART-A"),
+        GroundedFact(Decimal("3"), "cái", 17, 2, 3, "BOM-2", "PART-B"),
+    ))
+    documents[0] = Document(page_content="BOM: PART-A 2 cái; PART-B 3 cái.", metadata={
+        **documents[0].metadata,
+        "phong_ban_quyen": ["HR"], "site": "HCM", "owner_department": "HR",
+        "calculation_provenance": make_calculation_provenance(calculation, derive_claim(calculation)),
+    })
+    for enabled in (True, False):
+        runtime.query_decomposition_enabled = enabled
+        runtime.grounded_math_enabled = enabled
+        trace_id = "math-query-transition-" + ("on" if enabled else "off")
+        with caplog.at_level(logging.INFO, logger="RagTrace"):
+            events = _run("Tổng BOM là bao nhiêu và phiên bản tài liệu hiện hành là gì?",
+                          trace_id=trace_id, executor=executor)
+        assert isinstance(events[-1], RagCompleted)
+        phases = [event["phase"] for event in _trace_events(caplog, trace_id)
+                  if event.get("event") == "rag_phase"]
+        assert "retrieval" in phases
+        assert "generation" in phases
+        diagnostics = events[-1].diagnostics
+        evidence = [event for event in _trace_events(caplog, trace_id)
+                    if event.get("event") == "pilot_request_evidence"]
+        if enabled:
+            assert "5 cái" in _answer(events)
+            assert evidence[-1]["route"] == "calculation"
+            assert evidence[-1]["calculation_result_status"] == "valid"
+            assert evidence[-1]["provenance_passed"] is True
+            assert evidence[-1]["security_passed"] is True
+            assert evidence[-1]["leakage_detected"] is False
+            assert any(event.get("subquery_count") == 2
+                       for event in _trace_events(caplog, trace_id))
+        else:
+            assert not diagnostics.get("decomposition_branches")
+            assert not any(event.get("route") == "query_decomposition" for event in evidence)
+            assert not any(event.get("event") in ("query_decomposition", "grounded_math_generation")
+                           for event in _trace_events(caplog, trace_id))
+            assert not any(event.get("route") == "calculation" for event in evidence)
+            assert "5 cái" not in _answer(events)
+
+
 def _trace_events(caplog, trace_id):
     events = []
     for record in caplog.records:

@@ -2,6 +2,15 @@
 
 ## Kết luận và phạm vi
 
+Đối soát offline 08/09: run vẫn có 6 WAL, thiếu terminal/result/runtime-stop.
+Đề xuất disposition nằm ngoài run tại
+`.local/offline-freeze-20260908/incident-disposition-proposal.json`, khóa hash
+WAL/trace/consumed và sáu capture, không chứa plaintext/ciphertext.
+Trạng thái là `proposed_not_owner_approved`: giữ nguyên evidence chờ owner
+chọn retention hoặc terminal-cleanup cho đúng sáu hash. Không tự giải mã/xóa,
+không ghi successful pilot receipt, không resume/carry-forward. Các proof và
+mô tả triển khai dưới đây là lịch sử; trạng thái source mới xem Query readiness.
+
 Snapshot read-only lúc `2026-09-05T09:50:43+07:00` xác nhận pilot gián đoạn ở
 6/100: supervisor/runtime không còn tồn tại và port 8302 trống. Không phải
 completed pilot hoặc clean shutdown. Root đã consume, không được resume,

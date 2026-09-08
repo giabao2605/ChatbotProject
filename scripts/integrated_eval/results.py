@@ -24,6 +24,7 @@ from mech_chatbot.evaluation.integrated_hardening import (
 def build_results(
     eval_reports, security_cases, *, source_eval_sha256s=None,
     security_results_sha256=None,
+    combinations=None, maximum_provider_retries=2,
 ) -> dict:
     budget_cases = []
     eval_reports = list(eval_reports or ())
@@ -43,7 +44,9 @@ def build_results(
                     "final_generation_count", "deadline_exceeded",
                 )
             })
-    budget = evaluate_request_budgets(budget_cases)
+    budget = evaluate_request_budgets(
+        budget_cases, combinations=combinations,
+        maximum_provider_retries=maximum_provider_retries)
     security = evaluate_security_results(security_cases)
     return {
         "schema": "integrated-hardening-results-v1",
