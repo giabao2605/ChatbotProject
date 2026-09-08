@@ -1,5 +1,22 @@
 # CRAG: readiness offline ngày 05/09/2026
 
+## Candidate interpreter 08/09: audit sạch, compatibility đang kiểm
+
+Venv riêng `.local/live-readiness-20260908/venv` (Python 3.12.3,
+include-system-site-packages=false) đã cài thành công và `pip check` pass.
+Fresh `pip_audit --local` exit 0, không có vulnerability đã biết. So với 279
+package của shared inventory, chỉ đổi GitPython 3.1.58→3.1.59, pip 26.1.2→26.2,
+pypdf 6.15.0→6.16.1, tornado 6.5.7→6.5.8, unstructured 0.22.32→0.24.0.
+Report cuối và hashes ở `.local/live-readiness-20260908/dependency-compatibility-verified.json`;
+`dependency-remediation.json` là snapshot trung gian trước full unit.
+Full unit trên interpreter mới đã đạt 3562 pass, 2 skip, 1 warning (607,48 giây,
+exit 0); 12/12 isolated imports pass với network audit guard. Candidate pins
+được lưu trong requirements-security.txt; exact 279-package inventory vẫn ở
+gói local để không gọi lock lịch sử là runtime hiện tại. Chưa chạy runtime live, chưa
+freeze/bind lại. Shared chat_env giữ nguyên và vẫn có disposition bên dưới.
+Audit sạch là kết quả scanner, không thay compatibility, owner approval hoặc
+fresh preflight/smoke; không tự xác nhận upstream advisory discrepancy đã giải quyết.
+
 ## Checkpoint dependency hiện hành ngày 08/09/2026
 
 Đánh giá này áp dụng cho interpreter dùng chung của Query và CRAG:

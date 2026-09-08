@@ -2,8 +2,9 @@
 Prepare/inspect by default. -Register creates one on-demand, current-user task;
 -Register -Start also starts it. No triggers, retries, restart or catch-up.
 Interactive logon is required throughout. Logoff/reboot are terminal, not resume.
-Credentials must already be available to the task's user environment; they are
-never copied into its action, arguments, packet, or task XML.
+Credentials must be readable by the task user through the application's settings
+loader (dotenv plus environment overrides). The host passes the resolved service
+token only in child memory; never in its action, arguments, packet, or task XML.
 ##>
 [CmdletBinding()]
 param(

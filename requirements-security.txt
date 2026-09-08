@@ -1,6 +1,10 @@
 # Security pins layered over requirements.txt for controlled-demo runtimes.
 aiohttp==3.14.3
 cryptography==50.0.0
-GitPython==3.1.58
+GitPython==3.1.59
 h2==4.4.1
-pypdf==6.15.0
+pypdf==6.16.1
+# Audited isolated runtime candidates; do not upgrade shared chat_env in place.
+pip==26.2
+tornado==6.5.8
+unstructured==0.24.0

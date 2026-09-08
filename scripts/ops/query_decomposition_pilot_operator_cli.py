@@ -222,6 +222,7 @@ def _defer_capture_cleanup_authorized(args: argparse.Namespace, source_root: Pat
 
 def operator_main(argv: list[str] | None = None) -> int:
     from scripts.ops import query_decomposition_pilot_operator as operator
+    from mech_chatbot.config.settings import load_settings
 
     args = _parser().parse_args(argv)
     try:
@@ -252,7 +253,7 @@ def operator_main(argv: list[str] | None = None) -> int:
             runtime_out_log=args.runtime_out_log,
             runtime_err_log=args.runtime_err_log,
             result_path=args.result, terminal_path=args.terminal,
-            service_token=os.environ.get("RAG_SERVICE_TOKEN", ""),
+            service_token=load_settings().RAG_SERVICE_TOKEN,
             defer_capture_cleanup=defer_cleanup,
         )
         operator._exclusive_json(args.result.resolve(), result)

@@ -68,6 +68,23 @@ def _run_and_capture_defer_flag(root: Path, monkeypatch) -> bool:
     return observed["defer_capture_cleanup"]
 
 
+def test_cli_uses_runtime_settings_token_without_mutating_environment(tmp_path, monkeypatch):
+    import os
+    from mech_chatbot.config import settings
+    from scripts.ops import query_decomposition_pilot_operator as operator
+
+    monkeypatch.delenv("RAG_SERVICE_TOKEN", raising=False)
+    monkeypatch.setattr(settings, "load_settings", lambda: SimpleNamespace(
+        RAG_SERVICE_TOKEN="synthetic-settings-token"))
+    observed = {}
+    monkeypatch.setattr(operator, "supervise_pilot", lambda **kwargs:
+                        observed.update(kwargs) or {"status": "completed"})
+    assert cli.operator_main(_argv(tmp_path)) == 0
+    assert observed["service_token"] == "synthetic-settings-token"
+    assert "RAG_SERVICE_TOKEN" not in os.environ
+    assert "synthetic-settings-token" not in (tmp_path / ".local/run/result.json").read_text()
+
+
 def test_cli_env_marker_alone_cannot_defer_terminal_capture_cleanup(
     tmp_path,
     monkeypatch,

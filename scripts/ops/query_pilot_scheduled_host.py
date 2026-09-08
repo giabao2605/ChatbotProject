@@ -243,10 +243,13 @@ def prepare_packet(values: dict, source_commit: str, packet_path: Path) -> dict:
 
 def run_packet(packet_path: Path, expected_sha256: str) -> dict:
     """Run exactly once; absent receipt after hard host death requires disposition."""
+    from mech_chatbot.config.settings import load_settings
+
     packet, args, schedule, run_root = validate_packet(packet_path, expected_sha256)
     if Path(sys.executable).resolve() != args.python_exe.resolve():
         raise OperatorStopped("scheduled_interpreter_mismatch")
-    if not os.environ.get("RAG_SERVICE_TOKEN", "").strip():
+    service_token = load_settings().RAG_SERVICE_TOKEN
+    if not service_token.strip():
         raise OperatorStopped("scheduled_service_token_missing")
     if not wait_port_released(args.port, 0):
         raise OperatorStopped("scheduled_runtime_port_occupied")
@@ -267,6 +270,7 @@ def run_packet(packet_path: Path, expected_sha256: str) -> dict:
     })
     root = args.source_root.resolve()
     environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root / "src"), str(root))),
+                   "RAG_SERVICE_TOKEN": service_token,
                    "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
                    "RAG_QUERY_PILOT_HOST_CONTAINED": "1",
                    "RAG_QUERY_PILOT_HOST_PACKET": str(packet_path.resolve()),

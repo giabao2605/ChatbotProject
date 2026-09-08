@@ -437,7 +437,8 @@ def test_real_wrapper_registers_exact_synthetic_task(synthetic_host_packet):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows process boundary")
 @pytest.mark.parametrize("operator_exit", [0, 7])
-def test_synthetic_packet_run_outcome(synthetic_host_packet, monkeypatch, operator_exit):
+@pytest.mark.parametrize("token_source", ["environment", "settings"])
+def test_synthetic_packet_run_outcome(synthetic_host_packet, monkeypatch, operator_exit, token_source):
     copied_host, packet, prepared, _, run_root, _ = synthetic_host_packet
     host_root = run_root.with_name(run_root.name + "-scheduled-host")
     import win32process
@@ -465,7 +466,14 @@ def test_synthetic_packet_run_outcome(synthetic_host_packet, monkeypatch, operat
             process_security, thread_security, inherit, flags, environment, cwd, startup)
 
     monkeypatch.setattr(win32process, "CreateProcess", fake_operator_process)
-    monkeypatch.setenv("RAG_SERVICE_TOKEN", "synthetic-test-token")
+    if token_source == "environment":
+        monkeypatch.setenv("RAG_SERVICE_TOKEN", "synthetic-test-token")
+    else:
+        from types import SimpleNamespace
+        from mech_chatbot.config import settings
+        monkeypatch.delenv("RAG_SERVICE_TOKEN", raising=False)
+        monkeypatch.setattr(settings, "load_settings", lambda: SimpleNamespace(
+            RAG_SERVICE_TOKEN="synthetic-test-token"))
     outcome = copied_host.run_packet(packet, prepared["packet_sha256"])
     assert len(launched) == 1
     assert outcome["status"] == ("completed" if operator_exit == 0 else "terminal_failure")
@@ -477,3 +485,21 @@ def test_synthetic_packet_run_outcome(synthetic_host_packet, monkeypatch, operat
     with pytest.raises(host.OperatorStopped):
         copied_host.run_packet(packet, prepared["packet_sha256"])
     assert len(launched) == 1
+
+
+@pytest.mark.parametrize("token", ["synthetic-settings-token", ""])
+def test_host_resolves_settings_before_consumption(tmp_path, monkeypatch, token):
+    from types import SimpleNamespace
+    from mech_chatbot.config import settings
+
+    monkeypatch.delenv("RAG_SERVICE_TOKEN", raising=False)
+    monkeypatch.setattr(settings, "load_settings", lambda: SimpleNamespace(RAG_SERVICE_TOKEN=token))
+    run_root = tmp_path / "run"
+    args = SimpleNamespace(python_exe=Path(sys.executable), port=8302)
+    monkeypatch.setattr(host, "validate_packet", lambda *a: ({}, args, {}, run_root))
+    monkeypatch.setattr(host, "wait_port_released", lambda *a: False)
+    expected = "scheduled_runtime_port_occupied" if token else "scheduled_service_token_missing"
+    with pytest.raises(host.OperatorStopped, match=expected):
+        host.run_packet(tmp_path / "packet.json", "a" * 64)
+    assert "RAG_SERVICE_TOKEN" not in os.environ
+    assert not host._host_root(run_root).exists()

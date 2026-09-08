@@ -1,5 +1,32 @@
 # Query: gói chuẩn bị hậu-pilot ngày 2026-09-05
 
+## Continuation live-readiness 08/09 sau checkpoint 391e28b
+
+Kiểm read-only xác nhận service token có trong settings từ dotenv, nhưng không
+có trong environment process/User/Machine. Server dùng `load_settings()` còn
+host/CLI chỉ đọc environment, nên host sẽ reject trước consume. Regression đã
+RED rồi sửa host/CLI dùng loader hiện hữu; host truyền token đã resolve qua
+child environment, không ghi token vào packet/XML/receipt hoặc process cha.
+Missing/blank token vẫn fail closed trước consume. Host/CLI đạt 51 pass/1 skip;
+process-boundary mở rộng đạt 6/6, gồm settings-only và environment token.
+
+Full unit cho delta đạt **3562 pass, 2 skip**, 628,39 giây. Lệnh full coverage
+ban đầu exit 1 do không tính source copy trong fixture (62,85%); không ghi là
+coverage pass. Lượt `coverage run` riêng đạt 53 pass/1 skip; chỉ gộp các path
+có bytes trùng source thật cho kết quả **87,47%** (host 87%, CLI 88%). Mapping
+và report ở `coverage-path-verification.json`, `host-verified-coverage.json`.
+Review độc lập token-loader delta không có blocker.
+Venv mới sau đó đạt pip check, audit 0 known vulnerabilities, 12/12 offline
+imports và full unit 3562 pass/2 skip (607,48 giây), exit 0. Exact inventory
+chỉ đổi năm package đã nêu trong CRAG readiness; shared chat_env giữ nguyên.
+Bằng chứng tại `.local/live-readiness-20260908/`.
+Không coi 391e28b hoặc
+draft của checkpoint đó là binding hợp lệ cho working tree đã đổi. Exact commit
+sau freeze phải đọc từ gói binding mới trong live-readiness; checkpoint này
+không cấp quyền provider/task/activation hoặc chứng minh live-ready.
+Môi trường `chat_env` dùng chung giữ nguyên. Lượt resolution đầu timeout tải
+PyPI; lượt tiếp theo được theo dõi độc lập, không liên quan retry contract pilot.
+
 Trạng thái pre-freeze ngày 08/09: **đang chốt checkpoint source offline**, chưa
 release freeze hoặc hoàn tất toàn roadmap. Base trước commit là `96c78e3`;
 exact commit cuối, hashes và kiểm binding được ghi bên ngoài tracked source tại
