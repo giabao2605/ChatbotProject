@@ -57,6 +57,30 @@ QUERY_PILOT_AUTHORIZATION = {
     "replacement_policy": "none",
     "catch_up_policy": "none",
 }
+QUERY_SEQUENTIAL_PILOT_CONTRACT_VERSION = "query-decomposition-sequential-100-v1"
+
+
+def query_pilot_authorization(version: str) -> dict:
+    """Select an explicit contract; never reinterpret historical approval."""
+    if version == QUERY_PILOT_CONTRACT_VERSION:
+        return dict(QUERY_PILOT_AUTHORIZATION)
+    if version == QUERY_SEQUENTIAL_PILOT_CONTRACT_VERSION:
+        return {
+            **QUERY_PILOT_AUTHORIZATION,
+            "pilot_contract_version": version,
+            "minimum_elapsed_hours": 0,
+            "dispatch_mode": "sequential_after_completion",
+        }
+    raise ValueError("pilot_contract_version_invalid")
+
+
+def query_pilot_duration_bounds(version: str) -> tuple[timedelta, timedelta]:
+    query_pilot_authorization(version)
+    if version == QUERY_SEQUENTIAL_PILOT_CONTRACT_VERSION:
+        return timedelta(minutes=10), timedelta(hours=6)
+    return QUERY_PILOT_MINIMUM_DURATION, QUERY_PILOT_MAXIMUM_DURATION
+
+
 _FALSE_RUNTIME_BOUNDARIES = (
     "provider_traffic_authorized",
     "pilot_dispatch_authorized",
@@ -534,6 +558,12 @@ def _pilot_schedule_valid(
     activation_bundle_sha256: str, authorized_at: datetime,
     expires_at: datetime,
 ) -> bool:
+    version = schedule.get("pilot_contract_version")
+    try:
+        expected = query_pilot_authorization(version)
+    except ValueError:
+        return False
+    sequential = version == QUERY_SEQUENTIAL_PILOT_CONTRACT_VERSION
     cards = schedule.get("cards")
     template_cards = template.get("cards")
     if not isinstance(cards, list) or not isinstance(template_cards, list):
@@ -550,7 +580,7 @@ def _pilot_schedule_valid(
         == "query-decomposition-pilot-schedule-template-v1",
         schedule.get("pilot_contract_version")
         == template.get("pilot_contract_version")
-        == QUERY_PILOT_CONTRACT_VERSION,
+        == version,
         schedule.get("source_commit") == template.get("source_commit")
         == source_commit,
         schedule.get("activation_bundle_sha256")
@@ -561,9 +591,10 @@ def _pilot_schedule_valid(
         schedule.get("expires_at")
         == expires_at.isoformat(timespec="seconds").replace("+00:00", "Z"),
         starts_at - authorized_at == timedelta(minutes=5),
-        minimum_until - starts_at == timedelta(hours=24),
+        minimum_until - starts_at == timedelta(hours=expected["minimum_elapsed_hours"]),
         schedule.get("card_count") == 100,
-        schedule.get("minimum_elapsed_seconds") == 86400,
+        schedule.get("minimum_elapsed_seconds") == expected["minimum_elapsed_hours"] * 3600,
+        not sequential or schedule.get("dispatch_mode") == expected["dispatch_mode"],
         schedule.get("max_concurrency") == 1,
         all(
             schedule.get(name) == "none"
@@ -573,7 +604,7 @@ def _pilot_schedule_valid(
         ),
     )):
         return False
-    for card, template_card in zip(cards, template_cards, strict=True):
+    for index, (card, template_card) in enumerate(zip(cards, template_cards, strict=True)):
         if not isinstance(card, dict) or not isinstance(template_card, dict):
             return False
         scheduled = _timestamp(card.get("scheduled_at"))
@@ -582,6 +613,9 @@ def _pilot_schedule_valid(
             set(card) == {*template_card, "scheduled_at"},
             all(card.get(name) == value for name, value in template_card.items()),
             type(offset) is int,
+            not sequential or offset == 0,
+            card.get("card_id") == f"query-pilot-{index + 1:03d}",
+            card.get("review_capture_required") is (index < 20),
             scheduled is not None,
             scheduled is not None
             and scheduled == starts_at + timedelta(seconds=offset),
@@ -624,6 +658,11 @@ def _pilot_authorization_window(
     if authorized_at is None or expires_at is None or materialized_at is None:
         return None
     duration = expires_at - authorized_at
+    try:
+        expected_authorization = query_pilot_authorization(authorization.get("pilot_contract_version"))
+        minimum_duration, maximum_duration = query_pilot_duration_bounds(authorization.get("pilot_contract_version"))
+    except ValueError:
+        return None
     expected_flags = sorted(enabled_flags)
     activation_owner = str(activation.get("activation_owner") or "").strip()
     consolidated_approval_reference = approval.get(
@@ -672,7 +711,7 @@ def _pilot_authorization_window(
             == (consolidated_draft or {}).get("requested_authorization")
             == {
                 "activation": QUERY_ACTIVATION_AUTHORIZATION,
-                "pilot": QUERY_PILOT_AUTHORIZATION,
+                "pilot": expected_authorization,
             },
         ))
     if not all((
@@ -687,7 +726,7 @@ def _pilot_authorization_window(
         == ["RAG_QUERY_DECOMPOSITION_ENABLED"],
         all(
             authorization.get(name) == value
-            for name, value in QUERY_PILOT_AUTHORIZATION.items()
+            for name, value in expected_authorization.items()
         ),
         authorization.get("actor") == approval.get("actor"),
         authorization.get("authorized_at")
@@ -700,10 +739,10 @@ def _pilot_authorization_window(
         draft.get("scope") == "controlled_demo",
         draft.get("capability") == "query_decomposition",
         draft.get("activation_bundle_sha256") == activation_bundle_sha256,
-        draft.get("requested_authorization") == QUERY_PILOT_AUTHORIZATION,
+        draft.get("requested_authorization") == expected_authorization,
         approval.get("schema") == "query-decomposition-pilot-approval-v1",
         approval.get("draft_sha256") == draft_reference.get("sha256"),
-        approval.get("authorization") == QUERY_PILOT_AUTHORIZATION,
+        approval.get("authorization") == expected_authorization,
         consolidated_valid,
         bool(activation_owner),
         validate_query_activation_authorization(
@@ -719,8 +758,7 @@ def _pilot_authorization_window(
         finalization.get("runtime_start_authorized") is False,
         finalization.get("provider_traffic_authorized") is False,
         finalization.get("pilot_dispatch_authorized") is False,
-        QUERY_PILOT_MINIMUM_DURATION <= duration
-        <= QUERY_PILOT_MAXIMUM_DURATION,
+        minimum_duration <= duration <= maximum_duration,
         authorized_at <= materialized_at <= expires_at,
         _pilot_schedule_valid(
             schedule, template, source_commit=source_commit,

@@ -1,4 +1,4 @@
-"""Prepare and evaluate the fail-closed Query Decomposition 24-hour pilot."""
+"""Prepare and evaluate versioned fail-closed Query Decomposition pilots."""
 
 from __future__ import annotations
 
@@ -19,10 +19,13 @@ from mech_chatbot.governance.feature_activation import SELECTIVE_PROFILE
 from mech_chatbot.governance.feature_activation import profile_environment
 from mech_chatbot.governance.query_activation_contract import (
     QUERY_PILOT_AUTHORIZATION, validate_query_activation_authorization,
+    QUERY_SEQUENTIAL_PILOT_CONTRACT_VERSION, query_pilot_authorization,
+    query_pilot_duration_bounds,
 )
 from scripts.ops.query_pilot_review_capture import REVIEW_CAPTURE_DESIGN_SHA256
 
 PILOT_CONTRACT_VERSION = "query-decomposition-24h-100-v1"
+SEQUENTIAL_PILOT_CONTRACT_VERSION = QUERY_SEQUENTIAL_PILOT_CONTRACT_VERSION
 PILOT_REQUEST_COUNT = 100
 PILOT_REVIEW_CAPTURE_COUNT = 20
 PILOT_DURATION = timedelta(hours=24)
@@ -227,7 +230,10 @@ def _manifest(path: Path) -> tuple[list[dict], str]:
 def _schedule_template(
     *, commit: str, bundle_sha: str, manifest_path: Path,
     manifest_sha: str, complex_rows: list[dict], root: Path,
+    pilot_contract_version: str = PILOT_CONTRACT_VERSION,
 ) -> dict:
+    contract = query_pilot_authorization(pilot_contract_version)
+    duration = timedelta(hours=contract["minimum_elapsed_hours"])
     cards = []
     for index in range(PILOT_REQUEST_COUNT):
         case = complex_rows[index % len(complex_rows)]
@@ -238,14 +244,14 @@ def _schedule_template(
                 str(case["question"]).encode("utf-8")
             ),
             "offset_seconds": round(
-                index * PILOT_DURATION.total_seconds()
+                index * duration.total_seconds()
                 / (PILOT_REQUEST_COUNT - 1)
             ),
             "review_capture_required": index < PILOT_REVIEW_CAPTURE_COUNT,
         })
     return {
         "schema": "query-decomposition-pilot-schedule-template-v1",
-        "pilot_contract_version": PILOT_CONTRACT_VERSION,
+        "pilot_contract_version": pilot_contract_version,
         "source_commit": commit,
         "activation_bundle_sha256": bundle_sha,
         "traffic_class": "owner_authorized_operator_generated_fixture",
@@ -255,7 +261,8 @@ def _schedule_template(
             "sha256": manifest_sha,
         },
         "card_count": PILOT_REQUEST_COUNT,
-        "minimum_elapsed_seconds": int(PILOT_DURATION.total_seconds()),
+        "minimum_elapsed_seconds": int(duration.total_seconds()),
+        **({"dispatch_mode": contract["dispatch_mode"]} if "dispatch_mode" in contract else {}),
         "max_concurrency": 1,
         "retry_policy": "none",
         "replacement_policy": "none",
@@ -284,7 +291,7 @@ def _offline_rollback(commit: str) -> dict:
     }
 
 
-def _operator_runbook(commit: str) -> dict:
+def _operator_runbook(commit: str, pilot_contract_version: str = PILOT_CONTRACT_VERSION) -> dict:
     return {
         "schema": "query-decomposition-pilot-operator-runbook-v1",
         "source_commit": commit,
@@ -301,7 +308,7 @@ def _operator_runbook(commit: str) -> dict:
             ),
             "supervisor_stops_runtime_in_finally": True,
             "health_and_runtime_identity_preflight_required": True,
-            "dispatch_contract": PILOT_CONTRACT_VERSION,
+            "dispatch_contract": pilot_contract_version,
         },
         "rollback": {
             "stop_candidate_runtime": True,
@@ -376,7 +383,7 @@ def prepare_pilot_launch_packet(
     *, source_root: str | Path, source_commit: str,
     manifest_path: str | Path, activation_bundle_path: str | Path,
     activation_finalization_path: str | Path, output_dir: str | Path,
-    owner: str,
+    owner: str, pilot_contract_version: str = PILOT_CONTRACT_VERSION,
 ) -> dict:
     """Prepare every offline artifact before the single pilot approval gate."""
     root = Path(source_root).resolve()
@@ -398,6 +405,7 @@ def prepare_pilot_launch_packet(
         root=root, commit=commit, bundle_path=bundle_path,
         finalization_path=finalization_path,
     )
+    contract = query_pilot_authorization(pilot_contract_version)
     normalized_owner = str(owner or "").strip()
     if normalized_owner != activation.get("activation_owner"):
         raise ValueError("pilot_owner_invalid")
@@ -405,6 +413,7 @@ def prepare_pilot_launch_packet(
     template = _schedule_template(
         commit=commit, bundle_sha=bundle_sha, manifest_path=manifest_path,
         manifest_sha=manifest_sha, complex_rows=complex_rows, root=root,
+        pilot_contract_version=pilot_contract_version,
     )
     template_path, template_sha = _write_json(
         target / "schedule-template.json", template,
@@ -435,7 +444,7 @@ def prepare_pilot_launch_packet(
         target / "rollback.json", _offline_rollback(commit),
     )
     runbook_path, runbook_sha = _write_json(
-        target / "operator-runbook.json", _operator_runbook(commit),
+        target / "operator-runbook.json", _operator_runbook(commit, pilot_contract_version),
     )
     draft = {
         "schema": "query-decomposition-pilot-authorization-draft-v1",
@@ -469,7 +478,7 @@ def prepare_pilot_launch_packet(
             runbook_path, root=root,
             expected_schema="query-decomposition-pilot-operator-runbook-v1",
         ),
-        "requested_authorization": PILOT_AUTHORIZATION,
+        "requested_authorization": contract,
     }
     draft_path, draft_sha = _write_json(
         target / "pilot-authorization-draft.json", draft,
@@ -479,7 +488,7 @@ def prepare_pilot_launch_packet(
         "status": "AWAITING_CONSOLIDATED_PILOT_APPROVAL",
         "source_commit": commit,
         "bundle_sha256": bundle_sha,
-        "pilot_contract_version": PILOT_CONTRACT_VERSION,
+        "pilot_contract_version": pilot_contract_version,
         "schedule_template": {"path": str(template_path), "sha256": template_sha},
         "review_contract": {"path": str(review_path), "sha256": review_sha},
         "offline_rollback": {"path": str(rollback_path), "sha256": rollback_sha},
@@ -490,7 +499,7 @@ def prepare_pilot_launch_packet(
         "runtime_started": False,
         "provider_traffic_generated": False,
         "pilot_dispatched": False,
-        "next_gate": "one_consolidated_26_hour_query_pilot_authorization",
+        "next_gate": "one_consolidated_query_pilot_authorization",
     }
     _write_json(target / "launch-packet.json", packet)
     return packet
@@ -509,6 +518,9 @@ def finalize_pilot_authorization(
     authorized_at = _timestamp(approval.get("authorized_at"))
     expires_at = _timestamp(approval.get("expires_at"))
     duration = expires_at - authorized_at
+    version = draft.get("requested_authorization", {}).get("pilot_contract_version")
+    contract = query_pilot_authorization(version)
+    minimum_duration, maximum_duration = query_pilot_duration_bounds(version)
     draft_sha = _sha256(draft_raw)
     consolidated_draft = approval.get("consolidated_launch_draft")
     pilot_run_root_value = str(approval.get("pilot_run_root") or "")
@@ -537,10 +549,9 @@ def finalize_pilot_authorization(
         approval.get("draft_sha256") == draft_sha,
         approval.get("actor") == draft.get("owner"),
         approval.get("authorization") == draft.get("requested_authorization")
-        == PILOT_AUTHORIZATION,
+        == contract,
         authorized_at <= current <= expires_at,
-        MINIMUM_AUTHORIZATION_DURATION <= duration
-        <= MAXIMUM_AUTHORIZATION_DURATION,
+        minimum_duration <= duration <= maximum_duration,
         consolidated_binding_valid,
         pilot_run_root_value == Path(pilot_run_root_value).as_posix(),
         _inside(pilot_run_root, root / ".local"),
@@ -551,7 +562,7 @@ def finalize_pilot_authorization(
     if target.exists() and any(target.iterdir()):
         raise ValueError("pilot_authorization_output_must_be_empty")
     template = load_json_reference(draft.get("schedule_template"), root=root)
-    if not isinstance(template, dict):
+    if not isinstance(template, dict) or template.get("pilot_contract_version") != version:
         raise ValueError("schedule_template_invalid")
     starts_at = authorized_at + PILOT_START_DELAY
     cards = [
@@ -563,7 +574,7 @@ def finalize_pilot_authorization(
         }
         for card in template.get("cards", ())
     ]
-    minimum_until = starts_at + PILOT_DURATION
+    minimum_until = starts_at + timedelta(hours=contract["minimum_elapsed_hours"])
     if not (
         len(cards) == PILOT_REQUEST_COUNT
         and expires_at >= minimum_until + PILOT_START_DELAY
@@ -608,7 +619,7 @@ def finalize_pilot_authorization(
             "schema": "query-decomposition-pilot-schedule-v1",
         },
         "activation_finalization": draft["activation_finalization"],
-        **PILOT_AUTHORIZATION,
+        **contract,
     }
     _, digest = _write_json(target / "pilot-authorization.json", authorization)
     return authorization, digest
@@ -649,12 +660,14 @@ def _authorization_and_schedule(
     schedule, schedule_raw, _ = _read_json(schedule_path)
     authorization_sha = _sha256(authorization_raw)
     schedule_sha = _sha256(schedule_raw)
+    contract = query_pilot_authorization(authorization.get("pilot_contract_version"))
     if not all((
+        schedule.get("pilot_contract_version") == contract["pilot_contract_version"],
         authorization.get("schema")
         == "query-controlled-demo-pilot-authorization-v1",
         all(
             authorization.get(name) == value
-            for name, value in PILOT_AUTHORIZATION.items()
+            for name, value in contract.items()
         ),
         authorization.get("schedule", {}).get("sha256") == schedule_sha,
         schedule.get("schema") == "query-decomposition-pilot-schedule-v1",
@@ -679,6 +692,7 @@ def record_pilot_completion(
     authorization, auth_sha, schedule, schedule_sha = (
         _authorization_and_schedule(authorization_path, schedule_path)
     )
+    sequential = schedule.get("pilot_contract_version") == SEQUENTIAL_PILOT_CONTRACT_VERSION
     cards = schedule.get("cards")
     cards = cards if isinstance(cards, list) else []
     wal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -691,7 +705,7 @@ def record_pilot_completion(
         completed = _timestamp(completed_at)
         next_scheduled = (
             _timestamp(cards[len(rows) + 1].get("scheduled_at"))
-            if len(rows) + 1 < len(cards) else None
+            if not sequential and len(rows) + 1 < len(cards) else None
         )
         if not all((
             isinstance(card, dict),
@@ -699,6 +713,10 @@ def record_pilot_completion(
             attempted >= _timestamp((card or {}).get("scheduled_at")),
             next_scheduled is None or attempted < next_scheduled,
             completed >= attempted,
+            not sequential or not rows or (
+                attempted >= _timestamp(rows[-1].get("completed_at"))
+                and all(pilot_evidence_valid(row.get("evidence")) for row in rows)
+            ),
             next_scheduled is None or completed <= next_scheduled,
             completed <= _timestamp(authorization.get("expires_at")),
             _sha256_digest(runtime_identity_sha256),
@@ -741,6 +759,7 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--activation-finalization", type=Path, required=True)
     prepare.add_argument("--output-dir", type=Path, required=True)
     prepare.add_argument("--owner", required=True)
+    prepare.add_argument("--pilot-contract-version", default=PILOT_CONTRACT_VERSION, choices=[PILOT_CONTRACT_VERSION, SEQUENTIAL_PILOT_CONTRACT_VERSION])
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--draft", type=Path, required=True)
     finalize.add_argument("--approval", type=Path, required=True)
@@ -776,6 +795,7 @@ def main(argv: list[str] | None = None) -> int:
             activation_bundle_path=args.activation_bundle,
             activation_finalization_path=args.activation_finalization,
             output_dir=args.output_dir, owner=args.owner,
+            pilot_contract_version=args.pilot_contract_version,
         )
     elif args.command == "finalize":
         result, digest = finalize_pilot_authorization(

@@ -15,13 +15,12 @@ from mech_chatbot.governance.artifact_references import (
     read_bytes_with_reference,
 )
 from mech_chatbot.governance.query_activation_contract import (
-    QUERY_ACTIVATION_AUTHORIZATION,
+    QUERY_ACTIVATION_AUTHORIZATION, query_pilot_authorization,
+    query_pilot_duration_bounds,
 )
 from scripts.ops.query_controlled_demo_activation import finalize_activation
 from scripts.ops.query_decomposition_pilot import (
-    MAXIMUM_AUTHORIZATION_DURATION,
-    MINIMUM_AUTHORIZATION_DURATION,
-    PILOT_AUTHORIZATION,
+    PILOT_AUTHORIZATION, PILOT_CONTRACT_VERSION, SEQUENTIAL_PILOT_CONTRACT_VERSION,
     _dot_local,
     _format,
     _manifest,
@@ -48,8 +47,10 @@ def prepare_consolidated_launch(
     *, source_root: str | Path, source_commit: str,
     activation_draft_path: str | Path, manifest_path: str | Path,
     output_dir: str | Path, owner: str,
+    pilot_contract_version: str = PILOT_CONTRACT_VERSION,
 ) -> dict:
-    """Freeze one owner approval boundary for activation and the 24-hour pilot."""
+    """Freeze one owner approval boundary for activation and the selected pilot."""
+    contract = query_pilot_authorization(pilot_contract_version)
     root = Path(source_root).resolve()
     commit = _source_commit(root)
     if commit != str(source_commit or "").strip():
@@ -82,6 +83,7 @@ def prepare_consolidated_launch(
     plan = _schedule_template(
         commit=commit, bundle_sha="pending", manifest_path=manifest_path,
         manifest_sha=manifest_sha, complex_rows=complex_rows, root=root,
+        pilot_contract_version=pilot_contract_version,
     )
     plan = {
         **{name: value for name, value in plan.items()
@@ -90,7 +92,7 @@ def prepare_consolidated_launch(
     }
     plan_path, plan_sha = _write_json(target / "schedule-plan.json", plan)
     runbook_path, runbook_sha = _write_json(
-        target / "operator-runbook.json", _operator_runbook(commit),
+        target / "operator-runbook.json", _operator_runbook(commit, pilot_contract_version),
     )
     rollback_path, rollback_sha = _write_json(
         target / "rollback-plan.json", _offline_rollback(commit),
@@ -126,7 +128,7 @@ def prepare_consolidated_launch(
             expected_schema="query-decomposition-pilot-offline-rollback-v1",
         ),
         "operator_runner": operator_reference,
-        "requested_authorization": CONSOLIDATED_AUTHORIZATION,
+        "requested_authorization": {"activation": QUERY_ACTIVATION_AUTHORIZATION, "pilot": contract},
     }
     draft_path, draft_sha = _write_json(
         target / "consolidated-launch-draft.json", draft,
@@ -164,6 +166,9 @@ def finalize_consolidated_launch(
     draft, draft_raw, draft_path = _read_json(draft_path)
     approval, _, approval_path = _read_json(approval_path)
     root = Path(str(draft.get("source_root") or "")).resolve()
+    version = draft.get("requested_authorization", {}).get("pilot", {}).get("pilot_contract_version")
+    contract = query_pilot_authorization(version)
+    minimum_duration, maximum_duration = query_pilot_duration_bounds(version)
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     authorized_at = _timestamp(approval.get("authorized_at"))
     expires_at = _timestamp(approval.get("expires_at"))
@@ -183,10 +188,10 @@ def finalize_consolidated_launch(
         approval.get("draft_sha256") == _sha256(draft_raw),
         approval.get("actor") == draft.get("owner"),
         approval.get("authorization") == draft.get("requested_authorization")
-        == CONSOLIDATED_AUTHORIZATION,
+        == {"activation": QUERY_ACTIVATION_AUTHORIZATION, "pilot": contract},
         authorized_at <= current <= expires_at,
-        MINIMUM_AUTHORIZATION_DURATION
-        <= expires_at - authorized_at <= MAXIMUM_AUTHORIZATION_DURATION,
+        minimum_duration
+        <= expires_at - authorized_at <= maximum_duration,
         pilot_run_root_valid,
     )):
         raise ValueError("consolidated_launch_approval_invalid")
@@ -210,7 +215,7 @@ def finalize_consolidated_launch(
         isinstance(rollback_plan, dict),
         operator_path == "scripts/ops/query_decomposition_pilot_operator.py",
         operator_runner is not None,
-        operator_runbook == _operator_runbook(draft["source_commit"])
+        operator_runbook == _operator_runbook(draft["source_commit"], version)
         and rollback_plan == _offline_rollback(draft["source_commit"]),
     )):
         raise ValueError("operator_contract_invalid")
@@ -220,7 +225,7 @@ def finalize_consolidated_launch(
         expected_plan = _schedule_template(
             commit=draft["source_commit"], bundle_sha="pending",
             manifest_path=manifest_path, manifest_sha=manifest_sha,
-            complex_rows=complex_rows, root=root,
+            complex_rows=complex_rows, root=root, pilot_contract_version=version,
         )
     except (OSError, ValueError):
         raise ValueError("schedule_plan_invalid") from None
@@ -266,6 +271,7 @@ def finalize_consolidated_launch(
         activation_bundle_path=activation["bundle"]["path"],
         activation_finalization_path=activation["receipt"]["path"],
         output_dir=target / "pilot", owner=approval["actor"],
+        pilot_contract_version=version,
     )
     pilot_draft_path = Path(
         pilot_packet["pilot_authorization_draft"]["path"]
@@ -276,7 +282,7 @@ def finalize_consolidated_launch(
         "actor": approval["actor"],
         "authorized_at": _format(authorized_at),
         "expires_at": _format(expires_at),
-        "authorization": PILOT_AUTHORIZATION,
+        "authorization": contract,
         "consolidated_launch_approval": consolidated_ref,
         "consolidated_launch_draft": consolidated_draft_ref,
         "pilot_run_root": pilot_run_root_value,
@@ -323,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--manifest", type=Path, required=True)
     prepare.add_argument("--output-dir", type=Path, required=True)
     prepare.add_argument("--owner", required=True)
+    prepare.add_argument("--pilot-contract-version", default=PILOT_CONTRACT_VERSION, choices=[PILOT_CONTRACT_VERSION, SEQUENTIAL_PILOT_CONTRACT_VERSION])
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--draft", type=Path, required=True)
     finalize.add_argument("--approval", type=Path, required=True)
@@ -336,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
             manifest_path=args.manifest,
             output_dir=args.output_dir,
             owner=args.owner,
+            pilot_contract_version=args.pilot_contract_version,
         )
     else:
         result = finalize_consolidated_launch(

@@ -17,6 +17,7 @@ from mech_chatbot.governance.query_activation_contract import (
 )
 from scripts.ops.render_activation_profile import build_profile_environment
 from scripts.ops.query_decomposition_pilot import (
+    SEQUENTIAL_PILOT_CONTRACT_VERSION,
     _EVIDENCE_FIELDS,
     _authorization_and_schedule,
     _format,
@@ -303,6 +304,8 @@ def run_pilot(
         now=now_fn(),
     )
     cards = schedule.get("cards") or []
+    sequential = schedule.get("pilot_contract_version") == SEQUENTIAL_PILOT_CONTRACT_VERSION
+    expires = _timestamp(authorization.get("expires_at"))
     if _wal_rows(wal_file) or (claims.exists() and any(claims.iterdir())):
         raise OperatorStopped("pilot_root_not_fresh")
     schedule_sha = _sha256(schedule_file.read_bytes())
@@ -337,7 +340,7 @@ def run_pilot(
         scheduled = _timestamp(card.get("scheduled_at"))
         next_scheduled = (
             _timestamp(cards[index + 1].get("scheduled_at"))
-            if index + 1 < len(cards)
+            if not sequential and index + 1 < len(cards)
             else _timestamp(authorization.get("expires_at"))
         )
         while now_fn().astimezone(timezone.utc) < scheduled:
@@ -348,6 +351,9 @@ def run_pilot(
             raise OperatorStopped("scheduled_card_missed")
         live = health_fn()
         validate_runtime_health(live, frozen_health)
+        attempted = now_fn().astimezone(timezone.utc)
+        if attempted >= next_scheduled:
+            raise OperatorStopped("scheduled_card_missed")
         _claim(
             claims,
             card,

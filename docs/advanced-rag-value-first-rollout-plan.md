@@ -5,11 +5,46 @@
 - Default-rollout authorization đã ghi nhận là signed `selective` Math-only trên commit `67265a0`; accepted set chỉ có `RAG_GROUNDED_MATH_ENABLED`, sáu feature còn lại giữ OFF. Authorization này không tự chứng minh runtime đang chạy hoặc quyền trên RC mới.
 - Tách Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair thành các capability được đánh giá, pilot và quyết định độc lập.
 - Phát hành dần: tính năng đạt không phải chờ tính năng khác; tính năng chưa đạt tiếp tục OFF.
-- Mỗi pilot chạy trên Windows/LAN riêng theo contract của capability và đủ 100 request đúng nhóm. Mặc định vẫn tối thiểu 7 ngày; Math dùng exception 72 giờ, Query/Graph/CRAG+Claim Repair/Community dùng exception riêng tối thiểu 24 giờ đã ghi nhận trong roadmap chính. Duration không tự cấp quyền mở pilot.
+- Mỗi pilot chạy trên Windows/LAN riêng theo contract của capability và đủ 100 request đúng nhóm. Mặc định vẫn tối thiểu 7 ngày; Math dùng exception 72 giờ, Graph/CRAG+Claim Repair/Community dùng exception riêng tối thiểu 24 giờ. Từ yêu cầu owner ngày 09/09, Query tương lai dùng một lượt 100 card tuần tự; các run Query cũ giữ contract 24 giờ. Duration không tự cấp quyền mở pilot.
 - Theo đến cùng bốn tính năng chính: Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair. Chỉ dừng khi `accepted` hoặc chứng minh kỹ thuật rằng muốn tiến xa hơn phải phá ngưỡng đã khóa.
 - Community Summaries chỉ bắt đầu sau Graph accepted. Late Interaction giữ OFF vô thời hạn.
 
-## Checkpoint hiện hành — 2026-09-08
+## Thay đổi phạm vi Query — 2026-09-09
+
+Owner yêu cầu thay điều kiện thời gian của **pilot Query tương lai**: từ tối
+thiểu 24 giờ thành một lượt 100 card đủ điều kiện, thực hiện tuần tự. Contract
+mới là `query-decomposition-sequential-100-v1`; không chờ giữa các card sau khi
+card trước hoàn tất. Đây là thay đổi thời lượng/pacing, không phải quyền hạ gate
+quality, provenance, security hoặc bỏ qua failure.
+
+Giữ concurrency 1, đúng 100 card được freeze, zero retry/replacement/catch-up,
+root độc quyền, source/hash binding, hạn authorization tuyệt đối và dừng sau
+failure. Human review 20 capture, các ca bắt buộc, deletion receipt được duyệt
+riêng và final gate vẫn cần cho acceptance. Luồng cleanup tự động phải được
+nêu rõ trong hồ sơ được owner duyệt; không tự xóa dữ liệu.
+
+Các run `query-decomposition-24h-100-v1` giữ nguyên contract và evidence lịch sử,
+không được đánh giá lại bằng điều kiện sequential. Thay đổi này chỉ áp dụng
+Query; không đổi thời lượng hoặc quyền của Math, CRAG, Graph và Community.
+Một lượt 100 card không chứng minh độ ổn định vận hành suốt 24 giờ.
+
+Run `launch-candidate-04` trên `9f97761` đã dừng lúc 12:19:05 ngày 09/09:
+15 card hoàn tất, card 16 có `query_result_status=invalid` và
+`provenance_passed=false`, terminal `per_request_evidence_invalid`. Host receipt
+xác nhận cây tiến trình rỗng, port được giải phóng và cleanup capture tự động đã
+hoàn tất theo quyền của run đó. Đây không phải lỗi console đã xác nhận ở run
+candidate-02; không suy diễn nguyên nhân từ việc người dùng đóng cửa sổ sau đó.
+Root đã consume, không resume hoặc chuyển 15 card sang lượt mới. Receipt đối
+soát: `.local/live-readiness-20260908/launch-candidate-04/terminal-reconciliation-20260909.json`.
+
+Implementation contract mới đã hoàn tất offline: full unit **3581 pass, 2 skip**,
+0 failure/error; statement coverage tổng sáu module thay đổi **87,86%**. Source
+fixture chỉ được gộp khi bytes trùng source thật; từng module đều trên 80%.
+Review delta không còn blocker. Audit dependency mới còn một advisory
+`accelerate`, disposition `assessed_open`, `security_green=false`; xem readiness.
+Chưa có pilot sequential thực tế hoặc acceptance. Các checkpoint dưới đây giữ lịch sử.
+
+## Checkpoint 2026-09-08 (lịch sử)
 
 - Query/Math+Query đã có dispatcher sáu arm, process worker, observation ledger,
   receipt/terminal persistence và đối soát report/trace/quality binding trong

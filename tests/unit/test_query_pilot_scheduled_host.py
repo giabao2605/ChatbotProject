@@ -503,3 +503,21 @@ def test_host_resolves_settings_before_consumption(tmp_path, monkeypatch, token)
         host.run_packet(tmp_path / "packet.json", "a" * 64)
     assert "RAG_SERVICE_TOKEN" not in os.environ
     assert not host._host_root(run_root).exists()
+
+
+@pytest.mark.parametrize("remaining", [1, 3600, 21600])
+def test_sequential_host_timeout_honors_authorization_expiry(remaining):
+    from datetime import datetime, timedelta, timezone
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    schedule = {"pilot_contract_version": "query-decomposition-sequential-100-v1",
+                "cards": [{"scheduled_at": now.isoformat()}]}
+    authorization = {"expires_at": (now + timedelta(seconds=remaining)).isoformat()}
+    assert host._operator_timeout(schedule, authorization, now) == remaining
+
+
+def test_sequential_host_rejects_expired_authorization():
+    from datetime import datetime, timezone
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    with pytest.raises(host.OperatorStopped):
+        host._operator_timeout({"pilot_contract_version": "query-decomposition-sequential-100-v1"},
+                               {"expires_at": now.isoformat()}, now)

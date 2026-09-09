@@ -6,6 +6,7 @@ from pathlib import Path
 
 from scripts.ops.query_decomposition_pilot import (
     PILOT_CONTRACT_VERSION,
+    SEQUENTIAL_PILOT_CONTRACT_VERSION,
     PILOT_DURATION,
     PILOT_REQUEST_COUNT,
     _authorization_and_schedule,
@@ -127,11 +128,14 @@ def _failed_gate(reason: str) -> dict:
 def _row_contract_valid(
     rows: list[dict], cards: list[dict], *, auth_sha: str,
     schedule_sha: str, runtime_identity_sha256: str, expires_at: object,
+    contract_version: str = PILOT_CONTRACT_VERSION,
 ) -> tuple[bool, bool]:
+    sequential = contract_version == SEQUENTIAL_PILOT_CONTRACT_VERSION
     card_by_id = {card.get("card_id"): card for card in cards}
     try:
         per_request = all(
             row.get("schema") == "query-decomposition-pilot-wal-v1"
+            and row.get("pilot_contract_version", contract_version) == contract_version
             and row.get("authorization_sha256") == auth_sha
             and row.get("schedule_sha256") == schedule_sha
             and row.get("attempt_number") == 1
@@ -150,7 +154,7 @@ def _row_contract_valid(
         cadence = len(rows) == len(cards) and all(
             row.get("card_id") == card.get("card_id")
             and (
-                index == len(cards) - 1
+                sequential or index == len(cards) - 1
                 or _timestamp(row.get("attempted_at"))
                 < _timestamp(cards[index + 1].get("scheduled_at"))
             )
@@ -194,11 +198,14 @@ def build_pilot_gate(
         rows, parse_valid = [], False
     cards = schedule.get("cards")
     cards = cards if isinstance(cards, list) else []
+    contract_version = schedule.get("pilot_contract_version")
+    sequential = contract_version == SEQUENTIAL_PILOT_CONTRACT_VERSION
     row_cards = [row.get("card_id") for row in rows]
     per_request, cadence = _row_contract_valid(
         rows, cards, auth_sha=auth_sha, schedule_sha=schedule_sha,
         runtime_identity_sha256=runtime_identity_sha256,
         expires_at=authorization.get("expires_at"),
+        contract_version=contract_version,
     ) if parse_valid else (False, False)
     duration_valid = bool(
         len(rows) == PILOT_REQUEST_COUNT and per_request and cadence
@@ -219,7 +226,7 @@ def build_pilot_gate(
         "runtime_identity_bound": _sha256_digest(runtime_identity_sha256),
         "per_request_contract": per_request,
         "frozen_schedule_cadence": cadence,
-        "minimum_24_hours": duration_valid,
+        **({"sequential_order_and_nonoverlap": cadence} if sequential else {"minimum_24_hours": duration_valid}),
         "no_retry_replacement_or_catch_up": all(
             schedule.get(name) == "none"
             for name in ("retry_policy", "replacement_policy", "catch_up_policy")
@@ -249,7 +256,7 @@ def build_pilot_gate(
         "activation_bundle_sha256": authorization.get(
             "activation_bundle_sha256"
         ),
-        "pilot_contract_version": PILOT_CONTRACT_VERSION,
+        "pilot_contract_version": contract_version,
         "eligible_request_count": len(rows) if automated else 0,
         "checks": checks,
         "automated_gate_passed": automated,

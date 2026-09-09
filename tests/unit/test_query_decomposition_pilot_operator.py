@@ -446,8 +446,9 @@ def test_main_writes_exclusive_result_or_terminal(
         assert value["status"] == "completed"
 
 
+@pytest.mark.parametrize("sequential", [False, True])
 def test_run_pilot_claims_before_egress_and_never_persists_questions(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, sequential,
 ):
     start = datetime(2026, 8, 27, tzinfo=timezone.utc)
     clock = Clock(start)
@@ -461,7 +462,9 @@ def test_run_pilot_claims_before_egress_and_never_persists_questions(
         for index in (1, 2)
     ]
     authorization = {"expires_at": operator._format(start + timedelta(seconds=30))}
-    schedule = {"cards": cards}
+    if sequential:
+        cards = [{**card, "scheduled_at": operator._format(start)} for card in cards]
+    schedule = {"cards": cards, **({"pilot_contract_version": "query-decomposition-sequential-100-v1"} if sequential else {})}
     questions = {"case-1": "private one", "case-2": "private two"}
     paths = _operator_files(tmp_path)
     local = tmp_path / ".local"
@@ -509,6 +512,7 @@ def test_run_pilot_claims_before_egress_and_never_persists_questions(
         evidence_loader=lambda _trace: _evidence(),
     )
 
+    assert clock() == start if sequential else clock() == start + timedelta(seconds=10)
     assert result["completed_request_count"] == 2
     assert sent == ["private one", "private two"]
     assert [row["card_id"] for row in recorded] == [
@@ -623,8 +627,9 @@ def test_run_pilot_stops_root_when_provider_retry_is_observed(
         )
 
 
+@pytest.mark.parametrize("sequential", [False, True])
 def test_run_pilot_stops_invalid_evidence_before_wal_and_next_card(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, sequential,
 ):
     start = datetime(2026, 8, 27, tzinfo=timezone.utc)
     clock = Clock(start)
@@ -641,12 +646,14 @@ def test_run_pilot_stops_invalid_evidence_before_wal_and_next_card(
         }
         for index in (1, 2)
     ]
+    if sequential:
+        cards = [{**card, "scheduled_at": operator._format(start)} for card in cards]
     monkeypatch.setattr(
         operator,
         "validate_operator_inputs",
         lambda **_kwargs: (
             {"expires_at": operator._format(start + timedelta(seconds=30))},
-            {"cards": cards},
+            {"cards": cards, **({"pilot_contract_version": "query-decomposition-sequential-100-v1"} if sequential else {})},
             {"case-1": "private one", "case-2": "private two"},
         ),
     )
@@ -1134,3 +1141,35 @@ def test_supervisor_stops_immediately_on_health_drift(tmp_path, monkeypatch):
             health_fetcher=lambda: drifted,
         )
     assert process_events == ["terminate", ("wait", 15)]
+
+
+@pytest.mark.parametrize("expire_during", ["health", "request"])
+def test_sequential_stops_at_absolute_deadline(tmp_path, monkeypatch, expire_during):
+    start = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    clock = Clock(start)
+    cards = [{"card_id": "one", "case_id": "one", "request_sha256": "d" * 64, "scheduled_at": start.isoformat()}]
+    schedule = {"pilot_contract_version": "query-decomposition-sequential-100-v1", "cards": cards}
+    authorization = {"expires_at": (start + timedelta(seconds=1)).isoformat()}
+    monkeypatch.setattr(operator, "validate_operator_inputs", lambda **kw: (authorization, schedule, {"one": "question"}))
+    monkeypatch.setattr(operator, "_wal_rows", lambda p: [])
+    recorded, sent = [], []
+    monkeypatch.setattr(operator, "record_pilot_completion", lambda **kw: recorded.append(kw))
+    paths = _operator_files(tmp_path)
+    def health():
+        if expire_during == "health": clock.sleep(2)
+        return _health()
+    def send(question):
+        sent.append(question)
+        clock.sleep(2)
+        return "trace"
+    with pytest.raises(operator.OperatorStopped):
+        operator.run_pilot(source_root=tmp_path, schedule_path=paths["schedule"],
+            authorization_path=paths["authorization"], authorization_sha256="a"*64,
+            bundle_path=paths["bundle"], bundle_sha256="b"*64,
+            manifest_path=paths["manifest"], manifest_sha256="c"*64,
+            runtime_url="http://127.0.0.1:8302", frozen_health=_health(),
+            trace_path=tmp_path/".local/trace.jsonl", wal_path=tmp_path/".local/wal.jsonl",
+            claim_dir=tmp_path/".local/claims", service_token="token", clock=clock,
+            sleeper=clock.sleep, health=health, send=send, evidence_loader=lambda t: _evidence())
+    assert not recorded
+    assert len(sent) == (0 if expire_during == "health" else 1)

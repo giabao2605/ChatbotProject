@@ -241,6 +241,16 @@ def prepare_packet(values: dict, source_commit: str, packet_path: Path) -> dict:
             "runtime_started": False, "task_registered": False}
 
 
+def _operator_timeout(schedule: dict, authorization: dict, now: datetime) -> float:
+    if schedule.get("pilot_contract_version") == operator.SEQUENTIAL_PILOT_CONTRACT_VERSION:
+        remaining = (operator._timestamp(authorization["expires_at"]) - now).total_seconds()
+        if remaining <= 0:
+            raise OperatorStopped("scheduled_card_missed")
+        return remaining
+    last_card = operator._timestamp(schedule["cards"][-1]["scheduled_at"])
+    return max(1, min(26 * 3600, (last_card - now).total_seconds() + 300))
+
+
 def run_packet(packet_path: Path, expected_sha256: str) -> dict:
     """Run exactly once; absent receipt after hard host death requires disposition."""
     from mech_chatbot.config.settings import load_settings
@@ -253,6 +263,8 @@ def run_packet(packet_path: Path, expected_sha256: str) -> dict:
         raise OperatorStopped("scheduled_service_token_missing")
     if not wait_port_released(args.port, 0):
         raise OperatorStopped("scheduled_runtime_port_occupied")
+    authorization = json.loads(args.authorization.read_bytes())
+    timeout = _operator_timeout(schedule, authorization, datetime.now(timezone.utc))
     host_create_time = _process_create_time()
     state_root = _host_root(run_root)
     state_root.mkdir(parents=False, exist_ok=False)
@@ -280,8 +292,6 @@ def run_packet(packet_path: Path, expected_sha256: str) -> dict:
                    "RAG_QUERY_PILOT_HOST_OPERATOR_SHA256": packet["operator_arguments_sha256"]}
     command = [str(args.python_exe.resolve()), "-m",
                "scripts.ops.query_decomposition_pilot_operator", *_arguments(packet["operator"])]
-    last_card = operator._timestamp(schedule["cards"][-1]["scheduled_at"])
-    timeout = max(1, min(26 * 3600, (last_card - datetime.now(timezone.utc)).total_seconds() + 300))
     receipt = contain_operator(command, source_root=root, environment=environment,
                                timeout_seconds=timeout, port=args.port)
     receipt = finalize_operator_outcome(

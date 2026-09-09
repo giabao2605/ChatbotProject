@@ -1,7 +1,7 @@
 """Offline Query Decomposition pilot contract and gate."""
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -979,9 +979,12 @@ def test_runtime_accepts_bound_pilot_authorization_for_whole_window(
     ) == "invalid"
 
 
+@pytest.mark.parametrize("sequential", [False, True])
 def test_consolidated_launch_uses_one_approval_for_new_commit(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, sequential,
 ):
+    from mech_chatbot.governance.query_activation_contract import query_pilot_authorization
+    version = "query-decomposition-sequential-100-v1" if sequential else "query-decomposition-24h-100-v1"
     commit, manifest, _, _ = _inputs(tmp_path)
     activation_draft = tmp_path / ".local" / "activation-draft.json"
     _write_json(activation_draft, {
@@ -1008,6 +1011,7 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
         manifest_path=manifest,
         output_dir=output,
         owner="bao.nguyen",
+        pilot_contract_version=version,
     )
     runbook = json.loads((output / "operator-runbook.json").read_text())
     rollback = json.loads((output / "rollback-plan.json").read_text())
@@ -1019,7 +1023,7 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
     ).hexdigest()
     assert runbook["launch"]["required_enabled_flags"] == [
         "RAG_QUERY_DECOMPOSITION_ENABLED"]
-    assert runbook["launch"]["dispatch_contract"] == "query-decomposition-24h-100-v1"
+    assert runbook["launch"]["dispatch_contract"] == version
     assert runbook["owner_review"] == {
         "capture_sample_count": 20,
         "capture_storage": "dpapi_current_user_ciphertext_only",
@@ -1047,8 +1051,8 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
         "draft_sha256": hashlib.sha256(draft.read_bytes()).hexdigest(),
         "actor": "bao.nguyen",
         "authorized_at": "2026-08-27T00:00:00.1234567Z",
-        "expires_at": "2026-08-28T02:00:00.1234567Z",
-        "authorization": CONSOLIDATED_AUTHORIZATION,
+        "expires_at": "2026-08-27T06:00:00.1234567Z" if sequential else "2026-08-28T02:00:00.1234567Z",
+        "authorization": {"activation": QUERY_ACTIVATION_AUTHORIZATION, "pilot": query_pilot_authorization(version)},
     })
     def materialize_activation(**kwargs):
         target = Path(kwargs["output_dir"])
@@ -1140,8 +1144,39 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
         source_commit=commit,
         activation_bundle_sha256=bundle_sha,
         enabled_flags={"RAG_QUERY_DECOMPOSITION_ENABLED"},
-        now=datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 8, 27, 1 if sequential else 12, 0, tzinfo=timezone.utc),
     ) == "authorized"
+
+    if sequential:
+        schedule_path = authorization_path.parent / "schedule.json"
+        schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
+        assert len({card["scheduled_at"] for card in schedule["cards"]}) == 1
+        wal_path = tmp_path / ".local" / "sequential.wal.jsonl"
+        start = datetime.fromisoformat(schedule["cards"][0]["scheduled_at"].replace("Z", "+00:00"))
+        for index, card in enumerate(schedule["cards"]):
+            attempted = start + timedelta(seconds=index * 2)
+            record_pilot_completion(
+                schedule_path=schedule_path, authorization_path=authorization_path,
+                wal_path=wal_path, card_id=card["card_id"],
+                attempted_at=attempted.isoformat(),
+                completed_at=(attempted + timedelta(seconds=1)).isoformat(),
+                trace_id=f"sequential-{index}", runtime_identity_sha256="a" * 64,
+                evidence=_answered_evidence(),
+            )
+        gate_args = dict(schedule_path=schedule_path, authorization_path=authorization_path,
+                         wal_path=wal_path, runtime_identity_sha256="a" * 64)
+        gate = build_pilot_gate(**gate_args)
+        assert gate["automated_gate_passed"] is True
+        assert gate["pilot_accepted"] is False
+        original = wal_path.read_text(encoding="utf-8")
+        rows = [json.loads(line) for line in original.splitlines()]
+        variants = [rows[:-1], [rows[0], *rows[:-1]], [rows[1], rows[0], *rows[2:]],
+                    [rows[0], {**rows[1], "attempted_at": rows[0]["attempted_at"]}, *rows[2:]],
+                    [*rows[:-1], {**rows[-1], "completed_at": "2026-08-28T00:00:00Z"}]]
+        for invalid_rows in variants:
+            wal_path.write_text("".join(json.dumps(row) + "\n" for row in invalid_rows), encoding="utf-8")
+            assert build_pilot_gate(**gate_args)["automated_gate_passed"] is False
+        wal_path.write_text(original, encoding="utf-8")
 
     approval.write_text(
         approval.read_text(encoding="utf-8") + " ", encoding="utf-8"
@@ -1152,5 +1187,5 @@ def test_consolidated_launch_uses_one_approval_for_new_commit(
         source_commit=commit,
         activation_bundle_sha256=bundle_sha,
         enabled_flags={"RAG_QUERY_DECOMPOSITION_ENABLED"},
-        now=datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 8, 27, 1 if sequential else 12, 0, tzinfo=timezone.utc),
     ) == "invalid"

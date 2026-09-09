@@ -1,5 +1,50 @@
 # Query: gói chuẩn bị hậu-pilot ngày 2026-09-05
 
+## Query sequential 100 — thay đổi được owner yêu cầu ngày 09/09
+
+Contract mới `query-decomposition-sequential-100-v1` chạy đúng 100 card tuần tự,
+card sau chỉ dispatch khi card trước hoàn tất hợp lệ. Không có minimum 24 giờ;
+window authorization có giới hạn 10 phút đến 6 giờ, bắt đầu dispatch sau mốc
+freeze 5 phút. Sáu giờ là hạn tối đa, không phải thời gian phải chờ.
+Contract `query-decomposition-24h-100-v1` vẫn được giữ để kiểm evidence cũ.
+
+Run candidate-04 đã terminal `per_request_evidence_invalid`: 15 WAL, 16 claims,
+card 16 provenance false. Không resume hoặc lấy 15 card làm đầu vào lượt mới.
+Đổi pacing không giải quyết lỗi provenance và không nới quality/security gate.
+
+Đường chuẩn bị hồ sơ, materialization, runtime authorization, operator, WAL,
+automated gate và host timeout đã được nối theo version. Full unit đứng yên
+đạt **3581 pass, 2 skip**, 0 failure/error (642,47 giây); review delta không còn
+blocker. Statement coverage tổng sáu module **87,86%**, từng module trên 80%;
+chỉ gộp fixture source có bytes trùng source thật. Evidence: `.local/sequential-full.xml`,
+`.local/sequential-verified-coverage.json`, `.local/sequential-coverage-path-verification.json`
+và `.local/sequential-validation-input.json`. Chưa chạy provider cho contract mới.
+CLI prepare hiện hữu chọn `--pilot-contract-version query-decomposition-sequential-100-v1`;
+mặc định legacy được giữ nhằm tránh đổi nghĩa các caller/lịch sử hiện hữu.
+
+Bước tiếp theo trước live: freeze source sau validation, kiểm formal/review/
+controlled-demo binding bằng validator trên exact commit, tạo consolidated draft
+với root mới và lịch/hạn mới; nêu rõ cleanup scope để owner duyệt cụ thể.
+Sau đó mới fresh preflight/rollback/smoke và materialization/start. Không tái dùng
+approval của candidate-04; không sửa hash hoặc terminal lịch sử. Acceptance vẫn
+cần 20 capture review, các ca bắt buộc, deletion receipt được duyệt và final gate.
+
+
+### Dependency disposition cập nhật 09/09
+
+Audit mới của interpreter tách biệt trong `.local/live-readiness-20260908/venv`
+trả exit 1: `accelerate==1.13.0` có `CVE-2026-69112` /
+[GHSA-4j2p-28q2-5m79](https://github.com/advisories/GHSA-4j2p-28q2-5m79).
+Advisory mô tả path traversal/DoS khi nạp sharded checkpoint có `weight_map`
+không tin cậy; affected <=1.14.0, chưa liệt kê bản vá. Inventory không đổi trong
+delta sequential. Tìm source `src/` và `scripts/` chưa thấy gọi trực tiếp
+`load_checkpoint_in_model` hoặc `load_checkpoint_and_dispatch`; điều này chưa
+loại trừ dependency gọi gián tiếp. Disposition `assessed_open`,
+`security_green=false`; kiểm nguồn checkpoint và reachability trên cấu hình
+runtime được bind trước fresh live. Không nâng `chat_env` hoặc tự chọn phiên bản
+không được advisory xác nhận. Evidence `.local/sequential-dependency-audit.json`.
+Kết quả audit 0 ngày 08/09 bên dưới là lịch sử, không còn là kết luận hiện hành.
+
 ## Continuation live-readiness 08/09 sau checkpoint 391e28b
 
 Kiểm read-only xác nhận service token có trong settings từ dotenv, nhưng không
