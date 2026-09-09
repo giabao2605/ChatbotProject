@@ -77,3 +77,22 @@ def test_document_terms_do_not_trigger_material_substitution(question):
         question,
         "Quan he duoc duyet: v2 --SUPERSEDES--> v1",
     ) is None
+
+
+@pytest.mark.parametrize("domain", ["generic", "mechanical", "tabular"])
+@pytest.mark.parametrize("language,rule", [
+    ("vi", "Phiên bản là nhãn tài liệu"),
+    ("en", "Version numbers are document labels"),
+])
+def test_version_comparison_prompt_preserves_document_identity(domain, language, rule):
+    from mech_chatbot.rag.prompt import _build_prompt_template
+
+    messages = _build_prompt_template(domain, language).format_messages(
+        question="Compare document versions", context="Document A version 12; B version 1",
+        chat_history_str="",
+    )
+    assert rule in messages[0].content
+    assert find_unsupported_numbers(
+        "Difference: 11 versions", "A version 12; B version 1", "Compare versions",
+        strict_mode=True,
+    )
