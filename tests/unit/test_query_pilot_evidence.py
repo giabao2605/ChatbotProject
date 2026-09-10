@@ -1,8 +1,28 @@
 """Metadata-only per-request evidence for the Query Decomposition pilot."""
 
+import pytest
+
 from mech_chatbot.rag.execution import RequestBudgetLedger, RequestBudgetLimits
 from mech_chatbot.rag.evidence_gate import make_insufficient_evidence_message
 from mech_chatbot.rag.pilot_evidence import pilot_request_event_fields
+
+
+@pytest.mark.parametrize("label", ["Source-ID D8P2", "[SRC: D8P2]", "Source\tID D8P2"])
+def test_query_provenance_uses_stream_citation_parser(label):
+    from mech_chatbot.rag.pilot_evidence import _query_answer_contract
+    from mech_chatbot.rag.query_decomposition import audit_decomposition_stream
+
+    citations = [
+        {"doc_id": 7, "trang": 1, "version_no": 1, "source_id": "D7P1"},
+        {"doc_id": 8, "trang": 2, "version_no": 1, "source_id": "D8P2"},
+    ]
+    branches = [{"outcome": "full_answer", "citations": [item]} for item in citations]
+    answer = "".join(audit_decomposition_stream(
+        iter([f"First [SourceID D7P1]. Second [{label}]."]), branches,
+    ))
+    assert _query_answer_contract({
+        "citation_docs": citations, "decomposition_branches": branches,
+    }, answer) == (True, True)
 
 
 def _usage(branch_count: int = 2) -> dict:

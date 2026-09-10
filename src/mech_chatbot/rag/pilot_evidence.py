@@ -9,6 +9,7 @@ from typing import Any
 
 from mech_chatbot.evaluation.decomposition import normalize_decomposition_usage
 from mech_chatbot.governance.graph_pilot_review import APPROVED_GRAPH_REFUSALS
+from mech_chatbot.rag.answer_checks import extract_source_ids
 from mech_chatbot.rag.evidence_gate import make_insufficient_evidence_message
 
 
@@ -177,10 +178,7 @@ def _declared_source_ids(value: object) -> set[str] | None:
 def _query_answer_contract(
     diagnostics: Mapping[str, Any], answer: str
 ) -> tuple[bool, bool]:
-    rendered = {
-        match.group("source_id").upper()
-        for match in _SOURCE_ID_RE.finditer(str(answer or ""))
-    }
+    rendered = extract_source_ids(answer)
     available = _source_ids(
         _metadata_rows(diagnostics.get("citation_docs")),
         require_version=True,
