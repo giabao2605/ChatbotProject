@@ -78,7 +78,7 @@ def test_qdrant_runtime_builds_explicit_vector_dependencies():
         dependencies.collection_name = "other"
 
 
-def test_qdrant_runtime_disables_http_keepalive_reuse():
+def test_qdrant_runtime_bounds_http_keepalive_reuse():
     client = _Client(collection_exists=True)
     client_calls = []
 
@@ -91,7 +91,8 @@ def test_qdrant_runtime_disables_http_keepalive_reuse():
     )
 
     limits = client_calls[0]["limits"]
-    assert limits.max_keepalive_connections == 0
+    assert limits.max_keepalive_connections == 1
+    assert limits.keepalive_expiry == 5
 
 
 def test_qdrant_admin_runtime_accepts_operation_timeout():
