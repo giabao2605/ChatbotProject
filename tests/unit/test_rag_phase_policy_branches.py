@@ -1209,3 +1209,15 @@ def test_grounded_generation_drops_compare_verb_after_math_is_done():
         primary,
         documents,
     ) == "định mức P-1 và quy trình lắp P-3"
+
+@pytest.mark.parametrize("unavailable", ["access_denied", "insufficient_evidence"])
+def test_partial_generation_targets_only_answerable_branch(unavailable):
+    from mech_chatbot.rag.phases.generation import _effective_generation_question
+
+    primary = _primary(branches=(
+        {"outcome": "full_answer", "subquery": "Giá trị P-1 là gì?"},
+        {"outcome": unavailable, "subquery": "Mã cấu hình riêng là gì?"},
+    ))
+    assert _effective_generation_question(
+        _decision(), primary, [Document(page_content="P-1", metadata={})],
+    ) == "Giá trị P-1 là gì?"

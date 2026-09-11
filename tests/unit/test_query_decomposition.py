@@ -192,11 +192,21 @@ def test_partial_answer_instruction_counts_missing_and_denied_without_source_nam
         {"outcome": "access_denied", "restricted_source": "secret-payroll.md"},
     ])
 
-    assert len(instruction) <= 130
+    assert len(instruction) <= 450
     assert "1 nhánh chưa có đủ bằng chứng" in instruction
     assert "1 nhánh không thể truy cập" in instruction
     assert "không lộ nhánh bị chặn" in instruction.lower()
     assert "secret-payroll.md" not in instruction
+
+
+def test_partial_instruction_does_not_number_the_filtered_question():
+    instruction = build_decomposition_instruction([
+        {"outcome": "access_denied", "restricted_source": "private.md"},
+        {"outcome": "full_answer"},
+        {"outcome": "insufficient_evidence"},
+    ])
+    assert "ý số" not in instruction
+    assert "private.md" not in instruction
 
 
 def test_full_decomposition_instruction_limits_each_answer_to_the_asked_fact():
@@ -205,8 +215,10 @@ def test_full_decomposition_instruction_limits_each_answer_to_the_asked_fact():
         {"outcome": "full_answer"},
     ])
 
-    assert len(instruction) <= 80
+    assert len(instruction) <= 200
     assert "từng ý" in instruction.lower()
+    assert "không dùng bảng" not in instruction.lower()
+    assert "hàng trong bảng" in instruction.lower()
     assert "trả lời có nguồn" in instruction.lower()
     assert "không suy diễn" in instruction.lower()
     assert "không lộ nhánh bị chặn" in instruction.lower()
@@ -217,6 +229,8 @@ def test_common_prompt_limits_answers_to_the_requested_attribute():
 
     assert "chỉ nêu đúng thông tin được hỏi" in _COMMON_RULES_VI.lower()
     assert "không thêm mã, vật liệu hoặc thông số" in _COMMON_RULES_VI.lower()
+    assert "không lặp lại" in _COMMON_RULES_VI.lower()
+    assert "phiên bản" in _COMMON_RULES_VI.lower()
 
 
 def test_common_prompt_scopes_missing_details_without_contradicting_evidence():

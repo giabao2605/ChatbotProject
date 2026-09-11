@@ -769,6 +769,20 @@ def test_normal_streaming_rejects_split_provider_error_before_emitting(
         next(stream)
 
 
+@pytest.mark.parametrize("chunk_size", [1, 17, 500])
+def test_provider_request_error_text_is_not_an_answer(load_steps, chunk_size):
+    steps = load_steps()
+    text = (
+        "[Error] An error occurred while processing your request. You can retry "
+        "your request, or contact us through our help center at help.openai.com "
+        "if the error persists. Please include the request ID "
+        "1d183fe7-7bdf-4fab-93bb-5ad2a10b1f27 in your message."
+    )
+    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        next(steps._guard_provider_error_chunks(chunks))
+
+
 def test_normal_streaming_allows_valid_error_document_text(load_steps, monkeypatch):
     steps = load_steps(strict=False)
     provider = _prepare_provider(
@@ -795,6 +809,22 @@ def test_normal_streaming_does_not_retry_non_retryable_provider_failure(
 
     with pytest.raises(RuntimeError):
         list(steps.generate_answer(_plan(steps, provider=provider)))
+    assert provider.scripts == [["unexpected retry"]]
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_zero_retry_budget_preserves_original_provider_error(load_steps, monkeypatch, strict):
+    from mech_chatbot.rag.execution import RequestBudgetLedger, RequestBudgetLimits
+
+    steps = load_steps(strict=strict)
+    error = RuntimeError("provider unavailable")
+    provider = _prepare_provider(steps, monkeypatch, [error, ["unexpected retry"]])
+    monkeypatch.setattr(steps, "_is_gpt_rate_limit", lambda _: True)
+    budget = RequestBudgetLedger(RequestBudgetLimits(provider_retries=0), time.monotonic())
+    with pytest.raises(RuntimeError) as raised:
+        list(steps.generate_answer(_plan(steps, provider=provider, budget=budget)))
+    assert raised.value is error
+    assert budget.provider_retries == 0
     assert provider.scripts == [["unexpected retry"]]
 
 

@@ -9,7 +9,47 @@
 - Theo đến cùng bốn tính năng chính: Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair. Chỉ dừng khi `accepted` hoặc chứng minh kỹ thuật rằng muốn tiến xa hơn phải phá ngưỡng đã khóa.
 - Community Summaries chỉ bắt đầu sau Graph accepted. Late Interaction giữ OFF vô thời hạn.
 
-## Thay đổi phạm vi Query — 2026-09-09
+## Checkpoint hiện hành — 2026-09-11
+
+- Query diagnostic `query-diagnostic-100-20260911-014739` hoàn tất 100 card
+  lúc `2026-09-11T02:01:11Z`: 99 đạt; card 097 (`decomp-code-boundary`)
+  gặp `APITimeoutError` sau 120106,63 ms. Card 098–100 vẫn hoàn tất; mỗi
+  card một attempt, không retry/replacement. Bốn lỗi chất lượng của lượt trước
+  (014/016/029/064) đều đạt ở lượt này. Đây là diagnostic với
+  `pilot_evidence=false`, không phải pilot acceptance hoặc quyền rollout.
+- Pilot sequential `query-sequential-candidate-12/run` trước đó đã terminal
+  `per_request_evidence_invalid` ngày 10/09. Mọi root terminal/consumed giữ
+  nguyên evidence, không resume, retry hoặc chuyển card sang root mới.
+- Source chuẩn bị ở worktree `query-post-pilot-prep-20260905`, baseline
+  `9ad9056`. Delta cuối giữ lỗi provider gốc khi budget retry bằng 0,
+  chặn error-text trước khi phát câu trả lời, chỉ đưa nhánh trả lời được vào
+  câu hỏi generation và thống nhất hướng dẫn bảng/trích dẫn/thuộc tính tiếng Việt.
+  Không đổi evaluator hoặc threshold. Hai review độc lập Standards/Security
+  và Spec/Correctness không có finding; kiểm full unit/coverage và freeze cuối
+  được ghi tại `.local/query-freeze-20260911/`.
+- Contract prospective Query là `query-decomposition-sequential-100-v1`:
+  đúng 100 card đã freeze, concurrency 1, card sau chỉ chạy khi card trước
+  hoàn tất hợp lệ; không minimum 24 giờ. Authorization 10 phút–6 giờ và mốc
+  dispatch sau freeze 5 phút là giới hạn của contract, không phải quyền đã cấp.
+  `query-decomposition-24h-100-v1` chỉ giữ để kiểm evidence cũ.
+- Audit venv riêng ngày 11/09 còn một advisory `accelerate`
+  (`CVE-2026-69112`), `pip check` pass. Giữ `assessed_open` và
+  `security_green=false` đến khi có disposition runtime đủ bằng chứng.
+  Các số 12 advisory/5 package hoặc audit sạch ở checkpoint cũ là lịch sử.
+- Math+Query đã có dispatcher sáu arm, worker, receipt và đối soát
+  report/trace/quality offline; còn thiếu evidence thực tế trên RC cuối.
+  CRAG isolation/zero-retry đã sửa offline nhưng measured evidence vẫn
+  inconclusive, cần window riêng. Math chỉ giữ quyền exact-commit `67265a0`;
+  Graph giữ `keep_off_technical_limit`; Community/Late Interaction vẫn OFF.
+- Thứ tự tiếp theo: chốt kiểm thử/review/dependency và source sạch; kiểm lại
+  historical formal/review/owner-decision bằng validator; tạo activation,
+  consolidated sequential draft và matrix binding mới. Chỉ sau authorization
+  đúng source/root/draft/cleanup scope mới fresh preflight/rollback/smoke và
+  pilot chính thức. Pilot đạt rồi mới review 20 capture cùng ca bắt buộc,
+  deletion receipt theo phê duyệt, final gate, interaction matrix và release.
+  Không mở thêm diagnostic chỉ để tìm điểm 100/100 hoặc nới timeout.
+
+## Thay đổi phạm vi Query — 2026-09-09 (lịch sử)
 
 Owner yêu cầu thay điều kiện thời gian của **pilot Query tương lai**: từ tối
 thiểu 24 giờ thành một lượt 100 card đủ điều kiện, thực hiện tuần tự. Contract

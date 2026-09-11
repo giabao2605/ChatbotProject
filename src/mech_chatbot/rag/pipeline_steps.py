@@ -70,6 +70,7 @@ _QDRANT_SEARCH_TIMEOUT_SECONDS = 10
 _BM25_SEARCH_TIMEOUT_SECONDS = _QDRANT_SEARCH_TIMEOUT_SECONDS
 
 _PROVIDER_ERROR_PREFIXES = (
+    "[error] an error occurred while processing your request. you can retry your request",
     "[error] our servers are currently overloaded",
     "[error] service unavailable",
     "[error] service_unavailable",
@@ -1145,6 +1146,8 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         if attempt >= _stream_attempts or not _is_gpt_rate_limit(stream_error):
                             raise
                         if budget is not None:
+                            if budget.provider_retries >= budget.limits.provider_retries:
+                                raise
                             budget.consume_provider_retry()
                         delay = min(8, 2 ** attempt)
                         logger.warning(
@@ -1384,6 +1387,8 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         if chunks or attempt >= _stream_attempts or not _is_gpt_rate_limit(stream_error):
                             raise
                         if budget is not None:
+                            if budget.provider_retries >= budget.limits.provider_retries:
+                                raise
                             budget.consume_provider_retry()
                         delay = min(8, 2 ** attempt)
                         logger.warning(

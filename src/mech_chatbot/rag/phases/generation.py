@@ -63,6 +63,19 @@ def _effective_generation_question(
     primary: PrimaryRetrievalOutcome,
     documents: list[Any],
 ) -> str:
+    if any(
+        branch.get("outcome") in {"access_denied", "insufficient_evidence"}
+        for branch in primary.decomposition_branches
+    ) and not any(
+        isinstance(document.metadata.get("calculation_provenance"), dict)
+        for document in documents
+    ):
+        return " và ".join(
+            str(branch.get("subquery") or "").strip()
+            for branch in primary.decomposition_branches
+            if branch.get("outcome") == "full_answer"
+            and str(branch.get("subquery") or "").strip()
+        )
     if not any(
         isinstance(document.metadata.get("calculation_provenance"), dict)
         for document in documents
