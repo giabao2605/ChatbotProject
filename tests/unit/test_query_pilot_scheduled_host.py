@@ -289,7 +289,7 @@ def _synthetic_authorization(root, source, commit):
 
 
 @pytest.fixture
-def synthetic_host_packet(tmp_path, request):
+def synthetic_host_packet(tmp_path, request, monkeypatch):
     """Synthetic evidence stays in a temporary repo; no validator is replaced."""
     import importlib.util
 
@@ -317,7 +317,10 @@ def synthetic_host_packet(tmp_path, request):
         values[name] = str(paths[key])
     spec = importlib.util.spec_from_file_location("scripts.ops.synthetic_scheduled_host", root / "scripts/ops/query_pilot_scheduled_host.py")
     copied_host = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(copied_host)
+    # Loading the copied module must not dirty the frozen synthetic checkout.
+    with monkeypatch.context() as import_context:
+        import_context.setattr(sys, "dont_write_bytecode", True)
+        spec.loader.exec_module(copied_host)
     packet = materialized.parent / "host-packet.json"
     prepared = copied_host.prepare_packet(values, commit, packet)
     return copied_host, packet, prepared, values, run_root, commit
@@ -361,7 +364,8 @@ def test_prepare_and_validate_real_synthetic_authorization_chain(synthetic_host_
         str(powershell), "-NoProfile", "-NonInteractive", "-File",
         str(script_dir / "query_pilot_scheduled_task.ps1"), "-Packet", str(packet),
         "-PacketSha256", prepared["packet_sha256"],
-    ], cwd=root, env={**os.environ, "PYTHONPATH": os.pathsep.join((str(source), str(source / "src")))},
+    ], cwd=root, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": os.pathsep.join((str(source), str(source / "src")))},
        capture_output=True, text=True, timeout=30)
     assert inspected.returncode == 0, inspected.stdout + inspected.stderr
     assert json.loads(inspected.stdout)["task_registered"] is False
@@ -405,7 +409,8 @@ def test_real_wrapper_registers_exact_synthetic_task(synthetic_host_packet):
         str(source / "tests/fixtures/query_scheduled_registration_proof.ps1"),
         "-Wrapper", str(root / "scripts/ops/query_pilot_scheduled_task.ps1"),
         "-Packet", str(packet), "-PacketSha256", prepared["packet_sha256"], "-Start"],
-        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(source), str(source / "src")))},
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+             "PYTHONPATH": os.pathsep.join((str(source), str(source / "src")))},
         capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     proof = json.loads(result.stdout)

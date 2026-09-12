@@ -1,6 +1,13 @@
+from contextlib import redirect_stdout
+import io
+import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
+
+from mech_chatbot.rag import late_interaction
+from scripts.late_interaction import backfill_shadow
 
 from scripts.late_interaction.backfill_shadow import (
     backfill,
@@ -11,6 +18,124 @@ from scripts.late_interaction.backfill_shadow import (
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_backfill_uses_declared_document_length_and_records_encoder_identity(monkeypatch):
+    class Encoder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def encode(self, texts, *, max_length, **kwargs):
+            return {"colbert_vecs": [[[0.1] * 1024] * max_length for _ in texts]}
+
+    monkeypatch.setattr(late_interaction, "_load_encoder_type", lambda: Encoder)
+    client = MemoryQdrant([source_point()])
+    config = late_interaction.LateInteractionConfig(document_max_length=7)
+
+    report = backfill(client, "source", "shadow", config=config)
+
+    point = next(iter(client.shadow.values()))
+    assert report["coverage"] == 1.0
+    assert len(point.vector["late"]) == 7
+    assert point.payload["encoder_configuration"] == {
+        "model_name": "BAAI/bge-m3", "use_fp16": False, "document_max_length": 7,
+    }
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_backfill_requires_new_revision_for_changed_or_unknown_encoder(legacy):
+    client = MemoryQdrant([source_point()])
+    encoder = lambda texts: [[[0.1] * 1024] for _ in texts]
+    old_config = None if legacy else late_interaction.LateInteractionConfig(document_max_length=7)
+    backfill(client, "source", "shadow", encoder=encoder, config=old_config)
+    existing = next(iter(client.shadow.values()))
+    old_payload = dict(existing.payload)
+    new_config = late_interaction.LateInteractionConfig(document_max_length=8)
+
+    with pytest.raises(ValueError, match="encoder_configuration_changed_requires_new_index_version"):
+        backfill(client, "source", "shadow", encoder=encoder, config=new_config)
+
+    assert existing.payload == old_payload
+    report = backfill(
+        client, "source", "shadow", encoder=encoder, config=new_config, index_version="late-v3-test",
+    )
+    assert report["stale_reindexed"] == 1
+    assert next(iter(client.shadow.values())).payload["encoder_configuration"]["document_max_length"] == 8
+
+
+def test_cli_encoding_and_readiness_use_the_same_environment_lengths(monkeypatch, tmp_path):
+    encodings = []
+
+    class Encoder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def encode(self, texts, *, max_length, **kwargs):
+            encodings.append((tuple(texts), max_length))
+            return {"colbert_vecs": [[[0.1] * 1024] * max_length for _ in texts]}
+
+    class Client(MemoryQdrant):
+        def info(self):
+            return SimpleNamespace(version="1.18.2")
+
+        def get_collection(self, name):
+            result = super().get_collection(name)
+            result.points_count = 1 if name == "source" else len(self.shadow)
+            return result
+
+        def query_points(self, **kwargs):
+            assert len(kwargs["query"]) == 9
+
+    def run(command, **kwargs):
+        if command[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(command, 0, stdout="synthetic-commit", stderr="")
+        assert command[1] == "-c"
+        assert kwargs["env"]["HF_HUB_OFFLINE"] == "1"
+        output = io.StringIO()
+        with monkeypatch.context() as child:
+            child.setattr(backfill_shadow.sys, "argv", ["-c", *command[3:]])
+            with redirect_stdout(output):
+                exec(command[2], {})
+        return subprocess.CompletedProcess(command, 0, stdout=output.getvalue(), stderr="")
+
+    client = Client([source_point()])
+    monkeypatch.setattr(backfill_shadow, "QdrantClient", lambda **kwargs: client)
+    monkeypatch.setattr(backfill_shadow, "load_dotenv", lambda *args: None)
+    monkeypatch.setattr(backfill_shadow.subprocess, "run", run)
+    monkeypatch.setattr(late_interaction, "_load_encoder_type", lambda: Encoder)
+    monkeypatch.setenv("QDRANT_URL", "http://synthetic.invalid")
+    monkeypatch.setenv("RAG_LATE_DOCUMENT_MAX_LENGTH", "7")
+    monkeypatch.setenv("RAG_LATE_QUERY_MAX_LENGTH", "9")
+
+    assert backfill_shadow.main([
+        "--source-collection", "source", "--shadow-collection", "shadow",
+        "--smoke-encoder", "--benchmark", "--benchmark-iterations", "1",
+        "--output-dir", str(tmp_path),
+    ]) == 0
+
+    artifact = json.loads((tmp_path / "readiness.json").read_text(encoding="utf-8"))
+    assert artifact["configuration"]["document_max_length"] == 7
+    assert artifact["configuration"]["query_max_length"] == 9
+    assert encodings == [
+        (("BOM smoke test",), 9), (("BOM PART-A quantity 2",), 7),
+        (("BOM PART-A quantity 2",), 7),
+        *(((("BOM smoke test",), 9),) * 3),
+    ]
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "invalid"])
+def test_cli_rejects_invalid_lengths_before_connecting(monkeypatch, tmp_path, value):
+    def unexpected_client(**kwargs):
+        pytest.fail("invalid configuration reached Qdrant")
+
+    monkeypatch.setattr(backfill_shadow, "QdrantClient", unexpected_client)
+    monkeypatch.setattr(backfill_shadow, "load_dotenv", lambda *args: None)
+    monkeypatch.setenv("QDRANT_URL", "http://synthetic.invalid")
+    monkeypatch.setenv("RAG_LATE_DOCUMENT_MAX_LENGTH", value)
+
+    with pytest.raises(ValueError):
+        backfill_shadow.main(["--preflight-only", "--output-dir", str(tmp_path)])
+    assert not (tmp_path / "readiness.json").exists()
 
 
 def source_point(point_id="source-1", **metadata_overrides):

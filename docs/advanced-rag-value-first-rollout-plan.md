@@ -2,6 +2,126 @@
 
 ## Tóm tắt
 
+### Scope mới của owner — 2026-09-11: bật các capability trong scope, Graph giữ OFF
+
+Owner yêu cầu hoàn thành roadmap để bật các tính năng Advanced RAG, sau đó
+chốt ngoại lệ rõ ràng: "graph giữ off như plan nói". Graph giữ disposition
+keep_off_technical_limit, không mở lại design/formal/pilot/activation. Community
+Summaries phụ thuộc Graph nên cũng giữ OFF. Các disposition và run thất bại
+cũ vẫn là bằng chứng lịch sử, không sửa thành accepted.
+
+Đích triển khai là Grounded Math, Query Decomposition, CRAG, Claim Repair
+và Late Interaction có evidence hợp lệ trên RC phát hành, signed activation
+bundle và runtime thực được kiểm chứng. Graph và Community không thuộc enabled
+set. Routing chọn tính năng phù hợp từng request, vẫn giữ budgets và RBAC.
+
+Quyền tiếp tục triển khai trong scope đã được owner cấp; không hỏi lại cho
+các bước chuẩn bị, sửa/test và tạo binding mới thuộc scope. Không coi quyền
+này là nhãn human quality review, chữ ký của reviewer khác hoặc evidence pass.
+Không push, publish, xóa dữ liệu lịch sử hoặc nới ngưỡng để đạt mục tiêu.
+
+| Capability | Bằng chứng hiện có | Công việc bắt buộc còn lại |
+| --- | --- | --- |
+| Math | Release authorization exact 67265a0 | Revalidate trên RC chung, matrix và runtime final |
+| Query | Formal/review lịch sử; diagnostic 99/100; unit freeze d12efe6 | Pilot hợp lệ, human review, matrix, release |
+| Graph | keep_off_technical_limit được owner tái xác nhận | Giữ OFF; không mở lại |
+| CRAG + Claim Repair | Offline isolation/zero-retry fix; diagnostic inconclusive | Diagnostic tách stage, formal, pilot, matrix |
+| Community | Phụ thuộc Graph | Giữ OFF khi Graph OFF |
+| Late Interaction | Historical rejected; activation còn hard-deny | Design retrieval mới và NDCG/recall/latency/storage evidence; sau đó TDD conditional activation |
+
+Thứ tự thực thi: đối chiếu implementation/evidence từng capability song song
+offline; ưu tiên xử lý provider observability và Late design blockers,
+không để toàn bộ roadmap chờ Query pilot. Live evaluations chạy riêng,
+không chồng traffic làm nhiễu phép đo. Sau khi từng capability đạt, kiểm
+pairwise/full-stack ở concurrency 1/5, rollback rồi xác minh runtime cuối.
+Giữ các duration/gate đã khóa cho đến khi có thay đổi contract rõ ràng.
+
+Query windows ngày 11/09 trên d12efe6: window02 smoke5/5 nhưng pilot dừng
+sau11 card; window03 smoke dừng ở request4 do timeout; window04 smoke5/5
+nhưng pilot dừng sau5 card. Hai pilot gặp service-unavailable response trong
+generation; không có HTTP upstream status trong evidence. Các root terminal
+không reuse/carry-forward. Chi tiết metadata tại
+`.local/live-readiness-20260911/provider-incident-summary.md`.
+
+Mục tiêu mới chưa hoàn tất. Không đổi release ledger hoặc bật cờ chỉ bằng
+việc cập nhật plan. Quy định Graph keep-off và dependency Community bên dưới
+vẫn có hiệu lực. Riêng Late Interaction cần design/evidence mới trước khi
+xét migration hard-deny; không bật implementation đã rejected.
+
+#### Late revision: investigation đã xác định seam
+
+- Historical gate không đạt hai check: `voyage_baseline_valid` và
+  `ndcg_relative_gain`; các check recall, leakage, coverage và aggregate
+  latency/storage đạt. Số liệu roadmap lịch sử: MaxSim nDCG@10=0.5221,
+  RRF=0.8908; không suy ra thay đổi encoder sẽ tự cải thiện quality.
+- Encoder worker trước đây tạo model mỗi request. Đã sửa bằng TDD để giữ
+  một encoder theo vòng đời worker, không load lúc import hoặc khi chưa có
+  request hợp lệ; lỗi encode không làm mất model đã nạp. Benchmark cũng đã
+  sửa cùng lỗi tải lại model trong từng warm-up/sample. Test đồng hồ giả lập
+  tái hiện encode latency 10010 ms thay vì 10 ms trước sửa, đạt sau sửa.
+  Đây là sửa lifecycle/phép đo, không phải bằng chứng đã sửa nDCG.
+- `encode_documents` mặc định chỉ 48 token, query 64 token. Cần đối chiếu
+  actual backfill settings và vị trí evidence trong corpus trước khi chọn
+  revision độ dài; tăng vector length tùy tiện có thể phá storage gate25x
+  (historical23.3618x đã gần giới hạn). Chưa authorize ghi đè shadow index cũ.
+- Kiểm thử offline ngày11/09:99 tests CRAG diagnostic/latency, Late runtime/
+  evaluation và retrieval gate pass. Không thay formal/pilot evidence.
+- Kiểm thử ngày12/09: full unit sau sửa worker và cô lập bytecode fixture
+  scheduled-host: 3602 pass, 2 skip, 0 failure/error (568.163 giây), artifact
+  `.local/late-worker-full-unit-20260912-final.xml`. Hai skip là quyền tạo
+  symlink và opt-in đăng ký Scheduled Task; không tự đăng ký task để bỏ skip.
+  Sau delta benchmark, 37 tests Late pass; artifact
+  `.local/late-lifecycle-targeted-20260912.xml`. Full suite trên không bao gồm
+  delta benchmark mới; chưa có quality/latency đo bằng model thật cho revision.
+- Delta cấu hình ngày12/09: smoke, backfill, benchmark và encoder worker dùng
+  độ dài query/document đã khai báo, thay vì ghi environment vào báo cáo nhưng
+  encode bằng default. Backfill ghi encoder identity và không tính vector cũ
+  có identity khác/thiếu identity là hợp lệ dưới cùng index version. Đổi revision
+  vẫn cần index riêng cho lần đo mới; chưa ghi vào shadow index thật.
+  45 tests Late pass; coverage branch+statement ba file implementation 92–93%,
+  artifact `.local/late-configuration-20260912.xml` và
+  `.local/late-config-coverage-20260912`. Đây là kiểm thử offline, không thay
+  quality gate hoặc cho phép activation.
+- Smoke BGE-M3 thật ngày12/09 trong environment Late riêng đã pass offline:
+  query shape `[6, 1024]`, document shape `[10, 1024]`, return code 0.
+  Tổng cold-start/smoke 62394.22 ms, không dùng làm warm-query latency.
+  Log `.local/late-real-encoder-smoke-20260912.log`; không gọi provider/Qdrant.
+- Tokenizer BGE-M3 offline trên ba file demo Technical effective gốc: mỗi
+  file 156 token; riêng prefix trước `## Quy định chính` đã 47 token.
+  Giới hạn 48 token có nguy cơ chỉ giữ header thay vì nội dung phân biệt.
+  Log `.local/late-corpus-token-diagnostic-20260912.log`. Đây là file gốc,
+  chưa đối chiếu chunk hiện tại trong Qdrant; chưa kết luận nguyên nhân hoặc
+  tự tăng độ dài vượt storage budget.
+- Đối chiếu Qdrant read-only ngày12/09: `TaiLieuKyThuat_v2` hiện có 231 điểm
+  (scroll đủ 231, không còn trang tiếp); không có doc_id32/40/41 trong manifest
+  Late lịch sử. Không chạy lại benchmark bằng identity đã cũ. Bước đo tiếp theo
+  cần đối chiếu tài liệu hiện hành và tạo manifest đúng nguồn, giữ nguyên tiêu chí
+  relevance/gate. Evidence metadata tại `.local/late-index-token-diagnostic-20260912.log`
+  và `.local/late-source-identity-diagnostic-20260912.log`; không ghi Qdrant.
+  Kiểm tiếp theo tên xác nhận cả 7 tài liệu expected/forbidden của manifest
+  lịch sử đều vắng khỏi collection, không chỉ thay doc_id. Catalog metadata:
+  `.local/late-source-name-diagnostic-20260912.log`. Giữ manifest cũ nguyên vẹn;
+  không ánh xạ sang tài liệu khác theo tên gần giống.
+- Diagnostic offline model thật trên cùng 3 file Technical gốc và 4 câu hỏi:
+  48 và 160 token đều xếp core đầu ở exact-code/near-code-family/OCR; cả hai
+  đều xếp core cuối ở near-meaning (case cần phân biệt core/process/reference).
+  Số vector tăng từ 47 lên 155 mỗi file nhưng chưa sửa thứ hạng case khó.
+  Không chọn tăng độ dài đơn thuần làm revision; đây chỉ là 3-document
+  diagnostic, không thay NDCG formal. Log có score và file hash tại
+  `.local/late-length-quality-diagnostic-20260912.log`; script offline
+  `.local/late_length_diagnostic.py`. Không đổi default hoặc index thật.
+- Full unit sau toàn bộ delta lifecycle/configuration ngày12/09 hoàn tất:
+  3612 pass, 2 skip, 0 failure/error, 582.189 giây. Artifact
+  `.local/late-config-full-unit-20260912.xml`. Hai skip vẫn là quyền symlink
+  và opt-in Scheduled Task, không phải lỗi runtime. Review Standards không có
+  finding; nhánh encoder callable không config là test seam legacy do caller
+  sở hữu identity, không dùng trong CLI/default model. Không thêm cơ chế mới
+  chỉ cho test seam. Regression pass không đồng nghĩa Late quality accepted.
+- Audit dependency ngày12/09 vẫn còn một advisory `accelerate==1.13.0`
+  (`PYSEC-2026-3804`), không phát sinh package thay đổi trong delta này.
+  Artifact `.local/late-config-pip-audit-20260912.json`; giữ security_green=false,
+  không coi commit sửa encoder là release authorization hoặc audit sạch.
+
 - Default-rollout authorization đã ghi nhận là signed `selective` Math-only trên commit `67265a0`; accepted set chỉ có `RAG_GROUNDED_MATH_ENABLED`, sáu feature còn lại giữ OFF. Authorization này không tự chứng minh runtime đang chạy hoặc quyền trên RC mới.
 - Tách Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair thành các capability được đánh giá, pilot và quyết định độc lập.
 - Phát hành dần: tính năng đạt không phải chờ tính năng khác; tính năng chưa đạt tiếp tục OFF.

@@ -31,6 +31,11 @@ class LateInteractionConfig:
     collection_name: str = DEFAULT_COLLECTION
     index_version: str = "late-v2"
 
+    def __post_init__(self):
+        lengths = (self.query_max_length, self.document_max_length)
+        if any(type(value) is not int or value <= 0 for value in lengths):
+            raise ValueError("late_encoder_max_lengths_must_be_positive_integers")
+
 
 @dataclass(frozen=True, slots=True)
 class LateInteractionResult:

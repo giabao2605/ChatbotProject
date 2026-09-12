@@ -12,6 +12,7 @@ import sys
 import time
 import uuid
 from collections import Counter
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,6 +29,8 @@ for item in (ROOT, SRC):
 
 from mech_chatbot.rag.late_interaction import (  # noqa: E402
     DEFAULT_COLLECTION,
+    LateInteractionConfig,
+    build_encoder,
     candidate_key,
     encode_documents,
     encode_query,
@@ -37,7 +40,6 @@ from mech_chatbot.rag.late_interaction import (  # noqa: E402
 
 
 def _client():
-    load_dotenv(ROOT / ".env")
     return QdrantClient(
         url=os.environ["QDRANT_URL"],
         api_key=os.environ.get("QDRANT_API_KEY"),
@@ -290,8 +292,21 @@ def backfill(
     *,
     index_version="late-v2",
     prune_orphans=False,
-    encoder=encode_documents,
+    encoder=None,
+    config=None,
 ):
+    """Backfill with a bound model config or a caller-owned test encoder.
+
+    Injected callables without config retain the legacy test seam; callers own
+    their index identity. CLI and default model paths always bind configuration.
+    """
+    active_config = config or LateInteractionConfig()
+    encoder_identity = {
+        "model_name": active_config.model_name,
+        "use_fp16": active_config.use_fp16,
+        "document_max_length": active_config.document_max_length,
+    } if encoder is None or config is not None else None
+    model = None
     ensure_shadow_collection(client, shadow_collection)
     offset = None
     uploaded = 0
@@ -325,6 +340,8 @@ def backfill(
             grouped_records = {}
             for document in documents:
                 payload, missing = _canonical_record(document, index_version=index_version)
+                if encoder_identity is not None:
+                    payload = {**payload, "encoder_configuration": encoder_identity}
                 key = payload["candidate_key"]
                 if not document.page_content.strip():
                     missing = (*missing, "content")
@@ -400,6 +417,11 @@ def backfill(
                     if existing_payload.get("index_version") != str(index_version):
                         pending.append((key, document, payload, True))
                         continue
+                    if (
+                        encoder_identity is not None
+                        and existing_payload.get("encoder_configuration") != encoder_identity
+                    ):
+                        raise ValueError("encoder_configuration_changed_requires_new_index_version")
                     governance_changed = (
                         existing_payload.get("governance_fingerprint") != payload["governance_fingerprint"]
                     )
@@ -418,7 +440,17 @@ def backfill(
                     covered_keys.add(key)
                     continue
                 pending.append((key, document, payload, False))
-            vectors = encoder([document.page_content for _, document, _, _ in pending]) if pending else []
+            vectors = []
+            if pending:
+                texts = [document.page_content for _, document, _, _ in pending]
+                if encoder is None:
+                    if model is None:
+                        model = build_encoder(active_config)
+                    vectors = encode_documents(
+                        texts, encoder=model, max_length=active_config.document_max_length,
+                    )
+                else:
+                    vectors = encoder(texts)
             if len(vectors) != len(pending):
                 raise RuntimeError("encoder returned an unexpected vector count")
             shadow_points = []
@@ -489,7 +521,8 @@ def backfill(
     }
 
 
-def smoke_encoder():
+def smoke_encoder(config=None):
+    config = config or LateInteractionConfig()
     env = dict(os.environ)
     env["PYTHONPATH"] = str(SRC)
     env["HF_HUB_OFFLINE"] = "1"
@@ -497,15 +530,17 @@ def smoke_encoder():
     started = time.perf_counter()
     completed = subprocess.run(
         [sys.executable, "-c", (
-            "import json; "
-            "from mech_chatbot.rag.late_interaction import encode_documents, encode_query; "
-            "query=encode_query('BOM smoke test'); "
-            "documents=encode_documents(['BOM PART-A quantity 2']); "
+            "import json,sys; "
+            "from mech_chatbot.rag.late_interaction import LateInteractionConfig,build_encoder,encode_documents,encode_query; "
+            "config=LateInteractionConfig(**json.loads(sys.argv[1])); "
+            "encoder=build_encoder(config); "
+            "query=encode_query('BOM smoke test',encoder=encoder,max_length=config.query_max_length); "
+            "documents=encode_documents(['BOM PART-A quantity 2'],encoder=encoder,max_length=config.document_max_length); "
             "assert query and query[0] and documents and documents[0] and documents[0][0]; "
             "assert len(query[0]) == 1024 and len(documents[0][0]) == 1024; "
             "print(json.dumps({'query_shape':[len(query),len(query[0])],"
             "'document_shape':[len(documents[0]),len(documents[0][0])] }))"
-        )],
+        ), json.dumps(asdict(config))],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -564,7 +599,8 @@ def _percentile(values, percentile):
     return round(ordered[index], 2)
 
 
-def benchmark(client, collection, *, iterations=20):
+def benchmark(client, collection, *, iterations=20, config=None):
+    config = config or LateInteractionConfig()
     points, _ = client.scroll(
         collection_name=collection,
         limit=20,
@@ -578,11 +614,12 @@ def benchmark(client, collection, *, iterations=20):
     keys = [key for key in keys if key]
     if not keys:
         return {"passed": False, "reason": "empty_shadow_collection"}
+    encoder = build_encoder(config)
     encode_times = []
     query_times = []
     for attempt in range(max(1, int(iterations)) + 2):
         started = time.perf_counter()
-        vectors = encode_query("BOM smoke test")
+        vectors = encode_query("BOM smoke test", encoder=encoder, max_length=config.query_max_length)
         encode_ms = (time.perf_counter() - started) * 1000
         started = time.perf_counter()
         client.query_points(
@@ -617,6 +654,7 @@ def _commit_sha():
 
 
 def main(argv=None):
+    load_dotenv(ROOT / ".env")
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-collection", default=os.getenv("QDRANT_COLLECTION", "TaiLieuKyThuat_v2"))
     parser.add_argument("--shadow-collection", default=DEFAULT_COLLECTION)
@@ -629,9 +667,13 @@ def main(argv=None):
     parser.add_argument("--prune-orphans", action="store_true")
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args(argv)
+    config = LateInteractionConfig(
+        document_max_length=int(os.getenv("RAG_LATE_DOCUMENT_MAX_LENGTH", "48")),
+        query_max_length=int(os.getenv("RAG_LATE_QUERY_MAX_LENGTH", "64")),
+    )
     started_at = datetime.now(timezone.utc)
     client = _client()
-    encoder_report = smoke_encoder() if args.smoke_encoder else {
+    encoder_report = smoke_encoder(config) if args.smoke_encoder else {
         "passed": False, "reason": "not_checked", "offline": True,
     }
     qdrant_report = preflight(
@@ -652,6 +694,7 @@ def main(argv=None):
             args.batch_size,
             index_version=args.index_version,
             prune_orphans=args.prune_orphans,
+            config=config,
         )
         source = client.get_collection(args.source_collection)
         storage_report = estimate_storage(
@@ -670,7 +713,7 @@ def main(argv=None):
         qdrant_report["client_version"] = importlib.metadata.version("qdrant-client")
         if args.benchmark and qdrant_report["ready_for_serving"]:
             benchmark_report = benchmark(
-                client, args.shadow_collection, iterations=args.benchmark_iterations,
+                client, args.shadow_collection, iterations=args.benchmark_iterations, config=config,
             )
     ended_at = datetime.now(timezone.utc)
     output_dir = args.output_dir or (
@@ -691,8 +734,8 @@ def main(argv=None):
             "index_version": args.index_version,
             "batch_size": args.batch_size,
             "benchmark_iterations": args.benchmark_iterations if args.benchmark else None,
-            "document_max_length": int(os.getenv("RAG_LATE_DOCUMENT_MAX_LENGTH", "48")),
-            "query_max_length": int(os.getenv("RAG_LATE_QUERY_MAX_LENGTH", "64")),
+            "document_max_length": config.document_max_length,
+            "query_max_length": config.query_max_length,
         },
     )
     json_path, markdown_path = write_readiness_artifacts(output_dir, artifact)
