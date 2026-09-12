@@ -88,17 +88,12 @@ def _commit_sha():
     return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
 
-def _provider_configuration(top_k):
-    from mech_chatbot.rag.rerank import _voyage_runtime
-
-    runtime = _voyage_runtime()
-    endpoint = urlsplit(runtime.endpoint)
+def _provider_configuration(top_k, settings):
     configuration = {
         "dense_model": os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
         "sparse_model": "Qdrant/bm25",
-        "voyage_model": runtime.model,
-        "voyage_endpoint": f"{endpoint.scheme}://{endpoint.netloc}{endpoint.path}",
-        "voyage_timeout_seconds": float(os.getenv("VOYAGE_RERANK_TIMEOUT_SECONDS", "15")),
+        "voyage_model": settings.VOYAGE_RERANK_MODEL,
+        "voyage_timeout_seconds": settings.VOYAGE_RERANK_TIMEOUT_SECONDS,
         "candidate_top_k": int(top_k),
         "provider_retry_policy": "none",
         "fallback_policy": "preserve_rrf_closed_set",
@@ -311,7 +306,7 @@ def main(argv=None):
         return 2
 
     os.environ["RAG_LATE_INDEX_VERSION"] = args.index_version
-    provider_configuration, provider_configuration_sha256 = _provider_configuration(args.top_k)
+    provider_configuration, provider_configuration_sha256 = _provider_configuration(args.top_k, settings)
     rows_by_variant = {variant: [] for variant in VARIANTS}
     cache_path = Path(".local/late-interaction-eval") / f"{args.run_id}-candidates.json"
     retrieved = _retrieve_in_worker(args.manifest, args.repetitions, args.top_k, cache_path)
