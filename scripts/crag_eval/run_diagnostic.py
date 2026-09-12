@@ -434,25 +434,33 @@ def _run_case_pair(
 ) -> tuple[dict[str, Any], tuple[str, ...], bool]:
     case_dir = context.output / series_id / f"case-{ordinal:03d}"
     arms: dict[str, dict[str, Any]] = {}
+    stopped = False
     for label, enabled in _arm_specs(arm_order):
         arm_starts = (*arm_starts, _utc_now())
-        arm = _run_arm(
-            context,
-            case_dir,
-            label=label,
-            enabled=enabled,
-            arm_starts=arm_starts,
-            case_id=case_id,
-        )
+        try:
+            arm = _run_arm(
+                context,
+                case_dir,
+                label=label,
+                enabled=enabled,
+                arm_starts=arm_starts,
+                case_id=case_id,
+            )
+        except (RuntimeError, ValueError) as exc:
+            pair = {**_case_pair(case_id, arm_order, arms),
+                    "execution_failure": {"error_type": type(exc).__name__}}
+            return pair, arm_starts, True
         arms = {**arms, label: arm}
         if _provider_failures(arm) or _provider_retries(arm):
-            pair = _case_pair(case_id, arm_order, arms)
-            _write_case_summary(case_dir, pair, stopped=True)
-            return pair, arm_starts, True
+            stopped = True
+            break
 
     pair = _case_pair(case_id, arm_order, arms)
-    _write_case_summary(case_dir, pair, stopped=False)
-    return pair, arm_starts, False
+    try:
+        _write_case_summary(case_dir, pair, stopped=stopped)
+    except (RuntimeError, ValueError) as exc:
+        return {**pair, "execution_failure": {"error_type": type(exc).__name__}}, arm_starts, True
+    return pair, arm_starts, stopped
 
 
 def _arm_specs(arm_order: str) -> tuple[tuple[str, bool], ...]:
@@ -518,14 +526,17 @@ def _run_series(
     case_pairs: tuple[dict[str, Any], ...] = ()
     state = execution
     for ordinal, case_id in enumerate(context.case_ids, start=1):
-        pair, starts, stopped = _run_case_pair(
-            context,
-            series_id=series_id,
-            ordinal=ordinal,
-            case_id=case_id,
-            arm_order=arm_order,
-            arm_starts=state.arm_starts,
-        )
+        try:
+            pair, starts, stopped = _run_case_pair(
+                context,
+                series_id=series_id,
+                ordinal=ordinal,
+                case_id=case_id,
+                arm_order=arm_order,
+                arm_starts=state.arm_starts,
+            )
+        except (RuntimeError, ValueError) as exc:
+            return replace(state, execution_failure={"error_type": type(exc).__name__})
         state = replace(
             state,
             arm_starts=starts,
@@ -533,18 +544,24 @@ def _run_series(
             + sum(label in pair for label in ("baseline", "candidate")),
         )
         if stopped:
-            return replace(state, stopped_case=_stopped_case(series_id, case_id, pair))
+            return replace(
+                state, stopped_case=_stopped_case(series_id, case_id, pair),
+                execution_failure=pair.get("execution_failure"),
+            )
         case_pairs = (*case_pairs, pair)
         state = replace(
             state,
             completed_case_pairs=state.completed_case_pairs + 1,
         )
-    summary = build_series_summary(
-        series_id=series_id,
-        arm_order=arm_order,
-        case_pairs=case_pairs,
-    )
-    _write_json(context.output / series_id / "summary.json", summary)
+    try:
+        summary = build_series_summary(
+            series_id=series_id,
+            arm_order=arm_order,
+            case_pairs=case_pairs,
+        )
+        _write_json(context.output / series_id / "summary.json", summary)
+    except (RuntimeError, ValueError) as exc:
+        return replace(state, execution_failure={"error_type": type(exc).__name__})
     return replace(state, series=(*state.series, summary))
 
 
@@ -558,7 +575,7 @@ def _execute_series_plan(context: DiagnosticContext) -> DiagnosticExecution:
                 series_id=series_id,
                 arm_order=arm_order,
             )
-            if execution.stopped_case:
+            if execution.stopped_case or execution.execution_failure:
                 break
     except (RuntimeError, ValueError) as exc:
         execution = replace(
