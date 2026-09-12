@@ -9,6 +9,33 @@ from scripts.late_interaction.backfill_shadow import benchmark
 pytestmark = pytest.mark.unit
 
 
+def test_quality_evaluation_uses_declared_index_and_pooling():
+    from scripts.eval import run_late_interaction_eval as evaluation
+
+    settings = SimpleNamespace(
+        RAG_LATE_MODEL="BAAI/bge-m3", EMBEDDING_DEVICE="cpu",
+        RAG_LATE_QUERY_MAX_LENGTH=64, RAG_LATE_DOCUMENT_MAX_LENGTH=96,
+        RAG_LATE_DOCUMENT_POOLING="adjacent_mean",
+    )
+    config = evaluation._evaluation_config(SimpleNamespace(
+        shadow_collection="new-shadow", index_version="pooled-v1",
+    ), settings)
+    assert config.collection_name == "new-shadow"
+    assert config.index_version == "pooled-v1"
+    assert config.document_pooling == "adjacent_mean"
+    assert config.document_max_length == 96
+    assert config.query_max_length == 64
+
+
+def test_readiness_matching_rejects_pooling_drift():
+    from scripts.eval.run_late_interaction_eval import _evaluation_config, _readiness_matches
+    args = SimpleNamespace(source_collection="source", shadow_collection="shadow", index_version="v1")
+    settings = SimpleNamespace(RAG_LATE_MODEL="m", EMBEDDING_DEVICE="cpu", RAG_LATE_QUERY_MAX_LENGTH=64, RAG_LATE_DOCUMENT_MAX_LENGTH=96, RAG_LATE_DOCUMENT_POOLING="adjacent_mean")
+    config = _evaluation_config(args, settings)
+    readiness = {"ready_for_serving": True, "configuration": {"source_collection": "source", "shadow_collection": "shadow", "index_version": "v1", "document_pooling": "none"}}
+    assert _readiness_matches(readiness, args, config) is False
+
+
 def test_benchmark_measures_warm_encoder_without_reloading_model(monkeypatch):
     clock = [0.0]
     queries = []

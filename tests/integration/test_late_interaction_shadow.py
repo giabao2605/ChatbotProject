@@ -42,12 +42,13 @@ def test_qdrant_shadow_backfill_maxsim_is_idempotent_and_preserves_governance():
         use_fp16=settings.EMBEDDING_DEVICE.lower().startswith("cuda"),
         query_max_length=settings.RAG_LATE_QUERY_MAX_LENGTH,
         document_max_length=settings.RAG_LATE_DOCUMENT_MAX_LENGTH,
+        document_pooling=settings.RAG_LATE_DOCUMENT_POOLING,
         collection_name=shadow,
         index_version=index_version,
     )
     encoder = build_encoder(late_config)
     try:
-        first = backfill(client, source, shadow, batch_size=32, index_version=index_version)
+        first = backfill(client, source, shadow, batch_size=32, index_version=index_version, config=late_config)
         shadow_candidates, _ = client.scroll(
             collection_name=shadow,
             limit=2,
@@ -73,7 +74,7 @@ def test_qdrant_shadow_backfill_maxsim_is_idempotent_and_preserves_governance():
             ),
             config=late_config,
         )
-        second = backfill(client, source, shadow, batch_size=32, index_version=index_version)
+        second = backfill(client, source, shadow, batch_size=32, index_version=index_version, config=late_config)
 
         points, _ = client.scroll(
             collection_name=shadow,

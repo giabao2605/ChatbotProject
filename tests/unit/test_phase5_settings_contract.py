@@ -111,6 +111,7 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
             "RAG_LATE_MODEL": "local/late-model",
             "RAG_LATE_QUERY_MAX_LENGTH": "72",
             "RAG_LATE_DOCUMENT_MAX_LENGTH": "56",
+            "RAG_LATE_DOCUMENT_POOLING": "adjacent_mean",
             "RAG_LATE_COLLECTION": "late-shadow",
             "RERANK_MAX_CHUNKS_PER_DOCUMENT": "6",
             "RERANK_MAX_CHUNKS_PER_SECTION": "2",
@@ -150,6 +151,7 @@ def test_rag_process_projection_snapshots_query_expansion_flags():
     assert rag.late_model_name == "local/late-model"
     assert rag.late_query_max_length == 72
     assert rag.late_document_max_length == 56
+    assert rag.late_document_pooling == "adjacent_mean"
     assert rag.late_collection == "late-shadow"
     assert rag.rerank_max_chunks_per_document == 6
     assert rag.rerank_max_chunks_per_section == 2

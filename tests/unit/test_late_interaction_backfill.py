@@ -20,7 +20,8 @@ from scripts.late_interaction.backfill_shadow import (
 pytestmark = pytest.mark.unit
 
 
-def test_backfill_uses_declared_document_length_and_records_encoder_identity(monkeypatch):
+@pytest.mark.parametrize("pooling,expected_count", [("none", 7), ("adjacent_mean", 4)])
+def test_backfill_uses_declared_document_length_and_records_encoder_identity(monkeypatch, pooling, expected_count):
     class Encoder:
         def __init__(self, *args, **kwargs):
             pass
@@ -30,15 +31,16 @@ def test_backfill_uses_declared_document_length_and_records_encoder_identity(mon
 
     monkeypatch.setattr(late_interaction, "_load_encoder_type", lambda: Encoder)
     client = MemoryQdrant([source_point()])
-    config = late_interaction.LateInteractionConfig(document_max_length=7)
+    config = late_interaction.LateInteractionConfig(document_max_length=7, document_pooling=pooling)
 
     report = backfill(client, "source", "shadow", config=config)
 
     point = next(iter(client.shadow.values()))
     assert report["coverage"] == 1.0
-    assert len(point.vector["late"]) == 7
+    assert len(point.vector["late"]) == expected_count
     assert point.payload["encoder_configuration"] == {
         "model_name": "BAAI/bge-m3", "use_fp16": False, "document_max_length": 7,
+        "document_pooling": pooling,
     }
 
 
@@ -61,6 +63,40 @@ def test_backfill_requires_new_revision_for_changed_or_unknown_encoder(legacy):
     )
     assert report["stale_reindexed"] == 1
     assert next(iter(client.shadow.values())).payload["encoder_configuration"]["document_max_length"] == 8
+
+
+@pytest.mark.parametrize("index_version", ["late-v2", "late-v3-pooling"])
+def test_backfill_rejects_pooling_change_without_touching_existing_vectors(monkeypatch, index_version):
+    class Encoder:
+        def encode(self, texts, **kwargs):
+            return {"colbert_vecs": [[[0.1] * 1024] * 3 for _ in texts]}
+
+    monkeypatch.setattr(backfill_shadow, "build_encoder", lambda config: Encoder())
+    client = MemoryQdrant([source_point()])
+    backfill(client, "source", "shadow", config=late_interaction.LateInteractionConfig())
+    before = json.dumps(vars(next(iter(client.shadow.values()))), sort_keys=True)
+
+    with pytest.raises(ValueError, match="pooling_changed_requires_new_collection"):
+        backfill(client, "source", "shadow", index_version=index_version, config=late_interaction.LateInteractionConfig(
+            document_pooling="adjacent_mean",
+        ))
+
+    assert json.dumps(vars(next(iter(client.shadow.values()))), sort_keys=True) == before
+
+
+def test_backfill_legacy_identity_defaults_to_no_pooling():
+    client = MemoryQdrant([source_point()])
+    config = late_interaction.LateInteractionConfig()
+    encoder = lambda texts: [[[0.1] * 1024] for _ in texts]
+    backfill(client, "source", "shadow", encoder=encoder, config=config)
+    existing = next(iter(client.shadow.values()))
+    existing.payload["encoder_configuration"].pop("document_pooling")
+    before = json.dumps(vars(existing), sort_keys=True)
+
+    report = backfill(client, "source", "shadow", encoder=encoder, config=config)
+
+    assert report["coverage"] == 1.0
+    assert json.dumps(vars(existing), sort_keys=True) == before
 
 
 def test_cli_encoding_and_readiness_use_the_same_environment_lengths(monkeypatch, tmp_path):
@@ -106,6 +142,7 @@ def test_cli_encoding_and_readiness_use_the_same_environment_lengths(monkeypatch
     monkeypatch.setenv("QDRANT_URL", "http://synthetic.invalid")
     monkeypatch.setenv("RAG_LATE_DOCUMENT_MAX_LENGTH", "7")
     monkeypatch.setenv("RAG_LATE_QUERY_MAX_LENGTH", "9")
+    monkeypatch.setenv("RAG_LATE_DOCUMENT_POOLING", "adjacent_mean")
 
     assert backfill_shadow.main([
         "--source-collection", "source", "--shadow-collection", "shadow",
@@ -116,6 +153,8 @@ def test_cli_encoding_and_readiness_use_the_same_environment_lengths(monkeypatch
     artifact = json.loads((tmp_path / "readiness.json").read_text(encoding="utf-8"))
     assert artifact["configuration"]["document_max_length"] == 7
     assert artifact["configuration"]["query_max_length"] == 9
+    assert artifact["configuration"]["document_pooling"] == "adjacent_mean"
+    assert len(next(iter(client.shadow.values())).vector["late"]) == 4
     assert encodings == [
         (("BOM smoke test",), 9), (("BOM PART-A quantity 2",), 7),
         (("BOM PART-A quantity 2",), 7),

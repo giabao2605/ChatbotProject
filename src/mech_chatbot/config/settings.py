@@ -119,6 +119,7 @@ class Settings(BaseModel):
     RAG_LATE_MODEL: str = "BAAI/bge-m3"
     RAG_LATE_QUERY_MAX_LENGTH: int = 64
     RAG_LATE_DOCUMENT_MAX_LENGTH: int = 48
+    RAG_LATE_DOCUMENT_POOLING: str = "none"
     RAG_LATE_COLLECTION: str = "MechChatbot_LateInteraction_v1"
     RAG_QUERY_DECOMPOSITION_ENABLED: bool = False
     RAG_GRAPH_RETRIEVAL_ENABLED: bool = False
@@ -353,6 +354,7 @@ class Settings(BaseModel):
             RAG_LATE_INTERACTION_ENABLED=_bool("RAG_LATE_INTERACTION_ENABLED", False, _TRUTHY_5),
             RAG_LATE_ENCODER_READY=_bool("RAG_LATE_ENCODER_READY", False, _TRUTHY_5),
             RAG_LATE_MODEL=_str("RAG_LATE_MODEL", "BAAI/bge-m3"),
+            RAG_LATE_DOCUMENT_POOLING=_str("RAG_LATE_DOCUMENT_POOLING", "none"),
             RAG_LATE_QUERY_MAX_LENGTH=_int("RAG_LATE_QUERY_MAX_LENGTH", 64),
             RAG_LATE_DOCUMENT_MAX_LENGTH=_int(
                 "RAG_LATE_DOCUMENT_MAX_LENGTH",
@@ -809,6 +811,7 @@ class RagProcessSettings:
     late_use_fp16: bool
     late_query_max_length: int
     late_document_max_length: int
+    late_document_pooling: str
     late_collection: str
     late_index_version: str
     rerank_max_chunks_per_document: int
@@ -862,6 +865,7 @@ class RagProcessSettings:
             late_use_fp16=settings.EMBEDDING_DEVICE.lower().startswith("cuda"),
             late_query_max_length=settings.RAG_LATE_QUERY_MAX_LENGTH,
             late_document_max_length=settings.RAG_LATE_DOCUMENT_MAX_LENGTH,
+            late_document_pooling=settings.RAG_LATE_DOCUMENT_POOLING,
             late_collection=settings.RAG_LATE_COLLECTION,
             late_index_version=settings.RAG_LATE_INDEX_VERSION,
             rerank_max_chunks_per_document=(

@@ -205,7 +205,7 @@ def build_readiness_artifact(
         for key in (
             "source_collection", "shadow_collection", "index_version", "batch_size",
             "benchmark_iterations",
-            "document_max_length", "query_max_length",
+            "document_max_length", "query_max_length", "document_pooling",
         )
         if configuration.get(key) is not None
     }
@@ -305,6 +305,7 @@ def backfill(
         "model_name": active_config.model_name,
         "use_fp16": active_config.use_fp16,
         "document_max_length": active_config.document_max_length,
+        "document_pooling": active_config.document_pooling,
     } if encoder is None or config is not None else None
     model = None
     ensure_shadow_collection(client, shadow_collection)
@@ -414,12 +415,18 @@ def backfill(
                         blocked_keys.add(key)
                         covered_keys.discard(key)
                         continue
+                    existing_pooling = (existing_payload.get("encoder_configuration") or {}).get("document_pooling", "none")
+                    if encoder_identity is not None and existing_pooling != active_config.document_pooling:
+                        raise ValueError("pooling_changed_requires_new_collection")
                     if existing_payload.get("index_version") != str(index_version):
                         pending.append((key, document, payload, True))
                         continue
                     if (
                         encoder_identity is not None
-                        and existing_payload.get("encoder_configuration") != encoder_identity
+                        and {
+                            "document_pooling": "none",
+                            **(existing_payload.get("encoder_configuration") or {}),
+                        } != encoder_identity
                     ):
                         raise ValueError("encoder_configuration_changed_requires_new_index_version")
                     governance_changed = (
@@ -448,6 +455,7 @@ def backfill(
                         model = build_encoder(active_config)
                     vectors = encode_documents(
                         texts, encoder=model, max_length=active_config.document_max_length,
+                        pooling=active_config.document_pooling,
                     )
                 else:
                     vectors = encoder(texts)
@@ -535,7 +543,7 @@ def smoke_encoder(config=None):
             "config=LateInteractionConfig(**json.loads(sys.argv[1])); "
             "encoder=build_encoder(config); "
             "query=encode_query('BOM smoke test',encoder=encoder,max_length=config.query_max_length); "
-            "documents=encode_documents(['BOM PART-A quantity 2'],encoder=encoder,max_length=config.document_max_length); "
+            "documents=encode_documents(['BOM PART-A quantity 2'],encoder=encoder,max_length=config.document_max_length,pooling=config.document_pooling); "
             "assert query and query[0] and documents and documents[0] and documents[0][0]; "
             "assert len(query[0]) == 1024 and len(documents[0][0]) == 1024; "
             "print(json.dumps({'query_shape':[len(query),len(query[0])],"
@@ -670,6 +678,7 @@ def main(argv=None):
     config = LateInteractionConfig(
         document_max_length=int(os.getenv("RAG_LATE_DOCUMENT_MAX_LENGTH", "48")),
         query_max_length=int(os.getenv("RAG_LATE_QUERY_MAX_LENGTH", "64")),
+        document_pooling=os.getenv("RAG_LATE_DOCUMENT_POOLING", "none"),
     )
     started_at = datetime.now(timezone.utc)
     client = _client()
@@ -735,6 +744,7 @@ def main(argv=None):
             "batch_size": args.batch_size,
             "benchmark_iterations": args.benchmark_iterations if args.benchmark else None,
             "document_max_length": config.document_max_length,
+            "document_pooling": config.document_pooling,
             "query_max_length": config.query_max_length,
         },
     )

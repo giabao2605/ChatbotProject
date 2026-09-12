@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from qdrant_client import QdrantClient
 
-from mech_chatbot.config.settings import settings
+from mech_chatbot.config.settings import Settings
 from mech_chatbot.evaluation.late_interaction import (
     build_report,
     evaluate_variant,
@@ -29,7 +29,7 @@ from mech_chatbot.evaluation.late_interaction import (
     preflight_manifest,
     snapshot_fingerprint,
 )
-from mech_chatbot.rag.late_interaction import attempt_shadow_rerank
+from mech_chatbot.rag.late_interaction import LateInteractionConfig, attempt_shadow_rerank
 
 
 VARIANTS = ("rrf", "voyage", "maxsim")
@@ -231,7 +231,31 @@ def _markdown(report):
     return "\n".join(lines)
 
 
+def _evaluation_config(args, settings):
+    return LateInteractionConfig(
+        model_name=settings.RAG_LATE_MODEL,
+        use_fp16=settings.EMBEDDING_DEVICE.lower().startswith("cuda"),
+        query_max_length=settings.RAG_LATE_QUERY_MAX_LENGTH,
+        document_max_length=settings.RAG_LATE_DOCUMENT_MAX_LENGTH,
+        document_pooling=settings.RAG_LATE_DOCUMENT_POOLING,
+        collection_name=args.shadow_collection,
+        index_version=args.index_version,
+    )
+
+
+def _readiness_matches(readiness, args, late_config):
+    configuration = readiness.get("configuration") or {}
+    return (
+        readiness.get("ready_for_serving") is True
+        and configuration.get("source_collection") == args.source_collection
+        and configuration.get("shadow_collection") == args.shadow_collection
+        and configuration.get("index_version") == args.index_version
+        and configuration.get("document_pooling", "none") == late_config.document_pooling
+    )
+
+
 def main(argv=None):
+    settings = Settings.from_env()
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, default=Path("data/late_interaction_eval_v1/manifest.jsonl"))
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -248,6 +272,7 @@ def main(argv=None):
         default=Path(".local/late-interaction-env/Scripts/python.exe"),
     )
     args = parser.parse_args(argv)
+    late_config = _evaluation_config(args, settings)
     if args.repetitions < 2:
         parser.error("--repetitions must be at least 2 to expose provider variance")
     if not args.encoder_python.exists():
@@ -277,12 +302,7 @@ def main(argv=None):
     preflight = preflight_manifest(cases, available_sources=sources, snapshot=snapshot)
     readiness = json.loads(args.readiness.read_text(encoding="utf-8"))
     readiness_configuration = readiness.get("configuration") or {}
-    readiness_matches = (
-        readiness.get("ready_for_serving") is True
-        and readiness_configuration.get("source_collection") == args.source_collection
-        and readiness_configuration.get("shadow_collection") == args.shadow_collection
-        and readiness_configuration.get("index_version") == args.index_version
-    )
+    readiness_matches = _readiness_matches(readiness, args, late_config)
     preflight["readiness_matches"] = readiness_matches
     preflight["passed"] = preflight["passed"] and readiness_matches
     _write_json(run_root / "preflight.json", preflight)
@@ -320,6 +340,7 @@ def main(argv=None):
                                 top_n=len(docs),
                                 collection_name=args.shadow_collection,
                                 query_encoder=encoder.encode,
+                                config=late_config,
                             )) if variant == "maxsim" else None
                         ),
                     )

@@ -22,6 +22,25 @@ def doc(doc_id, page, chunk, text):
     )
 
 
+@pytest.mark.parametrize("stored,used", [(None, False), ("none", False), ("adjacent_mean", True)])
+def test_shadow_pooling_identity_must_match(stored, used):
+    candidates = [doc(1, 1, 0, "one")]
+
+    class Client:
+        def query_points(self, **kwargs):
+            payload = {"candidate_key": candidate_key(candidates[0]), "index_version": "late-v2"}
+            if stored is not None:
+                payload = {**payload, "encoder_configuration": {"document_pooling": stored}}
+            return SimpleNamespace(points=[SimpleNamespace(score=1.0, payload=payload)])
+
+    result = attempt_shadow_rerank(candidates, "query", Client(),
+        config=LateInteractionConfig(document_pooling="adjacent_mean"),
+        query_encoder=lambda query: [[1.0]])
+    assert result.used_shadow is used
+    if not used:
+        assert result.documents == tuple(candidates)
+
+
 def test_candidate_key_is_stable_and_changes_with_content():
     first = doc(41, 1, 0, "alpha")
     same = doc(41, 1, 0, "alpha")

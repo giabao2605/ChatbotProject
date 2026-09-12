@@ -316,6 +316,7 @@ def _build_late_dependencies(settings, process, encoder_builder):
         use_fp16=process.late_use_fp16,
         query_max_length=process.late_query_max_length,
         document_max_length=process.late_document_max_length,
+        document_pooling=process.late_document_pooling,
         collection_name=process.late_collection,
         index_version=process.late_index_version,
     )

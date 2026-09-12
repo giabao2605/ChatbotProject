@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -30,8 +31,11 @@ class LateInteractionConfig:
     document_max_length: int = 48
     collection_name: str = DEFAULT_COLLECTION
     index_version: str = "late-v2"
+    document_pooling: str = "none"
 
     def __post_init__(self):
+        if self.document_pooling not in ("none", "adjacent_mean"):
+            raise ValueError("unsupported_late_document_pooling")
         lengths = (self.query_max_length, self.document_max_length)
         if any(type(value) is not int or value <= 0 for value in lengths):
             raise ValueError("late_encoder_max_lengths_must_be_positive_integers")
@@ -110,7 +114,10 @@ def encode_documents(
     *,
     encoder: LateInteractionEncoder | None = None,
     max_length: int = 48,
+    pooling: str = "none",
 ):
+    if pooling not in ("none", "adjacent_mean"):
+        raise ValueError("unsupported_late_document_pooling")
     active_encoder = (
         encoder if encoder is not None else build_encoder(LateInteractionConfig())
     )
@@ -121,7 +128,19 @@ def encode_documents(
         return_sparse=False,
         return_colbert_vecs=True,
     )
-    return [item.tolist() if hasattr(item, "tolist") else item for item in encoded["colbert_vecs"]]
+    documents = [item.tolist() if hasattr(item, "tolist") else item for item in encoded["colbert_vecs"]]
+    if pooling == "none":
+        return documents
+    pooled = []
+    for vectors in documents:
+        pairs = []
+        for start in range(0, len(vectors), 2):
+            pair = vectors[start:start + 2]
+            mean = [sum(values) / len(pair) for values in zip(*pair, strict=True)]
+            norm = max(math.sqrt(sum(value * value for value in mean)), 1e-12)
+            pairs.append([value / norm for value in mean])
+        pooled.append(pairs)
+    return pooled
 
 
 def attempt_shadow_rerank(
@@ -176,7 +195,7 @@ def attempt_shadow_rerank(
                     ),
                 ]
             ),
-            with_payload=["candidate_key", "index_version"],
+            with_payload=["candidate_key", "index_version", "encoder_configuration"],
             limit=candidate_count,
         )
         query_ms = (time.perf_counter() - query_started) * 1000
@@ -193,6 +212,9 @@ def attempt_shadow_rerank(
     for point in getattr(response, "points", ()):
         payload = getattr(point, "payload", {}) or {}
         key = str(payload.get("candidate_key") or "")
+        stored_pooling = (payload.get("encoder_configuration") or {}).get("document_pooling", "none")
+        if stored_pooling != active_config.document_pooling:
+            continue
         if payload.get("index_version") != index_version or key not in by_key or key in seen:
             continue
         seen.add(key)
