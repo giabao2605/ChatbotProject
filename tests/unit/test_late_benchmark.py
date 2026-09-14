@@ -9,6 +9,29 @@ from scripts.late_interaction.backfill_shadow import benchmark
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("answer_id", [0, "677a3d4b-2a4b-4f19-9978-996eeb5b2808"])
+def test_ranked_sources_preserve_qdrant_chunk_identity(answer_id):
+    from langchain_qdrant import QdrantVectorStore
+    from scripts.eval.run_late_interaction_eval import _ranked_sources
+    from mech_chatbot.evaluation.late_interaction import build_report
+
+    metadata = {"file_goc": "same.md", "doc_id": 71, "trang_so": 1, "version_no": 1}
+    documents = [QdrantVectorStore._document_from_point(
+        SimpleNamespace(id=point_id, payload={"page_content": text, "metadata": dict(metadata)}),
+        "source", "page_content", "metadata",
+    ) for point_id, text in [("title", "Title only"), (answer_id, "Answer")]]
+    sources = _ranked_sources(documents)
+    assert sources[1]["source_id"] == str(answer_id)
+    report = build_report([{
+        "case": {"case_id": "chunk", "scenario": "exact_code", "expected_sources": [
+            {"doc_id": 71, "version": 1, "source_id": str(answer_id), "relevance": 3},
+        ], "forbidden_sources": []},
+        "ranked_sources": sources, "latency_ms": 1, "coverage": 1.0,
+    }], variant="rrf", run_metadata={})
+    assert report["ranked_retrieval"]["recall_at_5"] == 1.0
+    assert report["ranked_retrieval"]["ndcg_at_5"] == pytest.approx(0.6309297536)
+
+
 def test_retrieval_child_uses_declared_source_collection(monkeypatch, tmp_path):
     from scripts.eval import run_late_interaction_eval as evaluation
     cache = tmp_path / "candidates.json"

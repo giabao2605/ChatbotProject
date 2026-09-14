@@ -2,6 +2,50 @@
 
 ## Tóm tắt
 
+### Continuation task 01a09dae — dependency remediation và identity chunk
+
+- Owner đã chấp nhận bản downstream Accelerate unsharded-only cho hai môi
+  trường evaluation hiện có. Đã backup package nguyên trạng và wheel rollback,
+  cài offline `1.15.0+local.unsharded1` trong readiness/encoder, không đổi shared
+  chat_env. Wheel SHA-256
+  `82767c6694f6dec18225f48f7b74e5c1b215a8c9bbfceda4561b397a64fa3123`.
+  Bản vá từ chối branch shard-index trước open/parse, giữ single-file loader.
+  Đây là mitigation downstream có giới hạn, không phải upstream security fix.
+- Mỗi interpreter pass10 kiểm package/RECORD/entrypoint/inference; Dense và
+  Late thật đều tạo embedding hữu hạn đúng chiều từ pinned BGE-M3 sau cài.
+  Pip check pass cả hai. Audit278 package còn lại không thấy advisory;
+  Accelerate local bị scanner skip do không có trên PyPI. Không gọi kết quả
+  này là audit-clean hoặc security-green toàn environment. Artifact/rollback/
+  provenance tại `.local/accelerate-remediation-20260914/` và cập nhật
+  `.local/rc-734940d-preparation/owner-gates.md`.
+- Full unit sau cài dependency trên source executable734940d đạt3655 pass,
+  2 skip,0 error/failure,614.894giây. Sau đó review manifest phát hiện evaluator
+  bỏ `_id` của Qdrant và không phân biệt chunk cùng doc/page khi rerank.
+  Sáu regression RED đã tái hiện missing ID, numeric0/precedence, thứ tự chunk
+  và chunk ngoài candidate set. Sửa hai seam identity/serialization hiện hữu;
+  không đổi công thức metric, câu hỏi hoặc gate. Focused54/54 pass, scoped
+  line93.267327%/branch82.352941%; independent review không còn blocker.
+  Full unit sau delta identity đã hoàn tất: 3661 passed, 2 skipped, 0 failures/errors,
+  577.028 giây; JUnit: `.local/accelerate-remediation-20260914/final-identity-full.xml`.
+  Hai skip là quyền symlink của OS và test đăng ký Scheduled Task cần opt-in; không phải live acceptance.
+- Query owner-decision/formal/review đã revalidate true trên734940d qua
+  `evidence_source_commit=fe4dc37647b8078a2df4a73459c8ef65929b6de8`.
+  Delta identity cần RC/draft mới; không chuyển cleanup approval bound với
+ 734940d/window01 sang source/root mới. Không cần lặp formal nếu validator
+  chấp nhận binding mới. Chưa có timed launch approval hoặc live dispatch.
+- Late đã có annotation point-level trên nội dung snapshot231 point, không
+  xem thêm ranking: chunk trả lời relevance3, title-only cùng nguồn relevance1;
+  forbidden vẫn toàn doc. Draft mới
+  `.local/late-reviewed-manifest-20260914.chunk-draft.jsonl`, hash
+  `c321661385927497f3d10a04a8921f5fff69317013726f9e928b2001a75dc5b7`.
+  Schema12/12 và source/version/point đều tồn tại trong cache. Đã đối chiếu
+ 28 chunk được phép qua filter production chạy offline trên231 payload;
+  positive/forbidden scope pass12/12. Freeze riêng cho current-corpus-demo tại
+  `.local/late-reviewed-manifest-20260914.chunk-frozen.jsonl`, SHA-256
+  `6a46584520eb2c8da60f591e60ea3474f2d20f0e5d17450fec11ea070a93ed59`.
+  Đây chưa phải live preflight/acceptance; provenance demo và AI review được
+  công bố, không coi annotation mới là gain, held-out hoặc human signoff.
+
 ### Continuation 14/09 — hoàn tất delta evaluator và RC
 
 - Review delta phát hiện worker retrieval có thể tạo collection khi nguồn

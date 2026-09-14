@@ -83,6 +83,16 @@ def test_preflight_fails_when_expected_provenance_is_absent():
     assert result["missing_expected_sources"] == ["exact-code:technical_effective_core.md"]
 
 
+@pytest.mark.parametrize("field", ["source_id", "source_point_id"])
+def test_preflight_keeps_numeric_zero_ahead_of_fallback_identity(field):
+    case = _case(expected_sources=[{"doc_id": 71, field: 0, "_id": "fallback"}])
+    snapshot = {"source_collection": "source", "shadow_index_version": "late-v2"}
+    assert preflight_manifest([case], available_sources=[{"doc_id": 71, "source_id": 0}],
+                              snapshot=snapshot)["passed"] is True
+    assert preflight_manifest([case], available_sources=[{"doc_id": 71, "_id": "fallback"}],
+                              snapshot=snapshot)["passed"] is False
+
+
 def test_rrf_variant_never_calls_external_reranker():
     docs = [_doc("a.md", doc_id=1), _doc("b.md", doc_id=2)]
 
@@ -126,6 +136,30 @@ def test_reranker_cannot_add_document_outside_governed_candidates():
 
     assert result.documents == docs
     assert result.fallback_reason == "governance_escape"
+
+
+def test_reranker_cannot_replace_chunk_with_same_document_and_page():
+    from types import SimpleNamespace
+    original = SimpleNamespace(page_content="allowed", metadata={"doc_id": 71, "trang_so": 1, "_id": "allowed"})
+    escaped = SimpleNamespace(page_content="other", metadata={"doc_id": 71, "trang_so": 1, "_id": "outside"})
+    result = evaluate_variant(
+        _case(), [original], variant="voyage",
+        voyage_rerank=lambda docs, query: [escaped],
+    )
+    assert result.fallback_reason == "governance_escape"
+    assert result.documents == [original]
+
+
+def test_reranker_can_reorder_chunks_from_the_same_document_and_page():
+    from types import SimpleNamespace
+    documents = [SimpleNamespace(page_content=key, metadata={"doc_id": 71, "trang_so": 1, "_id": key})
+                 for key in ("title", "answer")]
+    result = evaluate_variant(
+        _case(), documents, variant="voyage",
+        voyage_rerank=lambda docs, query: list(reversed(docs)),
+    )
+    assert result.fallback_reason is None
+    assert result.documents == list(reversed(documents))
 
 
 def test_report_uses_worked_graded_ndcg_and_flags_forbidden_source():

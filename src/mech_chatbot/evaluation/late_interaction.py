@@ -105,7 +105,8 @@ def _identity(value: Any) -> dict[str, str]:
         "doc_id": value.get("doc_id") or value.get("DocID") or "",
         "page": value.get("page") or value.get("trang_so") or value.get("trang") or "",
         "version": value.get("version") or value.get("version_no") or "",
-        "source_id": value.get("source_id") or value.get("source_point_id") or "",
+        "source_id": next((value[name] for name in ("source_id", "source_point_id", "_id")
+                           if value.get(name) not in (None, "")), ""),
     }
     return {key: str(val).strip().casefold() if val not in (None, "") else "" for key, val in fields.items()}
 

@@ -111,12 +111,13 @@ def _write_json(path: Path, payload):
 
 
 def _source_from_metadata(metadata, point_id=None):
+    identifier = point_id if point_id is not None else metadata.get("_id")
     return {
         "document": metadata.get("file_goc") or "",
         "doc_id": metadata.get("doc_id"),
         "page": metadata.get("trang_so"),
         "version": metadata.get("version_no"),
-        "source_id": str(point_id or ""),
+        "source_id": str(identifier) if identifier is not None else "",
     }
 
 
