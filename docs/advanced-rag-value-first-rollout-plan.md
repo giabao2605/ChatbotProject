@@ -2,6 +2,27 @@
 
 ## Tóm tắt
 
+### Query window-04: terminal và metadata provenance
+
+Owner đã cấp ủy quyền thường trực cho các Query window tiếp theo trong cùng phạm vi;
+mỗi lượt vẫn cần draft/hash/RC/root mới, cửa sổ 60 phút, zero retry/replacement/carry-forward.
+Không mở rộng quyền sang capability khác hoặc dữ liệu lịch sử.
+Window-04 trên `f2fe274` đạt fresh preflight 13 case, rollback 35 test và smoke 5/5.
+Pilot dừng ở card 26 (`decomp-access-denied`) sau 25 WAL: provider success, zero retry,
+citation structure true nhưng provenance false. Cùng case ở card 6/16 có provenance true.
+Host xác nhận job empty/port released; xóa 20 capture của chính lượt, giữ WAL/trace/lịch sử.
+Root terminal không được dùng lại. Chi tiết `.local/rc-f2fe274-preparation/query-window-04/terminal-disposition.json`.
+
+Delta tiếp theo chỉ bổ sung `query_provenance_diagnostic` dạng count/boolean vào trace hiện có
+cho Query answered/provenance-invalid. Không lưu answer/SourceID, không thay schema evidence,
+gate, prompt hoặc thuật toán. Hai regression RED→GREEN, 51 focused test đạt;
+Full unit sau delta: 3663 passed, 2 skipped, 0 failures/errors, 607.750 giây;
+JUnit `.local/rc-f2fe274-preparation/query-provenance-full.xml`.
+Lượt coverage 59 test đạt, module `pilot_evidence.py` đạt 95% combined coverage;
+216 trường hợp đối chiếu cho quyết định provenance giống RC cũ.
+Diff đã self-review; agent review độc lập bị quota, chưa ghi nhận independent review pass.
+Chưa đủ metadata để kết luận nguyên nhân card 26; delta này là observability, không phải quality fix.
+
 ### Continuation task 01a09dae — dependency remediation và identity chunk
 
 - Owner đã chấp nhận bản downstream Accelerate unsharded-only cho hai môi

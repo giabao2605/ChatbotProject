@@ -198,7 +198,8 @@ def test_completed_refused_calculation_route_emits_failed_validation_evidence(
     assert evidence[0]["leakage_detected"] is True
 
 
-def test_query_pilot_event_reconciles_sources_after_stream_completion(monkeypatch):
+@pytest.mark.parametrize("missing_branch", [False, True])
+def test_query_pilot_event_reconciles_sources_after_stream_completion(monkeypatch, missing_branch):
     from mech_chatbot.config import logging as trace_logging
 
     trace_messages = []
@@ -228,8 +229,8 @@ def test_query_pilot_event_reconciles_sources_after_stream_completion(monkeypatc
 
         def stream():
             yield "SourceID: D7P1"
-            for branch in branches:
-                branch["rendered_source_ids"] = ["D7P1"]
+            for index, branch in enumerate(branches):
+                branch["rendered_source_ids"] = [] if missing_branch and index == 1 else ["D7P1"]
 
         usage = {
             "schema": "rag-decomposition-usage-v1",
@@ -310,9 +311,16 @@ def test_query_pilot_event_reconciles_sources_after_stream_completion(monkeypatc
         for message in trace_messages
         if json.loads(message)["event"] == "pilot_request_evidence"
     ]
-    assert evidence[0]["query_result_status"] == "valid"
+    assert evidence[0]["query_result_status"] == ("invalid" if missing_branch else "valid")
     assert evidence[0]["citation_structure_passed"] is True
-    assert evidence[0]["provenance_passed"] is True
+    assert evidence[0]["provenance_passed"] is (not missing_branch)
+    details = [json.loads(message) for message in trace_messages
+               if json.loads(message)["event"] == "query_provenance_diagnostic"]
+    assert len(details) == int(missing_branch)
+    if missing_branch:
+        assert details[0]["invalid_rendered_branch_count"] == 1
+        assert details[0]["full_answer_branch_count"] == 2
+        assert "D7P1" not in json.dumps(details[0])
 
 
 def test_safety_refusal_obeys_public_event_order_without_external_calls():

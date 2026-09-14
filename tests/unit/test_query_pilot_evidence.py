@@ -2,6 +2,29 @@
 
 import pytest
 
+
+def test_query_provenance_diagnostic_identifies_missing_branch_without_content():
+    from mech_chatbot.rag.pilot_evidence import query_provenance_diagnostics
+    from mech_chatbot.rag.query_decomposition import audit_decomposition_stream
+
+    sources = [
+        {"doc_id": 7, "trang": 1, "version_no": 1, "source_id": "D7P1"},
+        {"doc_id": 8, "trang": 2, "version_no": 1, "source_id": "D8P2"},
+    ]
+    branches = [{"outcome": "full_answer", "citations": [s]} for s in sources]
+    answer = "".join(audit_decomposition_stream(iter(["Private text [SourceID D7P1]."]), branches))
+    result = query_provenance_diagnostics({
+        "citation_docs": sources, "decomposition_branches": branches,
+    }, answer)
+    assert result == {
+        "citation_structure_passed": True, "provenance_passed": False,
+        "full_answer_branch_count": 2, "invalid_rendered_branch_count": 1,
+        "branch_citation_mismatch_count": 0, "branch_answer_mismatch_count": 0,
+        "answer_outside_branch_citations": False,
+        "answer_outside_branch_rendered": False,
+    }
+    assert all(type(value) in (bool, int) for value in result.values())
+
 from mech_chatbot.rag.execution import RequestBudgetLedger, RequestBudgetLimits
 from mech_chatbot.rag.evidence_gate import make_insufficient_evidence_message
 from mech_chatbot.rag.pilot_evidence import pilot_request_event_fields

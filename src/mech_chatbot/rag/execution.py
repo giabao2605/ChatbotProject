@@ -697,6 +697,15 @@ def _log_pilot_request_event(
         execution_context=current_execution_context(),
         **fields,
     )
+    if (fields.get("route") == "query_decomposition"
+            and outcome == "answered" and fields.get("provenance_passed") is False):
+        from mech_chatbot.rag.pilot_evidence import query_provenance_diagnostics
+
+        log_trace(
+            "query_provenance_diagnostic", trace_id,
+            execution_context=current_execution_context(),
+            **query_provenance_diagnostics(diagnostics, answer),
+        )
 
 
 def _failed_rag_event(

@@ -178,6 +178,14 @@ def _declared_source_ids(value: object) -> set[str] | None:
 def _query_answer_contract(
     diagnostics: Mapping[str, Any], answer: str
 ) -> tuple[bool, bool]:
+    result = query_provenance_diagnostics(diagnostics, answer)
+    return result["citation_structure_passed"], result["provenance_passed"]
+
+
+def query_provenance_diagnostics(
+    diagnostics: Mapping[str, Any], answer: str
+) -> dict[str, bool | int]:
+    """Explain the existing contract using counts/flags, never answer or source text."""
     rendered = extract_source_ids(answer)
     available = _source_ids(
         _metadata_rows(diagnostics.get("citation_docs")),
@@ -191,6 +199,7 @@ def _query_answer_contract(
     branch_citation_ids: set[str] = set()
     branch_rendered_ids: set[str] = set()
     branch_provenance_passed = bool(full_answer_branches)
+    invalid_rendered = citation_mismatches = answer_mismatches = 0
     for branch in full_answer_branches:
         citations = _source_ids(
             _metadata_rows(branch.get("citations")), require_version=True
@@ -201,18 +210,27 @@ def _query_answer_contract(
         branch_citation_ids.update(citations)
         branch_rendered_ids.update(branch_rendered or set())
         if branch_rendered is None:
+            invalid_rendered += 1
             branch_provenance_passed = False
             continue
+        citation_mismatches += int(not branch_rendered <= citations)
+        answer_mismatches += int(not branch_rendered <= rendered)
         branch_provenance_passed = branch_provenance_passed and all((
             branch_rendered <= citations,
             branch_rendered <= rendered,
         ))
-    return (
-        bool(rendered) and rendered <= available,
-        branch_provenance_passed
+    return {
+        "citation_structure_passed": bool(rendered) and rendered <= available,
+        "provenance_passed": branch_provenance_passed
         and rendered <= branch_citation_ids
         and rendered <= branch_rendered_ids,
-    )
+        "full_answer_branch_count": len(full_answer_branches),
+        "invalid_rendered_branch_count": invalid_rendered,
+        "branch_citation_mismatch_count": citation_mismatches,
+        "branch_answer_mismatch_count": answer_mismatches,
+        "answer_outside_branch_citations": not rendered <= branch_citation_ids,
+        "answer_outside_branch_rendered": not rendered <= branch_rendered_ids,
+    }
 
 
 def graph_pilot_validation(
