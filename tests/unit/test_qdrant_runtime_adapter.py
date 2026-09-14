@@ -16,6 +16,10 @@ class _Client:
     def __init__(self, *, collection_exists):
         self._collection_exists = collection_exists
         self.created = []
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def collection_exists(self, collection):
         return self._collection_exists
@@ -93,6 +97,25 @@ def test_qdrant_runtime_bounds_http_keepalive_reuse():
     limits = client_calls[0]["limits"]
     assert limits.max_keepalive_connections == 1
     assert limits.keepalive_expiry == 5
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_read_only_runtime_never_creates_collection(exists):
+    client = _Client(collection_exists=exists)
+    options = dict(
+        client_factory=lambda **_: client,
+        dense_embedding_factory=lambda **_: object(),
+        sparse_embedding_factory=lambda **_: object(),
+        vector_store_factory=lambda **_: object(),
+        create_if_missing=False,
+    )
+    if exists:
+        assert build_qdrant_runtime(_settings(), **options).qdrant_client is client
+    else:
+        with pytest.raises(ValueError, match="collection does not exist"):
+            build_qdrant_runtime(_settings(), **options)
+        assert client.closed
+    assert client.created == []
 
 
 def test_qdrant_admin_runtime_accepts_operation_timeout():

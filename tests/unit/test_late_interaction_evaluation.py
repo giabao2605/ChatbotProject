@@ -29,6 +29,18 @@ def _doc(name, *, doc_id, page=1, version="2", score=None):
     return type("Doc", (), {"page_content": name, "metadata": metadata})()
 
 
+@pytest.mark.parametrize("status", [429, 502])
+def test_voyage_failure_preserves_http_status_without_response_body(status):
+    import requests
+    response = requests.Response()
+    response.status_code = status
+    response._content = b"private response"
+    def fail(docs, query):
+        raise requests.HTTPError("private message", response=response)
+    result = evaluate_variant({"query": "q"}, [], variant="voyage", voyage_rerank=fail)
+    assert result.fallback_reason == f"voyage_error:HTTPError:http_{status}"
+
+
 def _case(**overrides):
     case = {
         "case_id": "exact-code",

@@ -83,9 +83,13 @@ def _default_factories() -> tuple[Callable[..., Any], ...]:
     )
 
 
-def _ensure_collection(client: Any, settings: QdrantSettings) -> None:
+def _ensure_collection(
+    client: Any, settings: QdrantSettings, *, create_if_missing: bool = True,
+) -> None:
     if client.collection_exists(settings.collection):
         return
+    if not create_if_missing:
+        raise ValueError("Qdrant collection does not exist")
 
     from qdrant_client import models
 
@@ -147,6 +151,7 @@ def _build_vector_store(
 def build_qdrant_runtime(
     settings: QdrantSettings,
     *,
+    create_if_missing: bool = True,
     client_factory: Callable[..., Any] | None = None,
     dense_embedding_factory: Callable[..., Any] | None = None,
     sparse_embedding_factory: Callable[..., Any] | None = None,
@@ -169,15 +174,19 @@ def build_qdrant_runtime(
         timeout=120,
         limits=_retrieval_http_limits(),
     )
-    _ensure_collection(client, settings)
-    vector_store = _build_vector_store(
-        settings,
-        client=client,
-        dense_builder=builders[1],
-        sparse_builder=builders[2],
-        store_builder=builders[3],
-        use_default_store=vector_store_factory is None,
-    )
+    try:
+        _ensure_collection(client, settings, create_if_missing=create_if_missing)
+        vector_store = _build_vector_store(
+            settings,
+            client=client,
+            dense_builder=builders[1],
+            sparse_builder=builders[2],
+            store_builder=builders[3],
+            use_default_store=vector_store_factory is None,
+        )
+    except Exception:
+        client.close()
+        raise
     return IngestionPipelineDependencies(
         vector_store=vector_store,
         qdrant_client=client,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 from pathlib import Path
 import time
@@ -20,8 +21,19 @@ def main(argv=None):
     parser.add_argument("--top-k", type=int, required=True)
     args = parser.parse_args(argv)
     from mech_chatbot.rag.pipeline_steps import _explicit_hybrid_rrf
+    from mech_chatbot.adapters.qdrant_runtime import build_qdrant_runtime
+    from mech_chatbot.config.settings import QdrantSettings, Settings
 
     cases = load_manifest(args.manifest)
+    settings = Settings.from_env()
+    runtime = build_qdrant_runtime(
+        QdrantSettings.from_settings(settings), create_if_missing=False,
+    )
+    with closing(runtime.qdrant_client):
+        return _retrieve_cases(args, cases, settings, runtime, _explicit_hybrid_rrf)
+
+
+def _retrieve_cases(args, cases, settings, runtime, retrieve):
     runs = []
     for repetition in range(1, args.repetitions + 1):
         for case in cases:
@@ -34,13 +46,17 @@ def main(argv=None):
                 allowed_sites=identity["allowed_sites"],
             )
             started = time.perf_counter()
-            docs, mode = _explicit_hybrid_rrf(
+            docs, mode = retrieve(
                 case["query"],
                 current_published_filter(rbac),
                 dense_top_k=args.top_k,
                 sparse_top_k=args.top_k,
                 result_cap=args.top_k,
                 phase="late_interaction_eval",
+                vectorstore=runtime.vector_store,
+                client=runtime.qdrant_client,
+                collection_name=runtime.collection_name,
+                qdrant_timeout_seconds=settings.QDRANT_SEARCH_TIMEOUT_SECONDS,
             )
             runs.append({
                 "repetition": repetition,

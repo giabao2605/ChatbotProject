@@ -1,13 +1,14 @@
 """Run the milestone 2.5 three-way retrieval benchmark.
 
-Run this script from the isolated Late Interaction environment so BGE-M3
-ColBERT encoding remains outside ``chat_env``. No answer-generation LLM is
+Run the evaluator from the readiness environment and select the isolated
+Late encoder with ``--encoder-python``. No answer-generation LLM is
 called; only the configured Voyage rerank variant uses an external provider.
 """
 
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -88,11 +89,13 @@ def _commit_sha():
     return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
 
-def _provider_configuration(top_k, settings):
+def _provider_configuration(top_k, settings, runtime):
+    endpoint = urlsplit(runtime.endpoint)
     configuration = {
         "dense_model": os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
         "sparse_model": "Qdrant/bm25",
-        "voyage_model": settings.VOYAGE_RERANK_MODEL,
+        "voyage_model": runtime.model,
+        "voyage_endpoint": f"{endpoint.scheme}://{endpoint.hostname}{':' + str(endpoint.port) if endpoint.port else ''}{endpoint.path}",
         "voyage_timeout_seconds": settings.VOYAGE_RERANK_TIMEOUT_SECONDS,
         "candidate_top_k": int(top_k),
         "provider_retry_policy": "none",
@@ -159,8 +162,9 @@ def _snapshot_rows(points):
     return rows
 
 
-def _retrieve_in_worker(manifest, repetitions, top_k, cache_path):
+def _retrieve_in_worker(manifest, repetitions, top_k, cache_path, *, source_collection):
     env = dict(os.environ)
+    env["QDRANT_COLLECTION"] = source_collection
     env["PYTHONPATH"] = "src"
     env["PYTHONIOENCODING"] = "utf-8"
     subprocess.run(
@@ -246,7 +250,16 @@ def _readiness_matches(readiness, args, late_config):
         and configuration.get("shadow_collection") == args.shadow_collection
         and configuration.get("index_version") == args.index_version
         and configuration.get("document_pooling", "none") == late_config.document_pooling
+        and configuration.get("document_max_length") == late_config.document_max_length
+        and configuration.get("query_max_length") == late_config.query_max_length
     )
+
+
+def _pace_voyage(previous_start, interval):
+    if previous_start is not None:
+        remaining = interval - (time.monotonic() - previous_start)
+        if remaining > 0:
+            time.sleep(remaining)
 
 
 def main(argv=None):
@@ -257,6 +270,7 @@ def main(argv=None):
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--voyage-interval-seconds", type=float, default=0.0)
     parser.add_argument("--source-collection", default=settings.QDRANT_COLLECTION)
     parser.add_argument("--shadow-collection", default="MechChatbot_LateInteraction_v1")
     parser.add_argument("--index-version", default="late-v2")
@@ -267,6 +281,8 @@ def main(argv=None):
         default=Path(".local/late-interaction-env/Scripts/python.exe"),
     )
     args = parser.parse_args(argv)
+    if not 0 <= args.voyage_interval_seconds <= 60:
+        parser.error("--voyage-interval-seconds must be between 0 and 60")
     late_config = _evaluation_config(args, settings)
     if args.repetitions < 2:
         parser.error("--repetitions must be at least 2 to expose provider variance")
@@ -276,10 +292,20 @@ def main(argv=None):
     if run_root.exists():
         parser.error(f"output already exists: {run_root}")
 
+    from mech_chatbot.composition.maintenance_runtime import configured_repository_runtime
+    with configured_repository_runtime(settings, include_qdrant=False):
+        return _run_evaluation(args, settings, late_config, run_root)
+
+
+def _run_evaluation(args, settings, late_config, run_root):
+    with closing(QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)) as client:
+        return _evaluate_with_client(args, settings, late_config, run_root, client)
+
+
+def _evaluate_with_client(args, settings, late_config, run_root, client):
     started = _utc_now()
     cases = load_manifest(args.manifest)
     manifest_sha256 = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
-    client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
     points = _scroll_all(client, args.source_collection)
     sources = [
         _source_from_metadata((point.payload or {}).get("metadata") or {}, point.id)
@@ -296,7 +322,6 @@ def main(argv=None):
     }
     preflight = preflight_manifest(cases, available_sources=sources, snapshot=snapshot)
     readiness = json.loads(args.readiness.read_text(encoding="utf-8"))
-    readiness_configuration = readiness.get("configuration") or {}
     readiness_matches = _readiness_matches(readiness, args, late_config)
     preflight["readiness_matches"] = readiness_matches
     preflight["passed"] = preflight["passed"] and readiness_matches
@@ -306,17 +331,32 @@ def main(argv=None):
         return 2
 
     os.environ["RAG_LATE_INDEX_VERSION"] = args.index_version
-    provider_configuration, provider_configuration_sha256 = _provider_configuration(args.top_k, settings)
+    from mech_chatbot.composition.rag_runtime import _build_voyage_dependency
+    voyage_runtime = _build_voyage_dependency(settings, None)
+    if voyage_runtime is None:
+        raise RuntimeError("Voyage runtime unavailable for quality evaluation")
+    provider_configuration, provider_configuration_sha256 = _provider_configuration(args.top_k, settings, voyage_runtime)
+    provider_configuration["voyage_interval_seconds"] = args.voyage_interval_seconds
+    provider_configuration_sha256 = hashlib.sha256(json.dumps(
+        provider_configuration, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
     rows_by_variant = {variant: [] for variant in VARIANTS}
     cache_path = Path(".local/late-interaction-eval") / f"{args.run_id}-candidates.json"
-    retrieved = _retrieve_in_worker(args.manifest, args.repetitions, args.top_k, cache_path)
+    retrieved = _retrieve_in_worker(
+        args.manifest, args.repetitions, args.top_k, cache_path,
+        source_collection=args.source_collection,
+    )
     encoder = IsolatedEncoder(args.encoder_python)
+    previous_voyage_start = None
     try:
         for repetition in range(1, args.repetitions + 1):
             pair_rows = {variant: [] for variant in VARIANTS}
             for case in cases:
                 candidates, retrieval_ms, retrieval_mode = retrieved[(repetition, case["case_id"])]
                 for variant in VARIANTS:
+                    if variant == "voyage":
+                        _pace_voyage(previous_voyage_start, args.voyage_interval_seconds)
+                        previous_voyage_start = time.monotonic()
                     result = evaluate_variant(
                         case,
                         candidates,
@@ -324,7 +364,10 @@ def main(argv=None):
                         voyage_rerank=(
                             (lambda docs, query: __import__(
                                 "mech_chatbot.rag.rerank", fromlist=["voyage_rerank_documents"]
-                            ).voyage_rerank_documents(docs, query, top_n=len(docs)))
+                            ).voyage_rerank_documents(
+                                docs, query, top_n=len(docs), runtime=voyage_runtime,
+                                timeout_seconds=settings.VOYAGE_RERANK_TIMEOUT_SECONDS,
+                            ))
                             if variant == "voyage" else None
                         ),
                         shadow_rerank=(

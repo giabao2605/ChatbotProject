@@ -32,6 +32,29 @@ cần 20 capture review, các ca bắt buộc, deletion receipt được duyệt
 
 ### Dependency disposition cập nhật 09/09
 
+Đối soát 14/09: readiness venv dùng Accelerate 1.13.0; encoder venv riêng
+`.local/late-interaction-env` của checkout chính dùng 1.14.0. Cả hai còn
+trong affected range của advisory; trang GHSA kiểm lại ngày 14/09 vẫn chưa
+liệt kê patched version. Không nâng package hoặc sửa site-packages.
+
+Kiểm static đường gọi: dense embeddings đi qua HuggingFaceEmbeddings →
+SentenceTransformer → Transformers 5.10.2 `from_pretrained`; Late đi qua
+BGEM3FlagModel → M3Embedder → AutoModel `from_pretrained`. Các path này dùng
+loader Transformers. Named callers của hai hàm Accelerate bị ảnh hưởng nằm
+trong `accelerate/big_modeling.py` và `accelerate/utils/bnb.py`; không tìm thấy
+application gọi trực tiếp các hàm này. Đây chưa phải bằng chứng mọi đường
+gọi runtime đều không reachable.
+
+Cache BGE-M3 `refs/main` đang trỏ revision
+`5617a9f61b028005a4858fdac845db406aefb181`, có `pytorch_model.bin` unsharded;
+không tìm thấy checkpoint `*.index.json` trong các snapshot đã kiểm. Marker
+index ở `.no_exist` là negative cache, không phải checkpoint index.
+Source của Accelerate ở cả hai venv vẫn join giá trị `weight_map` vào thư
+mục checkpoint mà không kiểm containment. Model/path có thể cấu hình lại;
+chưa kiểm chứng provenance/integrity/ACL cache hoặc exact future process
+configuration. Vì vậy giữ `assessed_open`, `security_green=false`; cần bound
+runtime disposition trước live, không đổi trạng thái bằng kết quả unit tests.
+
 Audit mới của interpreter tách biệt trong `.local/live-readiness-20260908/venv`
 trả exit 1: `accelerate==1.13.0` có `CVE-2026-69112` /
 [GHSA-4j2p-28q2-5m79](https://github.com/advisories/GHSA-4j2p-28q2-5m79).

@@ -2,6 +2,51 @@
 
 ## Tóm tắt
 
+### Continuation 14/09 — hoàn tất delta evaluator và RC
+
+- Review delta phát hiện worker retrieval có thể tạo collection khi nguồn
+  thiếu và không nhận source collection đã khai báo ở evaluator. Regression
+  RED đã tái hiện; worker dùng builder hiện hữu với `create_if_missing=False`,
+  truyền collection qua environment child riêng, đóng client ở mọi exit path.
+  Ingestion vẫn giữ hành vi tạo collection mặc định. Evaluator cũng đóng client
+  khi preflight/provider/retrieval lỗi, và từ chối readiness lệch/thiếu độ dài
+  query/document. Không đổi quality/latency/storage gate.
+- Full unit hoàn tất: 3649 pass, 2 skip, 0 failure/error, 677.075 giây;
+  artifact `.local/late-final-20260914-full.xml`. Hai skip: symlink Windows và
+  opt-in tạo Scheduled Task. Combined coverage 85% ban đầu không đủ: checker
+  độc lập báo branch chỉ 75%. Bổ sung sáu test giao thức/lifecycle encoder,
+  không đổi executable source sau full run; focused 48/48 pass tại
+  `.local/late-final-20260914-protocol.xml`. Checker hiện hữu đạt line93.253968%
+  và branch82.352941% trên bốn module scoped, không phải toàn repository;
+  report `.local/late-final-20260914-protocol-coverage.json`.
+  Review độc lập không thấy blocker correctness/security trong delta; hai
+  gợi ý test bổ sung không blocking (factory error và lỗi sau encoder init)
+  vẫn chưa bao phủ riêng. Integration DB/Qdrant và E2E live chưa được chạy.
+- Dùng standalone coverage runner vì pytest-cov collection trên môi trường
+  Windows này gặp native NumPy double-import; không thay dependencies để xử lý
+  lỗi test runner. Full suite tạo artifact mới, không overwrite run bị ngắt 12/09.
+- Query reuse đi qua validator `evidence_source_commit`; không mặc định chạy
+  lại formal/review lịch sử. Consolidated draft mới phải bind RC sạch và root
+  chưa dùng. Approval 11/09 đã hết hạn. Scheduled host chỉ cleanup failed-run
+  captures sau stop proof; review UI có cleanup ở cả completion và resume.
+  Phải chốt explicit deletion scope trước start/review, không suy rộng quyền
+  cleanup của run cũ sang lượt mới.
+- Dependency disposition và đường gọi/cache đã kiểm nằm trong Query readiness;
+  vẫn `assessed_open/security_green=false`. Late giữ trong mục tiêu, nhưng
+  bộ chín case đã dùng khi phát triển không có independent held-out provenance.
+  Chưa có bộ đại diện được gán nhãn độc lập để mở phép đo acceptance mới.
+  Graph/Community tiếp tục OFF. Không mở thêm live run để lặp kết quả cũ.
+- Audit dependency ngày14/09 recheck hoàn tất, còn một advisory Accelerate;
+  `.local/late-final-20260914-dependency-audit-recheck.json`. Lượt audit trước
+  timeout PyPI, không phải audit pass. Code freeze không là security/release
+  acceptance; cần giải quyết disposition trước bound live runtime.
+- Theo yêu cầu owner đã soạn 12 câu hỏi và phiếu review tại
+  `.local/late-review-preparation-20260914.md`, dựa trên cache corpus có hash.
+  Nhãn, người xác nhận nhu cầu và signoff để trống. Nguồn đang là synthetic/demo
+  đã dùng khi phát triển; câu hỏi diễn đạt lại, alias đề xuất và OCR giả lập
+  không tạo held-out provenance. Chỉ freeze manifest sau review độc lập và
+  xác nhận phạm vi đại diện; không dùng điểm candidate để chọn lại câu hỏi.
+
 ### Scope mới của owner — 2026-09-11: bật các capability trong scope, Graph giữ OFF
 
 Owner yêu cầu hoàn thành roadmap để bật các tính năng Advanced RAG, sau đó
@@ -36,6 +81,15 @@ không chồng traffic làm nhiễu phép đo. Sau khi từng capability đạt,
 pairwise/full-stack ở concurrency 1/5, rollback rồi xác minh runtime cuối.
 Giữ các duration/gate đã khóa cho đến khi có thay đổi contract rõ ràng.
 
+Checkpoint provider/CRAG ngày12/09: smoke evaluation lúc09:29:14–09:29:30UTC
+pass5/5,0 retry, p95=8040.34ms; artifact
+`.local/provider-recheck-evaluation-20260912-02/smoke.json`, provider fingerprint
+`9d978ec3fb533f7316eb98928ec0f3cbbde9f6e52b33ae3b45aff15d1d61416f`.
+CRAG preflight mới tại `.local/crag-current-preparation-20260912/preflight.json`
+pass9/9, fingerprint fixture không đổi. Đây là readiness tại thời điểm đo,
+không chứng minh pipeline/formal/pilot đã đạt; diagnostic mới vẫn cần RC sạch
+và smoke còn hạn theo validator, không reuse window8905562 đã terminal.
+
 Query windows ngày 11/09 trên d12efe6: window02 smoke5/5 nhưng pilot dừng
 sau11 card; window03 smoke dừng ở request4 do timeout; window04 smoke5/5
 nhưng pilot dừng sau5 card. Hai pilot gặp service-unavailable response trong
@@ -49,6 +103,35 @@ vẫn có hiệu lực. Riêng Late Interaction cần design/evidence mới trư
 xét migration hard-deny; không bật implementation đã rejected.
 
 #### Late revision: investigation đã xác định seam
+
+- Cập nhật corpus hiện hành ngày12/09 theo lựa chọn owner: shadow riêng
+  `MechChatbot_LateInteraction_RC_de37374_pool`, index `late-pooled-v1`,
+  backfill 231/231 chunk, coverage1.0; document96/query64, adjacent-pair mean
+  pooling, vector-byte storage ratio23.2792x. Readiness tại
+  `.local/late-real-rc-de37374/readiness.json` thuộc commit `de37374`.
+  Warm benchmark5 mẫu: encode p95=227.98ms, query p95=284.76ms; không thay
+  quality gate hoặc chứng minh final-RC acceptance.
+- Diagnostic `.local/late-quality-diagnostic/managed-runtime-06` trên draft
+  corpus9 case,2 lượt: MaxSim nDCG@10=1.0, RRF=0.905113; Voyage15/18 lượt
+  HTTP429 nên baseline không hợp lệ. Draft đã dùng trong phát triển, không
+  phải held-out evaluation. Delta evaluator chưa commit trong lượt đo này;
+  trường commit trong report không chứng minh toàn bộ source đã freeze.
+  Giữ nguyên artifact; không sửa failed run thành accepted.
+- Evaluator đã được nối explicit retrieval dependencies, managed Voyage runtime
+  và database context; mã HTTP được giữ mà không ghi response body. Diagnostic
+  tiếp theo khai báo pacing21 giây giữa request, không retry; pacing không phải
+  kết quả throughput phục vụ. Chưa có kết quả cho lượt này tại thời điểm ghi.
+  Graph/Community vẫn OFF; chưa đổi activation ledger hay signed bundle.
+- Diagnostic `managed-paced-07` đã hoàn tất:18/18 Voyage thành công,0 retry/
+  fallback; pacing21 giây khắc phục HTTP429 trong lượt đo này. nDCG@10:
+  RRF0.90511276, Voyage0.99589524, MaxSim1.0; recall@10=1.0 cả ba.
+  Gate hiện có còn fail `ndcg_relative_gain` và `latency_within_budget`:
+  p95 Voyage1452.09ms, MaxSim11877.70ms (giữ cả first-call cold start).
+  Với baseline0.99589524, trần gain khi candidate=1 chỉ khoảng0.4122%,
+  không thể đạt5% trên manifest này. Không làm khó nhãn/query sau khi xem
+  kết quả để ép gate pass; cần đánh giá lại tính đại diện của manifest bằng
+  nhu cầu thực độc lập trước khi quyết định hướng tiếp. Đây chưa phải bằng
+  chứng Late bất khả thi trên mọi corpus hoặc disposition keep-off đã duyệt.
 
 - Historical gate không đạt hai check: `voyage_baseline_valid` và
   `ndcg_relative_gain`; các check recall, leakage, coverage và aggregate

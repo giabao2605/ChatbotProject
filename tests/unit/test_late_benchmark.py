@@ -9,6 +9,93 @@ from scripts.late_interaction.backfill_shadow import benchmark
 pytestmark = pytest.mark.unit
 
 
+def test_retrieval_child_uses_declared_source_collection(monkeypatch, tmp_path):
+    from scripts.eval import run_late_interaction_eval as evaluation
+    cache = tmp_path / "candidates.json"
+    monkeypatch.setenv("QDRANT_COLLECTION", "other-source")
+    def run(command, *, check, env):
+        assert check
+        assert env["QDRANT_COLLECTION"] == "declared-source"
+        cache.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(evaluation.subprocess, "run", run)
+    assert evaluation._retrieve_in_worker(
+        "manifest", 2, 20, cache, source_collection="declared-source",
+    ) == {}
+    import os
+    assert os.environ["QDRANT_COLLECTION"] == "other-source"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("document_max_length", 48), ("query_max_length", 32),
+    ("document_max_length", None), ("query_max_length", None),
+])
+def test_readiness_rejects_encoder_length_drift(field, value):
+    from scripts.eval.run_late_interaction_eval import _readiness_matches
+    args = SimpleNamespace(source_collection="source", shadow_collection="shadow", index_version="v1")
+    config = SimpleNamespace(document_pooling="adjacent_mean", document_max_length=96, query_max_length=64)
+    configuration = dict(source_collection="source", shadow_collection="shadow", index_version="v1", document_pooling="adjacent_mean", document_max_length=96, query_max_length=64)
+    assert _readiness_matches({"ready_for_serving": True, "configuration": configuration}, args, config)
+    assert not _readiness_matches({"ready_for_serving": True, "configuration": {**configuration, field: value}}, args, config)
+
+
+def test_voyage_pacing_waits_only_remaining_interval(monkeypatch):
+    from scripts.eval import run_late_interaction_eval as evaluation
+    waits = []
+    monkeypatch.setattr(evaluation.time, "monotonic", lambda: 105.0)
+    monkeypatch.setattr(evaluation.time, "sleep", waits.append)
+    evaluation._pace_voyage(100.0, 21.0)
+    assert waits == [16.0]
+    evaluation._pace_voyage(None, 21.0)
+    evaluation._pace_voyage(70.0, 21.0)
+    assert waits == [16.0]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_evaluator_binds_and_closes_repository_context(monkeypatch, tmp_path, fails):
+    from contextlib import contextmanager
+    import sys
+    from scripts.eval import run_late_interaction_eval as evaluation
+    from mech_chatbot.composition import maintenance_runtime
+
+    events = []
+    def unexpected_client(*args, **kwargs):
+        pytest.fail("context test must not create a network client")
+    monkeypatch.setattr(evaluation, "QdrantClient", unexpected_client)
+    @contextmanager
+    def bind(settings, *, include_qdrant):
+        assert include_qdrant is False
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+    def run(*args):
+        assert events == ["enter"]
+        if fails:
+            raise RuntimeError("evaluation failed")
+        return 0
+    monkeypatch.setattr(maintenance_runtime, "configured_repository_runtime", bind)
+    monkeypatch.setattr(evaluation, "_run_evaluation", run, raising=False)
+    argv = ["--output-dir", str(tmp_path), "--run-id", "new", "--readiness", "unused", "--encoder-python", sys.executable]
+    if fails:
+        with pytest.raises(RuntimeError, match="evaluation failed"):
+            evaluation.main(argv)
+    else:
+        assert evaluation.main(argv) == 0
+    assert events == ["enter", "exit"]
+
+
+def test_provider_identity_uses_resolved_voyage_runtime():
+    from scripts.eval.run_late_interaction_eval import _provider_configuration
+    settings = SimpleNamespace(VOYAGE_RERANK_TIMEOUT_SECONDS=15)
+    runtime = SimpleNamespace(model="resolved-model", endpoint="https://example.test/v1", api_key="private")
+    configuration, fingerprint = _provider_configuration(20, settings, runtime)
+    assert configuration["voyage_model"] == "resolved-model"
+    assert configuration["voyage_endpoint"] == "https://example.test/v1"
+    assert "private" not in str(configuration)
+    assert len(fingerprint) == 64
+
+
 def test_quality_evaluation_uses_declared_index_and_pooling():
     from scripts.eval import run_late_interaction_eval as evaluation
 

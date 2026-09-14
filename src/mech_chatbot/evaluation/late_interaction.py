@@ -201,10 +201,14 @@ def evaluate_variant(
                 return VariantResult(original, "rrf", len(original), hits, coverage, latency, "governance_escape")
             return VariantResult(closed, "maxsim", len(original), hits, coverage, latency)
     except Exception as exc:
+        from mech_chatbot.llm.external_ai import external_error_metadata
+
+        status = external_error_metadata(exc).status_code
+        suffix = f":http_{status}" if status is not None else ""
         return VariantResult(
             original, "rrf", len(original),
             latency_ms=(time.perf_counter() - started) * 1000,
-            fallback_reason=f"{variant}_error:{type(exc).__name__}",
+            fallback_reason=f"{variant}_error:{type(exc).__name__}{suffix}",
         )
     raise ValueError(f"unknown variant: {variant}")
 
