@@ -2,6 +2,37 @@
 
 ## Tóm tắt
 
+### Checkpoint 2026-09-15 — Late stop-first-provider-failure
+
+Owner xác nhận quyền thường trực toàn bộ scope plan: không xin duyệt lại từng
+window Query/CRAG/Late hoặc bước kiểm chứng trong scope. Mỗi lượt vẫn phải bind
+đúng RC/hash/root và thời hạn; không reuse terminal root, không retry/replacement/
+carry-forward, không xóa lịch sử, không tự ghi human review hoặc mở rộng rollout.
+Quyền này thay thế giới hạn Query-only của checkpoint lịch sử bên dưới.
+
+Smoke delta đã freeze tại `8a192a47197fcef5b4fe1a6d4fff7c9d47f2e34c`.
+Hai CRAG window trên RC này terminal do timeout: window-01 smoke 0/1,
+window-02 smoke 4/5; không chạy diagnostic hoặc Late trong các root này.
+Disposition nằm tại `.local/rc-73f50ac-preparation/crag-window-01/terminal-disposition.json`
+và `.local/rc-73f50ac-preparation/crag-window-02/terminal-disposition.json`.
+
+Delta Late hiện chưa freeze: dừng ở provider failure đầu tiên, exit 2 và ghi
+terminal inconclusive với binding/hash/case/repetition; không ghi raw exception,
+không tạo aggregate cho lượt partial. Vẫn đóng encoder/client/repository và
+dọn candidate cache tạm của chính lượt qua lifecycle hiện có.
+Regression RED→GREEN; 26 focused test pass. Full unit: 3677 passed, 2 skipped,
+0 failures/errors, 628.973 giây; JUnit `.local/rc-73f50ac-preparation/late-stop-full.xml`.
+Coverage evaluator line 97.14%, branch 88%, tại
+`.local/rc-73f50ac-preparation/late-stop-full-coverage.xml`.
+Review tĩnh độc lập đã hoàn tất sau khi quota phục hồi: Gibbs (Standards) và
+Averroes (Spec) đều không có actionable finding. Đã kiểm đường HTTP Voyage,
+control flow dừng và cleanup; không chạy provider hoặc thực thi HTTP trong review.
+Review code không thay thế human acceptance. `pip check` đạt; pip-audit hiện có
+không phát hiện vulnerability trong các package được audit, nhưng bỏ qua bản
+Accelerate local unsharded-only; không coi đây là security pass toàn bộ.
+Chưa mở Late live trên delta hoặc công nhận activation. Các gate còn lại của
+roadmap, gồm final RC matrix c1/c5 và Math binding, vẫn giữ nguyên.
+
 ### Delta smoke sau RC 73f50ac — chưa freeze
 
 Hai Query window trên RC `73f50ac` terminal ở generation với thông báo

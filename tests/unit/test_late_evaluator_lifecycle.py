@@ -54,7 +54,7 @@ def test_isolated_encoder_closes_running_worker(monkeypatch, times_out):
     assert bool(terminated) is times_out
 
 
-@pytest.mark.parametrize("outcome", ["complete", "preflight", "provider", "retrieval"])
+@pytest.mark.parametrize("outcome", ["complete", "preflight", "provider", "retrieval", "voyage_failure"])
 def test_evaluator_lifecycle_and_reports(monkeypatch, tmp_path, outcome):
     from mech_chatbot.composition import maintenance_runtime, rag_runtime
     from mech_chatbot.rag import rerank
@@ -120,6 +120,9 @@ def test_evaluator_lifecycle_and_reports(monkeypatch, tmp_path, outcome):
         return {(i, "exact"): ([document], 10.0, "rrf") for i in range(1, repetitions + 1)}
 
     def voyage_rerank(docs, query, *, runtime, timeout_seconds, **kwargs):
+        events.append("voyage-call")
+        if outcome == "voyage_failure":
+            raise RuntimeError("private-provider-detail")
         assert runtime is voyage
         assert timeout_seconds > 0
         return docs
@@ -145,7 +148,7 @@ def test_evaluator_lifecycle_and_reports(monkeypatch, tmp_path, outcome):
         with pytest.raises(RuntimeError):
             evaluation.main(args)
     else:
-        assert evaluation.main(args) == (2 if outcome == "preflight" else 0)
+        assert evaluation.main(args) == (2 if outcome in {"preflight", "voyage_failure"} else 0)
     assert events[-2:] == ["client-close", "repository-close"]
     if outcome == "complete":
         assert events.count("encoder-open") == events.count("encoder-close") == 1
@@ -155,6 +158,15 @@ def test_evaluator_lifecycle_and_reports(monkeypatch, tmp_path, outcome):
             assert report["run_metadata"]["provider_configuration"]["voyage_model"] == "resolved"
             assert report["provider_failure_count"] == 0
             assert report["ranked_retrieval"]["ndcg_at_10"] == 1.0
+    elif outcome == "voyage_failure":
+        assert events.count("voyage-call") == 1
+        assert events.count("encoder-open") == events.count("encoder-close") == 1
+        assert not (tmp_path / "run" / "aggregate").exists()
+        terminal = json.loads((tmp_path / "run" / "terminal.json").read_text())
+        assert terminal["status"] == "inconclusive"
+        assert terminal["case_id"] == "exact"
+        assert terminal["repetition"] == 1
+        assert "private-provider-detail" not in json.dumps(terminal)
     else:
         assert "encoder-open" not in events
         assert not (tmp_path / "run" / "aggregate").exists()

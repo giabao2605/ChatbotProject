@@ -400,6 +400,21 @@ def _evaluate_with_client(args, settings, late_config, run_root, client):
                     }
                     pair_rows[variant].append(row)
                     rows_by_variant[variant].append(row)
+                    if row["provider_failure"]:
+                        _write_json(run_root / "terminal.json", {
+                            "schema": "late-interaction-terminal-v1",
+                            "status": "inconclusive",
+                            "reason": "provider_failure",
+                            "commit_sha": _commit_sha(),
+                            "manifest_sha256": manifest_sha256,
+                            "provider_configuration_sha256": provider_configuration_sha256,
+                            "snapshot_fingerprint": fingerprint,
+                            "case_id": case["case_id"],
+                            "repetition": repetition,
+                            "recorded_at": _utc_now(),
+                            "retry_authorized": False,
+                        })
+                        return 2
     finally:
         encoder.close()
         cache_path.unlink(missing_ok=True)
