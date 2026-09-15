@@ -2,6 +2,37 @@
 
 ## Tóm tắt
 
+### Checkpoint 2026-09-15 — browser baseline preparation
+
+Late stop-first-provider-failure đã freeze tại `d918b60fcea401593854e997541e7d090973808a`.
+Query window-05 trên RC này đạt smoke 5/5 nhưng terminal ở request thứ hai do
+provider generation error; chỉ 1 WAL hoàn tất. Late window-02 cũng terminal
+provider failure ở L04, repetition 1. Không reuse hai root hoặc coi là quality pass.
+
+Browser baseline-01 khởi động RAG all-off nhưng dừng trước browser/chat vì probe
+health thiếu service token (HTTP 401). Process tree đã dừng, port được giải phóng,
+hardlink credentials tạm đã gỡ; file credentials gốc và dữ liệu lịch sử được giữ.
+Sửa harness hiện hữu: credentials path qua biến môi trường, health anonymous
+phải 401, authenticated phải 200; native fetch có timeout/không follow redirect
+và lỗi đã lọc để token không vào Playwright request-error log. Không tắt service auth.
+Regression offline qua chính E2E health test đạt cả success và transport failure,
+không thấy token giả lập trong reporter output; đây không phải live acceptance.
+
+Audit frontend phát hiện NanoID và Vitest advisory. Đã kiểm đường PostCSS dùng
+`nanoid(6)`, không dùng custom generator size 0, rồi cập nhật patch NanoID 3.3.19;
+Vitest/coverage cùng 4.1.11 và các dependency transitive tương thích. Full npm
+audit sau cập nhật báo 0 vulnerability. Không thay Python package hoặc runtime code.
+Frontend full unit 131/131, coverage line 94.53%, branch 89.02%; typecheck/build đạt.
+JUnit tại `.local/rc-73f50ac-preparation/browser-delta-unit.xml`. Independent review
+đã xử lý finding token logging; Standards/security không còn blocker, Spec không
+thấy scope creep. Giữ evidence Python unit tại d918b60 vì source Python không đổi;
+không coi audit frontend là security pass cho bản Accelerate downstream.
+
+Chưa có browser baseline live đạt trên delta này. Còn Query pilot/review,
+CRAG diagnostic/formal/review/pilot, Late quality/latency/representativeness,
+final matrix c1/c5, signed bundle và Math binding trên RC phát hành.
+Graph/Community vẫn OFF; browser all-off không thay thế accepted-stack evidence.
+
 ### Checkpoint 2026-09-15 — Late stop-first-provider-failure
 
 Owner xác nhận quyền thường trực toàn bộ scope plan: không xin duyệt lại từng

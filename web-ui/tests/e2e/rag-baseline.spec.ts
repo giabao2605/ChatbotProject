@@ -10,7 +10,7 @@ import {
 
 const ALLOWED_ACTOR = "demo_owner_it";
 const DENIED_ACTOR = "demo_viewer";
-const CREDENTIALS_PATH = fileURLToPath(
+const CREDENTIALS_PATH = process.env.E2E_CREDENTIALS_PATH || fileURLToPath(
   new URL("../../../.local/demo-wave-credentials.json", import.meta.url),
 );
 const RAG_BASE_URL = process.env.E2E_RAG_BASE_URL || "http://127.0.0.1:8100";
@@ -145,10 +145,20 @@ test("từ chối session, CSRF và dữ liệu IT ngoài phạm vi", async ({
 });
 
 test("RAG health giữ baseline all-off", async ({ context }) => {
+  const serviceToken = process.env.RAG_SERVICE_TOKEN?.trim();
+  if (!serviceToken) throw new Error("RAG_SERVICE_TOKEN is required for the authenticated RAG health check.");
   const ragRequest = await createRequest.newContext({ baseURL: RAG_BASE_URL });
   try {
-    const response = await ragRequest.get("/health");
-    expect(response.status()).toBe(200);
+    const anonymousHealth = await ragRequest.get("/health", { maxRedirects: 0 });
+    expect(anonymousHealth.status()).toBe(401);
+    const response = await fetch(new URL("/health", RAG_BASE_URL), {
+      headers: { "X-RAG-Service-Token": serviceToken },
+      redirect: "manual",
+      signal: AbortSignal.timeout(15_000),
+    }).catch(() => {
+      throw new Error("Authenticated RAG health request failed.");
+    });
+    expect(response.status).toBe(200);
     const health = (await response.json()) as {
       status: string;
       rag_loaded: boolean;
