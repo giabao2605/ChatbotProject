@@ -2,6 +2,30 @@
 
 ## Tóm tắt
 
+### Delta smoke sau RC 73f50ac — chưa freeze
+
+Hai Query window trên RC `73f50ac` terminal ở generation với thông báo
+`provider unavailable: service unavailable response`, dù smoke trước đó đạt.
+Window-01 hoàn tất 8 WAL, window-02 không hoàn tất WAL; cả hai đã dừng an toàn,
+không reuse root. Không đủ dữ liệu để suy ra nội dung phản hồi smoke lịch sử.
+
+Đã tái hiện offline lỗi smoke tính phản hồi lỗi dạng text là thành công.
+Delta yêu cầu acknowledgement `OK` từ string hoặc message content; dừng sau
+exception, acknowledgement sai hoặc retry, ghi số request thực tế. Vẫn cần
+đủ 5 phản hồi hợp lệ, zero retry mới pass; không lưu raw response vào artifact.
+Regression RED→GREEN gồm stop-first-failure và compatibility với AIMessage.
+
+Full unit của delta cuối: 3676 passed, 2 skipped, 0 failures/errors, 610.722 giây.
+JUnit: `.local/rc-73f50ac-preparation/smoke-final-full.xml`.
+Coverage module smoke: line 88.03%, branch 92.11%, tại
+`.local/rc-73f50ac-preparation/smoke-final-full-coverage.xml`.
+Hai skip là OS symlink và Scheduled Task opt-in; không phải live acceptance.
+Review tĩnh độc lập: Gibbs (Standards) 0 finding, Averroes (Spec) 0 finding;
+hai reviewer kiểm diff/caller, không chạy lại test hoặc gọi provider.
+Chưa commit/freeze hoặc mở live trên delta này; còn kiểm dependency trước commit.
+Các gate Query pilot/review, CRAG, Late, final matrix c1/c5 và binding Math
+trên RC phát hành vẫn chưa hoàn tất. Graph/Community giữ OFF.
+
 ### Query window-04: terminal và metadata provenance
 
 Owner đã cấp ủy quyền thường trực cho các Query window tiếp theo trong cùng phạm vi;

@@ -919,6 +919,78 @@ def test_provider_smoke_requires_five_clean_requests_and_records_no_prompt():
     assert {call["surface"] for call in calls} == {"generation"}
 
 
+def test_provider_smoke_rejects_error_text_without_persisting_response():
+    response = "[Error] Service unavailable. private-provider-detail"
+    artifact = run_provider_smoke(lambda *args, **kwargs: response)
+    assert artifact["passed"] is False
+    assert artifact["successful_requests"] == 0
+    assert response not in json.dumps(artifact)
+
+
+def test_provider_smoke_accepts_adapter_message_acknowledgement():
+    from langchain_core.messages import AIMessage
+
+    artifact = run_provider_smoke(lambda *args, **kwargs: AIMessage(content=" OK\n"))
+    assert artifact["passed"] is True
+
+
+@pytest.mark.parametrize("response", [None, "", {"content": "OK"}])
+def test_provider_smoke_rejects_missing_or_wrong_response_type(response):
+    artifact = run_provider_smoke(lambda *args, **kwargs: response)
+    assert artifact["passed"] is False
+    assert artifact["successful_requests"] == 0
+    assert artifact["request_count"] == 1
+
+
+def test_provider_smoke_rejects_wrong_request_count_before_dispatch():
+    def invoke(*args, **kwargs):
+        pytest.fail("invalid smoke must not dispatch")
+
+    with pytest.raises(ValueError, match="exactly five"):
+        run_provider_smoke(invoke, request_count=4)
+
+
+def test_provider_smoke_handles_malformed_provider_exception_metadata():
+    class LastAttempt:
+        def exception(self):
+            return None
+
+    class ProviderError(Exception):
+        status_code = "unknown"
+        last_attempt = LastAttempt()
+
+    def invoke(*args, **kwargs):
+        raise ProviderError("503 service_unavailable private-detail")
+
+    artifact = run_provider_smoke(invoke)
+    assert artifact["passed"] is False
+    assert artifact["request_count"] == 1
+    assert artifact["status_codes"] == [503]
+    assert artifact["error_categories"] == ["capacity"]
+    assert "private-detail" not in json.dumps(artifact)
+
+
+@pytest.mark.parametrize("failure", ["invalid", "exception", "retry"])
+def test_provider_smoke_stops_before_next_request_after_failure(failure):
+    calls = []
+
+    def invoke(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return "OK"
+        if failure == "exception":
+            raise RuntimeError("provider failed")
+        if failure == "retry":
+            kwargs["retry_counter"]["count"] = 1
+            return "OK"
+        return "[Error] Service unavailable."
+
+    artifact = run_provider_smoke(invoke)
+    assert len(calls) == 2
+    assert artifact["request_count"] == 2
+    assert artifact["passed"] is False
+
+
 def test_provider_smoke_unwraps_retry_error_without_persisting_raw_message():
     class LastAttempt:
         @staticmethod
@@ -936,10 +1008,27 @@ def test_provider_smoke_unwraps_retry_error_without_persisting_raw_message():
 
     assert artifact["passed"] is False
     assert artifact["provider_outcome"]["decision"] == "inconclusive"
-    assert artifact["root_error_types"] == ["RuntimeError"] * 5
-    assert artifact["status_codes"] == [503] * 5
-    assert artifact["error_categories"] == ["capacity"] * 5
+    assert artifact["root_error_types"] == ["RuntimeError"]
+    assert artifact["status_codes"] == [503]
+    assert artifact["error_categories"] == ["capacity"]
     assert "secret-detail" not in json.dumps(artifact)
+
+
+@pytest.mark.parametrize("message,category,status", [
+    ("401 private-detail", "authentication_or_authorization", 401),
+    ("request timed out private-detail", "timeout", None),
+    ("502 private-detail", "http_error", 502),
+])
+def test_provider_smoke_classifies_first_failure_without_leaking_message(message, category, status):
+    def invoke(*args, **kwargs):
+        raise RuntimeError(message)
+
+    artifact = run_provider_smoke(invoke)
+    assert artifact["request_count"] == 1
+    assert artifact["error_categories"] == [category]
+    assert artifact["status_codes"] == [status]
+    assert artifact["passed"] is False
+    assert "private-detail" not in json.dumps(artifact)
 
 
 def test_demo_readiness_is_separate_from_live_readiness():

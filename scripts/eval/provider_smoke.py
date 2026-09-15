@@ -186,7 +186,7 @@ def run_provider_smoke(
         retry_counter = {"count": 0}
         started = time.perf_counter()
         try:
-            invoke(
+            response = invoke(
                 _SMOKE_MESSAGES,
                 # Exercise the already-approved generation surface. The trace
                 # id distinguishes this probe without widening egress policy.
@@ -194,6 +194,9 @@ def run_provider_smoke(
                 trace_id=f"provider-smoke-{index + 1}",
                 retry_counter=retry_counter,
             )
+            content = response if isinstance(response, str) else getattr(response, "content", None)
+            if not isinstance(content, str) or content.strip().casefold() != "ok":
+                raise ValueError("provider_smoke_invalid_acknowledgement")
             successful += 1
         except Exception as exc:  # the artifact stores only the class/category
             root = _root_exception(exc)
@@ -207,6 +210,8 @@ def run_provider_smoke(
         finally:
             retry_total += int(retry_counter.get("count") or 0)
             latencies.append((time.perf_counter() - started) * 1000)
+        if failures or retry_total:
+            break
     provider_outcome = classify_provider_outcome(
         [failure["classification_text"] for failure in failures]
     )
@@ -215,7 +220,7 @@ def run_provider_smoke(
         "schema": "provider-smoke-v1",
         "started_at": started_at,
         "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "request_count": request_count,
+        "request_count": len(latencies),
         "successful_requests": successful,
         "failed_requests": len(failures),
         "provider_retries": retry_total,
