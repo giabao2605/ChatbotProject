@@ -66,7 +66,7 @@ test.afterEach(async ({ context }, testInfo) => {
   }
 });
 
-test("đăng nhập thật, đọc public profile và hoàn tất chat SSE", async ({
+test("đăng nhập thật và đọc public profile", { tag: "@provider-free" }, async ({
   page,
   context,
 }) => {
@@ -80,7 +80,10 @@ test("đăng nhập thật, đọc public profile và hoàn tất chat SSE", asy
   expect(me.user.csrf_token).toEqual(expect.any(String));
   expect(me.user.csrf_token.length).toBeGreaterThan(20);
   expect(Object.keys(me.user).some((key) => /password|hash|secret/i.test(key))).toBe(false);
+});
 
+test("đăng nhập thật và hoàn tất chat SSE với citation", async ({ page, context }) => {
+  await login(page, ALLOWED_ACTOR);
   await page.goto("/chat");
   const composer = page.getByPlaceholder("Hỏi bất cứ điều gì");
   await expect(composer).toBeVisible();
@@ -111,7 +114,7 @@ test("đăng nhập thật, đọc public profile và hoàn tất chat SSE", asy
   );
 });
 
-test("từ chối session, CSRF và dữ liệu IT ngoài phạm vi", async ({
+test("từ chối session ẩn danh và CSRF thiếu token", { tag: "@provider-free" }, async ({
   page,
   context,
   request,
@@ -119,6 +122,15 @@ test("từ chối session, CSRF và dữ liệu IT ngoài phạm vi", async ({
   const anonymousMe = await request.get("/api/auth/me");
   expect(anonymousMe.status()).toBe(401);
 
+  await login(page, DENIED_ACTOR);
+  const missingCsrf = await context.request.post("/api/auth/refresh");
+  expect(missingCsrf.status()).toBe(403);
+  expect(await missingCsrf.json()).toMatchObject({
+    detail: "Invalid CSRF token",
+  });
+});
+
+test("từ chối dữ liệu IT ngoài phạm vi", async ({ page, context }) => {
   await login(page, DENIED_ACTOR);
   await page.goto("/chat");
   const composer = page.getByPlaceholder("Hỏi bất cứ điều gì");
@@ -128,11 +140,6 @@ test("từ chối session, CSRF và dữ liệu IT ngoài phạm vi", async ({
   const assistant = page.locator("article.message.assistant").last();
   await expect(assistant.getByText("Hoàn tất", { exact: true })).toBeVisible({
     timeout: 120_000,
-  });
-  const missingCsrf = await context.request.post("/api/auth/refresh");
-  expect(missingCsrf.status()).toBe(403);
-  expect(await missingCsrf.json()).toMatchObject({
-    detail: "Invalid CSRF token",
   });
 
   await startSafeTrace(context);
@@ -144,7 +151,7 @@ test("từ chối session, CSRF và dữ liệu IT ngoài phạm vi", async ({
   );
 });
 
-test("RAG health giữ baseline all-off", async ({ context }) => {
+test("RAG health giữ baseline all-off", { tag: "@provider-free" }, async ({ context }) => {
   const serviceToken = process.env.RAG_SERVICE_TOKEN?.trim();
   if (!serviceToken) throw new Error("RAG_SERVICE_TOKEN is required for the authenticated RAG health check.");
   const ragRequest = await createRequest.newContext({ baseURL: RAG_BASE_URL });
