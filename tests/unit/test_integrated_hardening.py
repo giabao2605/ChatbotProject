@@ -33,6 +33,7 @@ from scripts.integrated_eval.contracts import assert_clean_status
 from scripts.integrated_eval.compose_gate_metadata import (
     _expected_configurations,
     evaluate_combination_evidence,
+    load_matrix_evidence,
 )
 from scripts.eval.rag_trace_snapshot import build_snapshot
 from scripts.eval.milestone_decision import build_decision_artifact
@@ -40,6 +41,158 @@ from scripts.eval.provider_smoke import run_provider_smoke
 
 
 pytestmark = pytest.mark.unit
+
+
+def _scoped_matrix():
+    template = json.loads((Path(__file__).resolve().parents[2]
+        / "data/integrated_hardening_v1/matrix.json").read_text())["combinations"][0]
+    groups = {
+        "crag_claim": {"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"},
+        "grounded_math": {"RAG_GROUNDED_MATH_ENABLED"},
+        "query_decomposition": {"RAG_QUERY_DECOMPOSITION_ENABLED"},
+        "late_interaction": {"RAG_LATE_INTERACTION_ENABLED"},
+    }
+    rows = dict(groups)
+    for name, left, right in (
+        ("crag_math", "crag_claim", "grounded_math"),
+        ("crag_query", "crag_claim", "query_decomposition"),
+        ("crag_late", "crag_claim", "late_interaction"),
+        ("math_query", "grounded_math", "query_decomposition"),
+        ("math_late", "grounded_math", "late_interaction"),
+        ("query_late", "query_decomposition", "late_interaction"),
+    ):
+        rows[name] = groups[left] | groups[right]
+    rows["full_stack"] = set().union(*groups.values())
+    return {
+        "schema": "integrated-feature-matrix-v1",
+        "version": "integrated-v4-scoped",
+        "combinations": [{
+            "id": name, "prerequisites": ["evaluation_foundation"],
+            "flags": {flag: flag in enabled for flag in FEATURE_FLAGS},
+            "baseline_flags": {flag: False for flag in FEATURE_FLAGS},
+            "versions": dict(template["versions"]),
+        } for name, enabled in rows.items()],
+    }
+
+
+def test_scoped_matrix_requires_late_pairs_and_full_stack_without_graph():
+    matrix = _scoped_matrix()
+    assert validate_combination_matrix(matrix)["passed"] is True
+    pending, _ = load_matrix_evidence(
+        {"schema": "integrated-matrix-evidence-v1", "combinations": []},
+        feature_matrix=matrix,
+        release_decisions={"schema": "integrated-release-decisions-v1", "decisions": {}},
+    )
+    assert pending["feature_matrix_version"] == "integrated-v4-scoped"
+    assert pending["checks"]["requested_capabilities_enabled"] is False
+    assert pending["passed"] is False
+    assert validate_combination_matrix({**matrix, "combinations": matrix["combinations"][:-1]})["passed"] is False
+    changed = json.loads(json.dumps(matrix))
+    changed["combinations"][-1]["flags"]["RAG_GRAPH_RETRIEVAL_ENABLED"] = True
+    assert validate_combination_matrix(changed)["passed"] is False
+
+
+@pytest.mark.parametrize("change", [
+    "unknown_version", "wrong_schema", "duplicate", "extra", "baseline_enabled",
+    "missing_version", "missing_flag", "wrong_pair", "missing_prerequisite",
+])
+def test_scoped_matrix_rejects_incomplete_or_changed_contract(change):
+    matrix = _scoped_matrix()
+    if change == "unknown_version":
+        matrix["version"] = "integrated-v99"
+    elif change == "wrong_schema":
+        matrix["schema"] = "other"
+    elif change == "duplicate":
+        matrix["combinations"].append(matrix["combinations"][0])
+    elif change == "extra":
+        matrix["combinations"].append({**matrix["combinations"][0], "id": "extra"})
+    elif change == "baseline_enabled":
+        matrix["combinations"][0]["baseline_flags"]["RAG_CRAG_ENABLED"] = True
+    elif change == "missing_version":
+        matrix["combinations"][0]["versions"].pop("RAG_LATE_INDEX_VERSION")
+    elif change == "missing_flag":
+        matrix["combinations"][0]["flags"].pop("RAG_LATE_INTERACTION_ENABLED")
+    elif change == "wrong_pair":
+        matrix["combinations"][4]["flags"]["RAG_LATE_INTERACTION_ENABLED"] = True
+    else:
+        matrix["combinations"][0]["prerequisites"] = []
+    assert validate_combination_matrix(matrix)["passed"] is False
+    with pytest.raises(ValueError, match="feature matrix is invalid"):
+        load_matrix_evidence({}, feature_matrix=matrix, release_decisions={})
+
+
+def test_scoped_matrix_cannot_count_hard_denied_late_as_measured():
+    decisions = {flag: {"decision": "accepted"} for flag in FEATURE_FLAGS}
+    result, _ = load_matrix_evidence(
+        {"schema": "integrated-matrix-evidence-v1", "combinations": []},
+        feature_matrix=_scoped_matrix(),
+        release_decisions={"schema": "integrated-release-decisions-v1",
+                           "decisions": decisions},
+    )
+    assert result["checks"]["requested_capabilities_enabled"] is False
+    assert result["passed"] is False
+
+
+@pytest.mark.parametrize("fault", ["none", "retry", "missing_c1", "missing_c5", "commit_drift"])
+def test_scoped_matrix_loads_all_artifacts_without_accepting_disabled_late(tmp_path, fault):
+    from tests.unit.test_integrated_row_evidence_loader import _row_fixture, _write_json
+
+    matrix = _scoped_matrix()
+    decisions = {"schema": "integrated-release-decisions-v1", "decisions": {
+        flag: {"decision": "accepted"} for flag in FEATURE_FLAGS
+    }}
+    configurations = _expected_configurations(matrix, decisions)
+    budgets = {row["id"]: {flag for flag, value in row["flags"].items() if value}
+               for row in matrix["combinations"]}
+    rows = []
+    for row in matrix["combinations"]:
+        directory = tmp_path / row["id"]
+        directory.mkdir()
+        rows.append(_row_fixture(
+            directory, combination=row["id"], budget_combinations=budgets,
+            maximum_provider_retries=0, configuration=configurations[row["id"]],
+            candidate_changes=({"provider_retries": 1}
+                               if fault == "retry" and row["id"] == "full_stack" else None),
+        ))
+    if fault in {"missing_c1", "missing_c5", "commit_drift"}:
+        artifact = "candidate_eval" if fault == "commit_drift" else "candidate_benchmark"
+        path = Path(rows[-1][artifact]["path"])
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if fault == "commit_drift":
+            value["git_sha"] = "different-commit"
+        else:
+            missing = 1 if fault == "missing_c1" else 5
+            value["results"] = [run for run in value["results"]
+                             if run["summary"]["concurrency"] != missing]
+        rows[-1] = {**rows[-1], artifact: _write_json(path, value)}
+    manifest = {"schema": "integrated-matrix-evidence-v1", "combinations": rows,
+                "primary_combination_id": "full_stack"}
+    if fault in {"commit_drift", "missing_c5"}:
+        message = ("runtime identity does not match" if fault == "commit_drift"
+                   else "exactly one benchmark summary for concurrency 5")
+        with pytest.raises(ValueError, match=message):
+            load_matrix_evidence(manifest, feature_matrix=matrix,
+                                 release_decisions=decisions, root=tmp_path)
+        return
+    report, references = load_matrix_evidence(
+        manifest, feature_matrix=matrix, release_decisions=decisions, root=tmp_path,
+    )
+    assert len(references) == 110
+    assert report["checks"]["combination_ids_exact"] is True
+    assert report["checks"]["all_combinations_passed"] is (fault == "none"), report
+    full = report["combination_results"][-1]
+    if fault.startswith("missing_c"):
+        assert full["checks"]["required_load_concurrencies_passed"] is False
+    elif fault == "retry":
+        assert full["checks"]["candidate_trace_budgets_reconciled"] is False
+    assert report["checks"]["requested_capabilities_enabled"] is False
+    assert report["passed"] is False
+    duplicate, _ = load_matrix_evidence(
+        {**manifest, "combinations": [*rows, rows[0]]},
+        feature_matrix=matrix, release_decisions=decisions, root=tmp_path,
+    )
+    assert duplicate["checks"]["combination_ids_unique"] is False
+    assert duplicate["passed"] is False
 
 
 def _json(path):

@@ -20,6 +20,40 @@ REQUIRED_BASELINES = {
     **{name: set() for name in REQUIRED_COMBINATIONS},
     "community_summaries": {"RAG_GRAPH_RETRIEVAL_ENABLED"},
 }
+SCOPED_COMBINATIONS = {
+    name: flags for name, flags in REQUIRED_COMBINATIONS.items()
+    if name in {"crag_claim", "grounded_math", "query_decomposition"}
+}
+SCOPED_COMBINATIONS = {
+    **SCOPED_COMBINATIONS,
+    "late_interaction": {"RAG_LATE_INTERACTION_ENABLED"},
+}
+SCOPED_COMBINATIONS = {
+    **SCOPED_COMBINATIONS,
+    **{
+        name: SCOPED_COMBINATIONS[left] | SCOPED_COMBINATIONS[right]
+        for name, left, right in (
+            ("crag_math", "crag_claim", "grounded_math"),
+            ("crag_query", "crag_claim", "query_decomposition"),
+            ("crag_late", "crag_claim", "late_interaction"),
+            ("math_query", "grounded_math", "query_decomposition"),
+            ("math_late", "grounded_math", "late_interaction"),
+            ("query_late", "query_decomposition", "late_interaction"),
+        )
+    },
+    "full_stack": set().union(*SCOPED_COMBINATIONS.values()),
+}
+
+
+def required_matrix_combinations(version: str) -> dict:
+    """Return the exact contract; unknown versions never inherit a valid scope."""
+    if version == "integrated-v3-selective":
+        return {name: set(flags) for name, flags in REQUIRED_COMBINATIONS.items()}
+    if version == "integrated-v4-scoped":
+        return {name: set(flags) for name, flags in SCOPED_COMBINATIONS.items()}
+    return {}
+
+
 COMBINATION_PREREQUISITES = {
     "crag_claim": {"evaluation_foundation"},
     "grounded_math": {"evaluation_foundation"},
@@ -52,6 +86,15 @@ def _enabled(value) -> bool:
 
 
 def validate_combination_matrix(matrix: dict) -> dict:
+    required_combinations = required_matrix_combinations(matrix.get("version"))
+    scoped = matrix.get("version") == "integrated-v4-scoped"
+    required_baselines = (
+        {name: set() for name in required_combinations} if scoped else REQUIRED_BASELINES
+    )
+    required_prerequisites = (
+        {name: {"evaluation_foundation"} for name in required_combinations}
+        if scoped else COMBINATION_PREREQUISITES
+    )
     combinations = list(matrix.get("combinations") or [])
     ids = [str(item.get("id") or "").strip() for item in combinations]
     id_counts = Counter(ids)
@@ -80,7 +123,7 @@ def validate_combination_matrix(matrix: dict) -> dict:
             name for name, value in (by_id[combination_id].get("flags") or {}).items()
             if _enabled(value)
         }
-        for combination_id, required in REQUIRED_COMBINATIONS.items()
+        for combination_id, required in required_combinations.items()
     )
     required_baselines_correct = all(
         combination_id in by_id
@@ -91,18 +134,18 @@ def validate_combination_matrix(matrix: dict) -> dict:
             ).items()
             if _enabled(value)
         }
-        for combination_id, required in REQUIRED_BASELINES.items()
+        for combination_id, required in required_baselines.items()
     )
     dependencies_complete = all(
         combination_id in by_id
         and isinstance(by_id[combination_id].get("prerequisites"), list)
         and set(by_id[combination_id]["prerequisites"]) == prerequisites
-        for combination_id, prerequisites in COMBINATION_PREREQUISITES.items()
+        for combination_id, prerequisites in required_prerequisites.items()
     )
     checks = {
         "schema_valid": matrix.get("schema") == "integrated-feature-matrix-v1",
-        "version_valid": matrix.get("version") == "integrated-v3-selective",
-        "required_combinations_exact": set(ids) == set(REQUIRED_COMBINATIONS),
+        "version_valid": bool(required_combinations),
+        "required_combinations_exact": set(ids) == set(required_combinations),
         "combination_ids_unique": bool(ids) and all(count == 1 for count in id_counts.values()),
         "all_flags_explicit": flags_explicit,
         "all_baseline_flags_explicit": baseline_flags_explicit,

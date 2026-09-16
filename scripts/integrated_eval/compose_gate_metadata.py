@@ -17,7 +17,7 @@ for value in (ROOT, SRC):
 
 from mech_chatbot.evaluation.integrated_hardening import (
     FEATURE_FLAGS,
-    REQUIRED_COMBINATIONS,
+    required_matrix_combinations,
     validate_combination_matrix,
     compare_load_reports,
     evaluate_request_budgets,
@@ -396,6 +396,8 @@ def load_matrix_evidence(
     if not matrix_validation["passed"]:
         raise ValueError("feature matrix is invalid")
     matrix_by_id = _expected_configurations(feature_matrix, release_decisions)
+    required = required_matrix_combinations(feature_matrix.get("version"))
+    scoped = feature_matrix.get("version") == "integrated-v4-scoped"
     rows = manifest.get("combinations") or []
     ids = [str(row.get("id") or "") for row in rows]
     reports = []
@@ -403,6 +405,11 @@ def load_matrix_evidence(
     for row in rows:
         report, row_references = load_row_evidence(
             row, expected_configuration=matrix_by_id.get(row["id"]), root=root,
+            **({
+                "baseline_combinations": {name: set() for name in required},
+                "candidate_combinations": required,
+                "maximum_provider_retries": 0,
+            } if scoped else {}),
         )
         references.extend(row_references)
         reports.append(report)
@@ -410,7 +417,7 @@ def load_matrix_evidence(
     by_id = {row["combination_id"]: row for row in reports}
     checks = {
         "schema_valid": manifest.get("schema") == "integrated-matrix-evidence-v1",
-        "combination_ids_exact": set(ids) == set(REQUIRED_COMBINATIONS),
+        "combination_ids_exact": set(ids) == set(required),
         "combination_ids_unique": len(ids) == len(set(ids)),
         "all_combinations_passed": bool(reports) and all(row["passed"] for row in reports),
         "primary_combination_valid": primary in by_id,
@@ -425,8 +432,14 @@ def load_matrix_evidence(
             }) == 1
         ),
     }
+    if scoped:
+        checks["requested_capabilities_enabled"] = all(
+            {flag for flag, enabled in matrix_by_id[name]["flags"].items() if enabled}
+            == flags for name, flags in required.items()
+        )
     return ({
         "schema": "integrated-matrix-evidence-result-v1",
+        **({"feature_matrix_version": feature_matrix["version"]} if scoped else {}),
         "passed": all(checks.values()), "checks": checks,
         "combination_results": reports,
         "primary_combination_id": primary,

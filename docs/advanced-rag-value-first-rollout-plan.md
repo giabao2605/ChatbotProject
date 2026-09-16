@@ -2,6 +2,41 @@
 
 ## Tóm tắt
 
+### Checkpoint 2026-09-16 — provider-free verification và scoped matrix delta
+
+Browser provider-free trên `81820c53d240660701df2186677469972e06527c` đạt
+3/3: login/profile, anonymous session/CSRF, authenticated RAG health all-off.
+Không có chat/provider call trong lượt này; process đã dừng và port 8080/8100
+được xác minh giải phóng. Evidence ở
+`.local/rc-73f50ac-preparation/browser-provider-free-01/verification.json`.
+Đây không phải browser chat/citation hoặc provider recovery acceptance.
+
+Profile encoder Late cục bộ dùng worker hiện hữu và frozen manifest 12 câu:
+first-call gồm worker/model startup 28139.223 ms; 11 câu sau 290.527–358.866 ms.
+Không đo retrieval/MaxSim/Voyage; không bỏ cold-start khỏi gate đã khai báo.
+Raw stage timings ở `.local/rc-73f50ac-preparation/late-local-encoder-profile-81820c5.json`.
+
+Delta đang kiểm chứng bổ sung `integrated-v4-scoped` bên cạnh v3 lịch sử:
+4 capability (CRAG/Claim, Math, Query, Late), 6 cặp và full requested stack;
+Graph/Community OFF, baseline all-off, zero retry. Validator, evidence loader
+và release gate dùng cùng required row contract. Artifact-backed regression
+nạp 11 hàng/110 reference, từ chối duplicate, thiếu concurrency 1/5, sai commit,
+retry và không tính Late bị hard-deny là đã đo. Standards/security và Spec review
+không còn actionable finding sau bổ sung regression. Full unit với pytest-cov
+dừng collection vì duplicate native NumPy import và lỗi đường dẫn; JUnit lỗi
+giữ tại `.local/rc-73f50ac-preparation/scoped-matrix-full.xml`. Lượt thay thế dùng
+standalone coverage đã đạt 3694 passed, 2 skipped, 0 failure/error trong 652.49s;
+JUnit `scoped-matrix-full-standalone.xml`, coverage
+`scoped-matrix-full-standalone-coverage.xml` cùng thư mục preparation. Coverage
+gộp ba module đổi 84% (gate 84%, loader 77%, integrated_hardening 93%);
+không tuyên bố từng module đều đạt 80%. Hai skip là symlink OS và Scheduled Task
+opt-in; không bỏ qua failure. Chưa freeze delta hoặc công nhận v4 ready. Chưa có declared live
+matrix manifest; không dùng fixture synthetic làm acceptance evidence.
+
+Late hard-deny vẫn giữ nguyên đến khi có đủ capability evidence và conditional
+activation được kiểm chứng. Còn Query pilot/review, CRAG diagnostic/formal/pilot,
+Late acceptance, matrix live, final RC binding và signed release bundle.
+
 ### Checkpoint 2026-09-15 — browser baseline preparation
 
 Late stop-first-provider-failure đã freeze tại `d918b60fcea401593854e997541e7d090973808a`.

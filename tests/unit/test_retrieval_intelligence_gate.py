@@ -953,6 +953,25 @@ def test_community_summary_gate_fails_closed_without_graph_review_or_on_stale_su
     assert result["passed"] is False
 
 
+def test_scoped_matrix_gate_requires_all_eleven_rows_but_not_self_reported_acceptance():
+    gate = _module()
+    ids = ["crag_claim", "grounded_math", "query_decomposition", "late_interaction",
+           "crag_math", "crag_query", "crag_late", "math_query", "math_late",
+           "query_late", "full_stack"]
+    evidence = {"feature_matrix_version": "integrated-v4-scoped", "passed": True,
+                "combination_results": [{"combination_id": name, "passed": True}
+                                        for name in ids]}
+    result = gate.compare("integrated_hardening", report(), report(),
+                          {"combination_matrix_evidence": evidence})
+    assert result["checks"]["combination_results_complete"] is True
+    assert result["checks"]["artifact_integrity_verified"] is False
+    assert result["passed"] is False
+    for version in ("unknown", "integrated-v3-selective"):
+        result = gate.compare("integrated_hardening", report(), report(),
+            {"combination_matrix_evidence": {**evidence, "feature_matrix_version": version}})
+        assert result["checks"]["combination_results_complete"] is False
+
+
 def test_integrated_hardening_gate_requires_every_control_plane_report(tmp_path, monkeypatch):
     gate = _module()
     monkeypatch.setattr(gate, "_matrix_evidence_recomputed", lambda *_args: True)

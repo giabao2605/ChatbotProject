@@ -18,7 +18,7 @@ if str(SRC) not in sys.path:
 
 from mech_chatbot.evaluation.late_interaction import HARD_NEGATIVE_SCENARIOS
 from mech_chatbot.evaluation.integrated_hardening import (
-    REQUIRED_COMBINATIONS,
+    required_matrix_combinations,
     REQUIRED_PREREQUISITES,
 )
 from mech_chatbot.governance.artifact_references import (
@@ -692,7 +692,9 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
         combination_results = matrix_evidence.get("combination_results") or []
         prerequisites = metadata.get("prerequisites") or {}
         required_prerequisites = set(REQUIRED_PREREQUISITES)
-        required_combinations = set(REQUIRED_COMBINATIONS)
+        required_combinations = set(required_matrix_combinations(
+            matrix_evidence.get("feature_matrix_version", "integrated-v3-selective")
+        ))
         checks = {
             **common,
             "artifact_integrity_verified": (
@@ -712,7 +714,8 @@ def compare(stage, baseline, candidate, metadata=None, reference=None):
                 (metadata.get("matrix_validation") or {}).get("passed") is True
             ),
             "combination_results_complete": (
-                matrix_evidence.get("passed") is True
+                bool(required_combinations)
+                and matrix_evidence.get("passed") is True
                 and {row.get("combination_id") for row in combination_results}
                 == required_combinations
             ),
