@@ -144,7 +144,8 @@ ChatBotProject/
 │   ├── ops/
 │   │   ├── backup_system.py              # System backup utility
 │   │   ├── loadtest_lan.py               # LAN load testing tool
-│   │   └── start_demo_lan.ps1            # PowerShell script: start all services for LAN demo
+│   │   ├── start_demo_lan.ps1             # PowerShell script: start all services for LAN demo
+│   │   └── worker_supervisor.ps1          # Keep the ingestion worker ready and restart it after exit
 │   └── danger_ops/
 │       ├── empty_bag.py                  # Purge documents from Qdrant
 │       ├── reconcile_sql_qdrant.py       # Reconcile SQL ↔ Qdrant state
@@ -294,7 +295,7 @@ and state directories are ignored.
 - PowerShell on Windows for the simplest LAN demo workflow
 - Microsoft SQL Server + ODBC Driver (for `pyodbc`)
 - A Qdrant Cloud account (URL + API key)
-- An OpenAI-compatible LLM endpoint (ProxyLLM or direct OpenAI)
+- An OpenRouter account and API key for text and vision
 
 ### 2. Configure Environment
 
@@ -304,6 +305,18 @@ secret values. Never commit the resulting `.env` file.
 ```powershell
 Copy-Item .env.example .env
 ```
+
+Project provider configuration is shared: keep the OpenRouter key and both model
+names in the primary repository root `.env`. Text LLM and vision/OCR use the same
+`OPENROUTER_API_KEY`. A configured `OPENROUTER_BASE_URL` selects that key exclusively;
+an empty key never falls back to a legacy provider key. Restart existing processes
+after a change. Environment variables explicitly supplied by launchers take precedence.
+
+Git branches contain independent code snapshots. Branches used for new work must
+include the OpenRouter adapter/settings changes; environment configuration alone
+cannot migrate an older adapter. Historical rollout snapshots remain historical.
+Production also requires the managed `openrouter` profile with approved surfaces
+and a valid review expiry; no automatic policy bypass is installed.
 
 The important runtime values are:
 
@@ -317,10 +330,10 @@ EXTERNAL_AI_LOCAL_DEVELOPMENT=false
 EXTERNAL_PROCESSING_POLICY=internal_only
 
 # LLM / Vision
-PROXYLLM_BASE_URL=https://api.proxyllm.eu/v1
-PROXYLLM_API_KEY=<your-api-key>
-GPT_MODEL_NAME=gpt-5.4
-GPT_VISION_MODEL_NAME=gpt-5.4
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_API_KEY=<your-openrouter-api-key>
+GPT_MODEL_NAME=openai/gpt-5.6-luna
+GPT_VISION_MODEL_NAME=openai/gpt-5.6-luna
 GPT_TEMPERATURE=0
 GPT_MAX_OUTPUT_TOKENS=8000
 GPT_VISION_MAX_OUTPUT_TOKENS=16000
@@ -449,10 +462,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\ops\start_demo_lan.ps1
 ```
 
 The script applies every discovered pending migration, starts the RAG server on
-`127.0.0.1:8100`, and exposes the browser application on the configured LAN
-address. It prints the three owned process IDs; stop only those IDs with
-`Stop-Process -Id <rag-pid>,<worker-pid>,<app-pid>` before rerunning the
-launcher.
+`127.0.0.1:8100`, starts a single supervised ingestion worker, and exposes the
+browser application on the configured LAN address. It waits for the worker
+readiness marker before reporting the demo as ready. The output includes the
+RAG, worker supervisor, and app process IDs; stop the worker supervisor tree
+with `taskkill /PID <worker-supervisor-pid> /T /F`, then stop the RAG and app
+processes before rerunning the launcher.
 
 **Option B: Local Development**
 

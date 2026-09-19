@@ -154,3 +154,9 @@ archive/
 
 # ===== Empty components directory (legacy placeholder) =====
 components/
+
+# Generated local runtime cache and acceptance exports
+/src/data/cache/
+/backend-acceptance-*.xml
+/frontend-acceptance-*.json
+/test-qa-acceptance.xml
