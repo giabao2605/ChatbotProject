@@ -1,5 +1,220 @@
 # Query: gói chuẩn bị hậu-pilot ngày 2026-09-05
 
+## Checkpoint offline 09/09/2026: runbook hậu-pilot có điều kiện
+
+Source đã rà tĩnh: `9f9776148f08545a0ad29cfd1a8d4e8bb1c4759b`, trong worktree
+riêng `C:/Users/bao.nguyen/.codex/worktrees/5088/ChatBotProject`, branch
+`codex/advanced-rag-offline-20260909`. Theo coordination record của task cha,
+candidate-04 đã terminal fail-closed lúc `2026-09-09T05:19:05Z`: `15` WAL,
+`16` claims, card 16 bị `per_request_evidence_invalid` vì
+`provenance_passed=false`. Host receipt xác nhận safe stop; auto-cleanup của
+run đã hoàn tất theo quyền cleanup trước đó. Run này không accepted, không đạt
+contract 100 card/24 giờ và không đi vào review/final-gate success path.
+
+Không resume, retry, replacement, catch-up, dispatch, provider traffic hoặc
+xóa thêm dữ liệu từ run này. Cleanup đã xảy ra không tạo post-pilot deletion
+receipt, không chuyển quyền xóa sang run khác và không thay approval riêng cho
+review UI của một run thành công trong tương lai. Các checkpoint phía dưới giữ
+nguyên lịch sử.
+
+Parent đang triển khai contract Query prospective **sequential single-pass 100**
+trong worktree runtime riêng. Chưa có version, binding, validation hay owner
+authorization mới để ghi vào hồ sơ này; không dùng contract
+`query-decomposition-24h-100-v1` lịch sử để mở run thay thế.
+
+Tại source này, CLI final gate đã nối đủ input; dispatcher, worker, ledger,
+receipt và loader matrix đều đã có. Các dòng lịch sử nói các phần đó còn thiếu
+không còn là backlog hiện tại. Rà source không tìm gap mới cần sửa implementation.
+Evidence thực, human review và quyền thực thi vẫn là điều kiện còn thiếu.
+
+### Đầu vào và đầu ra phải khóa trước khi dùng lệnh
+
+| Bước | Input chính xác | Output và điều kiện chuyển bước |
+| --- | --- | --- |
+| Terminal reconciliation | Disposition/terminal và proof runtime đã dừng an toàn; authorization, schedule, WAL bất biến của cùng root | Chỉ run future kết thúc đủ 100 card mới đi tiếp automated gate. Failed/consumed root không retry/catch-up; candidate-04 đã terminal invalid-evidence ở card 16 nên không vào success path |
+| Automated gate | `--schedule`, `--authorization`, `--wal`, `--runtime-identity-sha256`, `--output` | JSON `query-decomposition-production-pilot-gate-v1`; tất cả `checks` và `automated_gate_passed=true`, `eligible_request_count=100`, `reason=human_review_pending`; human/pilot/default vẫn false |
+| Review pack | Source sạch đúng commit authorization; authorization/schedule/WAL/trace, đúng `review-captures`, output trực tiếp dưới run root | Pack `query-decomposition-pilot-review-pack-v3`; 20 capture đóng băng, 2 card cho mỗi 10 case; cộng mọi item ngoài sample có `owner_review_required=true`. `review_item_count` có thể lớn hơn 20 |
+| Owner review + cleanup | Pack/manifest cùng hash, source/tool binding, cùng Windows user DPAPI; owner thực xem mọi item; **explicit owner approval cho xóa đúng tập capture của run này trước mở hoặc resume UI** | Result metadata-only trước khi xóa; journal `capture-deletion.journal.json` finalized; deletion receipt bind result/journal/hash/count; capture directory còn tồn tại và rỗng |
+| Final gate | Toàn bộ automated inputs cộng pack, result, receipt, capture dir, trace, journal, source root | `automated_gate_passed`, `human_review_passed`, `pilot_accepted` đều true; `default_rollout_authorized=false`. Không phải quyền rollout/matrix |
+
+Gate kiểm mỗi card/trace đúng một lần, attempt 1, identity/hash, per-request
+contract, cadence, không overlap, thời gian thực từ attempt đầu đến completion
+cuối tối thiểu 24 giờ, concurrency 1 và no retry/replacement/catch-up.
+`gate` CLI trả exit 0 cả khi JSON gate fail: luôn kiểm nội dung JSON, không dùng
+exit code làm acceptance. Source: `query_decomposition_pilot_gate.py:169` và
+`query_decomposition_pilot.py:758,797` trong `scripts/ops/`.
+
+Mandatory human cases gồm toàn bộ 20 sample và mọi deterministic safe refusal
+ngoài sample được WAL đánh dấu `owner_review_required=true`; không tự chọn lại
+sample, không bỏ item bị rejected. Mỗi nhãn phải khớp card/trace, có answer,
+citation, safety, decision/reason hợp lệ; reviewer lấy từ `authorization.actor`.
+Không thay actual review bằng agent nhãn accepted. Source:
+`query_pilot_review_capture.py:354`, `query_pilot_review_artifacts.py:291,428,492`.
+
+**Ranh giới xóa:** UI không có chế độ review-only hoặc `--no-delete`. Finalize
+tự ghi result rồi gọi deletion lifecycle, kể cả review rejected. Khi result đã
+có mà receipt chưa có, mở lại cùng UI có thể resume deletion **trước khi mở
+window** (`query_pilot_review_ui.py:53,115,376`). Vì vậy phải có quyền xóa cụ thể
+trước cả invocation và resume; quyền pilot hoặc review chất lượng không suy ra
+quyền này. Không chạy cleanup bằng tay, không viết receipt giả hoặc xóa journal.
+Giữ nguyên sáu historical incident capture; scope candidate-02 không chuyển
+sang candidate-04. Pack chỉ xuất metadata nhưng vẫn đọc bytes ciphertext để
+kiểm binding, nên cũng chưa được thực thi trong lượt static review này.
+
+### PowerShell templates hậu-pilot, chưa chạy
+
+Chỉ dùng sau terminal reconciliation đạt; điền input từ packet đã xác minh,
+không đoán interpreter hoặc runtime identity từ environment. `$SourceRoot`
+phải là root bound trong authorization, **không phải worktree tài liệu này**.
+Lệnh chạy từ source sạch đúng commit; mọi output dưới ignored run root, tên mới
+chưa tồn tại. Template setup chỉ kiểm metadata, không cấp quyền cho bước sau.
+
+```powershell
+$Python = '<absolute verified python.exe from launch packet>'
+$SourceRoot = '<absolute authorized clean source root>'
+$Authorization = '<absolute pilot authorization JSON>'
+$Schedule = '<absolute frozen schedule JSON>'
+$RuntimeIdentitySha256 = '<verified 64-hex runtime identity digest>'
+$auth = Get-Content -LiteralPath $Authorization -Raw | ConvertFrom-Json
+$RunRoot = Join-Path $SourceRoot $auth.pilot_run_root
+$Wal = Join-Path $RunRoot 'pilot.wal.jsonl'
+$Trace = Join-Path $RunRoot 'trace.jsonl'
+$Captures = Join-Path $RunRoot 'review-captures'
+$Manifest = Join-Path $SourceRoot 'data/decomposition_eval_v1/eval_manifest.jsonl'
+$Pack = Join-Path $RunRoot 'post-pilot-review-pack.json'
+$Review = Join-Path $RunRoot 'post-pilot-review-result.json'
+$Receipt = Join-Path $RunRoot 'post-pilot-deletion-receipt.json'
+$Journal = Join-Path $RunRoot 'capture-deletion.journal.json'
+$Automated = Join-Path $RunRoot 'post-pilot-automated-gate.json'
+$Final = Join-Path $RunRoot 'post-pilot-final-gate.json'
+Set-Location -LiteralPath $SourceRoot
+if ((git rev-parse HEAD).Trim() -ne $auth.source_commit) { throw 'Source mismatch' }
+if (git status --porcelain --untracked-files=all) { throw 'Source must be clean' }
+$env:PYTHONDONTWRITEBYTECODE = '1'
+$env:PYTHONPATH = Join-Path $SourceRoot 'src'
+```
+
+Automated-only reconciliation sau pilot hoàn tất; chưa mở UI:
+
+```powershell
+if (Test-Path -LiteralPath $Automated) { throw 'Choose a new gate output path' }
+& $Python -m scripts.ops.query_decomposition_pilot gate --schedule $Schedule --authorization $Authorization --wal $Wal --runtime-identity-sha256 $RuntimeIdentitySha256 --output $Automated
+if ($LASTEXITCODE -ne 0) { throw 'Gate invocation failed' }
+$gate = Get-Content -LiteralPath $Automated -Raw | ConvertFrom-Json
+if ($gate.automated_gate_passed -ne $true -or $gate.reason -ne 'human_review_pending') { throw 'Stop: automated gate did not pass' }
+& $Python -m scripts.ops.query_pilot_review_pack --source-root $SourceRoot --authorization $Authorization --schedule $Schedule --wal $Wal --trace $Trace --capture-dir $Captures --output $Pack
+if ($LASTEXITCODE -ne 0) { throw 'Stop: review pack failed' }
+```
+
+Lệnh kế tiếp là **review có giải mã và tự xóa khi finalize**, chỉ owner chạy
+sau approval xóa đúng run/tập capture đã ghi nhận bên ngoài tracked Git.
+Không chạy chỉ để xem help/state hoặc thử UI. Resume sau receipt-write failure
+dùng nguyên lệnh và nguyên paths dưới cùng approval còn áp dụng; không tạo pack
+mới, không bỏ qua binding, và không resume nếu receipt đã tồn tại.
+
+```powershell
+& $Python -m scripts.ops.query_pilot_review_ui --source-root $SourceRoot --pack $Pack --manifest $Manifest --authorization $Authorization --schedule $Schedule --wal $Wal --trace $Trace --capture-dir $Captures --review-result $Review --deletion-receipt $Receipt
+if ($LASTEXITCODE -ne 0) { throw 'Stop: review or cleanup incomplete; inspect metadata disposition' }
+```
+
+Sau actual owner review và cleanup hoàn tất:
+
+```powershell
+if (Test-Path -LiteralPath $Final) { throw 'Choose a new gate output path' }
+& $Python -m scripts.ops.query_decomposition_pilot gate --schedule $Schedule --authorization $Authorization --wal $Wal --runtime-identity-sha256 $RuntimeIdentitySha256 --review-pack $Pack --review-result $Review --deletion-receipt $Receipt --capture-dir $Captures --trace $Trace --deletion-journal $Journal --source-root $SourceRoot --output $Final
+if ($LASTEXITCODE -ne 0) { throw 'Final gate invocation failed' }
+$gate = Get-Content -LiteralPath $Final -Raw | ConvertFrom-Json
+if ($gate.automated_gate_passed -ne $true -or $gate.human_review_passed -ne $true -or $gate.pilot_accepted -ne $true -or $gate.default_rollout_authorized -ne $false) { throw 'Stop: final pilot acceptance not established' }
+```
+
+### Math/Query trên future final RC: runner có rồi, evidence còn pending
+
+| Row | Manifest | Baseline / candidate | Số request baseline + candidate |
+| --- | --- | --- | --- |
+| `math_only` | `data/grounded_math_eval_v1/eval_manifest.jsonl` | All OFF / chỉ Grounded Math ON | 16 + 16 |
+| `query_only` | `data/decomposition_eval_v1/eval_manifest.jsonl` | All OFF / chỉ Query ON | 13 + 13 |
+| `math_query` | `data/decomposition_eval_v1/math_query_interaction_manifest.jsonl` | All OFF / Math và Query ON | 3 + 3 |
+
+Sáu arm chạy đúng thứ tự row trên, baseline rồi candidate, tổng 64 evaluation
+request; không cộng smoke thành evaluation evidence. CRAG/Graph/Community/Late
+giữ OFF. Đây là evaluation isolation, không default rollout. Math authorization
+cũ không chuyển sang future RC. Ba row phải cùng final RC/tool/versions/provider
+binding; collection, fixture snapshot, preflight và rollback theo từng row.
+Ba BOM interaction case vẫn yêu cầu Grounded Math, không bỏ hoặc relabel.
+
+CLI hiện chỉ có `prepare` và `validate` cho draft, không có `run`/`dispatch`.
+Đây là template offline cho future RC, output parent phải tồn tại; không tạo
+root execution hoặc lấy credential:
+
+```powershell
+$FinalRcRoot = '<absolute future RC source root>'
+$MatrixDraft = '<new absolute ignored draft output JSON outside future execution root>'
+Set-Location -LiteralPath $FinalRcRoot
+& $Python -m scripts.integrated_eval.math_query_matrix prepare --source-root $FinalRcRoot --output $MatrixDraft
+if ($LASTEXITCODE -ne 0) { throw 'Matrix draft rejected' }
+& $Python -m scripts.integrated_eval.math_query_matrix validate --source-root $FinalRcRoot --draft $MatrixDraft
+if ($LASTEXITCODE -ne 0) { throw 'Matrix draft drift' }
+```
+
+Draft `math-query-isolation-draft-v1` không phải executable declaration.
+API execution hiện hữu là `scripts.integrated_eval.math_query_dispatch.execute_matrix_processes`
+(`:209`), nhận `draft_bytes`, `approval_bytes`, keyword `source_root`,
+`expected_python`, `expected_approval_sha256`, `expected_owner`,
+`rollback_artifacts`, `smoke_artifacts`, `base_environment`, `timeout_seconds`,
+`clock`. Không dựng CLI mới hoặc chạy thẳng các arm command để bypass guard.
+Đầu vào phải là declaration `math-query-window-declaration-v1` sạch/exact-bound,
+approval mới bind exact draft SHA-256/owner/window, root chưa dùng, ba rollback
+bytes và sáu smoke bytes hash-bound/fresh, ba frozen preflight/conditions,
+explicit environment khớp provider fingerprint và interpreter/module paths.
+Chưa có các input này thì API là pending, không dùng dummy approval/time.
+
+Output execution: `consumed.json`, `terminal.json`, sáu cặp result/receipt trong
+`arm-receipts/`, report `<row>/<baseline|candidate>/eval.json`, trace
+`<row>/rag-traces/<baseline|candidate>.jsonl`. Worker failure dừng trước arm sau;
+valid quality-negative exit 2 được lưu thành quality outcome, không tự coi là
+execution failure. Root đã claim hoặc terminal failure vẫn consumed.
+`reconcile_matrix_execution` (`math_query_evidence.py:24`) phải nhận độc lập
+`expected_commit`, `expected_draft_sha256`, `expected_resolved_cases` để kiểm
+report/receipt và quality binding. `load_math_query_evidence` (`:171`) nhận
+manifest `math-query-evidence-v1`, `expected_conditions`, `versions`, source/root
+và cả ba execution inputs; kiểm ba row/sáu report/trace/identity/budget. Integrity
+pass hay `observed_candidate_quality_passed` không thay independent quality
+review: `quality_acceptance_verified`, `matrix_accepted`, default rollout vẫn
+false. Final technical/owner release decision và ledger/bundle là gate riêng.
+
+### Historical dependency revalidation và kiểm chứng còn chờ
+
+Rà source chain `validate_query_owner_decision` trong
+`src/mech_chatbot/governance/query_activation_contract.py:515`: validator này
+đọc owner decision/finalization references, trusted clean historical evidence
+root, owner approval/draft và formal disposition/review pack/result cùng hashes.
+Nó kiểm formal 3 pair, 111 successful provider calls/zero failure/retry và human
+13 case/39 reviewed output của historical quality scope. Đây khác với pilot
+100 card/20 frozen capture; không dùng pilot sample để thay 39-output review.
+Giữ `evidence_source_commit` lịch sử khác `source_commit` của RC; nếu dependency
+reject thì ghi dependency cần tái tạo, không sửa hash/root/artifact để pass.
+`prepare_activation_draft` (`scripts/ops/query_controlled_demo_activation.py:118`)
+đã gọi validator này; không cần xây validator hoặc dispatcher mới.
+
+Lượt này chỉ rà source và diff, **không gọi validator trên evidence thật** vì
+scope không đọc runtime artifacts/capture và worktree tài liệu đang dirty.
+Tái kiểm read-only bằng public `validate_query_owner_decision(...)` khi có đúng
+historical references/root và scope đọc được xác nhận; kết quả true chỉ cho
+quality dependency, không cấp authorization mới. Không dùng CLI `finalize`
+hoặc materialize runtime để kiểm dependency.
+
+Các node regression đã có, chưa chạy trong lượt static review này:
+`test_query_decomposition_pilot.py::test_collector_and_gate_require_exactly_once_100_request_contract`,
+`test_query_pilot_review_capture.py::test_review_capture_sample_requires_two_frozen_cards_per_case`,
+`test_query_pilot_review_capture.py::test_rejected_review_still_deletes_ciphertext_but_never_passes_gate`,
+`test_query_pilot_review_integrity.py::test_authorized_source_requires_exact_clean_head`,
+`test_query_pilot_review_ui.py::test_review_ui_fails_closed_when_deletion_receipt_write_fails`,
+và `test_query_pilot_capture_lifecycle.py::test_delete_capture_set_resumes_after_partial_unlink`
+(đều dưới `tests/unit/`). Sau pilot nếu cần kiểm lại contract dùng interpreter
+offline đã xác minh, `PYTHONDONTWRITEBYTECODE=1`, `RUN_QUERY_TASK_PROOF=0`, live
+opt-ins OFF và `python -m pytest -q` với đúng node trên; không cần full-suite,
+coverage, pip install hoặc model imports nặng cho thay đổi tài liệu này.
+
 ## Continuation live-readiness 08/09 sau checkpoint 391e28b
 
 Kiểm read-only xác nhận service token có trong settings từ dotenv, nhưng không

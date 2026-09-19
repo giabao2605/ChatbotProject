@@ -1,5 +1,63 @@
 # CRAG: readiness offline ngày 05/09/2026
 
+## Checkpoint offline 09/09/2026: source mới, chưa có CRAG window mới
+
+Static review trong worktree task riêng tại source
+`9f9776148f08545a0ad29cfd1a8d4e8bb1c4759b` xác nhận các sửa chữa isolation,
+zero retry và stop-on-failure đã có trong source. Không còn coi hai lỗi trên
+baseline `38620eb` bên dưới là việc implementation chưa làm. Lượt này không
+chạy test/import, audit dependencies hoặc truy cập runtime; những số kiểm chứng
+sau là kết quả đã ghi nhận trước đó, không phải test chạy lại ngày 09/09.
+Isolated venv đã ghi nhận **3562 pass / 2 skip**, audit **0 known vulnerabilities**;
+shared `chat_env` vẫn có advisory/disposition riêng ở checkpoint 08/09, không
+được đổi thành security-green nhờ kết quả của venv khác.
+
+| Invariant đã có tại `9f97761` | Source và regression để đối chiếu |
+| --- | --- |
+| Exact arm isolation, không mutate process cha | `scripts/crag_eval/run_rollout.py:162` merge provider map trước overrides; baseline all-off, candidate chỉ CRAG + Claim Repair; `tests/unit/test_crag_arm_isolation.py:13` có 8 tổ hợp host/provider nhiễm flag và hai router mode. |
+| Zero retry trước dispatch và dừng case tiếp theo | `run_rollout.py:301` truyền `--maximum-provider-retries 0` và `--stop-on-provider-failure`; `test_crag_eval_harness.py:1138` assert invocation, `:645` assert chỉ case đầu được gọi khi provider fail, `:687` kiểm source timeout. |
+| Source và artifact binding | `run_rollout.py:141`, `:154`, `:429` kiểm source sạch, commit/manifest không drift sau arm; regression `test_crag_eval_harness.py:1604`, `:1619`, `:1631` bao phủ dirty source, commit drift và rollback cùng commit; `:1534` kiểm smoke age trước mỗi arm. |
+| Inconclusive không thành acceptance | `scripts/crag_eval/diagnostic_aggregation.py:192`, `:520` yêu cầu series đầy đủ, không failure/retry, giữ gate và authorization false; `tests/unit/test_crag_diagnostic.py:345`, `:606`, `:628`, `:659`, `:687` kiểm stop, failure/retry và provider variance. |
+
+Không tìm thấy bounded implementation gap mới trong phạm vi static review này;
+không sửa runner/aggregator hoặc thêm harness trùng lặp. Đây không phải chứng
+minh toàn bộ CRAG không còn lỗi. Khoảng thiếu còn thực là **fresh measured
+evidence và owner authorization cho CRAG trên final RC**. Diagnostic lịch sử
+vẫn **3/9 case pair, 0 series hoàn tất, inconclusive**; giữ nguyên mọi hashes và
+tombstones bên dưới. Query pilot/smoke không phải CRAG evidence; chưa đủ dữ liệu
+để tối ưu code/performance từ provider variance.
+
+### Draft diagnostic/recovery prerequisites, không phải quyền chạy
+
+1. Chờ kết thúc cạnh tranh tài nguyên với Query; kiểm tra final RC và interpreter
+   thực sự được chọn sau hậu-pilot. Không dùng authorization Math cũ hoặc Query
+   làm CRAG authorization. Graph giữ `keep_off_technical_limit`; Community/Late
+   OFF; CRAG baseline/candidate giữ exact isolation như bảng trên.
+2. Chốt scope supporting diagnostic hoặc formal trong draft riêng: never-used
+   absolute root, source/manifest/runner/aggregation hashes mới, provider config,
+   fixture collection và fingerprint, concurrency 1, zero retry, budget/expiry,
+   stop conditions và rollback binding cùng RC. Các trường execution cuối tài
+   liệu vẫn chưa điền; approval/traffic/activation đều false.
+3. Owner phải duyệt exact scope/bindings trước preflight có traffic hoặc smoke.
+   Khi được duyệt mới thu preflight/rollback và fresh CRAG smoke 5 request,
+   một attempt/request; bind declaration mới, kiểm smoke age 30 phút mỗi arm.
+   Recovery phải được xác nhận cho CRAG; không refresh/resume/retry window đã
+   terminal, không dùng artifact hoặc root cũ để tiếp tục.
+4. Giữ nguyên mirrored series và hard gates đã ghi bên dưới. Failure/retry,
+   binding drift hoặc expiry làm dừng; ghi tombstone, giữ evidence và chuẩn bị
+   draft mới. Không biến diagnostic pass thành formal/pilot/default approval.
+
+Smallest focused regression set đề nghị sau pilot, **chưa chạy trong lượt này**:
+
+```powershell
+# Dùng interpreter đã được chọn cho final RC, tại worktree offline riêng.
+# Giữ RUN_DB_TESTS/RUN_QDRANT_TESTS/RUN_EVAL_TESTS=0 và RAG_EXECUTION_CONTEXT=test.
+& $FinalRcPython -m pytest -q -p no:cacheprovider tests/unit/test_crag_arm_isolation.py tests/unit/test_crag_eval_harness.py tests/unit/test_crag_diagnostic.py -k 'exact_feature_set or arm_binds_trace_log_file or stops_before_next_case or stops_after_qdrant_source_timeout or dirty_worktree or source_commit_drift or commit_pinned_rollback or stale_provider_smoke or stops_and_counts_retry or inconclusive_and_fail_closed or arm_order_changes_result or material_effect_size_variance'
+```
+
+Lệnh này là offline regression template, không gọi diagnostic/rollout CLI thực.
+Full suite/coverage, model imports và dependency audit không nằm trong lượt này.
+
 ## Candidate interpreter 08/09: audit sạch, compatibility đang kiểm
 
 Venv riêng `.local/live-readiness-20260908/venv` (Python 3.12.3,
