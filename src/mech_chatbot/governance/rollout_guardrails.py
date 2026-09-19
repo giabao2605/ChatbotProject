@@ -1,0 +1,579 @@
+"""Executable rollout contracts shared by evaluation and activation.
+
+The module validates artifact facts only. It never infers rollout readiness
+from unit-test counts or from raw telemetry volume.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+from mech_chatbot.governance.artifact_references import (
+    load_bytes_reference,
+    load_json_reference,
+)
+from mech_chatbot.governance.provider_smoke import (
+    provider_smoke_artifact_valid,
+    provider_smoke_fresh_for_arms,
+)
+from mech_chatbot.governance.review_governance import review_governance_status
+
+
+PAIR_SCHEMA = "rollout-evidence-pair-v1"
+LIVE_EVIDENCE_TYPES = {"staging_evaluation", "production_pilot"}
+BENCHMARK_CONDITION_FIELDS = (
+    "git_sha",
+    "manifest_sha256",
+    "snapshot_fingerprint",
+    "provider_configuration_sha256",
+    "concurrency",
+    "governance_scope_sha256",
+    "collection",
+)
+EVIDENCE_IDENTITY_FIELDS = (
+    "artifact_path",
+    "artifact_schema",
+    "artifact_sha256",
+    "trace_path",
+    "trace_schema",
+    "trace_sha256",
+    "started_at",
+    "completed_at",
+)
+STAGE_DEPENDENCIES = {
+    "crag": ("evaluation_foundation",),
+    "grounded_math": ("evaluation_foundation",),
+    "late_interaction": ("grounded_math",),
+    "query_decomposition": ("evaluation_foundation",),
+    "graph_retrieval": ("evaluation_foundation",),
+    "community_summaries": ("graph_retrieval",),
+    "integrated_hardening": (
+        "crag",
+        "grounded_math",
+        "late_interaction",
+        "query_decomposition",
+        "graph_retrieval",
+    ),
+}
+COMPLETED_DECISIONS = {"accepted", "rejected", "completed"}
+GATE_SCHEMAS = {
+    "crag": "crag-rollout-gate-v1",
+    "grounded_math": "retrieval-intelligence-gate-v1",
+    "late_interaction": "retrieval-intelligence-gate-v1",
+    "query_decomposition": "retrieval-intelligence-gate-v1",
+    "graph_retrieval": "retrieval-intelligence-gate-v1",
+    "community_summaries": "retrieval-intelligence-gate-v1",
+    "integrated_hardening": "retrieval-intelligence-gate-v1",
+}
+GRAPH_GATE_REQUIRED_CHECKS = frozenset({
+    "baseline_provider_telemetry_valid",
+    "candidate_provider_telemetry_valid",
+    "baseline_provider_failures_zero",
+    "candidate_provider_failures_zero",
+    "wrong_answer_not_increased",
+    "leakage_zero",
+    "provider_retries_not_increased",
+    "relational_accuracy_gain",
+    "reviewed_edge_precision",
+    "review_workflow_fixture_passed",
+    "review_sample_governance_valid",
+    "review_sample_reference_valid",
+    "reviewer_diversity_requirement_met",
+    "review_sample_size_sufficient",
+    "approved_edge_pool_sufficient",
+    "structured_coverage",
+    "provenance_complete",
+    "pilot_domains_covered",
+    "pending_edges_never_served",
+    "traversal_budget_respected",
+    "router_scope_respected",
+    "non_relational_quality_not_decreased",
+    "latency_within_budget",
+    "cost_within_budget",
+})
+
+
+def _load_verified_artifact(
+    reference: dict,
+    *,
+    prefix: str = "artifact",
+    root: str | Path = ".",
+) -> dict | None:
+    flattened = {
+        "path": reference.get(f"{prefix}_path"),
+        "sha256": reference.get(f"{prefix}_sha256"),
+        "schema": reference.get(f"{prefix}_schema"),
+    }
+    if not all(flattened.values()):
+        return None
+    return load_json_reference(flattened, root=root)
+
+
+def evaluate_rollout_pair(pair: dict, *, root: str | Path = ".") -> dict:
+    """Validate one baseline/candidate pair against roadmap section 2.1."""
+    baseline = pair.get("baseline") or {}
+    candidate = pair.get("candidate") or {}
+    mismatches = [
+        field
+        for field in BENCHMARK_CONDITION_FIELDS
+        if baseline.get(field) != candidate.get(field)
+    ]
+    benchmark_conditions_complete = all(
+        baseline.get(field) not in (None, "")
+        and candidate.get(field) not in (None, "")
+        for field in BENCHMARK_CONDITION_FIELDS
+    )
+    evidence_identity_complete = all(
+        baseline.get(field) not in (None, "")
+        and candidate.get(field) not in (None, "")
+        for field in EVIDENCE_IDENTITY_FIELDS
+    )
+    verified_evidence_artifacts = [
+        _load_verified_artifact(context, prefix=prefix, root=root)
+        for context in (baseline, candidate)
+        for prefix in ("artifact", "trace")
+    ]
+    evidence_artifacts_valid = all(verified_evidence_artifacts)
+    evidence_artifact_schemas_valid = (
+        evidence_artifacts_valid
+        and [artifact["schema"] for artifact in verified_evidence_artifacts]
+        == [
+            "rag-labeled-eval-v4", "rag-refusal-snapshot-v1",
+            "rag-labeled-eval-v4", "rag-refusal-snapshot-v1",
+        ]
+    )
+    artifacts_distinct = (
+        baseline.get("artifact_sha256") != candidate.get("artifact_sha256")
+        and baseline.get("trace_sha256") != candidate.get("trace_sha256")
+    )
+    artifact_context_valid = (
+        evidence_artifact_schemas_valid
+        and verified_evidence_artifacts[0].get("run_label") == "baseline"
+        and verified_evidence_artifacts[2].get("run_label") == "candidate"
+        and all(
+            artifact.get("git_sha") == context.get("git_sha")
+            and context.get("manifest_sha256") in artifact.get("manifest_sha256s", [])
+            and artifact.get("snapshot_fingerprint") == context.get("snapshot_fingerprint")
+            and artifact.get("provider_configuration_sha256")
+            == context.get("provider_configuration_sha256")
+            and artifact.get("governance_scope_sha256")
+            == context.get("governance_scope_sha256")
+            and artifact.get("benchmark_concurrency") == context.get("concurrency")
+            and artifact.get("collection") == context.get("collection")
+            for artifact, context in (
+                (verified_evidence_artifacts[0], baseline),
+                (verified_evidence_artifacts[2], candidate),
+            )
+        )
+        and all(
+            trace.get("source", {}).get("git_sha") == context.get("git_sha")
+            and trace.get("filters", {}).get("start") == context.get("started_at")
+            and trace.get("filters", {}).get("end") == context.get("completed_at")
+            and trace.get("filters", {}).get("execution_contexts") == ["evaluation"]
+            for trace, context in (
+                (verified_evidence_artifacts[1], baseline),
+                (verified_evidence_artifacts[3], candidate),
+            )
+        )
+    )
+    try:
+        baseline_start = datetime.fromisoformat(
+            str(baseline.get("started_at")).replace("Z", "+00:00")
+        )
+        baseline_end = datetime.fromisoformat(
+            str(baseline.get("completed_at")).replace("Z", "+00:00")
+        )
+        candidate_start = datetime.fromisoformat(
+            str(candidate.get("started_at")).replace("Z", "+00:00")
+        )
+        candidate_end = datetime.fromisoformat(
+            str(candidate.get("completed_at")).replace("Z", "+00:00")
+        )
+        arm_order = pair.get("arm_order", "baseline-first")
+        arm_order_valid = arm_order in {"baseline-first", "candidate-first"} and (
+            baseline_start < baseline_end <= candidate_start < candidate_end
+            if arm_order == "baseline-first"
+            else candidate_start < candidate_end <= baseline_start < baseline_end
+        )
+        evidence_windows_valid = arm_order_valid
+    except (TypeError, ValueError):
+        arm_order_valid = False
+        evidence_windows_valid = False
+    evidence_type = pair.get("evidence_type")
+    data_plane = pair.get("data_plane") or {}
+    production_collection = data_plane.get("production_collection")
+    mutation_mode = data_plane.get("mutation_mode")
+    touches_production = production_collection in {
+        baseline.get("collection"), candidate.get("collection")
+    }
+    production_collection_not_mutated = (
+        bool(production_collection)
+        and mutation_mode in {"staging", "shadow", "read_only"}
+        and (not touches_production or mutation_mode == "read_only")
+    )
+    provider_smoke = _load_verified_artifact(
+        pair.get("provider_smoke") or {},
+        root=root,
+    )
+    provider_smoke_valid = provider_smoke_artifact_valid(
+        provider_smoke,
+        expected_provider_sha256=str(
+            baseline.get("provider_configuration_sha256") or ""
+        ),
+    )
+    try:
+        earliest_arm_start = min(baseline_start, candidate_start)
+        provider_smoke_precedes_pair = (
+            provider_smoke_valid
+            and datetime.fromisoformat(
+                str(provider_smoke.get("completed_at")).replace("Z", "+00:00")
+            )
+            < earliest_arm_start
+        )
+    except (TypeError, ValueError, UnboundLocalError):
+        provider_smoke_precedes_pair = False
+    provider_smoke_fresh_for_pair = (
+        provider_smoke_valid
+        and provider_smoke_fresh_for_arms(
+            provider_smoke,
+            arm_started_at=(
+                baseline.get("started_at"),
+                candidate.get("started_at"),
+            ),
+        )
+    )
+    gate = pair.get("gate") or {}
+    gate_artifact = _load_verified_artifact(gate, root=root)
+    gate_schema_valid = (
+        gate_artifact is not None
+        and gate_artifact.get("schema") == GATE_SCHEMAS.get(pair.get("stage"))
+    )
+    gate_stage_valid = (
+        gate_artifact is not None
+        and (
+            pair.get("stage") == "crag"
+            or gate_artifact.get("stage") == pair.get("stage")
+        )
+    )
+    gate_checks = (gate_artifact or {}).get("checks") or {}
+    metadata_required = pair.get("stage") == "graph_retrieval"
+    metadata_reference = pair.get("metadata") or {}
+    metadata_artifact = (
+        _load_verified_artifact(metadata_reference, root=root)
+        if metadata_required
+        else None
+    )
+    metadata_artifact_verified = (
+        not metadata_required
+        or (
+            metadata_artifact is not None
+            and metadata_artifact.get("schema") == "graph-readiness-v1"
+        )
+    )
+    metadata_review_samples_verified = (
+        not metadata_required
+        or (
+            metadata_artifact_verified
+            and load_bytes_reference(
+                metadata_artifact.get("review_samples"),
+                root=root,
+                expected_format="jsonl",
+            )
+            is not None
+        )
+    )
+    metadata_review_governance_verified = not metadata_required
+    if metadata_required and metadata_artifact_verified:
+        review_mode = metadata_artifact.get("review_mode")
+        if review_mode == "single_owner":
+            governance = load_json_reference(
+                metadata_artifact.get("review_governance"),
+                root=root,
+            )
+            status = review_governance_status(
+                governance,
+                source_commit=candidate.get("git_sha"),
+                scope="controlled_demo",
+            )
+            metadata_review_governance_verified = (
+                governance is not None
+                and status.valid
+                and status.mode == review_mode
+                and status.review_source
+                == metadata_artifact.get("review_sample_source")
+            )
+        else:
+            metadata_review_governance_verified = (
+                review_mode == "multi_reviewer"
+                and metadata_artifact.get("review_sample_source")
+                == "independent"
+                and metadata_artifact.get("review_governance") is None
+            )
+    expected_gate_inputs = {
+        "baseline_eval_sha256": baseline.get("artifact_sha256"),
+        "candidate_eval_sha256": candidate.get("artifact_sha256"),
+        "baseline_trace_sha256": baseline.get("trace_sha256"),
+        "candidate_trace_sha256": candidate.get("trace_sha256"),
+    }
+    if metadata_required:
+        expected_gate_inputs["metadata_sha256"] = metadata_reference.get(
+            "artifact_sha256"
+        )
+    gate_inputs_bound = (
+        gate_artifact is not None
+        and metadata_artifact_verified
+        and metadata_review_samples_verified
+        and metadata_review_governance_verified
+        and gate_artifact.get("inputs") == expected_gate_inputs
+    )
+    gate_result_consistent = (
+        isinstance((gate_artifact or {}).get("passed"), bool)
+        and bool(gate_checks)
+        and all(isinstance(value, bool) for value in gate_checks.values())
+        and gate_artifact.get("passed") == all(gate_checks.values())
+    )
+    gate_check_contract_complete = (
+        pair.get("stage") != "graph_retrieval"
+        or GRAPH_GATE_REQUIRED_CHECKS <= set(gate_checks)
+    )
+    safety_gate_passed = (
+        gate_checks.get("wrong_answer_not_increased") is True
+        and gate_checks.get("leakage_zero") is True
+    )
+    rollback = pair.get("rollback") or {}
+    rollback_artifact = _load_verified_artifact(rollback, root=root)
+    rollback_contract_valid = (
+        bool(rollback.get("flags"))
+        and rollback.get("defaults_disabled") is True
+        and rollback_artifact is not None
+        and rollback_artifact.get("schema") == "rollback-test-evidence-v1"
+        and rollback_artifact.get("passed") is True
+        and rollback_artifact.get("git_sha") == baseline.get("git_sha")
+        and set(rollback_artifact.get("flags") or []) == set(rollback.get("flags") or [])
+    )
+    checks = {
+        "schema_valid": pair.get("schema") == PAIR_SCHEMA,
+        "source_commit_bound": (
+            bool(pair.get("source_commit"))
+            and pair.get("source_commit") == baseline.get("git_sha")
+            and pair.get("source_commit") == candidate.get("git_sha")
+        ),
+        "run_id_present": bool(pair.get("run_id")),
+        "stage_known": pair.get("stage") in STAGE_DEPENDENCIES,
+        "live_artifact": evidence_type in LIVE_EVIDENCE_TYPES,
+        "benchmark_conditions_match": not mismatches,
+        "benchmark_conditions_complete": benchmark_conditions_complete,
+        "evidence_identity_complete": evidence_identity_complete,
+        "evidence_artifacts_verified": evidence_artifacts_valid,
+        "evidence_artifact_schemas_valid": evidence_artifact_schemas_valid,
+        "artifact_context_valid": artifact_context_valid,
+        "baseline_candidate_artifacts_distinct": artifacts_distinct,
+        "arm_order_valid": arm_order_valid,
+        "evidence_windows_valid": evidence_windows_valid,
+        "production_collection_not_mutated": production_collection_not_mutated,
+        "provider_smoke_artifact_valid": provider_smoke_valid,
+        "provider_smoke_precedes_pair": provider_smoke_precedes_pair,
+        "provider_smoke_fresh_for_pair": provider_smoke_fresh_for_pair,
+        "gate_artifact_present": gate_artifact is not None,
+        "gate_schema_valid": gate_schema_valid,
+        "gate_stage_valid": gate_stage_valid,
+        **(
+            {"metadata_artifact_verified": metadata_artifact_verified}
+            if metadata_required
+            else {}
+        ),
+        **(
+            {
+                "metadata_review_governance_verified": (
+                    metadata_review_governance_verified
+                ),
+                "metadata_review_samples_verified": (
+                    metadata_review_samples_verified
+                ),
+            }
+            if metadata_required
+            else {}
+        ),
+        "gate_inputs_bound": gate_inputs_bound,
+        "gate_check_contract_complete": gate_check_contract_complete,
+        "gate_result_consistent": gate_result_consistent,
+        "safety_gate_passed": safety_gate_passed,
+        "rollback_contract_valid": rollback_contract_valid,
+    }
+    passed = all(checks.values())
+    return {
+        "schema": "rollout-guardrail-report-v1",
+        "stage": pair.get("stage"),
+        "passed": passed,
+        "production_eligible": passed and (gate_artifact or {}).get("passed") is True,
+        "checks": checks,
+        "mismatches": mismatches,
+    }
+
+
+def _decision_complete(value: dict | None, *, root: str | Path = ".") -> bool:
+    value = value or {}
+    if value.get("decision") not in COMPLETED_DECISIONS:
+        return False
+    artifact = load_json_reference(
+        {
+            "path": value.get("artifact"),
+            "sha256": value.get("artifact_sha256"),
+            "schema": value.get("artifact_schema"),
+        },
+        root=root,
+    )
+    return artifact is not None
+
+
+def evaluate_rollout_series(
+    stage: str,
+    pairs: list[dict],
+    *,
+    prior_decisions: dict[str, dict] | None = None,
+    minimum_pairs: int = 3,
+    pair_references: list[dict] | None = None,
+    root: str | Path = ".",
+) -> dict:
+    """Validate comparable multi-run evidence before a production transition."""
+    prior_decisions = prior_decisions or {}
+    pair_reports = [evaluate_rollout_pair(pair, root=root) for pair in pairs]
+    run_ids = [pair.get("run_id") for pair in pairs]
+    evidence_signatures = [
+        tuple(
+            (pair.get(arm) or {}).get(field)
+            for arm in ("baseline", "candidate")
+            for field in ("artifact_sha256", "trace_sha256")
+        )
+        for pair in pairs
+    ]
+    reference = pairs[0].get("baseline", {}) if pairs else {}
+    series_fields = BENCHMARK_CONDITION_FIELDS
+    series_conditions_match = all(
+        all((pair.get("baseline") or {}).get(field) == reference.get(field) for field in series_fields)
+        for pair in pairs
+    )
+    review_mode = None
+    review_source = None
+    graph_review_contract_consistent = True
+    if stage == "graph_retrieval":
+        review_contracts = []
+        for pair in pairs:
+            metadata = _load_verified_artifact(pair.get("metadata") or {}, root=root)
+            review_contracts.append((
+                (metadata or {}).get("review_mode"),
+                (metadata or {}).get("review_sample_source"),
+            ))
+        distinct_contracts = set(review_contracts)
+        graph_review_contract_consistent = (
+            bool(review_contracts)
+            and len(distinct_contracts) == 1
+            and next(iter(distinct_contracts))
+            == ("multi_reviewer", "independent")
+        )
+        if graph_review_contract_consistent:
+            review_mode, review_source = review_contracts[0]
+    dependencies = STAGE_DEPENDENCIES.get(stage, ())
+    checks = {
+        "stage_known": stage in STAGE_DEPENDENCIES,
+        "all_pairs_match_stage": bool(pairs) and all(pair.get("stage") == stage for pair in pairs),
+        "pair_contracts_valid": bool(pair_reports) and all(report["passed"] for report in pair_reports),
+        "minimum_independent_pairs": (
+            len(pairs) >= max(1, int(minimum_pairs))
+            and len(set(run_ids)) == len(run_ids)
+            and all(run_ids)
+        ),
+        "independent_pair_evidence": (
+            bool(pairs)
+            and len(set(evidence_signatures)) == len(evidence_signatures)
+            and all(all(value not in (None, "") for value in signature) for signature in evidence_signatures)
+        ),
+        "series_conditions_match": bool(pairs) and series_conditions_match,
+        **(
+            {
+                "graph_review_contract_consistent": (
+                    graph_review_contract_consistent
+                ),
+            }
+            if stage == "graph_retrieval"
+            else {}
+        ),
+        "prior_milestones_completed": all(
+            _decision_complete(prior_decisions.get(dependency), root=root)
+            for dependency in dependencies
+        ),
+        "all_pair_gates_passed": bool(pair_reports) and all(
+            report["production_eligible"] for report in pair_reports
+        ),
+    }
+    return {
+        "schema": "rollout-guardrail-series-v1",
+        "stage": stage,
+        "source_commit": reference.get("git_sha"),
+        "provider_configuration_sha256": reference.get(
+            "provider_configuration_sha256"
+        ),
+        "pair_count": len(pairs),
+        "run_ids": run_ids,
+        **(
+            {
+                "review_mode": review_mode,
+                "review_source": review_source,
+            }
+            if stage == "graph_retrieval"
+            else {}
+        ),
+        "pair_windows": [
+            {
+                "baseline_started_at": (pair.get("baseline") or {}).get(
+                    "started_at"
+                ),
+                "candidate_completed_at": (pair.get("candidate") or {}).get(
+                    "completed_at"
+                ),
+            }
+            for pair in pairs
+        ],
+        "source_artifacts": list(pair_references or []),
+        "prior_decisions": prior_decisions,
+        "passed": all(checks.values()),
+        "production_eligible": all(checks.values()),
+        "checks": checks,
+        "minimum_pairs": minimum_pairs,
+        "dependencies": list(dependencies),
+        "pair_reports": pair_reports,
+    }
+
+
+def validate_rollout_series_artifact(
+    artifact: object,
+    *,
+    stage: str,
+    root: str | Path = ".",
+) -> bool:
+    """Recompute a stored series from its hash-bound pair references."""
+    if not isinstance(artifact, dict) or not all((
+        artifact.get("schema") == "rollout-guardrail-series-v1",
+        artifact.get("stage") == stage,
+        type(artifact.get("minimum_pairs")) is int,
+        isinstance(artifact.get("prior_decisions"), dict),
+        isinstance(artifact.get("source_artifacts"), list),
+    )):
+        return False
+    pair_references = artifact["source_artifacts"]
+    pairs = [
+        load_json_reference(reference, root=root)
+        for reference in pair_references
+    ]
+    if not pairs or any(pair is None for pair in pairs):
+        return False
+    recomputed = evaluate_rollout_series(
+        stage,
+        pairs,
+        prior_decisions=artifact["prior_decisions"],
+        minimum_pairs=artifact["minimum_pairs"],
+        pair_references=pair_references,
+        root=root,
+    )
+    return recomputed == artifact

@@ -30,6 +30,25 @@ type Section = TableSection | BarSection;
 const scalars = ref<Scalar[]>([]);
 const sections = ref<Section[]>([]);
 
+const FIELD_LABELS: Record<string, string> = {
+  requests: "Số truy vấn",
+  today_questions: "Câu hỏi hôm nay",
+  recent_questions: "Câu hỏi gần đây",
+  total_questions: "Tổng số câu hỏi",
+  unique_users: "Người dùng duy nhất",
+  hit_rate: "Tỷ lệ cache hit",
+  cache_hit_rate: "Tỷ lệ cache hit",
+  cache_hits: "Cache hit",
+  cache_misses: "Cache miss",
+  p95_ms: "P95 (ms)",
+  avg_latency_ms: "Độ trễ trung bình (ms)",
+  error_rate: "Tỷ lệ lỗi",
+};
+
+function labelForKey(key: string): string {
+  return FIELD_LABELS[key] ?? key;
+}
+
 function isScalar(v: unknown): boolean {
   return v === null || ["string", "number", "boolean"].includes(typeof v);
 }
@@ -52,13 +71,13 @@ function fmt(v: unknown): string {
 
 // Bang tu mang cac object: cot so se co thanh bar ty le theo gia tri lon nhat cot do.
 function buildTable(key: string, arr: Record<string, unknown>[]): TableSection {
-  const columns: string[] = [];
+  const fields: string[] = [];
   for (const item of arr) {
-    for (const k of Object.keys(item ?? {})) if (!columns.includes(k)) columns.push(k);
+    for (const k of Object.keys(item ?? {})) if (!fields.includes(k)) fields.push(k);
   }
   const maxByCol: Record<string, number> = {};
   const numericCol: Record<string, boolean> = {};
-  for (const col of columns) {
+  for (const col of fields) {
     let allNum = true;
     let hasNum = false;
     let max = 0;
@@ -77,7 +96,7 @@ function buildTable(key: string, arr: Record<string, unknown>[]): TableSection {
     maxByCol[col] = max || 1;
   }
   const rows: Cell[][] = arr.map((item) =>
-    columns.map((col) => {
+    fields.map((col) => {
       const raw = item?.[col];
       const n = numericCol[col] ? toNumber(raw) : null;
       return {
@@ -86,11 +105,11 @@ function buildTable(key: string, arr: Record<string, unknown>[]): TableSection {
       };
     }),
   );
-  return { kind: "table", key, columns, rows };
+  return { kind: "table", key: labelForKey(key), columns: fields.map(labelForKey), rows };
 }
 
 function buildBars(key: string, obj: Record<string, unknown>): BarSection {
-  const entries = Object.entries(obj).map(([label, v]) => ({ label, n: toNumber(v) ?? 0, raw: v }));
+  const entries = Object.entries(obj).map(([label, v]) => ({ label: labelForKey(label), n: toNumber(v) ?? 0, raw: v }));
   const max = Math.max(1, ...entries.map((e) => Math.abs(e.n)));
   const items: BarItem[] = entries
     .sort((a, b) => Math.abs(b.n) - Math.abs(a.n))
@@ -116,7 +135,7 @@ function addSection(key: string, value: unknown) {
       sections.value.push(buildBars(key, obj));
     } else {
       // Object long -> bang key/value.
-      sections.value.push(buildTable(key, Object.entries(obj).map(([k, v]) => ({ key: k, value: fmt(v) }))));
+      sections.value.push(buildTable(key, Object.entries(obj).map(([k, v]) => ({ key: labelForKey(k), value: fmt(v) }))));
     }
   }
 }
@@ -132,7 +151,7 @@ async function refresh() {
       addSection(props.title, result);
     } else if (result && typeof result === "object") {
       for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
-        if (isScalar(value)) scalars.value.push({ key, value: fmt(value) });
+        if (isScalar(value)) scalars.value.push({ key: labelForKey(key), value: fmt(value) });
         else addSection(key, value);
       }
     }

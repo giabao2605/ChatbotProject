@@ -1,0 +1,26 @@
+{
+  "schema": "rag-review-governance-v1",
+  "mode": "single_owner",
+  "owner": "REPLACE_WITH_OWNER_ID",
+  "scope": "controlled_demo",
+  "source_commit": "REPLACE_WITH_TESTED_COMMIT",
+  "risk_accepted": false,
+  "accepted_at": "REPLACE_WITH_UTC_TIMESTAMP",
+  "role_signoffs": {
+    "rag": {
+      "owner": "REPLACE_WITH_OWNER_ID",
+      "signed": false,
+      "note": "REPLACE_WITH_RAG_REVIEW_NOTE"
+    },
+    "security_qa": {
+      "owner": "REPLACE_WITH_OWNER_ID",
+      "signed": false,
+      "note": "REPLACE_WITH_SECURITY_QA_REVIEW_NOTE"
+    },
+    "operations": {
+      "owner": "REPLACE_WITH_OWNER_ID",
+      "signed": false,
+      "note": "REPLACE_WITH_OPERATIONS_REVIEW_NOTE"
+    }
+  }
+}

@@ -3,12 +3,16 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 from sqlalchemy import text
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
 from ._shared import _cap_len
 from . import audit as _r_audit
 from . import qdrant as _r_qdrant
 from . import semantic_cache as _r_semantic_cache
+
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
 
 __all__ = [
     '_to_date',
@@ -139,16 +143,21 @@ def mark_document_reviewed(doc_id, reviewer, next_review_days=180):
         return False
 
 
-def refresh_expired_status():
+def refresh_expired_status(
+    *,
+    db_engine=None,
+    qdrant_client=None,
+    collection_name=None,
+):
     """P1-7: dat EffectiveStatus = 'expired' cho tai lieu da qua ExpiryDate. Tra so dong cap nhat.
     P0#4: dong bo 'expired' xuong payload Qdrant + invalidate semantic cache de RAG loai ngay."""
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     _WHERE = (
         "WHERE ExpiryDate IS NOT NULL AND ExpiryDate < CAST(GETDATE() AS DATE) "
         "AND ISNULL(EffectiveStatus, '') NOT IN ('expired', 'superseded')"
     )
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             rows = conn.execute(text("SELECT DocID FROM TaiLieu " + _WHERE)).fetchall()
             ids = [r[0] for r in rows]
             if ids:
@@ -156,7 +165,12 @@ def refresh_expired_status():
         # Dong bo payload Qdrant cho tung doc (best-effort)
         for _did in ids:
             try:
-                _r_qdrant.update_qdrant_metadata(_did, {"effective_status": "expired"})
+                _r_qdrant.update_qdrant_metadata(
+                    _did,
+                    {"effective_status": "expired"},
+                    qdrant_client=qdrant_client,
+                    collection_name=collection_name,
+                )
             except Exception as _qe:
                 logger.warning(f"refresh_expired_status: dong bo Qdrant loi doc {_did}: {_qe}")
         if ids:

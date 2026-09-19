@@ -84,3 +84,51 @@ class TestRbacFilter:
         )
         # User clearance public KHONG duoc lo level confidential
         assert "confidential" not in _blob(flt)
+
+    def test_served_document_access_validation_matches_current_scope(self):
+        metadata = {
+            "phong_ban_quyen": ["Engineering"],
+            "security_level": "internal",
+            "site": "HCM",
+        }
+
+        assert svc.document_matches_access_scope(
+            metadata,
+            user_department="Engineering",
+            user_roles=["viewer"],
+            allowed_departments=["Engineering"],
+            max_security_level="internal",
+            allowed_sites=["HCM"],
+        )
+        assert not svc.document_matches_access_scope(
+            {**metadata, "site": "HN"},
+            user_department="Engineering",
+            user_roles=["viewer"],
+            allowed_departments=["Engineering"],
+            max_security_level="internal",
+            allowed_sites=["HCM"],
+        )
+
+    @pytest.mark.parametrize(
+        "missing_key",
+        ["phong_ban_quyen", "security_level", "site"],
+    )
+    def test_served_document_access_validation_fails_closed_on_missing_metadata(
+        self,
+        missing_key,
+    ):
+        metadata = {
+            "phong_ban_quyen": ["Engineering"],
+            "security_level": "internal",
+            "site": "HCM",
+        }
+        metadata.pop(missing_key)
+
+        assert not svc.document_matches_access_scope(
+            metadata,
+            user_department="Engineering",
+            user_roles=["viewer"],
+            allowed_departments=["Engineering"],
+            max_security_level="internal",
+            allowed_sites=["HCM"],
+        )

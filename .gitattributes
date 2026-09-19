@@ -1,0 +1,11 @@
+# Governance artifacts are verified by raw-byte SHA-256 digests.
+# Reproduce the byte form used by the signed references on every platform.
+data/integrated_hardening_v1/**/*.json text eol=lf
+reports/**/*.json text eol=crlf
+
+# Preserve approved evaluation manifest bytes across Windows and Linux.
+data/grounded_math_eval_v1/eval_manifest.jsonl text eol=crlf
+data/decomposition_eval_v1/*.jsonl text eol=crlf
+data/decomposition_eval_v1/README.md text eol=crlf
+data/crag_eval_v1/eval_manifest.jsonl text eol=crlf
+data/graph_eval_v1/eval_manifest.jsonl text eol=crlf

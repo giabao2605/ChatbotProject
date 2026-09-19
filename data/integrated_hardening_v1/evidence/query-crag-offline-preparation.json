@@ -1,0 +1,196 @@
+{
+  "schema": "query-crag-offline-preparation-v1",
+  "status": "predeclared_unexecuted",
+  "prepared_at": "2026-08-15",
+  "prepared_from_commit": "67265a0bd6135f9f205521e99bd51870a955b014",
+  "purpose": "offline_predeclaration_only",
+  "authorization": {
+    "provider_traffic_authorized": false,
+    "formal_window_authorized": false,
+    "pilot_authorized": false,
+    "controlled_demo_activation_authorized": false,
+    "default_rollout_authorized": false
+  },
+  "math_campaign_dependency": {
+    "campaign_id": "19aacefbe67b1aa3907a490c",
+    "must_be_terminal_before_provider_traffic": true,
+    "completion_marker_required": true,
+    "artifacts_are_read_only": true
+  },
+  "math_default_rollout_dependency": {
+    "source_commit": "67265a0bd6135f9f205521e99bd51870a955b014",
+    "release_decisions_sha256": "0e41b33f87b0f82be66453f105bd956380cfd67c89927aa9914539dfda971208",
+    "activation_bundle_sha256": "d2b146bb36ba66e3ec6319391fccf3228776f34287b18a0ff490befd588ba660",
+    "accepted_features": [
+      "RAG_GROUNDED_MATH_ENABLED"
+    ],
+    "required_off_features": [
+      "RAG_CRAG_ENABLED",
+      "RAG_CLAIM_REPAIR_ENABLED",
+      "RAG_LATE_INTERACTION_ENABLED",
+      "RAG_QUERY_DECOMPOSITION_ENABLED",
+      "RAG_GRAPH_RETRIEVAL_ENABLED",
+      "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"
+    ],
+    "artifacts_are_read_only": true
+  },
+  "carry_forward": {
+    "requests": 0,
+    "elapsed_time_seconds": 0,
+    "traces": 0,
+    "artifacts": []
+  },
+  "capabilities": {
+    "query_decomposition": {
+      "status": "off_pending_fresh_declared_window",
+      "binding_readiness": {
+        "status": "historical_stale",
+        "current_execution_ready": false,
+        "fresh_binding_required": true
+      },
+      "previous_outcome": "provider_smoke_58dbb08_tombstoned_0_of_5_http_502",
+      "manifest_reference": {
+        "path": "data/decomposition_eval_v1/eval_manifest.jsonl",
+        "case_count": 13,
+        "prepared_sha256": "6976cbbe4c9500b7c0755c5944775e326106a780bb2910bfa71167787a1d0bf8"
+      },
+      "baseline_feature_flags": {
+        "RAG_CRAG_ENABLED": false,
+        "RAG_CLAIM_REPAIR_ENABLED": false,
+        "RAG_GROUNDED_MATH_ENABLED": false,
+        "RAG_LATE_INTERACTION_ENABLED": false,
+        "RAG_QUERY_DECOMPOSITION_ENABLED": false,
+        "RAG_GRAPH_RETRIEVAL_ENABLED": false,
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": false
+      },
+      "candidate_feature_flags": {
+        "RAG_CRAG_ENABLED": false,
+        "RAG_CLAIM_REPAIR_ENABLED": false,
+        "RAG_GROUNDED_MATH_ENABLED": false,
+        "RAG_LATE_INTERACTION_ENABLED": false,
+        "RAG_QUERY_DECOMPOSITION_ENABLED": true,
+        "RAG_GRAPH_RETRIEVAL_ENABLED": false,
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": false
+      },
+      "execution_bindings": {
+        "source_commit": null,
+        "manifest_sha256": "6976cbbe4c9500b7c0755c5944775e326106a780bb2910bfa71167787a1d0bf8",
+        "fixture_preflight_sha256": null,
+        "provider_configuration_sha256": null,
+        "fresh_provider_smoke_sha256": null,
+        "rollback_evidence_sha256": null,
+        "governance_scope_sha256": null,
+        "runner_sha256": "907ab3ee713f75ef4027510f174020857f4997adbafc0fa3ed4c35f25bd85a21",
+        "release_decisions_sha256": "0e41b33f87b0f82be66453f105bd956380cfd67c89927aa9914539dfda971208",
+        "owner_declaration_sha256": null
+      },
+      "provider_smoke_contract": {
+        "required_passed": 5,
+        "required_total": 5,
+        "maximum_provider_retries": 0,
+        "maximum_age_minutes_at_baseline_start": 30,
+        "same_provider_configuration_required": true
+      },
+      "thresholds": {
+        "minimum_complex_answer_gain": 0.1,
+        "maximum_latency_ratio": 1.5,
+        "maximum_cost_ratio": 1.5,
+        "maximum_subqueries": 3,
+        "maximum_corrections": 1,
+        "maximum_final_generations": 1,
+        "maximum_terminal_answer_violations": 0,
+        "required_branch_accuracy": 1.0,
+        "required_branch_citation_accuracy": 1.0
+      },
+      "review": {
+        "declaration_owner": "bao.nguyen",
+        "technical_reviewer": "tran.nghi",
+        "owner_signature": null,
+        "technical_review": null
+      },
+      "stop_conditions": [
+        "math campaign is not terminal",
+        "worktree is dirty or source commit changes",
+        "manifest, fixture, provider configuration, governance, rollback, or runner binding drifts",
+        "provider smoke is not fresh 5/5 with zero retries",
+        "any provider failure or retry occurs",
+        "any governed feature outside Query Decomposition is enabled",
+        "output directory or trace is reused",
+        "any prior request, trace, elapsed time, or gate is carried forward"
+      ]
+    },
+    "crag_claim_repair": {
+      "status": "off_pending_provider_recovery_and_fresh_window",
+      "previous_outcome": "diagnostic_v3_stopped_after_3_of_9_pairs_on_provider_retry",
+      "manifest_reference": {
+        "path": "data/crag_eval_v1/eval_manifest.jsonl",
+        "case_count": 9,
+        "prepared_sha256": "beac3aac28b59ac57930b2c7099997efa7bdfda2a76bf65e3f1620d4b0fb897b"
+      },
+      "baseline_feature_flags": {
+        "RAG_CRAG_ENABLED": false,
+        "RAG_CLAIM_REPAIR_ENABLED": false,
+        "RAG_GROUNDED_MATH_ENABLED": false,
+        "RAG_LATE_INTERACTION_ENABLED": false,
+        "RAG_QUERY_DECOMPOSITION_ENABLED": false,
+        "RAG_GRAPH_RETRIEVAL_ENABLED": false,
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": false
+      },
+      "candidate_feature_flags": {
+        "RAG_CRAG_ENABLED": true,
+        "RAG_CLAIM_REPAIR_ENABLED": true,
+        "RAG_GROUNDED_MATH_ENABLED": false,
+        "RAG_LATE_INTERACTION_ENABLED": false,
+        "RAG_QUERY_DECOMPOSITION_ENABLED": false,
+        "RAG_GRAPH_RETRIEVAL_ENABLED": false,
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": false
+      },
+      "execution_bindings": {
+        "source_commit": null,
+        "manifest_sha256": "beac3aac28b59ac57930b2c7099997efa7bdfda2a76bf65e3f1620d4b0fb897b",
+        "fixture_preflight_sha256": null,
+        "provider_configuration_sha256": null,
+        "fresh_provider_smoke_sha256": null,
+        "rollback_evidence_sha256": null,
+        "governance_scope_sha256": null,
+        "runner_sha256": "62b333ae70e34b13b45c95049fad096327b457b779de4e928a7ffe45d3086955",
+        "release_decisions_sha256": "0e41b33f87b0f82be66453f105bd956380cfd67c89927aa9914539dfda971208",
+        "owner_declaration_sha256": null
+      },
+      "provider_smoke_contract": {
+        "required_passed": 5,
+        "required_total": 5,
+        "maximum_provider_retries": 0,
+        "maximum_age_minutes_at_arm_start": 30,
+        "same_provider_configuration_required": true
+      },
+      "thresholds": {
+        "maximum_latency_ratio": 1.25,
+        "maximum_cost_ratio": 1.5,
+        "maximum_corrections_per_query": 1,
+        "maximum_repairs_per_query": 1,
+        "maximum_provider_retries": 0,
+        "candidate_cases_required_pass_rate": 1.0,
+        "maximum_leakage": 0,
+        "wrong_answers_may_increase": false
+      },
+      "review": {
+        "declaration_owner": "bao.nguyen",
+        "technical_reviewer": "tran.nghi",
+        "owner_signature": null,
+        "technical_review": null
+      },
+      "stop_conditions": [
+        "math campaign is not terminal",
+        "provider recovery has not been demonstrated by a new smoke",
+        "worktree is dirty or source commit changes",
+        "manifest, fixture, provider configuration, governance, rollback, or runner binding drifts",
+        "provider smoke is not fresh 5/5 with zero retries",
+        "any provider failure or retry occurs",
+        "any governed feature outside CRAG and Claim Repair is enabled",
+        "output directory or trace is reused",
+        "any prior request, trace, elapsed time, pair, or gate is carried forward"
+      ]
+    }
+  }
+}

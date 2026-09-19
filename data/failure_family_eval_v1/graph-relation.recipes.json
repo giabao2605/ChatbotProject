@@ -1,0 +1,8 @@
+[
+  {"id":"graph-relation-dev-1","axes":["paraphrase"],"question":"DEMO-PART-C sử dụng material nào và thuộc assembly nào?","holdout":false},
+  {"id":"graph-relation-dev-2","axes":["intent_order"],"question":"Assembly nào chứa DEMO-PART-C và part này dùng material gì?","holdout":false},
+  {"id":"graph-relation-dev-3","axes":["paraphrase"],"question":"Truy theo graph đã duyệt để tìm vật liệu và assembly của DEMO-PART-C.","holdout":false},
+  {"id":"graph-relation-dev-4","axes":["intent_order","paraphrase"],"question":"Nêu quan hệ CONTAINS_PART của assembly rồi quan hệ USES_MATERIAL của DEMO-PART-C.","holdout":false},
+  {"id":"graph-relation-holdout-1","axes":["paraphrase"],"question":"Từ DEMO-PART-C, hãy đi tối đa hai hop để xác định material và assembly.","holdout":true},
+  {"id":"graph-relation-holdout-2","axes":["intent_order"],"question":"Material liên kết với DEMO-PART-C là gì, và assembly liên quan là assembly nào?","holdout":true}
+]

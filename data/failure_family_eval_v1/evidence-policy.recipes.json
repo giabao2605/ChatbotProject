@@ -1,0 +1,8 @@
+[
+  {"id":"evidence-policy-dev-1","axes":["paraphrase"],"question":"Tài liệu có công bố đơn giá của DEMO-PART-A không?","holdout":false},
+  {"id":"evidence-policy-dev-2","axes":["paraphrase","negation"],"question":"Nếu tài liệu không nêu chi phí, hãy xác nhận rằng không có đơn giá DEMO-PART-A.","case_patch":{"expected_outcome":"insufficient_evidence"},"expected_policy":{"outcome":"insufficient_evidence","evidence_state":"SUFFICIENT","correction_allowed":false},"holdout":false},
+  {"id":"evidence-policy-dev-3","axes":["paraphrase"],"question":"Cho biết giá tiền của một DEMO-PART-A theo đúng tài liệu nguồn.","holdout":false},
+  {"id":"evidence-policy-dev-4","axes":["paraphrase"],"question":"Trong hồ sơ hiện hành, DEMO-PART-A có đơn giá bao nhiêu?","holdout":false},
+  {"id":"evidence-policy-holdout-1","axes":["paraphrase"],"question":"Chi phí mỗi DEMO-PART-A được ghi là bao nhiêu?","holdout":true},
+  {"id":"evidence-policy-holdout-2","axes":["paraphrase","negation"],"question":"Không được ước lượng: tài liệu có nêu đơn giá DEMO-PART-A hay không?","case_patch":{"expected_outcome":"insufficient_evidence"},"expected_policy":{"outcome":"insufficient_evidence","evidence_state":"SUFFICIENT","correction_allowed":false},"holdout":true}
+]

@@ -16,7 +16,6 @@ import qdrant / LLM -> unit-test import duoc, khong tai model.
 
 Bat/tat bang bien moi truong ENABLE_CONV_STATE (mac dinh TAT de an toan).
 """
-import os
 import re
 
 from mech_chatbot.rag.entity_resolver import _norm_text, _strip_accents, _norm_dim, has_explicit_code
@@ -42,12 +41,9 @@ _ORDINAL_WORDS = {
 _TRIGGER = r"(?:so|stt|muc|thu|dong|hang|option|phuong an|lua chon|chon|cai)"
 
 
-def is_enabled():
-    """True neu tinh nang Conversation-State duoc bat qua env."""
-    raw = os.getenv(FLAG_ENV)
-    if raw is None:
-        return False
-    return str(raw).strip().lower() in ("1", "true", "yes", "on", "y")
+def is_enabled(value: bool = False):
+    """True neu process runtime bat tinh nang Conversation-State."""
+    return bool(value)
 
 
 # ---------------------------------------------------------------------------
@@ -357,12 +353,9 @@ HISTORY_WINDOW_MSGS = 12
 SUMMARY_REFRESH_STEP = 2
 
 
-def history_summary_enabled():
-    """True neu bat tom tat hoi thoai luy tien qua env ENABLE_HISTORY_SUMMARY."""
-    raw = os.getenv(HISTORY_SUMMARY_FLAG_ENV)
-    if raw is None:
-        return False
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+def history_summary_enabled(value: bool = False):
+    """True neu process runtime bat tom tat hoi thoai luy tien."""
+    return bool(value)
 
 
 def split_history_for_summary(chat_history, window_msgs=HISTORY_WINDOW_MSGS):

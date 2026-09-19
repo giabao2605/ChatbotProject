@@ -1,0 +1,170 @@
+from dataclasses import FrozenInstanceError
+
+import pytest
+
+from mech_chatbot.adapters.qdrant_runtime import (
+    build_qdrant_admin_runtime,
+    build_qdrant_runtime,
+)
+from mech_chatbot.config.settings import QdrantSettings
+
+
+pytestmark = pytest.mark.unit
+
+
+class _Client:
+    def __init__(self, *, collection_exists):
+        self._collection_exists = collection_exists
+        self.created = []
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    def collection_exists(self, collection):
+        return self._collection_exists
+
+    def create_collection(self, **kwargs):
+        self.created.append(kwargs)
+
+
+def _settings(**overrides):
+    values = {
+        "url": "https://qdrant.example",
+        "api_key": "secret",
+        "collection": "KnowledgeBase",
+        "embedding_model": "BAAI/bge-m3",
+        "embedding_device": "cpu",
+        "embedding_dimension": 1024,
+    }
+    values.update(overrides)
+    return QdrantSettings(**values)
+
+
+def test_qdrant_runtime_builds_explicit_vector_dependencies():
+    client = _Client(collection_exists=False)
+    dense = object()
+    sparse = object()
+    vector_store = object()
+    client_calls = []
+    dense_calls = []
+    sparse_calls = []
+    vector_calls = []
+
+    dependencies = build_qdrant_runtime(
+        _settings(),
+        client_factory=lambda **kwargs: client_calls.append(kwargs) or client,
+        dense_embedding_factory=lambda **kwargs: dense_calls.append(kwargs) or dense,
+        sparse_embedding_factory=lambda **kwargs: sparse_calls.append(kwargs) or sparse,
+        vector_store_factory=lambda **kwargs: vector_calls.append(kwargs)
+        or vector_store,
+    )
+
+    assert dependencies.qdrant_client is client
+    assert dependencies.vector_store is vector_store
+    assert dependencies.collection_name == "KnowledgeBase"
+    assert len(client_calls) == 1
+    assert {
+        key: client_calls[0][key]
+        for key in ("url", "api_key", "timeout")
+    } == {
+        "url": "https://qdrant.example",
+        "api_key": "secret",
+        "timeout": 120,
+    }
+    assert dense_calls[0]["model_name"] == "BAAI/bge-m3"
+    assert dense_calls[0]["model_kwargs"] == {"device": "cpu"}
+    assert sparse_calls == [{"model_name": "Qdrant/bm25"}]
+    assert vector_calls[0]["client"] is client
+    assert len(client.created) == 1
+
+    with pytest.raises(FrozenInstanceError):
+        dependencies.collection_name = "other"
+
+
+def test_qdrant_runtime_bounds_http_keepalive_reuse():
+    client = _Client(collection_exists=True)
+    client_calls = []
+
+    build_qdrant_runtime(
+        _settings(),
+        client_factory=lambda **kwargs: client_calls.append(kwargs) or client,
+        dense_embedding_factory=lambda **_: object(),
+        sparse_embedding_factory=lambda **_: object(),
+        vector_store_factory=lambda **_: object(),
+    )
+
+    limits = client_calls[0]["limits"]
+    assert limits.max_keepalive_connections == 1
+    assert limits.keepalive_expiry == 5
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_read_only_runtime_never_creates_collection(exists):
+    client = _Client(collection_exists=exists)
+    options = dict(
+        client_factory=lambda **_: client,
+        dense_embedding_factory=lambda **_: object(),
+        sparse_embedding_factory=lambda **_: object(),
+        vector_store_factory=lambda **_: object(),
+        create_if_missing=False,
+    )
+    if exists:
+        assert build_qdrant_runtime(_settings(), **options).qdrant_client is client
+    else:
+        with pytest.raises(ValueError, match="collection does not exist"):
+            build_qdrant_runtime(_settings(), **options)
+        assert client.closed
+    assert client.created == []
+
+
+def test_qdrant_admin_runtime_accepts_operation_timeout():
+    client = _Client(collection_exists=True)
+    client_calls = []
+
+    runtime = build_qdrant_admin_runtime(
+        _settings(),
+        timeout_seconds=300,
+        client_factory=lambda **kwargs: client_calls.append(kwargs) or client,
+    )
+
+    assert runtime.client is client
+    assert client_calls == [
+        {
+            "url": "https://qdrant.example",
+            "api_key": "secret",
+            "timeout": 300,
+        }
+    ]
+
+
+@pytest.mark.parametrize("timeout_seconds", (0, -1, float("nan"), float("inf")))
+def test_qdrant_admin_runtime_rejects_invalid_timeout(timeout_seconds):
+    with pytest.raises(ValueError, match="positive and finite"):
+        build_qdrant_admin_runtime(
+            _settings(),
+            timeout_seconds=timeout_seconds,
+            client_factory=lambda **_: pytest.fail("must validate before client"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "missing_key"),
+    [
+        ({"url": None}, "QDRANT_URL"),
+        ({"api_key": None}, "QDRANT_API_KEY"),
+        ({"collection": ""}, "QDRANT_COLLECTION"),
+    ],
+)
+def test_qdrant_runtime_fails_fast_without_leaking_secret(overrides, missing_key):
+    with pytest.raises(ValueError) as error:
+        build_qdrant_runtime(
+            _settings(**overrides),
+            client_factory=lambda **_: pytest.fail("must validate before client"),
+            dense_embedding_factory=lambda **_: object(),
+            sparse_embedding_factory=lambda **_: object(),
+            vector_store_factory=lambda **_: object(),
+        )
+
+    assert missing_key in str(error.value)
+    assert "secret" not in str(error.value)

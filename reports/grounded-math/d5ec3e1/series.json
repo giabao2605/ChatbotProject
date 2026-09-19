@@ -1,0 +1,109 @@
+{
+  "schema": "rollout-guardrail-series-v1",
+  "stage": "grounded_math",
+  "passed": false,
+  "production_eligible": false,
+  "checks": {
+    "stage_known": true,
+    "all_pairs_match_stage": true,
+    "pair_contracts_valid": true,
+    "minimum_independent_pairs": true,
+    "independent_pair_evidence": true,
+    "series_conditions_match": true,
+    "prior_milestones_completed": false,
+    "all_pair_gates_passed": true
+  },
+  "minimum_pairs": 3,
+  "dependencies": [
+    "crag"
+  ],
+  "pair_reports": [
+    {
+      "schema": "rollout-guardrail-report-v1",
+      "stage": "grounded_math",
+      "passed": true,
+      "production_eligible": true,
+      "checks": {
+        "schema_valid": true,
+        "run_id_present": true,
+        "stage_known": true,
+        "live_artifact": true,
+        "benchmark_conditions_match": true,
+        "benchmark_conditions_complete": true,
+        "evidence_identity_complete": true,
+        "evidence_artifacts_verified": true,
+        "evidence_artifact_schemas_valid": true,
+        "artifact_context_valid": true,
+        "baseline_candidate_artifacts_distinct": true,
+        "evidence_windows_valid": true,
+        "production_collection_not_mutated": true,
+        "gate_artifact_present": true,
+        "gate_schema_valid": true,
+        "gate_stage_valid": true,
+        "gate_inputs_bound": true,
+        "gate_result_consistent": true,
+        "safety_gate_passed": true,
+        "rollback_contract_valid": true
+      },
+      "mismatches": []
+    },
+    {
+      "schema": "rollout-guardrail-report-v1",
+      "stage": "grounded_math",
+      "passed": true,
+      "production_eligible": true,
+      "checks": {
+        "schema_valid": true,
+        "run_id_present": true,
+        "stage_known": true,
+        "live_artifact": true,
+        "benchmark_conditions_match": true,
+        "benchmark_conditions_complete": true,
+        "evidence_identity_complete": true,
+        "evidence_artifacts_verified": true,
+        "evidence_artifact_schemas_valid": true,
+        "artifact_context_valid": true,
+        "baseline_candidate_artifacts_distinct": true,
+        "evidence_windows_valid": true,
+        "production_collection_not_mutated": true,
+        "gate_artifact_present": true,
+        "gate_schema_valid": true,
+        "gate_stage_valid": true,
+        "gate_inputs_bound": true,
+        "gate_result_consistent": true,
+        "safety_gate_passed": true,
+        "rollback_contract_valid": true
+      },
+      "mismatches": []
+    },
+    {
+      "schema": "rollout-guardrail-report-v1",
+      "stage": "grounded_math",
+      "passed": true,
+      "production_eligible": true,
+      "checks": {
+        "schema_valid": true,
+        "run_id_present": true,
+        "stage_known": true,
+        "live_artifact": true,
+        "benchmark_conditions_match": true,
+        "benchmark_conditions_complete": true,
+        "evidence_identity_complete": true,
+        "evidence_artifacts_verified": true,
+        "evidence_artifact_schemas_valid": true,
+        "artifact_context_valid": true,
+        "baseline_candidate_artifacts_distinct": true,
+        "evidence_windows_valid": true,
+        "production_collection_not_mutated": true,
+        "gate_artifact_present": true,
+        "gate_schema_valid": true,
+        "gate_stage_valid": true,
+        "gate_inputs_bound": true,
+        "gate_result_consistent": true,
+        "safety_gate_passed": true,
+        "rollback_contract_valid": true
+      },
+      "mismatches": []
+    }
+  ]
+}

@@ -28,4 +28,15 @@ describe("role-aware navigation policy", () => {
     expect(platformRoutes).not.toContain("/documents");
     expect(platformRoutes).not.toContain("/access");
   });
+
+  it("keeps reviewer, security, and platform capabilities distinct", () => {
+    expect(isRoleAllowed(["knowledge_approver"], ["reviewer"])).toBe(true);
+    expect(isRoleAllowed(["security_admin"], ["platform_admin"])).toBe(false);
+    expect(isRoleAllowed(["platform_admin"], ["security_admin"])).toBe(false);
+
+    const securityRoutes = visibleNavigationItems(["security_admin"]).map((item) => item.to);
+    expect(securityRoutes).toContain("/access");
+    expect(securityRoutes).toContain("/users");
+    expect(securityRoutes).not.toContain("/settings");
+  });
 });

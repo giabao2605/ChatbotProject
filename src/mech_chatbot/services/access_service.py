@@ -1,5 +1,5 @@
 """P2.3 — Access/clearance service (L6). Pass-through toi db repositories."""
-from mech_chatbot.db.repository import (
+from mech_chatbot.db.repositories.access import (
     count_pending_access_requests,
     create_access_request,
     get_grant_history,
@@ -9,6 +9,8 @@ from mech_chatbot.db.repository import (
     resolve_access_request,
     revoke_user_clearance,
     revoke_user_department,
+)
+from mech_chatbot.db.repositories.catalog import (
     set_user_clearance,
 )
 

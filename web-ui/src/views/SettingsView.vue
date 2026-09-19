@@ -228,7 +228,7 @@ const rowActions: RowAction[] = [{ label: "Sửa", run: (r) => openEdit(r) }];
   <ResourcePage
     title="Cấu hình"
     eyebrow="Settings"
-    description="Cấu hình ứng dụng (AppSettings)."
+    description="Dành cho platform_admin: cấu hình ứng dụng (AppSettings) và policy external AI."
     :columns="columns"
     :load="load"
     :create-form="createForm"

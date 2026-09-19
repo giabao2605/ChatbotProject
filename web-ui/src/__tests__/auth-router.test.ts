@@ -105,6 +105,29 @@ describe("route guards", () => {
     expect(platformAdminRouter.currentRoute.value.name).toBe("org");
   });
 
+  it("routes analytics to the capability that owns each API panel", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue({ ...user, roles: ["platform_admin"] });
+    const platformRouter = createAppRouter(createMemoryHistory());
+    await platformRouter.push("/analytics");
+    await platformRouter.isReady();
+    expect(platformRouter.currentRoute.value.name).toBe("analytics");
+
+    setActivePinia(createPinia());
+    vi.mocked(api.loadMe).mockResolvedValue({ ...user, roles: ["reviewer"] });
+    const reviewerRouter = createAppRouter(createMemoryHistory());
+    await reviewerRouter.push("/analytics");
+    await reviewerRouter.isReady();
+    expect(reviewerRouter.currentRoute.value.name).toBe("analytics");
+  });
+
+  it("allows security admins to open access administration", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue({ ...user, roles: ["security_admin"] });
+    const router = createAppRouter(createMemoryHistory());
+    await router.push("/access");
+    await router.isReady();
+    expect(router.currentRoute.value.name).toBe("access");
+  });
+
   it("redirects legacy lifecycle links into the document library", async () => {
     vi.mocked(api.loadMe).mockResolvedValue({ ...user, roles: ["reviewer"] });
     const router = createAppRouter(createMemoryHistory());

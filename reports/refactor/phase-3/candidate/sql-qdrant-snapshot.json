@@ -1,0 +1,25 @@
+{
+  "schema": "phase3-ingestion-consistency-snapshot-v1",
+  "collection": "TaiLieuKyThuat_v2",
+  "source_system": "upload",
+  "documents": [
+    {"doc_id": 1, "file_name": "accountant_demo_process_v1.md"},
+    {"doc_id": 2, "file_name": "hr_demo_confidential_v1.md"},
+    {"doc_id": 3, "file_name": "hr_demo_process_v1.md"},
+    {"doc_id": 4, "file_name": "hse_5s_demo_process_v1.md"},
+    {"doc_id": 5, "file_name": "iso_demo_process_v1.md"},
+    {"doc_id": 6, "file_name": "it_demo_process_v1.md"},
+    {"doc_id": 8, "file_name": "molding_demo_process_v1.md"},
+    {"doc_id": 9, "file_name": "planning_demo_process_v1.md"},
+    {"doc_id": 10, "file_name": "production_demo_process_v1.md"},
+    {"doc_id": 11, "file_name": "purchasing_demo_process_v1.md"},
+    {"doc_id": 12, "file_name": "qualitycontrol_demo_process_v1.md"},
+    {"doc_id": 13, "file_name": "sales_demo_process_v1.md"},
+    {"doc_id": 16, "file_name": "technical_demo_process_draft_v3.md"},
+    {"doc_id": 17, "file_name": "technical_demo_process_expired_v0.md"},
+    {"doc_id": 18, "file_name": "technical_demo_process_v1.md"},
+    {"doc_id": 19, "file_name": "technical_demo_process_v2.md"},
+    {"doc_id": 20, "file_name": "warehouse_demo_process_v1.md"},
+    {"doc_id": 21, "file_name": "technical_demo_other_site_v1.md"}
+  ]
+}

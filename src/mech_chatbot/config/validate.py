@@ -19,26 +19,30 @@ class ConfigError(RuntimeError):
 
 # --- Khai bao bien moi truong ----------------------------------------------
 REQUIRED_QDRANT = ["QDRANT_URL", "QDRANT_API_KEY"]
-LLM_KEY_ANY = ["PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY"]
-LLM_BASE_ANY = ["PROXYLLM_BASE_URL", "OPENAI_BASE_URL"]
+LLM_KEY_ANY = ["OPENROUTER_API_KEY", "PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY"]
+LLM_BASE_ANY = ["OPENROUTER_BASE_URL", "PROXYLLM_BASE_URL", "OPENAI_BASE_URL"]
 REQUIRED_EMBEDDING = ["EMBEDDING_MODEL", "EMBEDDING_DIM"]
 
 NUMERIC_INT = [
     "EMBEDDING_DIM", "EMBEDDING_CHUNK_SIZE", "EMBEDDING_CHUNK_OVERLAP",
     "MAX_CONCURRENT_RAG", "RAG_SERVER_PORT", "MAX_USER_MSG_LEN", "MAX_BOT_MSG_LEN",
     "GPT_MAX_OUTPUT_TOKENS", "RERANK_TOP_N_CAP",
-    "INTENT_MAX_WORKERS", "METADATA_TEXT_LIMIT", "PDF_RENDER_DPI",
+    "INTENT_MAX_WORKERS", "PARENT_CONTEXT_MAX_WORKERS", "METADATA_TEXT_LIMIT", "PDF_RENDER_DPI",
     "GPT_VISION_MAX_OUTPUT_TOKENS", "GPT_VISION_JPEG_QUALITY", "RAG_WORKER_TIMEOUT",
+    "QDRANT_SEARCH_TIMEOUT_SECONDS",
 ]
 NUMERIC_FLOAT = [
     "GPT_TEMPERATURE", "GPT_TIMEOUT_SECONDS", "GPT_MIN_INTERVAL_SECONDS",
     "INTENT_TIMEOUT", "GPT_VISION_TEMPERATURE", "VOYAGE_RERANK_TIMEOUT_SECONDS",
+    "JINA_RERANK_TIMEOUT_SECONDS",
 ]
 
 # Cac key la BI MAT -> KHONG BAO GIO log gia tri that
 SECRET_KEYS = {
+    "OPENROUTER_API_KEY",
     "QDRANT_API_KEY", "PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY",
-    "SQL_PASSWORD", "RAG_SERVICE_TOKEN", "VOYAGE_API_KEY",
+    "SQL_PASSWORD", "RAG_SERVICE_TOKEN", "VOYAGE_API_KEY", "JINA_API_KEY",
+    "APP_SESSION_SECRET", "CHAT_BRIDGE_SECRET",
 }
 
 # Cac key dung de in summary (khong bao gom secret value)
@@ -47,11 +51,14 @@ _SUMMARY_KEYS = (
         "EMBEDDING_DEVICE",
         "SQL_SERVER", "SQL_DATABASE", "SQL_DRIVER", "SQL_USERNAME",
         "SQL_TRUSTED_CONNECTION", "SQL_PASSWORD",
-        "QDRANT_COLLECTION", "GPT_MODEL_NAME", "MAX_CONCURRENT_RAG",
+        "QDRANT_COLLECTION", "QDRANT_SEARCH_TIMEOUT_SECONDS",
+        "GPT_MODEL_NAME", "MAX_CONCURRENT_RAG",
         "RAG_SERVER_HOST", "RAG_SERVER_PORT", "RAG_REQUIRE_SERVICE_AUTH",
-        "RAG_SERVICE_TOKEN", "USE_VOYAGE_RERANK", "VOYAGE_RERANK_MODEL",
-        "VOYAGE_RERANK_TIMEOUT_SECONDS", "VOYAGE_API_KEY",
-        "APP_ENV", "EXTERNAL_AI_LOCAL_DEVELOPMENT",
+        "RAG_SERVICE_TOKEN", "RERANK_PROVIDER", "USE_VOYAGE_RERANK",
+        "VOYAGE_RERANK_MODEL", "VOYAGE_RERANK_TIMEOUT_SECONDS", "VOYAGE_API_KEY",
+        "JINA_RERANK_MODEL", "JINA_RERANK_TIMEOUT_SECONDS", "JINA_API_KEY",
+        "APP_ENV", "APP_SESSION_SECRET", "CHAT_BRIDGE_SECRET",
+        "EXTERNAL_AI_LOCAL_DEVELOPMENT", "EXTERNAL_PROCESSING_POLICY",
         "STRICT_ANSWER_MODE", "STRICT_REALTIME_STREAMING",
     ]
 )
@@ -98,7 +105,9 @@ def validate_config(env=None, *, require_qdrant=True, require_llm=True,
                 errors.append(f"Thieu {k} (bat buoc de ket noi Qdrant vector store)")
 
     if require_llm:
-        if not any(_get(env, k) for k in LLM_KEY_ANY):
+        if _get(env, "OPENROUTER_BASE_URL") and not _get(env, "OPENROUTER_API_KEY"):
+            errors.append("Thieu OPENROUTER_API_KEY cho OpenRouter")
+        elif not any(_get(env, k) for k in LLM_KEY_ANY):
             errors.append("Thieu LLM API key: can mot trong " + "/".join(LLM_KEY_ANY))
         if not any(_get(env, k) for k in LLM_BASE_ANY):
             errors.append("Thieu LLM base URL: can mot trong " + "/".join(LLM_BASE_ANY))
@@ -129,6 +138,12 @@ def validate_config(env=None, *, require_qdrant=True, require_llm=True,
             "EXTERNAL_AI_LOCAL_DEVELOPMENT chi duoc dung khi APP_ENV=development hoac local"
         )
 
+    rerank_provider = _get(env, "RERANK_PROVIDER").lower() or "jina"
+    if rerank_provider not in {"voyage", "jina", "local_fusion"}:
+        errors.append(
+            "RERANK_PROVIDER phai la voyage, jina hoac local_fusion"
+        )
+
     # Character holdback cannot prove the prefix is factual.  Keep the pilot
     # server fail-closed until a sentence-level verifier is implemented.
     if _truthy(_get(env, "STRICT_REALTIME_STREAMING")):
@@ -146,6 +161,10 @@ def validate_config(env=None, *, require_qdrant=True, require_llm=True,
         if v and not _is_float(v):
             errors.append(f"{k}='{v}' phai la so thuc")
 
+    qdrant_timeout = _get(env, "QDRANT_SEARCH_TIMEOUT_SECONDS")
+    if qdrant_timeout and _is_int(qdrant_timeout) and int(qdrant_timeout) <= 0:
+        errors.append("QDRANT_SEARCH_TIMEOUT_SECONDS phai lon hon 0")
+
     return errors, warnings
 
 
@@ -158,6 +177,65 @@ def assert_config_valid(env=None, **kwargs):
             + "\n  - ".join(errors)
         )
     return warnings
+
+
+def validate_app_security(settings):
+    """Return production browser-app security errors without secret values."""
+
+    if str(settings.APP_ENV).strip().lower() not in {"prod", "production"}:
+        return []
+
+    errors = []
+    session_secret = str(settings.APP_SESSION_SECRET or "").strip()
+    other_secrets = {
+        str(settings.CHAT_BRIDGE_SECRET or "").strip(),
+        str(settings.RAG_SERVICE_TOKEN or "").strip(),
+    }
+    other_secrets.discard("")
+    if not settings.APP_SESSION_SECRET_EXPLICIT or not session_secret:
+        errors.append("Thieu APP_SESSION_SECRET explicit cho production app")
+    elif len(session_secret.encode("utf-8")) < 32:
+        errors.append("APP_SESSION_SECRET production phai co it nhat 32 byte")
+    elif session_secret in other_secrets:
+        errors.append(
+            "APP_SESSION_SECRET phai khac CHAT_BRIDGE_SECRET va RAG_SERVICE_TOKEN"
+        )
+    if not settings.APP_COOKIE_SECURE:
+        errors.append("APP_COOKIE_SECURE phai la true trong production")
+    if str(settings.APP_COOKIE_SAMESITE).strip().lower() not in {"lax", "strict"}:
+        errors.append(
+            "APP_COOKIE_SAMESITE production phai la lax hoac strict"
+        )
+    if (
+        not settings.APP_TRUSTED_HOSTS_EXPLICIT
+        or not settings.APP_TRUSTED_HOSTS
+        or any("*" in host for host in settings.APP_TRUSTED_HOSTS)
+    ):
+        errors.append(
+            "APP_TRUSTED_HOSTS production phai la allowlist explicit, "
+            "khong duoc dung *"
+        )
+    policy = str(settings.EXTERNAL_PROCESSING_POLICY or "").strip().lower()
+    if (
+        not settings.EXTERNAL_PROCESSING_POLICY_EXPLICIT
+        or policy not in {"internal_only", "all_external"}
+    ):
+        errors.append(
+            "EXTERNAL_PROCESSING_POLICY phai duoc dat explicit thanh "
+            "internal_only hoac all_external trong production"
+        )
+    return errors
+
+
+def assert_app_security_valid(settings):
+    """Fail fast when the browser app's production security is invalid."""
+
+    errors = validate_app_security(settings)
+    if errors:
+        raise ConfigError(
+            "Cau hinh app production khong hop le "
+            f"({len(errors)} loi):\n  - " + "\n  - ".join(errors)
+        )
 
 
 def mask_secret(value):

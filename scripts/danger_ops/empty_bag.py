@@ -13,7 +13,9 @@ NHOM DU LIEU
 [LUON XOA]  Tai lieu da ingest + dan xuat theo tai lieu (cac \"cuon vo\"):
     IngestionJobs, DocumentFamily, TaiLieu, TaiLieuKyThuat, BangKeVatTu,
     DocumentPages, TechnicalAttributes, DocumentAttributes, DocQualityScore,
-    PhongBanChiaSe, Documents (neu DB cu co), SemanticCache
+    PhongBanChiaSe, Documents (neu DB cu co), SemanticCache, AnswerEvidence,
+    ChatEvidenceManifest, KnowledgeGraphNode/Edge, GraphExtractionProposal,
+    GraphCommunityVersion/Membership/Summary
     + toan bo diem vector tren collection Qdrant.
 
 [TUY CHON] (mac dinh GIU LAI, them co de xoa):
@@ -54,8 +56,6 @@ import os
 import shutil
 import sys
 
-from dotenv import load_dotenv
-
 # ----------------------------------------------------------------------------------
 # Thiet lap duong dan de import duoc package mech_chatbot. Script nam o
 # scripts/danger_ops/ -> goc du an la 3 cap tren, va package nam trong src/
@@ -67,7 +67,8 @@ for _p in (SRC_DIR, BASE_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-load_dotenv()
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime
 
 # ----------------------------------------------------------------------------------
 # Danh sach bang, sap theo thu tu CON -> CHA de DELETE khong vuong khoa ngoai.
@@ -75,6 +76,17 @@ load_dotenv()
 #  reseed IDENTITY ve 0.)
 # ----------------------------------------------------------------------------------
 CORE_DOC_TABLES = [
+    # Evidence rows reference documents even when chat history is retained.
+    "AnswerEvidence",
+    "ChatEvidenceManifest",
+    # Community rows reference graph versions/nodes. Delete leaf tables first.
+    "GraphCommunitySummary",
+    "GraphCommunityMembership",
+    "GraphCommunityVersion",
+    # Proposals/edges reference graph nodes and source documents.
+    "GraphExtractionProposal",
+    "KnowledgeGraphEdge",
+    "KnowledgeGraphNode",
     "TechnicalAttributes",
     "DocumentPages",
     "BangKeVatTu",
@@ -124,10 +136,13 @@ def _hr():
 def sql_count(conn, table):
     """Dem so dong; tra ve None neu bang khong ton tai (DB cu)."""
     from sqlalchemy import text
-    try:
-        return conn.execute(text(f"SELECT COUNT(*) FROM dbo.{table}")).scalar()
-    except Exception:
+    exists = conn.execute(
+        text("SELECT OBJECT_ID(:qualified_name, 'U')"),
+        {"qualified_name": f"dbo.{table}"},
+    ).scalar()
+    if exists is None:
         return None
+    return conn.execute(text(f"SELECT COUNT(*) FROM dbo.{table}")).scalar()
 
 
 def collect_tables(args):
@@ -143,7 +158,7 @@ def collect_tables(args):
 
 
 def get_engine():
-    from mech_chatbot.db.repository import engine
+    from mech_chatbot.db.engine import engine
     if engine is None:
         raise RuntimeError(
             "SQLAlchemy Engine chua khoi tao duoc (kiem tra cau hinh DB / ODBC)."
@@ -153,15 +168,10 @@ def get_engine():
 
 def get_qdrant():
     """Tao client Qdrant + lay ten collection tu cau hinh (KHONG hardcode)."""
-    from qdrant_client import QdrantClient, models  # noqa: F401
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
-
-    qdrant_url = os.getenv("QDRANT_URL", "")
-    qdrant_api_key = os.getenv("QDRANT_API_KEY", "")
-    if not qdrant_url or not qdrant_api_key:
-        raise ValueError("Thieu QDRANT_URL hoac QDRANT_API_KEY trong file .env")
-    client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=120)
-    return client, QDRANT_COLLECTION
+    client, collection = current_qdrant_runtime()
+    if client is None or not collection:
+        raise RuntimeError("Qdrant runtime chua duoc khoi tao.")
+    return client, collection
 
 
 def qdrant_count(client, collection):
@@ -240,16 +250,18 @@ def wipe_sql(args):
     deleted = {}
     with engine.begin() as conn:
         for t in tables:
+            c = sql_count(conn, t)
+            if c is None:
+                print(f"   - {t:<22} (bang khong ton tai, bo qua)")
+                continue
             try:
-                c = sql_count(conn, t)
-                if c is None:
-                    print(f"   - {t:<22} (bang khong ton tai, bo qua)")
-                    continue
                 conn.execute(text(f"DELETE FROM dbo.{t}"))
                 deleted[t] = c
                 print(f"   - {t:<22} da xoa {c:,} dong")
             except Exception as e:
-                print(f"   [!] Loi xoa {t}: {e}")
+                raise RuntimeError(
+                    f"Khong the xoa bang bat buoc dbo.{t}; SQL cleanup da rollback."
+                ) from e
         # Reseed IDENTITY ve 0 (bang nao khong co IDENTITY se loi -> bo qua).
         for t in tables:
             try:
@@ -272,7 +284,9 @@ def wipe_sql(args):
             """))
             print("   - SemanticCacheStat     da reset thong ke cache")
         except Exception as e:
-            print(f"   [!] Loi reset SemanticCacheStat: {e}")
+            raise RuntimeError(
+                "Khong the reset dbo.SemanticCacheStat; SQL cleanup da rollback."
+            ) from e
     print(f"   => Xong SQL: {sum(deleted.values()):,} dong tren {len(deleted)} bang.")
 
 
@@ -303,6 +317,7 @@ def wipe_qdrant(args):
             print(f"   - Da xoa diem trong '{collection}': {before:,} -> {after:,}.")
     except Exception as e:
         print(f"   [!] Loi xoa Qdrant: {e}")
+        raise RuntimeError("Qdrant cleanup that bai; khong the bao cao HOAN TAT.") from e
     finally:
         try:
             client.close()
@@ -320,6 +335,7 @@ def wipe_files():
         print(f"   - Da don sach: {anh_dir}")
     except Exception as e:
         print(f"   [!] Loi don thu muc: {e}")
+        raise RuntimeError("Khong the don data/processed.") from e
 
 
 def wipe_raw_files():
@@ -335,6 +351,7 @@ def wipe_raw_files():
         print(f"   - Da don sach: {raw_dir}")
     except Exception as e:
         print(f"   [!] Loi don thu muc data/raw: {e}")
+        raise RuntimeError("Khong the don data/raw.") from e
 
 
 def do_wipe(args):
@@ -370,6 +387,7 @@ def build_parser():
     return p
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def main():
     args = build_parser().parse_args()
 

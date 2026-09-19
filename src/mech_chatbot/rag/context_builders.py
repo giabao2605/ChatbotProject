@@ -5,9 +5,11 @@ Chi phu thuoc logger + cac lazy import (repository, json, datetime) BEN TRONG ha
 -> KHONG the gay circular import voi service.py. service.py re-import cac ten nay
 nen moi cho goi cu + tests van chay.
 """
-import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from mech_chatbot.config.logging import logger
+from mech_chatbot.rag.execution import remaining_request_timeout_int
 
 
 def _context_is_mechanical(docs, part_ids=None):
@@ -38,7 +40,9 @@ def _context_domain(docs, part_ids=None):
 
 def build_structured_attributes_context(docs):
     try:
-        from mech_chatbot.db.repository import get_technical_attributes_for_rag
+        from mech_chatbot.db.repositories.document_pages import (
+            get_technical_attributes_for_rag,
+        )
         import json
         source_files = sorted(set(
             d.metadata.get("file_goc")
@@ -66,7 +70,9 @@ def build_common_metadata_context(docs):
     va canh bao khi tai lieu het hieu luc / da bi thay the.
     """
     try:
-        from mech_chatbot.db.repository import get_common_metadata_for_rag
+        from mech_chatbot.db.repositories.doc_metadata import (
+            get_common_metadata_for_rag,
+        )
         from datetime import date, datetime
         _nl = chr(10)
         doc_ids = [d.metadata.get("doc_id") for d in docs if d is not None and d.metadata.get("doc_id") is not None]
@@ -299,7 +305,108 @@ def _parent_chunk_is_safe(metadata, parent_key, selected_scope):
     )
 
 
-def _load_parent_section_chunks(parent_key, limit, selected_metadata):
+def _parent_context_filter(parent_key, selected_metadata):
+    from qdrant_client import models
+
+    selected_scope = _parent_access_scope(selected_metadata)
+    if selected_scope is None:
+        return None, None
+    doc_id, parent_kind, parent_value = parent_key
+    must = [
+        models.FieldCondition(
+            key="metadata.doc_id", match=models.MatchValue(value=doc_id)
+        ),
+        models.FieldCondition(
+            key="metadata.servable", match=models.MatchValue(value=True)
+        ),
+        models.FieldCondition(
+            key="metadata.publication_state",
+            match=models.MatchValue(value="published"),
+        ),
+        models.FieldCondition(
+            key="metadata.lifecycle_status",
+            match=models.MatchValue(value="published"),
+        ),
+        models.FieldCondition(
+            key="metadata.review_status",
+            match=models.MatchValue(value="approved"),
+        ),
+        models.FieldCondition(
+            key="metadata.is_current", match=models.MatchValue(value=True)
+        ),
+        models.FieldCondition(
+            key="metadata.site",
+            match=models.MatchValue(value=selected_scope["site"]),
+        ),
+        models.FieldCondition(
+            key="metadata.security_level",
+            match=models.MatchValue(value=selected_scope["security_level"]),
+        ),
+        models.FieldCondition(
+            key="metadata.phong_ban_quyen",
+            match=models.MatchAny(any=list(selected_scope["department_values"])),
+        ),
+    ]
+    for field in ("serving_epoch", "publication_version"):
+        value = selected_scope.get(f"{field}_value")
+        if value is not None:
+            must.append(
+                models.FieldCondition(
+                    key=f"metadata.{field}", match=models.MatchValue(value=value)
+                )
+            )
+    for field, value in selected_scope["clearance_values"]:
+        must.append(
+            models.FieldCondition(
+                key=f"metadata.{field}", match=models.MatchValue(value=value)
+            )
+        )
+    field_name = (
+        "metadata.parent_section"
+        if parent_kind == "section"
+        else "metadata.parent_page"
+    )
+    must.append(
+        models.FieldCondition(
+            key=field_name, match=models.MatchValue(value=parent_value)
+        )
+    )
+    return models.Filter(must=must), selected_scope
+
+
+def _parent_documents(points, parent_key, selected_scope):
+    docs = []
+    for point in points or ():
+        payload = getattr(point, "payload", None) or {}
+        metadata = dict(payload.get("metadata") or {})
+        if not _parent_chunk_is_safe(metadata, parent_key, selected_scope):
+            continue
+        document = _payload_document(payload)
+        if document is not None:
+            docs.append(document)
+    docs.sort(
+        key=lambda doc: (
+            int(
+                (doc.metadata or {}).get("parent_page")
+                or (doc.metadata or {}).get("trang_so")
+                or 0
+            ),
+            int((doc.metadata or {}).get("chunk_index") or 0),
+        )
+    )
+    return docs
+
+
+def _load_parent_section_chunks(
+    parent_key,
+    limit,
+    selected_metadata,
+    *,
+    client=None,
+    collection_name=None,
+    qdrant_timeout_seconds=10,
+    deadline_monotonic=None,
+):
     """Load bounded chunks for an already-authorized document parent.
 
     The calling retrieval path has already applied RBAC/site/servable filters to
@@ -307,100 +414,155 @@ def _load_parent_section_chunks(parent_key, limit, selected_metadata):
     repeats serving-state constraints so unpublished staging chunks can never be
     pulled into context.
     """
-    try:
-        from qdrant_client import models
-        from mech_chatbot.db.repository import _get_qdrant_client
-        from mech_chatbot.config.settings import QDRANT_COLLECTION
+    if client is None or not str(collection_name or "").strip():
+        raise RuntimeError("Parent-context Qdrant runtime is not configured")
 
-        selected_scope = _parent_access_scope(selected_metadata)
-        if selected_scope is None:
+    query_filter, selected_scope = _parent_context_filter(
+        parent_key,
+        selected_metadata,
+    )
+    if selected_scope is None:
+        logger.warning(
+            "Bo qua parent hydration cho %s vi selected chunk thieu scope metadata",
+            parent_key,
+        )
+        return []
+
+    points, _ = client.scroll(
+        collection_name=collection_name,
+        scroll_filter=query_filter,
+        limit=max(1, int(limit)),
+        with_payload=True,
+        with_vectors=False,
+        timeout=remaining_request_timeout_int(
+            qdrant_timeout_seconds,
+            stage="parent-context Qdrant scroll",
+            deadline_monotonic=deadline_monotonic,
+        ),
+    )
+    return _parent_documents(points, parent_key, selected_scope)
+
+
+def parent_context_max_workers(value=4):
+    """Return the bounded worker count used for parent-section hydration."""
+    try:
+        return max(1, min(16, int(value)))
+    except (TypeError, ValueError):
+        return 4
+
+
+def _render_parent_context(selected, children):
+    if len(children) <= 1:
+        return selected
+    try:
+        from langchain_core.documents import Document
+
+        parent_text = "\n\n".join(
+            str(
+                (child.metadata or {}).get("noi_dung_goc")
+                or child.page_content
+                or ""
+            ).strip()
+            for child in children
+        ).strip()
+        parent_metadata = dict(getattr(selected, "metadata", {}) or {})
+        parent_metadata["noi_dung_goc"] = parent_text
+        parent_metadata["parent_context_hydrated"] = True
+        parent_metadata["parent_context_chunk_count"] = len(children)
+        return Document(page_content=parent_text, metadata=parent_metadata)
+    except Exception:
+        return selected
+
+
+def _load_parent_sections_batch(
+    loadable,
+    limit,
+    *,
+    client,
+    collection_name,
+    qdrant_timeout_seconds=10,
+    deadline_monotonic=None,
+):
+    from qdrant_client import models
+
+    prepared = tuple(
+        (
+            parent_key,
+            *_parent_context_filter(parent_key, metadata),
+        )
+        for _selected, parent_key, metadata in loadable
+    )
+    valid = tuple(
+        item
+        for item in prepared
+        if item[1] is not None and item[2] is not None
+    )
+    for parent_key, query_filter, selected_scope in prepared:
+        if query_filter is None or selected_scope is None:
             logger.warning(
                 "Bo qua parent hydration cho %s vi selected chunk thieu scope metadata",
                 parent_key,
             )
-            return []
-
-        doc_id, parent_kind, parent_value = parent_key
-        must = [
-            models.FieldCondition(
-                key="metadata.doc_id", match=models.MatchValue(value=doc_id)
-            ),
-            models.FieldCondition(
-                key="metadata.servable", match=models.MatchValue(value=True)
-            ),
-            models.FieldCondition(
-                key="metadata.publication_state", match=models.MatchValue(value="published")
-            ),
-            models.FieldCondition(
-                key="metadata.lifecycle_status", match=models.MatchValue(value="published")
-            ),
-            models.FieldCondition(
-                key="metadata.review_status", match=models.MatchValue(value="approved")
-            ),
-            models.FieldCondition(
-                key="metadata.is_current", match=models.MatchValue(value=True)
-            ),
-            models.FieldCondition(
-                key="metadata.site", match=models.MatchValue(value=selected_scope["site"])
-            ),
-            models.FieldCondition(
-                key="metadata.security_level",
-                match=models.MatchValue(value=selected_scope["security_level"]),
-            ),
-            models.FieldCondition(
-                key="metadata.phong_ban_quyen",
-                match=models.MatchAny(any=list(selected_scope["department_values"])),
-            ),
-        ]
-        for field in ("serving_epoch", "publication_version"):
-            value = selected_scope.get(f"{field}_value")
-            if value is not None:
-                must.append(
-                    models.FieldCondition(
-                        key=f"metadata.{field}", match=models.MatchValue(value=value)
-                    )
+    if not valid:
+        return {parent_key: [] for parent_key, _filter, _scope in prepared}
+    try:
+        timeout = remaining_request_timeout_int(
+            qdrant_timeout_seconds,
+            stage="parent-context Qdrant batch",
+            deadline_monotonic=deadline_monotonic,
+        )
+        responses = client.query_batch_points(
+            collection_name=collection_name,
+            requests=[
+                models.QueryRequest(
+                    query=None,
+                    filter=query_filter,
+                    limit=max(1, int(limit)),
+                    with_payload=True,
+                    with_vector=False,
                 )
-        for field, value in selected_scope["clearance_values"]:
-            must.append(
-                models.FieldCondition(
-                    key=f"metadata.{field}", match=models.MatchValue(value=value)
-                )
-            )
-        field_name = "metadata.parent_section" if parent_kind == "section" else "metadata.parent_page"
-        must.append(
-            models.FieldCondition(
-                key=field_name, match=models.MatchValue(value=parent_value)
-            )
+                for _parent_key, query_filter, _scope in valid
+            ],
+            timeout=timeout,
         )
-        points, _ = _get_qdrant_client().scroll(
-            collection_name=QDRANT_COLLECTION,
-            scroll_filter=models.Filter(must=must),
-            limit=max(1, int(limit)),
-            with_payload=True,
-            with_vectors=False,
-        )
-        docs = []
-        for point in points or []:
-            payload = getattr(point, "payload", None) or {}
-            metadata = dict(payload.get("metadata") or {})
-            if not _parent_chunk_is_safe(metadata, parent_key, selected_scope):
-                continue
-            document = _payload_document(payload)
-            if document is not None:
-                docs.append(document)
-        docs.sort(
-            key=lambda doc: (
-                int((doc.metadata or {}).get("parent_page") or (doc.metadata or {}).get("trang_so") or 0),
-                int((doc.metadata or {}).get("chunk_index") or 0),
+        if len(responses) != len(valid):
+            raise RuntimeError("Parent-context batch result count mismatch")
+        loaded = {
+            parent_key: _parent_documents(
+                getattr(response, "points", None),
+                parent_key,
+                selected_scope,
             )
-        )
-        return docs
+            for (parent_key, _filter, selected_scope), response in zip(
+                valid,
+                responses,
+                strict=True,
+            )
+        }
+        return {
+            parent_key: loaded.get(parent_key, [])
+            for parent_key, _filter, _scope in prepared
+        }
     except Exception as exc:
-        logger.warning("Khong hydrate duoc parent context %s: %s", parent_key, exc)
-        return []
+        logger.warning(
+            "Khong hydrate duoc parent context batch: %s",
+            type(exc).__name__,
+        )
+        raise
 
 
-def hydrate_parent_context(documents, max_sections=None, max_chunks_per_section=None):
+def hydrate_parent_context(
+    documents,
+    max_sections=None,
+    max_chunks_per_section=None,
+    max_workers=None,
+    enabled=True,
+    client=None,
+    collection_name=None,
+    batch_enabled=False,
+    qdrant_timeout_seconds=10,
+    deadline_monotonic=None,
+):
     """Replace selected child chunks with bounded parent section/page context.
 
     Retrieval remains chunk-level for precision.  Only after reranking do we
@@ -408,47 +570,80 @@ def hydrate_parent_context(documents, max_sections=None, max_chunks_per_section=
     enough neighboring evidence without sending an entire document to the LLM.
     """
     docs = list(documents or [])
-    if not docs or os.getenv("PARENT_CONTEXT_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
+    if not docs or not enabled:
         return docs
-    max_sections = max(1, int(max_sections or os.getenv("PARENT_CONTEXT_MAX_SECTIONS", "8")))
+    max_sections = max(1, int(max_sections or 8))
     max_chunks_per_section = max(
         1,
-        int(max_chunks_per_section or os.getenv("PARENT_CONTEXT_MAX_CHUNKS", "6")),
+        int(max_chunks_per_section or 6),
     )
-    hydrated = []
+    max_workers = parent_context_max_workers(max_workers)
+    selected_parents = []
     seen = set()
     for selected in docs:
         metadata = getattr(selected, "metadata", {}) or {}
         if metadata.get("parent_context_enabled") is False:
-            hydrated.append(selected)
+            selected_parents.append((selected, None, metadata))
             continue
         parent_key = _parent_context_key(selected)
         if parent_key is None or parent_key in seen or len(seen) >= max_sections:
             if parent_key is None:
-                hydrated.append(selected)
+                selected_parents.append((selected, None, metadata))
             continue
         seen.add(parent_key)
-        children = _load_parent_section_chunks(
-            parent_key,
-            max_chunks_per_section,
-            metadata,
-        )
-        if len(children) <= 1:
-            hydrated.append(selected)
-            continue
-        try:
-            from langchain_core.documents import Document
-            parent_text = "\n\n".join(
-                str((child.metadata or {}).get("noi_dung_goc") or child.page_content or "").strip()
-                for child in children
-            ).strip()
-            parent_metadata = dict(metadata)
-            parent_metadata["noi_dung_goc"] = parent_text
-            parent_metadata["parent_context_hydrated"] = True
-            parent_metadata["parent_context_chunk_count"] = len(children)
-            hydrated.append(Document(page_content=parent_text, metadata=parent_metadata))
-        except Exception:
-            hydrated.append(selected)
+        selected_parents.append((selected, parent_key, metadata))
+
+    loadable = [item for item in selected_parents if item[1] is not None]
+    loaded_by_key = {}
+    qdrant_kwargs = (
+        {"client": client, "collection_name": collection_name}
+        if client is not None and str(collection_name or "").strip()
+        else {}
+    )
+    if loadable:
+        batch_reader = getattr(client, "query_batch_points", None)
+        if batch_enabled and qdrant_kwargs and callable(batch_reader):
+            loaded_by_key = _load_parent_sections_batch(
+                loadable,
+                max_chunks_per_section,
+                **qdrant_kwargs,
+                qdrant_timeout_seconds=qdrant_timeout_seconds,
+                deadline_monotonic=deadline_monotonic,
+            )
+        elif qdrant_kwargs or max_workers == 1 or len(loadable) == 1:
+            for _selected, parent_key, metadata in loadable:
+                loaded_by_key[parent_key] = _load_parent_section_chunks(
+                    parent_key,
+                    max_chunks_per_section,
+                    metadata,
+                    **qdrant_kwargs,
+                    qdrant_timeout_seconds=qdrant_timeout_seconds,
+                    deadline_monotonic=deadline_monotonic,
+                )
+        else:
+            with ThreadPoolExecutor(
+                max_workers=min(max_workers, len(loadable)),
+                thread_name_prefix="parent-context",
+            ) as executor:
+                futures = {
+                    parent_key: executor.submit(
+                        _load_parent_section_chunks,
+                        parent_key,
+                        max_chunks_per_section,
+                        metadata,
+                        **qdrant_kwargs,
+                    )
+                    for _selected, parent_key, metadata in loadable
+                }
+                for parent_key, future in futures.items():
+                    loaded_by_key[parent_key] = future.result()
+
+    hydrated = [
+        selected
+        if parent_key is None
+        else _render_parent_context(selected, loaded_by_key.get(parent_key) or [])
+        for selected, parent_key, _metadata in selected_parents
+    ]
     return hydrated or docs
 
 

@@ -25,42 +25,43 @@ def main():
         with open(in_path, "r", encoding="utf-8") as f:
             payload = json.load(f)
 
-        from mech_chatbot.rag.service import chat_with_rag
+        from mech_chatbot.rag.execution import (
+            AccessScope,
+            DefaultRagExecutor,
+            RagInvocation,
+            RagRequest,
+            collect_rag_events,
+        )
 
-        rag_result = chat_with_rag(
-            user_question=payload.get("user_question", ""),
+        request = RagRequest(
+            question=payload.get("user_question", ""),
             image_path=payload.get("image_path"),
-            chat_history=payload.get("chat_history") or [],
-            current_part_ids=payload.get("current_part_ids") or [],
-            user_department=payload.get("user_department"),
-            user_roles=payload.get("user_roles") or [],
-            allowed_departments=payload.get("allowed_departments") or [],
-            max_security_level=payload.get("max_security_level") or "public",
-            allowed_sites=payload.get("allowed_sites") or [],
+            history=tuple(payload.get("chat_history") or ()),
+            current_part_ids=tuple(payload.get("current_part_ids") or ()),
+            access=AccessScope(
+                department=payload.get("user_department"),
+                roles=frozenset(payload.get("user_roles") or ()),
+                allowed_departments=frozenset(payload.get("allowed_departments") or ()),
+                max_security_level=payload.get("max_security_level") or "public",
+                allowed_sites=frozenset(payload.get("allowed_sites") or ()),
+            ),
             response_language=payload.get("response_language") or "vi",
             conversation_context=payload.get("conversation_context") or None,
         )
-
-        if len(rag_result) >= 4:
-            stream = rag_result[0]
-            ref_text = rag_result[1]
-            ref_images = rag_result[2]
-            new_part_ids = rag_result[3]
-            debug_info = rag_result[4] if len(rag_result) >= 5 else {}
-        else:
-            raise ValueError(f"chat_with_rag trả về thiếu dữ liệu: {len(rag_result)} values")
-
-        chunks = []
-        for chunk in stream:
-            chunks.append(str(chunk))
+        result = collect_rag_events(
+            DefaultRagExecutor().run(
+                request,
+                RagInvocation(trace_id="", mode="production"),
+            )
+        )
 
         write_output(out_path, {
             "ok": True,
-            "response": "".join(chunks),
-            "ref_text": ref_text or "",
-            "ref_images": ref_images or [],
-            "new_part_ids": new_part_ids or [],
-            "debug_info": debug_info,
+            "response": result.answer,
+            "ref_text": result.ref_text,
+            "ref_images": list(result.ref_images),
+            "new_part_ids": list(result.new_part_ids),
+            "debug_info": dict(result.diagnostics),
         })
 
         # Avoid native-library teardown crashes (onnxruntime/torch/tokenizers/etc.)

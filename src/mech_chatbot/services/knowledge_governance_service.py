@@ -1,6 +1,6 @@
 """Knowledge governance service boundary."""
 
-from mech_chatbot.db.repository import (
+from mech_chatbot.db.repositories.knowledge_governance import (
     get_department_domain_profile,
     get_department_knowledge_governance,
     list_department_domain_profiles,

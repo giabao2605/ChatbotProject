@@ -1,0 +1,21 @@
+{
+  "schema": "milestone-decision-v2",
+  "milestone": "grounded_math",
+  "scope": "controlled_demo",
+  "decision": "accepted",
+  "source_commit": "7b9d57562a669984b843d48d6d7ddf09048c472d",
+  "evidence": [
+    {
+      "path": "data/integrated_hardening_v1/evidence/grounded-math-7b9d575-rollout-run.json",
+      "sha256": "3cfeaf24d89bbd0e06c50dea138af89d5258a08ab28cdee5a2dac8d4d4807e30",
+      "schema": "grounded-math-rollout-run-v1"
+    },
+    {
+      "path": "data/integrated_hardening_v1/evidence/grounded-math-19aacef-owner-review-result.json",
+      "sha256": "e4cd25c40916166d2cfbc7f97f663d668630956d70d7bbef6d30aec48fa23559",
+      "schema": "grounded-math-owner-review-result-v1"
+    }
+  ],
+  "reason": "The governed three-day campaign passed its automated gates and owner bao.nguyen accepted all 20 stratified cases, including all six mandatory-risk cases, for controlled-demo quality only.",
+  "reviewer_signoff": {"reviewer": "bao.nguyen", "signed_at": "2026-08-17T08:15:53.831494Z"}
+}

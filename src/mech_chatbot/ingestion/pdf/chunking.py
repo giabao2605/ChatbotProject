@@ -14,16 +14,23 @@ FIX (native crash 0xC0000005 luc khoi dong worker):
 """
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from functools import lru_cache
+from functools import lru_cache, partial
 
 from mech_chatbot.config.logging import logger
 
 # cross-module (owned) imports
-from mech_chatbot.ingestion.pdf.config import EMBEDDING_CHUNK_OVERLAP, EMBEDDING_CHUNK_SIZE, EMBEDDING_MODEL_NAME, _env_bool
+from mech_chatbot.ingestion.pdf.config import (
+    EMBEDDING_CHUNK_OVERLAP,
+    EMBEDDING_CHUNK_SIZE,
+    EMBEDDING_MODEL_NAME,
+    PdfIngestionConfig,
+)
 
 
-def _contextual_chunk_enabled():
-    return _env_bool("ENABLE_CONTEXTUAL_CHUNK", False)
+def _contextual_chunk_enabled(
+    config: PdfIngestionConfig | None = None,
+):
+    return bool(config.contextual_chunk_enabled) if config else False
 
 
 def _build_chunk_context_prefix(md):
@@ -73,9 +80,25 @@ GLOBAL_TOKENIZER = None
 _TOKENIZER_LOADED = False
 
 
-def _get_tokenizer():
+@lru_cache(maxsize=8)
+def _load_named_tokenizer(model_name):
+    try:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        logger.info(f"Da load AutoTokenizer ({model_name}) thanh cong cho Chunking.")
+        return tokenizer
+    except Exception as error:
+        logger.warning(f"Khong load duoc tokenizer {model_name}: {error}")
+        return None
+
+
+def _get_tokenizer(model_name=None):
     """Load AutoTokenizer mot lan, LAZY. Tra ve None neu load loi (fallback do dai ky tu)."""
     global GLOBAL_TOKENIZER, _TOKENIZER_LOADED
+    selected_model = str(model_name or EMBEDDING_MODEL_NAME)
+    if selected_model != EMBEDDING_MODEL_NAME:
+        return _load_named_tokenizer(selected_model)
     if _TOKENIZER_LOADED:
         return GLOBAL_TOKENIZER
     _TOKENIZER_LOADED = True
@@ -89,8 +112,8 @@ def _get_tokenizer():
     return GLOBAL_TOKENIZER
 
 
-def tokenizer_length(text):
-    tok = _get_tokenizer()
+def tokenizer_length(text, model_name=None):
+    tok = _get_tokenizer(model_name)
     if tok:
         return len(tok.encode(text))
     return len(text)
@@ -102,6 +125,27 @@ token_splitter = RecursiveCharacterTextSplitter(
     length_function=tokenizer_length
 )
 
+
+@lru_cache(maxsize=16)
+def _configured_token_splitter(chunk_size, chunk_overlap, model_name):
+    return RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        length_function=partial(tokenizer_length, model_name=model_name),
+    )
+
+
+def get_token_splitter(config: PdfIngestionConfig | None = None):
+    """Return a splitter projected from one immutable startup snapshot."""
+
+    if config is None:
+        return token_splitter
+    return _configured_token_splitter(
+        config.embedding_chunk_size,
+        config.embedding_chunk_overlap,
+        config.embedding_model_name,
+    )
+
 __all__ = [
     'tokenize_cached',
     'GLOBAL_TOKENIZER',
@@ -110,4 +154,5 @@ __all__ = [
     '_contextual_chunk_enabled',
     '_build_chunk_context_prefix',
     '_get_tokenizer',
+    'get_token_splitter',
 ]

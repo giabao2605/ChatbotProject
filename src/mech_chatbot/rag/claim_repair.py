@@ -7,12 +7,18 @@ import re
 from typing import Callable, Iterable
 
 from mech_chatbot.rag.answer_checks import (
+    extract_source_ids,
     has_unsupported_codes,
     has_unsupported_materials,
     has_unsupported_units_symbols,
     has_valid_source_citation,
 )
-from mech_chatbot.rag.evidence_gate import find_unsupported_numbers, normalized_number_values
+from mech_chatbot.rag.evidence_gate import find_unsupported_numbers
+from mech_chatbot.rag.number_normalization import (
+    NUMBER_PATTERN,
+    normalize_number_token,
+    normalized_number_values,
+)
 
 
 @dataclass(frozen=True)
@@ -22,6 +28,105 @@ class RepairResult:
     accepted: bool
     violation_reason: str = ""
     estimated_cost: float = 0.0
+
+
+def _deterministic_single_number_repair(answer, context_text, violations):
+    if len(violations) != 1 or re.search(
+        r"\[(?:Ngu[oồ]n|Source):[^\]]+\]",
+        answer,
+        flags=re.IGNORECASE,
+    ):
+        return None
+
+    def words(value):
+        without_numbers = NUMBER_PATTERN.sub(" ", str(value or ""))
+        return tuple(
+            word.casefold()
+            for word in re.findall(r"[^\W\d_]+", without_numbers, flags=re.UNICODE)
+        )
+
+    violation = violations[0]
+    answer_before = words(answer[: violation.start])
+    answer_after = words(answer[violation.end :])
+    if len(answer_before) + len(answer_after) < 3:
+        return None
+
+    candidates = []
+    for sentence in re.findall(r"[^.!?\r\n]+[.!?]?", str(context_text or "")):
+        numbers = list(NUMBER_PATTERN.finditer(sentence))
+        if len(numbers) != 1:
+            continue
+        number = numbers[0]
+        source_before = words(sentence[: number.start()])
+        source_after = words(sentence[number.end() :])
+        if answer_before and source_before[-len(answer_before) :] != answer_before:
+            continue
+        if answer_after and source_after[: len(answer_after)] != answer_after:
+            continue
+        candidates.append(number.group(0))
+    if len(candidates) != 1:
+        return None
+
+    if normalize_number_token(candidates[0]) == violation.normalized:
+        return None
+    return f"{answer[:violation.start]}{candidates[0]}{answer[violation.end:]}"
+
+
+def claim_repair_enabled(enabled: bool = False) -> bool:
+    """Return the process-provided repair switch."""
+    return bool(enabled)
+
+
+def _citations_match_documents(answer, documents):
+    allowed = {}
+    for document in documents or []:
+        metadata = getattr(document, "metadata", {}) or {}
+        try:
+            doc_id = int(metadata.get("doc_id"))
+            page = int(metadata.get("trang_so"))
+            version = int(metadata.get("version_no"))
+            filename = str(metadata.get("file_goc") or "").strip().casefold()
+        except (TypeError, ValueError):
+            continue
+        if page > 0 and version > 0 and filename:
+            allowed.setdefault(f"D{doc_id}P{page}", set()).add((version, filename))
+
+    cards = re.findall(
+        r"\[(?:Ngu[oồ]n|Source)\s*:[^\]]+\]",
+        str(answer or ""),
+        flags=re.IGNORECASE,
+    )
+    answer_source_ids = extract_source_ids(answer)
+    if not answer_source_ids:
+        return not cards
+    if not answer_source_ids.issubset(set(allowed)):
+        return False
+
+    card_source_ids = set()
+    for card in cards:
+        source_ids = extract_source_ids(card)
+        filename_match = re.search(
+            r"\[(?:Ngu[oồ]n|Source)\s*:\s*([^,\]]+)", card, re.IGNORECASE
+        )
+        page_match = re.search(r"(?:Trang|Page)\s*(?:s[oố]|#|:)?\s*(\d+)", card, re.IGNORECASE)
+        version_match = re.search(r"(?:Version|Ver|V)\s*[:#-]?\s*(\d+)", card, re.IGNORECASE)
+        if len(source_ids) != 1 or not filename_match or not page_match or not version_match:
+            return False
+        source_id = next(iter(source_ids))
+        source_match = re.fullmatch(r"D(\d+)P(\d+)", source_id)
+        if source_match is None:
+            return False
+        cited_page = int(page_match.group(1))
+        source_page = int(source_match.group(2))
+        cited_version = int(version_match.group(1))
+        cited_filename = filename_match.group(1).strip().casefold()
+        if cited_page != source_page or (
+            cited_version,
+            cited_filename,
+        ) not in allowed.get(source_id, set()):
+            return False
+        card_source_ids.add(source_id)
+    return answer_source_ids == card_source_ids
 
 
 def _validate(
@@ -47,6 +152,8 @@ def _validate(
         answer, documents, require_version=True
     ):
         return "citation"
+    if not _citations_match_documents(answer, documents):
+        return "citation"
     answer_source_ids = set(re.findall(r"\bD\d+P\d+\b", answer, flags=re.IGNORECASE))
     if required_source_ids and not {value.upper() for value in required_source_ids}.issubset(
         {value.upper() for value in answer_source_ids}
@@ -66,6 +173,7 @@ def repair_grounded_answer(
     invoke: Callable[[str], str],
     require_citation: bool,
     enabled: bool,
+    allow_deterministic: bool = False,
 ) -> RepairResult:
     """Attempt exactly one rewrite and accept it only if every guard passes."""
     if not enabled:
@@ -73,6 +181,11 @@ def repair_grounded_answer(
     documents = list(documents or [])
     violations = find_unsupported_numbers(
         answer, context_text, question, strict_mode=True
+    )
+    _, unsupported_materials = has_unsupported_materials(answer, context_text)
+    _, unsupported_codes = has_unsupported_codes(answer, context_text, question)
+    _, unsupported_units = has_unsupported_units_symbols(
+        answer, context_text, question
     )
     allowed_numbers = sorted(
         normalized_number_values(context_text) | normalized_number_values(question)
@@ -89,10 +202,36 @@ def repair_grounded_answer(
             if metadata.get("doc_id") is not None and metadata.get("trang_so") is not None
         }
     )
+    if allow_deterministic and not require_citation:
+        deterministic = _deterministic_single_number_repair(
+            answer,
+            context_text,
+            violations,
+        )
+        if deterministic is not None:
+            violation = _validate(
+                deterministic,
+                context_text=context_text,
+                question=question,
+                documents=documents,
+                require_citation=False,
+                required_source_ids=original_source_ids,
+                required_citations=required_citations,
+            )
+            if not violation:
+                return RepairResult(
+                    answer=deterministic,
+                    attempted=True,
+                    accepted=True,
+                )
+
     prompt = (
         "Repair the draft using only facts and numbers present in CONTEXT or QUESTION. "
         "Remove unsupported claims. Preserve every REQUIRED_SOURCE_ID exactly; only use ALLOWED_SOURCE_IDS. "
         "Do not explain the repair. Return only the repaired answer.\n\n"
+        f"UNSUPPORTED_MATERIALS: {sorted(unsupported_materials)}\n"
+        f"UNSUPPORTED_CODES: {sorted(unsupported_codes)}\n"
+        f"UNSUPPORTED_UNITS: {sorted(unsupported_units)}\n"
         f"UNSUPPORTED_NUMBERS: {[item.normalized for item in violations]}\n"
         f"ALLOWED_NUMBERS: {allowed_numbers}\n"
         f"REQUIRED_SOURCE_IDS: {original_source_ids}\n"

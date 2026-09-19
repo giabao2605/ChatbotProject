@@ -1,23 +1,42 @@
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
+from mech_chatbot.config.settings import ExternalAiSettings
 from mech_chatbot.llm import external_ai
 
 
 pytestmark = pytest.mark.unit
 
 
+def _external_settings(
+    *,
+    environment: str = "",
+    local: bool = False,
+    policy: str = "all_external",
+    execution_context: str = "production",
+) -> ExternalAiSettings:
+    return ExternalAiSettings(
+        application_environment=environment,
+        local_development=local,
+        processing_policy=policy,
+        execution_context=execution_context,
+    )
+
+
 @pytest.fixture(autouse=True)
-def _clear_provider_profile_cache(monkeypatch):
-    monkeypatch.delenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", raising=False)
-    monkeypatch.delenv("APP_ENV", raising=False)
-    external_ai.invalidate_external_ai_provider_profiles()
+def _provider_profile_test_boundary():
     yield
-    external_ai.invalidate_external_ai_provider_profiles()
 
 
-def _profile(provider="proxyllm", surfaces=("generation", "vision_ocr"), *, expires_in_days=30):
+def _profile(
+    provider="proxyllm",
+    surfaces=("generation", "vision_ocr"),
+    *,
+    expires_in_days=30,
+    policy_version="test-v1",
+):
     return external_ai.ExternalAIProviderProfile(
         provider=provider,
         endpoint="https://provider.example/v1",
@@ -25,7 +44,7 @@ def _profile(provider="proxyllm", surfaces=("generation", "vision_ocr"), *, expi
         secret_reference="env:TEST_API_KEY",
         allowed_surfaces=tuple(surfaces),
         retention_mode="test-retention",
-        policy_version="test-v1",
+        policy_version=policy_version,
         approved_by="tester",
         risk_acceptance_ref="test:risk-acceptance",
         review_expires_at=datetime.now() + timedelta(days=expires_in_days),
@@ -63,6 +82,21 @@ def test_internal_only_policy_fails_closed():
             surface="reranking",
             policies=["all_external", "internal_only"],
             profile=_profile("voyage", ("reranking",)),
+        )
+
+
+def test_policy_comes_from_explicit_settings_snapshot_not_ambient_environment(
+    monkeypatch,
+):
+    monkeypatch.setenv("EXTERNAL_PROCESSING_POLICY", "all_external")
+
+    with pytest.raises(external_ai.ExternalProcessingDenied):
+        external_ai.make_external_call_spec(
+            provider="voyage",
+            model="rerank-2.5-lite",
+            surface="reranking",
+            profile=_profile("voyage", ("reranking",)),
+            settings=_external_settings(policy="internal_only"),
         )
 
 
@@ -137,8 +171,70 @@ def test_inactive_profile_fails_closed():
         client.prepare_call(model="model-test", surface="generation")
 
 
+def test_evaluation_only_profile_is_allowed_only_in_evaluation_context():
+    profile = _profile(
+        "jina",
+        ("reranking",),
+        policy_version="evaluation-only-v1",
+    )
+
+    spec = external_ai.make_external_call_spec(
+        provider="jina",
+        model="jina-reranker-v3",
+        surface="reranking",
+        profile=profile,
+        settings=_external_settings(execution_context="evaluation"),
+    )
+
+    assert spec.policy_version == "evaluation-only-v1"
+
+
+@pytest.mark.parametrize("execution_context", ["production", "local", "test", ""])
+def test_evaluation_only_profile_fails_closed_outside_evaluation(
+    execution_context,
+):
+    profile = _profile(
+        "jina",
+        ("reranking",),
+        policy_version="evaluation-only-v1",
+    )
+
+    with pytest.raises(
+        external_ai.ExternalProcessingDenied,
+        match="evaluation",
+    ):
+        external_ai.make_external_call_spec(
+            provider="jina",
+            model="jina-reranker-v3",
+            surface="reranking",
+            profile=profile,
+            settings=_external_settings(execution_context=execution_context),
+        )
+
+
+def test_inactive_evaluation_only_profile_fails_closed_in_evaluation():
+    profile = external_ai.ExternalAIProviderProfile(
+        **{
+            **_profile(
+                "jina",
+                ("reranking",),
+                policy_version="evaluation-only-v1",
+            ).__dict__,
+            "is_active": False,
+        }
+    )
+
+    with pytest.raises(external_ai.ExternalProcessingDenied, match="dang bi tat"):
+        external_ai.make_external_call_spec(
+            provider="jina",
+            model="jina-reranker-v3",
+            surface="reranking",
+            profile=profile,
+            settings=_external_settings(execution_context="evaluation"),
+        )
+
+
 def test_missing_managed_profile_fails_closed_outside_local_development(monkeypatch):
-    monkeypatch.delenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", raising=False)
     monkeypatch.setattr(external_ai, "_load_managed_provider_profile", lambda _provider: None)
 
     assert external_ai.get_external_ai_provider_profile("voyage") is None
@@ -153,22 +249,152 @@ def test_missing_managed_profile_fails_closed_outside_local_development(monkeypa
 
 def test_bootstrap_profile_requires_explicit_local_development_flag(monkeypatch):
     monkeypatch.setattr(external_ai, "_load_managed_provider_profile", lambda _provider: None)
-    monkeypatch.setenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", "true")
-    monkeypatch.setenv("APP_ENV", "pilot")
 
-    assert external_ai.get_external_ai_provider_profile("voyage") is None
+    assert external_ai.get_external_ai_provider_profile(
+        "voyage",
+        settings=_external_settings(environment="pilot", local=True),
+    ) is None
 
-    monkeypatch.setenv("APP_ENV", "development")
-    external_ai.invalidate_external_ai_provider_profiles()
-    bootstrap = external_ai.get_external_ai_provider_profile("voyage")
+    bootstrap = external_ai.get_external_ai_provider_profile(
+        "voyage",
+        settings=_external_settings(environment="development", local=True),
+    )
 
     assert bootstrap is not None
     assert bootstrap.review_expires_at is None
     assert bootstrap.risk_acceptance_ref == "notion:92459b78-3e54-4c47-8322-d44ab2b65664"
 
 
+def test_proxyllm_bootstrap_profile_allows_governed_claim_repair(monkeypatch):
+    monkeypatch.setattr(external_ai, "_load_managed_provider_profile", lambda _provider: None)
+    settings = _external_settings(environment="development", local=True)
+
+    profile = external_ai.get_external_ai_provider_profile(
+        "proxyllm",
+        settings=settings,
+    )
+
+    assert profile is not None
+    client = external_ai.ExternalAIClient(
+        "proxyllm",
+        profile=profile,
+        settings=settings,
+    )
+    spec = client.prepare_call(model="model-test", surface="claim_repair")
+    assert spec.surface == "claim_repair"
+    assert spec.policy_version == "risk-accepted-v4-claim-repair"
+
+
+def test_claim_repair_profile_migration_is_additive_and_audited():
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "database"
+        / "migrations"
+        / "V0035__allow_governed_claim_repair_surface.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "JSON_MODIFY" in migration
+    assert "claim_repair" in migration
+    assert "external_ai_claim_repair_surface_enabled" in migration
+    assert "raw prompt" not in migration.lower()
+    assert "Expected exactly one proxyllm profile" in migration
+    assert "must be a JSON array" in migration
+    verification = migration.index("claim_repair surface update could not be verified")
+    audit = migration.index("external_ai_claim_repair_surface_enabled")
+    assert verification < audit
+
+
+def test_jina_evaluation_profile_migration_is_additive_metadata_only_and_audited():
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "database"
+        / "migrations"
+        / "V0040__managed_jina_rerank_profile.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "IF NOT EXISTS (SELECT 1 FROM dbo.ExternalAIProviderProfile WHERE Provider = 'jina')" in migration
+    assert "https://api.jina.ai/v1" in migration
+    assert "jina-reranker-v3" in migration
+    assert "env:JINA_API_KEY" in migration
+    assert 'N\'["reranking"]\'' in migration
+    assert "provider_default_no_training" in migration
+    assert "DATEADD(day, 30, GETDATE())" in migration
+    assert "DATEADD(day, 30, GETDATE()), 0" in migration
+    assert "evaluation-only" in migration
+    assert "019fab5f-2aa9-71d2-9bc1-0ecaf3b6d931" in migration
+    assert "external_ai_jina_evaluation_profile_created" in migration
+    assert "UPDATE dbo.ExternalAIProviderProfile" not in migration
+    assert "JINA_API_KEY=" not in migration
+    assert "release_decisions" not in migration
+
+
+def test_jina_evaluation_activation_migration_is_exact_fail_closed_and_idempotent():
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "database"
+        / "migrations"
+        / "V0041__activate_evaluation_only_jina_profile.sql"
+    ).read_text(encoding="utf-8")
+
+    for exact_value in (
+        "https://api.jina.ai/v1",
+        "jina-reranker-v3",
+        "env:JINA_API_KEY",
+        'N\'["reranking"]\'',
+        "provider_default_no_training",
+        "evaluation-only-v1",
+        "technical-evaluation-only",
+        "codex-thread:019fab5f-2aa9-71d2-9bc1-0ecaf3b6d931",
+        "V0040 migration",
+        "codex-eval-closeout",
+    ):
+        assert exact_value in migration
+    assert "ReviewExpiresAt > GETDATE()" in migration
+    assert "ReviewExpiresAt <= DATEADD(day, 30, GETDATE())" in migration
+    assert "IsActive = 0" in migration
+    assert "AND UpdatedBy = 'V0040 migration'" in migration
+    assert "OR (IsActive = 0 AND UpdatedBy = 'codex-eval-closeout')" in migration
+    assert "OR (IsActive = 1 AND UpdatedBy = 'V0041 migration')" in migration
+    assert "SET IsActive = 1" in migration
+    assert "THROW" in migration
+    assert "@jina_profile_activated = 1" in migration
+    assert "external_ai_jina_evaluation_profile_activated" in migration
+    assert "NOT EXISTS" in migration
+    assert "JINA_API_KEY=" not in migration
+    assert "release_decisions" not in migration
+
+
+def test_jina_production_activation_migration_is_exact_fail_closed_and_audited():
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "database"
+        / "migrations"
+        / "V0042__authorize_jina_production_reranking.sql"
+    ).read_text(encoding="utf-8")
+
+    for exact_value in (
+        "https://api.jina.ai/v1",
+        "jina-reranker-v3",
+        "env:JINA_API_KEY",
+        'N\'["reranking"]\'',
+        "provider_default_no_training",
+        "risk-accepted-v1-jina-production",
+        "owner-production-approval",
+        "owner-decision:2026-07-31:jina-primary-voyage-fallback",
+        "V0041 migration",
+        "V0042 migration",
+    ):
+        assert exact_value in migration
+    assert "Expected exactly one Jina profile" in migration
+    assert "evaluation-only-v1" in migration
+    assert "ReviewExpiresAt = DATEADD(day, 90, GETDATE())" in migration
+    assert "SET PolicyVersion = 'risk-accepted-v1-jina-production'" in migration
+    assert "external_ai_jina_production_authorized" in migration
+    assert "JINA_API_KEY=" not in migration
+    assert "release_decisions" not in migration
+
+
 def test_audit_unavailable_blocks_before_external_call_body(monkeypatch):
-    monkeypatch.delenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", raising=False)
     monkeypatch.setattr(external_ai, "_record_external_call", lambda *args, **kwargs: False)
     called = False
 
@@ -185,8 +411,6 @@ def test_audit_unavailable_blocks_before_external_call_body(monkeypatch):
 
 
 def test_local_development_may_continue_when_audit_unavailable(monkeypatch):
-    monkeypatch.setenv("EXTERNAL_AI_LOCAL_DEVELOPMENT", "true")
-    monkeypatch.setenv("APP_ENV", "local")
     monkeypatch.setattr(external_ai, "_record_external_call", lambda *args, **kwargs: False)
     called = False
 
@@ -195,10 +419,37 @@ def test_local_development_may_continue_when_audit_unavailable(monkeypatch):
         model="gpt-test",
         surface="generation",
         profile=_profile(),
+        settings=_external_settings(environment="local", local=True),
     ):
         called = True
 
     assert called is True
+
+
+def test_external_call_emits_metadata_only_latency_trace(monkeypatch):
+    events = []
+    monkeypatch.setattr(external_ai, "_record_external_call", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        external_ai,
+        "_emit_external_call_trace",
+        lambda spec, **kwargs: events.append((spec, kwargs)),
+    )
+
+    with external_ai.audited_external_call(
+        provider="proxyllm",
+        model="gpt-test",
+        surface="generation",
+        trace_id="trace-router",
+        profile=_profile(),
+    ):
+        pass
+
+    assert len(events) == 1
+    spec, metadata = events[0]
+    assert spec.trace_id == "trace-router"
+    assert metadata["status"] == "success"
+    assert metadata["latency_ms"] >= 0
+    assert set(metadata) == {"status", "latency_ms", "error_type"}
 
 
 def test_cancelled_external_call_is_audited_without_error_status(monkeypatch):
@@ -244,7 +495,6 @@ def test_provider_runtime_uses_the_profile_secret_reference(monkeypatch):
     profile = external_ai.ExternalAIProviderProfile(
         **{**profile.__dict__, "secret_reference": "env:TEST_RUNTIME_KEY"}
     )
-    monkeypatch.setenv("TEST_RUNTIME_KEY", "runtime-key")
     monkeypatch.setattr(
         external_ai,
         "_load_managed_provider_profile",
@@ -256,6 +506,7 @@ def test_provider_runtime_uses_the_profile_secret_reference(monkeypatch):
         fallback_endpoint="https://fallback.invalid/v1",
         fallback_model="fallback-model",
         fallback_secret_envs=("UNRELATED_PROVIDER_KEY",),
+        resolved_secrets={"TEST_RUNTIME_KEY": "runtime-key"},
     )
 
     assert runtime.endpoint == "https://provider.example/v1"
@@ -268,7 +519,6 @@ def test_provider_runtime_never_substitutes_a_different_key_for_secret_uri(monke
     profile = external_ai.ExternalAIProviderProfile(
         **{**profile.__dict__, "secret_reference": "secret://voyage/key"}
     )
-    monkeypatch.setenv("UNRELATED_PROVIDER_KEY", "must-not-be-used")
     monkeypatch.setattr(
         external_ai,
         "_load_managed_provider_profile",
@@ -280,6 +530,7 @@ def test_provider_runtime_never_substitutes_a_different_key_for_secret_uri(monke
         fallback_endpoint="https://fallback.invalid/v1",
         fallback_model="fallback-model",
         fallback_secret_envs=("UNRELATED_PROVIDER_KEY",),
+        resolved_secrets={"UNRELATED_PROVIDER_KEY": "must-not-be-used"},
     )
 
     assert runtime.api_key is None

@@ -1,0 +1,7 @@
+schema=pytest-baseline-v1
+scope=full default backend suite
+status=passed_with_opt_in_skips
+passed=1959
+failed=0
+skipped=22
+warnings=1

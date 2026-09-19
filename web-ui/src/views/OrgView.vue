@@ -411,7 +411,7 @@ const deptActions: RowAction[] = [
     <ResourcePage
       title="Knowledge governance"
       eyebrow="Knowledge platform"
-      description="Mỗi phòng cần Owner và Approver thật trước khi tài liệu có thể publish. Admin global-read không tự động có quyền duyệt thay."
+      description="Mỗi phòng cần Owner và Approver thật trước khi tài liệu có thể publish. platform_admin đọc/điều phối control-plane nhưng không tự động có quyền duyệt thay."
       :load="loadKnowledgeGovernance"
       :columns="governanceColumns"
       :create-form="canManagePlatform ? governanceForm : undefined"

@@ -2,11 +2,54 @@
 tach khoi rag/service.py de giam kich thuoc file + de unit test rieng.
 
 NGUYEN TAC: COPY NGUYEN VAN (byte-for-byte, trich bang ast) tu service.py -> KHONG doi logic.
-Chi phu thuoc stdlib (re, json) + lazy import material_registry -> KHONG the gay circular import.
+Chi phu thuoc stdlib (re, json) + explicit DB registry adapter.
 service.py re-import cac ten nay nen moi cho goi cu + tests van chay.
 """
 import json
+from mech_chatbot.domain.source_ids import extract_source_ids
 import re
+
+
+_QUANTITY_UNIT_PATTERN = r"(?:mm|kg|piece|cái|cai)"
+
+_GENERIC_MISSING_CLAIM = re.compile(
+    r"(?:tài liệu|tai lieu)[^.!?\n]{0,80}(?:không|khong|chưa|chua)\s+"
+    r"(?:đề cập|de cap|ghi|nêu|neu|cung cấp|cung cap)\s+(?:đến\s+|den\s+)?"
+    r"(?:thông tin|thong tin|nội dung|noi dung|vấn đề|van de)\s+này\b"
+    r"|(?:available\s+)?(?:internal\s+)?documents?[^.!?\n]{0,80}"
+    r"(?:do(?:es)?\s+not|don't)\s+(?:contain|cover|mention|provide)\s+"
+    r"(?:this\s+)?(?:information|content|topic)\b",
+    re.IGNORECASE,
+)
+_POSITIVE_DOCUMENT_COVERAGE = re.compile(
+    r"(?:tài liệu|tai lieu)"
+    r"(?:(?!\b(?:không|khong|chưa|chua)\b)[^.!?\n]){0,100}"
+    r"(?:mô tả|mo ta|xác nhận\s+(?:có|rằng)|xac nhan\s+(?:co|rang))\b"
+    r"|documents?(?:(?!\b(?:not|no)\b)[^.!?\n]){0,100}"
+    r"(?:describes?|covers?|confirms?\s+(?:that\s+)?)\b",
+    re.IGNORECASE,
+)
+_ANSWER_SECTION_BOUNDARY = re.compile(
+    r"(?m)(?=^[ \t]*(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+))"
+)
+
+
+def _answer_sections(answer):
+    """Group prose paragraphs while keeping separate list items isolated."""
+    return [
+        section.strip()
+        for section in _ANSWER_SECTION_BOUNDARY.split(str(answer or ""))
+        if section.strip()
+    ]
+
+
+def has_self_contradictory_missing_data_claim(answer):
+    """Detect one answer section that both acknowledges and globally denies coverage."""
+    return any(
+        _GENERIC_MISSING_CLAIM.search(section)
+        and _POSITIVE_DOCUMENT_COVERAGE.search(section)
+        for section in _answer_sections(answer)
+    )
 
 
 def _safe_json_loads(raw):
@@ -28,6 +71,54 @@ def _extract_numbers(text):
     return {n.replace(",", ".") for n in nums}
 
 
+def _extract_markdown_quantity_units(text):
+    lines = str(text or "").splitlines()
+    quantity_headers = {"quantity", "qty", "số lượng", "so luong"}
+    unit_headers = {"unit", "đơn vị", "don vi"}
+    found = set()
+
+    for index, line in enumerate(lines[:-2]):
+        if "|" not in line:
+            continue
+        headers = [cell.strip().casefold() for cell in line.strip().strip("|").split("|")]
+        quantity_index = next(
+            (i for i, header in enumerate(headers) if header in quantity_headers),
+            None,
+        )
+        unit_index = next(
+            (i for i, header in enumerate(headers) if header in unit_headers),
+            None,
+        )
+        if quantity_index is None or unit_index is None:
+            continue
+
+        separator = [
+            cell.strip()
+            for cell in lines[index + 1].strip().strip("|").split("|")
+        ]
+        if len(separator) != len(headers) or not all(
+            re.fullmatch(r":?-{3,}:?", cell) for cell in separator
+        ):
+            continue
+
+        for row_line in lines[index + 2:]:
+            if "|" not in row_line:
+                break
+            cells = [cell.strip() for cell in row_line.strip().strip("|").split("|")]
+            if len(cells) <= max(quantity_index, unit_index):
+                continue
+            quantity = cells[quantity_index]
+            unit = cells[unit_index]
+            if re.fullmatch(r"\d+(?:[\.,]\d+)?", quantity) and re.fullmatch(
+                _QUANTITY_UNIT_PATTERN,
+                unit,
+                re.IGNORECASE,
+            ):
+                found.add(f"{quantity}{unit}".upper())
+
+    return found
+
+
 def extract_units_and_symbols(text):
     text = str(text or "")
     patterns = [
@@ -35,8 +126,7 @@ def extract_units_and_symbols(text):
         r"Ø\s*\d+(?:[\.,]\d+)?",
         r"\bR\s*\d+(?:[\.,]\d+)?\b",
         r"\bM\d+(?:x\d+)?\b",
-        r"\b\d+(?:[\.,]\d+)?\s*mm\b",
-        r"\b\d+(?:[\.,]\d+)?\s*kg\b",
+        rf"\b\d+(?:[\.,]\d+)?\s*{_QUANTITY_UNIT_PATTERN}\b",
         r"\bASTM[-\w]*\b",
         r"\bJIS[-\w]*\b",
     ]
@@ -46,6 +136,7 @@ def extract_units_and_symbols(text):
         for m in re.findall(p, text, re.IGNORECASE):
             found.add(str(m).upper().replace(" ", ""))
 
+    found.update(_extract_markdown_quantity_units(text))
     return found
 
 
@@ -69,7 +160,7 @@ KNOWN_MATERIALS = [
 
 def _known_materials():
     try:
-        from mech_chatbot.ingestion.material_registry import get_known_materials
+        from mech_chatbot.db.registry_ports import get_known_materials
         mats = get_known_materials()
         if mats:
             return mats
@@ -162,15 +253,33 @@ def has_required_source_citation(answer, require_version=True):
     return has_source and has_page and has_version and has_source_id
 
 
-def extract_source_ids(value):
-    """Extract canonical source identifiers emitted by the RAG prompt."""
-    text = str(value or "")
-    matches = re.findall(
-        r"(?:source[_\s-]?id\s*[:#]?\s*|\[src:\s*)(D\d+P\d+)",
-        text,
-        flags=re.IGNORECASE,
-    )
-    return {match.upper() for match in matches}
+def _canonical_source_id(metadata):
+    try:
+        doc_id = int(metadata.get("doc_id"))
+        page_no = int(metadata.get("trang_so") or metadata.get("page_no"))
+    except (AttributeError, TypeError, ValueError):
+        return ""
+    return f"D{doc_id}P{page_no}" if page_no > 0 else ""
+
+
+def source_id_for_evidence_quote(quote, documents):
+    """Resolve a SourceID only from the document containing the exact quote."""
+    target = str(quote or "").strip()
+    if not target:
+        return ""
+    for document in documents or []:
+        metadata = getattr(document, "metadata", {}) or {}
+        content = str(
+            metadata.get("noi_dung_goc")
+            or getattr(document, "page_content", "")
+            or ""
+        )
+        if target not in content:
+            continue
+        source_id = _canonical_source_id(metadata)
+        if source_id:
+            return source_id
+    return ""
 
 
 def has_valid_source_citation(answer, documents, require_version=True):
@@ -181,11 +290,7 @@ def has_valid_source_citation(answer, documents, require_version=True):
     expected = set()
     for document in documents or []:
         metadata = getattr(document, "metadata", {}) or {}
-        try:
-            doc_id = int(metadata.get("doc_id"))
-            page_no = int(metadata.get("trang_so"))
-        except (TypeError, ValueError):
-            continue
-        if page_no > 0:
-            expected.add(f"D{doc_id}P{page_no}")
+        source_id = _canonical_source_id(metadata)
+        if source_id:
+            expected.add(source_id)
     return bool(cited and expected and cited.issubset(expected))

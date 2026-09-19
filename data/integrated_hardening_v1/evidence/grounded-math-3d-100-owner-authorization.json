@@ -1,0 +1,64 @@
+{
+  "schema": "grounded-math-pilot-owner-authorization-v1",
+  "created_at": "2026-08-14T02:15:30.6680828Z",
+  "feature": "RAG_GROUNDED_MATH_ENABLED",
+  "scope": "controlled_demo",
+  "status": "authorized",
+  "owner": "bao.nguyen",
+  "instruction_source": "interactive_owner_statement",
+  "pilot_contract_version": "grounded-math-3d-100-v1",
+  "contract": {
+    "eligible_calculation_requests": 100,
+    "minimum_elapsed_hours_from_first_dispatch_to_final_completion": 72,
+    "max_attempts_per_rolling_24_hours": 35,
+    "max_attempts_per_rolling_30_minutes": 3,
+    "max_concurrency": 1,
+    "retry_policy": "none",
+    "replacement_policy": "none",
+    "catch_up_policy": "none",
+    "traffic_class": "owner_authorized_operator_generated",
+    "transport": "internal_rag_sse"
+  },
+  "prospective_only": true,
+  "supersedes": {
+    "artifact_path": "data/integrated_hardening_v1/evidence/grounded-math-20dfd03b-deferred-disposition.json",
+    "artifact_sha256": "55007d64095d95005cb696f38c6a00e326624b5c8b024b7db6bf512df910f21e",
+    "fields": [
+      "authorization.new_campaign_authorized",
+      "reopen_condition"
+    ]
+  },
+  "historical_exclusions": {
+    "window_06_requests": 0,
+    "window_06_elapsed_duration": false,
+    "burst_window_11_requests": 0,
+    "burst_window_11_elapsed_duration": false,
+    "historical_gate_rewrite_allowed": false,
+    "historical_traffic_replay_allowed": false
+  },
+  "authorization": {
+    "new_campaign_authorized": true,
+    "owner_review_authorized": false,
+    "interaction_matrix_authorized": false,
+    "default_rollout_authorized": false,
+    "controlled_demo_feature_enablement_authorized": true,
+    "feature_enablement_authorized": false
+  },
+  "required_bindings": [
+    "owner_authorization_sha256",
+    "operator_tool_sha256",
+    "pilot_contract_version",
+    "manifest_sha256",
+    "window_sha256",
+    "state_sha256",
+    "health_sha256",
+    "release_decisions_sha256"
+  ],
+  "invariants": [
+    "The window-06 and burst-window-11 tombstones remain immutable.",
+    "No historical request, trace, elapsed duration, label, or gate result is carried forward.",
+    "The 100-request burst remains throughput evidence only.",
+    "Quality, safety, security, citation, provenance, budget, and rollback thresholds are unchanged.",
+    "Grounded Math default rollout remains disabled until all post-pilot gates pass."
+  ]
+}

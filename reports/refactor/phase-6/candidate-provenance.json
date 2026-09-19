@@ -1,0 +1,66 @@
+{
+  "commit_sha": "29c8cafab73005d45e0313c069172fb6bde8049c",
+  "baseline_sha": "47e1e73c58663d3496dbcd19f290ef5cff97f8d4",
+  "working_tree_status": [
+    "?? 9.3.03844/",
+    "?? 9.3.03951/",
+    "?? reports/refactor/phase-6/"
+  ],
+  "os_name": "Windows-10-10.0.19045-SP0",
+  "python_version": "3.12.3",
+  "dependency_lock_sha256": "b3b13bb2ed4dfad3f03d7d59dd6c39eccd39424a098013961755fe2609992662",
+  "settings": {
+    "scope": "phase_6_internal_facade_retirement",
+    "execution_context": "production",
+    "max_concurrent_rag": 6,
+    "request_deadline_seconds": 120,
+    "rag_require_service_auth": true,
+    "strict_answer_mode": true
+  },
+  "feature_flags": {
+    "RAG_CLAIM_REPAIR_ENABLED": false,
+    "RAG_CRAG_ENABLED": false,
+    "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": false,
+    "RAG_GRAPH_RETRIEVAL_ENABLED": false,
+    "RAG_GROUNDED_MATH_ENABLED": false,
+    "RAG_LATE_INTERACTION_ENABLED": false,
+    "RAG_QUERY_DECOMPOSITION_ENABLED": false,
+    "defaults_changed": false
+  },
+  "data_snapshot": {
+    "collection": "TaiLieuKyThuat_v2",
+    "document_count": 18,
+    "read_only_during_validation": true,
+    "snapshot_id": "phase3-ingestion-consistency-snapshot-v1",
+    "status": "user_authorized_main_demo_data"
+  },
+  "collection": "TaiLieuKyThuat_v2",
+  "provider_configuration": {
+    "embedding_dimension": 1024,
+    "embedding_model": "BAAI/bge-m3",
+    "embedding_provider": "local_cpu",
+    "llm_model": "gpt-5.4",
+    "llm_provider": "proxyllm",
+    "reranker_model": "rerank-2.5-lite",
+    "reranker_provider": "voyage"
+  },
+  "concurrency": 6,
+  "commands": [
+    ".\\chat_env\\Scripts\\python.exe -m pytest -q --cov=mech_chatbot --cov-branch --cov-report=json:reports\\refactor\\phase-6\\candidate\\coverage-backend.json --junitxml=reports\\refactor\\phase-6\\candidate\\pytest-full.xml",
+    ".\\chat_env\\Scripts\\python.exe scripts\\quality\\check_coverage.py reports\\refactor\\phase-6\\candidate\\coverage-backend.json --min-line 80 --min-branch 80",
+    ".\\chat_env\\Scripts\\python.exe -m pytest tests\\architecture -q",
+    ".\\chat_env\\Scripts\\python.exe -m pytest tests\\integration\\test_sql_qdrant_consistency.py -q (RUN_DB_TESTS=1, RUN_QDRANT_TESTS=1)",
+    "npm --prefix web-ui run test",
+    "npm --prefix web-ui run build",
+    ".\\chat_env\\Scripts\\python.exe scripts\\quality\\capture_refactor_baseline.py --output-dir reports\\refactor\\phase-6\\candidate --provenance reports\\refactor\\phase-6\\candidate-provenance.json",
+    "git diff --check"
+  ],
+  "pytest_baseline": {
+    "scope": "full backend at 29c8caf",
+    "status": "passed",
+    "passed": 2147,
+    "failed": 0,
+    "skipped": 22,
+    "warnings": 1
+  }
+}

@@ -3,26 +3,46 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
+from mech_chatbot.config.settings import Settings
+
 pytestmark = pytest.mark.unit
 
 rag_server = pytest.importorskip("mech_chatbot.api.rag_server")
 
 
-def test_require_service_auth_rejects_bad_token(monkeypatch):
-    monkeypatch.setattr(rag_server, "RAG_REQUIRE_SERVICE_AUTH", True)
-    monkeypatch.setattr(rag_server, "RAG_SERVICE_TOKEN", "expected-token")
+def _auth_state():
+    application = rag_server.create_rag_app(
+        Settings(
+            RAG_REQUIRE_SERVICE_AUTH=True,
+            RAG_SERVICE_TOKEN="expected-token",
+        )
+    )
+    return application.state.rag_server
+
+
+def test_require_service_auth_rejects_bad_token():
+    state = _auth_state()
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(rag_server.require_service_auth(x_rag_service_token="wrong-token"))
+        asyncio.run(
+            rag_server.require_service_auth(
+                x_rag_service_token="wrong-token",
+                server_state=state,
+            )
+        )
 
     assert exc.value.status_code == 401
 
 
-def test_require_service_auth_accepts_matching_token(monkeypatch):
-    monkeypatch.setattr(rag_server, "RAG_REQUIRE_SERVICE_AUTH", True)
-    monkeypatch.setattr(rag_server, "RAG_SERVICE_TOKEN", "expected-token")
+def test_require_service_auth_accepts_matching_token():
+    state = _auth_state()
 
-    asyncio.run(rag_server.require_service_auth(x_rag_service_token="expected-token"))
+    asyncio.run(
+        rag_server.require_service_auth(
+            x_rag_service_token="expected-token",
+            server_state=state,
+        )
+    )
 
 
 def test_resolve_user_profile_uses_db_identity_not_body_rbac(monkeypatch):

@@ -1,0 +1,35 @@
+{
+  "schema": "phase-4-refactor-diff-summary-v1",
+  "baseline_sha": "316b8fc26d34e72f934416fdcb6dc76da5cbc69c",
+  "candidate_sha": "eeb89f139bcb32957c91e693599060800d814d65",
+  "source_diff": {
+    "files_changed": 35,
+    "insertions": 6108,
+    "deletions": 2338,
+    "scope": "RAG runtime composition, private phase extraction, typed contracts, executor tests, and architecture allowlist relocation"
+  },
+  "public_contracts": {
+    "openapi_app_equal": true,
+    "openapi_rag_equal": true,
+    "sse_success_equal": true,
+    "sse_busy_equal": true,
+    "upload_review_samples_equal": true,
+    "legacy_five_tuple_preserved": true,
+    "rag_executor_public_facade_preserved": true
+  },
+  "flags": {
+    "defaults_changed": false,
+    "release_decision_changed": false
+  },
+  "validation": {
+    "full_backend": "2032 passed, 23 skipped, 0 failed, 1 known warning",
+    "coverage_line_percent": 91.525424,
+    "coverage_branch_percent": 85.064443,
+    "architecture": "8 passed",
+    "security_review": "no P0-P2 findings",
+    "sql_qdrant_consistency": "2 passed after repairing one invalid empty demo record",
+    "golden_delta": "no regression; inconclusive because both arms lack the same two documents",
+    "benchmark": "overall success and end-to-end latency pass; strict concurrency-10 stage gate fails"
+  },
+  "completion_status": "not_completed_due_to_benchmark_stage_gate"
+}

@@ -1,0 +1,88 @@
+{
+  "schema": "phase-4-final-benchmark-manifest-v1",
+  "git": {
+    "baseline_sha": "316b8fc26d34e72f934416fdcb6dc76da5cbc69c",
+    "candidate_sha": "eeb89f139bcb32957c91e693599060800d814d65",
+    "benchmark_harness_sha": "5bc0956cff44e28e7845bfac7da2cbfec2aea70a"
+  },
+  "runtime": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "python_version": "3.12.3",
+    "dependency_lock_sha256": "b3b13bb2ed4dfad3f03d7d59dd6c39eccd39424a098013961755fe2609992662"
+  },
+  "source_evidence": {
+    "candidate_manifest": "reports/refactor/phase-4/candidate/manifest.json",
+    "candidate_manifest_sha256": "ca8d9bc1a6a256a4b9b5df92421187272bc73802f8b9d7f1d7d3678b133a3e42"
+  },
+  "settings": {
+    "canonical_form": "{\"EXECUTION_CONTEXT\":\"production\",\"MAX_CONCURRENT_RAG\":\"6\",\"RAG_CLAIM_REPAIR_ENABLED\":\"false\",\"RAG_CRAG_ENABLED\":\"false\",\"RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED\":\"false\",\"RAG_GRAPH_RETRIEVAL_ENABLED\":\"false\",\"RAG_GROUNDED_MATH_ENABLED\":\"false\",\"RAG_LATE_INTERACTION_ENABLED\":\"false\",\"RAG_QUERY_DECOMPOSITION_ENABLED\":\"false\",\"RAG_REQUIRE_SERVICE_AUTH\":\"true\",\"REQUEST_DEADLINE_SECONDS\":\"120\",\"SEMANTIC_CACHE_ENABLED\":\"false\",\"STRICT_ANSWER_MODE\":\"true\"}",
+    "sha256": "fc470357a7cb89acb8f10e501de6c56e0aa73bba0f714e9acabb833347f21cd6",
+    "values": {
+      "EXECUTION_CONTEXT": "production",
+      "MAX_CONCURRENT_RAG": "6",
+      "RAG_CLAIM_REPAIR_ENABLED": "false",
+      "RAG_CRAG_ENABLED": "false",
+      "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": "false",
+      "RAG_GRAPH_RETRIEVAL_ENABLED": "false",
+      "RAG_GROUNDED_MATH_ENABLED": "false",
+      "RAG_LATE_INTERACTION_ENABLED": "false",
+      "RAG_QUERY_DECOMPOSITION_ENABLED": "false",
+      "RAG_REQUIRE_SERVICE_AUTH": "true",
+      "REQUEST_DEADLINE_SECONDS": "120",
+      "SEMANTIC_CACHE_ENABLED": "false",
+      "STRICT_ANSWER_MODE": "true"
+    }
+  },
+  "data_snapshot": {
+    "collection": "TaiLieuKyThuat_v2",
+    "document_count": 18,
+    "source_system": "upload",
+    "status": "user_authorized_demo_data_consistency_repaired",
+    "read_only_during_benchmark": true
+  },
+  "provider_configuration": {
+    "embedding_provider": "local_cpu",
+    "embedding_model": "BAAI/bge-m3",
+    "embedding_dimension": 1024,
+    "llm_provider": "proxyllm",
+    "llm_model": "gpt-5.4",
+    "reranker_provider": "voyage",
+    "reranker_model": "rerank-2.5-lite"
+  },
+  "benchmark": {
+    "question_count": 137,
+    "concurrency_levels": [
+      1,
+      5,
+      10
+    ],
+    "runs_per_arm": 3,
+    "timeout_seconds": 300,
+    "max_concurrent_rag": 6,
+    "run_order": [
+      "baseline_run_1",
+      "candidate_run_1",
+      "baseline_run_2",
+      "candidate_run_2",
+      "baseline_run_3",
+      "candidate_run_3"
+    ],
+    "server_process_scope": "fresh_process_per_arm",
+    "trace_correlation": "exact_trace_id",
+    "semantic_cache_enabled": false
+  },
+  "artifact_sha256": {
+    "baseline/rag-concurrency-run-1.json": "9396d7620fcd3a9df007f6f2f6b0315fdea0e914c2b1f1999f37f4c15b28b9e8",
+    "baseline/rag-concurrency-run-2.json": "e6ae9cace986d94f744a90dbcb694fd7b556e14af37f8163772b61be33ee9922",
+    "baseline/rag-concurrency-run-3.json": "1a9bf7e3cb6df30ea9bfea4ff67c868016328024a20fc8cc7a45ab9b0708c776",
+    "benchmark-summary.json": "7458d76730bb0a188ffee76ace5fedb44f88854f787493791310ae7e966aafff",
+    "candidate/rag-concurrency-run-1.json": "4533c2f8033438d5d134a384e7b7875aaf342053aecba2257832a6eb6ea85b22",
+    "candidate/rag-concurrency-run-2.json": "406b20c2d5bfaeae0b10f15a9421ced6d01be587e492797932d03da3c12a51cb",
+    "candidate/rag-concurrency-run-3.json": "26a4e71a91f86d54eaed8534e88035cdccdbd1e65bbd2649e9e5b688f7cc441b"
+  },
+  "raw_trace": {
+    "status": "local_ignored",
+    "path": "logs/refactor-phase4-cache-off",
+    "committed": false
+  }
+}

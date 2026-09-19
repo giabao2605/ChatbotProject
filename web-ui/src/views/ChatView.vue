@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref } from "vue";
 import * as api from "@/api/client";
 import { useChatStore } from "@/stores/chat";
-import { renderMarkdown } from "@/utils/markdown";
+import { formatSourceText, renderMarkdown } from "@/utils/markdown";
 import type { ChatMessage, SessionItem } from "@/types";
 
 type UiMessage = ChatMessage & {
@@ -64,6 +64,10 @@ function clearFile() {
   selectedFile.value = null;
   selectedPreview.value = "";
   uploadToken.value = "";
+}
+
+function sourceLines(value: string): string[] {
+  return formatSourceText(value).split("\n").filter(Boolean);
 }
 
 function setAssistantProgress(step: string, state: UiMessage["progressState"] = "running") {
@@ -269,7 +273,9 @@ onMounted(async () => {
 
                 <details v-if="message.ref_text" class="source-block">
                   <summary>Nguồn tham khảo</summary>
-                  <pre>{{ message.ref_text }}</pre>
+                  <div class="source-card">
+                    <p v-for="line in sourceLines(message.ref_text)" :key="line">{{ line }}</p>
+                  </div>
                 </details>
 
                 <div v-if="message.citations?.length" class="citation-grid">
@@ -522,6 +528,15 @@ onMounted(async () => {
   background: rgba(148, 163, 184, 0.12);
   padding: 0.05rem 0.3rem;
 }
+.message-content :deep(.citation-marker) {
+  display: inline-block;
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  border-radius: 5px;
+  background: rgba(56, 189, 248, 0.1);
+  color: #bcecff;
+  font-size: 0.82em;
+  padding: 0.05rem 0.3rem;
+}
 .message-content :deep(.md-table-wrap) {
   max-width: 100%;
   overflow-x: auto;
@@ -553,6 +568,30 @@ onMounted(async () => {
 }
 .message-content :deep(tbody tr:nth-child(even)) {
   background: rgba(148, 163, 184, 0.05);
+}
+.source-block {
+  margin-top: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+  padding: 0.7rem 0.85rem;
+}
+.source-block summary {
+  cursor: pointer;
+  color: var(--faint);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.source-card {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.55rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+.source-card p {
+  margin: 0;
 }
 .thinking-row {
   display: flex;

@@ -15,6 +15,7 @@ for candidate in (ROOT, ROOT / "src"):
         sys.path.insert(0, str(candidate))
 
 from scripts.demo_wave.generate_demo_assets import DEFAULT_OUTPUT, DEMO_BATCH
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
 from mech_chatbot.db.engine import _ensure_engine, engine
 from mech_chatbot.db.repositories.document import delete_document_completely
 
@@ -48,6 +49,7 @@ def cleanup() -> dict:
     return {"documents": deleted_docs, "evaluation_cases": int(deleted_cases), "users": len(demo_user_ids)}
 
 
+@with_configured_repository_runtime(include_qdrant=False)
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--confirm", required=True)

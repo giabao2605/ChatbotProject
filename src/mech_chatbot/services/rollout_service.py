@@ -1,6 +1,6 @@
 """Department rollout and evaluation-gate service boundary."""
 
-from mech_chatbot.db.repository import (
+from mech_chatbot.db.repositories.rollout import (
     get_department_rollout_readiness,
     list_department_rollout_plans,
     record_department_evaluation_gate,

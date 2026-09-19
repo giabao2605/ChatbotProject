@@ -36,6 +36,7 @@ const GROUPS: Array<{ key: keyof DashboardPayload; title: string }> = [
 const roles = computed(() => auth.user?.roles ?? []);
 const roleSummary = computed(() => {
   if (roles.value.includes("platform_admin")) return "Toàn cảnh vận hành hệ thống";
+  if (roles.value.includes("security_admin")) return "Quản trị tài khoản và quyền truy cập";
   if (roles.value.includes("admin")) return "Công việc tài liệu và quản trị nội dung";
   if (roles.value.some((r) => ["reviewer", "knowledge_approver"].includes(r))) return "Công việc duyệt và quản trị tri thức";
   if (roles.value.includes("uploader")) return "Tiến độ tài liệu bạn phụ trách";

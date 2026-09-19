@@ -1,0 +1,82 @@
+{
+  "commit_sha": "eeb89f139bcb32957c91e693599060800d814d65",
+  "baseline_sha": "316b8fc26d34e72f934416fdcb6dc76da5cbc69c",
+  "working_tree_status": [
+    "?? reports/refactor/phase-4/baseline/rag-concurrency-run-1.json",
+    "?? reports/refactor/phase-4/baseline/rag-concurrency-run-2.json",
+    "?? reports/refactor/phase-4/baseline/rag-concurrency-run-3.json",
+    "?? reports/refactor/phase-4/candidate/",
+    "?? reports/refactor/phase-4/candidate-provenance.json"
+  ],
+  "os_name": "Windows-10-10.0.19045-SP0",
+  "python_version": "3.12.3",
+  "dependency_lock_sha256": "b3b13bb2ed4dfad3f03d7d59dd6c39eccd39424a098013961755fe2609992662",
+  "settings": {
+    "scope": "phase_4_behavior_preserving_candidate",
+    "execution_context": "production",
+    "max_concurrent_rag": 6,
+    "request_deadline_seconds": 120,
+    "rag_require_service_auth": true,
+    "strict_answer_mode": true
+  },
+  "feature_flags": {
+    "RAG_CLAIM_REPAIR_ENABLED": false,
+    "RAG_CRAG_ENABLED": false,
+    "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED": false,
+    "RAG_GRAPH_RETRIEVAL_ENABLED": false,
+    "RAG_GROUNDED_MATH_ENABLED": false,
+    "RAG_LATE_INTERACTION_ENABLED": false,
+    "RAG_QUERY_DECOMPOSITION_ENABLED": false,
+    "defaults_changed": false
+  },
+  "data_snapshot": {
+    "collection": "TaiLieuKyThuat_v2",
+    "document_count": 18,
+    "read_only_during_benchmark": true,
+    "source_system": "upload",
+    "status": "user_authorized_demo_data_consistency_repaired"
+  },
+  "collection": "TaiLieuKyThuat_v2",
+  "provider_configuration": {
+    "embedding_dimension": 1024,
+    "embedding_model": "BAAI/bge-m3",
+    "embedding_provider": "local_cpu",
+    "llm_model": "gpt-5.4",
+    "llm_provider": "proxyllm",
+    "reranker_model": "rerank-2.5-lite",
+    "reranker_provider": "voyage"
+  },
+  "concurrency": 10,
+  "commands": [
+    ".\\chat_env\\Scripts\\python.exe -m pytest --junitxml=reports\\refactor\\phase-4\\candidate\\pytest-results.xml --cov=mech_chatbot --cov-branch --cov-report=json:reports\\refactor\\phase-4\\candidate\\coverage-backend.json -q",
+    ".\\chat_env\\Scripts\\python.exe scripts\\quality\\check_coverage.py reports\\refactor\\phase-4\\candidate\\coverage-backend.json --min-line 80 --min-branch 80",
+    ".\\chat_env\\Scripts\\python.exe -m pytest tests\\integration\\test_sql_qdrant_consistency.py -q -v (RUN_DB_TESTS=1, RUN_QDRANT_TESTS=1)",
+    ".\\chat_env\\Scripts\\python.exe -m pytest tests\\eval\\test_golden_questions.py -q -v (baseline and candidate, RUN_EVAL_TESTS=1)",
+    ".\\chat_env\\Scripts\\python.exe scripts\\eval\\benchmark_rag_concurrency.py scripts\\eval\\golden_set.jsonl --base-url http://127.0.0.1:8100 --username admin --concurrency 1,5,10 --timeout 300 --trace-jsonl <arm-trace> --report reports\\refactor\\phase-4\\<arm>\\rag-concurrency-run-<1..3>.json",
+    ".\\chat_env\\Scripts\\python.exe -m scripts.quality.capture_refactor_baseline --output-dir reports\\refactor\\phase-4\\candidate --provenance reports\\refactor\\phase-4\\candidate-provenance.json"
+  ],
+  "artifact_hash_scope": {
+    "manifest_artifact_sha256": "contract snapshots captured by capture_refactor_baseline",
+    "evidence_sha256": "sanitized Phase 4 benchmark and validation evidence outside the manifest contract snapshot set"
+  },
+  "evidence_sha256": {
+    "reports/refactor/phase-4/baseline/rag-concurrency-run-1.json": "2cd274fad3e06952c767f64bead07e5ce056b5894d1beaffc6d0ada7d4effb5b",
+    "reports/refactor/phase-4/baseline/rag-concurrency-run-2.json": "54d2939c4839a03d406095596a4e4cd1203c533e44f1b3d4de378d874e9b369f",
+    "reports/refactor/phase-4/baseline/rag-concurrency-run-3.json": "f7db257009b671c4620293195d242676a62b1d13590d22b61c88a309d37fc2f6",
+    "reports/refactor/phase-4/candidate/benchmark-summary.json": "7e14f5533e8deca85dbd906f9d9319355c0184f5bbd615d6fa4d16be047781cc",
+    "reports/refactor/phase-4/candidate/diff-summary.json": "88cdbe866a3cd68515707938843973fab7b39df32088bd0f55a6f924efce0c2c",
+    "reports/refactor/phase-4/candidate/golden-eval.txt": "9c30214d1e38aeda9d7a5869d0bf06e038596be5b144088d32e1701963a87fc3",
+    "reports/refactor/phase-4/candidate/rag-concurrency-run-1.json": "bb45b021aec3e69e10d08e3bbd522dad59959e31ffeb05168acc2c8df772badb",
+    "reports/refactor/phase-4/candidate/rag-concurrency-run-2.json": "0e38a7ac1b12ac4aae8047bfaacb3999906e773a2f8038ea0c26e5be16e0b8fa",
+    "reports/refactor/phase-4/candidate/rag-concurrency-run-3.json": "8243739b2b87e730459be0423e60d98584cfb5e0c1a6cef7c6303921b49128a4",
+    "reports/refactor/phase-4/candidate/sql-qdrant-consistency.txt": "daeb91db2fad3c8b13ec31db58e41af278cfae7a32564730273b5a2de065fca9"
+  },
+  "pytest_baseline": {
+    "scope": "full backend at eeb89f1",
+    "status": "passed",
+    "passed": 2032,
+    "failed": 0,
+    "skipped": 23,
+    "warnings": 1
+  }
+}

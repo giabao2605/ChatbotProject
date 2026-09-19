@@ -6,11 +6,10 @@ Nho vay unit test import duoc ma KHONG bi tai model / goi mang / crash.
 
 Logic giu NGUYEN BAN tu service.py (khong doi hanh vi).
 """
-import os
-
 from qdrant_client import models
 
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
+from mech_chatbot.domain.part_ids import canonical_part_id
 
 LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
 
@@ -52,13 +51,7 @@ def _security_filter(max_security_level):
         return models.FieldCondition(key="metadata.security_level", match=models.MatchAny(any=levels))
 
 
-def _strict_site_enabled():
-    """Fail-closed theo config process, khong mo ket noi DB trong hot path."""
-    raw = os.getenv("RBAC_STRICT_SITE_FILTER", "true")
-    return str(raw).strip().lower() in ("true", "1", "yes", "on")
-
-
-def _site_filter(allowed_sites):
+def _site_filter(allowed_sites, *, strict_site_filter=True):
     """Fail closed by site when strict mode is enabled (the default).
 
     An empty site assignment is denied. In the temporary legacy compatibility
@@ -73,7 +66,7 @@ def _site_filter(allowed_sites):
         )
     match_cond = models.FieldCondition(key="metadata.site", match=models.MatchAny(any=sites))
     # STRICT ON: chi khop dung site duoc phep, khong noi long cho doc thieu site.
-    if _strict_site_enabled():
+    if strict_site_filter:
         return match_cond
     # STRICT OFF: giu hanh vi cu (cho qua doc thieu site).
     try:
@@ -85,7 +78,15 @@ def _site_filter(allowed_sites):
         return match_cond
 
 
-def create_rbac_filter(user_department, user_roles, allowed_departments=None, max_security_level=None, allowed_sites=None):
+def create_rbac_filter(
+    user_department,
+    user_roles,
+    allowed_departments=None,
+    max_security_level=None,
+    allowed_sites=None,
+    *,
+    strict_site_filter=True,
+):
     # Revised plan v3 retains global read only for the legacy ``admin`` role.
     # It is intentionally narrow: new platform/security control-plane roles
     # are never retrieval bypasses.  The RAG API records an audit event for
@@ -122,19 +123,84 @@ def create_rbac_filter(user_department, user_roles, allowed_departments=None, ma
         models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchAny(any=allowed)),
         _security_filter(max_security_level),
     ]
-    site_cond = _site_filter(allowed_sites)
+    site_cond = _site_filter(
+        allowed_sites,
+        strict_site_filter=strict_site_filter,
+    )
     if site_cond is not None:
         must.append(site_cond)
 
     return models.Filter(must=must)
 
 
+def document_matches_access_scope(
+    metadata,
+    *,
+    user_department,
+    user_roles,
+    allowed_departments,
+    max_security_level,
+    allowed_sites,
+):
+    """Re-check one served document against the current retrieval scope."""
+    metadata = metadata if isinstance(metadata, dict) else {}
+    raw_departments = metadata.get("phong_ban_quyen")
+    security_level = str(metadata.get("security_level") or "").strip()
+    site = str(metadata.get("site") or "").strip()
+    if isinstance(raw_departments, str):
+        document_departments = {raw_departments.strip()} if raw_departments.strip() else set()
+    elif isinstance(raw_departments, (list, tuple, set, frozenset)):
+        document_departments = {
+            str(item).strip() for item in raw_departments if str(item).strip()
+        }
+    else:
+        document_departments = set()
+    if not document_departments or not security_level or not site:
+        return False
+
+    roles = {
+        str(role).strip().lower()
+        for role in (user_roles or [])
+        if str(role).strip()
+    }
+    if not roles:
+        return False
+    if "admin" in roles:
+        return True
+
+    clearance = str(max_security_level or "public").strip().lower()
+    if clearance not in LEVEL_ORDER or security_level.lower() not in LEVEL_ORDER:
+        return False
+    if LEVEL_ORDER[security_level.lower()] > LEVEL_ORDER[clearance]:
+        return False
+
+    sites = {str(item).strip() for item in (allowed_sites or []) if str(item).strip()}
+    if site not in sites:
+        return False
+
+    departments = {
+        str(item).strip()
+        for item in (allowed_departments or [])
+        if str(item).strip()
+    }
+    if user_department and str(user_department).strip():
+        departments.add(str(user_department).strip())
+    departments.add(SHARE_ALL_DEPARTMENT)
+    return bool(document_departments & departments)
+
+
 def _part_id_should_filter(new_part_ids, broad=False):
     """Dieu kien should match ma chi tiet (part id) tren cac key metadata."""
     keys = PART_ID_KEYS_BROAD if broad else PART_ID_KEYS_STRICT
+    part_ids = [str(part_id).strip() for part_id in (new_part_ids or []) if str(part_id).strip()]
+    match_values = list(dict.fromkeys(
+        value
+        for part_id in part_ids
+        for value in (part_id, canonical_part_id(part_id), part_id.lower())
+    ))
     return models.Filter(
         should=[
-            models.FieldCondition(key=k, match=models.MatchAny(any=new_part_ids))
+            models.FieldCondition(key=k, match=models.MatchAny(any=match_values))
             for k in keys
         ]
     )

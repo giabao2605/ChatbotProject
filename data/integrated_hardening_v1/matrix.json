@@ -1,0 +1,41 @@
+{
+  "schema": "integrated-feature-matrix-v1",
+  "version": "integrated-v3-selective",
+  "combinations": [
+    {
+      "id": "crag_claim",
+      "prerequisites": ["evaluation_foundation"],
+      "baseline_flags": {"RAG_CRAG_ENABLED":"false","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "flags": {"RAG_CRAG_ENABLED":"true","RAG_CLAIM_REPAIR_ENABLED":"true","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "grounded_math",
+      "prerequisites": ["evaluation_foundation"],
+      "baseline_flags": {"RAG_CRAG_ENABLED":"false","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "flags": {"RAG_CRAG_ENABLED":"false","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"true","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "query_decomposition",
+      "prerequisites": ["evaluation_foundation"],
+      "baseline_flags": {"RAG_CRAG_ENABLED":"false","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "flags": {"RAG_CRAG_ENABLED":"false","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"true","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "graph_retrieval",
+      "prerequisites": ["evaluation_foundation"],
+      "baseline_flags": {"RAG_CRAG_ENABLED":"false","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"false","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "flags": {"RAG_CRAG_ENABLED":"false","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"true","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    },
+    {
+      "id": "community_summaries",
+      "prerequisites": ["graph_retrieval"],
+      "baseline_flags": {"RAG_CRAG_ENABLED":"false","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"true","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"false"},
+      "flags": {"RAG_CRAG_ENABLED":"false","RAG_CLAIM_REPAIR_ENABLED":"false","RAG_GROUNDED_MATH_ENABLED":"false","RAG_LATE_INTERACTION_ENABLED":"false","RAG_QUERY_DECOMPOSITION_ENABLED":"false","RAG_GRAPH_RETRIEVAL_ENABLED":"true","RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED":"true"},
+      "versions": {"RAG_PLANNER_VERSION":"planner-v1","RAG_LATE_INDEX_VERSION":"late-v2","RAG_GRAPH_SERVING_EPOCH":"graph-v1","RAG_COMMUNITY_SERVING_EPOCH":"community-v1"}
+    }
+  ]
+}

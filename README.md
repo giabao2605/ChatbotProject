@@ -108,7 +108,8 @@ ChatBotProject/
 │   │   ├── V0029__wave4_rollout_profiles.sql
 │   │   ├── V0030__rollout_invariants_and_profile_hygiene.sql
 │   │   ├── V0031__wave1_domain_profiles.sql
-│   │   └── V0032__rollout_wave_status_guard.sql
+│   │   ├── V0032__rollout_wave_status_guard.sql
+│   │   └── V0033 - V0041                 # Feature governance and provider profiles
 │   └── MIGRATIONS.md                     # Migration documentation
 │
 ├── scripts/
@@ -143,7 +144,8 @@ ChatBotProject/
 │   ├── ops/
 │   │   ├── backup_system.py              # System backup utility
 │   │   ├── loadtest_lan.py               # LAN load testing tool
-│   │   └── start_demo_lan.ps1            # PowerShell script: start all services for LAN demo
+│   │   ├── start_demo_lan.ps1             # PowerShell script: start all services for LAN demo
+│   │   └── worker_supervisor.ps1          # Keep the ingestion worker ready and restart it after exit
 │   └── danger_ops/
 │       ├── empty_bag.py                  # Purge documents from Qdrant
 │       ├── reconcile_sql_qdrant.py       # Reconcile SQL ↔ Qdrant state
@@ -293,18 +295,45 @@ and state directories are ignored.
 - PowerShell on Windows for the simplest LAN demo workflow
 - Microsoft SQL Server + ODBC Driver (for `pyodbc`)
 - A Qdrant Cloud account (URL + API key)
-- An OpenAI-compatible LLM endpoint (ProxyLLM or direct OpenAI)
+- An OpenRouter account and API key for text and vision
 
 ### 2. Configure Environment
 
-Create a `.env` file at the project root:
+Copy the fail-closed example to a local `.env` file, then replace the blank
+secret values. Never commit the resulting `.env` file.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Project provider configuration is shared: keep the OpenRouter key and both model
+names in the primary repository root `.env`. Text LLM and vision/OCR use the same
+`OPENROUTER_API_KEY`. A configured `OPENROUTER_BASE_URL` selects that key exclusively;
+an empty key never falls back to a legacy provider key. Restart existing processes
+after a change. Environment variables explicitly supplied by launchers take precedence.
+
+Git branches contain independent code snapshots. Branches used for new work must
+include the OpenRouter adapter/settings changes; environment configuration alone
+cannot migrate an older adapter. Historical rollout snapshots remain historical.
+Production also requires the managed `openrouter` profile with approved surfaces
+and a valid review expiry; no automatic policy bypass is installed.
+
+The important runtime values are:
 
 ```env
+# Application security and external processing
+APP_ENV=production
+APP_SESSION_SECRET=<long-random-secret>
+APP_COOKIE_SECURE=true
+APP_TRUSTED_HOSTS=localhost,127.0.0.1,<deployed-hostname-or-ip>
+EXTERNAL_AI_LOCAL_DEVELOPMENT=false
+EXTERNAL_PROCESSING_POLICY=internal_only
+
 # LLM / Vision
-PROXYLLM_BASE_URL=https://api.proxyllm.eu/v1
-PROXYLLM_API_KEY=<your-api-key>
-GPT_MODEL_NAME=gpt-5.4
-GPT_VISION_MODEL_NAME=gpt-5.4
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_API_KEY=<your-openrouter-api-key>
+GPT_MODEL_NAME=openai/gpt-5.6-luna
+GPT_VISION_MODEL_NAME=openai/gpt-5.6-luna
 GPT_TEMPERATURE=0
 GPT_MAX_OUTPUT_TOKENS=8000
 GPT_VISION_MAX_OUTPUT_TOKENS=16000
@@ -321,6 +350,7 @@ VOYAGE_RERANK_TIMEOUT_SECONDS=15
 # Vector Database
 QDRANT_URL=<your-qdrant-cloud-url>
 QDRANT_API_KEY=<your-qdrant-api-key>
+QDRANT_SEARCH_TIMEOUT_SECONDS=10
 
 # Embedding
 EMBEDDING_MODEL=BAAI/bge-m3
@@ -358,6 +388,24 @@ SEMANTIC_ROUTER_MARGIN=0.04
 # Chat Bridge (app_server <-> rag_server shared secret)
 CHAT_BRIDGE_SECRET=<long-random-hex-string>
 
+# Authorization defaults
+RBAC_STRICT_SITE_FILTER=true
+KNOWLEDGE_ALLOW_ADMIN_APPROVAL_OVERRIDE=false
+KNOWLEDGE_ALLOW_ADMIN_METADATA_OVERRIDE=false
+
+# Governed RAG features stay disabled by default
+RAG_CRAG_ENABLED=false
+RAG_CLAIM_REPAIR_ENABLED=false
+RAG_GROUNDED_MATH_ENABLED=false
+RAG_LATE_INTERACTION_ENABLED=false
+RAG_LATE_ENCODER_READY=false
+RAG_QUERY_DECOMPOSITION_ENABLED=false
+RAG_GRAPH_RETRIEVAL_ENABLED=false
+RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED=false
+RAG_ACTIVATION_SCOPE=default_rollout
+RAG_ACTIVATION_BUNDLE_PATH=
+RAG_ACTIVATION_BUNDLE_SHA256=
+
 # Strict Modes
 STRICT_INGEST_REQUIRE_VISION=true
 STRICT_ANSWER_MODE=true
@@ -367,9 +415,24 @@ PDF_RENDER_DPI=300
 METADATA_TEXT_LIMIT=20000
 ```
 
+`EXTERNAL_PROCESSING_POLICY=all_external` is an explicit opt-in. Use it only
+with an approved provider profile, privacy-safe audit metadata, and the
+required governance review. Controlled RAG flags also require their matching
+activation bundle and release decision; code, tests, or a successful provider
+smoke do not authorize enabling them.
+
+Use a distinct random `APP_SESSION_SECRET`; do not reuse the RAG service or
+chat bridge secret. Keep `APP_COOKIE_SECURE=true` behind HTTPS. A local or LAN
+HTTP-only demo may set it to `false`, but that exception must not be copied to
+an HTTPS deployment. Set `APP_TRUSTED_HOSTS` to the exact hostnames or IP
+addresses users put in the browser; wildcard hosts are rejected in production.
+
 For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QDRANT_API_KEY`, `SQL_SERVER`, `SQL_DATABASE`, `SQL_USERNAME`, `SQL_PASSWORD`, `OPENAI_API_KEY`.
 
-> **Config validation:** The app calls `assert_config_valid()` at startup. If any required variable is missing or has the wrong type, it will raise `ConfigError` immediately with a clear list of issues. Secrets are never printed in plain text.
+> **Config validation:** The RAG server and workers call
+> `assert_config_valid()` at startup. Browser-session security fails closed
+> when `APP_SESSION_SECRET` is missing. Configuration errors never print
+> secrets in plain text.
 
 ### 3. Database Setup
 
@@ -377,15 +440,18 @@ For GitHub Actions CI, configure these repository **Secrets**: `QDRANT_URL`, `QD
 # Step 1: Create the base schema
 #   Run: database/schema/01_baseline.sql on your SQL Server instance
 
-# Step 2: Apply versioned migrations in order (currently V0001 -> V0032)
+# Step 2: Apply all discovered versioned migrations in order
 python scripts/migrations/migrate.py
 # or run each file in database/migrations/ manually
 
 # Step 3: Initialize Qdrant collections
 python scripts/create_qdrant_indexes.py
+
+# Step 4: Verify migration, Qdrant, all-off activation and account safety
+python scripts/ops/production_preflight.py --skip-health
 ```
 
-> **Security note:** Migrations seed example accounts (`admin`, `reviewer1`, `viewer1`, `uploader1`). Change or remove default credentials before any production deployment.
+> **Security note:** Migrations seed example accounts (`admin`, `reviewer1`, `viewer1`, `uploader1`). Keep them only for local bootstrap and make them inactive before any production deployment. The preflight reports only the active account count and fails until those seeded accounts are inactive; it never changes or deletes an account.
 
 ### 4. Running the Application
 
@@ -395,10 +461,13 @@ python scripts/create_qdrant_indexes.py
 powershell -ExecutionPolicy Bypass -File .\scripts\ops\start_demo_lan.ps1
 ```
 
-The script applies migrations through `V0032`, starts the RAG server on
-`127.0.0.1:8100`, and exposes the browser application on the configured LAN
-address. Stop the processes with `Ctrl+C`; rerun the same command to start the
-demo again.
+The script applies every discovered pending migration, starts the RAG server on
+`127.0.0.1:8100`, starts a single supervised ingestion worker, and exposes the
+browser application on the configured LAN address. It waits for the worker
+readiness marker before reporting the demo as ready. The output includes the
+RAG, worker supervisor, and app process IDs; stop the worker supervisor tree
+with `taskkill /PID <worker-supervisor-pid> /T /F`, then stop the RAG and app
+processes before rerunning the launcher.
 
 **Option B: Local Development**
 
@@ -427,6 +496,20 @@ $env:PYTHONPATH="src"; $env:APP_SERVER_HOST="0.0.0.0"; $env:APP_SERVER_PORT="808
 > PYTHONPATH=src python -m mech_chatbot.workers.ingestion_worker
 > PYTHONPATH=src APP_SERVER_HOST=0.0.0.0 APP_SERVER_PORT=8080 python -m mech_chatbot.api.app_server
 > ```
+
+Run the baseline browser E2E only after the RAG API is ready on port 8100, the
+browser app is ready on port 8080, and
+`.local/demo-wave-credentials.json` exists:
+
+```powershell
+$env:E2E_BROWSER_CHANNEL="chrome"
+npm --prefix web-ui run test:e2e
+```
+
+Omit `E2E_BROWSER_CHANNEL` after installing bundled Chromium with
+`npx playwright install chromium` from `web-ui`. The E2E runner reads demo
+credentials only inside the test process and keeps traces/videos off while
+login and chat requests are in flight.
 
 ---
 

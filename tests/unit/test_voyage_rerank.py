@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 pytestmark = pytest.mark.unit
 
@@ -42,13 +43,21 @@ def test_voyage_rerank_preserves_documents_and_order(monkeypatch):
         audit.update(kwargs)
         yield
 
-    monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
-    monkeypatch.setenv("VOYAGE_RERANK_MODEL", "rerank-2.5-lite")
     monkeypatch.setattr(rerank.requests, "post", fake_post)
     monkeypatch.setattr(rerank, "audited_external_call", fake_audit)
     docs = [_doc("zero"), _doc("one"), _doc("two")]
 
-    result = rerank.voyage_rerank_documents(docs, "cau hoi", top_n=2)
+    runtime = SimpleNamespace(
+        api_key="test-key",
+        model="rerank-2.5-lite",
+        endpoint="https://api.voyageai.com/v1",
+    )
+    result = rerank.voyage_rerank_documents(
+        docs,
+        "cau hoi",
+        top_n=2,
+        runtime=runtime,
+    )
 
     assert result == [docs[2], docs[0]]
     assert docs[2].metadata["relevance_score"] == 0.91
@@ -64,11 +73,50 @@ def test_voyage_rerank_preserves_documents_and_order(monkeypatch):
     }
     assert audit["provider"] == "voyage"
     assert audit["surface"] == "reranking"
-    assert audit["policies"] == ["all_external", "all_external", "all_external"]
+    assert audit["policies"] == ["internal_only", "internal_only", "internal_only"]
 
 
-def test_voyage_rerank_requires_api_key(monkeypatch):
-    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
-
+def test_voyage_rerank_requires_api_key():
     with pytest.raises(RuntimeError, match="VOYAGE_API_KEY"):
-        rerank.voyage_rerank_documents([_doc("text")], "cau hoi")
+        rerank.voyage_rerank_documents(
+            [_doc("text")],
+            "cau hoi",
+            runtime=SimpleNamespace(
+                api_key="",
+                model="rerank-2.5-lite",
+                endpoint="https://api.voyageai.com/v1",
+            ),
+        )
+
+
+def test_voyage_pilot_policy_records_429_and_immediate_local_fallback():
+    error = RuntimeError("429 too many requests")
+    error.status_code = 429
+
+    metadata = rerank.voyage_failure_metadata(error)
+
+    assert metadata == {
+        "backend": "voyage",
+        "status": "error",
+        "fallback": True,
+        "fallback_backend": "local_fusion",
+        "fallback_reason": "RuntimeError",
+        "provider_status_code": 429,
+        "retryable": True,
+        "retry_attempted": False,
+    }
+    assert "voyage_failure_metadata" in rerank.__all__
+
+
+def test_voyage_pilot_policy_reads_status_from_requests_http_error_response():
+    response = SimpleNamespace(status_code=429)
+    error = requests.HTTPError(
+        "429 Client Error: Too Many Requests",
+        response=response,
+    )
+
+    metadata = rerank.voyage_failure_metadata(error)
+
+    assert metadata["provider_status_code"] == 429
+    assert metadata["retryable"] is True
+    assert metadata["retry_attempted"] is False

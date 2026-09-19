@@ -1,0 +1,23 @@
+{
+  "schema": "crag-rollout-run-v1",
+  "git_sha": "adb8060a2e3088bde66c0e092d6b4b7e006b8324",
+  "manifest_sha256": "41a7aa157945f38085a47ed0bc0ae261ee93bd6d5754d91049fc11d9a59483fe",
+  "provider_configuration_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "concurrency": 1,
+  "fixture_fingerprint": "c10f804ec7d5e19ff2767f03ed0ec90b706e72a5558c7b467562e6059aeeedb4",
+  "router_mode": "offline",
+  "baseline": {
+    "label": "baseline",
+    "started_at": "2026-07-14T06:56:46.804758Z",
+    "completed_at": "2026-07-14T06:58:55.949072Z",
+    "runner_exit": 2
+  },
+  "candidate": {
+    "label": "candidate",
+    "started_at": "2026-07-14T06:58:56.844512Z",
+    "completed_at": "2026-07-14T07:00:48.350862Z",
+    "runner_exit": 0
+  },
+  "gate_exit": 0,
+  "passed": true
+}

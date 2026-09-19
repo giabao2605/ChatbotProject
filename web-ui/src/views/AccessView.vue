@@ -218,7 +218,7 @@ const userActions: RowAction[] = [
       v-if="canReview"
       title="Yêu cầu chờ duyệt"
       eyebrow="Access review"
-      description="Duyệt hoặc từ chối các yêu cầu đang chờ."
+      description="Dành cho security_admin: duyệt hoặc từ chối các yêu cầu đang chờ."
       :load="loadPending"
       :row-actions="reviewActions"
     />
@@ -226,7 +226,7 @@ const userActions: RowAction[] = [
       v-if="canReview"
       title="Lịch sử yêu cầu"
       eyebrow="Access history"
-      description="Toàn bộ yêu cầu đã xử lý (đã duyệt/từ chối) và đang chờ."
+      description="Dành cho security_admin: toàn bộ yêu cầu đã xử lý và đang chờ."
       :load="loadHistory"
       :columns="historyColumns"
     />
@@ -234,7 +234,7 @@ const userActions: RowAction[] = [
       v-if="canAdmin"
       title="Lịch sử cấp quyền"
       eyebrow="Grants"
-      description="Nhật ký cấp/thu hồi quyền (từ AuditLog)."
+      description="Dành cho security_admin: nhật ký cấp/thu hồi quyền từ AuditLog."
       :load="loadGrants"
       :columns="grantColumns"
     />
@@ -242,7 +242,7 @@ const userActions: RowAction[] = [
       v-if="canAdmin"
       title="Quản lý quyền người dùng"
       eyebrow="User access"
-      description="Xem mức mật + phòng ban của từng người dùng; thu hồi khi cần."
+      description="Dành cho security_admin: xem mức mật + phòng ban và thu hồi khi cần."
       :load="loadUsers"
       :columns="userColumns"
       :row-actions="userActions"

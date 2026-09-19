@@ -1,0 +1,28 @@
+{
+  "schema": "evaluation-foundation-technical-evidence-v1",
+  "git_sha": "937ec52e8b39b6cd16a88b58288cf3bb43ec35ec",
+  "tested_at": "2026-07-16T01:30:23Z",
+  "passed": true,
+  "test_count": 112,
+  "checks": {
+    "rollout_guardrails": true,
+    "evaluation_schema_and_metrics": true,
+    "grounding_and_claim_repair": true,
+    "trace_snapshot": true,
+    "scoped_demo_decisions": true,
+    "query_decomposition_regression": true
+  },
+  "command": [
+    "python", "-m", "pytest",
+    "tests/unit/test_rollout_guardrails.py",
+    "tests/unit/test_evaluation_foundation.py",
+    "tests/unit/test_eval_framework.py",
+    "tests/unit/test_number_grounding.py",
+    "tests/unit/test_claim_repair.py",
+    "tests/unit/test_rag_trace_snapshot.py",
+    "tests/unit/test_integrated_hardening.py",
+    "tests/unit/test_query_decomposition.py",
+    "tests/unit/test_decomposition_evaluation.py",
+    "-q"
+  ]
+}

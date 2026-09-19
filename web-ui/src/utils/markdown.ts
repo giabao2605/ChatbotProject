@@ -9,6 +9,7 @@ function escapeHtml(value: string): string {
 
 function renderInline(value: string): string {
   return escapeHtml(value)
+    .replace(/\[SRC:\s*(D\d+P\d+)\]/gi, (_marker, sourceId: string) => `<span class="citation-marker">${formatSourceReference(sourceId)}</span>`)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>");
@@ -119,4 +120,28 @@ export function renderMarkdown(value: string): string {
 
   flushParagraph(parts, paragraph);
   return parts.join("");
+}
+
+function formatSourceReference(value: string): string {
+  const match = /^D(\d+)P(\d+)$/i.exec(value.trim());
+  return match ? `Nguồn tài liệu D${match[1]}, trang ${match[2]}` : value;
+}
+
+/** Turn the legacy reference appendix into plain, readable source lines. */
+export function formatSourceText(value: string): string {
+  return (value || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !/^[-=]{3,}$/.test(line))
+    .map((line) => line
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^[-*]\s+/, "")
+      .replace(/\*\*|__|`/g, "")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/\[SRC:\s*(D\d+P\d+)\]/gi, (_marker, sourceId: string) => formatSourceReference(sourceId))
+      .replace(/\b(?:source[_ ]?id)\s*[:#]?\s*(D\d+P\d+)/gi, (_label, sourceId: string) => formatSourceReference(sourceId)),
+    )
+    .filter(Boolean)
+    .join("\n");
 }

@@ -24,7 +24,7 @@ async function load(): Promise<ApiRow[]> {
   <ResourcePage
     title="Audit Log"
     eyebrow="Security"
-    description="Nhật ký hành động gần đây trong hệ thống."
+    description="Dành cho platform_admin: nhật ký hành động gần đây trong hệ thống."
     :columns="columns"
     :load="load"
   />

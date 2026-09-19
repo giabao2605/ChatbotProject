@@ -1,0 +1,131 @@
+{
+  "schema": "post-ingest-controlled-demo-evidence-v1",
+  "scope": "controlled_demo",
+  "source_commit": "7c411e9f00fc40b192ab2361adaea9c7681b5899",
+  "generated_at": "2026-07-16T09:24:00Z",
+  "collection": "TaiLieuKyThuat_v2",
+  "privacy": {
+    "credentials_recorded": false,
+    "raw_prompt_recorded": false,
+    "raw_response_recorded": false,
+    "raw_document_recorded": false
+  },
+  "snapshot": {
+    "manifest_cases": 44,
+    "manifest_sha256": "a7598ce57899791aa6ab247f6877f68ddd9c9dc99a8bbd91e4e182398ca83a19",
+    "fixture_aliases_sha256": "e5d49bc3c0f3e9ed8ae43070083a6af915d56115754490605abc1147ee877b4d",
+    "governance_scope_sha256": "6a59c8b6947786fe3167f74b3ae5d2452f77dff8a22fdaa94846b378be502b41",
+    "provider_configuration_sha256": "629d53effc93275e6cb850ee3850d1761ca3143f8264e547ac26d8a7bfc1e3c0",
+    "referenced_documents": 18,
+    "preflight_failures": 0,
+    "snapshot_fingerprint": "7f83c1db66c083e99ecfd21d265c0977b00f342d9ab748e8e76b76378980b86e",
+    "provider_requests": 5,
+    "provider_successes": 5,
+    "provider_retries": 0,
+    "provider_capacity_errors": 0
+  },
+  "milestones": {
+    "crag": {
+      "case_count": 18,
+      "required_case_count": 20,
+      "case_count_ceiling": "inconclusive",
+      "baseline": {"passed": 3, "wrong_answer": 10, "wrong_refusal": 4, "p95_ms": 36255.71, "estimated_cost": 0.054955},
+      "candidate": {"passed": 3, "wrong_answer": 10, "wrong_refusal": 4, "p95_ms": 15124.75, "estimated_cost": 0.05461},
+      "leakage": 0,
+      "gate_passed": false,
+      "failed_checks": ["candidate_cases_passed", "correction_fixture_present", "repair_fixture_present", "wrong_refusal_reduced"],
+      "review_pack_cases": 6,
+      "human_review_completed": false,
+      "recommended_decision": "inconclusive",
+      "flag_state": "disabled"
+    },
+    "grounded_math": {
+      "case_count": 10,
+      "required_case_count": 10,
+      "baseline": {"passed": 0, "wrong_answer": 5, "p95_ms": 26473.11, "estimated_cost": 0.0421975},
+      "candidate": {"passed": 0, "wrong_answer": 7, "p95_ms": 25302.0, "estimated_cost": 0.0474425},
+      "candidate_calculation_count": 0,
+      "candidate_unsupported_number_count": 12,
+      "structured_bom_rows": {"technical_demo_process_v2.md": 0, "maintenance_demo_process_v1.md": 0},
+      "leakage": 0,
+      "gate_passed": false,
+      "review_pack_cases": 10,
+      "human_review_completed": false,
+      "recommended_decision": "rejected",
+      "decision_status": "pending_human_review",
+      "flag_state": "disabled"
+    },
+    "late_interaction": {
+      "decision": "rejected",
+      "reason": "The existing late-v2 benchmark did not prove an nDCG gain over the fallback path.",
+      "flag_state": "disabled"
+    },
+    "query_decomposition": {
+      "case_count": 9,
+      "required_case_count": 10,
+      "case_count_ceiling": "inconclusive",
+      "baseline": {"passed": 1, "wrong_answer": 7, "wrong_refusal": 1, "p95_ms": 22131.7, "estimated_cost": 0.0624975},
+      "candidate": {"passed": 0, "wrong_answer": 8, "wrong_refusal": 1, "p95_ms": 24528.7, "estimated_cost": 0.0590475},
+      "candidate_planner_calls": 8,
+      "candidate_subqueries": 8,
+      "branch_accuracy": 0.0,
+      "branch_citation_accuracy": 0.0,
+      "budget_violations": 0,
+      "leakage": 0,
+      "gate_passed": false,
+      "recommended_decision": "inconclusive",
+      "flag_state": "disabled"
+    },
+    "graph_retrieval": {
+      "available_historical_review_edges": 21,
+      "independently_reviewed_edges": 0,
+      "required_reviewed_edges": 20,
+      "fixture_currently_present_in_sql": false,
+      "decision": "inconclusive",
+      "flag_state": "disabled"
+    },
+    "community_summaries": {
+      "decision": "inconclusive",
+      "reason": "GraphRAG independent review is incomplete.",
+      "generation_started": false,
+      "flag_state": "disabled"
+    }
+  },
+  "integrated_fallback": {
+    "capability_passed": true,
+    "ready_for_demo_matrix": true,
+    "ready_for_live_matrix": false,
+    "security_cases": 15,
+    "security_leakage": 0,
+    "admin_exception_count": 1,
+    "resolved_fallback_combinations": 7,
+    "all_effective_feature_flags_disabled": true,
+    "offline_tests_passed": 47,
+    "rollback_passed": true,
+    "load_sample": {
+      "cases": 12,
+      "identity": "admin",
+      "cache_mode": "mixed_cache",
+      "concurrency_1": {"requests": 12, "successful": 12, "failed": 0, "p95_ms": 17416.0},
+      "concurrency_5": {"requests": 12, "successful": 12, "failed": 0, "p95_ms": 39963.0}
+    },
+    "seven_pair_matrix_executed": false,
+    "limitations": [
+      "The load sample uses a mixed warm/cold semantic cache, so its p50 is not a cold-path measurement.",
+      "All seven combinations resolve to the same all-flags-disabled fallback pipeline.",
+      "The fallback load sample is not a substitute for seven immutable baseline/candidate quality pairs."
+    ]
+  },
+  "source_artifacts": [
+    {"path": "reports/controlled-demo/20260716-post-ingest-v3/preflight.json", "sha256": "d7da9b9386b64411ba73051baabbae2ffc28874e5b499ede1e8b01b29babe755", "schema": "controlled-demo-main-preflight-v1"},
+    {"path": "reports/controlled-demo/20260716-post-ingest-v3/provider-smoke.json", "sha256": "77834de55ae4de10020d007d5fa97fa8d95fe27bc143b55426397270391f27dc", "schema": "provider-smoke-v1"},
+    {"path": "reports/controlled-demo/20260716-post-ingest-v3/crag/pair.json", "sha256": "967ff8801d58854239595caec53b6a9475a9b01a7a4cf81c453330d99a965af4", "schema": "controlled-demo-feature-pair-v1"},
+    {"path": "reports/controlled-demo/20260716-post-ingest-v3/grounded-math/pair.json", "sha256": "2d821868d2373df1b12d4817ccb81454367587d750b358e2de028150d89c270e", "schema": "controlled-demo-feature-pair-v1"},
+    {"path": "reports/controlled-demo/20260716-post-ingest-v3/query-decomposition/pair.json", "sha256": "b62812802e910b19093ba7075963b42e294b887fe3aab0ee940f385243ac671e", "schema": "controlled-demo-feature-pair-v1"},
+    {"path": "reports/controlled-demo/20260716-post-ingest-v3/integrated/offline.json", "sha256": "83665f89f6aa7b5799688ab851f15ab167d164982d350cd035a1b7e46eb339f5", "schema": "integrated-offline-verification-v1"},
+    {"path": "reports/controlled-demo/20260716-post-ingest-v3/integrated/preflight.json", "sha256": "01284776b4110e354c744818f795421c0b1633488be8b387c3339a524b4c6499", "schema": "integrated-hardening-readiness-v1"},
+    {"path": "reports/controlled-demo/20260716-post-ingest-v3/integrated/fallback-concurrency-factual.json", "sha256": "6f2d8540db9de6f5e99d7bce71a4a92488476a1db7be0e95494f8edc89296cfa", "schema": "rag-concurrency-benchmark-v1"},
+    {"path": "data/integrated_hardening_v1/evidence/post-ingest-structured-bom-check-20260716.json", "sha256": "85f4e1dfd3ffdcd2c97593b87da10826d2472ebcaa8b3a469d7ba44a96ea094b", "schema": "controlled-demo-structured-bom-check-v1"},
+    {"path": "data/integrated_hardening_v1/evidence/post-ingest-graph-review-check-20260716.json", "sha256": "f432ebb2060a07dba7a43bd2c83194d35f688f61f8c40fdbf24a06cef9adbb41", "schema": "controlled-demo-graph-review-check-v1"}
+  ]
+}

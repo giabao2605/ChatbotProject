@@ -3,7 +3,7 @@ r"""P1.8 — Backup tu dong: SQL Server (full + log) + snapshot Qdrant.
 Chuc nang:
   - SQL: chay BACKUP DATABASE (full) va BACKUP LOG (neu recovery model = FULL).
   - Qdrant: tao snapshot cho collection (client.create_snapshot).
-  - Ghi log ket qua + don backup cu hon --keep-days ngay.
+  - Ghi log ket qua; chi don backup cu khi truyen --keep-days.
 
 LUU Y QUAN TRONG:
   - SQL Server ghi file backup len MAY CHU SQL (duong dan local cua dich vu SQL),
@@ -24,13 +24,15 @@ Lich dinh ky: dung Windows Task Scheduler chay hang ngay (full + log nhieu lan/n
        FROM DISK = N'<duong_dan>\\Mech_Chatbot_DB_full_YYYYMMDD_HHMMSS.bak'
        WITH MOVE 'Mech_Chatbot_DB' TO N'D:\\Data\\Mech_Chatbot_DB_TEST.mdf',
             MOVE 'Mech_Chatbot_DB_log' TO N'D:\\Data\\Mech_Chatbot_DB_TEST_log.ldf',
-            RECOVERY, REPLACE;
+            RECOVERY;
+     Target phai chua ton tai; khong dung WITH REPLACE.
   2) Qdrant: tao collection moi tu snapshot (recover_snapshot) roi so sanh so points.
 """
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import datetime as _dt
 
@@ -42,25 +44,41 @@ if _SRC not in sys.path:
 
 from sqlalchemy import text  # noqa: E402
 
-from mech_chatbot.db import repository as repo  # noqa: E402
-
-COLLECTION = "TaiLieuKyThuat_v2"
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime  # noqa: E402
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime  # noqa: E402
+from mech_chatbot.config.settings import load_settings  # noqa: E402
+from mech_chatbot.db.engine import _ensure_engine, engine  # noqa: E402
 
 
 def _timestamp():
     return _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def _full_backup_options(engine_edition):
+    """SQL Server EngineEdition 4 is Express, which rejects COMPRESSION."""
+    return "WITH INIT" if engine_edition == 4 else "WITH INIT, COMPRESSION"
+
+
+def _execute_maintenance(connection, statement, parameters):
+    cursor = connection.connection.driver_connection.cursor()
+    try:
+        cursor.execute(statement, *parameters)
+        while cursor.nextset():
+            pass
+    finally:
+        cursor.close()
+
+
 def backup_sql(sql_dir=None):
     """BACKUP DATABASE (full) + BACKUP LOG (neu FULL recovery). Tra ve list file da tao."""
-    repo._ensure_engine()
-    db = repo.SQL_DATABASE
+    _ensure_engine()
+    db = load_settings().SQL_DATABASE
     ts = _timestamp()
     created = []
 
     # Neu khong chi dinh thu muc -> hoi SQL Server thu muc backup mac dinh cua instance
     if not sql_dir:
-        with repo.engine.connect() as conn:
+        with engine.connect() as conn:
             row = conn.execute(text(
                 "SELECT CAST(SERVERPROPERTY('InstanceDefaultBackupPath') AS NVARCHAR(4000))"
             )).fetchone()
@@ -70,12 +88,23 @@ def backup_sql(sql_dir=None):
 
     full_path = os.path.join(sql_dir, f"{db}_full_{ts}.bak")
     # autocommit: BACKUP khong chay trong transaction
-    with repo.engine.connect() as conn:
+    with engine.connect() as conn:
         conn = conn.execution_options(isolation_level="AUTOCOMMIT")
-        conn.execute(text(
-            f"BACKUP DATABASE [{db}] TO DISK = :p WITH INIT, COMPRESSION, "
-            f"NAME = :nm, STATS = 10"
-        ), {"p": full_path, "nm": f"{db} full {ts}"})
+        engine_edition = conn.execute(
+            text("SELECT CAST(SERVERPROPERTY('EngineEdition') AS INT)")
+        ).scalar()
+        options = _full_backup_options(engine_edition)
+        _execute_maintenance(
+            conn,
+            f"BACKUP DATABASE [{db}] TO DISK = ? {options}, "
+            "NAME = ?, STATS = 10",
+            (full_path, f"{db} full {ts}"),
+        )
+        _execute_maintenance(
+            conn,
+            "RESTORE VERIFYONLY FROM DISK = ?",
+            (full_path,),
+        )
         print(f"[SQL] full backup OK -> {full_path}")
         created.append(full_path)
 
@@ -85,9 +114,17 @@ def backup_sql(sql_dir=None):
         ), {"db": db}).scalar()
         if rm and str(rm).upper() == "FULL":
             log_path = os.path.join(sql_dir, f"{db}_log_{ts}.trn")
-            conn.execute(text(
-                f"BACKUP LOG [{db}] TO DISK = :p WITH INIT, NAME = :nm, STATS = 10"
-            ), {"p": log_path, "nm": f"{db} log {ts}"})
+            _execute_maintenance(
+                conn,
+                f"BACKUP LOG [{db}] TO DISK = ? WITH INIT, "
+                "NAME = ?, STATS = 10",
+                (log_path, f"{db} log {ts}"),
+            )
+            _execute_maintenance(
+                conn,
+                "RESTORE VERIFYONLY FROM DISK = ?",
+                (log_path,),
+            )
             print(f"[SQL] log backup OK -> {log_path}")
             created.append(log_path)
         else:
@@ -97,36 +134,46 @@ def backup_sql(sql_dir=None):
 
 def backup_qdrant():
     """Tao snapshot collection tren server Qdrant. Tra ve ten snapshot."""
-    client = repo._get_qdrant_client()
-    snap = client.create_snapshot(collection_name=COLLECTION, wait=True)
+    client, collection = current_qdrant_runtime()
+    snap = client.create_snapshot(collection_name=collection, wait=True)
     name = getattr(snap, "name", None) or str(snap)
-    print(f"[Qdrant] snapshot OK -> collection={COLLECTION} snapshot={name}")
+    print(f"[Qdrant] snapshot OK -> collection={collection} snapshot={name}")
     return name
 
 
-def cleanup_old(sql_dir, keep_days):
+def cleanup_old(sql_dir, keep_days, *, database):
     """Xoa file backup .bak/.trn cu hon keep_days (chay tren may co the truy cap sql_dir)."""
+    if keep_days is None:
+        return
+    if keep_days <= 0:
+        raise ValueError("keep_days must be a positive integer")
     if not sql_dir or not os.path.isdir(sql_dir):
         return
+    database_name = str(database or "").strip()
+    if not database_name:
+        raise ValueError("database is required for scoped backup cleanup")
+    owned_backup = re.compile(
+        rf"^{re.escape(database_name)}_(?:"
+        r"full_\d{8}_\d{6}\.bak|log_\d{8}_\d{6}\.trn)$",
+        re.IGNORECASE,
+    )
     cutoff = _dt.datetime.now() - _dt.timedelta(days=keep_days)
     for f in os.listdir(sql_dir):
-        if not (f.endswith(".bak") or f.endswith(".trn")):
+        if not owned_backup.fullmatch(f):
             continue
         fp = os.path.join(sql_dir, f)
-        try:
-            if _dt.datetime.fromtimestamp(os.path.getmtime(fp)) < cutoff:
-                os.remove(fp)
-                print(f"[cleanup] da xoa backup cu: {fp}")
-        except Exception as e:
-            print(f"[cleanup] bo qua {fp}: {e}")
+        if _dt.datetime.fromtimestamp(os.path.getmtime(fp)) < cutoff:
+            os.remove(fp)
+            print(f"[cleanup] da xoa backup cu: {fp}")
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def main():
     parser = argparse.ArgumentParser(description="Backup SQL + Qdrant (P1.8)")
     parser.add_argument("--sql-dir", default=None, help="Thu muc backup tren MAY CHU SQL (vd D:\\Backups).")
     parser.add_argument("--skip-sql", action="store_true")
     parser.add_argument("--skip-qdrant", action="store_true")
-    parser.add_argument("--keep-days", type=int, default=14, help="Don file backup cu hon N ngay (chi khi sql_dir truy cap duoc cuc bo).")
+    parser.add_argument("--keep-days", type=int, help="Opt-in: don file backup cu hon N ngay (chi khi sql_dir truy cap duoc cuc bo).")
     args = parser.parse_args()
 
     print(f"=== Backup he thong @ {_timestamp()} ===")
@@ -135,8 +182,12 @@ def main():
     if not args.skip_sql:
         try:
             backup_sql(args.sql_dir)
-            if args.sql_dir:
-                cleanup_old(args.sql_dir, args.keep_days)
+            if args.sql_dir and args.keep_days is not None:
+                cleanup_old(
+                    args.sql_dir,
+                    args.keep_days,
+                    database=load_settings().SQL_DATABASE,
+                )
         except Exception as e:
             errors.append(f"SQL backup loi: {e}")
             print(f"[SQL] LOI: {e}")

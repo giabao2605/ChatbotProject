@@ -108,8 +108,8 @@ def test_successful_login_returns_profile(monkeypatch):
     ]
     monkeypatch.setattr(core, "engine", _FakeEngine(_FakeConn(script)))
     # tranh goi DB that trong nhanh loc phong ban da archive
-    import mech_chatbot.db.repository as repo
-    monkeypatch.setattr(repo, "list_known_departments",
+    from mech_chatbot.db.repositories import catalog
+    monkeypatch.setattr(catalog, "list_known_departments",
                         lambda active_only=True: [{"code": "Technical"}], raising=False)
 
     out = core.authenticate_user("bob", "s3cret")
@@ -134,8 +134,8 @@ def test_load_user_profile_returns_current_db_permissions(monkeypatch):
         _FakeResult(one=("en",)),                  # PreferredLanguage
     ]
     monkeypatch.setattr(core, "engine", _FakeEngine(_FakeConn(script)))
-    import mech_chatbot.db.repository as repo
-    monkeypatch.setattr(repo, "list_known_departments",
+    from mech_chatbot.db.repositories import catalog
+    monkeypatch.setattr(catalog, "list_known_departments",
                         lambda active_only=True: [{"code": "Technical"}], raising=False)
 
     out = core.load_user_profile(user_id=7, username="bob")

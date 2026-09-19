@@ -1,0 +1,73 @@
+{
+  "schema": "grounded-math-owner-disposition-v1",
+  "created_at": "2026-08-14T01:29:53.4619516Z",
+  "feature": "RAG_GROUNDED_MATH_ENABLED",
+  "status": "recorded",
+  "disposition": "deferred_pending_valid_pilot",
+  "scope": "controlled_demo_and_default_rollout",
+  "owner_instruction": {
+    "actor": "bao.nguyen",
+    "decision": "defer_7_day_100_request_campaign",
+    "instruction_source": "interactive_owner_statement",
+    "instruction": "Complete the non-traffic preparation and leave the seven-day, 100-request campaign out of the current work."
+  },
+  "campaign_evidence": {
+    "source_commit": "7b9d57562a669984b843d48d6d7ddf09048c472d",
+    "window_06": {
+      "campaign_id": "ffb3734a0aa28ef4d43194a1",
+      "status": "tombstoned",
+      "completed_transport_count": 17,
+      "eligible_grounded_math_count": 10,
+      "calculation_invalid_count": 7,
+      "carry_forward_requests": 0,
+      "tombstone_sha256": "f42363b5214b6d6a05114c48246b0adfe8512546d17e96101cc33aaf71e5a9d6"
+    },
+    "burst_window_11": {
+      "campaign_id": "20dfd03b262a2eedf15731d7",
+      "status": "tombstoned",
+      "completed_request_count": 100,
+      "reconciled_unique_trace_count": 100,
+      "canonical_gate_passed": false,
+      "canonical_gate_decision": "rejected",
+      "canonical_gate_failed_check": "owner_declaration",
+      "count_toward_pilot": false,
+      "qualifies_as_7_day_pilot": false,
+      "carry_forward_requests": 0,
+      "runtime_tombstone_path": ".local/math-pilot-7b9d575-operator-burst-window-11/runtime-tombstone.json",
+      "runtime_tombstone_sha256": "8b54aeddbfb9a1d42e97d05ad8067a944ceed33ef3eec892d3bd755d1e718242",
+      "pilot_gate_path": ".local/math-pilot-7b9d575-operator-burst-window-11/pilot-gate.json",
+      "pilot_gate_sha256": "8cca838467038614418cff2a72471b66d9a80e976ecf53712416eef2cce55773",
+      "burst_gate_path": ".local/worktrees/operator-hardening-next/.local/grounded-math-operator-burst-window-11/burst-gate.json",
+      "burst_gate_sha256": "08a0ea895b40a73c509f0175adb709f50081da88d91514e266baf5d7f1504bf9",
+      "validator_postmortem_path": ".local/math-pilot-7b9d575-operator-burst-window-11/validator-postmortem.json",
+      "validator_postmortem_sha256": "9782642d64598b1874cf35380ec634ae45e74bcd9e32fbb702e1b91faf41ff5c"
+    }
+  },
+  "validator_fix": {
+    "commit": "d77f28c09c995dd983591a730db0e07a79b2f4e2",
+    "purpose": "bind future burst declarations to the runtime window hash domain",
+    "applies_to_historical_campaign": false,
+    "historical_artifact_rewritten": false,
+    "traffic_replayed": false
+  },
+  "prepared_work": {
+    "owner_review_runbook": "docs/grounded-math-owner-review-preparation.md",
+    "owner_review_status": "prepared_not_authorized",
+    "interaction_matrix_status": "prepared_not_authorized"
+  },
+  "authorization": {
+    "new_campaign_authorized": false,
+    "owner_review_authorized": false,
+    "interaction_matrix_authorized": false,
+    "default_rollout_authorized": false,
+    "feature_enablement_authorized": false
+  },
+  "invariants": [
+    "The original window-06 and burst-window-11 tombstones remain immutable.",
+    "No request, elapsed duration, label, or gate result is carried forward.",
+    "The 100-request burst is throughput evidence only and is not pilot, organic, quality, UI-parity, or default-rollout evidence.",
+    "Owner review and the interaction matrix remain blocked until a future canonical campaign gate explicitly permits them.",
+    "Grounded Math and every other non-accepted Advanced RAG feature remain disabled."
+  ],
+  "reopen_condition": "A new owner instruction must authorize a fresh declaration and a new valid seven-day, 100-request campaign on a reviewed commit."
+}

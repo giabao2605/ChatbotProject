@@ -13,8 +13,6 @@ Prototype ben duoi phai trai deu cac phong ban de tranh dinh tuyen nham cau hop 
 """
 from __future__ import annotations
 
-import os
-
 # Gia tri PHAI khop ROUTE_* trong interaction_router.py (dung chuoi de tranh import vong).
 _R_CHITCHAT = "chitchat"
 _R_CAPABILITY = "capability"
@@ -115,33 +113,16 @@ ROUTE_PROTOTYPES = {
 }
 
 
-def _env_flag(name, default):
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _env_float(name, default):
-    try:
-        raw = os.getenv(name)
-        if raw is None or str(raw).strip() == "":
-            return default
-        return float(raw)
-    except Exception:
-        return default
-
-
-def semantic_enabled():
+def semantic_enabled(value: bool = True):
     """Tat -> router hanh xu nhu P0 (chi L0 chitchat)."""
-    return _env_flag("SEMANTIC_ROUTER_ENABLED", True)
+    return bool(value)
 
 
-def semantic_threshold():
+def semantic_threshold(value: float = 0.62):
     """Nguong cosine toi thieu (mac dinh 0.62; phu thuoc embedding model -> hieu chinh)."""
-    return _env_float("SEMANTIC_ROUTER_SIM_THRESHOLD", 0.62)
+    return float(value)
 
 
-def semantic_margin():
+def semantic_margin(value: float = 0.04):
     """Cach biet toi thieu top1-top2 (chong nhap nhang). < margin -> fallback."""
-    return _env_float("SEMANTIC_ROUTER_MARGIN", 0.04)
+    return float(value)

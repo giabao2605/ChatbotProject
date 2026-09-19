@@ -1,0 +1,368 @@
+"""Validate human review files and emit a metadata-only fail-closed summary."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+from mech_chatbot.governance.review_governance import (
+    distinct_reviewer_count,
+    independent_reviewer_diversity_valid,
+    normalize_reviewer_identity,
+    review_governance_status,
+)
+from mech_chatbot.governance.artifact_references import (
+    read_bytes_with_reference,
+)
+from scripts.controlled_demo_eval.review_pack import (
+    HUMAN_REVIEW_TEMPLATE,
+    review_contract_sha256,
+)
+from scripts.eval.verify_failure_family_rollback import clean_git_sha
+
+
+CONTROLLED_DECISIONS = {"accepted", "rejected", "needs_discussion"}
+GRAPH_MUTABLE_FIELDS = {
+    "reviewer", "review_source", "expected_correct", "review_note",
+}
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def pack_contract_sha256(pack: dict) -> str:
+    raw = json.dumps(
+        pack, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def evaluate_controlled_review(pack: dict, rows, *, anchor: dict) -> dict:
+    rows = list(rows or [])
+    case_ids = [str(row.get("case_id") or "") for row in rows]
+    expected_count = int(pack.get("case_count") or 0)
+    anchor_matches = all((
+        anchor.get("pack_id") == pack.get("pack_id"),
+        anchor.get("pack_sha256") == pack_contract_sha256(pack),
+        anchor.get("review_contract_sha256") == pack.get("review_contract_sha256"),
+        anchor.get("case_count") == expected_count,
+    ))
+    contract_matches = (
+        len(str(pack.get("review_contract_sha256") or "")) == 64
+        and review_contract_sha256(rows) == pack.get("review_contract_sha256")
+    )
+    pack_valid = all((
+        pack.get("schema") == "controlled-demo-human-review-pack-v1",
+        pack.get("scope") == "controlled_demo",
+        pack.get("local_only") is True,
+        expected_count > 0,
+        pack.get("source_commit") == (pack.get("pair_provenance") or {}).get("git_sha"),
+    ))
+    invalid_case_ids = []
+    accepted = rejected = discussion = 0
+    answer_correct = citation_correct = safety_correct = 0
+    reviewers = set()
+    for case_id, row in zip(case_ids, rows):
+        review = row.get("human_review") or {}
+        reviewer = str(review.get("reviewer") or "").strip()
+        decision = str(review.get("decision") or "").strip()
+        note = str(review.get("note") or "").strip()
+        labels = tuple(review.get(field) for field in (
+            "answer_correct", "citation_correct", "safety_correct",
+        ))
+        labels_valid = all(isinstance(value, bool) for value in labels)
+        fields_valid = set(review) == set(HUMAN_REVIEW_TEMPLATE)
+        decision_valid = decision in CONTROLLED_DECISIONS
+        consistent = (
+            (decision == "accepted" and labels == (True, True, True))
+            or (decision == "rejected" and labels_valid and not all(labels))
+            or decision == "needs_discussion"
+        )
+        if not all((
+            case_id, reviewer, note, labels_valid, fields_valid,
+            decision_valid, consistent,
+        )):
+            invalid_case_ids.append(case_id)
+            continue
+        reviewers.add(reviewer)
+        answer_correct += int(labels[0])
+        citation_correct += int(labels[1])
+        safety_correct += int(labels[2])
+        accepted += int(decision == "accepted")
+        rejected += int(decision == "rejected")
+        discussion += int(decision == "needs_discussion")
+    ids_valid = (
+        len(case_ids) == expected_count
+        and len(set(case_ids)) == len(case_ids)
+        and all(case_ids)
+    )
+    validation_passed = (
+        anchor_matches and pack_valid and contract_matches
+        and ids_valid and not invalid_case_ids
+    )
+    review_complete = validation_passed and discussion == 0
+    return {
+        "schema": "controlled-demo-review-result-v1",
+        "pack_id": str(pack.get("pack_id") or ""),
+        "source_commit": str(pack.get("source_commit") or ""),
+        "validation_passed": validation_passed,
+        "anchor_matches": anchor_matches,
+        "review_contract_matches": contract_matches,
+        "review_complete": review_complete,
+        "quality_passed": review_complete and accepted == expected_count,
+        "case_count": len(rows),
+        "expected_case_count": expected_count,
+        "accepted_count": accepted,
+        "rejected_count": rejected,
+        "needs_discussion_count": discussion,
+        "answer_correct_rate": _rate(answer_correct, expected_count),
+        "citation_correct_rate": _rate(citation_correct, expected_count),
+        "safety_correct_rate": _rate(safety_correct, expected_count),
+        "reviewer_count": len(reviewers),
+        "invalid_case_ids": sorted(set(invalid_case_ids)),
+    }
+
+
+def _graph_by_id(rows) -> tuple[dict, bool, bool]:
+    result = {}
+    duplicate = False
+    blank = False
+    for row in rows or []:
+        edge_id = row.get("edge_id")
+        if edge_id is None or str(edge_id).strip() == "":
+            blank = True
+        if edge_id in result:
+            duplicate = True
+        result[edge_id] = row
+    return result, duplicate, blank
+
+
+def evaluate_graph_review(
+    source_rows, reviewed_rows, *, anchor: dict, source_sha256: str,
+    minimum_sample=20, minimum_precision=0.95, review_governance=None,
+    source_commit=None, scope=None,
+) -> dict:
+    governance = review_governance_status(
+        review_governance,
+        source_commit=source_commit,
+        scope=scope,
+    )
+    source, source_duplicates, source_blank = _graph_by_id(source_rows)
+    reviewed, reviewed_duplicates, reviewed_blank = _graph_by_id(reviewed_rows)
+    anchor_matches = all((
+        anchor.get("source_sha256") == source_sha256,
+        anchor.get("edge_count") == len(source),
+    ))
+    invalid_edge_ids = []
+    mismatch_edge_ids = []
+    correct = 0
+    reviewers = set()
+    for edge_id, row in reviewed.items():
+        original = source.get(edge_id)
+        immutable_matches = (
+            original is not None
+            and set(row) == set(original)
+            and all(
+                row.get(field) == value
+                for field, value in original.items()
+                if field not in GRAPH_MUTABLE_FIELDS
+            )
+        )
+        if not immutable_matches:
+            mismatch_edge_ids.append(edge_id)
+        reviewer = normalize_reviewer_identity(row.get("reviewer"))
+        owner = normalize_reviewer_identity(governance.owner)
+        review_note = str(row.get("review_note") or "").strip()
+        expected_correct = row.get("expected_correct")
+        row_valid = all((
+            immutable_matches,
+            reviewer,
+            review_note,
+            row.get("review_source") == governance.review_source,
+            governance.mode != "single_owner" or reviewer == owner,
+            isinstance(expected_correct, bool),
+        ))
+        if not row_valid:
+            invalid_edge_ids.append(edge_id)
+            continue
+        reviewers.add(reviewer)
+        correct += int(expected_correct)
+    sample_count = len(reviewed)
+    precision = _rate(correct, sample_count)
+    required_sample = max(int(minimum_sample), len(source))
+    reviewer_count = distinct_reviewer_count(reviewers)
+    reviewer_diversity_valid = (
+        governance.mode != "multi_reviewer"
+        or independent_reviewer_diversity_valid(reviewer_count)
+    )
+    validation_passed = all((
+        anchor_matches, bool(source), bool(reviewed), not source_duplicates,
+        not reviewed_duplicates, not source_blank, not reviewed_blank,
+        not invalid_edge_ids, governance.valid, reviewer_diversity_valid,
+    ))
+    review_complete = validation_passed and sample_count >= required_sample
+    return {
+        "schema": "controlled-demo-graph-review-result-v1",
+        "validation_passed": validation_passed,
+        "anchor_matches": anchor_matches,
+        "review_complete": review_complete,
+        "review_sample_count": sample_count,
+        "minimum_review_sample": required_sample,
+        "reviewed_edge_precision": precision,
+        "review_mode": governance.mode,
+        "review_source": governance.review_source,
+        "review_governance_valid": governance.valid,
+        "minimum_reviewed_edge_precision": float(minimum_precision),
+        "ready_for_graph_quality_gate": (
+            review_complete
+            and precision is not None
+            and precision >= float(minimum_precision)
+        ),
+        "reviewer_count": reviewer_count,
+        "reviewer_diversity_valid": reviewer_diversity_valid,
+        "invalid_edge_ids": sorted(set(invalid_edge_ids)),
+        "immutable_mismatch_edge_ids": sorted(set(mismatch_edge_ids)),
+    }
+
+
+def build_finalization_report(
+    *, git_sha: str, crag_review: dict, grounded_math_review: dict,
+    graph_review: dict,
+) -> dict:
+    all_complete = all((
+        crag_review.get("review_complete") is True,
+        grounded_math_review.get("review_complete") is True,
+        graph_review.get("review_complete") is True,
+    ))
+    graph_ready = graph_review.get("ready_for_graph_quality_gate") is True
+    if not crag_review.get("review_complete") or not grounded_math_review.get("review_complete"):
+        next_action = "complete_controlled_review_packs"
+    elif not graph_review.get("review_complete"):
+        next_action = "complete_graph_review"
+    elif not graph_ready:
+        next_action = "reject_graph_retrieval"
+    else:
+        next_action = "run_graph_quality_gate"
+    return {
+        "schema": "controlled-demo-human-review-finalization-v1",
+        "scope": "controlled_demo",
+        "git_sha": git_sha,
+        "all_review_inputs_complete": all_complete,
+        "graph_review_ready": graph_ready,
+        "community_generation_unlocked": False,
+        "next_action": next_action,
+        "crag_review": crag_review,
+        "grounded_math_review": grounded_math_review,
+        "graph_review": graph_review,
+    }
+
+
+def _read_json(path: Path) -> tuple[dict, dict]:
+    raw, reference = read_bytes_with_reference(path, root=ROOT)
+    value = json.loads(raw.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    if value.get("schema"):
+        reference["schema"] = value["schema"]
+    return value, reference
+
+
+def _read_jsonl(path: Path) -> tuple[list[dict], dict]:
+    raw, reference = read_bytes_with_reference(
+        path,
+        root=ROOT,
+        expected_format="jsonl",
+    )
+    rows = [
+        json.loads(line)
+        for line in raw.decode("utf-8").splitlines()
+        if line.strip()
+    ]
+    if not all(isinstance(row, dict) for row in rows):
+        raise ValueError(f"{path} must contain JSON objects")
+    return rows, reference
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--crag-pack", type=Path, required=True)
+    parser.add_argument("--crag-review", type=Path, required=True)
+    parser.add_argument("--grounded-math-pack", type=Path, required=True)
+    parser.add_argument("--grounded-math-review", type=Path, required=True)
+    parser.add_argument("--graph-source", type=Path, required=True)
+    parser.add_argument("--graph-review", type=Path, required=True)
+    parser.add_argument("--review-anchor", type=Path, required=True)
+    parser.add_argument("--review-governance", type=Path)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    if args.output.exists():
+        raise FileExistsError(f"finalization artifact already exists: {args.output}")
+    crag_pack, crag_pack_reference = _read_json(args.crag_pack)
+    crag_review, crag_review_reference = _read_jsonl(args.crag_review)
+    math_pack, math_pack_reference = _read_json(args.grounded_math_pack)
+    math_review, math_review_reference = _read_jsonl(
+        args.grounded_math_review
+    )
+    graph_source, graph_source_reference = _read_jsonl(args.graph_source)
+    graph_review, graph_review_reference = _read_jsonl(args.graph_review)
+    anchor, anchor_reference = _read_json(args.review_anchor)
+    review_governance = None
+    review_governance_reference = None
+    if args.review_governance:
+        governance_raw, review_governance_reference = (
+            read_bytes_with_reference(
+                args.review_governance,
+                root=ROOT,
+                expected_schema="rag-review-governance-v1",
+            )
+        )
+        review_governance = json.loads(governance_raw.decode("utf-8"))
+    if anchor.get("schema") != "controlled-demo-human-review-anchor-v1":
+        raise ValueError("review anchor schema must be controlled-demo-human-review-anchor-v1")
+    pack_anchors = anchor.get("controlled_packs") or {}
+    graph_anchor = anchor.get("graph_queue") or {}
+    git_sha = clean_git_sha(ROOT)
+    report = build_finalization_report(
+        git_sha=git_sha,
+        crag_review=evaluate_controlled_review(
+            crag_pack, crag_review,
+            anchor=pack_anchors.get(str(crag_pack.get("pack_id") or "")) or {},
+        ),
+        grounded_math_review=evaluate_controlled_review(
+            math_pack, math_review,
+            anchor=pack_anchors.get(str(math_pack.get("pack_id") or "")) or {},
+        ),
+        graph_review=evaluate_graph_review(
+            graph_source, graph_review,
+            anchor=graph_anchor,
+            source_sha256=graph_source_reference["sha256"],
+            review_governance=review_governance,
+            source_commit=git_sha if review_governance else None,
+            scope="controlled_demo" if review_governance else None,
+        ),
+    )
+    report["generated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    report["source_artifacts"] = [
+        crag_pack_reference,
+        crag_review_reference,
+        math_pack_reference,
+        math_review_reference,
+        graph_source_reference,
+        graph_review_reference,
+        anchor_reference,
+    ]
+    if args.review_governance:
+        report["source_artifacts"].append(review_governance_reference)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["all_review_inputs_complete"] else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

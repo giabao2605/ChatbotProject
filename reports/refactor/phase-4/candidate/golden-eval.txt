@@ -1,0 +1,15 @@
+schema=phase-4-golden-eval-v1
+baseline_sha=316b8fc26d34e72f934416fdcb6dc76da5cbc69c
+candidate_sha=eeb89f139bcb32957c91e693599060800d814d65
+command=.\chat_env\Scripts\python.exe -m pytest tests\eval\test_golden_questions.py -q -v
+baseline_result=1 passed, 2 failed
+candidate_result=1 passed, 2 failed
+answer_cases=2
+baseline_answer_cases_passed=0
+candidate_answer_cases_passed=0
+shared_failure_1=missing current SQL/Qdrant document for code 9.3.03951
+shared_failure_2=missing current SQL/Qdrant document for code 9.3.03844
+quality_delta=no candidate regression; baseline and candidate fail closed with the same not-found response
+status=inconclusive_data_missing
+threshold_changed=false
+golden_expectation_changed=false

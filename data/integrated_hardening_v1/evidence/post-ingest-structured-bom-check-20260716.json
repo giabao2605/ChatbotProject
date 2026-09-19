@@ -1,0 +1,15 @@
+{
+  "schema": "controlled-demo-structured-bom-check-v1",
+  "scope": "controlled_demo",
+  "source_commit": "7c411e9f00fc40b192ab2361adaea9c7681b5899",
+  "checked_at": "2026-07-16T09:25:00Z",
+  "database_surface": "SQL Server dbo.TaiLieu LEFT JOIN dbo.BangKeVatTu",
+  "query_sha256": "8ec2736cbcf39304b3efc9aac66ef8f8ad5440de43bb53c813b2d3ce50c62e9f",
+  "read_only": true,
+  "documents": [
+    {"doc_id": 7, "document": "maintenance_demo_process_v1.md", "bom_rows": 0},
+    {"doc_id": 19, "document": "technical_demo_process_v2.md", "bom_rows": 0}
+  ],
+  "total_bom_rows": 0,
+  "raw_rows_recorded": false
+}

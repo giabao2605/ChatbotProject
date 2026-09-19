@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from mech_chatbot.api import app_server
+from mech_chatbot.api.routers import documents as document_routes
 from mech_chatbot.db.repositories.lifecycle import classify_lifecycle
 
 pytestmark = pytest.mark.unit
@@ -44,14 +44,14 @@ def test_viewer_cannot_use_legacy_filter_to_open_expired_bucket():
         "roles": ["viewer"], "allowed_departments": ["HR"],
         "allowed_sites": ["HN"], "max_security_level": "internal",
     }
-    with pytest.raises(app_server.HTTPException) as exc_info:
-        app_server.documents(eff_mode="het", profile=profile)
+    with pytest.raises(document_routes.HTTPException) as exc_info:
+        document_routes.documents(eff_mode="het", profile=profile)
 
     assert exc_info.value.status_code == 403
 
 
 def test_invalid_document_bucket_is_rejected_before_repository_call():
-    with pytest.raises(app_server.HTTPException) as exc_info:
-        app_server.documents(bucket="unknown", profile={"roles": ["reviewer"]})
+    with pytest.raises(document_routes.HTTPException) as exc_info:
+        document_routes.documents(bucket="unknown", profile={"roles": ["reviewer"]})
 
     assert exc_info.value.status_code == 422
