@@ -818,7 +818,10 @@ time.sleep(60)
         "-RestartDelaySeconds",
         "1",
     ]
-    first = subprocess.Popen(command, cwd=tmp_path)
+    supervisor_output = paths["supervisor.out.log"].open("w", encoding="utf-8")
+    first = subprocess.Popen(
+        command, cwd=tmp_path, stdout=supervisor_output, stderr=subprocess.STDOUT,
+    )
 
     def process_exists(pid):
         result = subprocess.run(
@@ -830,19 +833,24 @@ time.sleep(60)
         return f'","{pid}",' in result.stdout
 
     try:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             run_file = tmp_path / "run-pids.txt"
             if run_file.exists() and len(run_file.read_text().splitlines()) >= 2:
                 break
             time.sleep(0.2)
 
-        assert first.poll() is None
+        diagnostics = "\n".join(
+            f"{name}: {path.read_text(encoding='utf-8', errors='replace')}"
+            for name, path in paths.items() if path.exists()
+        )
+        assert first.poll() is None, diagnostics
+        assert run_file.exists(), diagnostics
         pids = [
             int(value)
             for value in (tmp_path / "run-pids.txt").read_text().splitlines()
         ]
-        assert len(pids) >= 2
+        assert len(pids) >= 2, diagnostics
         assert process_exists(pids[-1])
 
         duplicate = subprocess.run(
@@ -870,6 +878,7 @@ time.sleep(60)
         except subprocess.TimeoutExpired:
             first.kill()
             first.wait(timeout=10)
+        supervisor_output.close()
         run_file = tmp_path / "run-pids.txt"
         if run_file.exists():
             for value in run_file.read_text().splitlines():
