@@ -8,3 +8,4 @@ data/grounded_math_eval_v1/eval_manifest.jsonl text eol=crlf
 data/decomposition_eval_v1/*.jsonl text eol=crlf
 data/decomposition_eval_v1/README.md text eol=crlf
 data/crag_eval_v1/eval_manifest.jsonl text eol=crlf
+data/graph_eval_v1/eval_manifest.jsonl text eol=crlf
