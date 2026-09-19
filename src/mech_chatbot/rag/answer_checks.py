@@ -6,6 +6,7 @@ Chi phu thuoc stdlib (re, json) + explicit DB registry adapter.
 service.py re-import cac ten nay nen moi cho goi cu + tests van chay.
 """
 import json
+from mech_chatbot.domain.source_ids import extract_source_ids
 import re
 
 
@@ -250,17 +251,6 @@ def has_required_source_citation(answer, require_version=True):
     )
 
     return has_source and has_page and has_version and has_source_id
-
-
-def extract_source_ids(value):
-    """Extract canonical source identifiers emitted by the RAG prompt."""
-    text = str(value or "")
-    matches = re.findall(
-        r"(?:source[_\s-]?id\s*[:#]?\s*|\[src:\s*)(D\d+P\d+)",
-        text,
-        flags=re.IGNORECASE,
-    )
-    return {match.upper() for match in matches}
 
 
 def _canonical_source_id(metadata):

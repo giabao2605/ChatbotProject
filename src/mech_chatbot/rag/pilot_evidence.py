@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from mech_chatbot.evaluation.decomposition import normalize_decomposition_usage
+from mech_chatbot.domain.decomposition_usage import normalize_decomposition_usage
 from mech_chatbot.governance.graph_pilot_review import APPROVED_GRAPH_REFUSALS
 from mech_chatbot.rag.answer_checks import extract_source_ids
 from mech_chatbot.rag.evidence_gate import make_insufficient_evidence_message
