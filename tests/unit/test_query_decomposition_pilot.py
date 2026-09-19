@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 import subprocess
 
+import sys
+
 import pytest
 
 from mech_chatbot.governance.feature_activation import FEATURE_FLAGS
@@ -396,6 +398,7 @@ def test_finalize_rejects_approval_without_consolidated_launch_draft(tmp_path):
     assert not (output / "authorized").exists()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_collector_and_gate_require_exactly_once_100_request_contract(
     tmp_path, monkeypatch,
 ):

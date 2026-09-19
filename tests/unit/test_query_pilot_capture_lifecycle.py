@@ -2,6 +2,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import sys
+
 import pytest
 
 from scripts.ops import query_pilot_capture_lifecycle as lifecycle
@@ -19,6 +21,7 @@ def _capture_set(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     return capture_dir, expected
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_delete_capture_set_resumes_after_partial_unlink(tmp_path, monkeypatch):
     capture_dir, expected = _capture_set(tmp_path)
     journal_path = tmp_path / "capture-deletion.journal.json"
@@ -62,6 +65,7 @@ def test_delete_capture_set_resumes_after_partial_unlink(tmp_path, monkeypatch):
     assert not (tmp_path / "review-captures.quarantine").exists()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_finalized_deletion_refuses_reintroduced_ciphertext(tmp_path):
     capture_dir, expected = _capture_set(tmp_path)
     journal_path = tmp_path / "capture-deletion.journal.json"

@@ -3163,6 +3163,7 @@ def test_profile_pair_launcher_rejects_invalid_selective_flag_sources(
     assert expected_error in result.stderr
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_profile_pair_launcher_resolves_live_bundle_from_external_checkout(tmp_path):
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     if powershell is None:

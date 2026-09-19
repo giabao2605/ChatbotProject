@@ -229,6 +229,18 @@ def _isolated_app_client(
         app_server.app.dependency_overrides[app_server.csrf_profile] = _evidence_profile
         client = TestClient(app_server.app)
         with ExitStack() as stack:
+            from types import SimpleNamespace
+            from sqlalchemy import create_engine
+            from sqlalchemy.pool import StaticPool
+
+            engine = create_engine(
+                "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+            )
+            stack.callback(engine.dispose)
+            stack.enter_context(patch.object(
+                app_server.app.state, "database_builder",
+                return_value=SimpleNamespace(engine=engine, close=engine.dispose),
+            ))
             stack.enter_context(
                 patch.object(
                     app_server.app.state,

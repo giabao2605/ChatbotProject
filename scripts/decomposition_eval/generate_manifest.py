@@ -201,14 +201,14 @@ def generate_manifest(output: Path = DEFAULT_OUTPUT):
             json.dumps(case, ensure_ascii=False) + "\n"
             for case in query_values
         ),
-        encoding="utf-8",
+        encoding="utf-8", newline="\r\n",
     )
     interaction_manifest.write_text(
         "".join(
             json.dumps(case, ensure_ascii=False) + "\n"
             for case in interaction_values
         ),
-        encoding="utf-8",
+        encoding="utf-8", newline="\r\n",
     )
     query_sha = hashlib.sha256(query_manifest.read_bytes()).hexdigest()
     interaction_sha = hashlib.sha256(
@@ -230,7 +230,7 @@ def generate_manifest(output: Path = DEFAULT_OUTPUT):
         "fail. Số document raw retrieval vẫn được giữ riêng trong telemetry.\n\n"
         f"Query-only SHA-256: `{query_sha}`\n\n"
         f"Math+Query interaction SHA-256: `{interaction_sha}`\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\r\n",
     )
     return {
         "schema": "decomposition-eval-manifest-v2",

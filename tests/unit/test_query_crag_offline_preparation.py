@@ -604,6 +604,7 @@ def test_query_window_entrypoint_rejects_authorization_longer_than_sixty_minutes
     assert not run_root.exists()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_query_pair_entrypoint_binds_absolute_python_before_creating_trace(tmp_path):
     project = tmp_path / "repo"
     module_root = project / "scripts" / "decomposition_eval"
@@ -705,6 +706,7 @@ def test_query_pair_entrypoint_binds_absolute_python_before_creating_trace(tmp_p
     assert Path(invocation["trace"]).resolve() == trace.resolve()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_query_pair_entrypoint_probe_failure_does_not_create_trace(tmp_path):
     project = tmp_path / "repo"
     project.mkdir()
@@ -758,6 +760,7 @@ def test_query_pair_entrypoint_probe_failure_does_not_create_trace(tmp_path):
         ("-RollbackTestArtifact", "rollback_test_artifact"),
     ],
 )
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_query_pair_entrypoint_rejects_directory_inputs_before_trace(
     tmp_path,
     invalid_parameter,
@@ -819,6 +822,7 @@ def test_query_pair_entrypoint_rejects_directory_inputs_before_trace(
     "invalid_parameter",
     ["-Manifest", "-ProviderSmokeArtifact", "-RollbackTestArtifact"],
 )
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_query_pair_entrypoint_semantically_validates_inputs_before_trace(
     tmp_path,
     invalid_parameter,

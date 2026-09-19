@@ -144,6 +144,7 @@ def test_cleanup_exception_cannot_turn_into_success(tmp_path):
 
 
 @pytest.mark.parametrize("empty,released,deleted", [(True, True, True), (False, True, False), (True, False, False)])
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_terminal_capture_cleanup_requires_verified_tree_and_port(tmp_path, empty, released, deleted):
     captures = tmp_path / "review-captures"
     captures.mkdir()

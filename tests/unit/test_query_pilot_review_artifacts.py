@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import sys
+
 import pytest
 
 from scripts.ops import query_pilot_review_artifacts as review_artifacts
@@ -243,6 +245,7 @@ def test_metadata_loader_rejects_nested_raw_content_and_unknown_fields(
         load_metadata_rows(rows)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_review_pack_rejects_unknown_wal_fields(tmp_path: Path):
     authorization, schedule, rows, capture_dir = _review_fixture(tmp_path)
     rows[0] = {**rows[0], "full_answer": "must not be accepted"}

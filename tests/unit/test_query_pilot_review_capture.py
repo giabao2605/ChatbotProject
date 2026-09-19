@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import subprocess
 
+import sys
+
 import pytest
 
 from scripts.ops import query_pilot_review_artifacts as review_artifacts
@@ -424,6 +426,7 @@ def _review_fixture(tmp_path: Path):
     return authorization, schedule, rows, capture_dir
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_review_result_and_deletion_receipt_bind_complete_review(tmp_path: Path):
     authorization, schedule, rows, capture_dir = _review_fixture(tmp_path)
     pack = build_review_pack(
@@ -742,6 +745,7 @@ def test_review_pack_and_deletion_reject_extra_capture_directory_entry(
     assert len(list(capture_dir.glob("*.capture.json"))) == 20
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_rejected_review_still_deletes_ciphertext_but_never_passes_gate(
     tmp_path: Path,
 ):

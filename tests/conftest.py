@@ -22,18 +22,6 @@ if str(_SRC) not in sys.path:
 
 # --- Skip rules theo bien moi truong ---------------------------------------
 def pytest_collection_modifyitems(config, items):
-    if sys.platform != "win32":
-        platform_skip = pytest.mark.skip(reason="requires Windows process/ACL semantics")
-        for item in items:
-            if any(token in str(item.fspath) for token in (
-                "test_query_crag_offline_preparation.py",
-                "test_query_pilot_capture_lifecycle.py",
-                "test_query_pilot_review_artifacts.py",
-                "test_query_pilot_review_capture.py",
-                "test_query_pilot_scheduled_host.py",
-                "test_query_decomposition_pilot.py",
-            )):
-                item.add_marker(platform_skip)
     run_db = os.getenv("RUN_DB_TESTS") == "1"
     run_qdrant = os.getenv("RUN_QDRANT_TESTS") == "1"
     # A configured URL is common in a developer .env and must not make the
@@ -104,10 +92,21 @@ def make_user():
 
 @pytest.fixture
 def isolated_app_lifespan(monkeypatch):
-    """Keep unit-test app lifespans independent from external Qdrant."""
+    """Keep unit-test app lifespans independent from external databases."""
 
     from mech_chatbot.api import app_server
 
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    monkeypatch.setattr(
+        app_server.app.state,
+        "database_builder",
+        lambda _settings: SimpleNamespace(engine=engine, close=engine.dispose),
+    )
     qdrant_runtime = SimpleNamespace(
         client=object(),
         collection_name="unit-test-collection",

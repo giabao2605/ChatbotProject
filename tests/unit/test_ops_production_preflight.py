@@ -760,6 +760,7 @@ def test_worker_supervisor_uses_one_instance_per_project_and_restarts_exits():
     assert "Start-Sleep -Seconds $restartDelay" in supervisor
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
 def test_worker_supervisor_restarts_early_exit_and_blocks_duplicate(tmp_path):
     powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
     if powershell is None:
