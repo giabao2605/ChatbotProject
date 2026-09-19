@@ -276,3 +276,14 @@ class TestAppSecurityConfig:
 
     def test_local_app_keeps_current_insecure_http_defaults(self):
         assert cfg.validate_app_security(Settings.from_env({})) == []
+
+
+def test_openrouter_validation_and_secret_redaction():
+    env = {"OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+           "OPENROUTER_API_KEY": "router-secret-test-key"}
+    errors, _ = cfg.validate_config(env, require_qdrant=False, require_sql=False, require_embedding=False)
+    assert not errors
+    assert "router-secret-test-key" not in str(cfg.safe_config_summary(env))
+    errors, _ = cfg.validate_config({**env, "OPENROUTER_API_KEY": "", "PROXYLLM_API_KEY": "old-key"},
+                                  require_qdrant=False, require_sql=False, require_embedding=False)
+    assert any("OPENROUTER_API_KEY" in error for error in errors)

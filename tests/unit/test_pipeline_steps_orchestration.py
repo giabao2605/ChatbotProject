@@ -641,3 +641,18 @@ def test_generation_deadline_fails_closed_before_calling_the_provider(
                 _generation_plan(steps, deadline=time.monotonic() - 1),
             )
         )
+
+
+def test_generation_audits_openrouter_endpoint(steps, monkeypatch):
+    from contextlib import contextmanager
+    chain = _FakeChain([["Approved answer."]])
+    _prepare_generation(steps, monkeypatch, chain)
+    monkeypatch.setattr(steps, "get_llm_endpoint", lambda _adapter: "https://openrouter.ai/api/v1")
+    calls = []
+    @contextmanager
+    def audit(**kwargs):
+        calls.append(kwargs)
+        yield
+    monkeypatch.setattr(steps, "audited_external_call", audit)
+    assert "".join(steps.generate_answer(_generation_plan(steps), metrics={})) == "Approved answer."
+    assert calls and all(call["provider"] == "openrouter" for call in calls)

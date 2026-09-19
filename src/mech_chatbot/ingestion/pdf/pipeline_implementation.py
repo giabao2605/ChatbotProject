@@ -744,7 +744,7 @@ def process_and_ingest_pdf(
                         logger.error(warn)
                 elif vision_required and not vision_model:
                     vision_failed = True
-                    warn = f"Trang {page_num+1}: cần GPT-5.4 Vision/OCR nhưng chưa cấu hình PROXYLLM_API_KEY hợp lệ."
+                    warn = f"Trang {page_num+1}: cần Vision/OCR nhưng chưa cấu hình API key hợp lệ cho provider đã chọn."
                     report["vision_warnings"].append({"page": page_num + 1, "detail": "no_vision_model"})
                     report["warnings"].append(warn)
                     logger.error(warn)

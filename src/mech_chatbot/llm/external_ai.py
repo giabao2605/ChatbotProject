@@ -26,6 +26,13 @@ ALL_EXTERNAL = "all_external"
 INTERNAL_ONLY = "internal_only"
 
 
+def compatible_provider_name(endpoint: str | None) -> str:
+    """Identify the supported gateway without trusting hostname substrings."""
+    if str(endpoint or "").rstrip("/") == "https://openrouter.ai/api/v1":
+        return "openrouter"
+    return "proxyllm"
+
+
 class ExternalProcessingDenied(RuntimeError):
     """Raised when a call conflicts with the configured data policy."""
 

@@ -2,14 +2,98 @@
 
 ## Tóm tắt
 
-- Giữ default rollout ở `all_off`; RC `7b9d575` chỉ được phép chạy controlled-demo Math-only pilot, chưa được phép bật mặc định.
+- Default-rollout authorization mới nhất là signed `selective` Math-only trên commit `67265a0`; accepted set chỉ có `RAG_GROUNDED_MATH_ENABLED`, sáu feature còn lại giữ OFF. Authorization này không tự chứng minh runtime đang chạy.
 - Tách Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair thành các capability được đánh giá, pilot và quyết định độc lập.
 - Phát hành dần: tính năng đạt không phải chờ tính năng khác; tính năng chưa đạt tiếp tục OFF.
-- Mỗi pilot chạy trên Windows/LAN riêng trong tối thiểu 7 ngày và đủ 100 request đúng nhóm.
+- Mỗi pilot chạy trên Windows/LAN riêng theo contract đã được owner duyệt và đủ 100 request đúng nhóm. Grounded Math dùng exception 72 giờ; Graph Retrieval, CRAG + Claim Repair và Community Summaries dùng exception riêng tối thiểu 24 giờ. Từ yêu cầu owner ngày 09/09, Query tương lai dùng một lượt 100 card tuần tự; contract Query 24 giờ chỉ giữ cho evidence lịch sử. Duration không tự cấp quyền mở pilot.
 - Theo đến cùng bốn tính năng chính: Grounded Math, Query Decomposition, Graph Retrieval và CRAG + Claim Repair. Chỉ dừng khi `accepted` hoặc chứng minh kỹ thuật rằng muốn tiến xa hơn phải phá ngưỡng đã khóa.
 - Community Summaries chỉ bắt đầu sau Graph accepted. Late Interaction giữ OFF vô thời hạn.
 
-## Checkpoint thực thi — 2026-08-10
+## Checkpoint hiện hành — 2026-09-11
+
+- Query diagnostic `query-diagnostic-100-20260911-014739` hoàn tất 100 card
+  lúc `2026-09-11T02:01:11Z`: 99 đạt; card 097 (`decomp-code-boundary`)
+  gặp `APITimeoutError` sau 120106,63 ms. Card 098–100 vẫn hoàn tất; mỗi
+  card một attempt, không retry/replacement. Bốn lỗi chất lượng của lượt trước
+  (014/016/029/064) đều đạt ở lượt này. Đây là diagnostic với
+  `pilot_evidence=false`, không phải pilot acceptance hoặc quyền rollout.
+- Pilot sequential `query-sequential-candidate-12/run` trước đó đã terminal
+  `per_request_evidence_invalid` ngày 10/09. Mọi root terminal/consumed giữ
+  nguyên evidence, không resume, retry hoặc chuyển card sang root mới.
+- Source chuẩn bị ở worktree `query-post-pilot-prep-20260905`, baseline
+  `9ad9056`. Delta cuối giữ lỗi provider gốc khi budget retry bằng 0,
+  chặn error-text trước khi phát câu trả lời, chỉ đưa nhánh trả lời được vào
+  câu hỏi generation và thống nhất hướng dẫn bảng/trích dẫn/thuộc tính tiếng Việt.
+  Không đổi evaluator hoặc threshold. Hai review độc lập Standards/Security
+  và Spec/Correctness không có finding; kiểm full unit/coverage và freeze cuối
+  được ghi tại `.local/query-freeze-20260911/`.
+- Contract prospective Query là `query-decomposition-sequential-100-v1`:
+  đúng 100 card đã freeze, concurrency 1, card sau chỉ chạy khi card trước
+  hoàn tất hợp lệ; không minimum 24 giờ. Authorization 10 phút–6 giờ và mốc
+  dispatch sau freeze 5 phút là giới hạn của contract, không phải quyền đã cấp.
+  `query-decomposition-24h-100-v1` chỉ giữ để kiểm evidence cũ.
+- Audit venv riêng ngày 11/09 còn một advisory `accelerate`
+  (`CVE-2026-69112`), `pip check` pass. Giữ `assessed_open` và
+  `security_green=false` đến khi có disposition runtime đủ bằng chứng.
+  Các số 12 advisory/5 package hoặc audit sạch ở checkpoint cũ là lịch sử.
+- Math+Query đã có dispatcher sáu arm, worker, receipt và đối soát
+  report/trace/quality offline; còn thiếu evidence thực tế trên RC cuối.
+  CRAG isolation/zero-retry đã sửa offline nhưng measured evidence vẫn
+  inconclusive, cần window riêng. Math chỉ giữ quyền exact-commit `67265a0`;
+  Graph giữ `keep_off_technical_limit`; Community/Late Interaction vẫn OFF.
+- Thứ tự tiếp theo: chốt kiểm thử/review/dependency và source sạch; kiểm lại
+  historical formal/review/owner-decision bằng validator; tạo activation,
+  consolidated sequential draft và matrix binding mới. Chỉ sau authorization
+  đúng source/root/draft/cleanup scope mới fresh preflight/rollback/smoke và
+  pilot chính thức. Pilot đạt rồi mới review 20 capture cùng ca bắt buộc,
+  deletion receipt theo phê duyệt, final gate, interaction matrix và release.
+  Không mở thêm diagnostic chỉ để tìm điểm 100/100 hoặc nới timeout.
+
+## Checkpoint 2026-09-08 (lịch sử)
+
+- Worktree `query-post-pilot-prep-20260905` đã triển khai dispatcher sáu arm,
+  process worker, observation ledger, receipt/terminal persistence và đối soát
+  report/trace/quality binding Math+Query. Các mô tả “chưa có dispatcher/evidence”
+  trong checkpoint cũ không còn là trạng thái hiện hành.
+- P1/P3 đã sửa và reviewer xác nhận: baseline quality âm exit 2 được phân biệt
+  với execution failure; authority claims top-level/nested bị reject. Full unit
+  checkpoint ngày 08/09 đạt 3557 pass, 2 skip; coverage tổng năm module 82,74%,
+  không phải mỗi module đều đạt 80%. Đây vẫn là bằng chứng offline.
+- Đã commit local gói source offline tại `391e28bba0188a23dacca5a70b9d0ce069728c20`,
+  worktree chuẩn bị sạch; full unit cuối 3557 pass/2 skip, coverage tổng 82,74%.
+  Đã tạo activation/consolidated schedule draft và matrix source binding mới,
+  chưa finalize/register/start/dispatch. Validator chấp nhận historical owner
+  decision `fe4dc37` qua explicit evidence_source_commit; authorization cũ không
+  được reuse. Dependency 12 advisory/5 package vẫn assessed_open/security-green=false.
+  Receipt tại `.local/worktrees/query-post-pilot-prep-20260905/.local/offline-freeze-20260908/freeze-receipt.json`.
+  Trạng thái
+  freeze cuối và artifact cụ thể xem [Query readiness](../.local/worktrees/query-post-pilot-prep-20260905/docs/query-post-pilot-readiness-20260905.md).
+  Không kế thừa acceptance 39/39 sang source mới nếu validator không chấp nhận.
+- Pilot 05/09 đã consume ở 6/100, thiếu terminal receipts; không chạy tiếp hoặc
+  carry-forward. Capture incident cần disposition riêng, không dùng full-pilot
+  deletion success workflow. Fresh pilot chỉ chạy sau exact authorization,
+  preflight/rollback/smoke theo scope, đúng 100 card trong tối thiểu 24 giờ.
+- CRAG harness đã sửa offline nhưng evidence thực vẫn inconclusive và cần
+  window riêng. Math giữ quyền exact-commit đã duyệt; Graph giữ
+  keep_off_technical_limit; Community/Late Interaction vẫn OFF.
+
+## Checkpoint ngày 2026-09-05 và đối soát 07/09 (lịch sử)
+
+- Đối soát 2026-09-07: worktree chuẩn bị `query-post-pilot-prep-20260905` sạch tại local checkpoint `96c78e3bc9451f6c71559a34c52ede936b21e1b1`; full unit trên checkpoint này **3323 pass, 1 skip, 1 warning** (451.61 giây), JUnit local `C:/Users/bao.nguyen/AppData/Local/Temp/query-prep-96c78e3-unit.xml`. Draft matrix `.local/math-query-draft-96c78e3.json` trong worktree chuẩn bị đã validate, SHA-256 `1a1b0d44e94e4bc0cf792d35dcbe9b7e8c4081f3921345dc663ced26da0e8a57`; vẫn `execution_ready=false` và `dispatch_authorized=false`. Checkpoint chỉ lưu code/test/doc offline, không phải release freeze: review delta đang kiểm lại; matrix có prepare/validate/arm planning, chưa có dispatcher/evidence acceptance. Không có pilot/window mới, push/merge hoặc default activation từ checkpoint này. Các mốc “chưa commit” phía dưới là lịch sử trước checkpoint.
+
+- Snapshot read-only lúc `09:50:43+07:00`: Query pilot mới `query-pilot-launch-38620eb-20260905-01/run` trên exact commit `38620eb02806278fb689446c34f2d99e1f6e0746` đã gián đoạn ở `6/100`, không còn là campaign đang chạy. Có `6` WAL/card duy nhất và `6` encrypted review capture; card cuối hoàn tất `2026-09-05T02:24:42Z`. Supervisor PID `28512`, runtime wrapper PID `324`, server PID `23372` đều vắng mặt và port `8302` không listen. Worktree nguồn vẫn sạch. Đây là root ngày 05/09, không phải root ngày 29/08 đã dừng ở `17/100`.
+- `consumed.json` đã consume authorization; `runtime-state.json` còn `runtime_stopped=false` chỉ là snapshot cũ. Không có `terminal.json`, `result.json` hoặc `runtime-stop.json`, nên không được báo completed/clean shutdown. Giữ root như evidence incident không đủ điều kiện acceptance; không sửa marker, resume, retry, replacement, catch-up hoặc carry-forward sáu card.
+- Windows Application Hang `1002`, record `25773`, ghi Codex (`ChatGPT.exe`) bị treo và đóng lúc `09:25:20+07:00`, ngay sau card 6. Chuỗi thời gian phù hợp với external process termination; chưa chứng minh được process nào kết thúc Python hoặc cơ chế job-object/parent lifetime. Không có provider error/retry trong sáu WAL đã kiểm, nhưng điều này không chứng minh provider hiện tại khỏe.
+- Formal evidence `fe4dc37` và human review `tran.nghi` `39/39` vẫn là mốc lịch sử riêng. Sau đó đã có scoped controlled-demo Query-only decision/bundle và fresh authorization cho pilot source `38620eb`; câu “chưa có decision/pilot/activation” ở checkpoint 25/08 không còn mô tả trạng thái hiện hành. Quyền hẹp đó không phải default rollout và không được tái sử dụng để mở window mới.
+- Đã có encrypted review capture, review UI/validator và deletion workflow trong source `38620eb`; không xây lại. Post-pilot còn thiếu wiring CLI gate cho trace/deletion journal/source root và runner/evidence cho Math+Query interaction. Sáu capture incident không đủ contract review `100` WAL/`20` capture, không được tạo receipt thành công giả hoặc xóa theo luồng full-pilot.
+- CRAG vẫn `inconclusive` trên window V3 `27e4809` (3/9 case pair); Query shared-code improvements không thay CRAG evidence. Offline audit tìm thấy baseline environment chưa ép năm feature ngoài CRAG/Claim Repair OFF, và invocation chưa khóa provider retry `0` trước dispatch. Phải sửa/kiểm thử offline, freeze source rồi mới xét fresh owner-authorized window; không reuse Query smoke.
+- Công việc được phép làm hiện tại: incident reconciliation và chuẩn bị tài liệu/test offline trong worktree riêng từ `38620eb`. Không đổi runtime, WAL, Scheduled Task, `.env`, database, provider traffic, activation, push hoặc merge. Trước window mới cần giải quyết process-host lifetime và chứng minh supervisor tồn tại độc lập với phiên Codex bằng test dùng process giả, rồi xin authorization mới bind exact source/root/schedule; không tái chạy root đã consume.
+- Gói công việc: [incident reconciliation](../.local/worktrees/query-post-pilot-prep-20260905/docs/query-pilot-incident-20260905.md), [Query post-pilot readiness](../.local/worktrees/query-post-pilot-prep-20260905/docs/query-post-pilot-readiness-20260905.md), [CRAG offline readiness](../.local/worktrees/query-post-pilot-prep-20260905/docs/crag-offline-readiness-20260905.md). Đây là tài liệu local offline, không phải signed disposition hay release evidence.
+- Continuation offline 05/09: đã sửa ba đầu vào CLI gate Query, exact CRAG flags kể cả provider-map override, và dispatch zero retry + stop-on-provider-failure trong worktree chuẩn bị. RED/GREEN regressions pass; focused suite 144/144, hai module coverage 83%. Full unit suite 3236 pass/1 stale preparation-hash failure, tái hiện trên baseline sạch; không sửa hash lịch sử để che lỗi. Bản sửa chưa commit/freeze/activate. Launcher chưa được harden: cần owner duyệt host/proof riêng (đề xuất Scheduled Task chạy process giả trước), disposition sáu capture và matrix contract; không tự đăng ký task hay phát traffic.
+
+- Checkpoint bổ sung sau quyền triển khai offline: host Windows Job và wrapper Scheduled Task đã có trong worktree chuẩn bị; proof `-Register -Start` bằng packet tổng hợp + stub hữu hạn pass `1/1`, xác minh XML/CIM/action/cwd và cleanup đúng task. Đây không phải pilot hoặc proof provider/runtime thật. Full unit checkpoint trước review đạt `3278/3278`; review cuối yêu cầu khóa cleanup delegation vào host thay vì ambient environment và tách lifecycle tests. Đang đóng các finding, chưa freeze/commit hoặc mở window mới. Preparation binding lịch sử được đánh dấu stale, không sửa hash cũ; matrix Math/Query mới ở draft contract, runner/evidence còn thiếu. Dependency scanner có 12 advisory/5 package, chưa đổi môi trường dùng chung. Chi tiết hiện hành nằm ở mục 12 của gói Query readiness phía trên; không áp dụng các mốc “launcher chưa triển khai” hoặc “3236 pass/1 failure” như trạng thái mới nhất.
+
+## Checkpoint thực thi — 2026-08-10 (lịch sử; xem checkpoint hiện hành 2026-09-05)
 
 - Phase 0 và Phase 1 đã hoàn tất. Runtime pilot/control hiện bind exact commit `7b9d57562a669984b843d48d6d7ddf09048c472d`; pilot chỉ bật Grounded Math, control giữ `all_off`.
 - Grounded Math đã đạt ba current-commit formal pair, series guardrail `production_eligible=true`, formal review 16/16 và rollback/restore reconciliation trên detached checkout sạch.
@@ -30,7 +114,7 @@
 - Graph Retrieval current-commit cycle đã bắt đầu offline từ base `c123c39`. Fixture hiện có `17` case, trong đó đúng `10` relational case thuộc Technical/Production/Maintenance và bao phủ `HAS_VERSION`, `SUPERSEDES`, `CONTAINS_PART`, `USES_MATERIAL`, `APPLIES_TO`; manifest SHA-256 là `def156e8d30a9184fd7105ca5e799ddef311c98a5c88c7bc59001ad42ee8a136`. Claim oracle đã lên `deterministic-labeled-claims-v2`: mọi positive relational claim bắt buộc predicate + target trong cùng một mệnh đề khẳng định; polarity `không/chưa/chẳng/chả` chỉ chặn mệnh đề chứa relation đó, nên câu phủ định không pass giả và mệnh đề phụ phủ định relation khác không bị loại oan.
 - Current fixture preflight chỉ đọc đã pass `17/17`, `0` failure, `21` approved edge, structured coverage/provenance đều `1.0`, pending serving edge bằng `0`; fingerprint `71edefd6023e72fdaee5acceac6a18a5e9dbb8a30a1f3a10036da05f49e178cf`. Queue mới `.local/graph-cycle-c123c39/review-queue.jsonl` có SHA-256 `a5cf221e549a37821deba9ec891b49e4822340352a8525f8831397221f9bdc2f`; semantic projection khác queue 21-edge cũ, nên không carry-forward review labels. Cần review queue mới trước formal graph-only pair; Graph vẫn OFF và chưa có provider/formal run.
 - Checkpoint Graph `2026-08-10`: queue current-contract đã được review lại `21/21` edge bởi hai reviewer `bao.nguyen` và `tran.nghi`, precision `1.0`, SHA-256 `4a02676d496b216a7dfe94c588965aab00ab9ba991fc5d17e5cb9edc7c2a64b1`. Audit fail-closed đã sửa runner để baseline giữ `all_off`, candidate chỉ bật Graph trong `evaluation/all_external`; gate bắt buộc thêm non-relational no-decrease và cost `<=1.5`; preflight không còn chấp nhận Graph artifact chỉ `passed=true` khi chưa đủ production eligibility. Cycle đầu trên `262da71` đã pass nhưng bị vô hiệu hóa cho activation sau khi audit phát hiện bundle không thể biểu diễn đúng independent review và single-pair artifact có thể bị dùng thay series. Root fix TDD tại `4bc666c11b81e28cfcc83d81d7128522736accfe` buộc Graph controlled-demo decision dùng series được recompute từ ba pair hash-bound, bắt buộc đúng `multi_reviewer/independent`, từ chối exception `single_owner`, và vẫn giữ default rollout cần owner signature riêng.
-- Trên detached checkout sạch của `4bc666c`, preflight pass với fingerprint `71edefd6023e72fdaee5acceac6a18a5e9dbb8a30a1f3a10036da05f49e178cf`, rollback Graph-only pass `70/70` test và ba provider smoke dùng cho formal evidence đều pass `5/5`, `0` retry. Ba matched pair `formal-pair-01..03` đều pass; baseline/candidate cùng `10/17`, relation accuracy ổn định `0 → 9/17` (`+52.94` điểm phần trăm), wrong-answer `7 → 7`; latency ratio lần lượt `1.020415`, `0.539582`, `0.978831`; cost ratio `1.371443`, `1.335126`, `1.342708`; mọi RBAC/provenance/review/pending/budget check đều pass. Series guardrail SHA-256 `8701c693cff4994b676d4f7a6281a56692e4b75f80c36e2672e1e67eb393264d` pass `9/9` check, bind `multi_reviewer/independent` và recompute validator trả `true`. Đây mới là technical eligibility để owner xét mở pilot, chưa phải pilot/live authorization: chưa tạo accepted controlled-demo decision hoặc feature-on bundle, Graph vẫn OFF, chưa có LAN pilot 7 ngày/100 routed relational request, interaction matrix, technical acceptance và owner release decision.
+- Trên detached checkout sạch của `4bc666c`, preflight pass với fingerprint `71edefd6023e72fdaee5acceac6a18a5e9dbb8a30a1f3a10036da05f49e178cf`, rollback Graph-only pass `70/70` test và ba provider smoke dùng cho formal evidence đều pass `5/5`, `0` retry. Ba matched pair `formal-pair-01..03` đều pass; baseline/candidate cùng `10/17`, relation accuracy ổn định `0 → 9/17` (`+52.94` điểm phần trăm), wrong-answer `7 → 7`; latency ratio lần lượt `1.020415`, `0.539582`, `0.978831`; cost ratio `1.371443`, `1.335126`, `1.342708`; mọi RBAC/provenance/review/pending/budget check đều pass. Series guardrail SHA-256 `8701c693cff4994b676d4f7a6281a56692e4b75f80c36e2672e1e67eb393264d` pass `9/9` check, bind `multi_reviewer/independent` và recompute validator trả `true`. Đây mới là technical eligibility để owner xét mở pilot, chưa phải pilot/live authorization: chưa tạo accepted controlled-demo decision hoặc feature-on bundle, Graph vẫn OFF, chưa có LAN pilot routed relational request, interaction matrix, technical acceptance và owner release decision.
 - Theo authorization tạo target nhưng chưa bật feature, restore drill đã tạo SQL database `Mech_Chatbot_DB_RestoreTest_RAGPilot_20260810_4bc666c` và Qdrant collection `TaiLieuKyThuat_v2_RestoreTest_RAGPilot_20260810_4bc666c` với `231/231` point; verifier exact `4bc666c` pass trên restore evidence SHA-256 `1f69e8bcdd87147f9d526bd0b3cf0738ad16c9576d4d10e2396b6258d5d7af27`. Owner `bao.nguyen` đã chấp nhận exact snapshot fingerprint `b1a73fa7d90500e5c738154e30b64ade68a0b59e5de7066f0e7981e613209b11`; Graph controlled-demo decision SHA-256 `28d02f7f384d02027e048718f94b8b82fe4071fdd83e662b5d8a707f3b5f24e5`, decision ledger SHA-256 `9a0e6ee497636fe80045d265a2bb3cfb8b98572a6da2b43c9e99f6c45eea0f5c`, activation bundle SHA-256 `0fc9f91920da899f802c2a0777c10e34a764a1427011080d8f2de28d282b06bd`. Quyền này chỉ áp dụng cho Graph `controlled_demo`; default rollout vẫn OFF.
 - Graph control/candidate runtime đã từng start trên detached checkout sạch `4bc666c` tại `8103/8104`. Health có xác thực xác nhận control `all_off`, candidate chỉ bật `RAG_GRAPH_RETRIEVAL_ENABLED`, cùng exact SQL/Qdrant target, fingerprint, bundle và restore evidence SHA; runtime identity lần lượt `0a47442886d5d2dbba8b5ea5cd2c48dbd414a3518937acd130dea35c51ab9526` và `ff4596e224804fbae3bc17dc938b3069fda92a822339dcd56dbb57108973fefc`. Runtime receipt `.local/graph-cycle-4bc666c/graph-controlled-demo-runtime-receipt.json` SHA-256 `82e2a1967d1f12b65e0f283100305fb0d2b5e70a4d039af9324b6aec1a3dce18` pass toàn bộ check. Đây là historical receipt: cặp runtime đã được dừng fail-closed khi source bắt đầu thay đổi; không có request hoặc thời gian nào được carry-forward vào pilot mới.
 - Owner `bao.nguyen` đã chấp nhận phương án governance riêng cho Graph controlled-demo pilot theo `single_owner`: review phân tầng tối thiểu `20` case, mọi failure/refusal/access-denied bất thường/low-confidence case bắt buộc owner review; Codex chỉ chuẩn bị metadata và hỗ trợ kỹ thuật. Artifact vẫn phải bind lại đúng final RC trước pilot. Exception này không thay đổi formal Graph gate: formal review vẫn bắt buộc `multi_reviewer/independent`, tối thiểu hai reviewer; default rollout vẫn OFF.
@@ -58,13 +142,75 @@
 - Owner-decision packet `.local/advanced-rag-owner-decision-packet-20260810.json` ghi `approved_recommended_all_three`, Graph fingerprint acceptance và scoped controlled-demo enablement; packet bind Query formal-series-02 tombstone, Graph decision/ledger/bundle/runtime receipt và Math clean window. Snapshot Math mới nhất lúc `2026-08-11T07:09:22Z` vẫn runtime/app-health valid, `0/100`, collecting fail-closed; health SHA-256 `51728bed4f75523f3131a47531822949d328a38fbd1d3c5884f40ec37a995489`, gate SHA-256 `b9ccf3ddc75d97beca0e7fff11c29aad9ac1898e0b56ec1da1f496aaedfaf984`. Packet SHA-256 hiện tại `c347e38bf2d3dae6b941b1801c2c4fc50870ed3b163ad92dc8ed7d86582f880f`; mọi default rollout enablement và git push vẫn bị loại trừ.
 - Production preflight đã được harden fail-closed: chỉ `default_rollout` mới có `production_ready=true`; health-only chấp nhận đúng healthy `controlled_demo` nhưng trả `production_ready=false`; missing, `evaluation` hoặc scope lạ đều fail. Điều này không đổi Math controlled-demo authorization và không nới default rollout.
 - Các attempt/window cũ và provider outage cũ tiếp tục được giữ làm tombstone; không chuyển request hoặc thời gian vào window hiện tại.
-- `release_decisions.json` vẫn `incomplete`; chưa có Advanced RAG feature nào được phép bật trên default rollout.
+- Owner đã thay acceptance contract ngày `2026-08-12`: window-02 được dừng sạch ở `0/100`, trace rỗng SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` và tombstone với `carry_forward_requests=0`, `carry_forward_runtime_duration=false`. Window thay thế dùng traffic class `owner_authorized_operator_generated`, direct transport `internal_rag_sse`, đúng 100 card freeze trước request đầu và lịch cố định trải đủ 7 ngày. Traffic này được owner cho tính vào pilot volume nhưng tuyệt đối không được gọi là organic, quality evidence hoặc UI parity; default rollout vẫn không được authorize.
+- Hai operator attempt đầu đã được tombstone ở `0` eligible, không carry-forward: window-04 phát một prompt aggregate nhưng không vào calculation route; window-05 phát một fixture Markdown không có served identity trong collection. Current `.local/math-pilot-7b9d575-operator-window-06` chỉ dùng PDF current/published/approved/servable, fresh smoke `5/5` và `0` retry. Campaign `ffb3734a0aa28ef4d43194a1` freeze `100` card từ recapture `12` PDF/`130` BOM row/`56` part code/`19` description; production preflight chấp nhận `170/170` candidate trước selection. Mốc campaign là `2026-08-12T01:50:06.967225Z` đến tối thiểu `2026-08-19T01:50:06.967225Z`.
+- Frozen-manifest audit xác nhận đủ `100` unique card/prompt hash, public/private hash set khớp, private prompt hashes đều tái tính đúng, timeline tăng nghiêm ngặt đủ `168` giờ, rolling 24 giờ tối đa `15`, tối đa `9` card/document và `2` card/document-operation. Public manifest không chứa raw question, raw answer, quantity, formula, raw document hoặc credential.
+- Current campaign đạt `3/100` eligible, WAL `3` started/`3` completed/`0` ambiguous và trace-hash sidecar khớp unchanged base gate `3/3`; cả ba trace có đúng cardinality, `0` provider retry/failure. Scheduled Task poll `5` phút nhưng runner giữ cadence manifest, concurrency 1 và không catch-up; heartbeat monitor mỗi giờ. Task cho phép chạy tiếp trên pin, giữ WakeToRun/IgnoreNew/hidden và execution limit `4` phút; task không missed run. Recovery chỉ tự start exact RC khi cả ba process cũ đều chết và cả ba port trống; partial runtime/port conflict dừng fail-closed. Card thứ tư được freeze tại `2026-08-12T06:55:34.239952Z`; default rollout vẫn OFF.
+- File tracked `data/integrated_hardening_v1/release_decisions.json` vẫn là ledger lịch sử `incomplete`; default-rollout runtime hiện chỉ tin exact Math-only ledger local đã ký và bundle hash-bound của commit `67265a0`, không suy diễn quyền cho feature khác.
+
+## Checkpoint Grounded Math default rollout — 2026-08-18 (lịch sử, superseded bởi audit 2026-08-25)
+
+- Campaign `19aacefbe67b1aa3907a490c` theo contract `grounded-math-3d-100-v1` đã hoàn tất đúng `100/100` trên lịch tối thiểu `72` giờ, không carry-forward/retry/replacement/catch-up; owner review metadata-only đạt `20/20`, trong đó đủ `6` mandatory-risk case, và controlled-demo decision đã accepted.
+- Fresh interaction matrix bind exact commit `67265a0bd6135f9f205521e99bd51870a955b014`: baseline/candidate đều thành công `32/32`, tổng `64/64`; p95 ratio first-token/completion ở concurrency 1 là `0.725497/0.721649`, ở concurrency 5 là `1.021295/1.096099`, đều dưới ngưỡng khóa `1.5`. Current-commit rollback, listener PID/module identity, pacing receipt và formal cost/retry evidence đều được revalidate.
+- Owner `bao.nguyen` xác nhận `single_owner` thay reviewer cố định `tran.nghi` cho đúng Grounded Math default-rollout RC này, ký đủ ba role `rag`, `security_qa`, `operations` và accept technical review. Đây là owner review, không được gọi là independent review và không mở quyền cho feature khác.
+- Exact Math-only ledger SHA-256 `0e41b33f87b0f82be66453f105bd956380cfd67c89927aa9914539dfda971208` đã được Ed25519 release authority ký. Activation bundle SHA-256 `d2b146bb36ba66e3ec6319391fccf3228776f34287b18a0ff490befd588ba660` qua offline validator với `review_mode=single_owner`, accepted set chỉ có `RAG_GROUNDED_MATH_ENABLED`.
+- Tại thời điểm checkpoint `2026-08-18`, runtime pair `default_rollout` đã live trên clean worktree: control `8210` là `all_off`; candidate `8200` là `selective` Math-only, `status=ok`, `activation_valid=true`, `live_authorized=true`, đúng commit/snapshot/bundle. Live verification lịch sử nằm tại `.local/worktrees/advanced-rag-post-burst-disposition/.local/grounded-math-interaction-matrix-20260818-02/release-candidate/live-verification.json`.
+- Rollback live đã đạt trạng thái an toàn: cả hai PID thoát, hai port được giải phóng và cùng bundle restart thành công. Còn một operational warning fail-closed: stopper kiểm port quá sớm trên lần stop đầu, báo `Port 8210 is still listening after stop.` dù port được nhả ngay sau đó; state được bảo toàn rồi reconcile. Bước hardening kế tiếp là thêm bounded port-release wait trong một RC/commit mới, không sửa nóng bundle đang chạy.
+
+## Audit checkpoint Advanced RAG — 2026-08-25 (lịch sử; xem checkpoint hiện hành 2026-09-05)
+
+- Read-only runtime snapshot không thấy listener tại `8180/8200/8210`; Scheduled Task `ChatBotProject-GroundedMath-Operator-Window13` đang `Disabled`, last result `0`. Vì vậy Math vẫn là capability duy nhất có signed default-rollout authorization, nhưng plan không gọi nó là currently serving nếu chưa có fresh health/runtime verification.
+- Provider đã hồi phục trong phạm vi cửa sổ Query mới trên exact commit `78160aa99142a556a2e7e455a3f3fc6ac41aca97`: smoke `5/5`, `0` failure, `0` retry, một attempt/request, timeout `30` giây, model `gpt-5.6-terra`; provider-smoke SHA-256 `9f233c0ddb9dce1d01367e7ab7ac86ba05d73f47110f46dab519c605e8ddd6b2`. Kết quả này không được reuse làm CRAG health/formal authorization.
+- Window `query-formal-78160aa-20260825-01` hoàn tất `3/3` formal pair và cả ba gate đều pass. Formal path ghi `111/111` provider call success, `0` provider failure/retry, `0` disallowed fallback, không smoke rerun, không command continuation, không catch-up.
+- Strict deterministic local split là fallback được phép đúng contract trong cửa sổ này: mỗi pair có `10` candidate fallback event, tất cả nằm trong `allowed_strict_deterministic_local_split_count`; baseline fallback bằng `0`, disallowed fallback bằng `0`.
+- Offline preflight/rollback pass trên exact commit `78160aa`; Query flag vẫn OFF. Disposition SHA-256 `c0404ca8587dfe9968ac04300079fee3c5a0c134a9709ecd92906bdacc9c5e45` ghi `status=completed_technical_eligible_pending_human_review`, `technical_eligible=true`, `production_eligible=false`, `decision_status=pending_human_review`.
+- Authorization đã được consume cho đúng window này. Governance vẫn fail-closed: `pilot_authorized=false`, `feature_activation_authorized=false`, `default_rollout_authorized=false`, `push_authorized=false`, `merge_authorized=false`, `query_decomposition_remains_off=true`. Không được reuse/carry-forward/same-root, không chạy thêm formal pair và không mở pilot từ chính window này.
+- Graph giữ disposition `keep_off_technical_limit` theo artifact tracked `data/integrated_hardening_v1/evidence/graph-retrieval-32fc8d7-feasibility-disposition.json`, SHA-256 `a97726d931fa4ea06694a6e313e045c0ad0db2cd4f6bdeeee3c1b3fb49d8fcf2`; mọi authorization formal/pilot/default/feature-on trong disposition đều `false`. Không same-design rerun nếu chưa có owner-approved provider/data-plane/corpus/product-scope change.
+- CRAG + Claim Repair vẫn ở diagnostic `inconclusive`: window V3 gần nhất dừng sau `3/9` case pair vì một provider retry và không công bố full-series latency/cost. Query smoke/window không mở quyền cho CRAG; CRAG muốn chạy tiếp phải có recovery signal, exact draft/authorization, never-used root, fresh smoke/declaration/window riêng.
+- Tracked `data/integrated_hardening_v1/release_decisions.json` vẫn `status=incomplete`: Late Interaction `rejected`, các decision còn lại `null`. Math-only default rollout dựa trên exact signed local ledger/bundle, không phải ledger tracked này; Query formal disposition cũng chưa phải release decision.
+- Ngày 2026-08-25, owner rút prospective Query Decomposition pilot từ 7 ngày xuống 24 giờ. Contract `query-decomposition-24h-100-v1` yêu cầu đúng 100 eligible request, freeze toàn bộ lịch trước dispatch đầu tiên, tối thiểu 24 giờ từ eligible dispatch đầu tiên đến eligible completion thứ 100, concurrency `1`, zero retry/replacement/catch-up.
+- Cùng ngày, owner rút riêng prospective pilot Graph Retrieval, CRAG + Claim Repair và Community Summaries xuống 24 giờ/capability. Contract tương ứng là `graph-retrieval-24h-100-v1`, `crag-claim-repair-24h-100-v1` và `community-summaries-24h-100-v1`; mỗi contract giữ đúng 100 eligible request, freeze toàn bộ lịch trước dispatch đầu tiên, tối thiểu 24 giờ từ eligible dispatch đầu tiên đến eligible completion thứ 100, concurrency `1`, zero retry/replacement/catch-up. Các thay đổi duration không nới quality/security/latency/cost gate, không bỏ dependency giữa capability và không tự authorize pilot hay activation.
+- Pack `query-human-review-78160aa-20260825-02` và checkpoint `78160aa` nay chỉ còn là lịch sử: output/evidence đã thay đổi sau chuỗi root fix `b494f6a → 5e97b94 → d6cc6dd → ff1c404 → fe4dc37`, nên pack cũ không được review tiếp, reuse hoặc dùng để lập decision.
+- Current Query RC là exact clean commit `fe4dc37647b8078a2df4a73459c8ef65929b6de8`. Fresh window `query-human-review-fe4dc37-20260825-03` pass smoke `5/5`, zero retry; ba formal pair pass `3/3`, tổng `111/111` provider call thành công, `0` failure/retry/error và `0` disallowed fallback. Mỗi pair có đúng `10` strict deterministic local split event được contract cho phép; Query flag giữ OFF. Disposition SHA-256 `1eb46fa648b05ffcae72113eb87357a6b59b31b4ab204daa6c6d2ce43bdd809c` ghi `completed_technical_eligible_pending_human_review`, `technical_eligible=true`, `production_eligible=false`.
+- Human-review pack current-contract bind đúng commit/window/disposition trên, gồm `13` case/`39` output instance; canonical pack SHA-256 `9826641abe6d874512b9c06d97d176136ee60c09cd48539f7cacd2a5acd4ff62`, review-contract SHA-256 `137ac1792301ead3d397b00c9866061424202333fc673d6d134f2457acf2c0c9`. Reviewer độc lập `tran.nghi` accept `39/39`; validator trả `validation_passed=true`, `review_complete=true`, `quality_passed=true`, `0` rejected và `0` needs-discussion. Review-result SHA-256 `71eb6150714de274ff730a2078c9282784fc7f37c6820eaa590cc95caec39d07`.
+- Tại checkpoint 25/08, bước gated tiếp theo là controlled-demo decision riêng bind `fe4dc37`, disposition và review-result. Bước này và việc mở pilot đã diễn ra sau đó theo quyền riêng; xem checkpoint 05/09. Review acceptance tự nó vẫn không authorize pilot, feature activation hoặc default rollout.
 
 ## Tiến độ theo phase
 
+Checkpoint proof 05/09: owner đã cho phép task thử nghiệm riêng và synthetic
+lifecycle proof đã pass lúc `2026-09-05T04:02:07Z`: payload còn sống và hoàn tất
+sau launcher exit, task result 0; task tạm và hai process đã được cleanup.
+Chi tiết và hash trong incident packet. Đây chỉ là proof Interactive-user với
+payload sleep hữu hạn; chưa harden/deploy launcher thật, chưa kiểm crash,
+logout/reboot, orphan/port-release hoặc DPAPI. Pilot 6-card không được resume.
+
+Continuation offline 05/09: owner cho phép hoàn tất launcher/fault tests,
+reconciliation, review và freeze trong worktree chuẩn bị; không cần xin lại
+quyền cho các bước offline này. Preparation binding lịch sử đã được ghi rõ
+`historical_stale`, giữ hash lịch sử và runtime validator; suite preparation
+pass 36/36 (135.13 giây). Launcher Scheduled Task và Windows process-tree
+ownership đang triển khai, chưa freeze hoặc chứng minh production readiness.
+Contract nháp `math-query-isolation-v1-draft` và inventory hash-only sáu
+capture nằm trong hai packet readiness/incident; không sửa matrix toàn cục,
+không xóa capture, không phát traffic hoặc resume root cũ.
+
+Checkpoint triển khai launcher offline: host/job wrapper và CLI đã có trong
+worktree chuẩn bị; fixture clean temporary repo đi qua activation/pilot
+authorization validators thật và `run_packet` với CreateProcess giả. Host/job
+34/34 pass; coverage host 85%, job 92%, combined 87% sau đối chiếu bytes các
+source copy. Scheduled Task thử nghiệm trước đó chạy 32/32 test và cleanup
+task/PIDs, không phải task pilot. Full unit lượt đầu 3273/3273 pass; lượt cuối
+đang chạy. Chưa freeze/activate; independent review toàn launcher bị quota,
+pip-audit môi trường dùng chung báo 12 advisory/5 package. Không đổi môi trường
+chung để che cảnh báo, không coi synthetic evidence là fresh pilot authority.
+
+Kết quả full unit cuối: **3278/3278 pass trong 404.94 giây**, exit 0,
+một Starlette/httpx deprecation warning. Chi tiết JUnit và giới hạn verification
+ở mục 11 của Query readiness packet. Review/freeze vẫn chưa hoàn tất.
+
 - Phase 0 — hoàn tất governance/selective activation và baseline foundation.
 - Phase 1 — hoàn tất disposable target, restore reconciliation, Math-only pilot/control runtime và collector/gate metadata-only.
-- Phase 2 — đang ở bước LAN pilot Grounded Math:
+- Phase 2 — hoàn tất Grounded Math pilot, owner review, interaction matrix và Math-only default rollout:
   - [x] Ba current-commit formal pair và series guardrail.
   - [x] So sánh review contract, reuse đúng 10 candidate labels không đổi và accepted controlled-demo decision.
   - [x] Chuyển web/app sang Math-only RC, xác minh runtime/rollback binding và traffic thật chỉ đếm `grounded_math_generation`.
@@ -74,12 +220,13 @@
   - [x] Xác nhận provider hồi phục bằng một provider smoke riêng, không retry và không tính vào pilot.
   - [x] Proof 5/5 đã pass và owner declaration cho full campaign đã được ký.
   - [x] Tombstone window đã dừng ở `30/100`, khởi động lại exact RC/targets, recapture health/runtime identity và mở window thay thế sạch ở `0/100`; không carry-forward request hoặc downtime.
-  - [ ] Thu đủ tối thiểu 7 ngày và `100` eligible calculation request thật trên window thay thế; không tạo synthetic production traffic.
-  - [ ] Human review 20 case phân tầng theo signed `single_owner`: cả 20 primary labels bởi `bao.nguyen`; mọi failure/low-confidence case bắt buộc owner review. Codex chỉ hỗ trợ kỹ thuật, không phải independent human reviewer.
-  - [ ] Nếu pilot pass, chạy interaction matrix Math-only trên final RC ở concurrency 1 và 5, technical review bởi `tran.nghi`, rồi mới tạo default-rollout ledger/bundle để owner quyết định release Math.
-- Phase 3 — owner đã adjudicate current-contract drift. Query-only manifest mới giữ floor `10+3`, không phụ thuộc Math và khóa terminal no-render contract; ba nhãn BOM Math-coupled được tách nguyên vẹn sang interaction manifest. Generator/preflight/regression suite và served-evidence root fix đã GREEN. Fresh smoke pass `5/5`, `0` retry, nhưng formal-series-02 pair 01 vẫn tombstone RED vì baseline provider failure/retry; candidate decomposition/branch/citation/terminal contract đều đạt. Pair 02/03 không chạy; Query vẫn OFF và series tương lai cần declaration + smoke mới.
+  - [x] Thu đủ đúng `100` eligible calculation request owner-authorized operator-generated trên window thay thế, đủ contract thời gian, concurrency 1, không retry/replacement/catch-up và WAL/trace hash đối chiếu đúng; không dùng volume này để tuyên bố organic demand hoặc UI parity.
+  - [x] Human review đủ `20/20` case phân tầng theo signed `single_owner` bởi `bao.nguyen`, gồm đủ `6` mandatory-risk case; controlled-demo quality accepted.
+  - [x] Fresh Math-only interaction matrix concurrency 1/5 pass `64/64`; owner technical review accepted; exact completed Math-only ledger đã ký và matching selective bundle đang live-authorized trên default rollout.
+  - [x] Live rollback effect và same-bundle restart đã được chứng minh; giữ follow-up riêng cho bounded wait của stopper, không thay đổi release decision hiện tại.
+- Phase 3 — Query-only manifest giữ floor `10+3` và terminal no-render contract; ba case BOM Math-coupled nằm riêng trong interaction manifest. Formal source `fe4dc37` pass `3/3` pair, `111/111` provider call và review độc lập `tran.nghi` accept `39/39`. Scoped controlled-demo Query-only pilot source `38620eb` đã được mở nhưng hiện gián đoạn ở `6/100`, runtime không còn listen; không đủ pilot acceptance và Query chưa được authorize default rollout. Bước tiếp theo là incident disposition, các prerequisite offline và fresh authorization, không resume root cũ.
 - Phase 4 — hoàn tất ở disposition `keep_off_technical_limit`. V2 trên `fe57f7d` chạy đủ `17/17` nhưng latency p95 ratio `2.226645` RED. V3 warm-state trên `32fc8d7` đóng giả thuyết cold-start đơn lẻ nhưng hai window đều dừng fail-closed vì Qdrant retrieval `ResponseHandlingException`: window-01 ở warm-up pair 1, window-02 sau warm-up sạch tại measured case 2. Không có đủ measured evidence cho formal; current evidence chưa chỉ ra code-local fix an toàn nếu giữ nguyên timeout/retry/fallback/oracle. `bao.nguyen` đã hoàn tất technical-review substitution và owner acceptance; Graph/formal/pilot/default tiếp tục OFF, không same-design rerun. Chỉ một future scope change được owner duyệt mới được mở declaration mới; formal khi đó vẫn bắt buộc `multi_reviewer/independent`.
-- Phase 5 — case-paired diagnostic V3 đã được implement/review và root-fix trace path tại `27e4809`, nhưng clean window mới dừng sau `3/9` cặp vì một provider retry. Chưa có full-series latency/cost signal và chưa mở formal window; lượt kế tiếp chỉ được mở sau xác nhận provider hồi phục, với declaration/smoke/window mới và không carry-forward.
+- Phase 5 — case-paired diagnostic V3 và root-fix trace path tại `27e4809` đã có, nhưng window lịch sử dừng sau `3/9` cặp vì một provider retry. Chưa có full-series latency/cost signal hoặc formal window. Audit 05/09 còn phát hiện thiếu exact feature isolation và zero-retry dispatch trong harness `38620eb`; phải sửa/test offline và freeze RC trước khi xét fresh authorization/declaration/smoke/window, không carry-forward.
 - Phase 6 — Community Summaries tiếp tục OFF; Late Interaction tiếp tục `rejected/OFF`.
 
 ## Thay đổi activation contract
@@ -174,7 +321,7 @@ Trạng thái ban đầu: lợi ích đã rõ; chưa cần tối ưu thuật to�
    - Chỉ reuse nhãn khi immutable case và `review_contract_sha256` không đổi.
    - Case hoặc candidate output thay đổi phải review lại.
 3. Chạy LAN pilot math-only:
-   - Tối thiểu 7 ngày và 100 request có calculation route.
+   - Theo exact owner-approved contract `grounded-math-3d-100-v1`: đúng 100 request có calculation route và tối thiểu 72 giờ từ eligible dispatch đầu tiên đến eligible completion thứ 100.
    - Automated safety/citation/provenance check đủ 100.
    - Human review 20 case phân tầng và mọi failure.
 4. Nếu đạt, tạo release Math:
@@ -185,7 +332,7 @@ Chỉ sửa code nếu math-only recapture phát hiện lỗi deterministic ở 
 
 ### Phase 3 — Query Decomposition
 
-Trạng thái ban đầu: chất lượng tốt nhưng cost từng đạt `1.554088 > 1.5`.
+Trạng thái hiện tại (05/09): formal Query-only window `query-human-review-fe4dc37-20260825-03` đã hoàn tất technical gate và human review `39/39`; sau đó scoped controlled-demo decision/bundle và authorization riêng đã mở Query-only pilot trên source `38620eb`. Root `query-pilot-launch-38620eb-20260905-01/run` hiện gián đoạn ở `6/100`, không còn runtime và không có terminal receipt. Không coi sáu card là full-pilot evidence, không resume/catch-up/carry-forward. Chuẩn bị offline theo checkpoint hiện hành, sau đó mới xét fresh owner authorization; default rollout/push/merge vẫn không được authorize. Các mục 1–6 dưới đây lưu tiến trình kỹ thuật lịch sử, không phải lệnh chạy lại.
 
 1. Thêm telemetry metadata-only để chia token/cost thành:
    - planner;
@@ -198,10 +345,10 @@ Trạng thái ban đầu: chất lượng tốt nhưng cost từng đạt `1.554
    - Final generation là overhead trội: baseline gọi `9` lần với cost `0.0198925`, query-only gọi `13` lần với cost `0.0377925`; chênh lệch `0.0179`.
    - Root fix hiện tại chuyển high-risk partial coverage có nhánh `grounded_negative` thành `insufficient_evidence` trước final generation; partial do `insufficient_evidence` hoặc `access_denied` không-grounded vẫn được phép sinh câu trả lời.
    - Diagnostic `20260808-diagnostic-7b9d575-dirty-03` là tombstone inconclusive: baseline và candidate đều có `9` provider failure, cost ratio `null`. Provider smoke riêng sau đó fail `0/5` với `ExternalProcessingDenied`, nên không chạy thêm 13+13 case và không dùng `-03` để đánh giá cost/quality.
-- Evaluation runner hiện ép `EXTERNAL_PROCESSING_POLICY=all_external` cùng `RAG_EXECUTION_CONTEXT=evaluation` trong bản sao môi trường của subprocess; process cha, `.env`, runtime LAN và default rollout không đổi. Diagnostic `20260808-diagnostic-7b9d575-dirty-04` đã vượt local policy gate nhưng bị dừng sau 19 ProxyLLM error call, 13 retry event và 9 baseline trace; mọi provider call đều trả HTTP 503 `service_unavailable/no_capacity`, candidate chưa bắt đầu.
-- Diagnostic runner hiện kiểm tra lại source commit, manifest, tracked worktree, runner hash và fixture fingerprint giữa hai arm. Nếu baseline đã có provider failure, runner ghi tombstone `inconclusive` rồi dừng trước candidate; recovery chỉ được xác nhận bên ngoài diagnostic, không bắt buộc thêm smoke.
-- Root fix evaluator tại `a106bef` ưu tiên `debug.generation_metrics.decomposition_usage` current sau stream trước top-level snapshot cũ. Diagnostic sạch sau fix đạt cost ratio `1.319309`, final-generation call không tăng (`9 → 9`) và reconciliation pass ở cả hai arm.
-- Formal pair 01 dừng ở branch accuracy/citation; pair 02/03 không chạy. Ba BOM case đang ghép kỳ vọng Grounded Math vào Query-only, còn `decomp-sufficient-missing` đang ghép partial-answer expectation vào terminal grounded-negative safety contract. Owner phải adjudicate/relabel và freeze manifest mới trước formal series; không sửa runtime/evaluator để làm yếu refusal hoặc citation oracle.
+   - Evaluation runner hiện ép `EXTERNAL_PROCESSING_POLICY=all_external` cùng `RAG_EXECUTION_CONTEXT=evaluation` trong bản sao môi trường của subprocess; process cha, `.env`, runtime LAN và default rollout không đổi. Diagnostic `20260808-diagnostic-7b9d575-dirty-04` đã vượt local policy gate nhưng bị dừng sau 19 ProxyLLM error call, 13 retry event và 9 baseline trace; mọi provider call đều trả HTTP 503 `service_unavailable/no_capacity`, candidate chưa bắt đầu.
+   - Diagnostic runner hiện kiểm tra lại source commit, manifest, tracked worktree, runner hash và fixture fingerprint giữa hai arm. Nếu baseline đã có provider failure, runner ghi tombstone `inconclusive` rồi dừng trước candidate; recovery chỉ được xác nhận bên ngoài diagnostic, không bắt buộc thêm smoke.
+   - Root fix evaluator tại `a106bef` ưu tiên `debug.generation_metrics.decomposition_usage` current sau stream trước top-level snapshot cũ. Diagnostic sạch sau fix đạt cost ratio `1.319309`, final-generation call không tăng (`9 → 9`) và reconciliation pass ở cả hai arm.
+   - Các formal failure cũ vẫn là tombstone: branch accuracy/citation, manifest drift và provider failure/retry không được rerun để chọn số đẹp. Owner đã adjudicate/relabel current-contract drift; ba BOM case Math-coupled được tách sang interaction manifest, Query-only giữ floor `10+3` và terminal no-render contract.
 3. Áp dụng root fix theo thứ tự:
    - Nếu duplicate source/context chiếm phần lớn overhead: dedupe theo canonical source identity trước final context, nhưng giữ đủ citation cho từng branch.
    - Nếu shared instruction bị lặp: đưa phần chung ra khỏi từng branch.
@@ -209,20 +356,29 @@ Trạng thái ban đầu: chất lượng tốt nhưng cost từng đạt `1.554
    - Sau root fix, theo owner không chạy thêm provider smoke cho diagnostic không-formal; chỉ mở một diagnostic mới khi provider được xác nhận hồi phục ngoài attempt này. Nếu diagnostic hợp lệ vẫn vượt ngưỡng, đo lại final-generation calls và per-case context trước khi tối ưu context; không giảm gate hoặc bỏ refusal/post-check để lấy số đẹp.
    - Nếu ba nguyên nhân trên không giải thích overhead, mở design investigation cho split-generation/merge; không sửa ngưỡng.
 4. Diagnostic target là cost `<=1.35` để có margin; formal gate vẫn giữ `<=1.5`.
-5. Freeze commit và chạy ba formal pair query-only:
-   - Complex-answer gain `>=10%`.
-   - Simple planner call bằng 0.
-   - Branch và branch-citation accuracy 100%.
-   - Tối đa ba subquery, một correction và một final generation.
-   - Latency/cost `<=1.5`; không leakage, retry hoặc wrong-answer regression.
-6. Human review 10-case current-contract pack.
-7. LAN pilot query-only đủ 7 ngày/100 eligible requests.
-8. Nếu đạt:
-   - Chạy interaction matrix Math-only, Query-only và Math+Query.
-   - Release accepted stack `{Math, Query}`; nếu Math chưa đạt thì release `{Query}`.
+5. Formal Query-only current-contract đã hoàn tất trên `fe4dc37647b8078a2df4a73459c8ef65929b6de8`:
+   - Provider smoke `5/5`, `0` retry, một attempt/request, timeout `30s`.
+   - Ba formal pair đều pass gate và contract; tổng formal path `111/111` provider call thành công, `0` failure/retry/error.
+   - Complex/simple quality, branch/citation contract, latency/cost, leakage và wrong-answer regression đều pass theo gate hiện hành.
+   - Strict deterministic local split fallback được contract cho phép; candidate có `10` allowed event/pair và `0` disallowed fallback.
+6. Human review exact three-pair evidence bundle:
+   - Review đúng commit `fe4dc37647b8078a2df4a73459c8ef65929b6de8`, run-root `query-human-review-fe4dc37-20260825-03` và disposition SHA-256 `1eb46fa648b05ffcae72113eb87357a6b59b31b4ab204daa6c6d2ce43bdd809c`.
+   - Reviewer độc lập `tran.nghi` đã accept `39/39`; review-result SHA-256 `71eb6150714de274ff730a2078c9282784fc7f37c6820eaa590cc95caec39d07`, `validation_passed=true`, `review_complete=true`, `quality_passed=true`.
+   - Không reuse review pack cũ nếu output, trace, manifest hoặc evidence bundle hash khác.
+7. Human review đã accepted; controlled-demo decision/bundle và authorization cho pilot `38620eb` đã có. Với mọi window thay thế, phải revalidate exact evidence và có quyền riêng mới:
+   - Decision phải phân biệt `technical_eligible`, `pilot_authorized`, `feature_activation_authorized` và `default_rollout_authorized`.
+   - Không dùng consumed window authorization để mở provider retry, extra pair, pilot hoặc activation.
+8. Pilot ngày 05/09 chưa đạt acceptance vì gián đoạn ở `6/100`. Chỉ sau incident disposition, offline hardening và fresh authorization mới tạo/revalidate matching bundle, fresh activation preflight/rollback và LAN pilot Query-only theo `query-decomposition-24h-100-v1`:
+   - đúng `100` eligible request;
+   - tối thiểu `24` giờ từ eligible dispatch đầu tiên đến eligible completion thứ `100`;
+   - freeze toàn bộ lịch trước dispatch đầu tiên, concurrency `1`, zero retry/replacement/catch-up.
+9. Nếu một pilot hợp lệ đạt đủ 100/100 và review/deletion contract:
+   - Hoàn thiện và kiểm thử runner/contract offline trước; manifest ba case không tự chứng minh đã có executable Math+Query matrix.
+   - Chỉ chạy fresh interaction matrix Math-only, Query-only và Math+Query khi có authorization tương ứng.
+   - Trình technical review và owner-signed default-rollout decision cho stack `{Math, Query}` (hoặc `{Query}` nếu Math chưa đạt); pilot/interaction pass không tự authorize release.
    - Rollback Query về stack accepted trước đó.
 
-Mỗi formal failure được giữ làm tombstone. Vòng tiếp theo phải có design delta cụ thể, test RED và declaration mới.
+Mỗi formal failure vẫn được giữ làm tombstone. Nếu human review hoặc pilot fail, vòng tiếp theo phải có design delta cụ thể, test RED và declaration mới.
 
 ### Phase 4 — Graph Retrieval
 
@@ -246,7 +402,10 @@ Trạng thái ban đầu: edge/provenance tốt nhưng khả năng tạo câu tr
    - Tối đa hai hop và 50 edge.
    - Local/non-relational quality không giảm.
    - Latency và cost `<=1.5`.
-6. LAN pilot graph-only đủ 7 ngày/100 routed relational requests.
+6. LAN pilot Graph-only theo `graph-retrieval-24h-100-v1`:
+   - đúng `100` routed relational request đủ điều kiện;
+   - tối thiểu `24` giờ từ eligible dispatch đầu tiên đến eligible completion thứ `100`;
+   - freeze toàn bộ lịch trước dispatch đầu tiên, concurrency `1`, zero retry/replacement/catch-up.
 7. Nếu đạt:
    - Chạy single, pairwise và full-stack matrix với Math/Query đã accepted.
    - Thêm Graph vào accepted stack.
@@ -258,13 +417,18 @@ Tiếp tục vòng diagnose → TDD root fix → RC mới → formal window cho 
 
 CRAG không còn chặn Math, Query hoặc Graph.
 
+Prerequisite hiện hành (05/09): hoàn tất regression/fix cho exact feature
+isolation và zero retry trước dispatch được ghi trong CRAG readiness packet.
+Chỉ sau freeze/review RC và fresh owner authorization mới thực thi các bước
+live dưới đây; “provider hồi phục” không tự cho phép mở diagnostic.
+
 1. Chạy interleaved diagnostic tách riêng:
    - retrieval;
    - rerank;
    - correction;
    - generation;
    - claim repair.
-2. Không sửa code khi delta vẫn do provider variance.
+2. Không tối ưu performance khi delta vẫn do provider variance. Quy tắc này không trì hoãn việc sửa lỗi governance/harness đã tái hiện offline.
 3. Root-fix decision:
    - Rerank overhead: reuse kết quả không đổi và giảm candidate duplication, không giảm recall.
    - Generation/context overhead: dedupe corrected context, vẫn chỉ một final generation.
@@ -278,7 +442,10 @@ CRAG không còn chặn Math, Query hoặc Graph.
    - Wrong-refusal giảm; wrong-answer không tăng.
    - Leakage/provider error ngoài contract bằng 0.
    - Latency `<=1.25`, cost `<=1.5`.
-6. LAN pilot chỉ đếm request thực sự đi vào correction/repair route; đủ 7 ngày/100 eligible requests.
+6. LAN pilot theo `crag-claim-repair-24h-100-v1` chỉ đếm request thực sự đi vào correction/repair route:
+   - đúng `100` eligible request;
+   - tối thiểu `24` giờ từ eligible dispatch đầu tiên đến eligible completion thứ `100`;
+   - freeze toàn bộ lịch trước dispatch đầu tiên, concurrency `1`, zero retry/replacement/catch-up.
 7. Khi accepted, thêm cả hai flag vào accepted stack và chạy lại pairwise/full-stack matrix.
 
 CRAG được tiếp tục qua nhiều design iteration, nhưng mỗi iteration phải có nguyên nhân mới hoặc thay đổi kỹ thuật đo được.
@@ -290,7 +457,7 @@ Community Summaries:
 - Giữ OFF cho đến khi Graph accepted.
 - Sau đó khóa graph fingerprint, generate/review summary và chạy ít nhất 10 global cases.
 - Global gain `>=10%`; local/relational quality không giảm; citation/provenance đầy đủ; không stale/pending serving; latency/cost `<=1.5`.
-- Nếu technical gate đạt, chạy pilot 7 ngày/100 global requests rồi mới thêm vào stack.
+- Nếu technical gate đạt, chạy pilot theo `community-summaries-24h-100-v1`: đúng `100` global request đủ điều kiện trong tối thiểu `24` giờ từ eligible dispatch đầu tiên đến eligible completion thứ `100`, freeze toàn bộ lịch trước dispatch đầu tiên, concurrency `1`, zero retry/replacement/catch-up; chỉ sau đó mới thêm vào stack.
 - Nếu lần đánh giá chuẩn đầu tiên fail, giữ OFF và đưa lại owner ưu tiên; Community không nằm trong nhóm “theo đến cùng”.
 
 Late Interaction:
@@ -310,7 +477,7 @@ Mỗi feature đi qua cùng lifecycle:
 5. Ba formal pair và stop-on-first-failure.
 6. Human review pack.
 7. Controlled-demo bundle cho LAN pilot riêng.
-8. Pilot đủ 7 ngày và 100 eligible requests.
+8. Pilot đủ contract capability đã được owner duyệt và 100 eligible requests; mặc định 7 ngày. Các exception phải commit/scope-bound: Math `grounded-math-3d-100-v1`, Query `query-decomposition-24h-100-v1`, Graph `graph-retrieval-24h-100-v1`, CRAG + Claim Repair `crag-claim-repair-24h-100-v1`, Community `community-summaries-24h-100-v1`.
 9. Integrated interaction matrix.
 10. `tran.nghi` review kỹ thuật.
 11. `bao.nguyen` chấp nhận hoặc giữ OFF.
@@ -330,7 +497,7 @@ Bất kỳ lỗi security, cross-scope leakage, bundle/commit drift hoặc rollb
 
 Mỗi pilot:
 
-- Chạy đủ 7 ngày và 100 request đúng route, lấy điều kiện hoàn thành sau.
+- Chạy đủ contract capability đã được owner duyệt và 100 request đúng route; mặc định 7 ngày, mọi exception phải được bind đúng feature/scope/commit trước pilot. Query, Graph, CRAG + Claim Repair và Community dùng contract `24h-100-v1` riêng theo capability: đúng 100 eligible request trong tối thiểu 24 giờ, lịch freeze trước dispatch đầu tiên, concurrency `1`, zero retry/replacement/catch-up.
 - Automated checks đủ 100 request: runtime identity, security, citation structure, provenance, budgets, provider errors và leakage.
 - Quality gain vẫn lấy từ matched formal evaluation, không suy diễn từ organic traffic không có oracle.
 - Human review 20 case phân tầng theo governance được ký trước pilot:
@@ -392,9 +559,9 @@ Decision pack cuối phải phân biệt `implemented / measured / reviewed / pi
 - Mục tiêu là Windows/LAN nội bộ, không Docker và không public deploy.
 - Jina vẫn là reranker chính; Voyage fallback một lần rồi deterministic local fusion.
 - Cả ba nhóm BOM/math, multi-intent và relational query đều có nhu cầu thực tế.
-- `bao.nguyen` là release owner; `tran.nghi` vẫn là technical reviewer độc lập trước quyết định default rollout. Riêng Graph `keep_off_technical_limit`, `bao.nguyen` đã xác nhận là reviewer hợp lệ thay `tran.nghi`; substitution này không cấp quyền feature-on và không áp dụng cho feature/default-rollout khác. Math controlled-demo hiện tại dùng exception `single_owner` riêng, không thay thế gate default rollout.
+- `bao.nguyen` là release owner. Graph `keep_off_technical_limit` và Grounded Math default-rollout RC `67265a0` đều có explicit owner-authority disposition thay reviewer cố định `tran.nghi`; Grounded Math dùng `single_owner`, đủ ba role signoff và risk acceptance. Các substitution này chỉ áp dụng đúng feature/scope/commit đã bind, không tự cấp quyền cho Query, CRAG/Claim Repair, Graph feature-on, Community Summaries hoặc future RC.
 - Không có UI toggle cho người dùng hoặc admin.
-- Threshold hiện hành không được nới.
+- Threshold quality/security/latency/cost hiện hành không được nới. Riêng duration của prospective pilot Query Decomposition, Graph Retrieval, CRAG + Claim Repair và Community Summaries được owner đổi từ 7 ngày xuống tối thiểu 24 giờ theo contract riêng của từng capability; không contract nào tự cấp pilot hoặc activation authorization.
 - Không tạo/xóa account; reuse cohort nội bộ hiện có.
 - Không cleanup disposable targets tự động.
 - Không push hoặc publish tracker/PR nếu chưa có phê duyệt riêng.

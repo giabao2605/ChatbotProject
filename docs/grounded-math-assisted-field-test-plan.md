@@ -6,7 +6,33 @@ Có thể tổ chức một chiến dịch 100 câu hỏi Grounded Math qua đú
 
 100 request chỉ được tính vào ngưỡng pilot khi `bao.nguyen` ký declaration **trước khi chạy full campaign**, chấp nhận rõ nguồn assisted là một phần của pilot volume. Không được quyết định hồi tố dựa trên việc kết quả xanh hay đỏ.
 
-Kế hoạch này không thay đổi runtime, threshold, dependency, activation bundle hoặc code gate. Nó chỉ quy định cách chuẩn bị câu hỏi, chạy thử nhỏ, chạy chiến dịch và review fail-closed.
+Kế hoạch này không thay đổi runtime, threshold, dependency, activation bundle hoặc base code gate. Nó chỉ quy định cách chuẩn bị câu hỏi, chạy thử nhỏ, chạy chiến dịch và review fail-closed.
+
+## Owner-authorized operator-generated addendum 2026-08-12
+
+Owner đã chấp nhận một traffic class mới cho window thay thế: `owner_authorized_operator_generated`. Addendum này supersede riêng các điều trước đây bắt buộc nhập tay qua UI, cấm direct RAG/script và mặc định loại toàn bộ synthetic traffic. Các invariant về exact runtime, corpus permission, 7 ngày/100 request, không dùng quantity/answer/formula, automated checks, human review và default OFF vẫn giữ nguyên.
+
+- Window-02 đã dừng sạch ở `0/100`; trace SHA-256 là empty-file hash `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`. Tombstone ghi `carry_forward_requests=0` và `carry_forward_runtime_duration=false`; artifact cũ không bị ghi đè.
+- Mọi window operator phải chạy cùng exact serving RC `7b9d57562a669984b843d48d6d7ddf09048c472d`; operator tool được bind bằng hash riêng, không được mô tả như thay đổi serving commit.
+- Đúng 100 card được sinh trước request đầu từ read-only identity inventory của current/published/approved/servable `dbo.TaiLieu` và `dbo.BangKeVatTu`. Query generator không đọc `SoLuong`, `Unit`, raw row, đáp án hay công thức. Public manifest chỉ giữ ID/hash/operation/template/schedule; private prompt manifest chỉ ở `.local/`.
+- Transport được khai báo đúng là `internal_rag_sse`, actor cố định `admin_bao`/UserID `81`, token chỉ nạp từ process settings. Vì bypass app/UI, report bắt buộc đặt `organic_claim_allowed=false`, `quality_claim_allowed=false`, `ui_parity_claim_allowed=false`.
+- 100 timestamp cố định trải từ `t0` đến `t0 + 7 ngày`, concurrency 1, tối đa 15 dispatch trong mọi rolling 24 giờ. Runner gửi tối đa một due card mỗi lần, giữ khoảng cách campaign cadence, không burst để đuổi lịch.
+- WAL append+fsync `attempt_started` trước network dispatch. Card completed không bao giờ gửi lại; started không có terminal hoặc transport exception là ambiguous và dừng toàn campaign. Không retry, không replacement. Đây là at-most-once dispatch fail-closed, không phải server-side exactly-once completion.
+- Companion operator gate bắt buộc đối chiếu đủ đúng 100 unique completed card và 100 trace hash với unchanged base gate, không extra/ambiguous/retry/replacement, runtime Math-only `controlled_demo`, control `all_off`, và Grounded Math decision trong `release_decisions.json` vẫn null. Output xanh cao nhất chỉ là `pending_owner_review`; `default_rollout_authorized` luôn false.
+- Owner `bao.nguyen` tự review 20 case phân tầng cùng mọi failure/low-confidence. Codex chỉ hỗ trợ metadata/kỹ thuật, không phải independent human reviewer. Quality gain tiếp tục dựa trên formal matched-pair evidence hiện có, không suy ra từ operator traffic.
+
+Implementation contract nằm tại `scripts/ops/grounded_math_operator_campaign.py`, `scripts/ops/grounded_math_operator_traffic.py` và `scripts/ops/grounded_math_operator_gate.py`.
+
+### Checkpoint operator campaign 2026-08-12
+
+- Hai lượt vận hành trước current window đã dừng fail-closed và có tombstone riêng: operator-window-04 có một transport completed nhưng prompt aggregate không vào calculation route; operator-window-05 có một transport completed trên fixture Markdown không có identity phục vụ trong collection. Cả hai đều có `eligible_grounded_math_count=0`, `carry_forward_requests=0`, `carry_forward_runtime_duration=false`, không retry và không replacement.
+- Current window là `.local/math-pilot-7b9d575-operator-window-06`, bind exact RC `7b9d57562a669984b843d48d6d7ddf09048c472d`, Math-only `controlled_demo` ở `8200`, control `all_off` ở `8210`, app ở `8180`. Fresh provider smoke pass `5/5`, `0` retry, SHA-256 `c4b0a532dbf6fb124fd46eb3cbecb83082334350476dff811d67097c545d62a0`.
+- Inventory freeze hiện chỉ lấy current/published/approved/servable PDF và không đọc quantity/unit/raw/answer/formula. Read-only recapture có `12` document, `130` BOM row, `56` distinct part code và `19` distinct description. Phạm vi recapture này thay thế giới hạn lịch sử `7` PDF/`87` BOM row chỉ cho campaign hiện tại; các checkpoint cũ vẫn được giữ nguyên làm chứng cứ thời điểm. Production preflight sinh `170` candidate, chấp nhận `170`, rồi freeze đúng `100` card; rejection metadata bằng rỗng. Đây vẫn là repeated exposure trên corpus nhỏ, không phải 100 tình huống tài liệu độc lập.
+- Read-only audit trên frozen manifest xác nhận `100/100` card ID và prompt hash đều unique, public/private ID cùng prompt-hash set khớp hoàn toàn, private prompt hash mismatch bằng `0`, timestamp tăng nghiêm ngặt từ `t0` đến `t0 + 168` giờ và rolling 24 giờ tối đa `15`. Campaign phủ `12` document, tối đa `9` card/document và `2` card/document-operation; public JSON không có field question/answer/quantity/formula/raw-document/credential/service-token.
+- Campaign `ffb3734a0aa28ef4d43194a1` bắt đầu `2026-08-12T01:50:06.967225Z`, mốc tối thiểu `2026-08-19T01:50:06.967225Z`. Canonical manifest binding SHA-256 `1330ef85547507d6bb4759df33831041d585415971f2b6036773c59ba974695d`, inventory SHA-256 `889e3b7d7a4978c6bb3beed76d8e20288fb63e4f2457d0c2cefd5543c0bacf7d`, operator-tool SHA-256 `93bc6be4865df0299c780773bdcf7c23ddfcc40c9261c20fcdef19b6023def2b`.
+- Ba request đầu đã được unchanged base gate tính đúng: `3/100` eligible, WAL `3` started/`3` completed, `0` ambiguous/bad terminal, và tập trace hash sidecar khớp base gate `3/3`. Mỗi trace có đúng một `grounded_math_generation`, một `pilot_request_evidence`, một `rag_end`, `0` provider retry và `0` provider-failure event. Request thứ ba do Scheduled Task dispatch sau timestamp freeze `2026-08-12T05:13:45.149043Z`; request thứ tư được freeze tại `2026-08-12T06:55:34.239952Z`, không được gửi sớm hoặc catch-up.
+- Windows Scheduled Task `ChatBotProject-GroundedMath-Operator-Window06` poll mỗi `5` phút, `IgnoreNew`, hidden, WakeToRun và không chứa secret. Task được phép bắt đầu khi dùng pin và không bị dừng khi máy chuyển sang pin; execution limit giữ `4` phút, lớn hơn connect/read timeout tối đa của một dispatch. Runner vẫn gửi tối đa một due card theo cadence. Wrapper chỉ tự start lại exact runtime khi cả ba process cũ đều chết và cả ba port trống; partial runtime/port conflict dừng fail-closed. Lượt Task Scheduler `2026-08-12T09:08:08+07:00` sau power hardening exit `0`, ghi `already_healthy`/`not_due`, không thêm WAL và không missed run.
+- Codex heartbeat `theo-doi-grounded-math-7-ngay` kiểm tra mỗi giờ, gồm cả drift của trigger `5` phút/`9` ngày, `IgnoreNew`, hidden, WakeToRun, execution limit và hai cờ nguồn điện; automation vẫn dùng notification policy `failed_runs_only`. Cả traffic và monitoring đều giữ `organic_claim_allowed=false`, `quality_claim_allowed=false`, `ui_parity_claim_allowed=false`, `default_rollout_authorized=false`.
 
 ## Checkpoint thực thi 2026-08-05
 
@@ -37,12 +63,13 @@ Kế hoạch này không thay đổi runtime, threshold, dependency, activation 
 | Organic | Người dùng hỏi vì nhu cầu công việc đang phát sinh, không theo campaign card | Có | Có, nếu gate xác nhận eligible |
 | Assisted controlled field test | Người kiểm thử được giao document/operation/task intent, tự viết câu hỏi như một người dùng; không biết quantity hay expected answer | Không | Chỉ khi owner predeclare `count_toward_pilot=true` |
 | Synthetic/replay | Script/API loop, replay prompt, copy case eval, hoặc tạo câu hỏi từ quantity/answer/formula đã biết | Không | Không |
+| Owner-authorized operator-generated | Tool sinh prompt từ document/operand identity không có quantity/answer/formula, gửi qua internal RAG SSE theo manifest/WAL đã predeclare | Không | Có riêng cho addendum 2026-08-12; không tạo quality/UI/default claim |
 
 Việc một request đi qua production UI chưa tự động biến nó thành organic. Nguồn khởi tạo intent mới là điểm phân biệt.
 
 ## Các invariant bị khóa
 
-1. Chỉ dùng app `8180` và Math-only pilot runtime đang được bind trong `pilot-window.json`; không gọi thẳng RAG API và không chạy replay/script loop.[S6]
+1. Mặc định chỉ dùng app `8180`; riêng addendum 2026-08-12 cho phép tool đã hash gọi Math-only pilot `internal_rag_sse` trên loopback. Không dùng replay headers, không gọi control arm và không được claim UI parity.[S6]
 2. Giữ exact commit, deployment, bundle, restore receipt, snapshot, provider configuration, SQL database và Qdrant collection của window hiện tại.[S2][S6]
 3. Giữ nguyên minimum 7 ngày/100 eligible, một calculation, không provider retry, tối đa một final generation, latency multiplier `1.25`, cost multiplier `1.5`.[S2]
 4. Artifact campaign chỉ lưu ID/hash/count/boolean/reason code; không lưu raw question, raw answer, raw document, credential hoặc private response.[S2][S7]
@@ -89,7 +116,7 @@ language_style
 scheduled_batch
 ```
 
-Với non-aggregate operation, authorized operator phải lấy user-visible operand label/code từ đúng authorized UI/source inventory đã freeze; card artifact chỉ giữ `operand_identity_sha256` và `operand_count`, không giữ raw label. Không có operand identity thì card chỉ được dùng cho document aggregate. Prompt được người kiểm thử soạn tại thời điểm chạy và nhập trực tiếp vào UI. Không ghi operand label, prompt hoặc response vào campaign artifact.
+Với non-aggregate operation, authorized operator phải lấy user-visible operand label/code từ đúng authorized UI/source inventory đã freeze; card artifact chỉ giữ `operand_identity_sha256` và `operand_count`, không giữ raw label. Không có operand identity thì card chỉ được dùng cho document aggregate. Trong manual-assisted flow, prompt được người kiểm thử soạn tại thời điểm chạy và nhập trực tiếp vào UI. Riêng addendum 2026-08-12 dùng private prompt manifest local-only và `internal_rag_sse`, nên không được claim UI parity. Không ghi operand label, prompt hoặc response vào public campaign artifact.
 
 ### Phân tầng 100 request
 
@@ -98,8 +125,7 @@ Corpus snapshot phải được inventory lại read-only trước declaration. 
 - tổng cộng đúng 100 planned submissions;
 - không quá 15 request trên một document;
 - không quá 3 request cho cùng cặp `document + operation`;
-- tất cả 7 published production PDF document trong expanded inventory được phủ;
-- cả 7 published production PDF document đều phải được phủ;
+- tất cả published/current/approved/servable production PDF document trong frozen inventory được phủ;
 - bao phủ mọi operation khả thi trong `sum/add/subtract/ratio/percent/multiply/divide`; operation không khả thi do corpus phải được nêu trong declaration, không được thay lặng lẽ;
 - có cả document aggregate, part-code operand và description operand;
 - câu hỏi phải khác về nhu cầu diễn đạt, không chỉ thay một từ đồng nghĩa để né duplicate.
@@ -186,7 +212,7 @@ Khuyến nghị: chỉ chọn `true` khi proof xác nhận intent có thể đư
 ### Bước 3 — Full campaign 100
 
 1. Mỗi ngày kiểm tra health/runtime binding trước batch.
-2. Chạy đúng card được schedule, tuần tự qua UI.
+2. Chạy đúng card được schedule, tuần tự. Manual-assisted flow dùng UI; addendum 2026-08-12 dùng runner đã hash qua `internal_rag_sse`.
 3. Sau mỗi request chỉ ghi metadata: card ID, started/completed timestamp, HTTP/UI completion class, route eligible boolean, runtime identity hash, trace hash và automated check booleans.
 4. Không mở raw response để lấy operand/quantity cho card sau.
 5. Cuối ngày chạy gate hiện hành; không sửa threshold hoặc artifact lịch sử.

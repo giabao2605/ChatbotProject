@@ -13,6 +13,7 @@ from mech_chatbot.config.settings import ExternalAiSettings, LlmSettings
 from mech_chatbot.llm.external_ai import (
     DEFAULT_EXTERNAL_AI_SETTINGS,
     audited_external_call,
+    compatible_provider_name,
     text_byte_count,
     text_char_count,
 )
@@ -49,7 +50,11 @@ def _make_llm(settings: LlmSettings, max_tokens: int | None = None) -> ChatOpenA
         model=snapshot.model_name,
         api_key=snapshot.api_key,
         base_url=snapshot.base_url,
-        temperature=snapshot.temperature,
+        temperature=(
+            None if compatible_provider_name(snapshot.base_url) == "openrouter"
+            and snapshot.model_name == "openai/gpt-5.6-luna"
+            else snapshot.temperature
+        ),
         max_tokens=(
             snapshot.max_output_tokens if max_tokens is None else int(max_tokens)
         ),
@@ -207,7 +212,7 @@ def gpt_invoke(
     model = get_llm_model_name(adapter)
     endpoint = get_llm_endpoint(adapter)
     with audited_external_call(
-        provider="proxyllm",
+        provider=compatible_provider_name(endpoint),
         model=model,
         endpoint=endpoint,
         surface=surface,

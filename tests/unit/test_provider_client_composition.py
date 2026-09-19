@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -15,6 +16,70 @@ from mech_chatbot.llm import llm_client, vision_client
 
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    "endpoint, provider",
+    [
+        ("https://openrouter.ai/api/v1", "openrouter"),
+        ("https://openrouter.ai/api/v1/", "openrouter"),
+        ("http://openrouter.ai/api/v1", "proxyllm"),
+        ("https://openrouter.ai.evil.example/api/v1", "proxyllm"),
+        ("https://openrouter.ai@proxy.example/api/v1", "proxyllm"),
+        ("https://openrouter.ai/api/v1/proxy", "proxyllm"),
+        ("https://api.proxyllm.eu/v1", "proxyllm"),
+    ],
+)
+def test_llm_audit_identifies_only_openrouter_endpoint(monkeypatch, endpoint, provider):
+    audit = Mock(return_value=nullcontext())
+    monkeypatch.setattr(llm_client, "ChatOpenAI", Mock(return_value=Mock()))
+    monkeypatch.setattr(llm_client, "audited_external_call", audit)
+    adapter = llm_client.build_llm_adapter(replace(_llm_settings(), base_url=endpoint))
+
+    adapter.invoke(["prompt"])
+
+    assert audit.call_args.kwargs["provider"] == provider
+
+
+def test_openrouter_luna_text_omits_temperature(monkeypatch):
+    constructor = Mock(return_value=Mock())
+    monkeypatch.setattr(llm_client, "ChatOpenAI", constructor)
+    llm_client.build_llm_adapter(replace(
+        _llm_settings(), base_url="https://openrouter.ai/api/v1", model_name="openai/gpt-5.6-luna"
+    ))
+
+    assert constructor.call_args.kwargs["temperature"] is None
+    assert constructor.call_args.kwargs["max_tokens"] == 321
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "proxyllm"])
+def test_luna_vision_request_options_and_audit_follow_provider(monkeypatch, provider):
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="read"))])
+    create = Mock(return_value=response)
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setattr(vision_client, "OpenAI", Mock(return_value=client))
+    audit = Mock(return_value=nullcontext())
+    monkeypatch.setattr(vision_client, "audited_external_call", audit)
+    normalize = Mock(wraps=vision_client.normalize_text_result)
+    monkeypatch.setattr(vision_client, "normalize_text_result", normalize)
+    endpoint = "https://openrouter.ai/api/v1" if provider == "openrouter" else "https://api.proxyllm.eu/v1"
+    model = vision_client.build_vision_model(replace(
+        _vision_settings(), base_url=endpoint, model_name="openai/gpt-5.6-luna"
+    ))
+
+    assert model.generate_content("read").text == "read"
+
+    request = create.call_args.kwargs
+    assert audit.call_args.kwargs["provider"] == provider
+    assert normalize.call_args.kwargs["provider"] == provider
+    if provider == "openrouter":
+        assert request["max_tokens"] == 654
+        assert "temperature" not in request
+        assert "max_completion_tokens" not in request
+    else:
+        assert request["max_tokens"] == 654
+        assert request["temperature"] == 0.3
+        assert "max_completion_tokens" not in request
 
 
 def _llm_settings() -> LlmSettings:
@@ -201,3 +266,19 @@ def test_provider_builders_fail_with_sanitized_missing_key(builder, settings):
         builder(missing_key)
 
     assert ("snapshot-" + "key") not in str(error.value)
+
+
+@pytest.mark.parametrize("key", ["new-router-key", ""])
+def test_openrouter_selection_shares_key_without_legacy_fallback(key):
+    from mech_chatbot.config.settings import Settings
+    settings = Settings.from_env({
+        "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+        "OPENROUTER_API_KEY": key,
+        "PROXYLLM_API_KEY": "old-proxy-key",
+        "PROXYLLM_BASE_URL": "https://api.proxyllm.eu/v1",
+        "OPENAI_API_KEY": "old-openai-key",
+    })
+    text = LlmSettings.from_settings(settings)
+    vision = VisionSettings.from_settings(settings)
+    assert text.api_key == vision.api_key == (key or None)
+    assert text.base_url == vision.base_url == "https://openrouter.ai/api/v1"

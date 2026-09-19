@@ -284,8 +284,12 @@ class Settings(BaseModel):
             EMBEDDING_CHUNK_SIZE=_int("EMBEDDING_CHUNK_SIZE", 220),
             EMBEDDING_CHUNK_OVERLAP=_int("EMBEDDING_CHUNK_OVERLAP", 40),
             # LLM
-            LLM_API_KEY=_first("PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY"),
-            LLM_BASE_URL=_first("PROXYLLM_BASE_URL", "OPENAI_BASE_URL"),
+            # An explicit gateway selection must never reuse another provider's key.
+            LLM_API_KEY=(
+                _first("OPENROUTER_API_KEY") if _first("OPENROUTER_BASE_URL")
+                else _first("PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY")
+            ),
+            LLM_BASE_URL=_first("OPENROUTER_BASE_URL", "PROXYLLM_BASE_URL", "OPENAI_BASE_URL"),
             GPT_MODEL_NAME=_str("GPT_MODEL_NAME", "gpt-5.4"),
             GPT_TEMPERATURE=_float("GPT_TEMPERATURE", 0.0),
             GPT_MAX_OUTPUT_TOKENS=_int("GPT_MAX_OUTPUT_TOKENS", 4000),
