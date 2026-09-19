@@ -19,8 +19,8 @@ class ConfigError(RuntimeError):
 
 # --- Khai bao bien moi truong ----------------------------------------------
 REQUIRED_QDRANT = ["QDRANT_URL", "QDRANT_API_KEY"]
-LLM_KEY_ANY = ["PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY"]
-LLM_BASE_ANY = ["PROXYLLM_BASE_URL", "OPENAI_BASE_URL"]
+LLM_KEY_ANY = ["OPENROUTER_API_KEY", "PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY"]
+LLM_BASE_ANY = ["OPENROUTER_BASE_URL", "PROXYLLM_BASE_URL", "OPENAI_BASE_URL"]
 REQUIRED_EMBEDDING = ["EMBEDDING_MODEL", "EMBEDDING_DIM"]
 
 NUMERIC_INT = [
@@ -39,6 +39,7 @@ NUMERIC_FLOAT = [
 
 # Cac key la BI MAT -> KHONG BAO GIO log gia tri that
 SECRET_KEYS = {
+    "OPENROUTER_API_KEY",
     "QDRANT_API_KEY", "PROXYLLM_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY",
     "SQL_PASSWORD", "RAG_SERVICE_TOKEN", "VOYAGE_API_KEY", "JINA_API_KEY",
     "APP_SESSION_SECRET", "CHAT_BRIDGE_SECRET",
@@ -104,7 +105,9 @@ def validate_config(env=None, *, require_qdrant=True, require_llm=True,
                 errors.append(f"Thieu {k} (bat buoc de ket noi Qdrant vector store)")
 
     if require_llm:
-        if not any(_get(env, k) for k in LLM_KEY_ANY):
+        if _get(env, "OPENROUTER_BASE_URL") and not _get(env, "OPENROUTER_API_KEY"):
+            errors.append("Thieu OPENROUTER_API_KEY cho OpenRouter")
+        elif not any(_get(env, k) for k in LLM_KEY_ANY):
             errors.append("Thieu LLM API key: can mot trong " + "/".join(LLM_KEY_ANY))
         if not any(_get(env, k) for k in LLM_BASE_ANY):
             errors.append("Thieu LLM base URL: can mot trong " + "/".join(LLM_BASE_ANY))

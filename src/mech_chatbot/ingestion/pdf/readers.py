@@ -176,7 +176,7 @@ def _read_presentation_file(file_path):
 
 def _read_image_file(file_path, ten_file, vision_model):
     if not vision_model:
-        raise ValueError("File ảnh cần PROXYLLM_API_KEY hợp lệ để GPT-5.4 Vision đọc nội dung/OCR.")
+        raise ValueError("File ảnh cần API key hợp lệ cho provider Vision/OCR đã cấu hình.")
     image = Image.open(file_path)
     prompt = (
         f"Day la file anh '{ten_file}' duoc nap lam du lieu cho chatbot ky thuat. "
