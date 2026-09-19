@@ -1,0 +1,365 @@
+{
+  "schema": "rag-production-decision-pack-v1",
+  "as_of": "2026-07-31",
+  "scope": "governed_rag_feature_activation",
+  "deployment_path": "windows_lan_no_docker",
+  "source_head_commit": "835648360f5fa996fe5ae52acaa69bcff0521066e",
+  "integrated_verification_commit": "5f7b98b81565eb7c04db4f45be39e0f44ed85786",
+  "authoritative_for_live_activation": false,
+  "worktree_clean": false,
+  "evidence_worktree_clean": true,
+  "owner_signature": "pending",
+  "release_gate": {
+    "ready_for_live_matrix": false,
+    "release_decisions_complete": false,
+    "runtime_profile": "all_off",
+    "all_governed_flags_disabled": true,
+    "recommendation": "keep_all_governed_features_off"
+  },
+  "production_audit": {
+    "score": 49,
+    "band": "blocked",
+    "blockers": [
+      "release decision ledger is incomplete and owner signature is pending",
+      "integrated live matrix is blocked by incomplete prerequisites and release decisions",
+      "CRAG and Claim Repair failed the declared latency gate",
+      "Grounded Math passed three technical pairs but remains blocked by the CRAG dependency and 0 of 10 human reviews",
+      "Query Decomposition stopped after pair 02 exceeded the declared cost ratio limit",
+      "Graph Retrieval has 21 of 21 approved edges with complete current provenance but 0 of 21 independent reviews",
+      "Community Summaries remains blocked by Graph Retrieval and has no reviewed summaries",
+      "runtime provenance has not been recaptured after launcher and preflight hardening",
+      "backup and restore drill has not run on a disposable target"
+    ]
+  },
+  "runtime_evidence": {
+    "collection": "TaiLieuKyThuat_v2",
+    "execution_context": "production",
+    "activation_scope": "default_rollout",
+    "activation_profile": "all_off",
+    "activation_valid": true,
+    "all_off_runtime_health_authorized": true,
+    "feature_activation_authorized": false,
+    "provenance_enforcement_implemented": true,
+    "provenance_recaptured": false,
+    "observed_demo_runtime": {
+      "health_status": "ok",
+      "git_sha": "00906394bce762d0d3cfd7812ed944d53617cf16",
+      "deployment_id": "windows-lan-dirty-00906394bce7",
+      "activation_profile": "all_off",
+      "all_governed_flags_disabled": true,
+      "matches_source_head": false,
+      "release_evidence": false
+    },
+    "production_preflight": {
+      "evidence_state": "stale_after_provenance_hardening",
+      "pre_provenance_hardening": {
+        "passed": true,
+        "checks_passed": 5,
+        "checks_total": 5,
+        "migration_current": true,
+        "qdrant_ready": true,
+        "seeded_dev_account_count": 0,
+        "rag_health_ready": true
+      },
+      "current_hardened_preflight": {
+        "executed": false,
+        "passed": false
+      }
+    },
+    "hot_cache_load_smoke": {
+      "concurrency_1": {
+        "requests": 8,
+        "successful": 8,
+        "busy": 0,
+        "other_errors": 0,
+        "completion_p95_ms": 70
+      },
+      "concurrency_5": {
+        "requests": 8,
+        "successful": 8,
+        "busy": 0,
+        "other_errors": 0,
+        "completion_p95_ms": 100
+      },
+      "quality_scored": false,
+      "release_evidence": false
+    }
+  },
+  "verification": {
+    "backend_full_suite": "2467 passed, 1 skipped, 0 failed on 5f7b98b; live integration and eval excluded",
+    "backend_coverage": {
+      "line_percent": 92.286356,
+      "branch_percent": 84.991334,
+      "minimum_percent": 80,
+      "path": ".local/integrated-hardening/5f7b98b/coverage-backend.json",
+      "sha256": "fcdd9a828552a279debe0699cd404210b0f2f20cb25cdd0e881dbac668281f7e"
+    },
+    "frontend_unit": "32/32 passed on 5f7b98b",
+    "frontend_production_build": "passed on 5f7b98b",
+    "architecture": "18/18 passed on 5f7b98b",
+    "browser_e2e": "3/3 passed before provenance hardening; not current live evidence",
+    "security_targeted": "current integrated security matrix 15/15 passed with leakage 0",
+    "rollback_cache_stream_preflight": "63/63 passed on 5f7b98b",
+    "scoped_runtime_hardening_subagent_review": {
+      "remaining_high_or_medium_blockers": 0,
+      "focused_tests": "45 passed",
+      "provider_or_live_service_calls": false
+    },
+    "final_review": {
+      "standards_findings": 0,
+      "spec_findings": 0,
+      "blocking_security_findings": 0,
+      "provider_or_live_mutations": false
+    },
+    "integrated_offline": {
+      "source_commit": "5f7b98b81565eb7c04db4f45be39e0f44ed85786",
+      "passed": true,
+      "feature_flags_default_disabled": true,
+      "cache_isolation_passed": true,
+      "strict_stream_passed": true,
+      "rollback_passed": true,
+      "path": ".local/integrated-hardening/5f7b98b/offline.json",
+      "sha256": "c30da40c23d881dd39a9f131b6bfcfb2d9edc8fe06fbd4763cc9f0d0773c5b02"
+    },
+    "integrated_preflight": {
+      "source_commit": "5f7b98b81565eb7c04db4f45be39e0f44ed85786",
+      "capability_passed": true,
+      "ready_for_demo_matrix": true,
+      "ready_for_live_matrix": false,
+      "security_cases": 15,
+      "leakage_count": 0,
+      "blockers": [
+        "prerequisite_milestones_incomplete",
+        "release_decisions_incomplete"
+      ],
+      "path": ".local/integrated-hardening/5f7b98b/preflight.json",
+      "sha256": "8bb633c1bf8cdc34bce48b00c45948bd916e938a009e48cfaa154df639025908"
+    },
+    "restore_drill": {
+      "tooling_implemented": true,
+      "executed": false,
+      "deferred_while_corpus_is_demo_only": true,
+      "gate_satisfied": false,
+      "automatic_cleanup": false,
+      "sql_backup_set_identity_required": true,
+      "qdrant_snapshot_checksum_required": true,
+      "runtime_state_recaptured_after_migrations": false
+    },
+    "dependency_audit": {
+      "active_python_environment": "no known vulnerabilities",
+      "frontend_production_dependencies": "no known vulnerabilities",
+      "requirements_lock": "non-canonical local snapshot: stale if audited, but intentionally not used by documented install or CI paths",
+      "rollout_blocker": false
+    },
+    "docker_used": false
+  },
+  "features": [
+    {
+      "id": "crag_claim_repair",
+      "flags": [
+        "RAG_CRAG_ENABLED",
+        "RAG_CLAIM_REPAIR_ENABLED"
+      ],
+      "implemented": true,
+      "measured": true,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "keep_off",
+      "failed_checks": [
+        "latency_within_budget"
+      ],
+      "metrics": {
+        "baseline_passed_cases": 8,
+        "candidate_passed_cases": 9,
+        "baseline_p95_ms": 5863.22,
+        "candidate_p95_ms": 7921.84,
+        "p95_latency_ratio": 1.351107,
+        "max_latency_ratio": 1.25,
+        "leakage_count": 0
+      },
+      "evidence": {
+        "source_commit": "00906394bce762d0d3cfd7812ed944d53617cf16",
+        "collection": "MechChatbot_CRAG_Eval_v1",
+        "fixture_fingerprint": "9592deb0e747ac9a14d42bf3fe14471baa3b145ad752bdd53fdc491dde3dea7f",
+        "path": "reports/controlled-demo/20260730-crag-window-06-0090639/window-outcome.json",
+        "sha256": "f56bdad00aed16678cc568c23bd4800b92f86750878fc1bc0bcb61c6a63a3dbc"
+      },
+      "diagnostic": {
+        "path": "reports/controlled-demo/20260730-crag-window-06-0090639/latency-diagnostic.json",
+        "sha256": "59b04865fda432925f5f67b20397793a3146d17dfb4eca613a17914575f6e3eb",
+        "deterministic_code_defect_isolated": false,
+        "code_change_authorized": false,
+        "new_crag_window_authorized": false
+      },
+      "rc_diagnostic": {
+        "source_commit": "1add3d546faa743718bdb29455d0d3a8c2f00d2d",
+        "path": ".local/rag-rollout-rc-1add3d5/crag-diagnostic/candidate-latency-breakdown.json",
+        "sha256": "b6d106d2a9daf37f737144ff48990b40bf4b30d458bdc0d3503f5bde5a143683",
+        "candidate_passed_cases": 9,
+        "candidate_p95_ms": 9054.55,
+        "voyage_429_fallbacks": 5,
+        "clean_diagnostic": false,
+        "baseline_run": false
+      },
+      "excluded_evidence": {
+        "path": "reports/controlled-demo/20260730-crag-window-05-0090639/window-outcome.json",
+        "sha256": "cc293623dda95761765ab453dbed118c95c26f66ad85c568409e89fd315dd2fb",
+        "reason": "operator-aborted window retained as a tombstone; not counted in the series or rollout decision"
+      },
+      "next_gate": "run a clean interleaved stage-latency diagnostic; open a new formal window only when it predicts candidate P95 at or below baseline P95 times 1.25"
+    },
+    {
+      "id": "grounded_math",
+      "flags": [
+        "RAG_GROUNDED_MATH_ENABLED"
+      ],
+      "implemented": true,
+      "measured": true,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "re_evaluate",
+      "failed_checks": [
+        "crag_dependency_incomplete",
+        "human_review_incomplete"
+      ],
+      "metrics": {
+        "fixture_cases_passed": 16,
+        "fixture_cases_total": 16,
+        "technical_pairs_passed": 3,
+        "technical_pairs_total": 3,
+        "candidate_cases_passed_per_pair": 16,
+        "candidate_cases_total_per_pair": 16,
+        "provider_failures": 0,
+        "provider_retries": 0,
+        "reviewed_cases": 0,
+        "required_reviewed_cases": 10
+      },
+      "evidence": {
+        "source_commit": "fa8dc16c26eb13333d8ef978d75cba8d7101ebf0",
+        "collection": "MechChatbot_GroundedMath_Eval_v1",
+        "fixture_fingerprint": "79d3f99524512476a15cf306297ea4bcf9c035c3f85e97bab5462e275b7acec6",
+        "path": "reports/grounded-math/20260730-window-04-fa8dc16/window-outcome.json",
+        "sha256": "7cd852717a68e2a3455f8c018bf4d116bde3049a80bada46193fe34a2e9b5a6a"
+      },
+      "next_gate": "preserve this completed window; require accepted CRAG evidence and project-owner review of all 10 cases"
+    },
+    {
+      "id": "late_interaction",
+      "flags": [
+        "RAG_LATE_INTERACTION_ENABLED"
+      ],
+      "implemented": true,
+      "measured": true,
+      "reviewed": true,
+      "disposition": "rejected",
+      "recommendation": "keep_off",
+      "evidence": {
+        "source_commit": "757b9392275b22a826269959797c43d9d169bd8b",
+        "path": "data/integrated_hardening_v1/evidence/late-interaction-757b939-gate.json",
+        "sha256": "9a73154fa9b34b6e3f0232dbad785290052d76e67830ff6d0b8be26f76de235a"
+      },
+      "next_gate": "reopen only after a new measured retrieval design beats the rejected quality gate"
+    },
+    {
+      "id": "query_decomposition",
+      "flags": [
+        "RAG_QUERY_DECOMPOSITION_ENABLED"
+      ],
+      "implemented": true,
+      "measured": true,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "re_evaluate",
+      "failed_checks": [
+        "cost_within_budget",
+        "owner_review_incomplete"
+      ],
+      "metrics": {
+        "fixture_cases_passed": 13,
+        "fixture_cases_total": 13,
+        "pair_01_status": "passed",
+        "pair_01_cost_ratio": 1.47852,
+        "pair_02_status": "failed",
+        "pair_02_cost_ratio": 1.554088,
+        "cost_ratio_limit": 1.5,
+        "pair_03_status": "not_run",
+        "reviewed_cases": 0,
+        "required_reviewed_cases": 10
+      },
+      "evidence": {
+        "source_commit": "fa8dc16c26eb13333d8ef978d75cba8d7101ebf0",
+        "collection": "MechChatbot_CRAG_Eval_v1",
+        "fixture_fingerprint": "b4066ab6ce9005715192d312c4ffa10b73512a027c5cf88858dea6bf71d1f90e",
+        "path": "reports/decomposition/20260730-window-01-fa8dc16/window-outcome.json",
+        "sha256": "4efb93b6167448f78d8102f27d60636069983cf27b92f8617a933fc01adb5e22"
+      },
+      "excluded_evidence": {
+        "path": "reports/decomposition/20260730-window-01-5f7b98b/evidence-invalidation.json",
+        "sha256": "e5d4f75ba0eb33803cb22caa5047af952128691a7930fba690953e91e3c7f416",
+        "reason": "undeclared rerun after a failed window; invalid for rollout decisions"
+      },
+      "next_gate": "preserve the stopped window, diagnose candidate token and cost overhead, then predeclare a new window without relaxing the 1.5 limit"
+    },
+    {
+      "id": "graph_retrieval",
+      "flags": [
+        "RAG_GRAPH_RETRIEVAL_ENABLED"
+      ],
+      "implemented": true,
+      "measured": false,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "re_evaluate",
+      "failed_checks": [
+        "independent_edge_review_missing"
+      ],
+      "metrics": {
+        "preflight_checked_cases": 13,
+        "preflight_passed": true,
+        "approved_edges": 21,
+        "provenance_complete_edges": 21,
+        "reviewed_edges": 0,
+        "required_reviewed_edges": 21,
+        "provenance_completeness": 1.0
+      },
+      "evidence": {
+        "source_commit": "1add3d546faa743718bdb29455d0d3a8c2f00d2d",
+        "collection": "MechChatbot_Graph_Eval_v1",
+        "fixture_fingerprint": "c74edb5f90673800736bc68e43cad886c8295bbd3b40c1bad0e2c9e0e69abcd8",
+        "path": ".local/rag-rollout-rc-1add3d5/graph-preflight-final.json",
+        "sha256": "493dd3ce0d6474ba2fef1bf3d6efccacf4dcb1a8d5c04c5e6808be5e5d92fc31"
+      },
+      "next_gate": "obtain independent labels for all 21 valid edges and at least 95 percent precision"
+    },
+    {
+      "id": "community_summaries",
+      "flags": [
+        "RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"
+      ],
+      "implemented": true,
+      "measured": false,
+      "reviewed": false,
+      "disposition": "inconclusive",
+      "recommendation": "re_evaluate",
+      "failed_checks": [
+        "graph_retrieval_not_accepted",
+        "reviewed_summaries_missing",
+        "global_evaluation_not_run"
+      ],
+      "metrics": {
+        "detection_run": false,
+        "detected_communities": 0,
+        "source_edges": 21,
+        "summaries_generated": 0,
+        "persisted": false
+      },
+      "evidence": {
+        "source_commit": "fa8dc16c26eb13333d8ef978d75cba8d7101ebf0",
+        "path": "reports/graph/20260730-gate-fa8dc16/gate-disposition.json",
+        "sha256": "5b61eb4300efd4935d671d91758bca894de5057039259028664f37a326902951"
+      },
+      "next_gate": "finish Graph Retrieval first, then generate, review, and evaluate community summaries"
+    }
+  ],
+  "owner_action": "keep the current all_off profile; sign only after the missing gates are completed and the decision ledger is updated on a clean commit"
+}

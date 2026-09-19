@@ -1,5 +1,5 @@
 """P2.3 — Feedback/quality/regression service (L6). Pass-through toi db repositories."""
-from mech_chatbot.db.repository import (
+from mech_chatbot.db.repositories.feedback import (
     add_regression_question,
     cleanup_dangling_records,
     ensure_regression_question,

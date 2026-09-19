@@ -15,8 +15,10 @@ thanh out_of_scope.
 from __future__ import annotations
 
 import json
-import os
 import re
+
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.rag.execution import RequestBudgetExceeded
 
 # Phai khop ROUTE_* trong interaction_router.py.
 _VALID_ROUTES = (
@@ -48,24 +50,22 @@ _SYSTEM_PROMPT = (
 )
 
 
-def enabled():
-    raw = os.getenv("LLM_ROUTER_ENABLED")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+def enabled(value: bool = True):
+    return bool(value)
 
 
-def min_confidence():
-    try:
-        return float(os.getenv("LLM_ROUTER_MIN_CONFIDENCE", "0.5"))
-    except Exception:
-        return 0.5
+def min_confidence(value: float = 0.5):
+    return float(value)
 
 
-def _default_invoke(messages):
+def _default_invoke(messages, *, trace_id=None):
     # Lazy import de module THUAN khi test (khong keo theo langchain/llm_client).
     from mech_chatbot.llm.llm_client import gpt_invoke
-    return gpt_invoke(messages, surface="interaction_routing")
+    return gpt_invoke(
+        messages,
+        surface="interaction_routing",
+        trace_id=trace_id,
+    )
 
 
 def _build_messages(text, context=None):
@@ -115,21 +115,34 @@ def parse_response(text):
     return (route, conf)
 
 
-def classify_llm(text, context=None, invoke=None):
+def classify_llm(
+    text,
+    context=None,
+    invoke=None,
+    trace_id=None,
+    *,
+    enabled=True,
+    minimum_confidence=0.5,
+):
     """Tra (route, confidence) neu du tu tin, nguoc lai None (fail-safe)."""
-    if not enabled():
+    if not enabled:
         return None
     if not text or not str(text).strip():
         return None
-    inv = invoke or _default_invoke
     try:
-        resp = inv(_build_messages(text, context))
+        messages = _build_messages(text, context)
+        if invoke is None:
+            resp = _default_invoke(messages, trace_id=trace_id)
+        else:
+            resp = invoke(messages)
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception:
         return None
     parsed = parse_response(_extract_text(resp))
     if parsed is None:
         return None
     route, conf = parsed
-    if conf < min_confidence():
+    if conf < minimum_confidence:
         return None
     return (route, conf)

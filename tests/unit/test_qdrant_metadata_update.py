@@ -29,12 +29,13 @@ class _Client:
 
 def test_filter_based_nested_metadata_write(monkeypatch):
     client = _Client(count=4)
-    monkeypatch.setattr(qdrant, "_get_qdrant_client", lambda: client)
 
     ok = qdrant.update_qdrant_metadata(
         12,
         {"servable": True, "publication_state": "published"},
         require_points=True,
+        qdrant_client=client,
+        collection_name="test-knowledge",
     )
 
     assert ok is True
@@ -48,16 +49,20 @@ def test_filter_based_nested_metadata_write(monkeypatch):
 
 def test_missing_points_can_be_required(monkeypatch):
     client = _Client(count=0)
-    monkeypatch.setattr(qdrant, "_get_qdrant_client", lambda: client)
 
-    assert qdrant.update_qdrant_metadata(99, {}, require_points=True) is False
-    assert qdrant.update_qdrant_metadata(99, {}, require_points=False) is True
+    assert qdrant.update_qdrant_metadata(
+        99, {}, require_points=True,
+        qdrant_client=client, collection_name="test-knowledge",
+    ) is False
+    assert qdrant.update_qdrant_metadata(
+        99, {}, require_points=False,
+        qdrant_client=client, collection_name="test-knowledge",
+    ) is True
     assert client.set_calls == []
 
 
 def test_batch_metadata_write_uses_one_strongly_ordered_request(monkeypatch):
     client = _Client(count=2)
-    monkeypatch.setattr(qdrant, "_get_qdrant_client", lambda: client)
 
     ok = qdrant.batch_update_qdrant_metadata(
         {
@@ -65,6 +70,8 @@ def test_batch_metadata_write_uses_one_strongly_ordered_request(monkeypatch):
             11: {"servable": True, "is_current": True},
         },
         require_points=True,
+        qdrant_client=client,
+        collection_name="test-knowledge",
     )
 
     assert ok is True
@@ -74,3 +81,22 @@ def test_batch_metadata_write_uses_one_strongly_ordered_request(monkeypatch):
     assert call["wait"] is True
     assert call["ordering"] == models.WriteOrdering.STRONG
     assert len(call["update_operations"]) == 2
+
+
+def test_metadata_write_uses_request_bound_qdrant_runtime():
+    from mech_chatbot.config.repository_runtime import bind_repository_runtime
+
+    client = _Client(count=1)
+
+    with bind_repository_runtime(
+        qdrant_client=client,
+        qdrant_collection="test-knowledge",
+    ):
+        ok = qdrant.update_qdrant_metadata(
+            12,
+            {"servable": True},
+            require_points=True,
+        )
+
+    assert ok is True
+    assert len(client.set_calls) == 1

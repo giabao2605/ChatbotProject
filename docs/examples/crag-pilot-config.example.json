@@ -1,0 +1,45 @@
+{
+  "run_id": "crag-pilot-YYYYMMDD",
+  "experiment_id": "crag-pilot-v1",
+  "git_sha": "REPLACE_WITH_COMMIT",
+  "start_at": "2026-07-15T00:00:00Z",
+  "end_at": "2026-07-22T00:00:00Z",
+  "eligible_cohort": {
+    "department": "Technical",
+    "sha256": "REPLACE_WITH_PINNED_COHORT_SHA256"
+  },
+  "assignment_version": "hmac-sha256-v1",
+  "sampling_version": "sha256-25pct-v1",
+  "snapshot_fingerprint": "REPLACE_WITH_SNAPSHOT_FINGERPRINT",
+  "deployment_urls": {
+    "control": "http://127.0.0.1:8101",
+    "candidate": "http://127.0.0.1:8102"
+  },
+  "deployments": {
+    "control": {
+      "id": "crag-control-v1",
+      "flags": {
+        "RAG_CRAG_ENABLED": false,
+        "RAG_CLAIM_REPAIR_ENABLED": false
+      }
+    },
+    "candidate": {
+      "id": "crag-candidate-v1",
+      "flags": {
+        "RAG_CRAG_ENABLED": true,
+        "RAG_CLAIM_REPAIR_ENABLED": true
+      }
+    }
+  },
+  "owners": {
+    "rag": "REPLACE_WITH_RAG_OWNER",
+    "security_qa": "REPLACE_WITH_SECURITY_QA_OWNER",
+    "operations": "REPLACE_WITH_OPERATIONS_OWNER"
+  },
+  "reviewer_signoff": {
+    "rag": false,
+    "security_qa": false,
+    "operations": false
+  },
+  "voyage_policy": "immediate_local_fallback_no_retry"
+}

@@ -3,8 +3,12 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 from sqlalchemy import text
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
+
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
 
 __all__ = [
     'write_audit_log',
@@ -14,11 +18,11 @@ __all__ = [
 # PHAN QUAN LY VONG DOI & REVIEW (PHASE 3)
 # ==========================================
 
-def write_audit_log(username, action, entity_type=None, entity_id=None, details=None, user_id=None):
-    _ensure_engine()
+def write_audit_log(username, action, entity_type=None, entity_id=None, details=None, user_id=None, *, db_engine=None):
+    selected_engine = resolve_engine(db_engine)
     import json
     try:
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO AuditLog (UserID, Username, Action, EntityType, EntityID, Details)
                 VALUES (:uid, :username, :action, :etype, :eid, :details)

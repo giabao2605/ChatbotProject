@@ -95,6 +95,15 @@ class TestComposeReturnsTwoFilters:
         assert isinstance(strict, models.Filter)
         assert isinstance(broad, models.Filter)
 
+    def test_part_id_filter_matches_normalized_and_stored_case_variants(self):
+        mc = _make_must_conditions(None)
+        strict, broad = svc.compose_retrieval_filters(mc, new_part_ids=["abc-123"])
+
+        for flt in (strict, broad):
+            blob = _blob(flt)
+            assert "abc-123" in blob
+            assert "ABC-123" in blob
+
     def test_empty_part_ids_skips_strict_part_id(self):
         # P1: routing da tach khoi trich ma. Khi new_part_ids RONG (vd chitchat
         # da bi Interaction Router chan tu truoc), strict KHONG them dieu kien

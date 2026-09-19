@@ -29,7 +29,7 @@ jobs:
       - name: Clean install, test, and build frontend
         run: |
           npm ci
-          npm run test
+          npm run test:coverage
           npm run build
 
   unit:
@@ -43,13 +43,18 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install test deps
+      - name: Install runtime and test deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-test.txt
-          # qdrant-client chi can phan `models` (khong can server) de test RBAC.
-          # Cai rieng o day cho CI nhe, khong keo ca requirements.txt nang.
-          pip install "qdrant-client>=1.7"
+          python -m pip install -r requirements.txt -r requirements-test.txt
 
       - name: Run fast tests (unit + security)
-        run: pytest -m "not integration and not eval" -v
+        run: |
+          python -m pytest -m "not integration and not eval" -v \
+            --cov=mech_chatbot \
+            --cov-branch \
+            --cov-report=json:reports/refactor/phase-0/coverage-backend-ci.json
+          python scripts/quality/check_coverage.py \
+            reports/refactor/phase-0/coverage-backend-ci.json \
+            --min-line 80 \
+            --min-branch 80

@@ -1,5 +1,5 @@
 """P2.3 — Material service (L6). Pass-through toi db repositories."""
-from mech_chatbot.db.repository import (
+from mech_chatbot.db.repositories.material import (
     add_material_synonym,
     delete_material,
     delete_material_synonym,

@@ -1,0 +1,5 @@
+{"data":{"message":"Đang suy nghĩ"},"event":"thinking"}
+{"data":{"text":"Câu trả lời "},"event":"delta"}
+{"data":{"text":"[Nguồn: sample.pdf, Trang 3, Version 1, SourceID D42P3]"},"event":"delta"}
+{"data":{"doc_id":42,"file_name":"sample.pdf","has_vision":false,"original_url":"/api/files/documents/42/original","page_no":3,"page_url":null,"score":0.91,"source_id":"D42P3","version_no":1},"event":"citation"}
+{"data":{"chat_id":123,"citations":[{"doc_id":42,"file_name":"sample.pdf","has_vision":false,"original_url":"/api/files/documents/42/original","page_no":3,"page_url":null,"score":0.91,"source_id":"D42P3","version_no":1}],"conversation_context":{"topic":"sample"},"elapsed_ms":"<duration>","new_part_ids":["P123"],"ref_text":"\n\n---\n**Nguồn tham chiếu:**\n- **sample.pdf** (Trang 3)"},"event":"done"}

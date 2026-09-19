@@ -1,0 +1,5 @@
+{"case_id":"worked-consensus","reviewer_id":"reviewer-a","role":"reviewer","outcome_label":"full_answer","answer_correct":true,"citation_correct":true,"reason_code":"evidence_supported"}
+{"case_id":"worked-consensus","reviewer_id":"reviewer-b","role":"reviewer","outcome_label":"full_answer","answer_correct":true,"citation_correct":true,"reason_code":"evidence_supported"}
+{"case_id":"worked-disagreement","reviewer_id":"reviewer-a","role":"reviewer","outcome_label":"full_answer","answer_correct":true,"citation_correct":true,"reason_code":"evidence_supported"}
+{"case_id":"worked-disagreement","reviewer_id":"reviewer-b","role":"reviewer","outcome_label":"partial_answer","answer_correct":true,"citation_correct":false,"reason_code":"citation_version_mismatch"}
+{"case_id":"worked-disagreement","reviewer_id":"reviewer-c","role":"adjudicator","outcome_label":"partial_answer","answer_correct":true,"citation_correct":false,"reason_code":"citation_version_mismatch"}

@@ -57,14 +57,15 @@ def sc_get_candidates(scope_sig, ttl_hours, limit=300):
         with engine.connect() as conn:
             rows = conn.execute(text("""
                 SELECT TOP (:lim) CacheID, Embedding, Answer, RefText, RefImages, SourceDocIDs, EstCost,
-                                  CitationSnapshotJson, EvidenceSnapshotJson
+                                  CitationSnapshotJson, EvidenceSnapshotJson, QuestionText
                 FROM dbo.SemanticCache
                 WHERE ScopeSig = :sc AND CreatedAt >= DATEADD(hour, -:ttl, GETDATE())
                 ORDER BY CreatedAt DESC
             """), {"lim": int(limit), "sc": scope_sig, "ttl": int(ttl_hours)}).fetchall()
         return [{"cache_id": r[0], "embedding": r[1], "answer": r[2], "ref_text": r[3],
                  "ref_images": r[4], "source_doc_ids": r[5], "est_cost": r[6],
-                 "citation_snapshot": r[7], "evidence_snapshot": r[8]} for r in rows]
+                 "citation_snapshot": r[7], "evidence_snapshot": r[8],
+                 "question": r[9]} for r in rows]
     except Exception as e:
         logger.error(f"sc_get_candidates loi: {e}", exc_info=True)
         return []

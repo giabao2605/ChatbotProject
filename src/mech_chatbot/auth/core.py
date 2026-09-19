@@ -72,7 +72,7 @@ def _build_user_profile(conn, user):
     # Giu lai: sentinel CHUNG, phong khong co trong bang Departments (legacy), va phong active.
     if allowed_departments:
         try:
-            from mech_chatbot.db.repository import list_known_departments
+            from mech_chatbot.db.repositories.catalog import list_known_departments
             _active_codes = {d["code"] for d in list_known_departments(active_only=True)}
             _all_codes = {d["code"] for d in list_known_departments(active_only=False)}
             allowed_departments = [

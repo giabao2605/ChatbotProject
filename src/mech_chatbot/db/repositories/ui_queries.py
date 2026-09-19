@@ -7,11 +7,13 @@ Mọi việc render (st.*) và dịch (t()) ở lại UI; module này chỉ tr�
 
 KHÔNG import streamlit / ui ở tầng này.
 """
-import os
-
 from sqlalchemy import text
 
-from mech_chatbot.db.engine import engine
+from mech_chatbot.db.engine import engine, resolve_engine as _resolve_engine
+
+
+def resolve_engine(candidate=None):
+	return _resolve_engine(engine if candidate is None else candidate)
 
 
 def is_engine_ready():
@@ -99,7 +101,7 @@ def get_dashboard_stats():
 		}
 
 
-def get_role_dashboard(profile):
+def get_role_dashboard(profile, *, strict_site_filter=True):
 	"""Return dashboard groups that are safe for the server-loaded identity.
 
 	The function intentionally accepts the complete, trusted profile instead of
@@ -121,6 +123,7 @@ def get_role_dashboard(profile):
 			max_security_level=max_security_level,
 			allowed_sites=allowed_sites,
 			global_read_admin=global_read_admin,
+			strict_site_filter=strict_site_filter,
 		),
 	}
 	if not role_allows(roles, "reviewer") and not role_allows(roles, "platform_admin"):
@@ -173,7 +176,7 @@ def get_role_dashboard(profile):
 					access_filters.append("1 = 0")
 				else:
 					site_match = "d.Site IN (" + ", ".join(site_parts) + ")"
-					access_filters.append(site_match if _strict_site_filter_enabled() else f"({site_match} OR d.Site IS NULL OR LTRIM(RTRIM(d.Site)) = '')")
+					access_filters.append(site_match if strict_site_filter else f"({site_match} OR d.Site IS NULL OR LTRIM(RTRIM(d.Site)) = '')")
 			access_filter = " AND ".join(access_filters)
 			result["review"] = {
 				"pending": _scalar(conn, f"""
@@ -335,11 +338,6 @@ def delete_feedback(fid):
 # documents.py
 # ---------------------------------------------------------------------------
 
-def _strict_site_filter_enabled():
-	raw = os.getenv("RBAC_STRICT_SITE_FILTER", "true")
-	return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _allowed_security_levels(max_security_level):
 	levels = {"public": 0, "internal": 1, "confidential": 2}
 	max_order = levels.get(str(max_security_level or "public").strip().lower(), 0)
@@ -361,7 +359,7 @@ def _lifecycle_bucket_case(soon_days_param="soon_days"):
 
 
 def _document_access_filters(*, allowed_departments, max_security_level, allowed_sites,
-							 global_read_admin, params):
+							 global_read_admin, params, strict_site_filter=True):
 	filters = [
 		"d.LifecycleStatus = 'published'",
 		"d.ReviewStatus = 'approved'",
@@ -403,17 +401,19 @@ def _document_access_filters(*, allowed_departments, max_security_level, allowed
 				site_placeholders.append(f":{key}")
 				params[key] = site
 			site_match = "d.Site IN (" + ", ".join(site_placeholders) + ")"
-			filters.append(site_match if _strict_site_filter_enabled() else f"({site_match} OR d.Site IS NULL OR LTRIM(RTRIM(d.Site)) = '')")
+			filters.append(site_match if strict_site_filter else f"({site_match} OR d.Site IS NULL OR LTRIM(RTRIM(d.Site)) = '')")
 	return filters
 
 
 def list_documents(allowed_departments=None, max_security_level="public", allowed_sites=None,
                    dept=None, domain=None, sec=None, eff_mode=None, search_kw=None,
-                   global_read_admin=False, bucket=None, soon_days=30):
+                   global_read_admin=False, bucket=None, soon_days=30,
+                   strict_site_filter=True):
 	params = {}
 	filters = _document_access_filters(
 		allowed_departments=allowed_departments, max_security_level=max_security_level,
 		allowed_sites=allowed_sites, global_read_admin=global_read_admin, params=params,
+		strict_site_filter=strict_site_filter,
 	)
 
 	if dept:
@@ -457,11 +457,13 @@ def list_documents(allowed_departments=None, max_security_level="public", allowe
 
 
 def get_document_lifecycle_counts(allowed_departments=None, max_security_level="public", allowed_sites=None,
-								  global_read_admin=False, soon_days=30):
+								  global_read_admin=False, soon_days=30,
+								  strict_site_filter=True):
 	params = {"soon_days": max(0, min(int(soon_days), 365))}
 	filters = _document_access_filters(
 		allowed_departments=allowed_departments, max_security_level=max_security_level,
 		allowed_sites=allowed_sites, global_read_admin=global_read_admin, params=params,
+		strict_site_filter=strict_site_filter,
 	)
 	bucket_case = _lifecycle_bucket_case()
 	query = f"""
@@ -552,8 +554,8 @@ def list_pending_review_docs():
         """)).fetchall()
 
 
-def reject_ingestion_job(job_id, reason):
-	with engine.begin() as conn:
+def reject_ingestion_job(job_id, reason, *, db_engine=None):
+	with resolve_engine(db_engine).begin() as conn:
 		res = conn.execute(text("""
                     UPDATE IngestionJobs
                     SET Status = 'rejected', RejectReason = :reason, UpdatedAt = GETDATE()
@@ -570,8 +572,8 @@ def mark_job_pending_review(job_id):
 	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
-def mark_job_published(job_id):
-	with engine.begin() as conn:
+def mark_job_published(job_id, *, db_engine=None):
+	with resolve_engine(db_engine).begin() as conn:
 		res = conn.execute(text("""
             UPDATE IngestionJobs
             SET Status = 'published', UpdatedAt = GETDATE()
@@ -580,8 +582,8 @@ def mark_job_published(job_id):
 	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
-def delete_ingestion_job(job_id):
-	with engine.begin() as conn:
+def delete_ingestion_job(job_id, *, db_engine=None):
+	with resolve_engine(db_engine).begin() as conn:
 		res = conn.execute(text("DELETE FROM IngestionJobs WHERE JobID = :jid"), {"jid": job_id})
 	return (getattr(res, "rowcount", 0) or 0) > 0
 
@@ -600,8 +602,8 @@ def list_bulk_action_jobs():
         """)).fetchall()
 
 
-def mark_job_rejected(job_id):
-	with engine.begin() as conn:
+def mark_job_rejected(job_id, *, db_engine=None):
+	with resolve_engine(db_engine).begin() as conn:
 		res = conn.execute(text("""
                         UPDATE IngestionJobs SET Status = 'rejected', UpdatedAt = GETDATE()
                         WHERE JobID = :jid
@@ -610,15 +612,29 @@ def mark_job_rejected(job_id):
 
 
 def list_docs_for_bulk_meta(dept=None, domain=None):
-	q = "SELECT DocID, TenFile, ThuMuc, Domain FROM TaiLieu WHERE IsCurrent = 1 AND LifecycleStatus <> 'deleting'"
+	q = """
+		SELECT t.DocID, t.TenFile, t.ThuMuc, t.Domain
+		FROM TaiLieu t
+		WHERE t.LifecycleStatus <> 'deleting'
+		  AND (
+			t.IsCurrent = 1
+			OR EXISTS (
+				SELECT 1
+				FROM IngestionJobs j
+				WHERE j.TenFile = t.TenFile
+				  AND j.ThuMuc = t.ThuMuc
+				  AND j.Status = 'pending_review'
+			)
+		  )
+	"""
 	params = {}
 	if dept:
-		q += " AND ThuMuc = :dept"
+		q += " AND t.ThuMuc = :dept"
 		params["dept"] = dept
 	if domain:
-		q += " AND Domain = :domain"
+		q += " AND t.Domain = :domain"
 		params["domain"] = domain
-	q += " ORDER BY ThuMuc, TenFile"
+	q += " ORDER BY t.ThuMuc, t.TenFile"
 	with engine.connect() as conn:
 		return conn.execute(text(q), params).fetchall()
 

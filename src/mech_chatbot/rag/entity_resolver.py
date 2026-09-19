@@ -75,10 +75,13 @@ _DIM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Pattern ma ban ve / part (dong bo voi extract_mechanical_codes ben service.py)
 _CODE_PATTERNS = [
     re.compile(r"\b\d+\.\d+\.\d+\b", re.IGNORECASE),
-    re.compile(r"\b[A-Z]{2,}[A-Z0-9-]*\d+[A-Z0-9-]*\b", re.IGNORECASE),
+    re.compile(
+        r"(?<![A-Z0-9-])(?=[A-Z0-9-]*\d)[A-Z]{2,}[A-Z0-9-]*(?![A-Z0-9-])",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b[A-Z]{2,}(?:-[A-Z0-9]{2,})+-[A-Z]{1,2}\b", re.IGNORECASE),
     re.compile(r"\b\d{3}-\d{3}\b", re.IGNORECASE),
 ]
 
@@ -147,6 +150,12 @@ def has_explicit_code(question):
         if pat.search(str(question or "")):
             return True
     return False
+
+
+def extract_explicit_codes(question):
+    """Tra ve cac ma ban ve / part ro rang trong cau hoi."""
+    text = str(question or "")
+    return sorted({match.group(0) for pat in _CODE_PATTERNS for match in pat.finditer(text)})
 
 
 # ---------------------------------------------------------------------------

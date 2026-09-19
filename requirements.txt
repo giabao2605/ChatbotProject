@@ -15,6 +15,7 @@ sentence-transformers
 openai
 langchain-openai
 bcrypt
+cryptography
 fastapi
 uvicorn
 requests

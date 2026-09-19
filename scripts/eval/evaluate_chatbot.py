@@ -4,13 +4,13 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from mech_chatbot.rag.service import chat_with_rag
-
-def collect_stream(stream):
-    chunks = []
-    for c in stream:
-        chunks.append(str(c))
-    return "".join(chunks)
+from mech_chatbot.rag.execution import (
+    AccessScope,
+    DefaultRagExecutor,
+    RagInvocation,
+    RagRequest,
+    collect_rag_events,
+)
 
 def run_eval():
     eval_file = os.path.join("tests", "golden_questions.json")
@@ -28,17 +28,18 @@ def run_eval():
         question = case["question"]
         print(f"Testing: {question}")
         
-        result = chat_with_rag(
-            user_question=question,
-            chat_history=[],
-            current_part_ids=[],
-            user_department=None,
-            user_roles=["admin"],
-            allowed_departments=[]
+        result = collect_rag_events(
+            DefaultRagExecutor().run(
+                RagRequest(
+                    question=question,
+                    access=AccessScope(roles=frozenset({"admin"})),
+                ),
+                RagInvocation(trace_id="", mode="evaluation"),
+            )
         )
-        
-        answer = collect_stream(result[0])
-        ref_text = result[1] or ""
+
+        answer = result.answer
+        ref_text = result.ref_text
         
         ok = True
         reasons = []

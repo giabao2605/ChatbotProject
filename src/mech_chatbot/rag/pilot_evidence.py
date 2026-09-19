@@ -1,0 +1,361 @@
+"""Metadata-only validation for capability pilot trace evidence."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from mech_chatbot.governance.graph_pilot_review import APPROVED_GRAPH_REFUSALS
+from mech_chatbot.rag.evidence_gate import make_insufficient_evidence_message
+
+
+_SOURCE_ID_RE = re.compile(
+    r"(?:source[_ ]?id\s*[:#]?\s*|\[SRC:)(?P<source_id>D\d+P\d+)",
+    re.IGNORECASE,
+)
+_REFUSAL_TOKEN = "GRAPH_REFUSAL_REASON"
+_GRAPH_CONFIDENCE_THRESHOLD = 0.5
+
+
+def _refusal_pattern(language: str) -> re.Pattern[str]:
+    template = make_insufficient_evidence_message("", _REFUSAL_TOKEN, language)
+    escaped = re.escape(template).replace(
+        re.escape(_REFUSAL_TOKEN), r"[^()\r\n]{1,200}"
+    )
+    return re.compile(escaped)
+
+
+_REFUSAL_PATTERNS = tuple(_refusal_pattern(lang) for lang in ("vi", "en"))
+
+
+@dataclass(frozen=True, slots=True)
+class GraphPilotValidation:
+    graph_result_status: str
+    security_passed: bool
+    citation_structure_passed: bool
+    provenance_passed: bool
+    leakage_detected: bool
+    graph_evidence_count: int
+    rendered_citation_count: int
+    graph_citation_count: int
+    full_answer: bool
+    low_confidence: bool
+
+
+def _positive_int(value: object) -> int | None:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _nonnegative_float(value: object) -> float:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return normalized if normalized >= 0 else 0.0
+
+
+def _confidence(value: object) -> float | None:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if 0.0 <= normalized <= 1.0 else None
+
+
+def _source_id(item: Mapping[str, Any]) -> str | None:
+    doc_id = _positive_int(item.get("doc_id"))
+    page = _positive_int(
+        item.get("trang") or item.get("trang_so") or item.get("page_no")
+    )
+    if doc_id is None or page is None:
+        return None
+    expected = f"D{doc_id}P{page}"
+    declared = str(item.get("source_id") or expected).strip().upper()
+    return expected if declared == expected else None
+
+
+def _metadata_rows(value: object) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    return tuple(item for item in value if isinstance(item, Mapping))
+
+
+def _graph_provenance_complete(item: Mapping[str, Any]) -> bool:
+    return all(
+        (
+            _source_id(item) is not None,
+            _positive_int(item.get("version_no")) is not None,
+            bool(str(item.get("graph_edge_id") or "").strip()),
+            bool(str(item.get("graph_relation_type") or "").strip()),
+            bool(str(item.get("graph_source_key") or "").strip()),
+            bool(str(item.get("graph_target_key") or "").strip()),
+        )
+    )
+
+
+def _source_ids(
+    rows: tuple[Mapping[str, Any], ...],
+    *,
+    require_version: bool = False,
+) -> set[str]:
+    return {
+        source_id
+        for row in rows
+        if (source_id := _source_id(row)) is not None
+        and (
+            not require_version
+            or _positive_int(row.get("version_no")) is not None
+        )
+    }
+
+
+def _answer_contract(payload: Mapping[str, Any], answer: str):
+    rendered = {
+        match.group("source_id").upper()
+        for match in _SOURCE_ID_RE.finditer(str(answer or ""))
+    }
+    citations = _source_ids(
+        _metadata_rows(payload.get("citation_docs")), require_version=True
+    )
+    graph_rows = _metadata_rows(payload.get("graph_evidence"))
+    low_confidence = not graph_rows or any(
+        (score := _confidence(row.get("graph_confidence"))) is None
+        or score < _GRAPH_CONFIDENCE_THRESHOLD
+        for row in graph_rows
+    )
+    graph_citation_count = len(rendered & _source_ids(graph_rows))
+    full_answer = payload.get("answer_outcome") == "full_answer"
+    citation_passed = (
+        bool(rendered) and rendered <= citations if full_answer else not rendered
+    )
+    provenance_passed = all(
+        _graph_provenance_complete(row) for row in graph_rows
+    ) and (
+        bool(graph_rows) and graph_citation_count > 0 if full_answer else True
+    )
+    return (
+        full_answer,
+        citation_passed,
+        provenance_passed,
+        len(graph_rows),
+        len(rendered),
+        graph_citation_count,
+        low_confidence,
+    )
+
+
+def _request_safety(payload: Mapping[str, Any]) -> tuple[bool, bool]:
+    validation = payload.get("pilot_request_validation")
+    validation = validation if isinstance(validation, Mapping) else {}
+    return (
+        validation.get("access_scope_passed") is True,
+        validation.get("leakage_passed") is True,
+    )
+
+
+def graph_pilot_validation(
+    diagnostics: Mapping[str, Any] | None,
+    answer: str,
+) -> GraphPilotValidation:
+    """Validate a routed Graph answer without persisting private content."""
+    payload = diagnostics if isinstance(diagnostics, Mapping) else {}
+    (
+        full_answer,
+        citation_passed,
+        provenance_passed,
+        graph_evidence_count,
+        rendered_citation_count,
+        graph_citation_count,
+        low_confidence,
+    ) = _answer_contract(payload, answer)
+    security_passed, leakage_passed = _request_safety(payload)
+    passed = all(
+        (
+            security_passed,
+            citation_passed,
+            provenance_passed,
+            leakage_passed,
+        )
+    )
+    return GraphPilotValidation(
+        graph_result_status=(
+            "valid" if passed and full_answer else "invalid"
+        ),
+        security_passed=security_passed,
+        citation_structure_passed=citation_passed,
+        provenance_passed=provenance_passed,
+        leakage_detected=not leakage_passed,
+        graph_evidence_count=graph_evidence_count,
+        rendered_citation_count=rendered_citation_count,
+        graph_citation_count=graph_citation_count,
+        full_answer=full_answer,
+        low_confidence=low_confidence,
+    )
+
+
+def _approved_refusal_code(reason: object) -> str | None:
+    normalized = str(reason or "").strip()
+    return normalized if normalized in APPROVED_GRAPH_REFUSALS else None
+
+
+def _refusal_template_valid(answer: str, reason: str | None) -> bool:
+    return bool(
+        reason == "evidence_gate"
+        and any(pattern.fullmatch(str(answer or "")) for pattern in _REFUSAL_PATTERNS)
+    )
+
+
+def _deterministic_refusal(
+    payload: Mapping[str, Any],
+    validation: GraphPilotValidation,
+    budget: Any,
+    answer: str,
+    completion_outcome: str,
+    refusal_reason: str | None,
+) -> bool:
+    return all((
+        not validation.full_answer,
+        validation.security_passed,
+        validation.citation_structure_passed,
+        validation.provenance_passed,
+        not validation.leakage_detected,
+        payload.get("answer_outcome") == "insufficient_evidence",
+        payload.get("evidence_stage") == "terminal",
+        completion_outcome == "refused",
+        _approved_refusal_code(refusal_reason) is not None,
+        _refusal_template_valid(answer, refusal_reason),
+        budget.final_generations == 0,
+    ))
+
+
+def _budget_fields(payload: Mapping[str, Any], budget: Any, latency: int):
+    metrics = payload.get("generation_metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    return {
+        "final_latency_ms": max(0, int(latency)),
+        "request_deadline_ms": max(
+            0, int(budget.limits.deadline_seconds * 1000)
+        ),
+        "estimated_cost": _nonnegative_float(metrics.get("estimated_cost")),
+        "provider_retries": budget.provider_retries,
+        "final_generations": budget.final_generations,
+    }
+
+
+def graph_pilot_event_fields(
+    diagnostics: Mapping[str, Any] | None,
+    answer: str,
+    budget: Any,
+    *,
+    final_latency_ms: int,
+    completion_outcome: str,
+    refusal_reason: str | None,
+) -> dict[str, Any]:
+    """Return the complete metadata-only event payload for a routed Graph request."""
+    payload = diagnostics if isinstance(diagnostics, Mapping) else {}
+    validation = graph_pilot_validation(payload, answer)
+    safe_refusal = _deterministic_refusal(
+        payload, validation, budget, answer, completion_outcome, refusal_reason
+    )
+    graph_max_hops = _positive_int(payload.get("graph_max_hops")) or 0
+    within_budget = all((
+        0 < budget.graph_edges <= budget.limits.graph_edges,
+        0 < graph_max_hops <= 2,
+        budget.provider_retries == 0,
+        budget.final_generations <= budget.limits.final_generations,
+        not budget.deadline_exceeded,
+    ))
+    result_status = "safe_refusal" if safe_refusal else validation.graph_result_status
+    result_valid = result_status in {"valid", "safe_refusal"} and within_budget
+    emitted_status = result_status if result_valid else "invalid"
+    refusal_code = _approved_refusal_code(refusal_reason)
+    return {
+        "route": "graph_relational",
+        "graph_result_status": emitted_status,
+        "completion_outcome": completion_outcome,
+        "refusal_reason_code": refusal_code,
+        "refusal_template_passed": _refusal_template_valid(
+            answer, refusal_reason
+        ),
+        "low_confidence": validation.low_confidence,
+        "owner_review_required": (
+            emitted_status != "valid" or validation.low_confidence
+        ),
+        "security_passed": validation.security_passed,
+        "citation_structure_passed": validation.citation_structure_passed,
+        "provenance_passed": validation.provenance_passed,
+        "leakage_detected": validation.leakage_detected,
+        "graph_edges": budget.graph_edges,
+        "graph_max_hops": graph_max_hops,
+        "graph_evidence_count": validation.graph_evidence_count,
+        "rendered_citation_count": validation.rendered_citation_count,
+        "graph_citation_count": validation.graph_citation_count,
+        **_budget_fields(payload, budget, final_latency_ms),
+    }
+
+
+def calculation_pilot_event_fields(
+    diagnostics: Mapping[str, Any],
+    budget: Any,
+    *,
+    final_latency_ms: int,
+) -> dict[str, Any]:
+    metrics = diagnostics.get("generation_metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    validation = diagnostics.get("pilot_request_validation")
+    validation = validation if isinstance(validation, Mapping) else {}
+    return {
+        "route": "calculation",
+        "calculation_result_status": (
+            "valid" if metrics.get("calculation_result_status") == "valid"
+            else "invalid"
+        ),
+        "security_passed": validation.get("access_scope_passed") is True,
+        "citation_structure_passed": (
+            validation.get("citation_structure_passed") is True
+        ),
+        "provenance_passed": validation.get("provenance_passed") is True,
+        "leakage_detected": validation.get("leakage_passed") is not True,
+        "calculations": budget.calculations,
+        **_budget_fields(diagnostics, budget, final_latency_ms),
+    }
+
+
+def pilot_request_event_fields(
+    diagnostics: Mapping[str, Any],
+    answer: str,
+    budget: Any,
+    *,
+    final_latency_ms: int,
+    completion_outcome: str,
+    refusal_reason: str | None,
+) -> dict[str, Any] | None:
+    if budget.calculations > 0:
+        return calculation_pilot_event_fields(
+            diagnostics, budget, final_latency_ms=final_latency_ms
+        )
+    if diagnostics.get("graph_routed") is True:
+        return graph_pilot_event_fields(
+            diagnostics,
+            answer,
+            budget,
+            final_latency_ms=final_latency_ms,
+            completion_outcome=completion_outcome,
+            refusal_reason=refusal_reason,
+        )
+    return None
+
+
+__all__ = [
+    "GraphPilotValidation",
+    "calculation_pilot_event_fields",
+    "graph_pilot_event_fields",
+    "graph_pilot_validation",
+    "pilot_request_event_fields",
+]

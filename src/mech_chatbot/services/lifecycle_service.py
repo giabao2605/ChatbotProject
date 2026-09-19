@@ -1,5 +1,5 @@
 """P2.3 — Lifecycle service (L6). Pass-through toi db repositories."""
-from mech_chatbot.db.repository import (
+from mech_chatbot.db.repositories.lifecycle import (
     get_lifecycle_overview,
     mark_document_reviewed,
     refresh_expired_status,

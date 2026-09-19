@@ -4,6 +4,7 @@
 import re
 import json
 from mech_chatbot.config.logging import logger
+from mech_chatbot.domain.part_ids import canonical_part_id_updates
 from mech_chatbot.llm.vision_client import describe_vision_error, is_retryable_error
 
 # cross-module (owned) imports
@@ -11,10 +12,13 @@ from mech_chatbot.ingestion.pdf.config import LLM_METADATA_MODE
 from mech_chatbot.ingestion.pdf.vision import call_vision_model
 
 
-def _metadata_needs_llm(result):
-    if LLM_METADATA_MODE in {"off", "false", "0", "none"}:
+def _metadata_needs_llm(result, metadata_mode=None):
+    mode = str(
+        LLM_METADATA_MODE if metadata_mode is None else metadata_mode
+    ).strip().lower()
+    if mode in {"off", "false", "0", "none"}:
         return False
-    if LLM_METADATA_MODE == "always":
+    if mode == "always":
         return True
     
     if not result.get("ma_doi_tuong"):
@@ -28,7 +32,15 @@ def _metadata_needs_llm(result):
     return any(str(result.get(field) or "").strip() in {"", "Khong ro"} for field in critical_fields)
 
 
-def extract_metadata_smart(text, ten_file, thu_muc, vision_model=None, quality_warnings=None):
+def extract_metadata_smart(
+    text,
+    ten_file,
+    thu_muc,
+    vision_model=None,
+    quality_warnings=None,
+    *,
+    metadata_mode=None,
+):
     """
     Chien luoc: Regex-first -> LLM-fallback.
     Luu y: LLM chi duoc goi khi Regex tra ve "Khong ro".
@@ -178,7 +190,7 @@ def extract_metadata_smart(text, ten_file, thu_muc, vision_model=None, quality_w
  
     # HYBRID APPROACH: LLM Extraction de doc moi ma (V2).
     # Mac dinh chi goi LLM khi metadata quan trong con thieu de giam rate limit.
-    if vision_model and _metadata_needs_llm(result):
+    if vision_model and _metadata_needs_llm(result, metadata_mode):
         prompt = f"""
         Ban la chuyen gia doc tai lieu co khi. Hay trich xuat cac thong tin sau tu doan text, tra ve dung dinh dang JSON:
             "ma_chinh": ["ma 1"],
@@ -230,7 +242,7 @@ def extract_metadata_smart(text, ten_file, thu_muc, vision_model=None, quality_w
             if quality_warnings is not None:
                 quality_warnings.append(msg)
  
-    return result
+    return {**result, **canonical_part_id_updates(result)}
 
 __all__ = [
     'extract_metadata_smart',

@@ -4,7 +4,8 @@ import json
 import os
 from mech_chatbot.llm.llm_client import cohere_invoke
 from langchain_core.messages import HumanMessage
-from mech_chatbot.db.repository import engine
+from mech_chatbot.db.engine import engine
+from mech_chatbot.db.repositories._shared import normalize_base_code
 from sqlalchemy import text
 from mech_chatbot.config.logging import logger
 
@@ -58,9 +59,10 @@ def extract_pages_for_classification(file_path, max_pages=6, char_budget=6000):
     return text_content[:char_budget]
 
 
-def check_existing_family(base_code):
+def check_existing_family(base_code, *, db_engine=None):
     try:
-        with engine.connect() as conn:
+        selected_engine = db_engine if db_engine is not None else engine
+        with selected_engine.connect() as conn:
             row = conn.execute(text("SELECT FamilyID, FamilyName FROM DocumentFamily WHERE BaseCode = :b"), {"b": base_code}).fetchone()
             if row:
                 return row[0]
@@ -70,8 +72,10 @@ def check_existing_family(base_code):
         return None
 
 def normalize_filename_to_classification(filename):
-    # Xoa extension khong phan biet hoa thuong
-    name_without_ext = re.sub(r'\.pdf$', '', filename, flags=re.IGNORECASE)
+    # Remove only a supported file suffix so dotted engineering/part codes remain intact.
+    from mech_chatbot.db.repositories._shared import strip_document_suffix
+
+    name_without_ext = strip_document_suffix(filename)
     
     # Tim version: _v2, -rev3, _version4
     match = re.search(r'([_-](v|rev|version)(\d+))$', name_without_ext, flags=re.IGNORECASE)
@@ -91,14 +95,17 @@ def normalize_filename_to_classification(filename):
     res["base_code"] = res["base_code"].strip()
     return res
 
-def _load_active_document_types(department_code):
+def _load_active_document_types(department_code, *, db_engine=None):
     """Read the serving profile without making classification depend on SQL availability."""
     if not department_code:
         return []
     try:
         from mech_chatbot.db.repositories.knowledge_governance import get_department_domain_profile
 
-        profile = get_department_domain_profile(department_code)
+        profile = get_department_domain_profile(
+            department_code,
+            **({"db_engine": db_engine} if db_engine is not None else {}),
+        )
         if not profile or not profile.get("is_active"):
             return []
         return [
@@ -173,7 +180,15 @@ def _validate_document_type(parsed, allowed_types, fallback_doc_type):
     return parsed
 
 
-def classify_document(file_path, original_filename=None, thu_muc=None, document_types=None):
+def classify_document(
+    file_path,
+    original_filename=None,
+    thu_muc=None,
+    document_types=None,
+    allow_external=False,
+    *,
+    db_engine=None,
+):
     """Phan loai tai lieu 2 tang:
       Tang 1: xac dinh domain tu thu_muc (mechanical / tabular / generic, tra cuu Departments)
       Tang 2: phan loai chi tiet bang LLM theo domain
@@ -200,7 +215,10 @@ def classify_document(file_path, original_filename=None, thu_muc=None, document_
     active_document_types = (
         [str(item).strip().lower() for item in document_types if str(item).strip()]
         if document_types is not None
-        else _load_active_document_types(thu_muc)
+        else _load_active_document_types(
+            thu_muc,
+            **({"db_engine": db_engine} if db_engine is not None else {}),
+        )
     )
     prompt, fallback_doc_type = handler.build_classify_prompt(
         original_filename=original_filename,
@@ -225,6 +243,14 @@ def classify_document(file_path, original_filename=None, thu_muc=None, document_
         "domain": domain,
         "security_level": resolve_security_by_department(thu_muc),
     }
+
+    if not allow_external:
+        return {
+            **default_res,
+            "classification_failed": True,
+            "document_type_validation": "policy_fallback",
+            "reason": "Classifier fallback: external processing policy blocked.",
+        }
     
     try:
         resp = cohere_invoke(
@@ -239,11 +265,13 @@ def classify_document(file_path, original_filename=None, thu_muc=None, document_
         
         base_code = parsed.get("base_code", default_res["base_code"])
         
-        from mech_chatbot.db.repository import normalize_base_code
         base_code = normalize_base_code(base_code)
         parsed["base_code"] = base_code
         
-        family_id = check_existing_family(base_code)
+        family_id = check_existing_family(
+            base_code,
+            **({"db_engine": db_engine} if db_engine is not None else {}),
+        )
         
         parsed["possible_existing_family"] = base_code if family_id else None
         

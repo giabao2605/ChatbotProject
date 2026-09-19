@@ -3,18 +3,142 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 import re
-import os
+from collections import Counter
+from decimal import Decimal, InvalidOperation
+import json
+from typing import NamedTuple
 from sqlalchemy import text
-from ..engine import _ensure_engine, engine
+from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
 from ._shared import _sanitize_int, _sanitize_text
 
+
+def resolve_engine(candidate=None):
+    return _resolve_engine(engine if candidate is None else candidate)
+
 __all__ = [
+    'BomSearchRow',
     'normalize_material_name',
     'save_bom_records',
+    'search_bom_facts',
     'search_bom_by_code',
 ]
+
+
+class BomSearchRow(NamedTuple):
+    doc_id: int
+    page: int
+    part_code: str | None
+    description: str | None
+    material: str | None
+    quantity: Decimal | None
+    note: str | None
+    document: str
+    version: int
+    security_level: str | None
+    site: str | None
+    external_processing_policy: str | None
+    bom_row_id: int
+    unit: str | None
+    source_row_id: str
+
+
+def _raw_bom_payload(raw):
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalized_bom_text(value):
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def _first_payload_value(payload, *keys):
+    return next((payload.get(key) for key in keys if payload.get(key)), "")
+
+
+def _bom_fact_identity(row, payload):
+    fact = _normalize_bom_result_row(row, payload)
+    return (
+        fact.doc_id,
+        fact.page,
+        _normalized_bom_text(fact.part_code),
+        _normalized_bom_text(fact.material),
+        fact.quantity,
+        _normalized_bom_text(fact.note),
+        _normalized_bom_text(fact.unit),
+        fact.version,
+    )
+
+
+def _cross_extractor_signature(row):
+    payload = _raw_bom_payload(row[14] if len(row) > 14 else None)
+    try:
+        source_table_index = int(row[15])
+    except (IndexError, TypeError, ValueError):
+        return None
+    cells = payload.get("cells")
+    if (
+        source_table_index >= 1
+        and payload.get("source_row_id")
+        and isinstance(cells, list)
+    ):
+        kind = "structured"
+        values = cells
+    elif (
+        source_table_index == 0
+        and not payload.get("source_row_id")
+        and payload.get("stt")
+    ):
+        kind = "vision"
+        values = (
+            payload.get("stt"),
+            _first_payload_value(payload, "ma_hang", "ma", "code"),
+            _first_payload_value(
+                payload, "vat_tu", "ten_vat_tu", "ten", "name",
+            ),
+            _first_payload_value(payload, "vat_lieu", "material"),
+            _first_payload_value(payload, "sl", "qty", "so_luong"),
+            _first_payload_value(payload, "ghi_chu", "note"),
+            _first_payload_value(payload, "don_vi", "unit"),
+        )
+    else:
+        return None
+    content = tuple(sorted(
+        normalized
+        for value in values
+        if (normalized := _normalized_bom_text(value))
+    ))
+    if len(content) < 4:
+        return None
+    return kind, (_bom_fact_identity(row, payload), content)
+
+
+def _remove_verified_cross_extractor_shadows(rows):
+    rows = tuple(rows)
+    signatures = tuple(
+        (index, signature)
+        for index, row in enumerate(rows)
+        if (signature := _cross_extractor_signature(row)) is not None
+    )
+    vision_counts = Counter(
+        identity for _, (kind, identity) in signatures if kind == "vision"
+    )
+    structured_counts = Counter(
+        identity for _, (kind, identity) in signatures if kind == "structured"
+    )
+    shadows = frozenset(
+        index
+        for index, (kind, identity) in signatures
+        if kind == "vision"
+        and vision_counts[identity] == structured_counts[identity] == 1
+    )
+    return tuple(row for index, row in enumerate(rows) if index not in shadows)
 
 def normalize_material_name(raw):
     """P2: uy quyen cho material_registry (tu dien DB). Fallback logic cu neu loi."""
@@ -31,11 +155,11 @@ def normalize_material_name(raw):
         s = re.sub(r"\s+", " ", s)
         return s
 
-def save_bom_records(doc_id, trang_so, records):
+def save_bom_records(doc_id, trang_so, records, *, db_engine=None):
     """Luu danh sach cac vat tu cua bang ke vao SQL"""
     if not doc_id or not records:
-        return
-    _ensure_engine()
+        return 0
+    selected_engine = resolve_engine(db_engine)
     try:
         # Perf (GD1): bulk insert thay N+1 (executemany). Giu nguyen tung dong.
         _rows = [
@@ -55,7 +179,7 @@ def save_bom_records(doc_id, trang_so, records):
             }
             for rec in records
         ]
-        with engine.begin() as conn:
+        with selected_engine.begin() as conn:
             if _rows:
                 conn.execute(
                     text("""
@@ -64,11 +188,47 @@ def save_bom_records(doc_id, trang_so, records):
                     """),
                     _rows,
                 )
+        return len(_rows)
     except Exception as e:
         logger.error(f"Loi save_bom_records cho doc_id {doc_id}, trang {trang_so}: {e}", exc_info=True)
+        return 0
 
-def search_bom_by_code(
-    ma_hang_list,
+
+def _normalize_bom_result_row(row, structured=None):
+    values = list(row)
+    raw = values[14] if len(values) > 14 else None
+    structured = _raw_bom_payload(raw) if structured is None else structured
+    quantity_raw = structured.get("quantity_decimal")
+    if quantity_raw in (None, ""):
+        quantity_raw = values[5]
+    try:
+        quantity = Decimal(str(quantity_raw)) if quantity_raw is not None else None
+    except (InvalidOperation, TypeError, ValueError):
+        quantity = None
+    source_row_id = str(structured.get("source_row_id") or "").strip()
+    if not source_row_id:
+        source_row_id = f"BOM-{int(values[12])}"
+    return BomSearchRow(
+        doc_id=values[0],
+        page=values[1],
+        part_code=values[2],
+        description=values[3],
+        material=values[4],
+        quantity=quantity,
+        note=values[6],
+        document=values[7],
+        version=values[8],
+        security_level=values[9],
+        site=values[10],
+        external_processing_policy=values[11],
+        bom_row_id=values[12],
+        unit=values[13],
+        source_row_id=source_row_id,
+    )
+
+def search_bom_facts(
+    part_codes=None,
+    document_ids=None,
     version_policy="current_only",
     detected_versions=None,
     user_department=None,
@@ -76,13 +236,18 @@ def search_bom_by_code(
     allowed_departments=None,
     max_security_level=None,
     allowed_sites=None,
+    strict_site_filter=True,
 ):
-    """Tim kiem bang ke vat tu tren SQL theo ma hang hoac ma doi tuong (parent assembly).
+    """Return governed BOM facts scoped by part codes or retrieved documents.
 
-    Su dung CONTAINS() neu Full-Text Index da duoc cai dat tren BangKeVatTu,
-    fallback ve LIKE '%...%' neu Full-Text Search khong kha dung.
+    ``document_ids`` supports aggregate questions that do not mention a part
+    code while preserving the same lifecycle and RBAC predicates as code
+    search.  When both scopes are supplied, the document scope narrows the
+    code search instead of widening it.
     """
-    if not ma_hang_list:
+    part_codes = [str(value).strip() for value in (part_codes or []) if str(value).strip()]
+    document_ids = sorted({int(value) for value in (document_ids or [])})
+    if not part_codes and not document_ids:
         return []
     if not user_roles:
         logger.warning("Deny SQL BOM search because user_roles is empty.")
@@ -101,7 +266,7 @@ def search_bom_by_code(
             # Tao dieu kien OR cho tung ma
             conditions = []
             params = {}
-            for i, m in enumerate(ma_hang_list):
+            for i, m in enumerate(part_codes):
                 if use_fulltext:
                     # CONTAINS dung double-quote de tim cum tu chinh xac hon
                     # prefix search: "ma*" khop maHang bat dau bang ma
@@ -130,7 +295,16 @@ def search_bom_by_code(
                     )
                     """)
 
-            filter_sql = "1=1"
+            if document_ids:
+                params["document_ids"] = json.dumps(document_ids)
+                document_scope = "b.DocID IN (SELECT TRY_CAST([value] AS INT) FROM OPENJSON(:document_ids))"
+                if conditions:
+                    filter_sql = "1=1 AND " + document_scope
+                else:
+                    conditions.append(document_scope)
+                    filter_sql = "1=1"
+            else:
+                filter_sql = "1=1"
             if version_policy in ["current_only", "all_current_variants"]:
                 filter_sql += " AND t.Servable = 1 AND t.PublicationState = 'published' AND t.LifecycleStatus = 'published' AND t.ReviewStatus = 'approved' AND t.IsCurrent = 1"
             elif version_policy == "specific_version":
@@ -203,9 +377,7 @@ def search_bom_by_code(
                 # Legacy data without a site is visible only while the explicit
                 # compatibility switch is off; strict mode is the default.
                 sites = sorted({str(site).strip() for site in (allowed_sites or []) if str(site).strip()})
-                strict_site = str(os.getenv("RBAC_STRICT_SITE_FILTER", "true")).strip().lower() in {
-                    "1", "true", "yes", "on"
-                }
+                strict_site = bool(strict_site_filter)
                 if not sites:
                     filter_sql += " AND 1 = 0"
                 else:
@@ -222,7 +394,8 @@ def search_bom_by_code(
             query = text(f"""
                 SELECT DISTINCT b.DocID, b.TrangSo, b.MaHang, b.TenVatTu, b.VatLieu,
                        b.SoLuong, b.GhiChu, t.TenFile, t.VersionNo, t.SecurityLevel,
-                       t.Site, t.ExternalProcessingPolicy
+                       t.Site, t.ExternalProcessingPolicy, b.ID, b.Unit, b.RawRowJson,
+                       b.SourceTableIndex
                 FROM BangKeVatTu b
                 JOIN TaiLieu t ON b.DocID = t.DocID
                 WHERE {filter_sql} AND b.TrangSo IS NOT NULL AND (
@@ -231,7 +404,35 @@ def search_bom_by_code(
             """)
 
             result = conn.execute(query, params).fetchall()
-            return result
+            return [
+                _normalize_bom_result_row(row)
+                for row in _remove_verified_cross_extractor_shadows(result)
+            ]
     except Exception as e:
-        logger.error(f"Loi search_bom_by_code: {e}", exc_info=True)
+        logger.error(f"Loi search_bom_facts: {e}", exc_info=True)
         return []
+
+
+def search_bom_by_code(
+    ma_hang_list,
+    version_policy="current_only",
+    detected_versions=None,
+    user_department=None,
+    user_roles=None,
+    allowed_departments=None,
+    max_security_level=None,
+    allowed_sites=None,
+    strict_site_filter=True,
+):
+    """Backward-compatible code-scoped BOM search."""
+    return search_bom_facts(
+        part_codes=ma_hang_list,
+        version_policy=version_policy,
+        detected_versions=detected_versions,
+        user_department=user_department,
+        user_roles=user_roles,
+        allowed_departments=allowed_departments,
+        max_security_level=max_security_level,
+        allowed_sites=allowed_sites,
+        strict_site_filter=strict_site_filter,
+    )

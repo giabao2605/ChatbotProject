@@ -10,7 +10,8 @@ from mech_chatbot.config.logging import logger
 from mech_chatbot.llm.vision_client import is_retryable_error
 
 # cross-module (owned) imports
-from mech_chatbot.ingestion.pdf.config import IMAGE_DIR
+from mech_chatbot.ingestion.pdf.config import IMAGE_DIR, PdfIngestionConfig
+from mech_chatbot.ingestion.vision_cache import VisionCacheConfig
 
 
 @retry(
@@ -71,7 +72,16 @@ def format_vision_data(data):
     return "Kết quả phân tích ảnh (Cấu trúc JSON):\n" + "\n".join(parts) if parts else ""
 
 
-def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress_callback=None):
+def _prewarm_vision_cache(
+    doc,
+    ten_file,
+    thu_muc,
+    domain,
+    vision_model,
+    progress_callback=None,
+    *,
+    config: PdfIngestionConfig | None = None,
+):
     """Perf (GD3, OPT-IN): lam nong Vision cache SONG SONG de tang toc ingest.
 
     MAC DINH TAT: chi chay khi env INGEST_VISION_PREWARM_WORKERS > 1.
@@ -83,10 +93,8 @@ def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress
     chinh ben duoi. Neu sua prompt/dieu kien trong vong lap, PHAI sua o ca day.
     Bat buoc chay golden-file consistency test truoc khi bat that o production.
     """
-    try:
-        max_workers = int(os.getenv("INGEST_VISION_PREWARM_WORKERS", "1"))
-    except ValueError:
-        max_workers = 1
+    runtime_config = config or PdfIngestionConfig(image_dir=IMAGE_DIR)
+    max_workers = runtime_config.vision_prewarm_workers
     if max_workers <= 1 or vision_model is None or doc is None:
         return  # TAT -> khong lam gi (giu nguyen hanh vi serial)
     try:
@@ -95,7 +103,11 @@ def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress
         from mech_chatbot.ingestion import vision_cache as _vc
         base_name = os.path.splitext(ten_file)[0]
         safe_thu_muc = re.sub(r'[\\/*?:"<>|]', "", thu_muc) if thu_muc else ""
-        dpi = int(os.getenv("PDF_RENDER_DPI", "300"))
+        dpi = runtime_config.pdf_render_dpi
+        cache_config = VisionCacheConfig(
+            enabled=runtime_config.vision_cache_enabled,
+            directory=runtime_config.vision_cache_dir,
+        )
         tasks = []  # (img_path, prompt, key)
         for page_num in range(len(doc)):
             try:
@@ -107,11 +119,11 @@ def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress
                 pix = page.get_pixmap(dpi=dpi)
                 img_name = (f"{safe_thu_muc}_{base_name}_page{page_num+1}.png"
                             if safe_thu_muc else f"{base_name}_page{page_num+1}.png")
-                img_path = os.path.join(IMAGE_DIR, img_name)
+                img_path = os.path.join(runtime_config.image_dir, img_name)
                 pix.save(img_path)
                 pix = None
                 key = _vc.hash_image_file(img_path)
-                if key is None or _vc.get(key) is not None:
+                if key is None or _vc.get(key, config=cache_config) is not None:
                     continue  # da co cache -> bo qua
                 prompt = (
                     f"Day la trang so {page_num+1} cua file {ten_file}. "
@@ -146,7 +158,7 @@ def _prewarm_vision_cache(doc, ten_file, thu_muc, domain, vision_model, progress
                 resp = call_vision_model(vision_model, prompt, img)
                 vd = parse_vision_json(resp.text)
                 if vd:
-                    _vc.put(key, vd)
+                    _vc.put(key, vd, config=cache_config)
             except Exception as _e:
                 logger.warning(f"[prewarm] Vision loi ({img_path}): {_e}")
 

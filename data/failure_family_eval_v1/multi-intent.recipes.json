@@ -1,0 +1,8 @@
+[
+  {"id":"multi-intent-dev-1","axes":["intent_order"],"question":"Phiếu mua trên 1000 piece cần ai duyệt, ngưỡng tồn kho tối thiểu là bao nhiêu và chu kỳ bảo trì là bao lâu?","holdout":false},
+  {"id":"multi-intent-dev-2","axes":["intent_order"],"question":"Ngưỡng tồn kho tối thiểu là bao nhiêu, chu kỳ bảo trì là bao lâu và ai duyệt phiếu mua trên 1000 piece?","holdout":false},
+  {"id":"multi-intent-dev-3","axes":["paraphrase","intent_count"],"question":"Trả lời đủ ba ý: chu kỳ bảo trì; mức tồn kho tối thiểu; cấp duyệt khi mua hơn 1000 piece.","holdout":false},
+  {"id":"multi-intent-dev-4","axes":["paraphrase"],"question":"Đối chiếu Maintenance, Warehouse và Purchasing: nêu chu kỳ, tồn tối thiểu và người phê duyệt đơn trên 1000 piece.","holdout":false},
+  {"id":"multi-intent-holdout-1","axes":["intent_order"],"question":"Ai duyệt yêu cầu trên 1000 piece; bảo trì theo chu kỳ nào; kho phải giữ tối thiểu bao nhiêu?","holdout":true},
+  {"id":"multi-intent-holdout-2","axes":["paraphrase","intent_order"],"question":"Cho mình lần lượt mức tồn tối thiểu, cấp duyệt mua trên 1000 piece và chu kỳ bảo trì.","holdout":true}
+]

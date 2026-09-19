@@ -1,0 +1,12 @@
+schema=phase-4-sql-qdrant-consistency-v1
+command=.\chat_env\Scripts\python.exe -m pytest tests\integration\test_sql_qdrant_consistency.py -q -v
+environment=RUN_DB_TESTS=1, RUN_QDRANT_TESTS=1
+initial_result=1 failed, 1 passed
+initial_failure=DocID 55 empty.md had TrangThaiVector=1 but no Qdrant point
+record_state=draft, not current, not servable, no FilePath
+repair=repository mark_document_ingest_failed set rejected state and TrangThaiVector=0
+repair_reason=Empty demo document has no retrievable content
+final_result=2 passed in 10.57s
+fixture_created=false
+database=main user-authorized demo database
+status=passed

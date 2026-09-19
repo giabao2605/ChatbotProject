@@ -11,7 +11,6 @@ Cach chay (Windows PowerShell):
     $env:PYTHONPATH="src"; python scripts\danger_ops\reconcile_sql_qdrant.py --fix
     $env:PYTHONPATH="src"; python scripts\danger_ops\reconcile_sql_qdrant.py --stuck-hours 6 --fix
 """
-import os
 import sys
 import argparse
 from pathlib import Path
@@ -22,14 +21,15 @@ if _SRC.exists() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from sqlalchemy import text
-from mech_chatbot.db import repository as repo
-
-COLLECTION = os.getenv("QDRANT_COLLECTION", "TaiLieuKyThuat_v2")
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime
+from mech_chatbot.db.engine import _ensure_engine, engine
+from mech_chatbot.db.repositories.document import delete_document_completely
 
 
 def _get_sql_doc_ids():
-    repo._ensure_engine()
-    with repo.engine.connect() as conn:
+    _ensure_engine()
+    with engine.connect() as conn:
         rows = conn.execute(text(
             "SELECT DocID FROM TaiLieu WHERE ISNULL(LifecycleStatus, '') <> 'deleting'"
         )).fetchall()
@@ -37,8 +37,8 @@ def _get_sql_doc_ids():
 
 
 def _get_stuck_deleting(stuck_hours):
-    repo._ensure_engine()
-    with repo.engine.connect() as conn:
+    _ensure_engine()
+    with engine.connect() as conn:
         rows = conn.execute(text("""
             SELECT DocID, TenFile
             FROM TaiLieu
@@ -48,13 +48,13 @@ def _get_stuck_deleting(stuck_hours):
     return [(str(r[0]), r[1]) for r in rows]
 
 
-def _scroll_qdrant_doc_ids(client):
+def _scroll_qdrant_doc_ids(client, collection):
     from collections import defaultdict
     counts = defaultdict(int)
     next_offset = None
     while True:
         points, next_offset = client.scroll(
-            collection_name=COLLECTION,
+            collection_name=collection,
             with_payload=True,
             with_vectors=False,
             limit=512,
@@ -71,24 +71,20 @@ def _scroll_qdrant_doc_ids(client):
     return counts
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def main():
     parser = argparse.ArgumentParser(description="Doi soat SQL <-> Qdrant (P1.7)")
     parser.add_argument("--fix", action="store_true", help="Thuc su don dep (mac dinh chi dry-run).")
     parser.add_argument("--stuck-hours", type=int, default=6, help="Nguong gio coi la 'deleting' bi ket.")
     args = parser.parse_args()
 
+    client, collection = current_qdrant_runtime()
     mode = "FIX" if args.fix else "DRY-RUN"
-    print(f"=== Doi soat SQL <-> Qdrant [{mode}] | collection={COLLECTION} ===")
-
-    try:
-        client = repo._get_qdrant_client()
-    except Exception as e:
-        print(f"[LOI] Khong ket noi duoc Qdrant: {e}")
-        return 1
+    print(f"=== Doi soat SQL <-> Qdrant [{mode}] | collection={collection} ===")
 
     sql_ids = _get_sql_doc_ids()
     print(f"SQL: {len(sql_ids)} tai lieu hop le.")
-    qdrant_counts = _scroll_qdrant_doc_ids(client)
+    qdrant_counts = _scroll_qdrant_doc_ids(client, collection)
     print(f"Qdrant: {len(qdrant_counts)} doc_id, tong {sum(qdrant_counts.values())} vector.")
 
     orphan_ids = [d for d in qdrant_counts if d not in sql_ids]
@@ -113,7 +109,7 @@ def main():
     for d in orphan_ids:
         try:
             client.delete(
-                collection_name=COLLECTION,
+                collection_name=collection,
                 points_selector=qmodels.FilterSelector(filter=qmodels.Filter(
                     must=[qmodels.FieldCondition(
                         key="metadata.doc_id",
@@ -129,7 +125,7 @@ def main():
     fixed_docs = 0
     for doc_id, ten in stuck:
         try:
-            if repo.delete_document_completely(doc_id, reviewer="reconcile_job"):
+            if delete_document_completely(doc_id, reviewer="reconcile_job"):
                 fixed_docs += 1
         except Exception as e:
             print(f"    [LOI] Khong xoa duoc DocID={doc_id}: {e}")

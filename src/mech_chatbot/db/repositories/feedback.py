@@ -184,9 +184,9 @@ def get_doc_quality_ranking(limit=50, worst_first=True):
 
 def upsert_golden_answer(question, answer, source_doc_id=None, department=None, site=None, created_by="System", feedback_id=None):
     """P3-4: Luu cau tra loi da duoc chuyen gia duyet thanh Golden Answer (gom theo hash cau hoi)."""
-    _ensure_engine()
     if not question or not answer:
         return None
+    _ensure_engine()
     qhash = _question_hash(question)
     try:
         with engine.begin() as conn:
@@ -243,9 +243,9 @@ def normalize_question(q):
 
 def add_regression_question(question, expected_doc_id=None, expected_keywords=None, department=None, site=None, created_by="System"):
     """P3-5: them 1 cau hoi vao bo hoi quy."""
-    _ensure_engine()
     if not question or not str(question).strip():
         return None
+    _ensure_engine()
     kw = expected_keywords
     if isinstance(expected_keywords, (list, tuple)):
         kw = ", ".join([str(x).strip() for x in expected_keywords if str(x).strip()])
@@ -400,9 +400,9 @@ def ensure_regression_question(question, expected_doc_id=None, expected_keywords
     """P1-6: them cau hoi vao bo hoi quy NEU CHUA co (dedupe theo cau hoi da chuan hoa).
     Dung khi tu dong nap Golden Answer -> regression, tranh trung khi reviewer luu lai nhieu lan.
     """
-    _ensure_engine()
     if not question or not str(question).strip():
         return None
+    _ensure_engine()
     target = normalize_question(question)
     try:
         with engine.connect() as conn:

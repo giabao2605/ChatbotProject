@@ -1,0 +1,29 @@
+Phase 3 validation summary
+
+Full backend suite with branch coverage:
+- command: .\chat_env\Scripts\python.exe -m pytest -q --cov=mech_chatbot --cov-branch --cov-report=
+- collected: 2030
+- passed: 2008
+- skipped: 22 opt-in integration/eval tests
+- failed: 0
+- warning: 1 StarletteDeprecationWarning from fastapi.testclient
+- exit code: 0
+
+Coverage gates:
+- full backend: 86.191868% line, 80.624286% branch, exit 0
+- Phase 3 owned plus small security modules: 93.223140% line, 87.537994% branch, exit 0
+- every Phase 3 core module: at least 80% line and branch
+- strict all-touched-module aggregate: 67.894103% line, 61.896243% branch
+- strict exception: legacy rag/pipeline.py and rag/pipeline_steps.py remain individually below 80 after one-line fail-closed policy changes; the changed lines have direct regression tests and global backend remains above 80/80
+
+Structural and regression gates:
+- tests/architecture: 8 passed
+- strict-stream then public-RAG order reproduction: 15 passed
+- git diff --check: exit 0; Windows CRLF conversion warnings only
+- security review: PASS, no actionable finding
+- standards review: PASS after test-isolation fix
+- security review: PASS after repository/publication/RAG fallback audit
+- spec review: implementation PASS; P2 closure exception remains for literal per-touched-module coverage wording
+
+Integration:
+- pinned SQL/Qdrant consistency: 2 passed, read-only

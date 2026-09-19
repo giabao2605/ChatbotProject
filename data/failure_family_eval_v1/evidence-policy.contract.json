@@ -1,0 +1,16 @@
+{
+  "failure_family": "EVIDENCE_POLICY_ERROR",
+  "seed_case_id": "demo-case-037",
+  "expected_policy": {
+    "outcome": "insufficient_evidence",
+    "evidence_state": "SUFFICIENT",
+    "correction_allowed": false
+  },
+  "invariants": [
+    "leakage_zero",
+    "negative_evidence_is_terminal",
+    "governance_unchanged"
+  ],
+  "mutation_axes": [],
+  "holdout": false
+}

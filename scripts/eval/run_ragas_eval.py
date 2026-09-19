@@ -65,7 +65,13 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
 
-    from mech_chatbot.rag.service import chat_with_rag
+    from mech_chatbot.rag.execution import (
+        AccessScope,
+        DefaultRagExecutor,
+        RagInvocation,
+        RagRequest,
+        collect_rag_events,
+    )
 
     cases = _load_cases(args.golden, args.limit)
     print("RAGAS eval: " + str(len(cases)) + " cases tu " + args.golden)
@@ -79,9 +85,22 @@ def main():
         allowed = case.get("allowed_departments")
         maxlv = case.get("max_security_level", "confidential")
         try:
-            stream, ref_text, ref_images, part_ids, dbg = chat_with_rag(
-                q, None, [], [], dept, roles, allowed, max_security_level=maxlv)
-            answer = "".join(str(c) for c in stream)
+            execution = collect_rag_events(
+                DefaultRagExecutor().run(
+                    RagRequest(
+                        question=q,
+                        access=AccessScope(
+                            department=dept,
+                            roles=frozenset(roles),
+                            allowed_departments=frozenset(allowed or []),
+                            max_security_level=maxlv,
+                        ),
+                    ),
+                    RagInvocation(trace_id="", mode="evaluation"),
+                )
+            )
+            answer = execution.answer
+            dbg = dict(execution.diagnostics)
             contexts = [d.get("text") for d in (dbg.get("retrieved_docs") or []) if d.get("text")]
             metrics = rm.evaluate_case(q, answer, contexts, gt)
         except Exception as e:

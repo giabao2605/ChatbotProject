@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import threading
 
 import pytest
 
@@ -73,8 +74,6 @@ def _point(metadata, content):
 
 
 def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(monkeypatch):
-    from mech_chatbot.db import repository
-
     selected = _metadata()
     client = _ScrollClient(
         [
@@ -87,12 +86,17 @@ def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(
             _point(_metadata(security_level="confidential"), "wrong security"),
         ]
     )
-    monkeypatch.setattr(repository, "_get_qdrant_client", lambda: client)
-
-    docs = context_builders._load_parent_section_chunks(PARENT_KEY, 12, selected)
+    docs = context_builders._load_parent_section_chunks(
+        PARENT_KEY,
+        12,
+        selected,
+        client=client,
+        collection_name="test-knowledge",
+    )
 
     assert [doc.page_content for doc in docs] == ["safe parent evidence"]
     assert len(client.calls) == 1
+    assert client.calls[0]["timeout"] == 5
     conditions = {
         condition.key: condition.match
         for condition in client.calls[0]["scroll_filter"].must
@@ -126,3 +130,70 @@ def test_parent_hydration_passes_selected_metadata_and_preserves_selected(monkey
 
     assert hydrated == [selected]
     assert called == [((PARENT_KEY, 2, selected.metadata), {})]
+
+
+def test_parent_hydration_loads_unique_sections_concurrently_and_preserves_order(monkeypatch):
+    selected = [
+        SimpleNamespace(
+            page_content=f"selected {index}",
+            metadata=_metadata(
+                doc_id=73 + index,
+                parent_section=f"Procedure {index:02d}",
+            ),
+        )
+        for index in range(1, 4)
+    ]
+    barrier = threading.Barrier(len(selected))
+
+    def _parallel_loader(parent_key, _limit, metadata):
+        barrier.wait(timeout=2)
+        return [
+            SimpleNamespace(page_content="first", metadata={**metadata, "chunk_index": 1}),
+            SimpleNamespace(page_content="second", metadata={**metadata, "chunk_index": 2}),
+        ]
+
+    monkeypatch.setattr(context_builders, "_load_parent_section_chunks", _parallel_loader)
+
+    hydrated = context_builders.hydrate_parent_context(
+        selected,
+        max_sections=3,
+        max_chunks_per_section=2,
+        max_workers=3,
+    )
+
+    assert [doc.metadata["doc_id"] for doc in hydrated] == [74, 75, 76]
+    assert [doc.page_content for doc in hydrated] == [
+        "first\n\nsecond",
+        "first\n\nsecond",
+        "first\n\nsecond",
+    ]
+
+
+def test_parent_hydration_worker_one_is_sequential_rollback(monkeypatch):
+    selected = [
+        SimpleNamespace(
+            page_content=f"selected {index}",
+            metadata=_metadata(
+                doc_id=80 + index,
+                parent_section=f"Procedure {index:02d}",
+            ),
+        )
+        for index in range(2)
+    ]
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def _loader(_parent_key, _limit, metadata):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        with lock:
+            active -= 1
+        return [SimpleNamespace(page_content="only", metadata=metadata)]
+
+    monkeypatch.setattr(context_builders, "_load_parent_section_chunks", _loader)
+
+    assert context_builders.hydrate_parent_context(selected, max_workers=1) == selected
+    assert max_active == 1

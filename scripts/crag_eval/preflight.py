@@ -6,9 +6,17 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 from scripts.crag_eval.constants import FIXTURE_BATCH, FIXTURE_COLLECTION, LIVE_OPT_IN
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
 
 
 def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str) -> dict:
@@ -54,6 +62,7 @@ def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str)
             and point.get("site") == case.get("expected_site")
             and point.get("security_level") == case.get("expected_security_level")
             and case.get("expected_department") in (point.get("phong_ban_quyen") or [])
+            and str(point.get("base_code") or "").lower() == str(doc.get("BaseCode") or "").lower()
             for point in qdrant_points
         )
         if not exists:
@@ -63,7 +72,7 @@ def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str)
             ({key: row.get(key) for key in (
                 "DocID", "TenFile", "VersionNo", "LifecycleStatus", "ReviewStatus",
                 "PublicationState", "IsCurrent", "Servable", "SourceSystem",
-                "OwnerDepartment", "Site", "SecurityLevel",
+                "OwnerDepartment", "Site", "SecurityLevel", "BaseCode",
             )}
              for row in sql_documents),
             key=lambda row: (str(row.get("TenFile")), int(row.get("DocID") or 0)),
@@ -73,6 +82,7 @@ def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str)
                 "doc_id", "page", "page_number", "trang_so", "source_system", "version_no",
                 "lifecycle_status", "review_status", "publication_state", "servable", "is_current",
                 "owner_department", "site", "security_level", "phong_ban_quyen",
+                "base_code", "ma_chinh", "ma_doi_tuong",
                 "_point_id", "_content_sha256",
             )}
              for point in qdrant_points),
@@ -90,26 +100,26 @@ def check_fixture_cases(cases, sql_documents, qdrant_points, *, collection: str)
     }
 
 
+@with_configured_repository_runtime(include_qdrant=True)
 def run_live_preflight(cases: list[dict]) -> dict:
     if os.getenv(LIVE_OPT_IN) != "1":
         raise RuntimeError(f"set {LIVE_OPT_IN}=1 to access the CRAG staging fixture")
     from sqlalchemy import text
     from qdrant_client import models
-    from mech_chatbot.config.settings import QDRANT_COLLECTION
+    from mech_chatbot.config.repository_runtime import current_qdrant_runtime
     from mech_chatbot.db.engine import _ensure_engine, engine
-    from mech_chatbot.db.repositories.qdrant import _get_qdrant_client
 
-    if QDRANT_COLLECTION != FIXTURE_COLLECTION:
+    client, collection = current_qdrant_runtime()
+    if collection != FIXTURE_COLLECTION:
         raise RuntimeError(f"QDRANT_COLLECTION must equal {FIXTURE_COLLECTION}")
     _ensure_engine()
     with engine.connect() as conn:
         rows = conn.execute(text("""
             SELECT DocID, TenFile, VersionNo, LifecycleStatus, ReviewStatus,
                    PublicationState, IsCurrent, Servable, SourceSystem,
-                   OwnerDepartment, Site, SecurityLevel
+                   OwnerDepartment, Site, SecurityLevel, BaseCode
             FROM dbo.TaiLieu WHERE SourceSystem=:batch
         """), {"batch": FIXTURE_BATCH}).mappings().all()
-    client = _get_qdrant_client()
     points = []
     for row in rows:
         found, _ = client.scroll(
@@ -125,7 +135,7 @@ def run_live_preflight(cases: list[dict]) -> dict:
             metadata["_point_id"] = str(point.id)
             metadata["_content_sha256"] = hashlib.sha256(str(content).encode("utf-8")).hexdigest()
             points.append(metadata)
-    return check_fixture_cases(cases, [dict(row) for row in rows], points, collection=QDRANT_COLLECTION)
+    return check_fixture_cases(cases, [dict(row) for row in rows], points, collection=collection)
 
 
 def main() -> int:

@@ -1,0 +1,39 @@
+{
+  "schema": "graph-retrieval-feasibility-disposition-v1",
+  "created_at": "2026-08-11T05:55:25.4953010Z",
+  "feature": "RAG_GRAPH_RETRIEVAL_ENABLED",
+  "status": "accepted",
+  "disposition": "keep_off_technical_limit",
+  "scope": "current_provider_data_plane_corpus_product_scope",
+  "evidence": {
+    "diagnostic_source_commit": "32fc8d739a635ff17fd4606e5a32df91b5f4a96a",
+    "report_source_commit": "a868e7b3332e67e26283b1de4507af8d7793759b",
+    "path": "docs/graph-retrieval-feasibility-report-32fc8d7.md",
+    "sha256": "13d3d127bc1dc02f436d3849d11219d23e2381a4664556f084e931ad807bc7d2"
+  },
+  "technical_review": {
+    "actor": "bao.nguyen",
+    "reviewed_at": "2026-08-11T05:55:25.4953010Z",
+    "decision": "approved",
+    "replaces_required_reviewer": "tran.nghi",
+    "reviewer_eligibility_asserted_by_actor": true
+  },
+  "owner_acceptance": {
+    "actor": "bao.nguyen",
+    "accepted_at": "2026-08-11T05:55:25.4953010Z",
+    "decision": "accepted"
+  },
+  "authorization": {
+    "formal_window_authorized": false,
+    "controlled_demo_pilot_authorized": false,
+    "default_rollout_authorized": false,
+    "feature_enablement_authorized": false
+  },
+  "invariants": [
+    "Graph Retrieval remains disabled.",
+    "Do not run another same-design diagnostic window.",
+    "Do not relax timeout, retry, fallback, case, percentile, quality, provenance, RBAC, safety, latency, or cost gates.",
+    "Reopen only after an owner-approved provider, data-plane, corpus, or product-scope change with a new declaration."
+  ],
+  "decision_source": "interactive_owner_statement"
+}

@@ -114,20 +114,10 @@ def test_describe_candidate():
     assert "Khung sat" in d and "381x470mm" in d and "inox 201" in d
 
 
-def test_is_enabled_flag(monkeypatch=None):
-    old = os.environ.get(cs.FLAG_ENV)
-    try:
-        os.environ.pop(cs.FLAG_ENV, None)
-        assert cs.is_enabled() is False
-        os.environ[cs.FLAG_ENV] = "true"
-        assert cs.is_enabled() is True
-        os.environ[cs.FLAG_ENV] = "0"
-        assert cs.is_enabled() is False
-    finally:
-        if old is None:
-            os.environ.pop(cs.FLAG_ENV, None)
-        else:
-            os.environ[cs.FLAG_ENV] = old
+def test_is_enabled_uses_explicit_runtime_value():
+    assert cs.is_enabled() is False
+    assert cs.is_enabled(False) is False
+    assert cs.is_enabled(True) is True
 
 
 def _run_all():

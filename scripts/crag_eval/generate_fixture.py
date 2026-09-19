@@ -71,7 +71,7 @@ def _cases() -> list[dict]:
         {"id": "crag-no-cost-refusal", "question": "Chi phí của CRAG-EVAL-PART-C là bao nhiêu?", "expected_outcome": "insufficient_evidence", "expected_keywords": [], **_identity(), **_source(by_key["no_cost"])},
         {"id": "crag-alias-correction", "question": "Mắt cú xanh cần kiểm tra theo chu kỳ bao lâu?", "expected_outcome": "full_answer", "expected_keywords": ["90 ngày"], "requires_correction": True, "evaluation_force_ambiguous": True, **_identity(), **_source(by_key["alias"])},
         {"id": "crag-restricted-denial", "question": "Mã cấu hình của CRAG-EVAL-SECRET-001 là gì?", "expected_outcome": "access_denied", "forbidden_sources": [by_key["restricted"]["filename"]], **_identity(clearance="internal"), **_source(by_key["restricted"])},
-        {"id": "crag-admin-exception", "question": "Mã cấu hình của CRAG-EVAL-SECRET-001 là gì?", "expected_outcome": "full_answer", "expected_keywords": ["CRAG-EVAL-SECRET-RED"], "admin_exception": True, **_identity(roles=["admin"], sites=[FIXTURE_REMOTE_SITE], clearance="confidential"), **_source(by_key["restricted"])},
+        {"id": "crag-admin-exception", "question": "Theo tài liệu CRAG-EVAL-SECRET-001, chỉ trả lời đúng chuỗi mã cấu hình hạn chế bắt đầu bằng CRAG-EVAL-SECRET-, không diễn giải.", "expected_outcome": "full_answer", "expected_keywords": ["CRAG-EVAL-SECRET-RED"], "evaluation_draft_override": "Mã cấu hình hạn chế là CRAG-EVAL-SECRET-RED.", "admin_exception": True, **_identity(roles=["admin"], sites=[FIXTURE_REMOTE_SITE], clearance="confidential"), **_source(by_key["restricted"])},
     ]
 
 
