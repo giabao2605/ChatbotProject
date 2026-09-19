@@ -11,5 +11,3 @@ def extract_source_ids(value):
         flags=re.IGNORECASE,
     )
     return {match.upper() for match in matches}
-
-

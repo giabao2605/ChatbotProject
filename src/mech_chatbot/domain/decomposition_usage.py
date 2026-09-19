@@ -163,5 +163,3 @@ def normalize_decomposition_usage(value: Any) -> dict[str, Any] | None:
             ),
         },
     }
-
-
