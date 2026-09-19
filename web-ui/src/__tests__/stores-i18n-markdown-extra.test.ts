@@ -17,6 +17,7 @@ import type { UserProfile } from "@/types";
 vi.mock("@/api/client", () => ({
   loadMe: vi.fn(),
   login: vi.fn(),
+  loginErrorMessage: (error: unknown) => error instanceof Error ? error.message : "Đăng nhập thất bại",
   refreshSession: vi.fn(),
   updatePreferredLanguage: vi.fn(),
   logout: vi.fn(),

@@ -1,4 +1,4 @@
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import UploadView from "@/views/UploadView.vue";
 import * as api from "@/api/client";
@@ -32,6 +32,31 @@ function mountUploadView() {
 }
 
 describe("UploadView validation", () => {
+  it("updates the worker warning and stops polling on unmount", async () => {
+    vi.useFakeTimers();
+    let status = "unavailable";
+    vi.mocked(api.apiGet).mockImplementation(async (path) => (
+      path === "/api/health" ? { ingestion_worker: status } : { departments: [], sites: [] }
+    ) as never);
+    const wrapper = mountUploadView();
+    try {
+      await flushPromises();
+      expect(wrapper.text()).toContain("Chưa xác nhận được bộ xử lý");
+      status = "ready";
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(wrapper.text()).not.toContain("Chưa xác nhận được bộ xử lý");
+      status = "unavailable";
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(wrapper.text()).toContain("Chưa xác nhận được bộ xử lý");
+      wrapper.unmount();
+      const calls = vi.mocked(api.apiGet).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(vi.mocked(api.apiGet).mock.calls.length).toBe(calls);
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
   it("requires a file before uploading", async () => {
     const wrapper = mountUploadView();
 

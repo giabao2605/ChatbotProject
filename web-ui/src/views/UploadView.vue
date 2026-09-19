@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { apiGet, apiUpload } from "@/api/client";
 import { t } from "@/i18n";
@@ -11,6 +11,21 @@ const files = ref<File[]>([]);
 const busy = ref(false);
 const error = ref("");
 const notice = ref("");
+const workerStatus = ref("unknown");
+let workerPoll: ReturnType<typeof setInterval> | undefined;
+async function loadWorkerStatus() {
+  try {
+    const health = await apiGet<{ ingestion_worker?: string }>("/api/health");
+    workerStatus.value = health.ingestion_worker ?? "unknown";
+  } catch {
+    workerStatus.value = "unknown";
+  }
+}
+onMounted(() => {
+  void loadWorkerStatus();
+  workerPoll = setInterval(loadWorkerStatus, 15000);
+});
+onUnmounted(() => clearInterval(workerPoll));
 
 const departments = ref<Array<{ code: string; name: string }>>([]);
 const sites = ref<Array<{ code: string; name: string }>>([]);
@@ -200,6 +215,9 @@ async function submit() {
 
 <template>
   <section class="content-page">
+    <Message v-if="workerStatus !== 'ready'" severity="warn" :closable="false">
+      Chưa xác nhận được bộ xử lý tài liệu đang hoạt động. Tệp tải lên có thể chờ trong hàng đợi; hãy kiểm tra lại hoặc liên hệ quản trị viên.
+    </Message>
     <header class="page-header">
       <div>
         <div class="eyebrow">Ingestion</div>

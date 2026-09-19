@@ -45,25 +45,48 @@ function parseReport(row: ApiRow): Record<string, unknown> | null {
   }
 }
 
+function isMarked(value: unknown): boolean {
+  return value === true || value === 1 || (typeof value === "string" && ["true", "1", "failed", "incomplete"].includes(value.toLowerCase()));
+}
+
+function hasClassificationFailure(report: Record<string, unknown>): boolean {
+  return isMarked(report.classification_failed) || String(report.classification_status ?? "").toLowerCase() === "failed";
+}
+
+function hasIncompleteMetadata(report: Record<string, unknown>): boolean {
+  return isMarked(report.metadata_incomplete) || String(report.metadata_status ?? "").toLowerCase() === "incomplete";
+}
+
 function summarizeExtraction(row: ApiRow): string {
   const report = parseReport(row);
   if (!report) return "Chưa có báo cáo ingest";
-  const status = String(report.status ?? "unknown");
+  const classificationFailed = hasClassificationFailure(report);
+  const metadataIncomplete = hasIncompleteMetadata(report);
+  const status = classificationFailed ? "extraction hoàn tất; phân loại thất bại" : String(report.status ?? "unknown");
   const pages = Number(report.total_pages ?? 0);
   const chunks = Number(report.total_chunks ?? 0);
   const tables = Array.isArray(report.pages_table_extracted) ? report.pages_table_extracted.length : 0;
   const failed = Array.isArray(report.failed_pages) ? report.failed_pages.length : 0;
-  const score = report.quality_score == null ? "" : `, chất lượng ${report.quality_score}`;
+  const score = report.quality_score == null
+    ? ""
+    : classificationFailed
+      ? `, điểm trích xuất ${report.quality_score} (chưa đủ điều kiện kết luận)`
+      : `, chất lượng ${report.quality_score}`;
   const time = report.time_taken == null ? "" : `, ${Number(report.time_taken).toFixed(1)}s`;
   const parts = [`${status}`, `${pages} trang`, `${chunks} chunks`];
   if (tables) parts.push(`${tables} bảng`);
   if (failed) parts.push(`${failed} trang lỗi`);
+  if (metadataIncomplete && !classificationFailed) parts.push("metadata chưa đầy đủ");
   return `${parts.join(", ")}${score}${time}`;
 }
 
 function qualityDetails(row: ApiRow): string {
   const report = parseReport(row);
   if (!report) return "Chưa có dữ liệu giải thích điểm.";
+  const warnings = [
+    hasClassificationFailure(report) ? "Chưa thể kết luận chất lượng: classifier thất bại" : "",
+    hasIncompleteMetadata(report) ? "Metadata chưa đầy đủ" : "",
+  ].filter(Boolean);
   const policy = String(report.quality_policy_version ?? report.policy_version ?? "chưa ghi phiên bản");
   const rawReasons = report.quality_reasons ?? report.reason_codes ?? report.reasons;
   const reasons = Array.isArray(rawReasons)
@@ -73,7 +96,7 @@ function qualityDetails(row: ApiRow): string {
   const components = rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
     ? Object.entries(rawComponents as Record<string, unknown>).map(([key, value]) => `${key}: ${String(value)}`)
     : [];
-  return [`Chính sách ${policy}`, ...components, ...reasons].join("; ");
+  return [...warnings, `Chính sách ${policy}`, ...components, ...reasons].join("; ");
 }
 
 function pickId(row: ApiRow, candidates: string[]): number | null {
@@ -96,10 +119,16 @@ function actionError(result: unknown): string | null {
   if ((result as { ok?: boolean }).ok !== false) return null;
   const payload = result as {
     error?: string;
+    message?: string;
+    detail?: string;
+    issues?: Array<{ message?: string }>;
     validation?: { issues?: Array<{ message?: string }> };
   };
-  const issues = payload.validation?.issues?.map((item) => item.message).filter(Boolean) ?? [];
-  return issues.length ? issues.join("; ") : payload.error || "Thao tác thất bại.";
+  const issues = [
+    ...(payload.issues ?? []),
+    ...(payload.validation?.issues ?? []),
+  ].map((item) => item.message).filter(Boolean);
+  return issues.length ? issues.join("; ") : payload.error || payload.message || payload.detail || "Thao tác thất bại.";
 }
 
 async function reviewAction(
@@ -149,6 +178,15 @@ async function reviewAction(
 }
 
 const rowActions: RowAction[] = [
+  {
+    label: "Xem nguồn review",
+    visible: (row) => docId(row) !== null,
+    run: async (row) => {
+      const doc = docId(row);
+      if (doc === null) throw new Error("Không tìm thấy DocID để xem nguồn review.");
+      window.open(`/api/files/documents/${doc}/review-preview`, "_blank");
+    },
+  },
   {
     label: "Xuất bản (version)",
     run: (r) =>

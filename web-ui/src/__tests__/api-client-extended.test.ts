@@ -135,6 +135,43 @@ describe("extended API client behavior", () => {
     await expect(apiGet("/api/failing")).rejects.toThrow(expected);
   });
 
+  it("does not expose an upstream HTML page as a login or API error", async () => {
+    const upstreamHtml = "<!doctype html><html><body>ngrok 3004 upstream failure</body></html>";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(upstreamHtml, { status: 502 })),
+    );
+
+    const failure = apiGet("/api/auth/me");
+    await expect(failure).rejects.toThrow(
+      "Dịch vụ đang tạm thời không khả dụng. Vui lòng thử lại.",
+    );
+    await expect(failure).rejects.not.toThrow("ngrok 3004");
+  });
+
+  it("prioritizes safe publish issue messages over a generic error envelope", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            ok: false,
+            error: "Publish contract failed",
+            issues: [
+              { field: "knowledge_approver_user_id", message: "Assigned approver chưa hợp lệ" },
+              { field: "title", message: "" },
+            ],
+          },
+          422,
+        ),
+      ),
+    );
+
+    const failure = apiGet("/api/documents/135/publish-contract");
+    await expect(failure).rejects.toThrow("Assigned approver chưa hợp lệ");
+    await expect(failure).rejects.not.toThrow("Publish contract failed");
+  });
+
   it("falls back to the status when an error body cannot be read", async () => {
     vi.stubGlobal(
       "fetch",

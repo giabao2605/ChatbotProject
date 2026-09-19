@@ -254,7 +254,7 @@ const rowActions: RowAction[] = [
   <ResourcePage
     title="Người dùng"
     eyebrow="Users"
-    description="Quản lý tài khoản, vai trò, phòng ban, site và mức mật."
+    description="Dành cho security_admin: quản lý tài khoản, vai trò, phòng ban, site và mức mật."
     :columns="columns"
     :load="load"
     :toolbar="toolbar"

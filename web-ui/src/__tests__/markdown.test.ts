@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderMarkdown } from "@/utils/markdown";
+import { formatSourceText, renderMarkdown } from "@/utils/markdown";
 
 describe("renderMarkdown", () => {
   it("renders markdown tables for assistant answers", () => {
@@ -26,5 +26,18 @@ describe("renderMarkdown", () => {
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).toContain("<strong>ok</strong>");
     expect(html).not.toContain("<script>");
+  });
+
+  it("turns legacy source markdown and citation markers into readable source text", () => {
+    const text = formatSourceText(
+      ["---", "**Nguồn tham chiếu:**", "- **manual.pdf** (Trang 3)", "[SRC:D134P1]"].join("\n"),
+    );
+
+    expect(text).toContain("Nguồn tham chiếu:");
+    expect(text).toContain("manual.pdf (Trang 3)");
+    expect(text).toContain("Nguồn tài liệu D134, trang 1");
+    expect(text).not.toContain("**");
+    expect(text).not.toContain("[SRC:");
+    expect(text).not.toContain("---");
   });
 });

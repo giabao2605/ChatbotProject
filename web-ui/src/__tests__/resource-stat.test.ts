@@ -528,6 +528,24 @@ describe("StatView public behavior", () => {
     expect(primitiveWrapper.text()).toContain("B");
   });
 
+  it("uses readable labels for analytics field keys", async () => {
+    const wrapper = mountStat({
+      title: "Analytics",
+      load: vi.fn().mockResolvedValue({
+        today_questions: 3,
+        cache_hit_rate: 0.8,
+        p95_ms: 900,
+      }),
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Câu hỏi hôm nay");
+    expect(wrapper.text()).toContain("Tỷ lệ cache hit");
+    expect(wrapper.text()).toContain("P95 (ms)");
+    expect(wrapper.text()).not.toContain("today_questions");
+    expect(wrapper.text()).not.toContain("cache_hit_rate");
+  });
+
   it("shows loading and both load error forms, then recovers on refresh", async () => {
     let rejectLoad!: (reason: unknown) => void;
     const load = vi

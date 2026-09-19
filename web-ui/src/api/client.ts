@@ -3,26 +3,76 @@ import { parseSseBuffer } from "@/api/sse";
 
 let csrfToken = "";
 
+const TEMPORARY_UPSTREAM_ERROR = "Dịch vụ đang tạm thời không khả dụng. Vui lòng thử lại.";
+const LOGIN_UPSTREAM_ERROR = "Dịch vụ đăng nhập đang tạm thời không khả dụng. Vui lòng thử lại.";
+
+function isHtmlResponse(value: string): boolean {
+  return /<(?:!doctype|html|head|body|title|h1)\b/i.test(value);
+}
+
+function messageList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item && typeof item === "object") {
+        const candidate = (item as { message?: unknown; msg?: unknown }).message
+          ?? (item as { msg?: unknown }).msg;
+        return typeof candidate === "string" ? candidate.trim() : "";
+      }
+      return "";
+    })
+    .filter(Boolean);
+}
+
 function errorDetail(raw: string, status: number): string {
-  if (!raw) return `HTTP ${status}`;
+  if (!raw.trim()) return `HTTP ${status}`;
   try {
-    const parsed = JSON.parse(raw) as { detail?: unknown; message?: unknown };
-    if (typeof parsed.detail === "string" && parsed.detail.trim()) return parsed.detail;
-    if (Array.isArray(parsed.detail)) {
-      const messages = parsed.detail
-        .map((item) => {
-          if (typeof item === "string") return item;
-          if (item && typeof item === "object" && "msg" in item) return String(item.msg);
-          return "";
-        })
-        .filter(Boolean);
-      if (messages.length) return messages.join("; ");
+    const parsed = JSON.parse(raw) as {
+      detail?: unknown;
+      message?: unknown;
+      error?: unknown;
+      issues?: unknown;
+      validation?: { issues?: unknown };
+    };
+    const issueMessages = [
+      ...messageList(parsed.issues),
+      ...messageList(parsed.validation?.issues),
+    ];
+    if (issueMessages.length) {
+      const joined = issueMessages.join("; ");
+      return isHtmlResponse(joined) ? TEMPORARY_UPSTREAM_ERROR : joined;
     }
-    if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      const detail = parsed.detail.trim();
+      return isHtmlResponse(detail) ? TEMPORARY_UPSTREAM_ERROR : detail;
+    }
+    const detailMessages = messageList(parsed.detail);
+    if (detailMessages.length) {
+      const joined = detailMessages.join("; ");
+      return isHtmlResponse(joined) ? TEMPORARY_UPSTREAM_ERROR : joined;
+    }
+    if (typeof parsed.message === "string" && parsed.message.trim()) {
+      const message = parsed.message.trim();
+      return isHtmlResponse(message) ? TEMPORARY_UPSTREAM_ERROR : message;
+    }
+    if (typeof parsed.error === "string" && parsed.error.trim()) {
+      const error = parsed.error.trim();
+      return isHtmlResponse(error) ? TEMPORARY_UPSTREAM_ERROR : error;
+    }
   } catch {
-    // Non-JSON backend errors are already suitable for direct display.
+    if (isHtmlResponse(raw)) return TEMPORARY_UPSTREAM_ERROR;
   }
+  if (isHtmlResponse(raw)) return TEMPORARY_UPSTREAM_ERROR;
   return raw;
+}
+
+export function loginErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (!message || isHtmlResponse(message) || message === TEMPORARY_UPSTREAM_ERROR) {
+    return LOGIN_UPSTREAM_ERROR;
+  }
+  return message;
 }
 
 export function setCsrfToken(token: string) {

@@ -38,7 +38,7 @@ export const useAuthStore = defineStore("auth", {
         syncLocale(this.user);
         this.ready = true;
       } catch (error) {
-        this.error = error instanceof Error ? error.message : "Đăng nhập thất bại";
+        this.error = api.loginErrorMessage(error);
         throw error;
       } finally {
         this.loading = false;

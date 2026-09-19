@@ -11,7 +11,7 @@ async function load(): Promise<Record<string, unknown>> {
   <StatView
     title="Observability"
     eyebrow="Operations"
-    description="Sức khỏe hệ thống, độ trễ và tỷ lệ lỗi 7 ngày gần nhất."
+    description="Dành cho platform_admin: sức khỏe hệ thống, độ trễ và tỷ lệ lỗi 7 ngày gần nhất."
     :load="load"
   />
 </template>

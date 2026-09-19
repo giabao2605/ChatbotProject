@@ -27,18 +27,21 @@ import { t } from "@/i18n";
           </p>
           <h3>3. Duyệt &amp; xuất bản</h3>
           <p>
-            Reviewer/Admin vào <strong>Duyệt tài liệu</strong> để xuất bản phiên bản mới / variant / độc lập, từ chối hoặc
-            lưu trữ.
+            Người có capability <strong>reviewer</strong> (gồm <code>reviewer</code>, <code>knowledge_approver</code> hoặc
+            legacy <code>admin</code>) vào <strong>Duyệt tài liệu</strong> để xuất bản phiên bản mới / variant / độc lập,
+            từ chối hoặc lưu trữ.
           </p>
           <h3>4. Phân quyền</h3>
           <p>
-            Người dùng gửi <strong>Yêu cầu quyền</strong> (nâng mức mật / thêm phòng ban). Admin quản lý tài khoản, vai
-            trò, phòng ban, site ở trang <strong>Người dùng</strong>.
+            Người dùng đã đăng nhập gửi <strong>Yêu cầu quyền</strong> (nâng mức mật / thêm phòng ban). Capability
+            <strong>security_admin</strong> quản lý tài khoản, vai trò, phòng ban, site ở trang <strong>Người dùng</strong>
+            và duyệt yêu cầu quyền.
           </p>
           <h3>5. Chất lượng &amp; theo dõi</h3>
           <p>
-            Các trang Feedback, Regression, Chất lượng, Báo cáo sử dụng, Observability và Audit Log giúp giám sát và
-            cải thiện hệ thống.
+            <strong>reviewer</strong> (hoặc legacy <code>admin</code>) dùng Feedback, Regression, Chất lượng và Báo cáo
+            sử dụng. <strong>platform_admin</strong> dùng Observability, Audit Log, Settings và danh mục tổ chức. Điểm
+            Chất lượng là DocQualityScore từ feedback, không phải điểm extraction.
           </p>
           <h3>6. Ngôn ngữ</h3>
           <p>Chuyển Việt/Anh bằng nút ngôn ngữ trên thanh điều hướng; lựa chọn được lưu theo tài khoản.</p>

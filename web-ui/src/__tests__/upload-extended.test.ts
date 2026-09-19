@@ -207,11 +207,13 @@ describe("UploadView extended behavior", () => {
   });
 
   it("fails closed for catalog and upload errors", async () => {
+    vi.mocked(api.apiGet).mockResolvedValueOnce({ ingestion_worker: "ready" });
     vi.mocked(api.apiGet).mockRejectedValueOnce(new Error("catalog offline"));
     const catalogFailure = mountView();
     await flushPromises();
     expect(catalogFailure.text()).toContain("catalog offline");
 
+    vi.mocked(api.apiGet).mockResolvedValueOnce({ ingestion_worker: "ready" });
     vi.mocked(api.apiGet).mockRejectedValueOnce("offline");
     const nonErrorCatalog = mountView();
     await flushPromises();

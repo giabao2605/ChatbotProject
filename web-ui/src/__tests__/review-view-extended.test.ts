@@ -175,6 +175,18 @@ describe("ReviewView public behavior", () => {
         },
       },
       { JobID: 7 },
+      {
+        JobID: 8,
+        ExtractionReport: {
+          status: "complete",
+          total_pages: 2,
+          total_chunks: 4,
+          quality_score: 0.85,
+          quality_status: "passed",
+          classification_failed: true,
+          metadata_incomplete: true,
+        },
+      },
     ];
 
     const wrapper = await mountReview();
@@ -216,6 +228,11 @@ describe("ReviewView public behavior", () => {
     }
     expect(rows[5].QualityDetails).toBe("Chính sách chưa ghi phiên bản");
     expect(rows[6].ExtractionSummary).toBe("Chưa có báo cáo ingest");
+    const incomplete = rows[7];
+    expect(incomplete.ExtractionSummary).toContain("phân loại thất bại");
+    expect(incomplete.ExtractionSummary).toContain("điểm trích xuất 0.85");
+    expect(incomplete.ExtractionSummary).not.toContain("đạt");
+    expect(incomplete.QualityDetails).toContain("Metadata chưa đầy đủ");
   });
 
   it("publishes every supported document mode only after contract validation", async () => {
@@ -253,6 +270,19 @@ describe("ReviewView public behavior", () => {
       "POST",
       undefined,
     );
+  });
+
+  it("opens the protected source preview for a pending document", async () => {
+    const wrapper = await mountReview();
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    await action(wrapper, "Xem nguồn review").run({ DocID: 135 });
+
+    expect(open).toHaveBeenCalledWith(
+      "/api/files/documents/135/review-preview",
+      "_blank",
+    );
+    open.mockRestore();
   });
 
   it("fails closed for missing documents and invalid publish contracts", async () => {
@@ -382,6 +412,20 @@ describe("ReviewView public behavior", () => {
     send.mockResolvedValueOnce({ result: "legacy-success" } as never);
     send.mockResolvedValueOnce({ ok: true } as never);
     await expect(reject.run(row)).resolves.toBeUndefined();
+  });
+
+  it("prefers direct publish issue messages when the write envelope is rejected", async () => {
+    const wrapper = await mountReview();
+    const reject = action(wrapper, "Từ chối");
+    vi.mocked(api.apiSend).mockResolvedValueOnce({
+      ok: false,
+      error: "Publish contract failed",
+      issues: [{ message: "Assigned approver không khớp" }, { message: "" }],
+    } as never);
+
+    await expect(reject.run({ DocID: 31, JobID: 41 })).rejects.toThrow(
+      "Assigned approver không khớp",
+    );
   });
 
   it("validates bulk selection and reports mixed publish results", async () => {

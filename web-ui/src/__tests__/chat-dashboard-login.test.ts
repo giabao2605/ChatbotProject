@@ -26,6 +26,12 @@ vi.mock("@/api/client", () => ({
   loadDashboard: vi.fn(),
   loadHistory: vi.fn(),
   login: vi.fn(),
+  loginErrorMessage: (error: unknown) => {
+    const message = error instanceof Error ? error.message : "Đăng nhập thất bại";
+    return /<(?:!doctype|html|head|body|title|h1)\b/i.test(message)
+      ? "Dịch vụ đăng nhập đang tạm thời không khả dụng. Vui lòng thử lại."
+      : message;
+  },
   sendChatMessage: vi.fn(),
   sendFeedback: vi.fn(),
   uploadChatImage: vi.fn(),
@@ -286,6 +292,29 @@ describe("ChatView public behavior", () => {
     expect(api.sendFeedback).toHaveBeenCalledWith(42, 1);
   });
 
+  it("renders a legacy markdown source appendix as readable source lines", async () => {
+    vi.mocked(api.listSessions).mockResolvedValue([{ session_id: "session-source", cau_hoi: "Nguồn?" }]);
+    vi.mocked(api.loadHistory).mockResolvedValue([
+      {
+        role: "assistant",
+        content: "Câu trả lời [SRC:D134P1]",
+        ref_text: "---\n**Nguồn tham chiếu:**\n- **manual.pdf** (Trang 3)\n[SRC:D134P1]",
+      },
+    ]);
+    const { wrapper } = mountWithPinia(ChatView);
+    await flushPromises();
+
+    await button(wrapper, "Lịch sử").trigger("click");
+    await wrapper.find(".history-title").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Nguồn tài liệu D134, trang 1");
+    expect(wrapper.text()).toContain("manual.pdf (Trang 3)");
+    expect(wrapper.text()).not.toContain("[SRC:");
+    expect(wrapper.text()).not.toContain("**Nguồn");
+    expect(wrapper.text()).not.toContain("---");
+  });
+
   it("uses a prompt suggestion and renders an SSE error as the assistant answer", async () => {
     vi.mocked(api.sendChatMessage).mockImplementation(async (_payload, callbacks) => {
       callbacks.onError("Không tìm thấy tài liệu");
@@ -497,5 +526,22 @@ describe("LoginView public behavior", () => {
 
     expect(wrapper.text()).toContain("Sai tên đăng nhập hoặc mật khẩu");
     expect(button(wrapper, "Đăng nhập").attributes("data-loading")).toBe("true");
+  });
+
+  it("turns an upstream HTML login response into short retryable copy", async () => {
+    const pinia = newPinia();
+    const auth = useAuthStore();
+    vi.mocked(api.login).mockRejectedValue(
+      new Error("<!doctype html><html><body>ngrok 3004 upstream failure</body></html>"),
+    );
+
+    await expect(auth.login("bao", "secret")).rejects.toThrow();
+    const wrapper = mount(LoginView, {
+      global: { ...global, plugins: [pinia] },
+    });
+
+    expect(wrapper.text()).toContain("Dịch vụ đăng nhập đang tạm thời không khả dụng. Vui lòng thử lại.");
+    expect(wrapper.text()).not.toContain("ngrok 3004");
+    expect(wrapper.text()).not.toContain("<html>");
   });
 });

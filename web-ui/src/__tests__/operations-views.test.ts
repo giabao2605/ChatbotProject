@@ -277,6 +277,7 @@ beforeEach(() => {
 
 describe("thin operations views", () => {
   it("runs analytics, observability, audit, and quality contracts", async () => {
+    state.roles = [...state.roles, "platform_admin"];
     const analytics = mountView(AnalyticsView);
     for (const stat of analytics.findAllComponents(StatViewStub)) {
       await (stat.props("load") as () => Promise<unknown>)();
@@ -296,7 +297,7 @@ describe("thin operations views", () => {
     expect(vi.mocked(api.apiGet)).toHaveBeenCalledWith("/api/analytics/departments", { days: 30 });
     expect(vi.mocked(api.apiGet)).toHaveBeenCalledWith("/api/analytics/cache");
     expect(vi.mocked(api.apiGet)).toHaveBeenCalledWith("/api/analytics/observability", { days: 7 });
-    expect(vi.mocked(api.apiSend)).toHaveBeenCalledWith("/api/quality/cleanup", "POST");
+    expect(vi.mocked(api.apiSend)).not.toHaveBeenCalledWith("/api/quality/cleanup", "POST");
   });
 
   it("switches dictionary tabs and renders help content", async () => {
