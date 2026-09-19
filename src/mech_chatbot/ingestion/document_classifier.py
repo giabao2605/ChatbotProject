@@ -6,6 +6,7 @@ from mech_chatbot.llm.llm_client import cohere_invoke
 from langchain_core.messages import HumanMessage
 from mech_chatbot.db.engine import engine
 from mech_chatbot.db.repositories._shared import normalize_base_code
+from mech_chatbot.ingestion.pdf.readers import extract_text_from_supported_file
 from sqlalchemy import text
 from mech_chatbot.config.logging import logger
 
@@ -28,6 +29,16 @@ def extract_pages_for_classification(file_path, max_pages=6, char_budget=6000):
       gioi han so trang & so ky tu de tiet kiem chi phi/toc do.
     """
     text_content = ""
+    if os.path.splitext(file_path)[1].lower() != ".pdf":
+        try:
+            extracted, _data_type = extract_text_from_supported_file(
+                file_path,
+                os.path.basename(file_path),
+            )
+            return f"--- Section 1 ---\n{extracted}\n"[:char_budget]
+        except Exception as e:
+            logger.error(f"Loi doc file non-PDF classification {file_path}: {e}")
+            return ""
     try:
         doc = fitz.open(file_path)
         total = len(doc)
@@ -188,6 +199,7 @@ def classify_document(
     allow_external=False,
     *,
     db_engine=None,
+    adapter=None,
 ):
     """Phan loai tai lieu 2 tang:
       Tang 1: xac dinh domain tu thu_muc (mechanical / tabular / generic, tra cuu Departments)
@@ -254,7 +266,9 @@ def classify_document(
     
     try:
         resp = cohere_invoke(
-            [HumanMessage(content=prompt)], surface="document_classification"
+            [HumanMessage(content=prompt)],
+            surface="document_classification",
+            adapter=adapter,
         )
         clean_json = resp.content.replace('```json', '').replace('```', '').strip()
         parsed = json.loads(clean_json)
@@ -286,8 +300,15 @@ def classify_document(
     except Exception as e:
         logger.error(f"Loi classification LLM: {e}")
         default_res["classification_failed"] = True
-        default_res["document_type_validation"] = "classifier_error_fallback"
-        default_res["reason"] = f"Classifier fallback: {type(e).__name__}."
+        if "LLM adapter is not configured" in str(e):
+            default_res["document_type_validation"] = "adapter_unavailable"
+            default_res["classification_error"] = "provider_not_configured"
+            default_res["reason"] = (
+                "Classifier fallback: LLM adapter is not configured for this process."
+            )
+        else:
+            default_res["document_type_validation"] = "classifier_error_fallback"
+            default_res["reason"] = f"Classifier fallback: {type(e).__name__}."
         return default_res
 
 if __name__ == "__main__":

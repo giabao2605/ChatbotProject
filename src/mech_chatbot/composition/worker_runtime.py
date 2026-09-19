@@ -18,7 +18,10 @@ from mech_chatbot.application.vector_ingestion import (
     IngestionPersistence,
     IngestionPipelineDependencies,
 )
+from mech_chatbot.config.logging import logger
 from mech_chatbot.config.settings import (
+    ExternalAiSettings,
+    LlmSettings,
     QdrantSettings,
     RepositoryPolicySettings,
     Settings,
@@ -32,6 +35,7 @@ from mech_chatbot.db.engine import DatabaseRuntime, build_database_runtime
 _MISSING = object()
 QdrantBuilder = Callable[[QdrantSettings], IngestionPipelineDependencies]
 VisionBuilder = Callable[[VisionSettings], Any]
+LlmBuilder = Callable[..., Any]
 
 
 class WorkerClock(Protocol):
@@ -109,6 +113,28 @@ def _build_vision(settings: VisionSettings) -> Any:
     from mech_chatbot.llm.vision_client import build_vision_model
 
     return build_vision_model(settings)
+
+
+def _build_classifier_adapter(
+    settings: Settings,
+    llm_builder: LlmBuilder | None,
+) -> Any | None:
+    """Compose the worker text provider; missing config remains fail-closed."""
+
+    from mech_chatbot.llm.llm_client import build_llm_adapter
+
+    builder = llm_builder or build_llm_adapter
+    try:
+        return builder(
+            LlmSettings.from_settings(settings),
+            external_ai_settings=ExternalAiSettings.from_settings(settings),
+        )
+    except Exception as error:  # noqa: BLE001 - classifier must fail closed
+        logger.warning(
+            "Document classifier provider is unavailable; classification will fail closed: %s",
+            type(error).__name__,
+        )
+        return None
 
 
 def _with_engine(callback: Callable[..., Any], engine: Any) -> Callable[..., Any]:
@@ -202,6 +228,7 @@ def _build_runner(
     vision_model: Any,
     qdrant_builder: QdrantBuilder,
     vision_builder: VisionBuilder,
+    llm_builder: LlmBuilder | None,
 ) -> IngestionRunner:
     from mech_chatbot.ingestion.document_classifier import classify_document
     from mech_chatbot.ingestion.file_ingestor import learn_new_file_typed
@@ -220,6 +247,7 @@ def _build_runner(
         if vision_model is _MISSING
         else vision_model
     )
+    classifier_adapter = _build_classifier_adapter(settings, llm_builder)
     return IngestionRunner(
         job_store=job_store,
         classifier=LegacyDocumentClassifier(
@@ -229,6 +257,7 @@ def _build_runner(
                 get_department_knowledge_governance,
                 engine,
             ),
+            adapter=classifier_adapter,
         ),
         processor=IngestionPipelineProcessor(
             partial(
@@ -257,6 +286,7 @@ def build_worker_runtime(
     vision_model: Any = _MISSING,
     qdrant_builder: QdrantBuilder = _build_qdrant,
     vision_builder: VisionBuilder = _build_vision,
+    llm_builder: LlmBuilder | None = None,
     database_runtime: DatabaseRuntime | None = None,
 ) -> WorkerRuntime:
     """Build the worker graph while retaining existing production adapters.
@@ -326,6 +356,7 @@ def build_worker_runtime(
         vision_model=vision_model,
         qdrant_builder=qdrant_builder,
         vision_builder=vision_builder,
+        llm_builder=llm_builder,
     )
     return WorkerRuntime(
         settings=WorkerProcessSettings.from_settings(settings_snapshot),

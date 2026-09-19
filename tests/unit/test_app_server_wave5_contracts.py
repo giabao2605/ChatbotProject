@@ -136,6 +136,54 @@ def test_auth_session_lifecycle_exposes_only_public_profile(
         assert client.get("/api/auth/me").status_code == 401
 
 
+def test_logout_revokes_replayed_cookie_and_rotated_session_token(
+    monkeypatch,
+    isolated_app_lifespan,
+):
+    profile = _profile("viewer")
+    monkeypatch.setattr(
+        operation_routes,
+        "authenticate_user",
+        lambda username, password: profile
+        if (username, password) == ("alice", "correct-password")
+        else None,
+    )
+    monkeypatch.setattr(operation_routes, "load_user_profile", lambda **_kwargs: profile)
+
+    with TestClient(app_server.app) as client:
+        logged_in = client.post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "correct-password"},
+        )
+        first_token = client.cookies.get(app_server.app_security.SESSION_COOKIE_NAME)
+        first_csrf = logged_in.json()["user"]["csrf_token"]
+
+        refreshed = client.post(
+            "/api/auth/refresh",
+            headers={"X-CSRF-Token": first_csrf},
+        )
+        rotated_token = client.cookies.get(app_server.app_security.SESSION_COOKIE_NAME)
+        client.cookies.set(app_server.app_security.SESSION_COOKIE_NAME, first_token)
+        replayed_before_logout = client.get("/api/auth/me")
+        client.cookies.set(app_server.app_security.SESSION_COOKIE_NAME, rotated_token)
+        logged_out = client.post(
+            "/api/auth/logout",
+            headers={"X-CSRF-Token": refreshed.json()["user"]["csrf_token"]},
+        )
+
+        client.cookies.set(app_server.app_security.SESSION_COOKIE_NAME, first_token)
+        replayed_first = client.get("/api/auth/me")
+        client.cookies.set(app_server.app_security.SESSION_COOKIE_NAME, rotated_token)
+        replayed_rotated = client.get("/api/auth/me")
+
+    assert logged_in.status_code == 200
+    assert refreshed.status_code == 200
+    assert replayed_before_logout.status_code == 401
+    assert logged_out.json() == {"ok": True}
+    assert replayed_first.status_code == 401
+    assert replayed_rotated.status_code == 401
+
+
 def test_auth_profile_and_refresh_fail_closed_for_inactive_user(
     monkeypatch,
     isolated_app_lifespan,
@@ -674,6 +722,7 @@ def test_health_reports_database_probe_outcome(monkeypatch, client_for):
         "status": "degraded",
         "app": "mech-chatbot-app-api",
         "db": "unavailable",
+        "ingestion_worker": "unconfigured",
     }
     assert available.json()["status"] == "ok"
     assert failed.json()["status"] == "degraded"

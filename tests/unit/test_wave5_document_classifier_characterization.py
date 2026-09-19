@@ -108,6 +108,22 @@ def test_representative_page_extraction_obeys_budget_and_handles_empty_or_broken
     assert classifier.extract_pages_for_classification("broken.pdf") == ""
 
 
+@pytest.mark.parametrize("filename", ["manual.md", "manual.docx", "bom.xlsx"])
+def test_non_pdf_classification_uses_supported_reader(monkeypatch, filename):
+    calls = []
+
+    def read(path, name):
+        calls.append((path, name))
+        return "Office or text content", "van_ban"
+
+    monkeypatch.setattr(classifier, "extract_text_from_supported_file", read)
+
+    assert classifier.extract_pages_for_classification(filename) == (
+        "--- Section 1 ---\nOffice or text content\n"
+    )
+    assert calls == [(filename, filename)]
+
+
 @pytest.mark.parametrize(
     ("row", "error", "expected"),
     [

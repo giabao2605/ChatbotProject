@@ -9,7 +9,7 @@ from mech_chatbot.application.vector_ingestion import IngestionPipelineDependenc
 pytestmark = pytest.mark.unit
 
 
-def test_vector_cleanup_prefers_document_identity_then_keeps_legacy_fallback(
+def test_vector_cleanup_requires_document_identity(
 ):
     delete_calls = []
     dependencies = IngestionPipelineDependencies(
@@ -32,7 +32,7 @@ def test_vector_cleanup_prefers_document_identity_then_keeps_legacy_fallback(
         dependencies=dependencies,
     )
 
-    assert len(delete_calls) == 3
+    assert len(delete_calls) == 1
     assert all(
         call["collection_name"] == "technical-documents"
         for call in delete_calls

@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import bcrypt
+import time
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
@@ -64,8 +65,14 @@ def me(request: Request):
 
 @auth_router.post("/logout")
 def logout(request: Request, response: Response):
+    token = request.cookies.get(app_security.SESSION_COOKIE_NAME)
     payload = session_payload(request)
     app_security.require_csrf(request, payload)
+    app_security.revoke_session(
+        token,
+        session_id=payload.session_id,
+        expires_at=payload.exp,
+    )
     app_security.clear_session_cookie(response)
     return {"ok": True}
 
@@ -82,12 +89,23 @@ def refresh_session(request: Request, response: Response):
     """Xoay vong (rotate) session token dua tren cookie hien tai va tra ve
     profile + csrf_token moi. Yeu cau CSRF de tranh bi lam dung tu cross-site.
     Frontend goi dinh ky/khi gan het han de giu phien lien tuc."""
+    issued_at = int(time.time())
     payload = session_payload(request)
     app_security.require_csrf(request, payload)
     profile = load_user_profile(user_id=payload.user_id, username=payload.username)
     if not profile:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or invalid")
-    token, new_payload = app_security.create_session_token(user_id=int(profile["user_id"]), username=str(profile["username"]))
+    current_token = request.cookies.get(app_security.SESSION_COOKIE_NAME)
+    token, new_payload = app_security.create_session_token(
+        user_id=int(profile["user_id"]),
+        username=str(profile["username"]),
+        session_id=payload.session_id or None,
+        issued_at=issued_at,
+    )
+    app_security.revoke_session(
+        current_token,
+        expires_at=payload.exp,
+    )
     app_security.set_session_cookie(response, token)
     return {"ok": True, "user": public_profile(profile, csrf=new_payload.csrf)}
 

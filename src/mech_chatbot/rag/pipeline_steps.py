@@ -22,7 +22,7 @@ from mech_chatbot.rag.context_builders import (
 
 from langchain_core.output_parsers import StrOutputParser
 from mech_chatbot.llm.llm_client import get_llm_endpoint, get_llm_model_name
-from mech_chatbot.llm.external_ai import audited_external_call, ExternalAICallCancelled
+from mech_chatbot.llm.external_ai import audited_external_call, ExternalAICallCancelled, compatible_provider_name
 from mech_chatbot.rag.answer_checks import (
     has_self_contradictory_missing_data_claim,
     has_unsupported_units_symbols,
@@ -1077,7 +1077,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     _external_input_chars = len(context_text + user_question + chat_history_str)
     _external_input_bytes = len((context_text + user_question + chat_history_str).encode("utf-8"))
     _external_call_args = {
-        "provider": "proxyllm",
+        "provider": compatible_provider_name(get_llm_endpoint(provider_adapter)),
         "model": get_llm_model_name(provider_adapter),
         "endpoint": get_llm_endpoint(provider_adapter),
         "surface": "generation",

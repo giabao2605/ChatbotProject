@@ -16,6 +16,7 @@ from mech_chatbot.config.settings import ExternalAiSettings, VisionSettings
 from mech_chatbot.llm.external_ai import (
     DEFAULT_EXTERNAL_AI_SETTINGS,
     audited_external_call,
+    compatible_provider_name,
     normalize_text_result,
 )
 
@@ -221,9 +222,14 @@ class GPTVisionModel:
             else:
                 user_content.append({"type": "text", "text": str(part)})
 
+        request_options = (
+            {} if compatible_provider_name(self._endpoint) == "openrouter"
+            and self.model_name == "openai/gpt-5.6-luna"
+            else {"temperature": self.settings.temperature}
+        )
         serialized_content = json.dumps(user_content, ensure_ascii=False)
         with audited_external_call(
-            provider="proxyllm",
+            provider=compatible_provider_name(self._endpoint),
             model=self.model_name,
             endpoint=self._endpoint,
             surface="vision_ocr",
@@ -234,13 +240,13 @@ class GPTVisionModel:
             response = self._client.chat.completions.create(
                 model=self.model_name,
                 messages=[{"role": "user", "content": user_content}],
-                temperature=self.settings.temperature,
+                **request_options,
                 max_tokens=self.settings.max_output_tokens,
                 timeout=self.settings.timeout_seconds,
             )
         normalized = normalize_text_result(
             response.choices[0].message,
-            provider="proxyllm",
+            provider=compatible_provider_name(self._endpoint),
             model=self.model_name,
             kind="vision_extraction",
         )

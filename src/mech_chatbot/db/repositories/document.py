@@ -127,14 +127,26 @@ def _get_or_create_doc(
                 f_id = inserted[0]
 
     row = conn.execute(
-        text("SELECT DocID, LifecycleStatus, ReviewStatus, IsCurrent FROM TaiLieu WHERE TenFile = :f AND ThuMuc = :t"),
+        text(
+            """
+            SELECT DocID, LifecycleStatus, ReviewStatus, PublicationState,
+                   Servable, IsCurrent
+            FROM TaiLieu
+            WHERE TenFile = :f AND ThuMuc = :t
+            """
+        ),
         {"f": file_name, "t": thu_muc},
     ).fetchone()
     
     if row:
-        doc_id, lifecycle_status, review_status, is_current = row
-        if lifecycle_status == 'published' and review_status == 'approved':
-            raise ValueError(f"Tài liệu {file_name} đã được published. Không cho phép re-ingest để bảo toàn dữ liệu.")
+        doc_id, lifecycle_status, review_status, publication_state, servable, is_current = row
+        is_published = str(lifecycle_status or "").strip().lower() == "published"
+        is_public = str(publication_state or "").strip().lower() == "published"
+        if is_published or is_public or bool(servable):
+            raise ValueError(
+                f"Tài liệu {file_name} đã được published/servable. "
+                "Không cho phép re-ingest để bảo toàn dữ liệu."
+            )
         # Update metadata neu re-ingest draft/rejected
         conn.execute(
             text("""UPDATE TaiLieu SET 
@@ -262,23 +274,50 @@ def mark_document_ingest_failed(
     error_message=None,
     *,
     db_engine=None,
+    expected_doc_id=None,
 ):
     selected_engine = resolve_engine(db_engine)
     try:
         with selected_engine.begin() as conn:
+            lookup_sql = (
+                """
+                SELECT DocID, LifecycleStatus, ReviewStatus,
+                       PublicationState, Servable, IsCurrent
+                FROM TaiLieu
+                WHERE DocID = :d
+                """
+                if expected_doc_id is not None
+                else """
+                SELECT DocID, LifecycleStatus, ReviewStatus,
+                       PublicationState, Servable, IsCurrent
+                FROM TaiLieu
+                WHERE TenFile = :f AND ThuMuc = :t
+                """
+            )
+            lookup_params = (
+                {"d": expected_doc_id}
+                if expected_doc_id is not None
+                else {"f": file_name, "t": thu_muc}
+            )
             row = conn.execute(
-                text("""
-                    SELECT DocID
-                    FROM TaiLieu
-                    WHERE TenFile = :f AND ThuMuc = :t
-                """),
-                {"f": file_name, "t": thu_muc}
+                text(lookup_sql),
+                lookup_params,
             ).fetchone()
 
             if not row:
-                return
+                return False
 
-            doc_id = row[0]
+            doc_id, lifecycle_status, _review_status, publication_state, servable, _is_current = row
+            is_published = str(lifecycle_status or "").strip().lower() == "published"
+            is_public = str(publication_state or "").strip().lower() == "published"
+            if is_published or is_public or bool(servable):
+                logger.warning(
+                    "Bo qua rollback ingest cho tai lieu da published/servable "
+                    "doc_id=%s file=%s",
+                    doc_id,
+                    file_name,
+                )
+                return False
 
             conn.execute(text("DELETE FROM TaiLieuKyThuat WHERE DocID = :d"), {"d": doc_id})
             conn.execute(text("DELETE FROM BangKeVatTu WHERE DocID = :d"), {"d": doc_id})
@@ -296,8 +335,10 @@ def mark_document_ingest_failed(
                 """),
                 {"d": doc_id, "msg": error_message or "Ingest failed"}
             )
+            return True
     except Exception as e:
         logger.error(f"Loi mark_document_ingest_failed: {e}", exc_info=True)
+        return False
 
 def get_document_info(doc_id, *, db_engine=None):
     selected_engine = resolve_engine(db_engine)

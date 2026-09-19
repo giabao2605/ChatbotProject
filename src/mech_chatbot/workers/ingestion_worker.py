@@ -2,13 +2,41 @@
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
+from mech_chatbot.adapters.worker_status import worker_heartbeat
 
 from mech_chatbot.application.ingestion_runner import IngestionJob
 from mech_chatbot.composition.worker_runtime import WorkerRuntime, build_worker_runtime
 from mech_chatbot.config.logging import LoggingConfig, configure_logging, logger
 from mech_chatbot.config.repository_runtime import bind_repository_runtime
 from mech_chatbot.config.settings import Settings, load_settings
+
+
+_READY_ENV = "INGESTION_WORKER_READY_FILE"
+
+
+def _readiness_path() -> Path | None:
+    raw_path = os.environ.get(_READY_ENV, "").strip()
+    return Path(raw_path) if raw_path else None
+
+
+def _clear_readiness_marker(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _write_readiness_marker(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("ready\n", encoding="utf-8")
+    return path
 
 
 def _reconcile(runtime: WorkerRuntime, last_publication: float, last_serving: float) -> tuple[float, float]:
@@ -47,6 +75,8 @@ def run_worker(runtime: WorkerRuntime | None = None) -> None:
         resolved_runtime = build_worker_runtime(settings_snapshot)
     else:
         resolved_runtime = runtime
+    readiness_marker = _readiness_path()
+    _clear_readiness_marker(readiness_marker)
     last_publication_reconcile = 0.0
     last_serving_reconcile = 0.0
 
@@ -64,12 +94,13 @@ def run_worker(runtime: WorkerRuntime | None = None) -> None:
                 "Ingestion worker requires explicit SQL and Qdrant repositories"
             )
         logger.info("Khởi động Ingestion Worker chạy ngầm...")
-        print("Ingestion Worker đã sẵn sàng. Đang chờ file mới...")
-        with bind_repository_runtime(
+        print("Ingestion Worker đã sẵn sàng. Đang chờ file mới...", flush=True)
+        with worker_heartbeat(readiness_marker), bind_repository_runtime(
             db_engine=database_engine,
             qdrant_client=qdrant_client,
             qdrant_collection=qdrant_collection,
         ):
+            readiness_marker = _write_readiness_marker(readiness_marker)
             while True:
                 job: IngestionJob | None = None
                 try:
@@ -100,6 +131,7 @@ def run_worker(runtime: WorkerRuntime | None = None) -> None:
                         resolved_runtime.settings.error_sleep_seconds
                     )
     finally:
+        _clear_readiness_marker(readiness_marker)
         if owns_runtime:
             resolved_runtime.close()
 

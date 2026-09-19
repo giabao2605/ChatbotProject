@@ -190,10 +190,12 @@ class LegacyDocumentClassifier:
         *,
         processing_context: Callable[..., Any],
         load_governance: Callable[[str], Mapping[str, Any] | None] | None = None,
+        adapter: Any | None = None,
     ) -> None:
         self._classify = classify
         self._processing_context = processing_context
         self._load_governance = load_governance
+        self._adapter = adapter
 
     def _external_allowed(self, job: IngestionJob) -> bool:
         if self._load_governance is None:
@@ -218,11 +220,16 @@ class LegacyDocumentClassifier:
             False,
             f"ingestion_{job.job_id}",
         ):
+            classify_kwargs = {
+                "thu_muc": job.owner_department,
+                "allow_external": self._external_allowed(job),
+            }
+            if self._adapter is not None:
+                classify_kwargs["adapter"] = self._adapter
             return self._classify(
                 str(job.file_path),
                 job.file_name,
-                thu_muc=job.owner_department,
-                allow_external=self._external_allowed(job),
+                **classify_kwargs,
             )
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -130,6 +131,27 @@ def test_worker_sleeps_when_no_job_exists(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert clock.sleep_calls == [5]
     assert runner.jobs == []
+
+
+def test_worker_exposes_readiness_marker_only_while_polling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "worker.ready"
+    monkeypatch.setenv("INGESTION_WORKER_READY_FILE", str(marker))
+    clock = FakeClock()
+
+    def assert_ready_then_stop(seconds: float) -> None:
+        assert seconds == 5
+        assert marker.read_text(encoding="utf-8") == "ready\n"
+        raise _StopWorker
+
+    clock.sleep = assert_ready_then_stop  # type: ignore[method-assign]
+
+    with pytest.raises(_StopWorker):
+        ingestion_worker.run_worker(_runtime(FakeStore([None]), FakeRunner(), clock))
+
+    assert not marker.exists()
 
 
 def test_worker_uses_runtime_intervals_and_sleep_values() -> None:

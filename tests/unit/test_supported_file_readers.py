@@ -278,7 +278,7 @@ def test_image_reader_requires_model_and_formats_structured_vision(
     monkeypatch.setattr(readers, "parse_vision_json", lambda _text: {"materials": ["steel"]})
     monkeypatch.setattr(readers, "format_vision_data", lambda data: f"materials={data['materials'][0]}")
 
-    with pytest.raises(ValueError, match="PROXYLLM_API_KEY"):
+    with pytest.raises(ValueError, match="API key"):
         readers.extract_text_from_supported_file(str(path), path.name)
 
     assert readers.extract_text_from_supported_file(

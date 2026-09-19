@@ -176,7 +176,7 @@ def test_published_document_cannot_be_reingested(install_engine, monkeypatch):
         if "FROM dbo.DepartmentKnowledgeGovernance" in sql:
             return _Result()
         if "SELECT DocID, LifecycleStatus" in sql:
-            return _Result([(42, "published", "approved", 1)])
+            return _Result([(42, "published", "approved", "published", 1, 1)])
         return _Result()
 
     connection = install_engine(handle)
@@ -205,7 +205,7 @@ def test_reingest_resets_a_draft_to_review_with_safe_classification_defaults(
         if "FROM dbo.DepartmentKnowledgeGovernance" in sql:
             return _Result()
         if "SELECT DocID, LifecycleStatus" in sql:
-            return _Result([(42, "draft", "rejected", 0)])
+            return _Result([(42, "draft", "rejected", "draft", 0, 0)])
         return _Result()
 
     connection = install_engine(handle)
@@ -373,12 +373,16 @@ def test_metadata_params_normalize_scalar_document_codes(
 
 def test_mark_ingest_failed_removes_partial_data_and_rejects_the_document(install_engine):
     connection = install_engine(
-        lambda sql, _params: _Result([(42,)])
+        lambda sql, _params: _Result(
+            [(42, "draft", "pending_review", "draft", 0, 1)]
+        )
         if "SELECT DocID" in sql
         else _Result()
     )
 
-    document.mark_document_ingest_failed("drawing.pdf", "QA", "invalid pages")
+    document.mark_document_ingest_failed(
+        "drawing.pdf", "QA", "invalid pages", expected_doc_id=42
+    )
 
     sql_text = "\n".join(sql for sql, _ in connection.calls)
     assert "DELETE FROM TaiLieuKyThuat" in sql_text
@@ -387,6 +391,79 @@ def test_mark_ingest_failed_removes_partial_data_and_rejects_the_document(instal
     assert "DELETE FROM TechnicalAttributes" in sql_text
     assert "LifecycleStatus = 'rejected'" in sql_text
     assert connection.calls[-1][1] == {"d": 42, "msg": "invalid pages"}
+
+
+def test_mark_ingest_failed_refuses_published_approved_document(install_engine):
+    connection = install_engine(
+        lambda sql, _params: _Result(
+            [(42, "published", "approved", "published", 1, 1)]
+        )
+        if "SELECT DocID" in sql
+        else pytest.fail("published guard must stop before destructive SQL")
+    )
+
+    assert (
+        document.mark_document_ingest_failed(
+            "published.pdf", "QA", "duplicate upload"
+        )
+        is False
+    )
+
+    assert len(connection.calls) == 1
+    assert all("DELETE FROM" not in sql for sql, _params in connection.calls)
+    assert all("UPDATE TaiLieu" not in sql for sql, _params in connection.calls)
+
+
+def test_mark_ingest_failed_refuses_inconsistent_published_or_servable_document(
+    install_engine,
+):
+    connection = install_engine(
+        lambda sql, _params: _Result(
+            [(42, "draft", "rejected", "published", 1, 0)]
+        )
+        if "SELECT DocID" in sql
+        else pytest.fail("published/servable guard must stop before destructive SQL")
+    )
+
+    assert (
+        document.mark_document_ingest_failed(
+            "published.pdf", "QA", "duplicate upload", expected_doc_id=42
+        )
+        is False
+    )
+
+    assert len(connection.calls) == 1
+    assert all("DELETE FROM" not in sql for sql, _params in connection.calls)
+    assert all("UPDATE TaiLieu" not in sql for sql, _params in connection.calls)
+
+
+def test_published_or_servable_document_cannot_be_reingested_when_review_is_inconsistent(
+    install_engine, monkeypatch
+):
+    from mech_chatbot.db import registry_ports
+
+    def handle(sql, _params):
+        if "FROM dbo.IngestionJobs" in sql:
+            return _Result()
+        if "FROM dbo.DepartmentKnowledgeGovernance" in sql:
+            return _Result()
+        if "SELECT DocID, LifecycleStatus" in sql:
+            return _Result([(42, "draft", "rejected", "published", 1, 0)])
+        return _Result()
+
+    connection = install_engine(handle)
+    monkeypatch.setattr(registry_ports, "resolve_domain_by_department", lambda _dept: "quality")
+    monkeypatch.setattr(
+        registry_ports,
+        "resolve_security_by_department",
+        lambda _dept: "internal",
+    )
+    monkeypatch.setattr(document._r_catalog, "_resolve_site", lambda _dept: "HCM")
+
+    with pytest.raises(ValueError, match="published/servable"):
+        document._get_or_create_doc(connection, "drawing.pdf", "QA")
+
+    assert not any("UPDATE TaiLieu SET" in sql for sql, _ in connection.calls)
 
 
 def test_mark_ingest_failed_does_not_touch_data_when_document_is_missing(install_engine):

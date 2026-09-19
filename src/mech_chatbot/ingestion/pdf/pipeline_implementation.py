@@ -288,6 +288,15 @@ def _rollback_failed_ingestion(
     if report["status"] != "error" or not rollback_on_error:
         return
 
+    # A rejected duplicate can fail before reset_document_metadata returns a
+    # document identity.  Without an owned DocID, any file/folder cleanup can
+    # target the already-published document that caused the duplicate guard.
+    if doc_id is None:
+        report["warnings"].append(
+            "Bo qua rollback vi ingest khong co DocID thuoc attempt nay."
+        )
+        return
+
     try:
         _delete_vectors_for_file(
             ten_file,
@@ -299,6 +308,7 @@ def _rollback_failed_ingestion(
             ten_file,
             thu_muc,
             report.get("message"),
+            expected_doc_id=doc_id,
         )
         persistence.restore_document_children(doc_id)
         report["total_chunks"] = 0
@@ -452,31 +462,20 @@ def _delete_vectors_for_file(
     *,
     dependencies,
 ):
-    # Uu tien xoa theo doc_id (chinh xac nhat, bat duoc ca khi doi ten file/thu muc
-    # -> tranh sot vector cu gay trung lap/nhieu khi re-ingest).
-    if doc_id is not None:
-        try:
-            dependencies.qdrant_client.delete(
-                collection_name=dependencies.collection_name,
-                points_selector=models.Filter(
-                    must=[models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=doc_id))]
-                ),
-            )
-        except Exception as e:
-            logger.warning(f"Xoa vector theo doc_id={doc_id} loi (se thu tiep theo file): {e}")
-    # Bug#4: khop theo metadata.thu_muc (thu muc goc, gia tri don) thay vi
-    # metadata.phong_ban_quyen (danh sach quyen). phong_ban_quyen co the chua nhieu
-    # phong chia se, dung MatchValue tren list de lai vector khi doi ten phong.
-    # Van giu should de tuong thich nguoc voi vector cu (chua co metadata.thu_muc).
+    # Rollback is allowed to remove only vectors owned by the governed
+    # document identity.  A filename/folder fallback can match a published
+    # document during a rejected duplicate upload.
+    if doc_id is None:
+        return
+
     dependencies.qdrant_client.delete(
         collection_name=dependencies.collection_name,
         points_selector=models.Filter(
             must=[
-                models.FieldCondition(key="metadata.file_goc", match=models.MatchValue(value=ten_file)),
-            ],
-            should=[
-                models.FieldCondition(key="metadata.thu_muc", match=models.MatchValue(value=thu_muc)),
-                models.FieldCondition(key="metadata.phong_ban_quyen", match=models.MatchValue(value=thu_muc)),
+                models.FieldCondition(
+                    key="metadata.doc_id",
+                    match=models.MatchValue(value=doc_id),
+                ),
             ],
         )
     )
@@ -744,7 +743,7 @@ def process_and_ingest_pdf(
                         logger.error(warn)
                 elif vision_required and not vision_model:
                     vision_failed = True
-                    warn = f"Trang {page_num+1}: cần GPT-5.4 Vision/OCR nhưng chưa cấu hình PROXYLLM_API_KEY hợp lệ."
+                    warn = f"Trang {page_num+1}: cần Vision/OCR nhưng chưa cấu hình API key hợp lệ cho provider đã chọn."
                     report["vision_warnings"].append({"page": page_num + 1, "detail": "no_vision_model"})
                     report["warnings"].append(warn)
                     logger.error(warn)
@@ -1274,8 +1273,17 @@ def process_and_ingest_file(
                 extraction_status="success",
                 image_path=rendered_image_path,
             )
-        elif ext in MARKDOWN_EXTENSIONS:
-            report["pages_text_extracted"].append(1)
+        else:
+            # Non-PDF readers expose one logical page/section to the quality
+            # gate.  Office/table readers used to create chunks without
+            # recording extraction coverage, which made a valid DOCX/XLSX
+            # appear as 0/1 pages and triggered rollback.
+            extracted_pages = (
+                report["pages_table_extracted"]
+                if data_type == "bang_du_lieu"
+                else report["pages_text_extracted"]
+            )
+            extracted_pages.append(1)
             persistence.save_document_page(
                 doc_id=doc_id,
                 file_name=ten_file,
@@ -1285,19 +1293,20 @@ def process_and_ingest_file(
                 extraction_status="success",
                 image_path=None,
             )
-            markdown_bom_records = extract_bom_records_from_markdown(text_content)
-            if markdown_bom_records:
-                persisted = persistence.save_bom_records(
-                    doc_id,
-                    1,
-                    markdown_bom_records,
-                )
-                report["bom_rows_count"] += persisted
-                report["pages_table_extracted"].append(1)
-                if not persisted:
-                    report["warnings"].append(
-                        "structured_bom_persistence_failed:page:1"
+            if ext in MARKDOWN_EXTENSIONS:
+                markdown_bom_records = extract_bom_records_from_markdown(text_content)
+                if markdown_bom_records:
+                    persisted = persistence.save_bom_records(
+                        doc_id,
+                        1,
+                        markdown_bom_records,
                     )
+                    report["bom_rows_count"] += persisted
+                    report["pages_table_extracted"].append(1)
+                    if not persisted:
+                        report["warnings"].append(
+                            "structured_bom_persistence_failed:page:1"
+                        )
 
         # GD4: duong nap hang loat khong tin folder tuyet doi -> quet noi dung nhay cam
         if scan_sensitive:

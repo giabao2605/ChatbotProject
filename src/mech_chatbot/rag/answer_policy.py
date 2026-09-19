@@ -60,10 +60,6 @@ _NEGATIVE_STATEMENT = re.compile(
     r"|\bno\s+(?:field|data|information)\b[^.!?;\n]{0,140}",
     re.IGNORECASE,
 )
-_STOP_WORDS = {
-    "bao", "nhieu", "la", "cua", "trong", "tai", "lieu", "co", "khong",
-    "what", "which", "the", "does", "document", "provide",
-}
 _NEGATIVE_TOPIC_GROUPS = (
     ("chi phi", "don gia", "cost", "price"),
     ("thoi gian", "chu ky", "duration", "cycle", "time"),
@@ -79,12 +75,10 @@ def has_explicit_negative_evidence(question: str, context_text: str) -> bool:
 def explicit_negative_evidence_quote(question: str, context_text: str) -> str:
     """Return the relevant negative source clause, if one is present."""
     question_folded = _fold(question)
-    question_tokens = set(re.findall(r"[a-z0-9]+", question_folded)) - _STOP_WORDS
     sentences = re.split(r"(?<=[.!?;])\s+|\r?\n+", str(context_text or ""))
     for original_sentence in sentences:
         context_folded = _fold(original_sentence)
         for match in _NEGATIVE_STATEMENT.finditer(context_folded):
-            statement_tokens = set(re.findall(r"[a-z0-9]+", match.group(0)))
             matched_topics = [
                 group
                 for group in _NEGATIVE_TOPIC_GROUPS
@@ -96,8 +90,10 @@ def explicit_negative_evidence_quote(question: str, context_text: str) -> str:
                 for topic in group
             ):
                 return original_sentence.strip()
-            if not matched_topics and question_tokens & statement_tokens:
-                return original_sentence.strip()
+            # Generic token overlap is not enough to establish topic relevance:
+            # words such as "quy"/"dinh" and document identifiers occur in
+            # unrelated questions and can turn a price denial into a false
+            # answer for a process or timing query.
     return ""
 
 

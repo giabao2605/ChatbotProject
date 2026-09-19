@@ -544,12 +544,35 @@ def list_pending_review_docs():
                    d.OwnerSigner, d.EffectiveStatus, d.VersionNo, d.IsCurrent AS IsCurrentVersion,
                    d.VariantGroup, d.VariantCode AS BranchLabel
             FROM IngestionJobs j
+            OUTER APPLY (
+                SELECT TOP 1 pending.DocID
+                FROM dbo.TaiLieu pending
+                WHERE pending.TenFile = j.TenFile
+                  AND pending.ThuMuc = j.ThuMuc
+                  AND pending.ReviewStatus = 'pending_review'
+                  AND pending.LifecycleStatus <> 'deleting'
+                ORDER BY pending.DocID DESC
+            ) pending
             LEFT JOIN TaiLieu d
-              ON d.TenFile = j.TenFile
-             AND d.ThuMuc = j.ThuMuc
+              ON d.DocID = pending.DocID
              AND d.ReviewStatus = 'pending_review'
              AND d.LifecycleStatus <> 'deleting'
             WHERE j.Status = 'pending_review'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM dbo.TaiLieu published
+                  WHERE published.TenFile = j.TenFile
+                    AND published.ThuMuc = j.ThuMuc
+                    AND published.LifecycleStatus <> 'deleting'
+                    AND published.ReviewStatus = 'approved'
+                    AND published.PublicationState = 'published'
+                    AND published.Servable = 1
+                    AND (
+                        published.DocID >= pending.DocID
+                        OR pending.DocID IS NULL
+                    )
+                    AND published.DocID >= COALESCE(pending.DocID, 0)
+              )
             ORDER BY j.UpdatedAt ASC
         """)).fetchall()
 
@@ -593,11 +616,45 @@ def list_bulk_action_jobs():
 		return conn.execute(text("""
             SELECT j.JobID, j.TenFile, j.ThuMuc, j.Status, j.UpdatedAt, d.DocID
             FROM IngestionJobs j
+            OUTER APPLY (
+                SELECT TOP 1 pending.DocID
+                FROM dbo.TaiLieu pending
+                WHERE pending.TenFile = j.TenFile
+                  AND pending.ThuMuc = j.ThuMuc
+                  AND pending.ReviewStatus = 'pending_review'
+                  AND pending.LifecycleStatus <> 'deleting'
+                ORDER BY pending.DocID DESC
+            ) pending
+            OUTER APPLY (
+                SELECT TOP 1 latest.DocID
+                FROM dbo.TaiLieu latest
+                WHERE latest.TenFile = j.TenFile
+                  AND latest.ThuMuc = j.ThuMuc
+                  AND latest.LifecycleStatus <> 'deleting'
+                ORDER BY latest.DocID DESC
+            ) latest
             LEFT JOIN TaiLieu d
-              ON d.TenFile = j.TenFile
-             AND d.ThuMuc = j.ThuMuc
+              ON d.DocID = latest.DocID
              AND d.LifecycleStatus <> 'deleting'
             WHERE j.Status IN ('pending_review', 'failed', 'rejected', 'publishing')
+              AND (
+                  j.Status <> 'pending_review'
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM dbo.TaiLieu published
+                      WHERE published.TenFile = j.TenFile
+                        AND published.ThuMuc = j.ThuMuc
+                        AND published.LifecycleStatus <> 'deleting'
+                        AND published.ReviewStatus = 'approved'
+                        AND published.PublicationState = 'published'
+                        AND published.Servable = 1
+                        AND (
+                            published.DocID >= pending.DocID
+                            OR pending.DocID IS NULL
+                        )
+                        AND published.DocID >= COALESCE(pending.DocID, 0)
+                  )
+              )
             ORDER BY j.UpdatedAt ASC
         """)).fetchall()
 

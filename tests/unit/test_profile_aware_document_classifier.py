@@ -155,6 +155,73 @@ def test_classifier_error_fallback_is_explicitly_marked(monkeypatch):
     assert result["document_type_validation"] == "classifier_error_fallback"
 
 
+def test_classifier_passes_composed_adapter_to_provider(monkeypatch):
+    captured = {}
+    adapter = object()
+    monkeypatch.setattr(classifier, "extract_pages_for_classification", lambda *_a, **_k: "text")
+    monkeypatch.setattr(classifier, "_load_active_document_types", lambda _code: ["generic"])
+    monkeypatch.setattr("mech_chatbot.ingestion.domain_registry.resolve_domain_by_department", lambda _d: "generic")
+    monkeypatch.setattr("mech_chatbot.ingestion.domain_registry.resolve_security_by_department", lambda _d: "internal")
+
+    def invoke(*_args, **kwargs):
+        captured["adapter"] = kwargs["adapter"]
+        return SimpleNamespace(content='{"base_code":"DOC","document_type":"generic"}')
+
+    monkeypatch.setattr(classifier, "cohere_invoke", invoke)
+
+    result = classifier.classify_document(
+        "unused.pdf",
+        "doc.pdf",
+        thu_muc="HR",
+        allow_external=True,
+        adapter=adapter,
+    )
+
+    assert result.get("classification_failed", False) is False
+    assert captured["adapter"] is adapter
+
+
+def test_missing_classifier_adapter_is_explicitly_failed_closed(monkeypatch):
+    monkeypatch.setattr(classifier, "extract_pages_for_classification", lambda *_a, **_k: "text")
+    monkeypatch.setattr(classifier, "_load_active_document_types", lambda _code: ["generic"])
+    monkeypatch.setattr("mech_chatbot.ingestion.domain_registry.resolve_domain_by_department", lambda _d: "generic")
+    monkeypatch.setattr("mech_chatbot.ingestion.domain_registry.resolve_security_by_department", lambda _d: "internal")
+    monkeypatch.setattr(
+        classifier,
+        "cohere_invoke",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            RuntimeError("LLM adapter is not configured for this process")
+        ),
+    )
+
+    result = classifier.classify_document(
+        "unused.pdf",
+        "doc.pdf",
+        thu_muc="HR",
+        allow_external=True,
+    )
+
+    assert result["classification_failed"] is True
+    assert result["document_type_validation"] == "adapter_unavailable"
+    assert result["classification_error"] == "provider_not_configured"
+
+
+def test_unconfigured_runtime_adapter_is_failed_closed_at_provider_boundary(monkeypatch):
+    monkeypatch.setattr(classifier, "extract_pages_for_classification", lambda *_a, **_k: "text")
+
+    result = classifier.classify_document(
+        "unused.pdf",
+        "doc.pdf",
+        thu_muc="HR",
+        document_types=["generic"],
+        allow_external=True,
+    )
+
+    assert result["classification_failed"] is True
+    assert result["document_type_validation"] == "adapter_unavailable"
+    assert result["classification_error"] == "provider_not_configured"
+
+
 def test_internal_only_classification_uses_deterministic_fallback(monkeypatch):
     monkeypatch.setattr(
         classifier,

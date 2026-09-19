@@ -126,13 +126,15 @@ def test_create_app_builds_rag_transport_from_the_captured_snapshot(monkeypatch)
 
 def test_app_lifespan_closes_sql_and_qdrant_resources(monkeypatch):
     from mech_chatbot.api import app_server
+    from sqlalchemy import create_engine
 
     closed = []
 
     class DatabaseRuntime:
-        engine = object()
+        engine = create_engine("sqlite://")
 
         def close(self):
+            self.engine.dispose()
             closed.append("sql")
 
     class QdrantRuntime:
@@ -221,12 +223,13 @@ def test_production_app_adds_security_headers_and_rejects_untrusted_hosts(
     monkeypatch,
 ):
     from mech_chatbot.api import app_server
+    from sqlalchemy import create_engine
 
     class DatabaseRuntime:
-        engine = object()
+        engine = create_engine("sqlite://")
 
         def close(self):
-            pass
+            self.engine.dispose()
 
     class QdrantRuntime:
         client = object()

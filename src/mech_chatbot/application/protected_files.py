@@ -18,7 +18,12 @@ from mech_chatbot.domain.serving_state import is_currently_servable
 
 
 LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
-ProtectedFileKind = Literal["document_page", "document_original", "chat_image"]
+ProtectedFileKind = Literal[
+    "document_page",
+    "document_original",
+    "document_review_original",
+    "chat_image",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +43,9 @@ class DocumentAccessRecord:
     effective_status: str | None = "effective"
     effective_date: date | str | None = None
     expiry_date: date | str | None = None
+    knowledge_owner_user_id: int | None = None
+    knowledge_approver_user_id: int | None = None
+    department_knowledge_approver_user_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,10 +63,16 @@ class ProtectedFileActor:
     allowed_departments: frozenset[str]
     allowed_sites: frozenset[str]
     max_security_level: str
+    user_id: int | None = None
 
     @classmethod
     def from_profile(cls, profile: Mapping[str, Any]) -> "ProtectedFileActor":
+        try:
+            user_id = int(profile.get("user_id"))
+        except (TypeError, ValueError):
+            user_id = None
         return cls(
+            user_id=user_id,
             username=str(profile.get("username") or ""),
             roles=frozenset(
                 str(role).strip().lower()
@@ -96,6 +110,10 @@ class ProtectedFileReference:
     @classmethod
     def original(cls, doc_id: int) -> "ProtectedFileReference":
         return cls(kind="document_original", doc_id=int(doc_id))
+
+    @classmethod
+    def review_original(cls, doc_id: int) -> "ProtectedFileReference":
+        return cls(kind="document_review_original", doc_id=int(doc_id))
 
     @classmethod
     def page(cls, doc_id: int, page_no: int) -> "ProtectedFileReference":
@@ -160,11 +178,13 @@ def evaluate_document_access(
     record: DocumentAccessRecord | None,
     *,
     strict_site_filter: bool,
+    allow_review_preview: bool = False,
 ) -> AccessDecision:
     if record is None:
         return AccessDecision(False, "document_not_found")
 
     security_level = normalize_security_level(record.security_level)
+    review_preview_decision: AccessDecision | None = None
     if not is_currently_servable(
         {
             "servable": record.servable,
@@ -178,10 +198,18 @@ def evaluate_document_access(
         },
         require_current=True,
     ):
-        return AccessDecision(False, "document_not_servable", security_level)
+        if not allow_review_preview:
+            return AccessDecision(False, "document_not_servable", security_level)
+        review_preview_decision = evaluate_review_preview_access(actor, record)
+        if not review_preview_decision.allowed:
+            return review_preview_decision
 
     if "admin" in actor.roles:
-        return AccessDecision(True, "global_admin", security_level)
+        return AccessDecision(
+            True,
+            review_preview_decision.reason if review_preview_decision else "global_admin",
+            security_level,
+        )
 
     document_departments = frozenset(
         str(department).strip()
@@ -214,7 +242,49 @@ def evaluate_document_access(
     elif document_site and document_site not in allowed_sites:
         return AccessDecision(False, "site_denied", security_level)
 
-    return AccessDecision(True, "allowed", security_level)
+    return AccessDecision(
+        True,
+        review_preview_decision.reason if review_preview_decision else "allowed",
+        security_level,
+    )
+
+
+def evaluate_review_preview_access(
+    actor: ProtectedFileActor,
+    record: DocumentAccessRecord | None,
+) -> AccessDecision:
+    """Authorize the separate source-preview path for a pending document.
+
+    A pending original is review material, not a normal downloadable source.
+    The effective approver must be present in SQL and the authenticated actor
+    must match that user id while carrying an explicit review role.  A viewer,
+    an actor without a user id, or a pending document without an assignment
+    therefore remains fail-closed.
+    """
+    if record is None:
+        return AccessDecision(False, "document_not_found")
+    security_level = normalize_security_level(record.security_level)
+    approver_id = (
+        record.knowledge_approver_user_id
+        or record.department_knowledge_approver_user_id
+    )
+    if approver_id is None:
+        return AccessDecision(
+            False,
+            "review_preview_assignment_missing",
+            security_level,
+        )
+    if actor.user_id is None:
+        return AccessDecision(
+            False,
+            "review_preview_identity_missing",
+            security_level,
+        )
+    if actor.user_id != int(approver_id):
+        return AccessDecision(False, "review_preview_not_assigned", security_level)
+    if not {"knowledge_approver", "reviewer"}.intersection(actor.roles):
+        return AccessDecision(False, "review_preview_role_denied", security_level)
+    return AccessDecision(True, "assigned_knowledge_approver", security_level)
 
 
 class ProtectedFileResolver:
@@ -240,7 +310,11 @@ class ProtectedFileResolver:
     ) -> AuthorizedFile:
         if reference.kind == "chat_image":
             return self._resolve_chat_image(reference, actor)
-        if reference.kind in {"document_page", "document_original"}:
+        if reference.kind in {
+            "document_page",
+            "document_original",
+            "document_review_original",
+        }:
             return self._resolve_document(reference, actor)
         raise ProtectedFileError("not_found", "File not found")
 
@@ -255,6 +329,7 @@ class ProtectedFileResolver:
             actor,
             record,
             strict_site_filter=self._strict_site_filter,
+            allow_review_preview=reference.kind == "document_review_original",
         )
         if not decision.allowed or record is None:
             raise ProtectedFileError("unauthorized", decision.reason)
@@ -282,16 +357,25 @@ class ProtectedFileResolver:
         path = self._storage.resolve_original(record.file_path)
         if path is None:
             raise ProtectedFileError("not_found", "Original file not found")
+        review_preview = reference.kind == "document_review_original"
         self._record_audit(
             actor,
-            "admin_global_read_original"
-            if "admin" in actor.roles
-            else "download_original",
+            (
+                "review_preview_original"
+                if review_preview
+                else (
+                    "admin_global_read_original"
+                    if "admin" in actor.roles
+                    else "download_original"
+                )
+            ),
             doc_id,
             {
                 "file": record.ten_file,
                 "security_level": decision.security_level,
                 "access_scope": decision.reason,
+                "policy_decision": decision.reason,
+                "review_preview": review_preview,
                 "source": "app-api",
             },
         )
@@ -347,5 +431,6 @@ __all__ = [
     "ProtectedFileStorage",
     "ProtectedFileStore",
     "evaluate_document_access",
+    "evaluate_review_preview_access",
     "normalize_security_level",
 ]

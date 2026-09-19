@@ -14,6 +14,9 @@ $appOutLog = Join-Path $logsDir "app-api.out.log"
 $appErrLog = Join-Path $logsDir "app-api.err.log"
 $workerOutLog = Join-Path $logsDir "worker.out.log"
 $workerErrLog = Join-Path $logsDir "worker.err.log"
+$workerSupervisorOutLog = Join-Path $logsDir "worker-supervisor.out.log"
+$workerSupervisorErrLog = Join-Path $logsDir "worker-supervisor.err.log"
+$workerReadyFile = Join-Path $logsDir "worker.ready"
 
 if (!(Test-Path $pythonExe)) {
     throw "Khong tim thay chat_env\Scripts\python.exe. Hay tao/khai bao dung virtualenv truoc khi chay demo."
@@ -231,6 +234,21 @@ function Wait-WebOk {
     return $false
 }
 
+function Wait-WorkerReady {
+    param(
+        [string]$ReadyFile,
+        [System.Diagnostics.Process]$Supervisor,
+        [int]$TimeoutSeconds
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if (Test-Path -LiteralPath $ReadyFile) { return $true }
+        if ($Supervisor.HasExited) { return $false }
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
 Assert-PortsAvailable -Ports @(8100, 8080)
 
 $lanIp = $null
@@ -291,16 +309,36 @@ $ragProc = Start-ProcessWithEnv `
     }
 $ownedProcesses += $ragProc
 
-$workerProc = Start-ProcessWithEnv `
-    -FilePath $pythonExe `
-    -ArgumentList @("run_worker.py") `
+$powerShellCommand = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+if (!$powerShellCommand) {
+    $powerShellCommand = Get-Command powershell.exe -ErrorAction SilentlyContinue
+}
+if (!$powerShellCommand) {
+    throw "Khong tim thay PowerShell de duy tri ingestion worker."
+}
+$workerSupervisorProc = Start-ProcessWithEnv `
+    -FilePath $powerShellCommand.Source `
+    -ArgumentList @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", (Join-Path $projectRoot "scripts\ops\worker_supervisor.ps1"),
+        "-ProjectRoot", $projectRoot,
+        "-PythonExe", $pythonExe,
+        "-WorkerOutputLog", $workerOutLog,
+        "-WorkerErrorLog", $workerErrLog,
+        "-ReadyFile", $workerReadyFile
+    ) `
     -WorkingDirectory $projectRoot `
-    -RedirectStandardOutput $workerOutLog `
-    -RedirectStandardError $workerErrLog `
-    -Environment @{ PYTHONPATH = "src" }
-$ownedProcesses += $workerProc
+    -RedirectStandardOutput $workerSupervisorOutLog `
+    -RedirectStandardError $workerSupervisorErrLog `
+    -Environment @{
+        PYTHONPATH = "src"
+        INGESTION_WORKER_READY_FILE = $workerReadyFile
+    }
+$ownedProcesses += $workerSupervisorProc
 
 $baseAppEnv = @{
+    INGESTION_WORKER_READY_FILE = $workerReadyFile
     PYTHONPATH       = "src"
     APP_SERVER_HOST  = "0.0.0.0"
     APP_SERVER_PORT  = "8080"
@@ -337,21 +375,32 @@ $ragHealth = Wait-RestMethod -Uri "http://127.0.0.1:8100/health" -TimeoutSeconds
 if ($LASTEXITCODE -ne 0) {
     throw "RAG readiness khong dat contract production."
 }
+$workerReady = Wait-WorkerReady `
+    -ReadyFile $workerReadyFile `
+    -Supervisor $workerSupervisorProc `
+    -TimeoutSeconds 90
+if (!$workerReady) {
+    throw "Ingestion worker khong dat readiness. Kiem tra worker-supervisor.err.log va worker.err.log."
+}
 $appOk = Wait-WebOk -Uri "http://127.0.0.1:8080" -TimeoutSeconds 30
 if (!$appOk) {
     throw "App API khong dat readiness. Kiem tra app-api.err.log."
 }
 
 Write-Output ("RAG PID: {0}" -f $ragProc.Id)
-Write-Output ("Worker PID: {0}" -f $workerProc.Id)
+Write-Output ("Worker Supervisor PID: {0}" -f $workerSupervisorProc.Id)
 Write-Output ("App API PID: {0}" -f $appProc.Id)
 Write-Output ("RAG Health: {0}" -f ($(if ($ragHealth) { ($ragHealth | ConvertTo-Json -Compress) } else { "UNAVAILABLE" })))
+Write-Output ("Worker Ready: {0}" -f $workerReady)
 Write-Output ("App Ready: {0}" -f $appOk)
 Write-Output ("==> LINK DEMO (mo tren cac may cung LAN): http://{0}:8080" -f $lanIp)
 }
 catch {
     foreach ($ownedProcess in $ownedProcesses) {
         if ($ownedProcess -and !$ownedProcess.HasExited) {
+            if ($workerSupervisorProc -and $ownedProcess.Id -eq $workerSupervisorProc.Id) {
+                & taskkill.exe /PID $ownedProcess.Id /T /F *> $null
+            }
             Stop-Process -Id $ownedProcess.Id -Force -ErrorAction SilentlyContinue
         }
     }

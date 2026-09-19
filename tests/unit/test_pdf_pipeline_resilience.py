@@ -84,6 +84,49 @@ def test_supported_file_missing_document_id_blocks_external_processing(monkeypat
     assert external_calls == []
 
 
+def test_published_duplicate_does_not_start_destructive_rollback(tmp_path, monkeypatch):
+    deleted = []
+    failed = []
+    restored = []
+
+    def reject_published_duplicate(*_args, **_kwargs):
+        raise ValueError("Tài liệu published.pdf đã được published.")
+
+    monkeypatch.setattr(
+        pipeline, "reset_document_metadata", reject_published_duplicate
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_delete_vectors_for_file",
+        lambda *args, **kwargs: deleted.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "mark_document_ingest_failed",
+        lambda *args, **kwargs: failed.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "restore_document_children",
+        lambda *args, **kwargs: restored.append((args, kwargs)),
+    )
+
+    report = pipeline.process_and_ingest_file(
+        str(tmp_path / "published.pdf"),
+        "published.pdf",
+        "QA",
+        domain_override="generic",
+        security_override="internal",
+        site_override="HQ",
+        dependencies=characterization._dependencies(),
+    )
+
+    assert report["status"] == "error"
+    assert deleted == []
+    assert failed == []
+    assert restored == []
+
+
 def test_pdf_vision_cache_hit_avoids_provider_and_missing_site_requires_review(
     tmp_path, monkeypatch,
 ):
@@ -235,12 +278,6 @@ def test_pdf_open_and_rollback_failures_are_reported_without_escaping(monkeypatc
         lambda _path: (_ for _ in ()).throw(OSError("invalid pdf")),
     )
     monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", True)
-    monkeypatch.setattr(
-        pipeline,
-        "_delete_vectors_for_file",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("qdrant down")),
-    )
-
     report = pipeline.process_and_ingest_pdf(
         "invalid.pdf",
         "invalid.pdf",
@@ -255,7 +292,49 @@ def test_pdf_open_and_rollback_failures_are_reported_without_escaping(monkeypatc
     assert report["quality_status"] == "blocked"
     assert report["quality_hard_blocked"] is True
     assert "invalid pdf" in report["message"]
-    assert any("Rollback vector/metadata that bai: qdrant down" in item for item in report["warnings"])
+    assert any("khong co DocID" in item for item in report["warnings"])
+
+
+def test_new_document_with_doc_id_reports_vector_rollback_failure(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        pipeline,
+        "extract_text_from_supported_file",
+        lambda *_args, **_kwargs: ("  ", "van_ban"),
+    )
+    monkeypatch.setattr(
+        pipeline, "reset_document_metadata", lambda *_args, **_kwargs: 701,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "get_document_info",
+        lambda _doc_id: {"external_processing_policy": "all_external"},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_delete_vectors_for_file",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("qdrant down")
+        ),
+    )
+
+    report = pipeline.process_and_ingest_file(
+        str(tmp_path / "new-document.txt"),
+        "new-document.txt",
+        "QA",
+        domain_override="generic",
+        security_override="internal",
+        site_override="HQ",
+        dependencies=characterization._dependencies(),
+    )
+
+    assert report["status"] == "error"
+    assert report["quality_status"] == "blocked"
+    assert any(
+        "Rollback vector/metadata that bai: qdrant down" in item
+        for item in report["warnings"]
+    )
 
 
 def test_empty_supported_file_rolls_back_and_preserves_failure_reason(monkeypatch):

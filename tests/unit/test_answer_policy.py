@@ -162,6 +162,25 @@ def test_negative_detector_does_not_match_an_unasked_topic_by_code_only():
     ) is False
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Tóm tắt quy trình OR-REVIEW-20260917-01, đủ bước và thông số.",
+        "Quy trình kiểm thử quy định thời gian bao lâu?",
+    ],
+)
+def test_negative_detector_does_not_reuse_unrelated_price_denial_for_process_questions(
+    question,
+):
+    context = (
+        "Quy trình kiểm thử gồm kiểm tra ngoại quan, siết vít với mô-men 7 N.m, "
+        "giữ tải thử trong 13 phút và chu kỳ kiểm tra lại 17 ngày. "
+        "Tài liệu không quy định giá mua, nhà cung cấp hoặc số điện thoại liên hệ."
+    )
+
+    assert has_explicit_negative_evidence(question, context) is False
+
+
 def test_negative_detector_does_not_treat_value_as_unit_price():
     assert has_explicit_negative_evidence(
         (

@@ -72,7 +72,7 @@ RISKY_QUESTION_KEYWORDS = [
 TIME_EVIDENCE_PATTERNS = [
     r"thoi\s*gian\s*(?:gia\s*cong|san\s*xuat|che\s*tao|lap\s*rap|xu\s*ly)",
     r"(?:gia\s*cong|san\s*xuat|che\s*tao|lap\s*rap).{0,40}(?:gio|phut|ngay|ca)",
-    r"(?:\d+(?:[\.,]\d+)?\s*)(?:gio|h|phut|p|ngay|ca)\b",
+    r"(?:\d+(?:[\.,]\d+)?\s*)(?:gio|h|phut|p|ngay|ca|hours?|hrs?|minutes?|mins?|days?|weeks?|months?|years?)\b",
     r"nang\s*suat|dinh\s*muc|cycle\s*time|lead\s*time|takt\s*time",
 ]
 
@@ -277,13 +277,18 @@ def find_unsupported_numbers(answer, context_text, question, strict_mode=False):
         return []
     allowed = normalized_number_values(context_text) | normalized_number_values(question)
     answer_text = str(answer or "")
-    citation_spans = [
+    formatting_spans = [
         match.span()
         for match in re.finditer(r"\[(?:Nguồn|Source):[^\]]+\]", answer_text, flags=re.IGNORECASE)
     ]
+    # Ordered-list labels describe presentation, not quantities from the source.
+    formatting_spans += [
+        match.span(1)
+        for match in re.finditer(r"(?m)^[ \t]*(\d+)[.)][ \t]+", answer_text)
+    ]
     violations = []
     for match in _NUMBER_PATTERN.finditer(answer_text):
-        if any(start <= match.start() and match.end() <= end for start, end in citation_spans):
+        if any(start <= match.start() and match.end() <= end for start, end in formatting_spans):
             continue
         normalized = _normalize_number_token(match.group(0))
         if normalized in allowed:

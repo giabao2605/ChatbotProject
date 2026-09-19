@@ -175,6 +175,12 @@ def original_document(doc_id: int, request: Request, profile: dict[str, Any] = D
     return _file_response(authorized.path, filename=authorized.filename)
 
 
+@files_router.get("/documents/{doc_id}/review-preview")
+def review_preview_original(doc_id: int, request: Request, profile: dict[str, Any] = Depends(current_profile)):
+    authorized = _resolve_protected_file(request, ProtectedFileReference.review_original(doc_id), profile)
+    return _file_response(authorized.path, filename=authorized.filename)
+
+
 @files_router.get("/chat-images/{image_id}")
 def chat_image(image_id: str, request: Request, profile: dict[str, Any] = Depends(current_profile)):
     authorized = _resolve_protected_file(request, ProtectedFileReference.chat_image(image_id), profile)
@@ -680,7 +686,7 @@ def lifecycle_mark_reviewed(doc_id: int, body: dict[str, Any], profile: dict[str
 
 
 __all__ = [
-    "citation_page", "original_document", "chat_image", "documents",
+    "citation_page", "original_document", "review_preview_original", "chat_image", "documents",
     "document_lifecycle_counts", "documents_upload", "documents_upload_batch",
     "ingestion_jobs", "documents_pending_review", "documents_reconcile_serving",
     "documents_expiring", "documents_bulk_meta", "documents_bulk_metadata",

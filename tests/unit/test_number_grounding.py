@@ -10,6 +10,23 @@ from mech_chatbot.rag.evidence_gate import (
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("marker", ["4.", "5)", "    6."])
+def test_number_grounding_ignores_ordered_list_marker_only(marker):
+    answer = f"{marker} Giữ 13 phút, lặp lại sau 17 ngày."
+    assert find_unsupported_numbers(
+        answer, "Giữ 13 phút, lặp lại sau 17 ngày.", "Tóm tắt quy trình", strict_mode=True
+    ) == []
+
+
+def test_number_grounding_still_checks_values_inside_ordered_list():
+    answer = "4. Giữ 999 phút.\n5) Tổng số lần là 5.\n6. Nhiệt độ 4.5 độ."
+    violations = find_unsupported_numbers(
+        answer, "Giữ 13 phút.", "Tóm tắt quy trình", strict_mode=True
+    )
+    assert [item.raw for item in violations] == ["999", "5", "4.5"]
+    assert all(answer[item.start:item.end] == item.raw for item in violations)
+
+
 @pytest.mark.parametrize("source,answer", [("1,500", "1500"), ("1.500", "1500"), ("12,50", "12.5")])
 def test_number_grounding_accepts_equivalent_formatting(source, answer):
     assert find_unsupported_numbers(answer, source, "Chi phí bao nhiêu?", strict_mode=True) == []

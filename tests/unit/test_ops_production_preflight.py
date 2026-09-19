@@ -2,9 +2,11 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from threading import Thread
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -723,3 +725,158 @@ def test_lan_launcher_fails_when_the_browser_app_is_not_ready():
     failure_guard = launcher.index("if (!$appOk)")
 
     assert app_probe < failure_guard
+
+
+def test_lan_launcher_starts_and_waits_for_a_supervised_worker():
+    launcher = (ROOT / "scripts" / "ops" / "start_demo_lan.ps1").read_text(
+        encoding="utf-8"
+    )
+    supervisor = (ROOT / "scripts" / "ops" / "worker_supervisor.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"scripts\\ops\\worker_supervisor.ps1"' in launcher
+    assert "$workerReadyFile" in launcher
+    assert "INGESTION_WORKER_READY_FILE" in launcher
+    assert "$workerSupervisorProc = Start-ProcessWithEnv" in launcher
+    assert 'if (!$workerReady)' in launcher
+    assert "[System.Threading.Mutex]::new" in supervisor
+    assert "while ($true)" in supervisor
+    assert "Wait-Process" in supervisor
+    assert "ReleaseMutex" in supervisor
+
+
+def test_worker_supervisor_uses_one_instance_per_project_and_restarts_exits():
+    supervisor = (ROOT / "scripts" / "ops" / "worker_supervisor.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "GetFullPath" in supervisor
+    assert "SHA256" in supervisor
+    assert "Local\\ChatBotProject.IngestionWorker." in supervisor
+    assert "if (!$createdNew)" in supervisor
+    assert "$mutex.WaitOne()" in supervisor
+    assert "Start-Process" in supervisor
+    assert "Start-Sleep -Seconds $restartDelay" in supervisor
+
+
+def test_worker_supervisor_restarts_early_exit_and_blocks_duplicate(tmp_path):
+    powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is required for the worker supervisor contract")
+
+    dummy_worker = tmp_path / "run_worker.py"
+    dummy_worker.write_text(
+        """from pathlib import Path
+import os
+import time
+
+root = Path(__file__).parent
+count_file = root / "run-count.txt"
+run_file = root / "run-pids.txt"
+count = int(count_file.read_text() or "0") + 1 if count_file.exists() else 1
+count_file.write_text(str(count))
+with run_file.open("a", encoding="utf-8") as stream:
+    stream.write(f"{os.getpid()}\\n")
+    stream.flush()
+if count == 1:
+    raise SystemExit(17)
+time.sleep(60)
+""",
+        encoding="utf-8",
+    )
+
+    supervisor = ROOT / "scripts" / "ops" / "worker_supervisor.ps1"
+    paths = {
+        name: tmp_path / name
+        for name in (
+            "supervisor.out.log",
+            "supervisor.err.log",
+            "worker.out.log",
+            "worker.err.log",
+            "worker.ready",
+        )
+    }
+    command = [
+        powershell,
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(supervisor),
+        "-ProjectRoot",
+        str(tmp_path),
+        "-PythonExe",
+        sys.executable,
+        "-WorkerOutputLog",
+        str(paths["worker.out.log"]),
+        "-WorkerErrorLog",
+        str(paths["worker.err.log"]),
+        "-ReadyFile",
+        str(paths["worker.ready"]),
+        "-RestartDelaySeconds",
+        "1",
+    ]
+    first = subprocess.Popen(command, cwd=tmp_path)
+
+    def process_exists(pid):
+        result = subprocess.run(
+            ["tasklist.exe", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return f'","{pid}",' in result.stdout
+
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            run_file = tmp_path / "run-pids.txt"
+            if run_file.exists() and len(run_file.read_text().splitlines()) >= 2:
+                break
+            time.sleep(0.2)
+
+        assert first.poll() is None
+        pids = [
+            int(value)
+            for value in (tmp_path / "run-pids.txt").read_text().splitlines()
+        ]
+        assert len(pids) >= 2
+        assert process_exists(pids[-1])
+
+        duplicate = subprocess.run(
+            command,
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert duplicate.returncode == 0
+        assert "already running" in (duplicate.stdout + duplicate.stderr)
+        runs_before = len((tmp_path / "run-pids.txt").read_text().splitlines())
+        time.sleep(1.5)
+        assert len((tmp_path / "run-pids.txt").read_text().splitlines()) == runs_before
+    finally:
+        if first.poll() is None:
+            subprocess.run(
+                ["taskkill.exe", "/PID", str(first.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+            )
+        try:
+            first.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            first.kill()
+            first.wait(timeout=10)
+        run_file = tmp_path / "run-pids.txt"
+        if run_file.exists():
+            for value in run_file.read_text().splitlines():
+                pid = int(value)
+                if process_exists(pid):
+                    subprocess.run(
+                        ["taskkill.exe", "/PID", str(pid), "/T", "/F"],
+                        capture_output=True,
+                        check=False,
+                    )
+                    assert not process_exists(pid)

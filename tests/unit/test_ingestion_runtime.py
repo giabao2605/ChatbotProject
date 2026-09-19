@@ -224,6 +224,21 @@ def test_document_classifier_allows_external_only_for_active_explicit_policy() -
     assert calls[0][1]["allow_external"] is True
 
 
+def test_document_classifier_forwards_composed_adapter_when_available() -> None:
+    calls = []
+    adapter = object()
+    classifier = LegacyDocumentClassifier(
+        lambda *args, **kwargs: calls.append((args, kwargs)) or {"confidence": 0.7},
+        processing_context=lambda *args: nullcontext(),
+        adapter=adapter,
+    )
+    job = _store()[0].claim_next("worker-9")
+
+    classifier.classify(job)  # type: ignore[arg-type]
+
+    assert calls[0][1]["adapter"] is adapter
+
+
 def test_document_classifier_governance_lookup_failure_is_fail_closed() -> None:
     calls = []
 

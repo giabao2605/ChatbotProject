@@ -2,6 +2,8 @@ from pathlib import Path
 import json
 from contextlib import contextmanager
 
+import pytest
+
 from mech_chatbot.ingestion.pdf import pipeline_implementation as pipeline
 from mech_chatbot.application.vector_ingestion import IngestionPipelineDependencies
 from mech_chatbot.ingestion.pdf.bom import (
@@ -150,6 +152,47 @@ def test_markdown_upload_records_extracted_page_and_reaches_review(tmp_path, mon
             "image_path": None,
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("filename", "data_type", "extracted_field"),
+    [
+        ("manual.docx", "van_ban_word", "pages_text_extracted"),
+        ("bom.xlsx", "bang_du_lieu", "pages_table_extracted"),
+    ],
+)
+def test_office_upload_records_one_extracted_page_and_reaches_review(
+    tmp_path,
+    monkeypatch,
+    filename,
+    data_type,
+    extracted_field,
+):
+    office_path = tmp_path / filename
+    office_path.write_bytes(b"office-fixture")
+    saved_pages = []
+    _install_success_path_stubs(monkeypatch, saved_pages)
+    monkeypatch.setattr(
+        pipeline,
+        "extract_text_from_supported_file",
+        lambda *_args, **_kwargs: ("Office content", data_type),
+    )
+
+    report = pipeline.process_and_ingest_file(
+        file_path=str(office_path),
+        ten_file=office_path.name,
+        thu_muc="Technical",
+        domain_override="generic",
+        security_override="internal",
+        site_override="DEMO-HQ",
+        dependencies=_dependencies(),
+    )
+
+    assert report["status"] == "success"
+    assert report[extracted_field] == [1]
+    assert report["quality_status"] == "ready_for_review"
+    assert "no_extracted_pages" not in report["quality_reason_codes"]
+    assert saved_pages[0]["extraction_status"] == "success"
 
 
 def test_non_pdf_external_calls_run_inside_governed_document_context(

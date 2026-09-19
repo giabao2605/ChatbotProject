@@ -16,6 +16,20 @@ from mech_chatbot.application.protected_files import (
 )
 
 
+def _optional_user_id(row: Any, index: int) -> int | None:
+    """Read optional governance ids while keeping old row fakes compatible."""
+    try:
+        value = row[index]
+    except (IndexError, KeyError, TypeError):
+        return None
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class SqlProtectedFileStore:
     """Read only the metadata needed by the protected-file application seam."""
 
@@ -30,11 +44,16 @@ class SqlProtectedFileStore:
             row = connection.execute(
                 text(
                     """
-                    SELECT DocID, TenFile, FilePath, ThuMuc, SecurityLevel, Site,
-                           LifecycleStatus, ReviewStatus, Servable, PublicationState,
-                           IsCurrent, EffectiveStatus, EffectiveDate, ExpiryDate
-                    FROM dbo.TaiLieu
-                    WHERE DocID = :doc_id
+                    SELECT t.DocID, t.TenFile, t.FilePath, t.ThuMuc, t.SecurityLevel,
+                           t.Site, t.LifecycleStatus, t.ReviewStatus, t.Servable,
+                           t.PublicationState, t.IsCurrent, t.EffectiveStatus,
+                           t.EffectiveDate, t.ExpiryDate,
+                           t.KnowledgeOwnerUserID, t.KnowledgeApproverUserID,
+                           g.KnowledgeApproverUserID AS DepartmentKnowledgeApproverUserID
+                    FROM dbo.TaiLieu AS t
+                    LEFT JOIN dbo.DepartmentKnowledgeGovernance AS g
+                        ON g.DeptCode = t.OwnerDepartment AND g.IsActive = 1
+                    WHERE t.DocID = :doc_id
                     """
                 ),
                 {"doc_id": int(doc_id)},
@@ -69,6 +88,9 @@ class SqlProtectedFileStore:
             effective_status=row[11],
             effective_date=row[12],
             expiry_date=row[13],
+            knowledge_owner_user_id=_optional_user_id(row, 14),
+            knowledge_approver_user_id=_optional_user_id(row, 15),
+            department_knowledge_approver_user_id=_optional_user_id(row, 16),
         )
 
     def load_page_image(self, doc_id: int, page_no: int) -> str | None:

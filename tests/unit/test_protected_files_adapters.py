@@ -81,6 +81,9 @@ def test_sql_store_loads_normalized_document_and_page_metadata() -> None:
             "effective",
             None,
             None,
+            11,
+            12,
+            13,
         ),
         departments=[("Technical",), (None,)],
         page=("/worker/page-9.png",),
@@ -93,6 +96,9 @@ def test_sql_store_loads_normalized_document_and_page_metadata() -> None:
     assert record.doc_id == 9
     assert record.security_level == "internal"
     assert record.departments == ("Technical",)
+    assert record.knowledge_owner_user_id == 11
+    assert record.knowledge_approver_user_id == 12
+    assert record.department_knowledge_approver_user_id == 13
     assert store.load_page_image(9, 1) == "/worker/page-9.png"
 
 

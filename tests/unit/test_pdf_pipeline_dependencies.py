@@ -62,7 +62,7 @@ def test_vector_helpers_use_only_explicit_dependencies() -> None:
     )
 
     assert dependencies.vector_store.batches == [["chunk"]]
-    assert len(dependencies.qdrant_client.delete_calls) == 2
+    assert len(dependencies.qdrant_client.delete_calls) == 1
     assert all(
         call["collection_name"] == "technical-documents"
         for call in dependencies.qdrant_client.delete_calls

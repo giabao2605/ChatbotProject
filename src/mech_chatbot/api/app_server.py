@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+import os
+from mech_chatbot.adapters.worker_status import read_worker_status
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -20,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from mech_chatbot.api import app_security
+from mech_chatbot.adapters.session_revocations import SqlSessionRevocations
 from mech_chatbot.api.dependencies import csrf_profile, current_profile, require_any_role
 from mech_chatbot.api.file_access import (
     chat_image_path,
@@ -110,6 +113,9 @@ async def _lifespan(application: FastAPI):
             QdrantSettings.from_settings(settings_snapshot)
         )
         application.state.database_runtime = database_runtime
+        session_revocations = SqlSessionRevocations(database_runtime.engine)
+        session_revocations.create_schema()
+        application.state.session_revocations = session_revocations
         application.state.qdrant_runtime = qdrant_runtime
         application.state.runtime = _build_default_app_runtime(
             process,
@@ -166,6 +172,7 @@ async def _lifespan(application: FastAPI):
             qdrant_runtime.close()
         database_runtime.close()
         application.state.database_runtime = None
+        application.state.session_revocations = None
         application.state.qdrant_runtime = None
 
 
@@ -180,6 +187,7 @@ def app_health(request: Request):
         "status": "ok" if db_status == "ok" else "degraded",
         "app": "mech-chatbot-app-api",
         "db": db_status,
+        "ingestion_worker": read_worker_status(os.environ.get("INGESTION_WORKER_READY_FILE")),
     }
 
 
@@ -438,6 +446,9 @@ def create_app(
             app_security.bind_security_settings(
                 request.app.state.process_settings
             ),
+            app_security.bind_session_revocations(
+                getattr(request.app.state, "session_revocations", None)
+            ),
             bind_repository_runtime(
                 policy=RepositoryPolicySettings.from_settings(
                     request.app.state.settings_snapshot
@@ -498,6 +509,7 @@ _DOCUMENT_COMPAT_EXPORTS = (
     "_resolve_protected_file",
     "citation_page",
     "original_document",
+    "review_preview_original",
     "chat_image",
     "documents",
     "document_lifecycle_counts",
@@ -667,6 +679,10 @@ def citation_page(doc_id: int, page_no: int, profile: dict[str, Any]):
 
 def original_document(doc_id: int, profile: dict[str, Any]):
     return _document_routes.original_document(doc_id, _compat_request(), profile)
+
+
+def review_preview_original(doc_id: int, profile: dict[str, Any]):
+    return _document_routes.review_preview_original(doc_id, _compat_request(), profile)
 
 
 def chat_image(image_id: str, profile: dict[str, Any]):

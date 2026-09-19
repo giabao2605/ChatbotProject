@@ -42,6 +42,7 @@ app_server = pytest.importorskip("mech_chatbot.api.app_server")
         ("upload_chat_image", ["request", "file", "profile"]),
         ("citation_page", ["doc_id", "page_no", "profile"]),
         ("original_document", ["doc_id", "profile"]),
+        ("review_preview_original", ["doc_id", "profile"]),
         ("chat_image", ["image_id", "profile"]),
         (
             "documents_upload_batch",

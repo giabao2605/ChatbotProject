@@ -139,7 +139,12 @@ def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
     monkeypatch.setattr(db_package, "repository", repository, raising=False)
 
     classifier_module = ModuleType("mech_chatbot.ingestion.document_classifier")
-    classifier_module.classify_document = lambda *args, **kwargs: {}  # type: ignore[attr-defined]
+
+    def classify_document(*args, **kwargs):
+        captured["classification"] = (args, kwargs)
+        return {}
+
+    classifier_module.classify_document = classify_document  # type: ignore[attr-defined]
     file_module = ModuleType("mech_chatbot.ingestion.file_ingestor")
 
     def learn_new_file_typed(**kwargs):
@@ -161,8 +166,10 @@ def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
         collection_name="KnowledgeBase",
     )
     vision_model = object()
+    classifier_adapter = object()
     qdrant_settings_seen = []
     vision_settings_seen = []
+    llm_settings_seen = []
 
     def qdrant_builder(settings: QdrantSettings):
         qdrant_settings_seen.append(settings)
@@ -172,12 +179,17 @@ def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
         vision_settings_seen.append(settings)
         return vision_model
 
+    def llm_builder(settings, **kwargs):
+        llm_settings_seen.append((settings, kwargs))
+        return classifier_adapter
+
     settings = _settings(QDRANT_COLLECTION="KnowledgeBase")
     runtime = build_worker_runtime(
         settings,
         job_store=CompleteFakeStore(),
         qdrant_builder=qdrant_builder,
         vision_builder=vision_builder,
+        llm_builder=llm_builder,
     )
     runtime.runner.run(
         IngestionJob(
@@ -199,6 +211,8 @@ def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
     assert captured["dependencies"] is dependencies
     assert captured["vision_model"] is vision_model
     assert captured["persistence"] is not None
+    assert llm_settings_seen[0][0].model_name == settings.GPT_MODEL_NAME
+    assert captured["classification"][1]["adapter"] is classifier_adapter
 
 
 def test_system_clock_delegates_to_time_module(monkeypatch) -> None:
