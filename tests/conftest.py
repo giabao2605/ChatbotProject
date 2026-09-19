@@ -22,6 +22,18 @@ if str(_SRC) not in sys.path:
 
 # --- Skip rules theo bien moi truong ---------------------------------------
 def pytest_collection_modifyitems(config, items):
+    if sys.platform != "win32":
+        platform_skip = pytest.mark.skip(reason="requires Windows process/ACL semantics")
+        for item in items:
+            if any(token in str(item.fspath) for token in (
+                "test_query_crag_offline_preparation.py",
+                "test_query_pilot_capture_lifecycle.py",
+                "test_query_pilot_review_artifacts.py",
+                "test_query_pilot_review_capture.py",
+                "test_query_pilot_scheduled_host.py",
+                "test_query_decomposition_pilot.py",
+            )):
+                item.add_marker(platform_skip)
     run_db = os.getenv("RUN_DB_TESTS") == "1"
     run_qdrant = os.getenv("RUN_QDRANT_TESTS") == "1"
     # A configured URL is common in a developer .env and must not make the

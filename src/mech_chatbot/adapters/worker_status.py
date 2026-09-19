@@ -23,6 +23,10 @@ def worker_heartbeat(marker):
 
     thread = Thread(target=update, daemon=True, name='ingestion-heartbeat') if marker else None
     if thread:
+        try:
+            Path(marker).write_text('ready\n', encoding='utf-8')
+        except OSError:
+            pass
         thread.start()
     try:
         yield
