@@ -129,6 +129,23 @@ def test_filesystem_storage_allows_only_approved_roots_and_safe_image_names(tmp_
     assert storage.resolve_chat_image(".hidden") is None
 
 
+def test_page_image_resolves_approved_ingestion_output_root(tmp_path) -> None:
+    raw = tmp_path / "data" / "raw"
+    processed = tmp_path / "data" / "processed"
+    ingestion_output = tmp_path / "src" / "data" / "processed"
+    for directory in (raw, processed, ingestion_output):
+        directory.mkdir(parents=True)
+    page = ingestion_output / "pending-page.png"
+    page.write_bytes(b"page")
+    storage = FilesystemProtectedFileStorage(
+        project_root=tmp_path, raw_root=raw, processed_root=processed,
+        additional_processed_roots=(ingestion_output,),
+    )
+
+    assert storage.resolve_page_image(str(page)) == page.resolve()
+    assert storage.resolve_page_image("/outside/missing-page.png") is None
+
+
 def test_audit_adapter_preserves_repository_call_shape() -> None:
     calls = []
     sink = RepositoryProtectedFileAuditSink(

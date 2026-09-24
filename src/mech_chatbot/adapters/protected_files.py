@@ -146,10 +146,12 @@ class FilesystemProtectedFileStorage:
         project_root: Path,
         raw_root: Path,
         processed_root: Path,
+        additional_processed_roots: Iterable[Path] = (),
     ) -> None:
         self._project_root = Path(project_root)
         self._raw_root = Path(raw_root)
         self._processed_root = Path(processed_root)
+        self._processed_roots = (self._processed_root, *(Path(root) for root in additional_processed_roots))
 
     @property
     def project_root(self) -> Path:
@@ -186,7 +188,7 @@ class FilesystemProtectedFileStorage:
         return self.resolve_under_root(stored_path, (self._raw_root,))
 
     def resolve_page_image(self, stored_path: str | None) -> Path | None:
-        resolved = self.resolve_under_root(stored_path, (self._processed_root,))
+        resolved = self.resolve_under_root(stored_path, self._processed_roots)
         if resolved is not None and resolved.exists() and resolved.is_file():
             return resolved
         try:
