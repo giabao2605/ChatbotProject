@@ -122,26 +122,32 @@ def _default_policy() -> RepositoryPolicySettings:
     )
 
 
+_REQUIRED_METADATA_COLUMNS = {
+    "owner_department": "OwnerDepartment",
+    "shared_departments": "DeptCount",
+    "domain": "Domain",
+    "source_system": "SourceSystem",
+    "site": "Site",
+    "security_level": "SecurityLevel",
+    "classification_rationale": "ClassificationRationale",
+    "classification_model": "ClassificationModel",
+    "external_processing_policy": "ExternalProcessingPolicy",
+    "taxonomy_version": "TaxonomyVersion",
+    "knowledge_owner_user_id": "KnowledgeOwnerUserID",
+    "knowledge_approver_user_id": "KnowledgeApproverUserID",
+    "version": "VersionNo",
+    "parent_section": "ParentSection",
+    "parent_page": "ParentPage",
+}
+SUPPORTED_REQUIRED_METADATA_FIELDS = frozenset(_REQUIRED_METADATA_COLUMNS) | {"document_type"}
+
+
 def _required_metadata_value(field_name, row, doc_type):
-    values = {
-        "owner_department": row["OwnerDepartment"],
-        "shared_departments": row["DeptCount"],
-        "domain": row["Domain"],
-        "document_type": doc_type,
-        "source_system": row["SourceSystem"],
-        "site": row["Site"],
-        "security_level": row["SecurityLevel"],
-        "classification_rationale": row["ClassificationRationale"],
-        "classification_model": row["ClassificationModel"],
-        "external_processing_policy": row["ExternalProcessingPolicy"],
-        "taxonomy_version": row["TaxonomyVersion"],
-        "knowledge_owner_user_id": row["KnowledgeOwnerUserID"],
-        "knowledge_approver_user_id": row["KnowledgeApproverUserID"],
-        "version": row["VersionNo"],
-        "parent_section": row["ParentSection"],
-        "parent_page": row["ParentPage"],
-    }
-    return values.get(_clean(field_name).lower())
+    field = _clean(field_name).lower()
+    if field == "document_type":
+        return doc_type
+    column = _REQUIRED_METADATA_COLUMNS.get(field)
+    return row[column] if column else None
 
 
 def validate_publish_contract(doc_id, *, db_engine=None) -> ValidationResult:
