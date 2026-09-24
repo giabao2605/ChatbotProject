@@ -230,7 +230,7 @@ function cancel() {
   rejectDlg = null;
 }
 
-async function onDialogHide() {
+async function onDialogAfterHide() {
   cancel();
   await nextTick();
   dialogTrigger?.focus();
@@ -271,7 +271,7 @@ const rowActions: RowAction[] = [
     :row-actions="rowActions"
   />
 
-  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '460px' }" @hide="onDialogHide">
+  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '460px' }" @after-hide="onDialogAfterHide">
     <div class="stack-form">
       <Message v-if="dlg.error" severity="error" v-text="dlg.error"></Message>
 

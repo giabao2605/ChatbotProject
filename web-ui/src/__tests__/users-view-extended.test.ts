@@ -29,7 +29,7 @@ const ResourcePageStub = defineComponent({
 const DialogStub = defineComponent({
   name: "Dialog",
   props: { visible: Boolean, header: String },
-  emits: ["update:visible", "hide"],
+  emits: ["update:visible", "hide", "after-hide"],
   template:
     '<section v-if="visible" class="dialog-stub"><h2>{{ header }}</h2><slot /><slot name="footer" /></section>',
 });
@@ -225,7 +225,7 @@ describe("UsersView public contracts", () => {
     await expect(pending).rejects.toThrow("");
   });
 
-  it("returns keyboard focus to the create trigger after dialog hide", async () => {
+  it("returns keyboard focus to the create trigger after dialog closes", async () => {
     const trigger = document.createElement("button");
     const sink = document.createElement("button");
     document.body.append(trigger, sink);
@@ -235,7 +235,7 @@ describe("UsersView public contracts", () => {
     const { pending } = await openCreate(wrapper);
     sink.focus();
     await button(wrapper, "Huỷ").trigger("click");
-    wrapper.findComponent(DialogStub).vm.$emit("hide");
+    wrapper.findComponent(DialogStub).vm.$emit("after-hide");
     await nextTick();
     await expect(pending).rejects.toThrow("");
     expect(document.activeElement).toBe(trigger);
