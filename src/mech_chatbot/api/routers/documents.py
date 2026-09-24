@@ -169,10 +169,13 @@ def _upload_error_payload(failure: UploadFailure) -> dict[str, Any]:
     return {"file_name": failure.file_name, "error": failure.message}
 
 
-def _file_response(path: Path, filename: str | None = None) -> FileResponse:
+def _file_response(path: Path, filename: str | None = None, *, inline: bool = False) -> FileResponse:
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, media_type=mimetypes.guess_type(str(path))[0] or "application/octet-stream", filename=filename)
+    return FileResponse(
+        path, media_type=mimetypes.guess_type(str(path))[0] or "application/octet-stream",
+        filename=filename, content_disposition_type="inline" if inline else "attachment",
+    )
 
 
 def _resolve_protected_file(request: Request, reference: ProtectedFileReference, profile: dict[str, Any]):
@@ -187,21 +190,61 @@ def _resolve_protected_file(request: Request, reference: ProtectedFileReference,
 
 @files_router.get("/documents/{doc_id}/pages/{page_no}")
 def citation_page(doc_id: int, page_no: int, request: Request, profile: dict[str, Any] = Depends(current_profile)):
-    authorized = _resolve_protected_file(request, ProtectedFileReference.page(doc_id, page_no), profile)
+    return _document_page_response(doc_id, page_no, request, profile, review=False)
+
+
+@files_router.get("/review/documents/{doc_id}/pages/{page_no}")
+def review_citation_page(
+    doc_id: int, page_no: int, request: Request,
+    profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin")),
+):
+    _assert_review_actor(doc_id, profile)
+    return _document_page_response(doc_id, page_no, request, profile, review=True)
+
+
+def _document_page_response(doc_id: int, page_no: int, request: Request, profile: dict[str, Any], *, review: bool):
+    reference = ProtectedFileReference.review_page(doc_id, page_no) if review else ProtectedFileReference.page(doc_id, page_no)
+    authorized = _resolve_protected_file(request, reference, profile)
     if authorized.placeholder:
+        original_url = f"/api/files/review/documents/{int(doc_id)}/original" if review else f"/api/files/documents/{int(doc_id)}/original"
         svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
 <rect width="640" height="360" fill="#111827"/><rect x="24" y="24" width="592" height="312" rx="16" fill="#1f2937" stroke="#475569"/>
 <text x="320" y="160" text-anchor="middle" fill="#cbd5e1" font-family="Arial,sans-serif" font-size="24">Không có ảnh xem trước</text>
 <text x="320" y="202" text-anchor="middle" fill="#94a3b8" font-family="Arial,sans-serif" font-size="18">Doc {int(doc_id)} · Trang {int(page_no)}</text>
-<a href="/api/files/documents/{int(doc_id)}/original" target="_top"><text x="320" y="242" text-anchor="middle" fill="#93c5fd" font-family="Arial,sans-serif" font-size="15" text-decoration="underline">Mở tài liệu gốc</text></a></svg>"""
-        return Response(content=svg, media_type="image/svg+xml", headers={"Cache-Control": "private, no-store"})
-    return _file_response(authorized.path)
+<a href="{original_url}" target="_top"><text x="320" y="242" text-anchor="middle" fill="#93c5fd" font-family="Arial,sans-serif" font-size="15" text-decoration="underline">Mở tài liệu gốc</text></a></svg>"""
+        headers = {"Cache-Control": "private, no-store"}
+        if review:
+            headers["X-Content-Type-Options"] = "nosniff"
+        return Response(content=svg, media_type="image/svg+xml", headers=headers)
+    if review and authorized.path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=415, detail="Preview image type is not supported")
+    file_response = _file_response(authorized.path)
+    if review:
+        file_response.headers["Cache-Control"] = "private, no-store"
+        file_response.headers["X-Content-Type-Options"] = "nosniff"
+    return file_response
 
 
 @files_router.get("/documents/{doc_id}/original")
 def original_document(doc_id: int, request: Request, profile: dict[str, Any] = Depends(current_profile)):
     authorized = _resolve_protected_file(request, ProtectedFileReference.original(doc_id), profile)
     return _file_response(authorized.path, filename=authorized.filename)
+
+
+@files_router.get("/review/documents/{doc_id}/original")
+def review_original_document(
+    doc_id: int, request: Request,
+    profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin")),
+):
+    _assert_review_actor(doc_id, profile)
+    authorized = _resolve_protected_file(request, ProtectedFileReference.review_original(doc_id), profile)
+    file_response = _file_response(
+        authorized.path, filename=authorized.filename,
+        inline=authorized.path.suffix.lower() == ".pdf",
+    )
+    file_response.headers["Cache-Control"] = "private, no-store"
+    file_response.headers["X-Content-Type-Options"] = "nosniff"
+    return file_response
 
 
 @files_router.get("/chat-images/{image_id}")

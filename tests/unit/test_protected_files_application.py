@@ -136,6 +136,37 @@ def test_denied_document_never_resolves_storage() -> None:
     assert raised.value.detail == "security_denied"
 
 
+def test_assigned_reviewer_can_preview_pending_page_and_original(tmp_path) -> None:
+    source = tmp_path / "pending.pdf"
+    page = tmp_path / "pending-page.png"
+    audit = Audit()
+    record = _record(
+        review_status="pending_review", publication_state="draft",
+        lifecycle_status="pending_review", servable=False, is_current=False,
+    )
+    resolver = _resolver(Store(record=record, page_path="rendered.png"), Storage(original=source, page=page), audit)
+    reviewer = _actor(roles=frozenset({"reviewer"}))
+
+    assert resolver.resolve(ProtectedFileReference.review_page(42, 1), reviewer).path == page
+    assert resolver.resolve(ProtectedFileReference.review_original(42), reviewer).path == source
+    assert [item.action for item in audit.records] == ["view_pending_page", "view_pending_original"]
+    with pytest.raises(ProtectedFileError):
+        resolver.resolve(ProtectedFileReference.page(42, 1), reviewer)
+
+
+@pytest.mark.parametrize("actor,record", [
+    (_actor(), _record(review_status="pending_review", publication_state="draft", servable=False)),
+    (_actor(roles=frozenset({"reviewer"}), allowed_departments=frozenset({"Other"}), department="Other"),
+     _record(review_status="pending_review", publication_state="draft", servable=False)),
+    (_actor(roles=frozenset({"reviewer"})), _record()),
+])
+def test_pending_preview_rejects_wrong_role_scope_or_state(actor, record) -> None:
+    resolver = _resolver(Store(record=record), Storage(original=Path("pending.pdf")))
+    with pytest.raises(ProtectedFileError) as denied:
+        resolver.resolve(ProtectedFileReference.review_original(42), actor)
+    assert denied.value.code == "unauthorized"
+
+
 def test_missing_page_image_returns_placeholder_after_confidential_audit() -> None:
     audit = Audit()
     resolver = _resolver(

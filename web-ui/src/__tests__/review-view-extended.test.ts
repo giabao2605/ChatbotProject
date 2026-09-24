@@ -136,6 +136,14 @@ beforeEach(() => {
 });
 
 describe("ReviewView public behavior", () => {
+  it("opens assigned pending document preview from the review row", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const wrapper = await mountReview();
+    await action(wrapper, "Xem trước").run({ DocID: 144, JobID: 134 });
+    expect(open).toHaveBeenCalledWith("/api/files/review/documents/144/pages/1", "_blank");
+    open.mockRestore();
+  });
+
   it("loads the review queues and presents normalized extraction evidence", async () => {
     bulkJobs = [{ JobID: 1 }];
     metadataDocs = [{ DocID: 10 }];

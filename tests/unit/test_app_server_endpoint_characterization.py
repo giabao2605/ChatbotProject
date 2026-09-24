@@ -679,6 +679,88 @@ def test_original_document_denies_before_resolving_file(monkeypatch, client_for)
     assert response.json() == {"detail": "security_denied"}
 
 
+def test_pending_preview_requires_assigned_reviewer_before_file_resolution(monkeypatch, client_for):
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            pytest.fail("unassigned reviewer must not resolve the file")
+
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda *_args: SimpleNamespace(valid=False))
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
+    )
+    response = client_for(_profile("reviewer")).get("/api/files/review/documents/42/pages/1")
+    assert response.status_code == 403
+
+
+def test_pending_preview_serves_assigned_reviewers_page_and_inline_original(monkeypatch, client_for, tmp_path):
+    source = tmp_path / "pending.pdf"
+    source.write_bytes(b"trusted-pdf")
+    page = tmp_path / "page.png"
+    page.write_bytes(b"trusted-page")
+
+    class Resolver:
+        def resolve(self, reference, _actor):
+            if reference.kind == "review_page":
+                return AuthorizedFile(path=page)
+            assert reference.kind == "review_original"
+            return AuthorizedFile(path=source, filename="pending.pdf")
+
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda *_args: SimpleNamespace(valid=True))
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
+    )
+    client = client_for(_profile("reviewer"))
+    page_response = client.get("/api/files/review/documents/42/pages/1")
+    source_response = client.get("/api/files/review/documents/42/original")
+    assert page_response.status_code == 200
+    assert page_response.content == b"trusted-page"
+    assert page_response.headers["cache-control"] == "private, no-store"
+    assert page_response.headers["x-content-type-options"] == "nosniff"
+    assert source_response.status_code == 200
+    assert source_response.content == b"trusted-pdf"
+    assert source_response.headers["content-disposition"].startswith("inline;")
+    assert source_response.headers["cache-control"] == "private, no-store"
+    assert source_response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_pending_html_original_downloads_instead_of_rendering_in_app_origin(monkeypatch, client_for, tmp_path):
+    source = tmp_path / "uploaded.html"
+    source.write_text("<script>alert(1)</script>", encoding="utf-8")
+
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            return AuthorizedFile(path=source, filename="uploaded.html")
+
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda *_args: SimpleNamespace(valid=True))
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
+    )
+    response = client_for(_profile("reviewer")).get("/api/files/review/documents/42/original")
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].startswith("attachment;")
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_pending_preview_rejects_active_page_image_type(monkeypatch, client_for, tmp_path):
+    source = tmp_path / "page.svg"
+    source.write_text("<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8")
+
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            return AuthorizedFile(path=source)
+
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda *_args: SimpleNamespace(valid=True))
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
+    )
+    response = client_for(_profile("reviewer")).get("/api/files/review/documents/42/pages/1")
+    assert response.status_code == 415
+
+
 def test_chat_stream_serializes_incomplete_runner_error_after_visible_delta(
     monkeypatch, client_for
 ):

@@ -150,6 +150,14 @@ async function reviewAction(
 
 const rowActions: RowAction[] = [
   {
+    label: "Xem trước",
+    run: async (row) => {
+      const doc = docId(row);
+      if (doc === null) throw new Error("Chưa tạo được tài liệu để xem trước.");
+      window.open(`/api/files/review/documents/${doc}/pages/1`, "_blank");
+    },
+  },
+  {
     label: "Xuất bản (version)",
     run: (r) =>
       reviewAction(r, {

@@ -18,7 +18,7 @@ from mech_chatbot.domain.serving_state import is_currently_servable
 
 
 LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
-ProtectedFileKind = Literal["document_page", "document_original", "chat_image"]
+ProtectedFileKind = Literal["document_page", "document_original", "review_page", "review_original", "chat_image"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +102,14 @@ class ProtectedFileReference:
         return cls(kind="document_page", doc_id=int(doc_id), page_no=int(page_no))
 
     @classmethod
+    def review_original(cls, doc_id: int) -> "ProtectedFileReference":
+        return cls(kind="review_original", doc_id=int(doc_id))
+
+    @classmethod
+    def review_page(cls, doc_id: int, page_no: int) -> "ProtectedFileReference":
+        return cls(kind="review_page", doc_id=int(doc_id), page_no=int(page_no))
+
+    @classmethod
     def chat_image(cls, image_id: str) -> "ProtectedFileReference":
         return cls(kind="chat_image", image_id=str(image_id or ""))
 
@@ -162,12 +170,22 @@ def evaluate_document_access(
     record: DocumentAccessRecord | None,
     *,
     strict_site_filter: bool,
+    review_preview: bool = False,
 ) -> AccessDecision:
     if record is None:
         return AccessDecision(False, "document_not_found")
 
     security_level = normalize_security_level(record.security_level)
-    if not is_currently_servable(
+    if review_preview:
+        if not actor.roles.intersection({"reviewer", "knowledge_approver", "admin"}):
+            return AccessDecision(False, "reviewer_required", security_level)
+        if (
+            str(record.review_status or "").strip().lower() != "pending_review"
+            or str(record.publication_state or "").strip().lower() != "draft"
+            or record.servable
+        ):
+            return AccessDecision(False, "document_not_pending_review", security_level)
+    elif not is_currently_servable(
         {
             "servable": record.servable,
             "publication_state": record.publication_state,
@@ -242,7 +260,7 @@ class ProtectedFileResolver:
     ) -> AuthorizedFile:
         if reference.kind == "chat_image":
             return self._resolve_chat_image(reference, actor)
-        if reference.kind in {"document_page", "document_original"}:
+        if reference.kind in {"document_page", "document_original", "review_page", "review_original"}:
             return self._resolve_document(reference, actor)
         raise ProtectedFileError("not_found", "File not found")
 
@@ -257,20 +275,23 @@ class ProtectedFileResolver:
             actor,
             record,
             strict_site_filter=self._strict_site_filter,
+            review_preview=reference.kind in {"review_page", "review_original"},
         )
         if not decision.allowed or record is None:
             raise ProtectedFileError("unauthorized", decision.reason)
 
-        if reference.kind == "document_page":
+        if reference.kind in {"document_page", "review_page"}:
             page_no = int(reference.page_no or 0)
             if page_no < 1 or not self._store.has_page(doc_id, page_no):
                 raise ProtectedFileError("not_found", "Page not found")
             stored_path = self._store.load_page_image(doc_id, page_no)
             path = self._storage.resolve_page_image(stored_path)
-            if "admin" in actor.roles or decision.security_level == "confidential":
+            if reference.kind == "review_page" or "admin" in actor.roles or decision.security_level == "confidential":
                 self._record_audit(
                     actor,
-                    "admin_global_read_citation"
+                    "view_pending_page"
+                    if reference.kind == "review_page"
+                    else "admin_global_read_citation"
                     if "admin" in actor.roles
                     else "view_citation_page",
                     doc_id,
@@ -288,7 +309,9 @@ class ProtectedFileResolver:
             raise ProtectedFileError("not_found", "Original file not found")
         self._record_audit(
             actor,
-            "admin_global_read_original"
+            "view_pending_original"
+            if reference.kind == "review_original"
+            else "admin_global_read_original"
             if "admin" in actor.roles
             else "download_original",
             doc_id,
