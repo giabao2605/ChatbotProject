@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -36,6 +37,10 @@ _REQUEST_SETTINGS: ContextVar[AppSecuritySettings | None] = ContextVar(
     "app_security_settings",
     default=None,
 )
+_PROCESS_SECRET = secrets.token_bytes(32)
+_SESSION_LOCK = threading.Lock()
+_REVOKED_SESSIONS: dict[str, int] = {}
+_USER_GENERATIONS: dict[int, int] = {}
 
 
 @dataclass(frozen=True)
@@ -44,6 +49,8 @@ class SessionPayload:
     username: str
     exp: int
     csrf: str
+    session_id: str
+    generation: int
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -82,7 +89,7 @@ def _session_secret(settings: AppSecuritySettings | None = None) -> bytes:
             "APP_SESSION_SECRET is not configured. Set APP_SESSION_SECRET "
             "or reuse CHAT_BRIDGE_SECRET/RAG_SERVICE_TOKEN for local migration."
         )
-    return secret.encode("utf-8")
+    return secret.encode("utf-8") + _PROCESS_SECRET
 
 
 def _sign(
@@ -117,6 +124,8 @@ def create_session_token(
     *,
     user_id: int,
     username: str,
+    session_id: str | None = None,
+    generation: int | None = None,
     ttl_seconds: int | None = None,
     settings: AppSecuritySettings | None = None,
 ) -> tuple[str, SessionPayload]:
@@ -125,11 +134,21 @@ def create_session_token(
         if ttl_seconds is not None
         else session_ttl_seconds(settings)
     )
+    resolved_user_id = int(user_id)
+    resolved_session_id = session_id or secrets.token_urlsafe(32)
+    with _SESSION_LOCK:
+        current_generation = _USER_GENERATIONS.get(resolved_user_id, 0)
+        if generation is not None and generation != current_generation:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
+        if _REVOKED_SESSIONS.get(resolved_session_id, 0) >= int(time.time()):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
     payload: dict[str, Any] = {
-        "user_id": int(user_id),
+        "user_id": resolved_user_id,
         "username": str(username),
         "exp": int(time.time()) + int(ttl),
         "csrf": secrets.token_urlsafe(32),
+        "session_id": resolved_session_id,
+        "generation": current_generation,
     }
     body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     token = f"{body}.{_sign(body, settings)}"
@@ -157,12 +176,30 @@ def verify_session_token(
             username=str(raw["username"]),
             exp=int(raw["exp"]),
             csrf=str(raw["csrf"]),
+            session_id=str(raw["session_id"]),
+            generation=int(raw["generation"]),
         )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session payload") from exc
     if payload.exp < int(time.time()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+    with _SESSION_LOCK:
+        revoked = _REVOKED_SESSIONS.get(payload.session_id, 0) >= int(time.time())
+        stale = payload.generation != _USER_GENERATIONS.get(payload.user_id, 0)
+    if not payload.session_id or revoked or stale:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
     return payload
+
+
+def revoke_session(payload: SessionPayload, *, settings: AppSecuritySettings | None = None) -> None:
+    until = max(payload.exp, int(time.time()) + session_ttl_seconds(settings) + 60)
+    with _SESSION_LOCK:
+        _REVOKED_SESSIONS[payload.session_id] = until
+
+
+def revoke_user_sessions(user_id: int) -> None:
+    with _SESSION_LOCK:
+        _USER_GENERATIONS[user_id] = _USER_GENERATIONS.get(user_id, 0) + 1
 
 
 def set_session_cookie(

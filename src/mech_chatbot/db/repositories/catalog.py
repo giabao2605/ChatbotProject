@@ -304,6 +304,8 @@ def set_department_status(code, status, actor="System", force=False):
     archived chi cho phep khi khong con user va job pending, tru khi force=True.
     Phong ban da archived khong cho mo lai qua UI de tranh vo lifecycle.
     """
+    if str(status or "").strip().lower() not in {"active", "disabled", "archived"}:
+        return {"ok": False, "message": "Trạng thái phòng ban không hợp lệ"}
     summary = get_department_summary(code)
     if not summary:
         return {"ok": False, "message": f"Khong tim thay phong ban '{code}'."}

@@ -283,8 +283,11 @@ def bulk_delete_ingestion_jobs(ids):
 	with engine.begin() as conn:
 		for jid in ids:
 			try:
-				conn.execute(text("DELETE FROM dbo.IngestionJobs WHERE JobID = :jid"), {"jid": jid})
-				ok += 1
+				result = conn.execute(text("DELETE FROM dbo.IngestionJobs WHERE JobID = :jid"), {"jid": jid})
+				if (getattr(result, "rowcount", 0) or 0) > 0:
+					ok += 1
+				else:
+					fail += 1
 			except Exception:
 				fail += 1
 	return ok, fail
@@ -445,7 +448,7 @@ def list_documents(allowed_departments=None, max_security_level="public", allowe
 	q = f"""
         SELECT d.DocID, d.TenFile AS OriginalFileName, d.ThuMuc AS Department, d.Domain, d.SecurityLevel,
                d.Title, d.Tags, d.Summary, d.VersionNo, d.IsCurrent AS IsCurrentVersion,
-               d.UploadedBy, d.NgayTaiLen AS CreatedAt, d.ExpiryDate, d.EffectiveStatus,
+               d.UploadedBy, d.NgayTaiLen AS CreatedAt, d.ExpiryDate, d.EffectiveStatus, d.LastReviewedAt,
                d.EffectiveDate AS EffectiveDateStart, d.ReviewDate, d.OwnerSigner, d.DocLanguage AS Language,
                d.DocNumber, d.Site, d.VariantGroup, d.VariantCode AS BranchLabel, d.LifecycleStatus, d.ReviewStatus
         FROM TaiLieu d
@@ -513,21 +516,30 @@ def mark_document_expired(doc_id, reviewer=None):
 	return True
 
 
-def list_expiring_documents():
+def list_expiring_documents(allowed_departments=None, max_security_level="public",
+                            allowed_sites=None, global_read_admin=False):
+	params = {}
+	filters = _document_access_filters(
+		allowed_departments=allowed_departments,
+		max_security_level=max_security_level,
+		allowed_sites=allowed_sites,
+		global_read_admin=global_read_admin,
+		params=params,
+	)
+	filters.append("""((d.ExpiryDate IS NOT NULL AND d.ExpiryDate <= DATEADD(day, 60, GETDATE()))
+		OR (d.ReviewDate IS NOT NULL AND d.ReviewDate <= DATEADD(day, 60, GETDATE())))""")
+	filters.append("d.LifecycleStatus <> 'deleting'")
+	where_clause = " AND ".join(filters)
 	with engine.connect() as conn:
-		q = text("""
-                    SELECT DocID, TenFile AS OriginalFileName, ThuMuc AS Department, EffectiveStatus,
-                           ExpiryDate, ReviewDate, IsCurrent AS IsCurrentVersion
-                    FROM TaiLieu
-                    WHERE (
-                        (ExpiryDate IS NOT NULL AND ExpiryDate <= DATEADD(day, 60, GETDATE()))
-                        OR (ReviewDate IS NOT NULL AND ReviewDate <= DATEADD(day, 60, GETDATE()))
-                    )
-                    AND IsCurrent = 1
-                    AND LifecycleStatus <> 'deleting'
-                    ORDER BY ExpiryDate ASC
+		q = text(f"""
+                    SELECT d.DocID, d.TenFile AS OriginalFileName, d.ThuMuc AS Department,
+                           d.EffectiveStatus, d.ExpiryDate, d.ReviewDate,
+                           d.IsCurrent AS IsCurrentVersion
+                    FROM TaiLieu d
+                    WHERE {where_clause}
+                    ORDER BY d.ExpiryDate ASC
                 """)
-		return conn.execute(q).fetchall()
+		return conn.execute(q, params).fetchall()
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +623,8 @@ def mark_job_rejected(job_id, *, db_engine=None):
 	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
-def list_docs_for_bulk_meta(dept=None, domain=None):
+def list_docs_for_bulk_meta(dept=None, domain=None, *, allowed_departments=None,
+							 allowed_sites=None, max_security_level="public", global_read_admin=False):
 	q = """
 		SELECT t.DocID, t.TenFile, t.ThuMuc, t.Domain
 		FROM TaiLieu t
@@ -634,6 +647,30 @@ def list_docs_for_bulk_meta(dept=None, domain=None):
 	if domain:
 		q += " AND t.Domain = :domain"
 		params["domain"] = domain
+	if not global_read_admin:
+		departments = sorted({str(value).strip() for value in (allowed_departments or []) if str(value).strip()})
+		sites = sorted({str(value).strip() for value in (allowed_sites or []) if str(value).strip()})
+		if not departments or not sites:
+			q += " AND 1 = 0"
+		else:
+			dept_keys = []
+			for index, value in enumerate(departments):
+				key = f"allowed_dept_{index}"
+				dept_keys.append(f":{key}")
+				params[key] = value
+			q += " AND EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pb WHERE pb.DocID = t.DocID AND pb.DeptCode IN (" + ", ".join(dept_keys) + "))"
+			site_keys = []
+			for index, value in enumerate(sites):
+				key = f"allowed_site_{index}"
+				site_keys.append(f":{key}")
+				params[key] = value
+			q += " AND t.Site IN (" + ", ".join(site_keys) + ")"
+			level_keys = []
+			for index, value in enumerate(_allowed_security_levels(max_security_level)):
+				key = f"allowed_level_{index}"
+				level_keys.append(f":{key}")
+				params[key] = value
+			q += " AND COALESCE(NULLIF(LOWER(LTRIM(RTRIM(t.SecurityLevel))), ''), 'confidential') IN (" + ", ".join(level_keys) + ")"
 	q += " ORDER BY t.ThuMuc, t.TenFile"
 	with engine.connect() as conn:
 		return conn.execute(text(q), params).fetchall()

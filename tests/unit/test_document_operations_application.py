@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 
 import pytest
+from PIL import Image
 
 from mech_chatbot.application import document_upload as upload_module
 from mech_chatbot.application.document_review import (
@@ -144,6 +146,67 @@ def test_upload_preflight_rejects_department_and_extension_before_reading_bytes(
 
     assert unauthorized is not None and unauthorized.code == "unauthorized"
     assert invalid is not None and invalid.code == "invalid_extension"
+
+
+def test_legacy_doc_is_rejected_before_job_creation_with_conversion_guidance() -> None:
+    storage = Storage()
+    jobs = Jobs()
+    upload = DocumentUpload(storage=storage, job_store=jobs)
+
+    with pytest.raises(UploadRejected) as raised:
+        upload.enqueue(_command(file_name="legacy.doc"), _actor())
+
+    assert raised.value.failure.code == "invalid_extension"
+    assert "DOCX" in raised.value.failure.message
+    assert storage.stored == []
+    assert jobs.calls == []
+
+
+def test_xls_without_reader_is_rejected_before_job_creation(monkeypatch) -> None:
+    storage = Storage()
+    jobs = Jobs()
+    upload = DocumentUpload(storage=storage, job_store=jobs)
+    monkeypatch.setattr(upload_module.importlib.util, "find_spec", lambda name: None if name == "xlrd" else object())
+
+    with pytest.raises(UploadRejected) as raised:
+        upload.enqueue(_command(file_name="legacy.xls"), _actor())
+
+    assert raised.value.failure.code == "missing_dependency"
+    assert "XLS" in raised.value.failure.message
+    assert storage.stored == []
+    assert jobs.calls == []
+
+
+def test_multipage_tiff_is_rejected_before_job_creation() -> None:
+    content = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(
+        content,
+        format="TIFF",
+        save_all=True,
+        append_images=[Image.new("RGB", (2, 2), "black")],
+    )
+    storage = Storage()
+    jobs = Jobs()
+    upload = DocumentUpload(storage=storage, job_store=jobs)
+
+    with pytest.raises(UploadRejected) as raised:
+        upload.enqueue(_command(file_name="drawing.tiff", content=content.getvalue()), _actor())
+
+    assert raised.value.failure.code == "unsupported_multipage_image"
+    assert "TIFF" in raised.value.failure.message
+    assert storage.stored == []
+    assert jobs.calls == []
+
+
+def test_single_page_tiff_still_enqueues() -> None:
+    content = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(content, format="TIFF")
+
+    receipt = DocumentUpload(storage=Storage(), job_store=Jobs()).enqueue(
+        _command(file_name="drawing.tif", content=content.getvalue()), _actor()
+    )
+
+    assert receipt.job_id == 91
 
 
 def test_single_upload_rejects_oversized_content(monkeypatch) -> None:

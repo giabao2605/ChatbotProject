@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
 from mech_chatbot.api import dependencies as api_dependencies
 from mech_chatbot.api.routers import documents as document_routes
@@ -210,7 +211,7 @@ def test_access_request_fails_closed_when_repository_rejects(monkeypatch, client
     )
 
     response = client_for(_profile()).post(
-        "/api/access/request", json={"request_type": "clearance"}
+        "/api/access/request", json={"request_type": "clearance", "requested_level": "internal"}
     )
 
     assert response.status_code == 400
@@ -654,6 +655,29 @@ def test_feedback_without_correct_answer_does_not_query_golden_source(
     assert response.status_code == 200
     assert response.json() == {
         "result": {"status": "classified"},
+        "golden_hash": None,
+        "regression_qid": None,
+    }
+
+
+def test_feedback_classify_serializes_sqlalchemy_row_after_write(monkeypatch, client_for):
+    with create_engine("sqlite://").connect() as conn:
+        row = conn.execute(
+            text("SELECT 169 AS SourceDocID, 'QA_B' AS Department, 'SiteB' AS Site")
+        ).first()
+    monkeypatch.setattr(
+        operation_routes.ui_query_service,
+        "classify_feedback_and_get_source",
+        lambda *_args, **_kwargs: row,
+    )
+
+    response = client_for(_profile("reviewer")).post(
+        "/api/feedback/4/classify", json={"failure_type": "other"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "result": {"SourceDocID": 169, "Department": "QA_B", "Site": "SiteB"},
         "golden_hash": None,
         "regression_qid": None,
     }

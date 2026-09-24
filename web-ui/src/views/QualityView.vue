@@ -20,7 +20,7 @@ const toolbar: ToolbarAction[] = [
   <ResourcePage
     title="Chất lượng tài liệu"
     eyebrow="Quality"
-    description="Điểm chất lượng trích xuất theo tài liệu."
+    description="Điểm chất lượng theo phản hồi người dùng về tài liệu."
     :filters="filters"
     :load="load"
     :toolbar="toolbar"

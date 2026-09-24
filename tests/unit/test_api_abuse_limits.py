@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from mech_chatbot.api import request_limits
 from mech_chatbot.api.dependencies import csrf_profile
@@ -383,10 +384,13 @@ def test_chat_image_rate_limit_runs_before_reading_or_storing(
         client=SimpleNamespace(host="10.0.0.8"),
     )
     profile = {"user_id": 7, "username": "alice"}
+    valid_image = BytesIO()
+    Image.new("RGB", (1, 1)).save(valid_image, format="PNG")
+    valid_image.seek(0)
 
     first = chat_routes.upload_chat_image(
         request,
-        UploadFile(filename="first.png", file=BytesIO(b"first")),
+        UploadFile(filename="first.png", file=valid_image),
         profile,
     )
     with pytest.raises(HTTPException) as exc:

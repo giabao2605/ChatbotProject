@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from mech_chatbot.api import app_security
@@ -375,6 +377,11 @@ def upload_chat_image(
         raw = read_upload_limited(file.file, CHAT_IMAGE_MAX_BYTES)
     except UploadTooLarge:
         raise HTTPException(status_code=413, detail="File is too large")
+    try:
+        with Image.open(BytesIO(raw)) as image:
+            image.verify()
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid image file") from exc
     out_dir = data_raw_root() / "Chat_Images"
     out_dir.mkdir(parents=True, exist_ok=True)
     image_id = f"{uuid4().hex}{ext}"

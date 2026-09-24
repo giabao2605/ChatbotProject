@@ -89,7 +89,8 @@ async function submitBulk() {
   bulk.busy = true;
   bulk.error = "";
   try {
-    await apiSend("/api/ingestion/jobs/bulk-delete", "POST", { ids });
+    const result = await apiSend<{ ok: boolean; failed: number }>("/api/ingestion/jobs/bulk-delete", "POST", { ids });
+    if (!result.ok) throw new Error(`${result.failed} JobID không xóa được`);
     bulk.visible = false;
     resolveBulk?.();
     resolveBulk = null;

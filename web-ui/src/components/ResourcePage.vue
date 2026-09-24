@@ -36,6 +36,7 @@ for (const filter of props.filters ?? []) {
 
 const showForm = ref(false);
 const formValues = reactive<Record<string, unknown>>({});
+const formError = ref("");
 
 function resetForm() {
   for (const field of props.createForm?.fields ?? []) {
@@ -90,11 +91,9 @@ async function runAction(action: RowAction | ToolbarAction, row?: ApiRow) {
   error.value = "";
   notice.value = "";
   try {
-    if (row) {
-      await (action as RowAction).run(row);
-    } else {
-      await (action as ToolbarAction).run();
-    }
+    const result = row ? await (action as RowAction).run(row) : await (action as ToolbarAction).run();
+    const outcome = result as { ok?: boolean; message?: string; result?: { message?: string } } | undefined;
+    if (outcome?.ok === false) throw new Error(outcome.message || outcome.result?.message || t("common.error"));
     notice.value = t("common.success");
     await refresh();
   } catch (err) {
@@ -106,20 +105,35 @@ async function runAction(action: RowAction | ToolbarAction, row?: ApiRow) {
 
 function openForm() {
   resetForm();
+  formError.value = "";
+  notice.value = "";
   showForm.value = true;
 }
 
 async function submitForm() {
   if (!props.createForm) return;
+  const missing = props.createForm.fields.find((field) => {
+    if (!field.required) return false;
+    const value = formValues[field.key];
+    return value == null || (typeof value === "string" && !value.trim()) || (field.type === "checkbox" && value !== true);
+  });
+  if (missing) {
+    formError.value = `Vui lòng nhập ${missing.label}`;
+    return;
+  }
   busy.value = true;
   error.value = "";
+  formError.value = "";
   try {
-    await props.createForm.submit({ ...formValues });
+    const result = await props.createForm.submit({ ...formValues });
+    if (result && typeof result === "object" && "ok" in result && result.ok === false) {
+      throw new Error("Không lưu được dữ liệu");
+    }
     showForm.value = false;
     notice.value = t("common.success");
     await refresh();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t("common.error");
+    formError.value = err instanceof Error ? err.message : t("common.error");
   } finally {
     busy.value = false;
   }
@@ -263,6 +277,7 @@ defineExpose({ refresh });
       :style="{ width: '480px' }"
     >
       <form class="stack-form" @submit.prevent="submitForm">
+        <Message v-if="formError" severity="error" v-text="formError"></Message>
         <label v-for="field in createForm.fields" :key="field.key" class="stack-field">
           <span><span v-text="field.label"></span><em v-if="field.required"> *</em></span>
           <Textarea
@@ -270,11 +285,13 @@ defineExpose({ refresh });
             v-model="formValues[field.key] as string"
             rows="3"
             auto-resize
+            :required="field.required"
           />
           <select
             v-else-if="field.type === 'select'"
             v-model="formValues[field.key]"
             class="native-select"
+            :required="field.required"
           >
             <option
               v-for="opt in field.options || []"
@@ -287,13 +304,15 @@ defineExpose({ refresh });
             v-else-if="field.type === 'checkbox'"
             v-model="formValues[field.key]"
             type="checkbox"
+            :required="field.required"
           />
           <InputText
             v-else-if="field.type === 'number'"
             v-model="formValues[field.key] as string"
             type="number"
+            :required="field.required"
           />
-          <InputText v-else v-model="formValues[field.key] as string" :placeholder="field.placeholder" />
+          <InputText v-else v-model="formValues[field.key] as string" :placeholder="field.placeholder" :required="field.required" />
           <small v-if="field.help" class="muted-text" v-text="field.help"></small>
         </label>
         <div class="form-actions">

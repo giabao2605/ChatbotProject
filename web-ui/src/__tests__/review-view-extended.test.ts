@@ -503,7 +503,6 @@ describe("ReviewView public behavior", () => {
           owner_signer: "QA lead",
           effective_status: "active",
           language: "vi",
-          domain: "mechanical",
         },
       },
     );

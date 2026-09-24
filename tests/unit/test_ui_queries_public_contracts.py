@@ -329,6 +329,12 @@ def test_bulk_delete_counts_each_success_and_failure(monkeypatch):
     assert [params["jid"] for _, params in connection.calls] == [1, 2, 3]
 
 
+def test_bulk_delete_counts_missing_job_as_failure(monkeypatch):
+    install_engine(monkeypatch, lambda *_args: FakeResult(rowcount=0))
+
+    assert ui_queries.bulk_delete_ingestion_jobs([2147483647]) == (0, 1)
+
+
 def test_feedback_mutations_return_source_and_use_expected_params(monkeypatch):
     source = (42, "MFG", "HCM")
 

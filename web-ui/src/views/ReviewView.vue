@@ -311,7 +311,6 @@ async function applyBulkMeta() {
       .map(([k, v]) => [k, String(v ?? "").trim()])
       .filter(([, v]) => v),
   );
-  if (bmeta.domain) metadata.domain = bmeta.domain;
   if (!Object.keys(metadata).length) {
     bmeta.error = "Nhập ít nhất một metadata để cập nhật.";
     return;

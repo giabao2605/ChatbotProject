@@ -543,6 +543,7 @@ def test_generation_debug_validates_served_calculation_documents_for_pilot():
         {
             "citation_structure_passed": True,
             "provenance_passed": True,
+            "decomposition_usage": {},
         },
     )
     debug = _generation_debug(*arguments)

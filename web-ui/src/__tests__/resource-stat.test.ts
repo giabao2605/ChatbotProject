@@ -345,6 +345,7 @@ describe("ResourcePage public behavior", () => {
       rowActions: [
         { label: "Run row", confirm: "Sure?", run: runRow },
         { label: "Fail row", run: failRow },
+        { label: "Blocked", run: vi.fn().mockResolvedValue({ ok: false, result: { message: "Không thể vô hiệu hóa" } }) },
         { label: "Always", run: vi.fn().mockResolvedValue(undefined) },
         { label: "Hidden", visible: () => false, run: vi.fn() },
       ],
@@ -370,6 +371,12 @@ describe("ResourcePage public behavior", () => {
     await button(wrapper, "Fail row").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("row failed");
+
+    await button(wrapper, "Blocked").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Không thể vô hiệu hóa");
+    expect(wrapper.text()).not.toContain("Thành công");
+    expect(load).toHaveBeenCalledTimes(2);
 
     confirm.mockReturnValue(false);
     await button(wrapper, "Run toolbar").trigger("click");
@@ -441,6 +448,7 @@ describe("ResourcePage public behavior", () => {
 
     submit.mockRejectedValueOnce(new Error("duplicate machine"));
     await button(wrapper, "Add machine").trigger("click");
+    await wrapper.find('input[type="text"]').setValue("Lathe");
     await wrapper.find("form").trigger("submit");
     await flushPromises();
     expect(wrapper.find(".dialog").exists()).toBe(true);
@@ -450,6 +458,50 @@ describe("ResourcePage public behavior", () => {
     await wrapper.find("form").trigger("submit");
     await flushPromises();
     expect(wrapper.text()).toContain("Đã xảy ra lỗi");
+  });
+
+  it("blocks missing required values and reports rejected create responses", async () => {
+    const submit = vi.fn().mockResolvedValueOnce({ ok: false });
+    const wrapper = mountResource({
+      title: "Machines",
+      load: vi.fn().mockResolvedValue([]),
+      createForm: {
+        triggerLabel: "Add machine",
+        fields: [
+          { key: "name", label: "Name", required: true },
+          { key: "count", label: "Count", type: "number", required: true },
+          { key: "notes", label: "Notes", type: "textarea", required: true },
+          { key: "site", label: "Site", type: "select", required: true, options: [{ label: "A", value: "A" }] },
+        ],
+        submit,
+      },
+    });
+    await flushPromises();
+    await button(wrapper, "Add machine").trigger("click");
+    await wrapper.find("form").trigger("submit");
+    expect(submit).not.toHaveBeenCalled();
+    expect(wrapper.find(".dialog .message").text()).toContain("Name");
+    expect(wrapper.find('.dialog input[type="text"]').attributes()).toHaveProperty("required");
+
+    await wrapper.find('input[type="text"]').setValue("  Machine  ");
+    await wrapper.find("form").trigger("submit");
+    expect(submit).not.toHaveBeenCalled();
+    expect(wrapper.find(".dialog .message").text()).toContain("Count");
+    await wrapper.find('input[type="number"]').setValue("0");
+    await wrapper.find("form").trigger("submit");
+    expect(submit).not.toHaveBeenCalled();
+    expect(wrapper.find(".dialog .message").text()).toContain("Notes");
+    await wrapper.find("textarea").setValue("Details");
+    await wrapper.find("form").trigger("submit");
+    expect(submit).not.toHaveBeenCalled();
+    expect(wrapper.find(".dialog .message").text()).toContain("Site");
+    await wrapper.find("select").setValue("A");
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+    expect(submit).toHaveBeenCalledOnce();
+    expect(wrapper.find(".dialog").exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("Thành công");
+    expect(wrapper.find(".dialog").text()).toContain("Không lưu được");
   });
 });
 

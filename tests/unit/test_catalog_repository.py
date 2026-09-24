@@ -337,6 +337,20 @@ def test_set_department_status_rejects_missing_archived_and_in_use_departments(m
     assert blocked["summary"]["users"] == 2
 
 
+def test_set_department_status_rejects_unknown_status_without_write(monkeypatch):
+    monkeypatch.setattr(
+        catalog, "get_department_summary", lambda _code: _summary("active"),
+    )
+    monkeypatch.setattr(
+        catalog, "upsert_department",
+        lambda *_args, **_kwargs: pytest.fail("unknown status must not be normalized"),
+    )
+
+    result = catalog.set_department_status("ENG", "QA_INVALID")
+
+    assert result["ok"] is False
+
+
 def test_set_department_status_persists_audits_and_returns_fresh_summary(monkeypatch):
     summaries = iter([_summary("active"), _summary("disabled")])
     monkeypatch.setattr(catalog, "get_department_summary", lambda _code: next(summaries))

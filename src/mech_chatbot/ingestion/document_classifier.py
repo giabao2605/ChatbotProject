@@ -188,6 +188,7 @@ def classify_document(
     allow_external=False,
     *,
     db_engine=None,
+    llm_adapter=None,
 ):
     """Phan loai tai lieu 2 tang:
       Tang 1: xac dinh domain tu thu_muc (mechanical / tabular / generic, tra cuu Departments)
@@ -254,7 +255,8 @@ def classify_document(
     
     try:
         resp = cohere_invoke(
-            [HumanMessage(content=prompt)], surface="document_classification"
+            [HumanMessage(content=prompt)], surface="document_classification",
+            **({"adapter": llm_adapter} if llm_adapter is not None else {}),
         )
         clean_json = resp.content.replace('```json', '').replace('```', '').strip()
         parsed = json.loads(clean_json)

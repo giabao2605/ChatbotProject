@@ -198,6 +198,7 @@ export async function sendChatMessage(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let terminalEventReceived = false;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -210,10 +211,17 @@ export async function sendChatMessage(
       if (item.event === "thinking") callbacks.onThinking();
       if (item.event === "delta" || item.event === "token") callbacks.onDelta(String(data.text ?? ""));
       if (item.event === "warning") callbacks.onWarning(String(data.message ?? ""));
-      if (item.event === "done") callbacks.onDone(data);
-      if (item.event === "error") callbacks.onError(String(data.detail || data.message || "Unknown error"));
+      if (item.event === "done") {
+        terminalEventReceived = true;
+        callbacks.onDone(data);
+      }
+      if (item.event === "error") {
+        terminalEventReceived = true;
+        callbacks.onError(String(data.detail || data.message || "Unknown error"));
+      }
     }
   }
+  if (!terminalEventReceived) throw new Error("Phản hồi chưa hoàn tất. Vui lòng thử lại.");
 }
 
 export async function sendFeedback(chatId: number, rating: number) {

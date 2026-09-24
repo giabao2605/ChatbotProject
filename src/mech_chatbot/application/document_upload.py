@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import logging
+import importlib.util
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Protocol
+
+from PIL import Image
 
 from mech_chatbot.auth.authorization import role_allows
 
@@ -18,7 +22,6 @@ ALLOWED_UPLOAD_EXTENSIONS = frozenset(
     {
         ".pdf",
         ".docx",
-        ".doc",
         ".xlsx",
         ".xls",
         ".txt",
@@ -159,11 +162,23 @@ class DocumentUpload:
                 f"Không có quyền upload vào phòng ban {owner_department}",
             )
         extension = Path(file_name or "").suffix.lower()
+        if extension == ".doc":
+            return _failure(
+                "invalid_extension",
+                file_name,
+                "Định dạng DOC chưa được hỗ trợ; hãy chuyển sang DOCX trước khi tải lên",
+            )
         if extension not in ALLOWED_UPLOAD_EXTENSIONS:
             return _failure(
                 "invalid_extension",
                 file_name,
                 f"Định dạng tệp không được hỗ trợ: {file_name}",
+            )
+        if extension == ".xls" and importlib.util.find_spec("xlrd") is None:
+            return _failure(
+                "missing_dependency",
+                file_name,
+                "Máy chủ chưa có bộ đọc XLS (xlrd); hãy báo quản trị viên hoặc chuyển sang XLSX",
             )
         return None
 
@@ -294,6 +309,17 @@ class DocumentUpload:
                 f"Tệp quá lớn (giới hạn 100MB): {command.file_name}",
                 {"limit_bytes": MAX_UPLOAD_BYTES, "actual_bytes": len(command.content)},
             )
+        if Path(command.file_name).suffix.lower() in {".tif", ".tiff"}:
+            try:
+                with Image.open(BytesIO(command.content)) as image:
+                    if getattr(image, "n_frames", 1) > 1:
+                        return _failure(
+                            "unsupported_multipage_image",
+                            command.file_name,
+                            "TIFF nhiều trang chưa được hỗ trợ; hãy tách thành ảnh từng trang hoặc chuyển sang PDF",
+                        )
+            except (OSError, ValueError):
+                return _failure("invalid_image", command.file_name, "Tệp TIFF không hợp lệ")
         return None
 
     @staticmethod

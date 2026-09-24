@@ -319,6 +319,43 @@ describe("extended API client behavior", () => {
     ]);
   });
 
+  it("rejects a partial answer when the SSE connection closes without a terminal event", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: delta\ndata: {"text":"QA_PARTIAL_STREAM"}\n\n'));
+        controller.close();
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(stream, { status: 200 })));
+    const callbacks = {
+      onThinking: vi.fn(),
+      onDelta: vi.fn(),
+      onWarning: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    } satisfies ChatStreamCallbacks;
+
+    await expect(sendChatMessage({ question: "P-101?" }, callbacks)).rejects.toThrow("Phản hồi chưa hoàn tất");
+    expect(callbacks.onDelta).toHaveBeenCalledWith("QA_PARTIAL_STREAM");
+    expect(callbacks.onDone).not.toHaveBeenCalled();
+  });
+
+  it("accepts an explicit SSE error as a terminal event", async () => {
+    const body = 'event: error\ndata: {"message":"RAG unavailable"}\n\n';
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    const callbacks = {
+      onThinking: vi.fn(),
+      onDelta: vi.fn(),
+      onWarning: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    } satisfies ChatStreamCallbacks;
+
+    await expect(sendChatMessage({}, callbacks)).resolves.toBeUndefined();
+    expect(callbacks.onError).toHaveBeenCalledWith("RAG unavailable");
+    expect(callbacks.onDone).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       "backend rejection",

@@ -8,12 +8,12 @@ from __future__ import annotations
 from typing import Any
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
 from mech_chatbot.api import app_security
 from mech_chatbot.api.dependencies import csrf_profile, current_profile, public_profile, require_any_role, session_payload
-from mech_chatbot.api.transport_utils import assert_any_role, rows_to_json, safe_int
+from mech_chatbot.api.transport_utils import assert_any_role, row_to_json, rows_to_json, safe_int
 from mech_chatbot.auth.core import authenticate_user, load_user_profile, update_user_preferred_language
 from mech_chatbot.llm.external_ai import invalidate_external_ai_provider_profiles
 import mech_chatbot.services.access_service as access_service
@@ -32,6 +32,10 @@ import mech_chatbot.services.ui_query_service as ui_query_service
 
 auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
 router = APIRouter(prefix="/api", tags=["operations"])
+
+
+def _operation_ok(result: Any) -> bool:
+    return bool(result.get("ok")) if isinstance(result, dict) and "ok" in result else bool(result)
 
 
 class LoginRequest(BaseModel):
@@ -66,6 +70,7 @@ def me(request: Request):
 def logout(request: Request, response: Response):
     payload = session_payload(request)
     app_security.require_csrf(request, payload)
+    app_security.revoke_session(payload)
     app_security.clear_session_cookie(response)
     return {"ok": True}
 
@@ -87,7 +92,10 @@ def refresh_session(request: Request, response: Response):
     profile = load_user_profile(user_id=payload.user_id, username=payload.username)
     if not profile:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or invalid")
-    token, new_payload = app_security.create_session_token(user_id=int(profile["user_id"]), username=str(profile["username"]))
+    token, new_payload = app_security.create_session_token(
+        user_id=int(profile["user_id"]), username=str(profile["username"]),
+        session_id=payload.session_id, generation=payload.generation,
+    )
     app_security.set_session_cookie(response, token)
     return {"ok": True, "user": public_profile(profile, csrf=new_payload.csrf)}
 
@@ -114,7 +122,17 @@ def audit(limit: int = 100, profile: dict[str, Any] = Depends(require_any_role("
 
 @router.post("/access/request")
 def access_request(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
-    result = access_service.create_access_request(user_id=profile.get("user_id"), username=profile.get("username"), request_type=str(body.get("request_type") or ""), requested_level=body.get("requested_level"), requested_dept=body.get("requested_dept"), question_text=body.get("question_text"), reason=body.get("reason"))
+    request_type = str(body.get("request_type") or "").strip().lower()
+    request_type = "security" if request_type == "clearance" else request_type
+    level = str(body.get("requested_level") or "").strip().lower()
+    department = str(body.get("requested_dept") or "").strip()
+    if (
+        request_type not in {"security", "department"}
+        or (request_type == "security" and level not in {"public", "internal", "confidential"})
+        or (request_type == "department" and not department)
+    ):
+        raise HTTPException(status_code=422, detail="Loại yêu cầu hoặc quyền cần cấp không hợp lệ")
+    result = access_service.create_access_request(user_id=profile.get("user_id"), username=profile.get("username"), request_type=request_type, requested_level=level if request_type == "security" else None, requested_dept=department if request_type == "department" else None, question_text=body.get("question_text"), reason=body.get("reason"))
     if not result:
         raise HTTPException(status_code=400, detail="Could not create access request")
     return result
@@ -134,7 +152,7 @@ def my_access_requests(limit: int = 50, profile: dict[str, Any] = Depends(curren
 def access_request_resolve(request_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "security_admin")
     result = access_service.resolve_access_request(request_id=request_id, decision=str(body.get("decision") or ""), reviewer_username=profile.get("username"), reviewer_id=profile.get("user_id"), review_note=body.get("review_note"))
-    return {"ok": bool(result), "result": result}
+    return {"ok": _operation_ok(result), "result": result}
 
 
 @router.get("/access/users")
@@ -151,14 +169,14 @@ def access_grants(limit: int = 100, profile: dict[str, Any] = Depends(require_an
 def access_revoke_clearance(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "security_admin")
     result = access_service.revoke_user_clearance(user_id=user_id, new_level=body.get("new_level") or "public", actor_username=profile.get("username"), actor_id=profile.get("user_id"), reason=body.get("reason"))
-    return {"ok": bool(result), "result": result}
+    return {"ok": _operation_ok(result), "result": result}
 
 
 @router.post("/access/users/{user_id}/revoke-department")
 def access_revoke_department(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "security_admin")
     result = access_service.revoke_user_department(user_id=user_id, dept=str(body.get("department") or ""), actor_username=profile.get("username"), actor_id=profile.get("user_id"), reason=body.get("reason"))
-    return {"ok": bool(result), "result": result}
+    return {"ok": _operation_ok(result), "result": result}
 
 
 @router.get("/users")
@@ -174,11 +192,17 @@ def user_detail(user_id: int, profile: dict[str, Any] = Depends(require_any_role
 @router.post("/users")
 def user_create(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "security_admin")
+    username = str(body.get("username") or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Thiếu tên đăng nhập")
     password = str(body.get("password") or "")
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    result = ui_query_service.create_user_with_roles(username=str(body.get("username") or "").strip(), password_hash=password_hash, display_name=body.get("display_name"), department=body.get("department"), selected_roles=body.get("roles") or [], depts=body.get("departments") or [])
+    try:
+        result = ui_query_service.create_user_with_roles(username=username, password_hash=password_hash, display_name=body.get("display_name"), department=body.get("department"), selected_roles=body.get("roles") or [], depts=body.get("departments") or [])
+    except ui_query_service.UserAccountConflict as error:
+        raise HTTPException(status_code=409, detail="Tên đăng nhập đã tồn tại hoặc dữ liệu tài khoản không hợp lệ") from error
     if result:
         user_id = safe_int(result.get("user_id") if isinstance(result, dict) else result)
         if user_id:
@@ -190,7 +214,8 @@ def user_create(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_pro
 @router.patch("/users/{user_id}/active")
 def user_active(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "security_admin")
-    return {"ok": bool(ui_query_service.set_user_active_status(user_id, bool(body.get("is_active")), actor_username=profile.get("username"), actor_id=profile.get("user_id")))}
+    result = ui_query_service.set_user_active_status(user_id, bool(body.get("is_active")), actor_username=profile.get("username"), actor_id=profile.get("user_id"))
+    return {"ok": _operation_ok(result), "result": result}
 
 
 @router.patch("/users/{user_id}/roles")
@@ -224,13 +249,17 @@ def user_password(user_id: int, body: dict[str, Any], profile: dict[str, Any] = 
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    return {"ok": bool(ui_query_service.update_user_password(user_id, password_hash))}
+    updated = bool(ui_query_service.update_user_password(user_id, password_hash))
+    if updated:
+        app_security.revoke_user_sessions(user_id)
+    return {"ok": updated}
 
 
 @router.delete("/users/{user_id}")
 def user_delete(user_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "security_admin")
-    return {"ok": bool(ui_query_service.delete_user_account(user_id, actor_username=profile.get("username"), actor_id=profile.get("user_id")))}
+    result = ui_query_service.delete_user_account(user_id, actor_username=profile.get("username"), actor_id=profile.get("user_id"))
+    return {"ok": _operation_ok(result), "result": result}
 
 
 @router.get("/catalog/departments")
@@ -333,13 +362,18 @@ def catalog_department_upsert(body: dict[str, Any], profile: dict[str, Any] = De
 @router.patch("/catalog/departments/{code}/status")
 def catalog_department_status(code: str, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "platform_admin")
-    return {"ok": bool(org_service.set_department_status(code, status=str(body.get("status") or ""), actor=profile.get("username") or "System", force=bool(body.get("force", False))))}
+    target = str(body.get("status") or "").strip().lower()
+    if target not in {"active", "disabled", "archived"}:
+        raise HTTPException(status_code=422, detail="Trạng thái phòng ban không hợp lệ")
+    result = org_service.set_department_status(code, status=target, actor=profile.get("username") or "System", force=bool(body.get("force", False)))
+    return result if isinstance(result, dict) else {"ok": bool(result)}
 
 
 @router.post("/catalog/departments/{code}/archive")
 def catalog_department_archive(code: str, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "platform_admin")
-    return {"ok": bool(org_service.archive_department(code, actor=profile.get("username") or "System", force=bool(body.get("force", False))))}
+    result = org_service.archive_department(code, actor=profile.get("username") or "System", force=bool(body.get("force", False)))
+    return result if isinstance(result, dict) else {"ok": bool(result)}
 
 
 @router.post("/catalog/departments/reassign")
@@ -434,7 +468,7 @@ def feedback_classify(feedback_id: int, body: dict[str, Any], request: Request, 
             question, source_doc_id, department, site = row
             golden_hash = feedback_service.upsert_golden_answer(question=question, answer=correct_answer, source_doc_id=source_doc_id, department=department, site=site, created_by=profile.get("username") or "reviewer", feedback_id=feedback_id)
             regression_qid = feedback_service.ensure_regression_question(question=question, expected_doc_id=source_doc_id, department=department, site=site, created_by=profile.get("username") or "reviewer")
-    return {"result": result, "golden_hash": golden_hash, "regression_qid": regression_qid}
+    return {"result": row_to_json(result), "golden_hash": golden_hash, "regression_qid": regression_qid}
 
 
 @router.delete("/feedback/{feedback_id}")
@@ -476,7 +510,7 @@ def regression_run(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_
 
 
 @router.get("/quality/documents")
-def quality_documents(limit: int = 50, worst_first: bool = True, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
+def quality_documents(limit: int = Query(50, ge=0), worst_first: bool = True, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
     return {"documents": rows_to_json(feedback_service.get_doc_quality_ranking(limit=limit, worst_first=worst_first))}
 
 

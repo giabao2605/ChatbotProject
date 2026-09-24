@@ -281,8 +281,8 @@ def test_bulk_review_reports_missing_identifiers_and_executes_scoped_delete_path
             calls.append(("delete-job", job_id))
 
     class Publication:
-        def resolve_latest_doc_id(self, _job_id):
-            return 42
+        def resolve_latest_doc_id(self, job_id):
+            return {6: 5, 8: 8}.get(job_id)
 
         def publish_document(self, _command, _actor):
             raise AssertionError("missing identifiers must fail before publication")
@@ -295,9 +295,18 @@ def test_bulk_review_reports_missing_identifiers_and_executes_scoped_delete_path
         publication=PublicationCoordinator(publication=Publication()),
     )
     monkeypatch.setattr(
+        document_routes,
+        "validate_publish_actor",
+        lambda *_args: SimpleNamespace(valid=True, issues=()),
+    )
+    monkeypatch.setattr(
         app_server.app.state,
         "runtime",
-        replace(app_server.app.state.runtime, review_documents=review_documents),
+        replace(
+            app_server.app.state.runtime,
+            review_documents=review_documents,
+            publication_port=Publication(),
+        ),
     )
 
     missing_publish = app_client.post(

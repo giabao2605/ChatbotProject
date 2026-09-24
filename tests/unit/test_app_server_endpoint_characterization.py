@@ -307,6 +307,42 @@ def test_bulk_metadata_rejects_empty_contract_fields(payload, client_for):
     assert response.status_code == 400
 
 
+@pytest.mark.parametrize("metadata", [
+    {"qa_unknown_field": "x"},
+    {"domain": "mechanical"},
+    {"title": "Pump manual", "domain": "mechanical"},
+])
+def test_bulk_metadata_rejects_fields_that_cannot_update_a_document(
+    metadata, monkeypatch, client_for
+):
+    monkeypatch.setattr(
+        document_routes,
+        "update_document_common_metadata",
+        lambda *_args, **_kwargs: pytest.fail("invalid metadata must not be written"),
+    )
+    response = client_for(_profile("reviewer")).patch(
+        "/api/documents/bulk-metadata", json={"doc_ids": [42], "metadata": metadata}
+    )
+    assert response.status_code == 422
+    assert "metadata" in response.json()["detail"]
+
+
+def test_lifecycle_rejects_nonexistent_date_before_mutation(monkeypatch, client_for):
+    monkeypatch.setattr(
+        document_routes, "validate_document_metadata_actor", lambda *_args: (True, "allowed")
+    )
+    monkeypatch.setattr(
+        document_routes,
+        "set_document_lifecycle",
+        lambda *_args, **_kwargs: pytest.fail("invalid date must not be written"),
+    )
+    response = client_for(_profile("reviewer")).patch(
+        "/api/lifecycle/documents/42", json={"effective_date": "2026-02-30"}
+    )
+    assert response.status_code == 422
+    assert "effective_date" in response.json()["detail"]
+
+
 def test_bulk_metadata_reports_mixed_results_without_leaking_internal_errors(
     monkeypatch, client_for
 ):
@@ -487,9 +523,14 @@ def test_bulk_review_executes_reject_and_delete_boundaries(
         publication=PublicationCoordinator(publication=Publication()),
     )
     monkeypatch.setattr(
+        document_routes,
+        "validate_publish_actor",
+        lambda *_args: SimpleNamespace(valid=True, issues=()),
+    )
+    monkeypatch.setattr(
         app_server.app.state,
         "runtime",
-        replace(app_server.app.state.runtime, review_documents=review),
+        replace(app_server.app.state.runtime, review_documents=review, publication_port=Publication()),
     )
 
     response = client_for(_profile("reviewer")).post(
@@ -554,6 +595,7 @@ def test_citation_page_returns_safe_placeholder_and_audits_confidential_read(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/svg+xml")
     assert "Doc 42" in response.text
+    assert '<a href="/api/files/documents/42/original"' in response.text
     assert response.headers["cache-control"] == "private, no-store"
 
 

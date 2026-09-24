@@ -20,6 +20,7 @@ import AnalyticsView from "@/views/AnalyticsView.vue";
 import ObservabilityView from "@/views/ObservabilityView.vue";
 import AuditView from "@/views/AuditView.vue";
 import HelpView from "@/views/HelpView.vue";
+import NotFoundView from "@/views/NotFoundView.vue";
 
 // meta.roles: capability duoc phep vao route. Rong = moi nguoi dung da dang
 // nhap. Dong bo voi navItems trong App.vue de an menu va chan URL truc tiep.
@@ -47,6 +48,7 @@ export const routes = [
   { path: "/audit", name: "audit", component: AuditView, meta: { roles: ["platform_admin"] } },
   { path: "/settings", name: "settings", component: SettingsView, meta: { roles: ["platform_admin"] } },
   { path: "/help", name: "help", component: HelpView },
+  { path: "/:pathMatch(.*)*", name: "not-found", component: NotFoundView },
 ];
 
 export function createAppRouter(history: RouterHistory = createWebHistory()) {

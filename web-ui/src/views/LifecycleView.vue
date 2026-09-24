@@ -18,7 +18,17 @@ type LifecyclePayload = {
 // (xem get_lifecycle_overview). Tach thanh 3 bang de hien thi + thao tac.
 async function loadGroup(key: "expired" | "expiring_soon" | "needs_review"): Promise<ApiRow[]> {
   const data = await apiGet<LifecyclePayload>("/api/lifecycle", { soon_days: 30 });
-  return data[key] ?? [];
+  return (data[key] ?? []).map((row) => ({
+    doc_id: row.DocID,
+    file: row.OriginalFileName,
+    dept: row.Department,
+    version_no: row.VersionNo,
+    effective_status: row.EffectiveStatus,
+    effective_date: row.EffectiveDateStart,
+    expiry_date: row.ExpiryDate,
+    review_date: row.ReviewDate,
+    last_reviewed_at: row.LastReviewedAt,
+  }));
 }
 
 const loadSelected = () => loadGroup(props.group);

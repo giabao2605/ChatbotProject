@@ -167,7 +167,17 @@ function responseFor(path: string): unknown {
     "/api/feedback": { feedbacks: [{ FeedbackID: 3 }] },
     "/api/glossary": { terms: [{ glossary_id: 4 }] },
     "/api/lifecycle": {
-      expired: [{ doc_id: 9 }],
+      expired: [{
+        DocID: 9,
+        OriginalFileName: "pump.pdf",
+        Department: "QA_B",
+        VersionNo: 2,
+        EffectiveStatus: "expired",
+        EffectiveDateStart: "2026-01-01T00:00:00",
+        ExpiryDate: "2026-09-21T00:00:00",
+        ReviewDate: "2026-09-18T00:00:00",
+        LastReviewedAt: "2026-09-10T00:00:00",
+      }],
       expiring_soon: [{ doc_id: 10 }],
       needs_review: [{ doc_id: 11 }],
     },
@@ -488,10 +498,21 @@ describe("lifecycle, queue, and regression operations", () => {
   it("loads lifecycle groups and submits review and date changes", async () => {
     const wrapper = mountView(LifecycleView, { group: "expired" });
     const contract = pages(wrapper)[0];
-    expect(await contract.load?.()).toEqual([{ doc_id: 9 }]);
+    const rows = await contract.load?.() as ApiRow[];
+    expect(rows).toEqual([{
+      doc_id: 9,
+      file: "pump.pdf",
+      dept: "QA_B",
+      version_no: 2,
+      effective_status: "expired",
+      effective_date: "2026-01-01T00:00:00",
+      expiry_date: "2026-09-21T00:00:00",
+      review_date: "2026-09-18T00:00:00",
+      last_reviewed_at: "2026-09-10T00:00:00",
+    }]);
     await contract.toolbar?.[0].run();
 
-    const reviewed = contract.rowActions?.[0].run({ doc_id: 9, file: "pump.pdf" });
+    const reviewed = contract.rowActions?.[0].run(rows[0]);
     await nextTick();
     await wrapper.find('.dialog-stub input[type="number"]').setValue("90");
     await button(wrapper, "Lưu", ".dialog-stub button").trigger("click");
@@ -535,6 +556,25 @@ describe("lifecycle, queue, and regression operations", () => {
       "POST",
       { ids: [13, 14] },
     );
+  });
+
+  it("keeps the bulk delete dialog open when a job ID does not exist", async () => {
+    vi.mocked(api.apiSend).mockImplementation((path) =>
+      Promise.resolve(path === "/api/ingestion/jobs/bulk-delete"
+        ? { ok: false, deleted: 0, failed: 1 }
+        : { ok: true }) as never,
+    );
+    const wrapper = mountView(QueueView);
+    await flushPromises();
+    const pending = pages(wrapper)[0].toolbar?.[0].run().catch(() => undefined);
+    await nextTick();
+    await wrapper.find(".dialog-stub textarea").setValue("2147483647");
+    await button(wrapper, "Xoá", ".dialog-stub button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".dialog-stub").text()).toContain("1 JobID không xóa được");
+    await button(wrapper, "Huỷ", ".dialog-stub button").trigger("click");
+    await pending;
   });
 
   it("loads, edits, and runs the regression suite", async () => {

@@ -10,7 +10,6 @@ from statistics import mean
 from typing import Any, Mapping, Sequence
 
 from mech_chatbot.evaluation.grounding import extract_claims
-from mech_chatbot.rag.answer_checks import extract_source_ids
 
 
 class DecompositionManifestError(ValueError):
@@ -235,7 +234,10 @@ def _terminal_answer_contract(
         )
     )
     terminal_rendered_source_count = max(
-        len(extract_source_ids(answer)),
+        len({match.upper() for match in re.findall(
+            r"(?:source[_\s-]?id\s*[:#]?\s*|\[src:\s*)(D\d+P\d+)",
+            str(answer or ""), flags=re.IGNORECASE,
+        )}),
         len(CITATION_MARKER_PATTERN.findall(answer)),
     )
     if (

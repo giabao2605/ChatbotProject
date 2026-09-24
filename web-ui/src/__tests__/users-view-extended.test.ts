@@ -225,6 +225,24 @@ describe("UsersView public contracts", () => {
     await expect(pending).rejects.toThrow("");
   });
 
+  it("returns keyboard focus to the create trigger after dialog hide", async () => {
+    const trigger = document.createElement("button");
+    const sink = document.createElement("button");
+    document.body.append(trigger, sink);
+    const wrapper = mountUsers();
+    await flushPromises();
+    trigger.focus();
+    const { pending } = await openCreate(wrapper);
+    sink.focus();
+    await button(wrapper, "Huỷ").trigger("click");
+    wrapper.findComponent(DialogStub).vm.$emit("hide");
+    await nextTick();
+    await expect(pending).rejects.toThrow("");
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+    sink.remove();
+  });
+
   it("computes role additions and removals from the current server state", async () => {
     const wrapper = mountUsers();
     await flushPromises();

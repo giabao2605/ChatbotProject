@@ -285,7 +285,7 @@ def _rollback_failed_ingestion(
     rollback_on_error,
     persistence,
 ):
-    if report["status"] != "error" or not rollback_on_error:
+    if report["status"] != "error" or not rollback_on_error or doc_id is None:
         return
 
     try:
@@ -455,15 +455,13 @@ def _delete_vectors_for_file(
     # Uu tien xoa theo doc_id (chinh xac nhat, bat duoc ca khi doi ten file/thu muc
     # -> tranh sot vector cu gay trung lap/nhieu khi re-ingest).
     if doc_id is not None:
-        try:
-            dependencies.qdrant_client.delete(
-                collection_name=dependencies.collection_name,
-                points_selector=models.Filter(
-                    must=[models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=doc_id))]
-                ),
-            )
-        except Exception as e:
-            logger.warning(f"Xoa vector theo doc_id={doc_id} loi (se thu tiep theo file): {e}")
+        dependencies.qdrant_client.delete(
+            collection_name=dependencies.collection_name,
+            points_selector=models.Filter(
+                must=[models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=doc_id))]
+            ),
+        )
+        return
     # Bug#4: khop theo metadata.thu_muc (thu muc goc, gia tri don) thay vi
     # metadata.phong_ban_quyen (danh sach quyen). phong_ban_quyen co the chua nhieu
     # phong chia se, dung MatchValue tren list de lai vector khi doi ten phong.
@@ -480,6 +478,18 @@ def _delete_vectors_for_file(
             ],
         )
     )
+
+
+def _read_pdf_page_text(page, *, dpi):
+    text = page.get_text("text")
+    if text.strip():
+        return text, False
+    try:
+        text_page = page.get_textpage_ocr(language="eng+vie", dpi=dpi, full=True)
+        return page.get_text(textpage=text_page), True
+    except Exception as error:
+        logger.warning("Không OCR được trang PDF scan: %s", error)
+        return "", True
 
 
 def process_and_ingest_pdf(
@@ -606,7 +616,9 @@ def process_and_ingest_pdf(
             )
             try:
                 page = doc.load_page(page_num)
-                text = page.get_text("text")
+                text, scanned_page = _read_pdf_page_text(
+                    page, dpi=runtime_config.pdf_render_dpi,
+                )
 
                 # Render image truoc de kip phan tich
                 pix = page.get_pixmap(dpi=runtime_config.pdf_render_dpi)
@@ -617,6 +629,13 @@ def process_and_ingest_pdf(
                     img_name = f"{base_name}_page{page_num+1}.png"
                 img_path = os.path.join(runtime_config.image_dir, img_name)
                 pix.save(img_path)
+
+                if scanned_page and len(text.strip()) < 20:
+                    report["failed_pages"].append(page_num + 1)
+                    report["warnings"].append(
+                        f"Trang {page_num+1}: OCR không xác minh được nội dung PDF scan."
+                    )
+                    continue
 
                 image_summary = ""
                 vision_metadata = {}
@@ -629,7 +648,10 @@ def process_and_ingest_pdf(
                 _is_mech_domain_vision = _gh_vision(domain).vision_always
                 # P0: chi day anh/scan qua GPT Vision. Trang co lop text day (van ban thuan)
                 # thuoc domain phi co khi thi doc truc tiep tu text layer, tiet kiem quota Vision.
-                vision_required = os.path.exists(img_path) and (_is_mech_domain_vision or not is_text_heavy)
+                vision_required = (
+                    not scanned_page and os.path.exists(img_path)
+                    and (_is_mech_domain_vision or not is_text_heavy)
+                )
                 vision_failed = False
                 vision_data = {}
 
@@ -1274,7 +1296,7 @@ def process_and_ingest_file(
                 extraction_status="success",
                 image_path=rendered_image_path,
             )
-        elif ext in MARKDOWN_EXTENSIONS:
+        else:
             report["pages_text_extracted"].append(1)
             persistence.save_document_page(
                 doc_id=doc_id,
@@ -1285,7 +1307,10 @@ def process_and_ingest_file(
                 extraction_status="success",
                 image_path=None,
             )
-            markdown_bom_records = extract_bom_records_from_markdown(text_content)
+            markdown_bom_records = (
+                extract_bom_records_from_markdown(text_content)
+                if ext in MARKDOWN_EXTENSIONS else []
+            )
             if markdown_bom_records:
                 persisted = persistence.save_bom_records(
                     doc_id,

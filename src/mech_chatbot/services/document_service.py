@@ -8,6 +8,7 @@ from mech_chatbot.db.repositories.document import (
 from mech_chatbot.db.repositories.publication import (
     publish_document,
     reconcile_serving_state,
+    validate_publish_actor,
     validate_publish_contract,
 )
 from mech_chatbot.db.repositories.version import (

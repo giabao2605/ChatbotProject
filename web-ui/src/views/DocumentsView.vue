@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watchEffect } from "vue";
+import { computed, reactive, ref, watch, watchEffect } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ResourcePage from "@/components/ResourcePage.vue";
 import LifecycleView from "@/views/LifecycleView.vue";
@@ -75,6 +75,7 @@ const EFFECTIVE_STATUSES = ["draft", "effective", "superseded", "expired", "with
 const editVisible = ref(false);
 const editBusy = ref(false);
 const editError = ref("");
+const linkError = ref("");
 const editDocId = ref<number | null>(null);
 const editValues = reactive<Record<string, string>>({});
 let resolveEdit: (() => void) | null = null;
@@ -99,6 +100,20 @@ function openEdit(row: ApiRow): Promise<void> {
     editVisible.value = true;
   });
 }
+
+watch(() => route.query.doc, async (value) => {
+  const id = Number(value);
+  if (!canManage.value || !Number.isSafeInteger(id) || id <= 0) return;
+  linkError.value = "";
+  try {
+    const data = await apiGet<{ documents: ApiRow[] }>("/api/documents/pending-review");
+    const row = (data.documents ?? []).find((item) => num(item, "DocID") === id);
+    if (row) void openEdit(row).catch(() => {});
+    else linkError.value = "Không tìm thấy tài liệu chờ duyệt được phép sửa.";
+  } catch {
+    linkError.value = "Không thể mở tài liệu chờ duyệt này.";
+  }
+}, { immediate: true });
 
 async function submitEdit() {
   if (editDocId.value === null) return;
@@ -227,6 +242,7 @@ const toolbar = computed<ToolbarAction[]>(() => canManage.value ? [
 <template>
   <section class="content-page document-tabs-shell">
     <header class="page-header"><div><div class="eyebrow">Document library</div><h1>Kho tài liệu</h1><p class="page-subtitle">Tài liệu được phân loại theo trạng thái hiệu lực.</p></div></header>
+    <Message v-if="linkError" severity="error" v-text="linkError"></Message>
     <nav class="view-tabs" aria-label="Trạng thái tài liệu">
       <Button label="Còn hiệu lực" :outlined="activeTab !== 'effective'" @click="selectTab('effective')" />
       <template v-if="canManage">

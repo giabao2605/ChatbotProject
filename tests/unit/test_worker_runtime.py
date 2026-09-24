@@ -11,6 +11,7 @@ from mech_chatbot.application.vector_ingestion import IngestionPipelineDependenc
 from mech_chatbot.composition import worker_runtime
 from mech_chatbot.composition.worker_runtime import WorkerRuntime, build_worker_runtime
 from mech_chatbot.config.settings import (
+    LlmSettings,
     QdrantSettings,
     Settings,
     VisionSettings,
@@ -139,7 +140,11 @@ def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
     monkeypatch.setattr(db_package, "repository", repository, raising=False)
 
     classifier_module = ModuleType("mech_chatbot.ingestion.document_classifier")
-    classifier_module.classify_document = lambda *args, **kwargs: {}  # type: ignore[attr-defined]
+    def classify_document(*_args, **kwargs):
+        captured["classifier_kwargs"] = kwargs
+        return {}
+
+    classifier_module.classify_document = classify_document  # type: ignore[attr-defined]
     file_module = ModuleType("mech_chatbot.ingestion.file_ingestor")
 
     def learn_new_file_typed(**kwargs):
@@ -172,12 +177,20 @@ def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
         vision_settings_seen.append(settings)
         return vision_model
 
-    settings = _settings(QDRANT_COLLECTION="KnowledgeBase")
+    llm_adapter = object()
+    llm_settings_seen = []
+
+    def llm_builder(settings: LlmSettings):
+        llm_settings_seen.append(settings)
+        return llm_adapter
+
+    settings = _settings(QDRANT_COLLECTION="KnowledgeBase", PROXYLLM_API_KEY="test-key")
     runtime = build_worker_runtime(
         settings,
         job_store=CompleteFakeStore(),
         qdrant_builder=qdrant_builder,
         vision_builder=vision_builder,
+        llm_builder=llm_builder,
     )
     runtime.runner.run(
         IngestionJob(
@@ -196,6 +209,8 @@ def test_build_default_worker_runtime_injects_composed_pipeline_dependencies(
     assert runtime.worker_id == "worker-1"
     assert qdrant_settings_seen == [QdrantSettings.from_settings(settings)]
     assert vision_settings_seen == [VisionSettings.from_settings(settings)]
+    assert llm_settings_seen == [LlmSettings.from_settings(settings)]
+    assert captured["classifier_kwargs"]["llm_adapter"] is llm_adapter
     assert captured["dependencies"] is dependencies
     assert captured["vision_model"] is vision_model
     assert captured["persistence"] is not None

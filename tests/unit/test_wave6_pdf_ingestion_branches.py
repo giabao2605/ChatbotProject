@@ -32,7 +32,7 @@ def test_vector_cleanup_prefers_document_identity_then_keeps_legacy_fallback(
         dependencies=dependencies,
     )
 
-    assert len(delete_calls) == 3
+    assert len(delete_calls) == 2
     assert all(
         call["collection_name"] == "technical-documents"
         for call in delete_calls

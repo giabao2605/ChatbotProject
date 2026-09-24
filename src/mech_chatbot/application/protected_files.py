@@ -133,6 +133,8 @@ class ProtectedFileError(Exception):
 class ProtectedFileStore(Protocol):
     def load_document(self, doc_id: int) -> DocumentAccessRecord | None: ...
 
+    def has_page(self, doc_id: int, page_no: int) -> bool: ...
+
     def load_page_image(self, doc_id: int, page_no: int) -> str | None: ...
 
     def chat_image_owned_by(self, image_id: str, username: str) -> bool: ...
@@ -261,6 +263,8 @@ class ProtectedFileResolver:
 
         if reference.kind == "document_page":
             page_no = int(reference.page_no or 0)
+            if page_no < 1 or not self._store.has_page(doc_id, page_no):
+                raise ProtectedFileError("not_found", "Page not found")
             stored_path = self._store.load_page_image(doc_id, page_no)
             path = self._storage.resolve_page_image(stored_path)
             if "admin" in actor.roles or decision.security_level == "confidential":

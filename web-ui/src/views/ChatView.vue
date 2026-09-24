@@ -10,6 +10,8 @@ type UiMessage = ChatMessage & {
   progressState?: "running" | "done" | "error";
 };
 
+const activeSessionKey = "chat-active-session";
+
 const chatStore = useChatStore();
 const sessions = ref<SessionItem[]>([]);
 const messages = ref<UiMessage[]>([]);
@@ -39,6 +41,7 @@ async function scrollToBottom() {
 async function newChat() {
   if (busy.value) return;
   chatStore.newSession();
+  sessionStorage.removeItem(activeSessionKey);
   messages.value = [];
   warning.value = "";
   error.value = "";
@@ -47,8 +50,9 @@ async function newChat() {
 
 async function openSession(id: string) {
   if (busy.value) return;
-  chatStore.openSession(id);
   messages.value = await api.loadHistory(id);
+  chatStore.openSession(id);
+  sessionStorage.setItem(activeSessionKey, id);
   historyOpen.value = false;
   await scrollToBottom();
 }
@@ -95,6 +99,9 @@ async function send() {
   input.value = "";
 
   const currentSession = sessionId.value;
+  if (messages.value.at(-1)?.progressState === "error" && messages.value.at(-2)?.role === "user") {
+    messages.value.splice(-2);
+  }
   const history = messages.value.map((message) => ({
     role: message.role,
     content: message.content,
@@ -146,7 +153,8 @@ async function send() {
           error.value = message;
           setAssistantProgress("Có lỗi khi xử lý câu hỏi", "error");
           const last = messages.value[messages.value.length - 1];
-          if (last?.role === "assistant" && !last.content) last.content = `Lỗi: ${message}`;
+          if (last?.role === "assistant") last.content = `Lỗi: ${message}`;
+          if (!imageToken) input.value = question;
         },
         onDone(data) {
           thinking.value = false;
@@ -161,6 +169,7 @@ async function send() {
             currentPartIds: data.new_part_ids ?? [],
             conversationContext: data.conversation_context ?? null,
           });
+          sessionStorage.setItem(activeSessionKey, currentSession);
           refreshSessions();
         },
       },
@@ -168,6 +177,9 @@ async function send() {
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Gửi câu hỏi thất bại";
     setAssistantProgress("Có lỗi khi gửi câu hỏi", "error");
+    const last = messages.value[messages.value.length - 1];
+    if (last?.role === "assistant") last.content = `Lỗi: ${error.value}`;
+    if (!imageToken) input.value = question;
   } finally {
     busy.value = false;
     thinking.value = false;
@@ -182,6 +194,12 @@ async function rate(message: ChatMessage, rating: number) {
 
 onMounted(async () => {
   await refreshSessions();
+  const savedSession = sessionStorage.getItem(activeSessionKey);
+  if (savedSession && sessions.value.some((session) => session.session_id === savedSession)) {
+    await openSession(savedSession);
+  } else {
+    sessionStorage.removeItem(activeSessionKey);
+  }
 });
 </script>
 

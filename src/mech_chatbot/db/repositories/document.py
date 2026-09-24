@@ -268,7 +268,7 @@ def mark_document_ingest_failed(
         with selected_engine.begin() as conn:
             row = conn.execute(
                 text("""
-                    SELECT DocID
+                    SELECT DocID, LifecycleStatus, ReviewStatus
                     FROM TaiLieu
                     WHERE TenFile = :f AND ThuMuc = :t
                 """),
@@ -276,6 +276,9 @@ def mark_document_ingest_failed(
             ).fetchone()
 
             if not row:
+                return
+
+            if row[1] == "published" or row[2] == "approved":
                 return
 
             doc_id = row[0]

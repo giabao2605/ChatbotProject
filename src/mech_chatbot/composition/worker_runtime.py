@@ -19,6 +19,7 @@ from mech_chatbot.application.vector_ingestion import (
     IngestionPipelineDependencies,
 )
 from mech_chatbot.config.settings import (
+    LlmSettings,
     QdrantSettings,
     RepositoryPolicySettings,
     Settings,
@@ -32,6 +33,7 @@ from mech_chatbot.db.engine import DatabaseRuntime, build_database_runtime
 _MISSING = object()
 QdrantBuilder = Callable[[QdrantSettings], IngestionPipelineDependencies]
 VisionBuilder = Callable[[VisionSettings], Any]
+LlmBuilder = Callable[[LlmSettings], Any]
 
 
 class WorkerClock(Protocol):
@@ -109,6 +111,12 @@ def _build_vision(settings: VisionSettings) -> Any:
     from mech_chatbot.llm.vision_client import build_vision_model
 
     return build_vision_model(settings)
+
+
+def _build_llm(settings: LlmSettings) -> Any:
+    from mech_chatbot.llm.llm_client import build_llm_adapter
+
+    return build_llm_adapter(settings)
 
 
 def _with_engine(callback: Callable[..., Any], engine: Any) -> Callable[..., Any]:
@@ -202,6 +210,7 @@ def _build_runner(
     vision_model: Any,
     qdrant_builder: QdrantBuilder,
     vision_builder: VisionBuilder,
+    llm_builder: LlmBuilder,
 ) -> IngestionRunner:
     from mech_chatbot.ingestion.document_classifier import classify_document
     from mech_chatbot.ingestion.file_ingestor import learn_new_file_typed
@@ -220,10 +229,11 @@ def _build_runner(
         if vision_model is _MISSING
         else vision_model
     )
+    llm_adapter = llm_builder(LlmSettings.from_settings(settings)) if settings.LLM_API_KEY else None
     return IngestionRunner(
         job_store=job_store,
         classifier=LegacyDocumentClassifier(
-            partial(classify_document, db_engine=engine),
+            partial(classify_document, db_engine=engine, llm_adapter=llm_adapter),
             processing_context=external_processing_context,
             load_governance=_with_engine(
                 get_department_knowledge_governance,
@@ -257,6 +267,7 @@ def build_worker_runtime(
     vision_model: Any = _MISSING,
     qdrant_builder: QdrantBuilder = _build_qdrant,
     vision_builder: VisionBuilder = _build_vision,
+    llm_builder: LlmBuilder = _build_llm,
     database_runtime: DatabaseRuntime | None = None,
 ) -> WorkerRuntime:
     """Build the worker graph while retaining existing production adapters.
@@ -326,6 +337,7 @@ def build_worker_runtime(
         vision_model=vision_model,
         qdrant_builder=qdrant_builder,
         vision_builder=vision_builder,
+        llm_builder=llm_builder,
     )
     return WorkerRuntime(
         settings=WorkerProcessSettings.from_settings(settings_snapshot),

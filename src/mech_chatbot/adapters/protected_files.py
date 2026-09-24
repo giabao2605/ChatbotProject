@@ -71,6 +71,17 @@ class SqlProtectedFileStore:
             expiry_date=row[13],
         )
 
+    def has_page(self, doc_id: int, page_no: int) -> bool:
+        engine = self._engine_provider()
+        if engine is None:
+            raise RuntimeError("database unavailable")
+        with engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT TOP 1 PageID FROM dbo.DocumentPages WHERE DocID = :doc_id AND PageNo = :page_no"),
+                {"doc_id": int(doc_id), "page_no": int(page_no)},
+            ).fetchone()
+        return row is not None
+
     def load_page_image(self, doc_id: int, page_no: int) -> str | None:
         engine = self._engine_provider()
         if engine is None:

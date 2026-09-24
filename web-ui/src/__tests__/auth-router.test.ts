@@ -115,4 +115,15 @@ describe("route guards", () => {
     expect(router.currentRoute.value.path).toBe("/documents");
     expect(router.currentRoute.value.query.tab).toBe("expired");
   });
+
+  it("shows a not-found route instead of an empty page for unknown URLs", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue(user);
+    const router = createAppRouter(createMemoryHistory());
+
+    await router.push("/QA_missing_route");
+    await router.isReady();
+
+    expect(router.currentRoute.value.name).toBe("not-found");
+    expect(router.currentRoute.value.path).toBe("/QA_missing_route");
+  });
 });

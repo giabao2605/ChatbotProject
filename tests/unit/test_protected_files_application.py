@@ -52,6 +52,7 @@ def _record(**overrides) -> DocumentAccessRecord:
 class Store:
     record: DocumentAccessRecord | None = None
     page_path: str | None = None
+    page_exists: bool = True
     chat_owned: bool = False
     available: bool = True
 
@@ -60,6 +61,9 @@ class Store:
 
     def load_page_image(self, doc_id: int, page_no: int) -> str | None:
         return self.page_path
+
+    def has_page(self, doc_id: int, page_no: int) -> bool:
+        return self.page_exists
 
     def chat_image_owned_by(self, image_id: str, username: str) -> bool:
         if not self.available:
@@ -149,6 +153,18 @@ def test_missing_page_image_returns_placeholder_after_confidential_audit() -> No
     assert result.placeholder is True
     assert audit.records[0].action == "view_citation_page"
     assert audit.records[0].details["page_no"] == 3
+
+
+@pytest.mark.parametrize("page_no", [0, 999999])
+def test_nonexistent_document_page_is_not_a_placeholder(page_no: int) -> None:
+    resolver = _resolver(
+        Store(record=_record(), page_exists=False), Storage(page=None)
+    )
+
+    with pytest.raises(ProtectedFileError) as raised:
+        resolver.resolve(ProtectedFileReference.page(42, page_no), _actor())
+
+    assert raised.value.code == "not_found"
 
 
 @pytest.mark.parametrize("image_id", ["../secret.png", "nested/secret.png", ".hidden"])

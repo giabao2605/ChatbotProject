@@ -373,7 +373,7 @@ def test_metadata_params_normalize_scalar_document_codes(
 
 def test_mark_ingest_failed_removes_partial_data_and_rejects_the_document(install_engine):
     connection = install_engine(
-        lambda sql, _params: _Result([(42,)])
+        lambda sql, _params: _Result([(42, "draft", "pending_review")])
         if "SELECT DocID" in sql
         else _Result()
     )
@@ -396,6 +396,17 @@ def test_mark_ingest_failed_does_not_touch_data_when_document_is_missing(install
 
     assert len(connection.calls) == 1
     assert "SELECT DocID" in connection.calls[0][0]
+
+
+def test_mark_ingest_failed_preserves_published_document(install_engine):
+    connection = install_engine(
+        lambda sql, _params: _Result([(42, "published", "approved")])
+        if "SELECT DocID" in sql else _Result()
+    )
+
+    document.mark_document_ingest_failed("drawing.pdf", "QA", "duplicate upload")
+
+    assert len(connection.calls) == 1
 
 
 def test_document_info_maps_governance_and_classification_fields(install_engine):

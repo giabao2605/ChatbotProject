@@ -8,10 +8,13 @@ are eligible for retrieval.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from datetime import datetime
+import hashlib
 import json
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.settings import RepositoryPolicySettings
@@ -469,6 +472,33 @@ def validate_publish_actor(
     return ValidationResult(doc_id=normalized_doc_id, valid=not issues, issues=tuple(issues))
 
 
+def _new_variant_error(conn, doc_id, doc=None):
+    if doc is None:
+        doc = conn.execute(
+            text("SELECT BaseCode, VariantCode FROM dbo.TaiLieu WHERE DocID = :doc_id"),
+            {"doc_id": doc_id},
+        ).mappings().first()
+    if not doc:
+        return "Không tìm thấy tài liệu"
+    base_code = _clean(doc["BaseCode"])
+    variant_code = _clean(doc["VariantCode"])
+    if not base_code or not variant_code or variant_code.lower() == "default":
+        return "Chọn mã biến thể riêng trước khi xuất bản biến thể mới"
+    collision = conn.execute(
+        text(
+            """
+            SELECT TOP 1 DocID FROM dbo.TaiLieu WITH (UPDLOCK, HOLDLOCK)
+            WHERE BaseCode = :base_code AND VariantCode = :variant_code
+              AND IsCurrent = 1 AND DocID <> :doc_id
+            """
+        ),
+        {"base_code": base_code, "variant_code": variant_code, "doc_id": doc_id},
+    ).mappings().first()
+    if collision:
+        return "Mã biến thể đã được xuất bản; chọn mã khác"
+    return None
+
+
 def _create_outbox_event(
     doc_id,
     action,
@@ -552,6 +582,17 @@ def _create_outbox_event(
                 state="published",
                 validation=validation,
             )
+
+        if action == "new_variant":
+            variant_error = _new_variant_error(conn, doc_id)
+            if variant_error:
+                return PublicationResult(
+                    ok=False,
+                    doc_id=doc_id,
+                    state="validation_failed",
+                    error=variant_error,
+                    validation=validation,
+                )
 
         existing = conn.execute(
             text(
@@ -763,7 +804,58 @@ def _mark_outbox_failure(
     )
 
 
+@contextmanager
+def _variant_publish_lock(selected_engine, doc_id):
+    with selected_engine.begin() as conn:
+        doc = conn.execute(
+            text("SELECT BaseCode, VariantCode FROM dbo.TaiLieu WHERE DocID = :doc_id"),
+            {"doc_id": doc_id},
+        ).mappings().first()
+        if not doc:
+            raise RuntimeError("Không tìm thấy tài liệu")
+        identity = json.dumps(
+            [str(doc["BaseCode"] or "").casefold(), str(doc["VariantCode"] or "default").casefold()],
+            ensure_ascii=False,
+        )
+        resource = "publish_variant:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        result = conn.execute(
+            text(
+                """
+                DECLARE @lock_result int;
+                EXEC @lock_result = sys.sp_getapplock
+                    @Resource = :resource, @LockMode = 'Exclusive',
+                    @LockOwner = 'Transaction', @LockTimeout = 10000;
+                SELECT @lock_result;
+                """
+            ),
+            {"resource": resource},
+        ).fetchone()
+        if not result or int(result[0]) < 0:
+            raise RuntimeError("Không khóa được lượt xuất bản biến thể; thử lại sau")
+        yield
+
+
 def _publish_event(
+    event,
+    *,
+    db_engine=None,
+    policy: RepositoryPolicySettings | None = None,
+    qdrant_client=None,
+    collection_name=None,
+):
+    kwargs = {
+        "db_engine": db_engine,
+        "policy": policy,
+        "qdrant_client": qdrant_client,
+        "collection_name": collection_name,
+    }
+    if _clean(event["Action"]) != "new_variant":
+        return _publish_event_unlocked(event, **kwargs)
+    with _variant_publish_lock(resolve_engine(db_engine), int(event["DocID"])):
+        return _publish_event_unlocked(event, **kwargs)
+
+
+def _publish_event_unlocked(
     event,
     *,
     db_engine=None,
@@ -810,6 +902,10 @@ def _publish_event(
         ).mappings().first()
         if not doc:
             raise RuntimeError(f"Khong tim thay DocID {doc_id}")
+        if action == "new_variant":
+            variant_error = _new_variant_error(conn, doc_id, doc)
+            if variant_error:
+                raise RuntimeError(variant_error)
         old_rows = []
         if action == "new_version" and _clean(doc["BaseCode"]):
             old_rows = conn.execute(
@@ -1043,7 +1139,7 @@ def process_publication_outbox_once(
             doc_id=int(event["DocID"]),
             outbox_id=int(event["OutboxID"]),
             state="failed",
-            error=str(exc),
+            error="Xuất bản thất bại; kiểm tra trạng thái và thử lại" if isinstance(exc, SQLAlchemyError) else str(exc),
         )
 
 
