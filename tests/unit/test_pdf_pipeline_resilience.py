@@ -56,6 +56,30 @@ def test_scan_page_with_unavailable_ocr_returns_no_verified_text():
     assert pipeline._read_pdf_page_text(Page(), dpi=200) == ("", True)
 
 
+def test_short_verified_scan_ocr_counts_as_extracted_pages(tmp_path, monkeypatch):
+    pdf_document = characterization._PdfDocument(["", ""])
+    plumber_document = characterization._PlumberDocument([[], []])
+    captured, _qdrant = characterization._install_common_boundaries(monkeypatch, tmp_path)
+    values = iter((
+        "QA-20260922-PDF-002 Page 1 Torque 109 N.m Hold 111 minutes",
+        "QA-20260922-PDF-002 Page 2 Torque 112 N.m Hold 114 minutes",
+    ))
+    monkeypatch.setattr(pipeline.fitz, "open", lambda _path: pdf_document)
+    monkeypatch.setattr(pipeline.pdfplumber, "open", lambda _path: plumber_document)
+    monkeypatch.setattr(pipeline, "_read_pdf_page_text", lambda _page, **_kwargs: (next(values), True))
+
+    report = pipeline.process_and_ingest_pdf(
+        str(tmp_path / "short-scan.pdf"), "short-scan.pdf", "QA_B",
+        domain_override="generic", security_override="internal", site_override="QA_B",
+        dependencies=captured["dependencies"],
+    )
+
+    assert report["status"] == "success"
+    assert report["pages_text_extracted"] == [1, 2]
+    assert report["quality_status"] != "blocked"
+    assert [page["page_no"] for page in captured["pages"]] == [1, 2]
+
+
 def test_pdf_governance_lookup_failure_blocks_external_processing(
     tmp_path, monkeypatch,
 ):

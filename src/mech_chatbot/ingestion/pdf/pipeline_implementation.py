@@ -640,7 +640,7 @@ def process_and_ingest_pdf(
                 image_summary = ""
                 vision_metadata = {}
                 is_text_heavy = len(text.strip()) > 1500  # Chi bo qua trang van ban thuan
-                if len(text.strip()) > 100:
+                if len(text.strip()) > 100 or (scanned_page and len(text.strip()) >= 20):
                     report["pages_text_extracted"].append(page_num + 1)
 
                 # Phan tich anh qua GPT-5.4 Vision khi can.
