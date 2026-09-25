@@ -419,6 +419,20 @@ describe("ChatView public behavior", () => {
 });
 
 describe("DashboardView public behavior", () => {
+  it("does not claim recent documents are empty when the group is unavailable", async () => {
+    vi.mocked(api.loadDashboard).mockResolvedValue({
+      document_lifecycle: { effective: 0 },
+    } as Awaited<ReturnType<typeof api.loadDashboard>>);
+    const pinia = newPinia();
+    useAuthStore().user = { ...user, roles: ["platform_admin"] };
+    const wrapper = mount(DashboardView, {
+      global: { ...global, plugins: [pinia] },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Tài liệu gần đây");
+  });
+
   it.each(["platform_admin", "security_admin"])(
     "does not offer document or queue links without route access for %s",
     async (role) => {

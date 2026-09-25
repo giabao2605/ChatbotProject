@@ -84,8 +84,8 @@ onMounted(async () => {
           </Card>
         </div>
       </section>
-      <div class="two-column">
-        <Card><template #title>Tài liệu gần đây</template><template #content>
+      <div v-if="payload.recent_documents || payload.recent_failed_jobs" class="two-column">
+        <Card v-if="payload.recent_documents"><template #title>Tài liệu gần đây</template><template #content>
           <ul v-if="payload.recent_documents?.length" class="activity-list"><li v-for="(row, i) in payload.recent_documents" :key="i"><strong>{{ cell(row, 'TenFile', 'OriginalFileName', 'file') }}</strong><span>{{ cell(row, 'Department', 'ThuMuc', 'dept') }} · {{ cell(row, 'LifecycleStatus', 'effective_status') }}</span></li></ul>
           <p v-else class="muted-text">Không có dữ liệu.</p>
         </template></Card>

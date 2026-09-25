@@ -130,6 +130,18 @@ def get_role_dashboard(profile, *, strict_site_filter=True):
 		result["document_lifecycle"] = {
 			"effective": int(result["document_lifecycle"].get("effective", 0))
 		}
+	if role_allows(roles, "viewer", "uploader", "reviewer"):
+		result["recent_documents"] = [
+			{"DocID": row[0], "OriginalFileName": row[1],
+			 "Department": row[2], "LifecycleStatus": row[3]}
+			for row in list_recent_documents(
+				allowed_departments=allowed_departments,
+				max_security_level=max_security_level,
+				allowed_sites=allowed_sites,
+				global_read_admin=global_read_admin,
+				strict_site_filter=strict_site_filter,
+			)
+		]
 	with engine.connect() as conn:
 		if role_allows(roles, "uploader"):
 			result["ingestion"] = {
@@ -213,13 +225,26 @@ def get_role_dashboard(profile, *, strict_site_filter=True):
 	return result
 
 
-def list_recent_documents():
+def list_recent_documents(allowed_departments=None, max_security_level="public",
+							  allowed_sites=None, global_read_admin=False,
+							  strict_site_filter=True):
+	params = {"soon_days": 30}
+	filters = _document_access_filters(
+		allowed_departments=allowed_departments,
+		max_security_level=max_security_level,
+		allowed_sites=allowed_sites,
+		global_read_admin=global_read_admin,
+		params=params,
+		strict_site_filter=strict_site_filter,
+	)
+	filters.append(f"({_lifecycle_bucket_case()}) = 'effective'")
 	with engine.connect() as conn:
-		return conn.execute(text("""
-                SELECT TOP 10 DocID, TenFile, ThuMuc, ReviewStatus, LifecycleStatus, NgayTaiLen
-                FROM TaiLieu
-                ORDER BY NgayTaiLen DESC
-            """)).fetchall()
+		return conn.execute(text(f"""
+			SELECT TOP 10 d.DocID, d.TenFile, d.ThuMuc, d.LifecycleStatus
+			FROM dbo.TaiLieu d
+			WHERE {' AND '.join(filters)}
+			ORDER BY d.NgayTaiLen DESC, d.DocID DESC
+		"""), params).fetchall()
 
 
 def list_recent_failed_jobs():

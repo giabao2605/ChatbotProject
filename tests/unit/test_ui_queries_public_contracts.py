@@ -155,6 +155,11 @@ def test_viewer_dashboard_only_exposes_effective_documents_and_own_usage(monkeyp
         "get_document_lifecycle_counts",
         lambda **_kwargs: {"effective": 12, "expired": 2, "needs_review": 1},
     )
+    monkeypatch.setattr(
+        ui_queries,
+        "list_recent_documents",
+        lambda **_kwargs: [(1155, "QA_20260925_dashboard_delta.md", "QA_20260919_R1_B", "published")],
+    )
 
     result = ui_queries.get_role_dashboard({
         "roles": ["viewer"],
@@ -167,7 +172,31 @@ def test_viewer_dashboard_only_exposes_effective_documents_and_own_usage(monkeyp
     assert result == {
         "document_lifecycle": {"effective": 12},
         "usage": {"today_questions": 6, "recent_questions": 9},
+        "recent_documents": [{
+            "DocID": 1155,
+            "OriginalFileName": "QA_20260925_dashboard_delta.md",
+            "Department": "QA_20260919_R1_B",
+            "LifecycleStatus": "published",
+        }],
     }
+
+
+def test_recent_dashboard_documents_apply_serving_and_actor_scope(monkeypatch):
+    connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=[]))
+
+    ui_queries.list_recent_documents(
+        allowed_departments=["QA_20260919_R1_B"],
+        max_security_level="internal",
+        allowed_sites=["QA_20260919_R1_B"],
+    )
+
+    sql, params = connection.calls[-1]
+    assert "TOP 10" in sql
+    assert "d.Servable = 1" in sql
+    assert "PhongBanChiaSe" in sql
+    assert "d.Site IN" in sql
+    assert params["allowed_dept_0"] == "QA_20260919_R1_B"
+    assert params["allowed_site_0"] == "QA_20260919_R1_B"
 
 
 def test_reviewer_uploader_dashboard_applies_department_and_site_scope(monkeypatch):
@@ -181,6 +210,7 @@ def test_reviewer_uploader_dashboard_applies_department_and_site_scope(monkeypat
         "get_document_lifecycle_counts",
         lambda **_kwargs: {"effective": 4, "expired": 1},
     )
+    monkeypatch.setattr(ui_queries, "list_recent_documents", lambda **_kwargs: [])
 
     result = ui_queries.get_role_dashboard({
         "roles": ["uploader", "reviewer"],
@@ -248,6 +278,7 @@ def test_reviewer_dashboard_handles_global_admin_and_missing_site_scope(
         "get_document_lifecycle_counts",
         lambda **_kwargs: {"effective": 1},
     )
+    monkeypatch.setattr(ui_queries, "list_recent_documents", lambda **_kwargs: [])
 
     result = ui_queries.get_role_dashboard({
         "roles": roles,
