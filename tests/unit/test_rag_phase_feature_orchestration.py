@@ -1763,8 +1763,13 @@ def test_exact_code_miss_returns_a_typed_terminal(monkeypatch, blocked, expected
     assert event_names.index("retrieval") < event_names.index("rag_end")
 
 
-@pytest.mark.parametrize("include_gamma", [False, True])
-def test_exact_code_miss_requires_accessible_content_for_every_code(monkeypatch, include_gamma):
+@pytest.mark.parametrize(
+    ("include_gamma", "initial_beta"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_exact_code_miss_requires_accessible_content_for_every_code(
+    monkeypatch, include_gamma, initial_beta,
+):
     from mech_chatbot.rag.phases import retrieval_enrichment as enrichment_phase
     from mech_chatbot.rag.phases.contracts import PhaseTerminal
 
@@ -1781,6 +1786,8 @@ def test_exact_code_miss_requires_accessible_content_for_every_code(monkeypatch,
     )
     beta = Document(page_content="QA-BETA-01 torque 61 N.m", metadata={"doc_id": 1150})
     gamma = Document(page_content="QA-GAMMA-01 torque 67 N.m", metadata={"doc_id": 1151})
+    if initial_beta:
+        primary = replace(primary, documents=(beta,))
     unrelated = Document(page_content="QA-GAMMA-010 unrelated code", metadata={"doc_id": 1200})
     documents = [beta, unrelated] + ([gamma] if include_gamma else [])
     calls = []

@@ -429,12 +429,36 @@ def _handle_exact_code_miss(
     has_active_filter: bool,
 ) -> _CodeMissResult:
     part_ids = list(context.decision.new_part_ids)
-    if documents or not part_ids:
+    if not part_ids:
         return _CodeMissResult(
             tuple(documents), tuple(part_ids), retrieval_mode,
             active_filter, has_active_filter,
         )
     if not context.decision.is_inherited:
+        patterns = {
+            code: re.compile(r"(?<![\w.-])" + re.escape(code) + r"(?![\w.-])", re.IGNORECASE)
+            for code in part_ids
+        }
+
+        def has_code(doc: Any, code: str, pattern: Any) -> bool:
+            metadata = getattr(doc, "metadata", {}) or {}
+            return (
+                str(metadata.get("base_code") or "").casefold() == code.casefold()
+                or bool(pattern.search(str(getattr(doc, "page_content", ""))))
+            )
+
+        evidence = tuple(
+            doc for doc in documents
+            if any(has_code(doc, code, pattern) for code, pattern in patterns.items())
+        )
+        if documents and all(
+            any(has_code(doc, code, pattern) for doc in evidence)
+            for code, pattern in patterns.items()
+        ):
+            return _CodeMissResult(
+                tuple(documents), tuple(part_ids), retrieval_mode,
+                active_filter, has_active_filter,
+            )
         try:
             # A code absent from metadata can still be present verbatim in an allowed document.
             published_filter = current_published_filter(context.decision.rbac_filter)
@@ -443,17 +467,13 @@ def _handle_exact_code_miss(
                 search_kwargs={"k": 30, "filter": published_filter},
             )
             candidates = retriever.invoke(context.decision.query_to_search)
-            patterns = {
-                code: re.compile(r"(?<![\w.-])" + re.escape(code) + r"(?![\w.-])", re.IGNORECASE)
-                for code in part_ids
-            }
             matched = tuple(
                 doc for doc in candidates
-                if any(pattern.search(str(getattr(doc, "page_content", ""))) for pattern in patterns.values())
+                if any(has_code(doc, code, pattern) for code, pattern in patterns.items())
             )
             if matched and all(
-                any(pattern.search(str(getattr(doc, "page_content", ""))) for doc in matched)
-                for pattern in patterns.values()
+                any(has_code(doc, code, pattern) for doc in matched)
+                for code, pattern in patterns.items()
             ):
                 return _CodeMissResult(
                     matched, (), "content_code_after_exact_miss", published_filter, True,
@@ -462,6 +482,11 @@ def _handle_exact_code_miss(
             raise
         except Exception as content_error:
             logger.warning("Exact content-code lookup failed: %s", content_error)
+        if documents:
+            return _CodeMissResult(
+                tuple(documents), tuple(part_ids), retrieval_mode,
+                active_filter, has_active_filter,
+            )
         logger.info(
             "Khong tim thay bat ky tai lieu nao cho ma %s. Tu choi fallback semantic.",
             part_ids,
@@ -475,6 +500,11 @@ def _handle_exact_code_miss(
         )
         return _CodeMissResult((), tuple(part_ids), retrieval_mode, active_filter,
                                has_active_filter, terminal)
+    if documents:
+        return _CodeMissResult(
+            tuple(documents), tuple(part_ids), retrieval_mode,
+            active_filter, has_active_filter,
+        )
     logger.info(
         "Khong co doc cho ma KE THUA %s. Huy ke thua, tim kiem chung.", part_ids
     )
