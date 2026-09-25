@@ -121,13 +121,13 @@ def _parent_context_key(doc):
         return None
     section = str(metadata.get("parent_section") or "").strip()
     page = metadata.get("parent_page") or metadata.get("trang_so")
-    if section:
-        return (normalized_doc_id, "section", section)
     if page not in (None, ""):
         try:
             return (normalized_doc_id, "page", int(page))
         except (TypeError, ValueError):
-            return None
+            pass
+    if section:
+        return (normalized_doc_id, "section", section)
     return None
 
 

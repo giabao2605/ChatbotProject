@@ -364,7 +364,7 @@ def diversify_candidates(documents, max_per_document=4, max_per_section=1, cap=4
         # one synthetic ``page:`` bucket; only apply the per-section cap when
         # the ingestion metadata actually identifies a section or page.
         section_key = (
-            (document_key, parent_section or f"page:{parent_page}")
+            (document_key, parent_section, str(parent_page or ""))
             if parent_section or parent_page not in (None, "")
             else None
         )

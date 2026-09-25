@@ -197,3 +197,37 @@ def test_parent_hydration_worker_one_is_sequential_rollback(monkeypatch):
 
     assert context_builders.hydrate_parent_context(selected, max_workers=1) == selected
     assert max_active == 1
+
+
+def test_hydration_keeps_page_sources_separate_with_shared_section(monkeypatch):
+    selected = [
+        SimpleNamespace(page_content=f"page {page}", metadata=_metadata(
+            parent_section="QA_B", parent_page=page, trang_so=page,
+            file_goc="scan.pdf", version_no=1,
+        ))
+        for page in (2, 1)
+    ]
+
+    def load(parent_key, _limit, metadata):
+        page = parent_key[2]
+        return [
+            SimpleNamespace(page_content=f"fact {part} from page {page}", metadata=metadata)
+            for part in (1, 2)
+        ]
+
+    monkeypatch.setattr(context_builders, "_load_parent_section_chunks", load)
+    hydrated = context_builders.hydrate_parent_context(selected, max_workers=1)
+
+    assert len(hydrated) == 2
+    rendered = context_builders.format_docs(hydrated)
+    assert "SOURCE_ID: D73P1" in rendered
+    assert "SOURCE_ID: D73P2" in rendered
+    assert "fact 1 from page 1" in rendered
+    assert "fact 2 from page 2" in rendered
+
+
+def test_parent_key_uses_section_when_page_metadata_is_invalid():
+    selected = SimpleNamespace(metadata={
+        "doc_id": 73, "parent_section": "Procedure 01", "parent_page": "unknown",
+    })
+    assert context_builders._parent_context_key(selected) == PARENT_KEY
