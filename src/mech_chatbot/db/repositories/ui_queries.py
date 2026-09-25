@@ -126,7 +126,7 @@ def get_role_dashboard(profile, *, strict_site_filter=True):
 			strict_site_filter=strict_site_filter,
 		),
 	}
-	if not role_allows(roles, "reviewer") and not role_allows(roles, "platform_admin"):
+	if not role_allows(roles, "reviewer"):
 		result["document_lifecycle"] = {
 			"effective": int(result["document_lifecycle"].get("effective", 0))
 		}

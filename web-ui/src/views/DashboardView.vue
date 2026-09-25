@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { loadDashboard } from "@/api/client";
 import { useAuthStore } from "@/stores/auth";
+import { isRoleAllowed, NAVIGATION_ITEMS } from "@/authorization";
 import { dashboardMetricLabel, dashboardMetricTarget } from "@/utils/dashboard";
 import type { ApiRow } from "@/types";
 
@@ -49,7 +50,12 @@ const groups = computed(() => {
 });
 
 function label(key: string) { return dashboardMetricLabel(key); }
-function target(key: string): string | null { return dashboardMetricTarget(key); }
+function target(key: string): string | null {
+  const to = dashboardMetricTarget(key);
+  if (!to) return null;
+  const item = NAVIGATION_ITEMS.find((nav) => to === nav.to || to.startsWith(`${nav.to}?`));
+  return item && !isRoleAllowed(roles.value, item.roles) ? null : to;
+}
 function openMetric(key: string) { const to = target(key); if (to) void router.push(to); }
 function cell(row: ApiRow, ...keys: string[]) {
   const value = keys.map((key) => row[key]).find((item) => item !== null && item !== undefined && item !== "");

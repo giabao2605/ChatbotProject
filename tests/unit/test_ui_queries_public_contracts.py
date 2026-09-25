@@ -215,7 +215,7 @@ def test_platform_admin_dashboard_exposes_rollout_counts(monkeypatch):
     monkeypatch.setattr(
         ui_queries,
         "get_document_lifecycle_counts",
-        lambda **_kwargs: {"effective": 3},
+        lambda **_kwargs: {"effective": 3, "expired": 2, "expiring_soon": 1, "needs_review": 4},
     )
 
     result = ui_queries.get_role_dashboard({
@@ -223,6 +223,7 @@ def test_platform_admin_dashboard_exposes_rollout_counts(monkeypatch):
         "username": "ops",
     })
 
+    assert result["document_lifecycle"] == {"effective": 3}
     assert result["ingestion"] == {"running": 9, "failed": 9}
     assert result["rollout"] == {
         "departments_total": 9,

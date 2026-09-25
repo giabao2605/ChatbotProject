@@ -419,6 +419,33 @@ describe("ChatView public behavior", () => {
 });
 
 describe("DashboardView public behavior", () => {
+  it.each(["platform_admin", "security_admin"])(
+    "does not offer document or queue links without route access for %s",
+    async (role) => {
+      vi.mocked(api.loadDashboard).mockResolvedValue({
+        stats: {},
+        document_lifecycle: { effective: 3 },
+        ingestion: { running: 2 },
+        recent_documents: [],
+        recent_failed_jobs: [],
+      });
+      const pinia = newPinia();
+      useAuthStore().user = { ...user, roles: [role] };
+      const wrapper = mount(DashboardView, {
+        global: { ...global, plugins: [pinia] },
+      });
+      await flushPromises();
+
+      const cards = wrapper.findAll(".metric-card");
+      expect(cards.length).toBe(2);
+      for (const card of cards) {
+        expect(card.classes()).not.toContain("actionable");
+        await card.trigger("click");
+      }
+      expect(routerState.push).not.toHaveBeenCalled();
+    },
+  );
+
   it("renders grouped metrics and recent activity, then opens actionable metrics", async () => {
     vi.mocked(api.loadDashboard).mockResolvedValue({
       stats: { ignored: 99 },
@@ -439,13 +466,13 @@ describe("DashboardView public behavior", () => {
       ],
     });
     const pinia = newPinia();
-    useAuthStore().user = { ...user, roles: ["platform_admin"] };
+    useAuthStore().user = { ...user, roles: ["admin"] };
     const wrapper = mount(DashboardView, {
       global: { ...global, plugins: [pinia] },
     });
     await flushPromises();
 
-    expect(wrapper.text()).toContain("Toàn cảnh vận hành hệ thống");
+    expect(wrapper.text()).toContain("Công việc tài liệu và quản trị nội dung");
     expect(wrapper.text()).toContain("Ingest");
     expect(wrapper.text()).toContain("Job đang chạy");
     expect(wrapper.text()).toContain("Chờ duyệt");
