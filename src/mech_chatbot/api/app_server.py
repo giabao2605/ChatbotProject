@@ -281,6 +281,7 @@ def _build_default_app_runtime(
             db_engine=engine,
             qdrant_client=qdrant_client,
             collection_name=collection_name,
+            raw_root=data_raw_root,
         ),
         delete_ingestion_job=lambda *args, **kwargs: delete_ingestion_job(
             *args,

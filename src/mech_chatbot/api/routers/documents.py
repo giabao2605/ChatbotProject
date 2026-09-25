@@ -39,7 +39,6 @@ from mech_chatbot.config.logging import logger
 from mech_chatbot.services.audit_service import write_audit_log
 from mech_chatbot.services.document_service import (
     archive_document,
-    delete_document_completely,
     reconcile_serving_state,
     reject_document,
     update_document_common_metadata,
@@ -689,9 +688,11 @@ def document_archive(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile
 
 
 @router.delete("/documents/{doc_id}")
-def document_delete(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
+def document_delete(doc_id: int, request: Request, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "admin")
-    return {"ok": bool(delete_document_completely(doc_id, reviewer=profile.get("username") or "System"))}
+    return {"ok": bool(request.app.state.runtime.review_store.delete_document(
+        doc_id, reviewer=profile.get("username") or "System"
+    ))}
 
 
 @router.get("/ingestion/eta")

@@ -8,6 +8,19 @@ from fastapi import HTTPException
 from mech_chatbot.api.routers import documents
 
 
+def test_document_delete_uses_runtime_with_qdrant_dependencies():
+    calls = []
+    review_store = SimpleNamespace(
+        delete_document=lambda doc_id, reviewer: calls.append((doc_id, reviewer)) or True
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(runtime=SimpleNamespace(review_store=review_store)))
+    )
+
+    assert documents.document_delete(10, request, {"roles": ["admin"], "username": "qa_admin"}) == {"ok": True}
+    assert calls == [(10, "qa_admin")]
+
+
 @pytest.mark.parametrize(
     ("route", "mutation"),
     [
