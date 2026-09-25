@@ -119,6 +119,39 @@ def test_publish_document_rejects_action_and_doc_id_before_touching_boundaries(
 
 
 @pytest.mark.parametrize(
+    ("outbox_status", "expected_ok", "expected_state"),
+    [("processing", True, "processing"), ("done", True, "published"), ("failed", False, "failed")],
+)
+def test_publish_reports_actual_outbox_state_when_own_claim_loses(
+    monkeypatch, outbox_status, expected_ok, expected_state,
+):
+    _install_engine(
+        monkeypatch,
+        lambda sql, _params: _Result(row=(outbox_status,))
+        if "SELECT Status FROM dbo.PublicationOutbox" in sql else _Result(),
+    )
+    monkeypatch.setattr(
+        publication, "_create_outbox_event",
+        lambda *_args, **_kwargs: publication.PublicationResult(
+            ok=True, doc_id=1149, outbox_id=10345, state="publishing"
+        ),
+    )
+    monkeypatch.setattr(publication, "process_publication_outbox_once", lambda **_kwargs: None)
+
+    result = publication.publish_document(
+        1149, action="standalone", reviewer="reviewer_b", reviewer_id=100,
+        reviewer_roles=["reviewer"],
+    )
+
+    assert result.ok is expected_ok
+    assert result.doc_id == 1149
+    assert result.outbox_id == 10345
+    assert result.state == expected_state
+    if outbox_status == "failed":
+        assert result.error
+
+
+@pytest.mark.parametrize(
     ("variant_code", "collision"),
     [("default", None), ("A", {"DocID": 168})],
 )

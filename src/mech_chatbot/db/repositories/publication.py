@@ -1201,9 +1201,25 @@ def publish_document(
         process_kwargs["db_engine"] = db_engine
     if policy is not None:
         process_kwargs["policy"] = policy
-    return process_publication_outbox_once(
+    processed = process_publication_outbox_once(
         **process_kwargs,
     )
+    if processed is None:
+        # The event may have been claimed, completed, or exhausted elsewhere.
+        with resolve_engine(db_engine).connect() as conn:
+            row = conn.execute(
+                text("SELECT Status FROM dbo.PublicationOutbox WHERE OutboxID = :outbox_id"),
+                {"outbox_id": queued.outbox_id},
+            ).fetchone()
+        status = row[0] if row else None
+        return PublicationResult(
+            ok=status in {"pending", "processing", "done"},
+            doc_id=normalized_doc_id,
+            outbox_id=queued.outbox_id,
+            state={"pending": "publishing", "processing": "processing", "done": "published"}.get(status, "failed"),
+            error=None if status in {"pending", "processing", "done"} else "Xuất bản thất bại; kiểm tra trạng thái",
+        )
+    return processed
 
 
 def reconcile_publications(
