@@ -331,10 +331,11 @@ def classify_feedback_and_get_source(fid, failure_type, correct_answer, reviewer
 
 def delete_feedback(fid):
 	with engine.begin() as conn:
-		conn.execute(
+		result = conn.execute(
 			text("DELETE FROM FeedbackReview WHERE FeedbackID = :fid"),
 			{"fid": fid},
 		)
+		return (result.rowcount or 0) > 0
 
 
 # ---------------------------------------------------------------------------

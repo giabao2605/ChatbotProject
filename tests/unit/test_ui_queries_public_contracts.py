@@ -358,6 +358,13 @@ def test_feedback_mutations_return_source_and_use_expected_params(monkeypatch):
     assert connection.calls[-1][1] == {"fid": 7}
 
 
+@pytest.mark.parametrize(("rowcount", "expected"), [(1, True), (0, False)])
+def test_delete_feedback_reports_whether_a_row_was_deleted(monkeypatch, rowcount, expected):
+    install_engine(monkeypatch, lambda *_args: FakeResult(rowcount=rowcount))
+
+    assert ui_queries.delete_feedback(7) is expected
+
+
 def test_feedback_list_can_include_already_reviewed_rows(monkeypatch):
     connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=[]))
 
