@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -434,6 +435,33 @@ def _handle_exact_code_miss(
             active_filter, has_active_filter,
         )
     if not context.decision.is_inherited:
+        try:
+            # A code absent from metadata can still be present verbatim in an allowed document.
+            published_filter = current_published_filter(context.decision.rbac_filter)
+            retriever = state.retrieval_adapter.vectorstore.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": 30, "filter": published_filter},
+            )
+            candidates = retriever.invoke(context.decision.query_to_search)
+            patterns = {
+                code: re.compile(r"(?<![\w.-])" + re.escape(code) + r"(?![\w.-])", re.IGNORECASE)
+                for code in part_ids
+            }
+            matched = tuple(
+                doc for doc in candidates
+                if any(pattern.search(str(getattr(doc, "page_content", ""))) for pattern in patterns.values())
+            )
+            if matched and all(
+                any(pattern.search(str(getattr(doc, "page_content", ""))) for doc in matched)
+                for pattern in patterns.values()
+            ):
+                return _CodeMissResult(
+                    matched, (), "content_code_after_exact_miss", published_filter, True,
+                )
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
+            raise
+        except Exception as content_error:
+            logger.warning("Exact content-code lookup failed: %s", content_error)
         logger.info(
             "Khong tim thay bat ky tai lieu nao cho ma %s. Tu choi fallback semantic.",
             part_ids,
