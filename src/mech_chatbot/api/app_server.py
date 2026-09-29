@@ -17,6 +17,7 @@ import requests
 from fastapi import FastAPI, Request
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from mech_chatbot.api import app_security
@@ -389,6 +390,16 @@ def create_app(
         version="0.1.0",
         lifespan=_lifespan,
     )
+
+    @application.exception_handler(Exception)
+    async def _unhandled_error(request: Request, error: Exception):
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {"detail": "Internal Server Error"},
+                status_code=500,
+                headers={"Cache-Control": "private, no-store"},
+            )
+        return PlainTextResponse("Internal Server Error", status_code=500)
     application.state.process_settings = process
     application.state.settings_snapshot = settings_snapshot
     application.state.pilot_replays = pilot_replays
@@ -453,6 +464,9 @@ def create_app(
             ),
         ):
             response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.raw_headers = list(response.raw_headers)
+            response.headers["Cache-Control"] = "private, no-store"
         if production:
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["X-Frame-Options"] = "DENY"

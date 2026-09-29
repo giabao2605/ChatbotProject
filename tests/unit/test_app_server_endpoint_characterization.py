@@ -5,9 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.routing import Route
 
 from mech_chatbot.api import dependencies as api_dependencies
 from mech_chatbot.api.routers import documents as document_routes
+from mech_chatbot.api.routers import operations as operation_routes
 from mech_chatbot.application.chat_turn import (
     ChatDelta,
     ChatDone,
@@ -26,6 +28,7 @@ from mech_chatbot.application.document_upload import (
     UploadReceipt,
 )
 from mech_chatbot.application.protected_files import AuthorizedFile, ProtectedFileError
+from mech_chatbot.config.settings import Settings
 
 
 pytestmark = pytest.mark.unit
@@ -641,6 +644,46 @@ def test_original_document_serves_only_authorized_resolved_file(
     assert response.status_code == 200
     assert response.content == b"trusted-pdf"
     assert "download-name.pdf" in response.headers["content-disposition"]
+    assert response.headers["cache-control"] == "private, no-store"
+
+
+def test_auth_responses_disable_caching(monkeypatch, client_for):
+    profile = _profile()
+    monkeypatch.setattr(operation_routes, "authenticate_user", lambda *_args: profile)
+    monkeypatch.setattr(
+        operation_routes.app_security,
+        "create_session_token",
+        lambda **_kwargs: ("token", SimpleNamespace(csrf="csrf")),
+    )
+    monkeypatch.setattr(operation_routes.app_security, "set_session_cookie", lambda *_args: None)
+    monkeypatch.setattr(operation_routes, "session_payload", lambda _request: SimpleNamespace(user_id=7, username="alice", csrf="csrf"))
+    monkeypatch.setattr(operation_routes, "load_user_profile", lambda **_kwargs: profile)
+    client = client_for(profile)
+
+    login = client.post("/api/auth/login", json={"username": "alice", "password": "test"})
+    me = client.get("/api/auth/me")
+
+    assert login.status_code == 200
+    assert me.status_code == 200
+    assert login.headers["cache-control"] == "private, no-store"
+    assert me.headers["cache-control"] == "private, no-store"
+
+
+def test_unhandled_api_error_disables_caching_without_exposing_exception():
+    application = app_server.create_app(Settings.from_env({}))
+
+    async def cache_error_probe(_request):
+        raise RuntimeError("private failure detail")
+
+    application.router.routes.insert(0, Route("/api/cache-error-probe", cache_error_probe))
+
+    response = TestClient(application, raise_server_exceptions=False).get(
+        "/api/cache-error-probe"
+    )
+
+    assert response.status_code == 500
+    assert response.headers["cache-control"] == "private, no-store"
+    assert "private failure detail" not in response.text
 
 
 def test_original_document_fails_closed_when_resolved_file_is_missing(
@@ -784,6 +827,8 @@ def test_chat_stream_serializes_incomplete_runner_error_after_visible_delta(
     )
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-accel-buffering"] == "no"
     events = _sse_events(response.text)
     assert [event for event, _payload in events] == ["thinking", "delta", "error"]
     assert events[-1][1] == {"message": "RAG stream ended without a done event"}

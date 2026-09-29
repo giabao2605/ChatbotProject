@@ -43,6 +43,7 @@ def test_app_rejects_oversized_upload_before_multipart_parsing() -> None:
     )
 
     assert response.status_code == 413
+    assert response.headers["cache-control"] == "private, no-store"
 
 
 def test_request_body_limit_rejects_chunked_body_before_inner_app_retains_it():
