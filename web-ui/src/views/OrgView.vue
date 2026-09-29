@@ -347,7 +347,10 @@ async function submit() {
   dlg.error = "";
   try {
     if (dlg.mode === "status") {
-      await apiSend(`/api/catalog/departments/${dlg.sourceCode}/status`, "PATCH", { status: dlg.status });
+      const result = await apiSend<{ ok: boolean; message?: string }>(
+        `/api/catalog/departments/${dlg.sourceCode}/status`, "PATCH", { status: dlg.status },
+      );
+      if (result?.ok !== true) throw new Error(result?.message || "Đổi trạng thái phòng ban thất bại.");
     } else {
       if (!dlg.targetCode) {
         dlg.error = "Chọn phòng ban đích.";

@@ -486,6 +486,7 @@ describe("OrgView public ResourcePage contracts", () => {
       "Đổi trạng thái — ENG",
     );
     await wrapper.find(".dialog select").setValue("active");
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: true });
     await button(wrapper, "Lưu").trigger("click");
     await statusDone;
     expect(api.apiSend).toHaveBeenCalledWith(
@@ -497,6 +498,19 @@ describe("OrgView public ResourcePage contracts", () => {
 
     const statusRetry = changeStatus.run({ MaPhong: "HR", Status: "" });
     await flushPromises();
+    vi.mocked(api.apiSend).mockResolvedValueOnce({
+      ok: false,
+      message: "Không thể đổi trạng thái.",
+    });
+    await button(wrapper, "Lưu").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".dialog").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Không thể đổi trạng thái.");
+    vi.mocked(api.apiSend).mockResolvedValueOnce({});
+    await button(wrapper, "Lưu").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".dialog").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Đổi trạng thái phòng ban thất bại.");
     vi.mocked(api.apiSend).mockRejectedValueOnce(new Error("status offline"));
     await button(wrapper, "Lưu").trigger("click");
     await flushPromises();
@@ -505,7 +519,7 @@ describe("OrgView public ResourcePage contracts", () => {
     await button(wrapper, "Lưu").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("Lỗi");
-    vi.mocked(api.apiSend).mockResolvedValueOnce({});
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: true });
     await button(wrapper, "Lưu").trigger("click");
     await statusRetry;
 
