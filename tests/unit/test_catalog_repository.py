@@ -443,8 +443,8 @@ def test_reassign_department_data_moves_sql_rbac_and_reports_qdrant_failures(mon
     monkeypatch.setattr(catalog._r_audit, "write_audit_log", lambda *args: audits.append(args))
     monkeypatch.setattr(
         catalog._r_semantic_cache,
-        "_invalidate_semantic_cache",
-        lambda reason: cache_invalidations.append(reason),
+        "sc_delete_for_docs",
+        lambda doc_ids, *, connection: cache_invalidations.append((doc_ids, connection)),
     )
 
     result = catalog.reassign_department_data(" OLD ", " ENG ", actor="admin")
@@ -484,7 +484,7 @@ def test_reassign_department_data_moves_sql_rbac_and_reports_qdrant_failures(mon
         for statement, params in calls
     )
     assert audits[-1][0:3] == ("admin", "department_reassign", "Departments")
-    assert cache_invalidations == ["dept.reassign"]
+    assert cache_invalidations == [([11], engine.connection)]
 
 
 def test_reassign_department_data_reports_failed_source_disable(monkeypatch):
@@ -502,6 +502,31 @@ def test_reassign_department_data_reports_failed_source_disable(monkeypatch):
 
     assert result["ok"] is False
     assert result["status_result"] == {"ok": False, "message": "disable failed"}
+
+
+def test_reassign_department_data_stops_before_qdrant_when_scoped_cache_delete_fails(monkeypatch):
+    summaries = {"OLD": _summary("active"), "ENG": _summary("active")}
+    monkeypatch.setattr(catalog, "get_department_summary", summaries.get)
+    monkeypatch.setattr(catalog, "engine", _Engine([_Result(rows=[(11, "OLD")])]))
+    monkeypatch.setattr(
+        catalog._r_semantic_cache,
+        "sc_delete_for_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("cache unavailable")),
+    )
+    monkeypatch.setattr(
+        catalog._r_qdrant,
+        "update_qdrant_metadata",
+        lambda *_args, **_kwargs: pytest.fail("Qdrant must not update after SQL rollback"),
+    )
+    monkeypatch.setattr(
+        catalog,
+        "set_department_status",
+        lambda *_args, **_kwargs: pytest.fail("source must stay active"),
+    )
+
+    result = catalog.reassign_department_data("OLD", "ENG", move_users=False)
+
+    assert result == {"ok": False, "message": "cache unavailable"}
 
 
 def test_reassign_department_data_supports_no_user_move_and_reports_transaction_failure(monkeypatch):

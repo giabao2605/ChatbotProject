@@ -439,6 +439,10 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
             else:
                 moved_users = 0
 
+            _r_semantic_cache.sc_delete_for_docs(
+                [doc_id for doc_id, _ in updated_doc_payloads], connection=conn
+            )
+
         # 4) Qdrant payload (ngoai transaction SQL)
         for doc_id, phong_ban_quyen in updated_doc_payloads:
             ok_meta = _r_qdrant.update_qdrant_metadata(doc_id, {
@@ -457,7 +461,6 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
             "docs": len(updated_doc_payloads),
             "qdrant_failures": qdrant_failures,
         })
-        _r_semantic_cache._invalidate_semantic_cache("dept.reassign")
         complete = not qdrant_failures and isinstance(status_res, dict) and status_res.get("ok") is True
         return {
             "ok": complete,
