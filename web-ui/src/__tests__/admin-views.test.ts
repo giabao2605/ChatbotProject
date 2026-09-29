@@ -523,6 +523,15 @@ describe("OrgView public ResourcePage contracts", () => {
     expect(wrapper.text()).toContain("Chọn phòng ban đích.");
     await wrapper.find(".dialog select").setValue("HR");
     await wrapper.find('.dialog input[type="checkbox"]').setValue(false);
+    vi.mocked(api.apiSend).mockResolvedValueOnce({
+      ok: false,
+      message: "Không thể chuyển phòng ban.",
+    });
+    await button(wrapper, "Lưu").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".dialog").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Không thể chuyển phòng ban.");
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: true });
     await button(wrapper, "Lưu").trigger("click");
     await reassignDone;
     expect(api.apiSend).toHaveBeenCalledWith(

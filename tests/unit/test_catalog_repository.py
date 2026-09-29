@@ -450,13 +450,14 @@ def test_reassign_department_data_moves_sql_rbac_and_reports_qdrant_failures(mon
     result = catalog.reassign_department_data(" OLD ", " ENG ", actor="admin")
 
     assert result == {
-        "ok": True,
+        "ok": False,
         "source": "OLD",
         "target": "ENG",
         "moved_docs": 1,
         "moved_users": 2,
         "qdrant_failures": [11],
         "status_result": {"ok": True, "status": "disabled"},
+        "message": "Chuyển phòng ban chưa hoàn tất; cần kiểm tra SQL và Qdrant trước khi thử lại.",
     }
     assert qdrant_calls == [
         (11, {"phong_ban_quyen": ["ENG", "SHARED"], "department": "ENG"})
@@ -484,6 +485,23 @@ def test_reassign_department_data_moves_sql_rbac_and_reports_qdrant_failures(mon
     )
     assert audits[-1][0:3] == ("admin", "department_reassign", "Departments")
     assert cache_invalidations == ["dept.reassign"]
+
+
+def test_reassign_department_data_reports_failed_source_disable(monkeypatch):
+    summaries = {"OLD": _summary("active"), "ENG": _summary("active")}
+    monkeypatch.setattr(catalog, "get_department_summary", summaries.get)
+    monkeypatch.setattr(catalog, "engine", _Engine([_Result(rows=[]), _Result(rows=[])]))
+    monkeypatch.setattr(
+        catalog, "set_department_status",
+        lambda *_args, **_kwargs: {"ok": False, "message": "disable failed"},
+    )
+    monkeypatch.setattr(catalog._r_audit, "write_audit_log", lambda *_args: None)
+    monkeypatch.setattr(catalog._r_semantic_cache, "_invalidate_semantic_cache", lambda *_args: None)
+
+    result = catalog.reassign_department_data("OLD", "ENG", move_users=False)
+
+    assert result["ok"] is False
+    assert result["status_result"] == {"ok": False, "message": "disable failed"}
 
 
 def test_reassign_department_data_supports_no_user_move_and_reports_transaction_failure(monkeypatch):

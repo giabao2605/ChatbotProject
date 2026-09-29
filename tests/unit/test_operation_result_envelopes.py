@@ -55,6 +55,21 @@ def test_department_archive_returns_repository_rejection(monkeypatch):
     assert "users" in result["message"]
 
 
+def test_department_reassign_returns_repository_rejection(monkeypatch):
+    monkeypatch.setattr(
+        operations.org_service,
+        "reassign_department_data",
+        lambda **_kwargs: {"ok": False, "message": "Không thể chuyển phòng ban."},
+    )
+
+    result = operations.catalog_department_reassign(
+        {"source_code": "QA_OLD", "target_code": "QA_NEW"},
+        {"roles": ["platform_admin"]},
+    )
+
+    assert result == {"ok": False, "message": "Không thể chuyển phòng ban."}
+
+
 @pytest.mark.parametrize("body", [
     {},
     {"request_type": "QA_INVALID"},

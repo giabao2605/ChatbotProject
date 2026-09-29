@@ -458,14 +458,16 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
             "qdrant_failures": qdrant_failures,
         })
         _r_semantic_cache._invalidate_semantic_cache("dept.reassign")
+        complete = not qdrant_failures and isinstance(status_res, dict) and status_res.get("ok") is True
         return {
-            "ok": True,
+            "ok": complete,
             "source": source_code,
             "target": target_code,
             "moved_docs": len(updated_doc_payloads),
             "moved_users": moved_users,
             "qdrant_failures": qdrant_failures,
             "status_result": status_res,
+            **({"message": "Chuyển phòng ban chưa hoàn tất; cần kiểm tra SQL và Qdrant trước khi thử lại."} if not complete else {}),
         }
     except Exception as e:
         logger.error(f"reassign_department_data loi {source_code}->{target_code}: {e}", exc_info=True)

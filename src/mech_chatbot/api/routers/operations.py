@@ -379,7 +379,8 @@ def catalog_department_archive(code: str, body: dict[str, Any], profile: dict[st
 @router.post("/catalog/departments/reassign")
 def catalog_department_reassign(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "platform_admin")
-    return {"ok": bool(org_service.reassign_department_data(source_code=str(body.get("source_code") or ""), target_code=str(body.get("target_code") or ""), actor=profile.get("username") or "System", move_users=bool(body.get("move_users", True))))}
+    result = org_service.reassign_department_data(source_code=str(body.get("source_code") or ""), target_code=str(body.get("target_code") or ""), actor=profile.get("username") or "System", move_users=bool(body.get("move_users", True)))
+    return result if isinstance(result, dict) else {"ok": bool(result)}
 
 
 @router.get("/catalog/sites")

@@ -354,11 +354,12 @@ async function submit() {
         dlg.busy = false;
         return;
       }
-      await apiSend("/api/catalog/departments/reassign", "POST", {
+      const result = await apiSend<{ ok: boolean; message?: string }>("/api/catalog/departments/reassign", "POST", {
         source_code: dlg.sourceCode,
         target_code: dlg.targetCode,
         move_users: dlg.moveUsers,
       });
+      if (result?.ok !== true) throw new Error(result?.message || "Chuyển phòng ban thất bại.");
     }
     dlg.visible = false;
     resolveDlg?.();
