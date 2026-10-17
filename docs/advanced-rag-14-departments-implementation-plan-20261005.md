@@ -39,6 +39,8 @@ Kế hoạch rollout cũ trong repo: [Advanced RAG theo hướng value-first](ad
 
 [Chuẩn bị đối chứng Math v2 — checkpoint 17/10](../reports/rag-14-departments-20261005/math-v2-baseline-preparation-20261017/README.md) đã kiểm đường chatbot thường bằng SQL/Qdrant local: lấy đúng Doc1/2, dừng trước API OpenRouter/Luna, zero provider calls. Đã sửa truyền cấu hình policy của adapter sang audit generation; 42 kiểm tra ảnh hưởng đạt, review không có finding. Bộ chạy ba cặp/hai chiều và patch delta tám tệp đã chuẩn bị; đề xuất tối đa sáu lần gọi Luna cho baseline, candidate không gọi model, policy/audit riêng 60 phút, không retry và dừng khi lỗi. Chưa có quyền commit delta/call mới, chưa chạy formal, không đổi quyền phát hành hoặc contract Math đã duyệt.
 
+[Sửa composition policy — checkpoint 17/10](../reports/rag-14-departments-20261005/math-v2-baseline-preparation-20261017/recovery-01/README.md): người dùng đã duyệt và mã delta tám tệp được commit ở `cc298b90eded410836d7f1cc2515fd4aea15c74a`. Lượt formal đầu dừng trước API do default adapter chưa nhận ExternalAiSettings; SQLite xác nhận zero call/audit row và policy đã đóng. Đã sửa default builder tại composition root, giữ builder được tiêm; 21 kiểm tra ảnh hưởng đạt, review không có finding. Preflight sau sửa qua audit SQLite thật rồi client guard dừng trước mạng, evaluation-only không mở production. Chưa chạy lại lượt đã đóng; đề xuất delta ba tệp/cửa sổ mới vẫn pending, formal pair bằng 0 và feature chưa bật.
+
 ## 1. Mục tiêu và nguyên tắc
 
 Xây dựng hệ thống trả lời có căn cứ, xử lý câu hỏi nhiều ý, tính toán chính xác và truy vết quan hệ bản vẽ cho toàn bộ 14 phòng ban. Nghiệp vụ kỹ thuật dưới xưởng là trọng tâm chuyên sâu; kế toán và các phòng còn lại được nghiệm thu độc lập.

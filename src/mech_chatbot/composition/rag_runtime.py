@@ -224,14 +224,15 @@ def _runtime_identity(
 
 def _build_external_stack(settings, qdrant_builder, llm_builder, vision_builder):
     from mech_chatbot.adapters.qdrant_runtime import build_qdrant_runtime
-    from mech_chatbot.config.settings import LlmSettings, QdrantSettings, VisionSettings
+    from mech_chatbot.config.settings import ExternalAiSettings, LlmSettings, QdrantSettings, VisionSettings
     from mech_chatbot.llm.llm_client import build_llm_adapter
     from mech_chatbot.llm.vision_client import build_vision_model
 
     vector_runtime = (qdrant_builder or build_qdrant_runtime)(
         QdrantSettings.from_settings(settings)
     )
-    provider = (llm_builder or build_llm_adapter)(
+    provider = (llm_builder or partial(build_llm_adapter,
+        external_ai_settings=ExternalAiSettings.from_settings(settings)))(
         LlmSettings.from_settings(settings)
     )
     vision_model = (vision_builder or build_vision_model)(
