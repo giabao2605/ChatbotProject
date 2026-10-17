@@ -681,7 +681,7 @@ def _log_pilot_request_event(
     outcome: CompletionOutcome,
     refusal_reason: str | None,
 ) -> None:
-    if state.math_v2_capability is not None:
+    if state.math_v2_capability is not None or "math_v2" in diagnostics:
         return
     from mech_chatbot.rag.pilot_evidence import pilot_request_event_fields
 

@@ -457,6 +457,12 @@ _INTENT_SEPARATOR = re.compile(
     r"\b(?:đồng\s+thời|dong\s+thoi|và|va|also)\b)\s*",
     re.IGNORECASE,
 )
+_SCOPE_OPERAND = r'(?:kỳ|ky|quý|quy|tháng|thang|năm|nam|phạm\s+vi|pham\s+vi|period|scope)\s+[\w./-]+'
+_COMPARISON_OPERANDS = re.compile(
+    r'^\s*(?:so\s+sánh|so\s+sanh|đối\s+chiếu|doi\s+chieu|compare)\b[^,;\n?]*?\b'
+    + _SCOPE_OPERAND + r'\s+(?P<join>và|va|and)\s+' + _SCOPE_OPERAND
+    + r'(?=\s*(?:[,;?!\n]|$))', re.IGNORECASE,
+)
 _INTENT_STOP_WORDS = {
     "cho", "biet", "neu", "dong", "thoi", "va", "cua", "la", "bao",
     "nhieu", "the", "please", "also", "and",
@@ -474,11 +480,15 @@ def _fold(value: str) -> str:
 
 def split_query_intents(question: str) -> tuple[tuple[str, ...], bool]:
     original = str(question or "").strip()
-    parts = [
-        part.strip(" ,;?\t\r\n")
-        for part in _INTENT_SEPARATOR.split(original)
-        if part.strip(" ,;?\t\r\n")
-    ]
+    operands = _COMPARISON_OPERANDS.match(original)
+    parts, start = [], 0
+    for separator in _INTENT_SEPARATOR.finditer(original):
+        if operands and separator.start() <= operands.start('join') and separator.end() >= operands.end('join'):
+            continue
+        parts.append(original[start:separator.start()].strip(" ,;?\t\r\n"))
+        start = separator.end()
+    parts.append(original[start:].strip(" ,;?\t\r\n"))
+    parts = [part for part in parts if part]
     return tuple(parts or ([original] if original else [])), len(parts) > 3
 
 

@@ -29,6 +29,18 @@ def test_completed_comparison_emits_metadata_only_v2_evidence(monkeypatch,live_s
     assert not any(event['event']=='pilot_request_evidence' for event in calls)
 
 
+def test_evaluation_comparison_never_counts_as_v1_or_authorized_v2_pilot(monkeypatch,live_store):
+    from mech_chatbot.config import logging
+    calls=[]
+    monkeypatch.setattr(logging,'log_trace',lambda event,*a,**kw:calls.append(event))
+    with bind_repository_runtime(db_engine=live_store):
+        result=collect_rag_events(DefaultRagExecutor().run(request(),RagInvocation('offline-v2',mode='evaluation')))
+    assert result.diagnostics.budget.calculations==4
+    assert result.diagnostics['math_v2']['offline_only'] is True
+    assert 'pilot_request_evidence' not in calls
+    assert 'math_v2_comparison_completed' not in calls
+
+
 def test_closing_at_completed_event_does_not_count_as_drained_request(monkeypatch,live_store):
     from mech_chatbot.config import logging
     calls=[]

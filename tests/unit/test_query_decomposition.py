@@ -22,6 +22,18 @@ from langchain_core.documents import Document
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize('question, expected', [
+    ('So sánh tổng doanh thu kỳ A và kỳ B, chênh lệch B trừ A và tỷ lệ thay đổi so với kỳ A.',
+        ('So sánh tổng doanh thu kỳ A và kỳ B', 'chênh lệch B trừ A', 'tỷ lệ thay đổi so với kỳ A.')),
+    ('Compare revenue for period OLD and period NEW, difference, percentage change.',
+        ('Compare revenue for period OLD and period NEW', 'difference', 'percentage change.')),
+    ('So sánh tồn kho tháng 09 và tháng 10; tìm BOM; xem vật liệu; kiểm dung sai',
+        ('So sánh tồn kho tháng 09 và tháng 10', 'tìm BOM', 'xem vật liệu', 'kiểm dung sai')),
+])
+def test_comparison_scope_operands_stay_together_without_hiding_other_intents(question, expected):
+    assert split_query_intents(question) == (expected, len(expected) > 3)
+
+
 def test_overflow_keeps_all_explicit_intents_and_never_calls_planner_or_retrieval():
     question = "Tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn"
     expected = ("Tìm BOM", "tìm vật liệu", "tìm dung sai", "tìm hướng dẫn hàn")
