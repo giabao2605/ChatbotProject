@@ -78,7 +78,7 @@ _ELIGIBLE_DOCUMENTS = _CURRENT_DOCUMENTS + """, SafeOccurrences AS (
       AND o.ReviewStatus='approved' AND o.ReviewedBy IS NOT NULL AND o.ReviewedAt IS NOT NULL
       AND e.ServingStatus='approved' AND e.RelationType='CONTAINS_PART'
       AND e.SourceDocID=o.ParentDocID AND e.SourceVersion=o.ParentVersion
-      AND e.SourcePage=o.SourcePage AND o.SourcePage>0
+      AND e.SourcePage>0 AND o.SourcePage>0
       AND sn.CanonicalKey='document:'+CAST(o.ParentDocID AS NVARCHAR(30))
       AND tn.CanonicalKey=o.PartKey
       AND NULLIF(LTRIM(RTRIM(o.SourceQuote)),N'') IS NOT NULL

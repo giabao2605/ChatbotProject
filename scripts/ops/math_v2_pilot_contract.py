@@ -124,6 +124,20 @@ def _comparison_citations(observed,scopes):
     return expected == actual and ids == expected_ids == set(citation_source_ids(observed.get('answer')))
 
 
+def _baseline_metrics_bound(baseline, candidate, base):
+    from mech_chatbot.evaluation.adjudication import _bound_observation
+    from scripts.ops import grounded_math_pilot_gate as common
+    try:
+        observed = _bound_observation(baseline['case_reference'], baseline['observation_reference'], base)
+        return (baseline['observation_reference']['sha256'] != candidate['observation_reference']['sha256']
+            and observed.get('math_results') == [] and type(observed.get('calculation_count')) is int
+            and observed['calculation_count'] == 0
+            and all(common._decimal(baseline[key]) == common._decimal(observed[key])
+                for key in ('latency_ms', 'estimated_cost')))
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        return False
+
+
 def _pair_budget_maxima(before,after,base,commit,snapshot):
     from scripts.ops import grounded_math_pilot_gate as common
     from mech_chatbot.evaluation.metrics import nearest_rank
@@ -138,6 +152,8 @@ def _pair_budget_maxima(before,after,base,commit,snapshot):
             and all(isinstance(c,dict) and isinstance(c.get('case_id'),str) and c['case_id'].strip() for c in a+b)
             and len({c['case_id'] for c in a})==len(a)
             and [c['case_id'] for c in a]==[c['case_id'] for c in b]):
+        return None
+    if any(not _baseline_metrics_bound(left, right, base) for left, right in zip(a, b)):
         return None
     counts=[_bound_comparison(left,right,before,base) for left,right in zip(a,b)]
     if any(count is None for count in counts) or 4 not in counts:

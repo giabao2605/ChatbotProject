@@ -643,8 +643,11 @@ def test_generation_deadline_fails_closed_before_calling_the_provider(
         )
 
 
-def test_generation_audits_openrouter_endpoint(steps, monkeypatch):
+@pytest.mark.parametrize('execution_context', ['production', 'evaluation'])
+def test_generation_audits_openrouter_endpoint(steps, monkeypatch, execution_context):
     from contextlib import contextmanager
+    from dataclasses import replace
+    from mech_chatbot.config.settings import ExternalAiSettings
     chain = _FakeChain([["Approved answer."]])
     _prepare_generation(steps, monkeypatch, chain)
     monkeypatch.setattr(steps, "get_llm_endpoint", lambda _adapter: "https://openrouter.ai/api/v1")
@@ -654,5 +657,10 @@ def test_generation_audits_openrouter_endpoint(steps, monkeypatch):
         calls.append(kwargs)
         yield
     monkeypatch.setattr(steps, "audited_external_call", audit)
-    assert "".join(steps.generate_answer(_generation_plan(steps), metrics={})) == "Approved answer."
+    plan = _generation_plan(steps)
+    external_settings = ExternalAiSettings('development', False, 'all_external', execution_context)
+    provider = SimpleNamespace(**vars(plan.runtime.provider_adapter), external_ai_settings=external_settings)
+    plan = replace(plan, runtime=SimpleNamespace(retrieval_adapter=plan.runtime.retrieval_adapter, provider_adapter=provider))
+    assert "".join(steps.generate_answer(plan, metrics={})) == "Approved answer."
     assert calls and all(call["provider"] == "openrouter" for call in calls)
+    assert all(call['settings'] is external_settings for call in calls)

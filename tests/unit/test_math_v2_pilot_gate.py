@@ -62,6 +62,10 @@ def comparison_inputs(grant, store):
                 'math_reference': math_ref, 'latency_ms': 30000, 'estimated_cost': 0}]}
         with bind_repository_runtime(db_engine=store):
             observation = run_fixed_case(case_ref, root=root, run_binding=binding, profile_loader=current_profile)
+        # Synthetic baseline shape only; no fixture is evidence of a real comparison run.
+        baseline_observation = {**observation, 'math_results': [], 'calculation_count': 0,
+            'latency_ms': 30000, 'estimated_cost': 0}
+        before['cases'][0]['observation_reference'] = reference(root, f'baseline-observed-{index}.json', baseline_observation)
         observation_ref = reference(root, f'observed-{index}.json', observation)
         after = {**before, 'cases': [{**before['cases'][0], 'observation_reference': observation_ref,
             'latency_ms': observation['latency_ms']}]}
@@ -147,6 +151,39 @@ def test_formal_gate_cli_produces_hash_bound_evidence_consumed_by_pilot(comparis
     assert evaluate(inputs)['passed']
 
 
+@pytest.mark.parametrize('fault', ['missing_observation', 'latency', 'cost', 'copied_candidate',
+    'foreign_actor', 'foreign_case', 'missing_cost', 'math_v2_baseline'])
+def test_formal_gate_rejects_unbound_or_copied_baseline_metrics(comparison_inputs, fault):
+    from scripts.ops import math_v2_pilot_contract as contract
+    root = comparison_inputs['window_path'].parent
+    pair = comparison_inputs['window']['formal_budget_sources']['pairs'][0]
+    baseline_path, candidate_path = (root / pair[key]['path'] for key in ('eval', 'candidate_eval'))
+    baseline = json.loads(baseline_path.read_text())
+    row = baseline['cases'][0]
+    if fault == 'missing_observation':
+        row.pop('observation_reference', None)
+    elif fault == 'latency':
+        row['latency_ms'] = 40000
+    elif fault == 'cost':
+        row['estimated_cost'] = 1
+    elif fault == 'copied_candidate':
+        candidate = json.loads(candidate_path.read_text())
+        baseline['cases'][0] = candidate['cases'][0]
+    else:
+        observed = json.loads((root / row['observation_reference']['path']).read_text())
+        if fault == 'foreign_actor':
+            observed['actor'] = {**observed['actor'], 'allowed_departments': ['OTHER']}
+        elif fault == 'foreign_case':
+            observed['case_sha256'] = '9' * 64
+        elif fault == 'missing_cost':
+            observed.pop('estimated_cost')
+        else:
+            observed['calculation_count'] = 4
+        row['observation_reference'] = reference(root, 'changed-baseline-observation.json', observed)
+    reference(root, pair['eval']['path'], baseline)
+    assert not contract.build_formal_gate(baseline_path, candidate_path, root=root)['passed']
+
+
 def test_shared_pass_report_without_bound_case_observations_cannot_pass(tmp_path):
     from scripts.ops import math_v2_pilot_contract as contract
     report = {'schema': 'grounded-calculation-evaluation-v2', 'template': 'compare_two_scopes',
@@ -197,6 +234,9 @@ def test_formal_pair_preserves_reference_partial_and_blocked_outcomes(comparison
     reference(root, pair['eval']['path'], before)
     with bind_repository_runtime(db_engine=store):
         observed = run_fixed_case(case_ref, root=root, run_binding=binding, profile_loader=current_profile)
+    row['observation_reference'] = reference(root, 'additional-baseline-observation.json',
+        {**observed, 'math_results': [], 'calculation_count': 0, 'latency_ms': 30000, 'estimated_cost': 0})
+    reference(root, pair['eval']['path'], before)
     after['cases'].append({**row, 'latency_ms': observed['latency_ms'],
         'observation_reference': reference(root, 'additional-observation.json', observed)})
     reference(root, pair['candidate_eval']['path'], after)

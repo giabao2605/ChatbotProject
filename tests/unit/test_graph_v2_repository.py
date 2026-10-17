@@ -108,18 +108,21 @@ def reader(connection, **context):
                         "max_security_level": "internal", **context})
 
 
-def test_two_occurrences_keep_own_rows_while_sharing_one_approved_edge(connection):
+@pytest.mark.parametrize('source_page', [1, 2])
+def test_two_occurrences_keep_own_rows_while_sharing_one_approved_edge(connection, source_page):
     from mech_chatbot.db.repositories import graph_v2_review
     row = {'source_row_id':'row-2','part':'p','quantity':3}
-    connection.conn.execute(text('INSERT INTO BangKeVatTu VALUES(1,1,:part,:raw)'), {'part':'p','raw':json.dumps(row)})
-    connection.conn.execute(text("INSERT INTO ReviewedGraphOccurrences VALUES('1:row-2:1',1,1,1,'product','factory','part:p',NULL,'approved','reviewer','now',1,'quantity','row-2','3','piece','per_parent',1)"))
+    connection.conn.execute(text('INSERT INTO BangKeVatTu VALUES(1,:page,:part,:raw)'), {'page':source_page,'part':'p','raw':json.dumps(row)})
+    connection.conn.execute(text("INSERT INTO ReviewedGraphOccurrences VALUES('1:row-2:1',1,1,1,'product','factory','part:p',NULL,'approved','reviewer','now',:page,'quantity','row-2','3','piece','per_parent',1)"), {'page':source_page})
     connection.conn.execute(text("INSERT INTO StructuredNumericFact VALUES(1,1,:hash,'approved',7,:raw,'quantity-scope')"),
-        {'hash':'a'*64,'raw':json.dumps({'value':'3','unit':'piece','locator':{'page':1,'row_key':'page-1:row-2'}})})
+        {'hash':'a'*64,'raw':json.dumps({'value':'3','unit':'piece','locator':{'page':source_page,'row_key':f'page-{source_page}:row-2'}})})
     connection.conn.execute(text('UPDATE ReviewedGraphDeclarations SET ExpectedRows=2 WHERE DocID=1'))
     data = reader(connection).assembly(1,500)
     assert len(data['rows']) == 2
     assert {str(r['quantity']) for r in data['rows']} == {'2','3'}
-    payload = {'edge_id':1,'parent_doc_id':1,'parent_version':1,'source_page':1,'source_quote':'quantity',
+    second = next(r for r in data['rows'] if str(r['quantity']) == '3')
+    assert second['sources'][0]['page'] == source_page
+    payload = {'edge_id':1,'parent_doc_id':1,'parent_version':1,'source_page':source_page,'source_quote':'quantity',
                'part_key':'part:p','row_key':'row-2','quantity':'3','unit':'piece','child_binding_id':None}
     params = graph_v2_review._params({'allowed_departments':['tech'],'allowed_sites':['factory'],'max_security_level':'internal'},'product','factory')
     assert graph_v2_review._proof(connection,'occurrence',payload,params)
@@ -127,6 +130,20 @@ def test_two_occurrences_keep_own_rows_while_sharing_one_approved_edge(connectio
     connection.conn.execute(text("INSERT INTO BangKeVatTu VALUES(1,1,'other',:raw)"), {'raw':json.dumps({'source_row_id':'row-other','part':'other','quantity':9})})
     connection.conn.execute(text("UPDATE KnowledgeGraphEdge SET SourceQuote=:raw WHERE EdgeID=1"), {'raw':json.dumps({'source_row_id':'row-other','part':'other','quantity':9})})
     assert reader(connection).assembly(1,500)['rows'] == ()
+    assert not graph_v2_review._proof(connection,'occurrence',payload,params)
+
+
+def test_occurrence_on_another_page_cannot_borrow_a_quantity_fact_from_edge_page(connection):
+    from mech_chatbot.db.repositories import graph_v2_review
+    row = json.dumps({'source_row_id':'row-2','part':'p','quantity':3})
+    connection.conn.execute(text('INSERT INTO BangKeVatTu VALUES(1,2,:part,:raw)'), {'part':'p','raw':row})
+    connection.conn.execute(text("INSERT INTO ReviewedGraphOccurrences VALUES('1:row-2:1',1,1,1,'product','factory','part:p',NULL,'approved','reviewer','now',2,'quantity','row-2','3','piece','per_parent',1)"))
+    connection.conn.execute(text("INSERT INTO StructuredNumericFact VALUES(1,1,:hash,'approved',7,:raw,'quantity-scope')"),
+        {'hash':'a'*64,'raw':json.dumps({'value':'3','unit':'piece','locator':{'page':1,'row_key':'page-1:row-2'}})})
+    payload = {'edge_id':1,'parent_doc_id':1,'parent_version':1,'source_page':2,'source_quote':'quantity',
+               'part_key':'part:p','row_key':'row-2','quantity':'3','unit':'piece','child_binding_id':None}
+    params = graph_v2_review._params({'allowed_departments':['tech'],'allowed_sites':['factory'],'max_security_level':'internal'},'product','factory')
+    assert len(reader(connection).assembly(1,500)['rows']) == 1
     assert not graph_v2_review._proof(connection,'occurrence',payload,params)
 
 

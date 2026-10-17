@@ -112,10 +112,10 @@ def _proof(conn, kind, values, params):
           SELECT 1 FROM dbo.KnowledgeGraphEdge e
           JOIN dbo.KnowledgeGraphNode sn ON sn.NodeID=e.SourceNodeID
           JOIN dbo.KnowledgeGraphNode tn ON tn.NodeID=e.TargetNodeID
-          JOIN dbo.BangKeVatTu bom ON bom.DocID=e.SourceDocID AND bom.TrangSo=e.SourcePage
+          JOIN dbo.BangKeVatTu bom ON bom.DocID=e.SourceDocID AND bom.TrangSo=:source_page
           WHERE e.EdgeID=:edge_id AND e.ServingStatus='approved'
             AND e.RelationType='CONTAINS_PART' AND e.SourceDocID=:parent_doc_id
-            AND e.SourceVersion=:parent_version AND e.SourcePage=:source_page
+            AND e.SourceVersion=:parent_version AND e.SourcePage>0
             AND sn.CanonicalKey='document:'+CAST(:parent_doc_id AS NVARCHAR(30))
             AND tn.CanonicalKey=:part_key
             AND 'part:'+LOWER(LTRIM(RTRIM(bom.MaHang)))=:part_key
