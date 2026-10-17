@@ -266,6 +266,31 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
     )
 
 
+def test_query_overflow_has_no_planner_retrieval_hyde_or_fictitious_branches():
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+
+    request = _prepared_request(question="Tìm BOM; tìm vật liệu; tìm dung sai; tìm bước hàn")
+    decision = replace(_route_decision(request), hyde_eligible=True)
+    calls = []
+    outcome = _run_phase(
+        lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(
+            retrieve=lambda **_: calls.append("retrieve"),
+            query_decomposition_enabled=True,
+            hyde_enabled=True,
+        ),
+        provider=SimpleNamespace(invoke=lambda *_args, **_: calls.append("provider")),
+    )
+    assert calls == []
+    assert outcome.reason_code == "intent_overflow"
+    assert outcome.decomposition_intent_overflow is True
+    assert len(outcome.decomposition_intents) == 4
+    assert outcome.decomposition_branches == ()
+    assert outcome.documents == ()
+    assert outcome.lookup_documents == ()
+    assert "tối đa ba ý" in outcome.decomposition_notice
+
+
 def test_decomposition_scopes_only_router_validated_branch_codes(
     monkeypatch,
 ):

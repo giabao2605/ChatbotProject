@@ -111,6 +111,20 @@ def test_build_conn_str_rejects_incomplete_sql_auth_without_leaking_secret():
     assert "chatbot" not in message
 
 
+def test_legacy_proxy_survives_module_reload_for_snapshot_engine_identity():
+    import importlib
+    import mech_chatbot.db.engine as engine_module
+    from mech_chatbot.config.repository_runtime import bind_repository_runtime
+    legacy = engine_module.engine
+    selected = object()
+    try:
+        importlib.reload(engine_module)
+        with bind_repository_runtime(db_engine=selected):
+            assert engine_module.resolve_engine(legacy) is selected
+    finally:
+        importlib.reload(engine_module)
+
+
 def test_create_db_engine_uses_explicit_config_and_returns_factory_result(monkeypatch):
     import mech_chatbot.db.engine as engine_module
 

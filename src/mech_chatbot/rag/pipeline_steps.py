@@ -9,6 +9,7 @@ from mech_chatbot.config.logging import logger
 from mech_chatbot.llm.llm_client import _is_gpt_rate_limit
 from langchain_core.messages import HumanMessage
 import time
+import re
 from mech_chatbot.config.logging import log_trace
 from PIL import Image
 from tenacity import retry, retry_if_exception, wait_exponential, stop_after_attempt
@@ -45,7 +46,7 @@ from mech_chatbot.rag.intent import serialize_qdrant_filter
 from mech_chatbot.rag.context_builders import _context_is_mechanical, _context_domain
 
 
-from mech_chatbot.rag.retrieval import current_published_filter
+from mech_chatbot.rag.retrieval import current_published_filter, run_retrieval_step, TracedRetrievalDependency
 
 # P0 slices #4/#5/#7: cac helper _route / _rewrite_and_anchor / _disambiguate
 from mech_chatbot.rag.prompt import _t_rag
@@ -59,6 +60,7 @@ from mech_chatbot.rag.entity_resolver import (
 from mech_chatbot.rag.execution import (
     RequestBudgetExceeded,
     current_execution_context,
+    current_request_checkpoint,
 )
 
 _RETRIEVE_UNSET = object()
@@ -140,6 +142,10 @@ class GenerationEvidence:
     retrieval_mode: str
     has_active_filter: bool = False
     active_filter: Any = None
+    dependency_sources: Sequence[Mapping[str, Any]] = ()
+    independent_numeric_source_ids: Sequence[str] = ()
+    dependency_source_attributes: Sequence[Mapping[str, Any]] = ()
+    dependency_recheck: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +256,7 @@ def _explicit_hybrid_rrf(
     vectorstore,
     client,
     collection_name,
+    checkpoint=None,
 ):
     """Run dense and BM25 independently, then fuse their ranks explicitly.
 
@@ -261,14 +268,17 @@ def _explicit_hybrid_rrf(
     dense_top_k = max(1, int(dense_top_k))
     sparse_top_k = max(1, int(sparse_top_k))
     result_cap = max(1, int(result_cap))
+    checkpoint = checkpoint or current_request_checkpoint()
     try:
         from langchain_qdrant import QdrantVectorStore, RetrievalMode
         dense_embedding = getattr(vectorstore, "embeddings", None)
         sparse_embedding = getattr(vectorstore, "sparse_embeddings", None)
         if dense_embedding is None or sparse_embedding is None:
             raise RuntimeError("Qdrant vectorstore khong expose dense/sparse embeddings")
+        dense_embedding = TracedRetrievalDependency(dense_embedding,'embed_query','dense_embedding',trace_id,phase,checkpoint)
+        sparse_embedding = TracedRetrievalDependency(sparse_embedding,'embed_query','sparse_embedding',trace_id,phase,checkpoint)
         dense_store = QdrantVectorStore(
-            client=client,
+            client=TracedRetrievalDependency(client,'query_points','dense_qdrant_query',trace_id,phase,checkpoint),
             collection_name=collection_name,
             embedding=dense_embedding,
             retrieval_mode=RetrievalMode.DENSE,
@@ -276,7 +286,7 @@ def _explicit_hybrid_rrf(
             validate_collection_config=False,
         )
         sparse_store = QdrantVectorStore(
-            client=client,
+            client=TracedRetrievalDependency(client,'query_points','sparse_qdrant_query',trace_id,phase,checkpoint),
             collection_name=collection_name,
             embedding=dense_embedding,
             sparse_embedding=sparse_embedding,
@@ -286,23 +296,27 @@ def _explicit_hybrid_rrf(
             validate_collection_config=False,
         )
         t_dense = time.perf_counter()
-        dense_docs = dense_store.similarity_search(
+        dense_docs = run_retrieval_step(lambda: dense_store.similarity_search(
             query,
             k=dense_top_k,
             filter=payload_filter,
             timeout=_QDRANT_SEARCH_TIMEOUT_SECONDS,
-        )
+        ),trace_id=trace_id,step='dense_search',phase=phase,checkpoint=checkpoint)
         dense_ms = int((time.perf_counter() - t_dense) * 1000)
         t_bm25 = time.perf_counter()
         sparse_error = None
         try:
-            sparse_docs = sparse_store.similarity_search(
+            sparse_docs = run_retrieval_step(lambda: sparse_store.similarity_search(
                 query,
                 k=sparse_top_k,
                 filter=payload_filter,
                 timeout=_BM25_SEARCH_TIMEOUT_SECONDS,
-            )
+            ),trace_id=trace_id,step='sparse_search',phase=phase,checkpoint=checkpoint)
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
+            raise
         except Exception as exc:
+            if checkpoint:
+                checkpoint('sparse_fallback')
             sparse_error = exc
             sparse_docs = []
             logger.warning(
@@ -357,18 +371,38 @@ def _explicit_hybrid_rrf(
             if sparse_error is not None
             else "explicit_dense_bm25_rrf"
         )
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
     except Exception as exc:
+        if checkpoint:
+            checkpoint('hybrid_fallback')
         logger.warning("Explicit dense+BM25 RRF unavailable, fallback HYBRID: %s", exc)
         if trace_id:
             log_trace("hybrid_fallback", trace_id, phase=phase, error=type(exc).__name__)
-        fallback = vectorstore.as_retriever(
+        from copy import copy
+        from langchain_qdrant.qdrant import QdrantVectorStore as NativeQdrantVectorStore
+        fallback_store = vectorstore
+        if isinstance(vectorstore, NativeQdrantVectorStore):
+            # Copy SDK state to preserve custom configuration without changing the shared runtime.
+            fallback_store = copy(vectorstore)
+            # shortcut: SDK field names follow installed langchain-qdrant; recheck on adapter upgrades.
+            for name, method, step in (
+                ('_embeddings', 'embed_query', 'hybrid_dense_embedding'),
+                ('_sparse_embeddings', 'embed_query', 'hybrid_sparse_embedding'),
+                ('_client', 'query_points', 'hybrid_qdrant_query'),
+            ):
+                dependency = getattr(vectorstore, name)
+                if dependency is not None:
+                    setattr(fallback_store, name, TracedRetrievalDependency(
+                        dependency, method, step, trace_id, phase, checkpoint))
+        fallback = run_retrieval_step(lambda: fallback_store.as_retriever(
             search_type="similarity",
             search_kwargs={
                 "k": result_cap,
                 "filter": payload_filter,
                 "timeout": _BM25_SEARCH_TIMEOUT_SECONDS,
             },
-        ).invoke(query)
+        ).invoke(query),trace_id=trace_id,step='hybrid_fallback',phase=phase,checkpoint=checkpoint)
         return list(fallback or []), "hybrid_fallback"
 
 
@@ -596,6 +630,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     active_filter bind co dieu kien de bao toan ngu nghia locals() nhu ban goc.
     """
     context_text = plan.evidence.context_text
+    dependency_sources = plan.evidence.dependency_sources
     user_question = plan.turn.user_question
     chat_history_str = plan.turn.chat_history_str
     retrieved_docs = plan.evidence.retrieved_docs
@@ -769,11 +804,14 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         "chat_history_str": chat_history_str
     }
     _external_doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
+    _external_doc_ids += [attribute['doc_id'] for attribute in plan.evidence.dependency_source_attributes]
     _external_security = [d.metadata.get("security_level") for d in retrieved_docs]
+    _external_security += [attribute['security_level'] for attribute in plan.evidence.dependency_source_attributes]
     _external_policies = [
         d.metadata.get("external_processing_policy") or "internal_only"
         for d in retrieved_docs
     ]
+    _external_policies += [attribute['external_processing_policy'] for attribute in plan.evidence.dependency_source_attributes]
     _external_input_chars = len(context_text + user_question + chat_history_str)
     _external_input_bytes = len((context_text + user_question + chat_history_str).encode("utf-8"))
     _external_call_args = {
@@ -799,6 +837,12 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     _claim_repair_enabled = claim_repair_enabled(
         bool(getattr(retrieval_runtime, "claim_repair_enabled", False))
     )
+    if dependency_sources:
+        # Locator provenance is not supported by the legacy repair validator.
+        if _claim_repair_enabled:
+            metrics['claim_repair_skipped_reason'] = 'computed_dependency_locator'
+        _claim_repair_enabled = False
+        _strict_realtime = False
     if _claim_repair_enabled:
         # Repair requires full-answer holdback; never release a violating draft.
         _strict_realtime = False
@@ -816,12 +860,18 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         if not grounded_prefix:
             return value
         return f"{grounded_prefix}\n{value}".strip()
+
+    def _recheck_dependencies():
+        if plan.evidence.dependency_recheck is not None:
+            attributes = plan.evidence.dependency_recheck()
+            if attributes != plan.evidence.dependency_source_attributes:
+                raise PermissionError('Dependency source policy changed')
     _strict_holdback_chars = max(
         64,
         int(getattr(retrieval_runtime, "strict_streaming_holdback_chars", 160)),
     )
 
-    if (strict_answer_mode or is_high_risk_question(user_question)) and not _strict_realtime:
+    if (strict_answer_mode or is_high_risk_question(user_question) or dependency_sources) and not _strict_realtime:
         # LOP PHONG THU 3: Post-check so lieu. Voi cau hoi rui ro, tam hoan streaming de kiem tra
         # LLM co tu tao so lieu moi (vd 24 gio) khong co trong context/user question hay khong.
         def guarded_stream():
@@ -831,6 +881,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
             error_msg = ""
             try:
                 _raise_if_cancelled()
+                _recheck_dependencies()
                 for attempt in range(1, _stream_attempts + 1):
                     _raise_if_cancelled()
                     chunks.clear()
@@ -868,6 +919,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         time.sleep(delay)
                 _raise_if_cancelled()
                 answer = "".join(chunks)
+                _recheck_dependencies()
                 draft_override = getattr(
                     getattr(request_runtime, "invocation", None),
                     "evaluation_draft_override",
@@ -912,16 +964,23 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 # formats an otherwise sourced value differently.
                 bad_numbers = has_unsupported_numbers(
                     answer,
-                    context_text,
-                    user_question,
-                    strict_mode=is_high_risk_question(user_question),
+                    re.sub(r'<verified_computation[^>]*>', '', context_text) if dependency_sources else context_text,
+                    '' if dependency_sources else user_question,
+                    strict_mode=bool(dependency_sources) or is_high_risk_question(user_question),
                 )
+                if dependency_sources:
+                    from mech_chatbot.rag.query_dependencies import has_dependent_numeric_claim
+                    bad_numbers = bad_numbers or has_dependent_numeric_claim(
+                        answer, plan.evidence.independent_numeric_source_ids, retrieved_docs)
                 if bad_mats or bad_codes:
                     violation_reason = "materials_codes"
                 elif bad_units:
                     violation_reason = "units"
                 elif bad_numbers:
                     violation_reason = "numbers"
+                elif dependency_sources and not has_valid_source_citation(
+                        answer, retrieved_docs, dependency_sources=dependency_sources):
+                    violation_reason = "citations"
                 else:
                     violation_reason = ""
                 if violation_reason:
@@ -977,6 +1036,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                             "cau tra loi sinh ra co so lieu khong truy vet duoc "
                             "trong tai lieu"
                         ),
+                        "citations": "câu trả lời không dẫn đúng nguồn đã xác nhận",
                     }[violation_reason]
                     refusal_reason = f"post_check_{violation_reason}"
                     outcome.refusal_reason = refusal_reason
@@ -1169,13 +1229,14 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
 
 def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
               query_to_search, rbac_filter, trace_id=None, vectorstore,
-              client, collection_name, dense_top_k=None, sparse_top_k=None):
+              client, collection_name, dense_top_k=None, sparse_top_k=None, checkpoint=None):
     """BUOC: truy xuat tai lieu (strict_exact / broad_fallback / general).
     Tra ve (retrieved_docs, base_k, retrieval_mode, t_retrieval, active_filter_or_sentinel).
     active_filter tra _RETRIEVE_UNSET neu chua set (duong hiem) de caller bind co dieu kien,
     bao toan ngu nghia '"active_filter" in locals()' nhu ban goc. Tach P0 slice #5.
     """
     retrieved_docs = []
+    checkpoint = checkpoint or current_request_checkpoint()
     t_retrieval = time.time()
     retrieval_mode = "unknown"
     if new_part_ids:
@@ -1192,13 +1253,18 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                 result_cap=base_k,
                 trace_id=trace_id,
                 phase="strict_exact",
+                checkpoint=checkpoint,
                 vectorstore=vectorstore,
                 client=client,
                 collection_name=collection_name,
             )
             retrieval_mode = f"strict_exact:{strict_mode}"
             active_filter = strict_filter
+        except (ExternalAICallCancelled, RequestBudgetExceeded):
+            raise
         except Exception as e:
+            if checkpoint:
+                checkpoint('strict_fallback')
             logger.warning(f"Strict retrieval that bai: {e}")
             strict_docs = []
                 
@@ -1217,6 +1283,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                 result_cap=base_k * 2,
                 trace_id=trace_id,
                 phase="broad_fallback",
+                checkpoint=checkpoint,
                 vectorstore=vectorstore,
                 client=client,
                 collection_name=collection_name,
@@ -1237,7 +1304,11 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                     retrieved_docs = merged_docs
                 else:
                     retrieved_docs = broad_docs
+            except (ExternalAICallCancelled, RequestBudgetExceeded):
+                raise
             except Exception as e:
+                if checkpoint:
+                    checkpoint('broad_fallback')
                 logger.warning(f"Broad retrieval that bai: {e}")
                 retrieved_docs = strict_docs
     else:
@@ -1261,6 +1332,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
             result_cap=base_k,
             trace_id=trace_id,
             phase="general",
+            checkpoint=checkpoint,
             vectorstore=vectorstore,
             client=client,
             collection_name=collection_name,
@@ -1272,7 +1344,9 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
     # that crossed its expiry date cannot reach reranking or generation while
     # lifecycle reconciliation is still catching up.
     from mech_chatbot.domain.serving_state import filter_currently_servable
-    retrieved_docs = filter_currently_servable(retrieved_docs)
+    retrieved_docs = run_retrieval_step(lambda: filter_currently_servable(retrieved_docs),
+                                      trace_id=trace_id,step='serving_filter',phase=retrieval_mode,
+                                      checkpoint=checkpoint)
     return retrieved_docs, base_k, retrieval_mode, t_retrieval, (active_filter if "active_filter" in locals() else _RETRIEVE_UNSET)
 
 

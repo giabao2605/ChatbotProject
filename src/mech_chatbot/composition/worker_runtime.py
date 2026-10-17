@@ -146,6 +146,9 @@ def _build_ingestion_persistence(
     import mech_chatbot.db.repositories.bom as bom_repository
     import mech_chatbot.db.repositories.document as document_repository
     import mech_chatbot.db.repositories.document_pages as document_pages_repository
+    import mech_chatbot.db.repositories.structured_evidence as structured_repository
+    import mech_chatbot.db.repositories.text_evidence as text_repository
+    import mech_chatbot.db.repositories.source_page_images as image_repository
 
     reingest_snapshots: dict[int, Any] = {}
     return IngestionPersistence(
@@ -190,6 +193,10 @@ def _build_ingestion_persistence(
             document_pages_repository.save_page_metadata,
             engine,
         ),
+        save_structured_scope=_with_engine(structured_repository.save_extracted_scope, engine),
+        register_source_snapshot=_with_engine(structured_repository.register_source_snapshot, engine),
+        save_structured_text=_with_engine(text_repository.save_extracted_text_facts, engine),
+        save_source_page_images=_with_engine(image_repository.save_source_page_images,engine),
     )
 
 

@@ -42,6 +42,10 @@ class IngestionPersistence:
     save_document_attributes: Callable[..., Any]
     save_document_page: Callable[..., Any]
     save_page_metadata: Callable[..., Any]
+    save_structured_scope: Callable[..., Any] | None = None
+    register_source_snapshot: Callable[..., Any] | None = None
+    save_structured_text: Callable[..., Any] | None = None
+    save_source_page_images: Callable[..., Any] | None = None
 
 
 def require_pipeline_dependencies(

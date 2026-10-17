@@ -87,6 +87,7 @@ function getResponse(path: string): unknown {
     return { documents: pendingDocuments };
   }
   if (path.endsWith("/publish-contract")) return contractResponse;
+  if (path.startsWith("/api/rag-evidence/documents/") && path.endsWith("/scopes")) return { scopes: [] };
   throw new Error(`Unexpected GET ${path}`);
 }
 
@@ -136,6 +137,18 @@ beforeEach(() => {
 });
 
 describe("ReviewView public behavior", () => {
+  it("opens structured evidence review for a document without publishing", async () => {
+    const wrapper = await mountReview();
+    const evidenceAction = action(wrapper, "Duyệt dữ liệu có cấu trúc");
+    expect(evidenceAction.visible?.({ DocID: 17 })).toBe(true);
+    expect(evidenceAction.visible?.({ JobID: 2 })).toBe(false);
+    await evidenceAction.run({ DocID: 17 });
+    await flushPromises();
+    expect(api.apiGet).toHaveBeenCalledWith("/api/rag-evidence/documents/17/scopes");
+    expect(api.apiSend).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("Tài liệu chưa có phạm vi dữ liệu để kiểm tra.");
+    await expect(evidenceAction.run({ JobID: 2 })).rejects.toThrow("Chưa có tài liệu");
+  });
   it("loads the review queues and presents normalized extraction evidence", async () => {
     bulkJobs = [{ JobID: 1 }];
     metadataDocs = [{ DocID: 10 }];

@@ -188,6 +188,7 @@ def _enrich_graph(
                 edges,
                 getattr(runtime, "client", None),
                 getattr(runtime, "collection_name", "TaiLieuKyThuat_v2"),
+                trace_id=context.trace_id,
             )
         else:
             edges = []

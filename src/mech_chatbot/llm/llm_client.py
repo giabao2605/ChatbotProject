@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
+from time import monotonic
 from typing import Any
 
 from langchain_openai import ChatOpenAI
@@ -21,6 +23,10 @@ from mech_chatbot.llm.external_ai import (
 
 _MISSING_PROVIDER_KEY = "provider API key is not configured"
 _DEFAULT_PROVIDER_ENDPOINT = "https://api.proxyllm.eu/v1"
+
+
+class ProviderCompletionError(RuntimeError):
+    """The provider explicitly failed an otherwise successful HTTP response."""
 
 
 def _validated_settings(settings: LlmSettings) -> LlmSettings:
@@ -80,6 +86,8 @@ class LlmAdapter:
         security_levels=None,
         policies=None,
         retry_counter=None,
+        *,
+        response_format=None,
     ):
         return gpt_invoke(
             messages,
@@ -90,6 +98,7 @@ class LlmAdapter:
             policies=policies,
             retry_counter=retry_counter,
             adapter=self,
+            response_format=response_format,
         )
 
     def invoke_once(
@@ -101,6 +110,8 @@ class LlmAdapter:
         security_levels=None,
         policies=None,
         retry_counter=None,
+        *,
+        response_format=None,
     ):
         return gpt_invoke.retry_with(stop=stop_after_attempt(1))(
             messages,
@@ -111,6 +122,7 @@ class LlmAdapter:
             policies=policies,
             retry_counter=retry_counter,
             adapter=self,
+            response_format=response_format,
         )
 
 
@@ -191,6 +203,21 @@ def _get_runtime_llm(adapter: LlmAdapter | None = None):
     return adapter.client
 
 
+def _request_timeout_options(adapter):
+    from mech_chatbot.rag.execution import current_request_budget, current_request_checkpoint
+
+    budget = current_request_budget()
+    if budget is None:
+        return {}
+    # The executor binds budget and checkpoint together for the same request.
+    current_request_checkpoint()('provider')
+    remaining = budget.deadline_monotonic - monotonic()
+    if remaining <= 0:
+        budget.deadline_exceeded = True
+        raise TimeoutError('RAG request deadline exceeded before provider call')
+    return {'timeout': min(remaining, adapter.settings.timeout_seconds) if adapter is not None else remaining}
+
+
 @retry(
     retry=retry_if_exception(_is_gpt_rate_limit),
     wait=wait_exponential(multiplier=2, min=2, max=30),
@@ -207,6 +234,7 @@ def gpt_invoke(
     retry_counter=None,
     *,
     adapter: LlmAdapter | None = None,
+    response_format=None,
 ):
     client = _get_runtime_llm() if adapter is None else adapter.client
     model = get_llm_model_name(adapter)
@@ -228,7 +256,16 @@ def gpt_invoke(
             else DEFAULT_EXTERNAL_AI_SETTINGS
         ),
     ):
-        return client.invoke(messages)
+        options = _request_timeout_options(adapter)
+        if response_format is not None:
+            options = {**options, 'response_format': deepcopy(response_format)}
+            if compatible_provider_name(endpoint) == 'openrouter':
+                options = {**options, 'extra_body': {'provider': {'require_parameters': True}}}
+        response = client.invoke(messages, **options)
+        metadata = getattr(response, 'response_metadata', None)
+        if isinstance(metadata, dict) and metadata.get('finish_reason') == 'error':
+            raise ProviderCompletionError('provider reported a completion error')
+        return response
 
 
 def cohere_invoke(

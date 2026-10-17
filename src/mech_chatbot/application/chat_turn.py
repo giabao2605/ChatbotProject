@@ -6,8 +6,19 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, TypeAlias
+from mech_chatbot.domain.graph_query import GraphQuery,BomRollupQuery
+from mech_chatbot.domain.query_plan import QueryPlan
 
 logger = logging.getLogger(__name__)
+
+
+def _text_query_metadata(debug_info, citations):
+    branches=[]
+    for branch in debug_info.get('decomposition_branches') or ():
+        source_ids={source.get('source_id') for source in branch.get('citations') or ()}
+        branches.append({key:branch.get(key) for key in ('branch_id','subquery','outcome','evaluator_state')}
+            | {'cited_sources':[dict(card) for card in citations if card.get('source_id') in source_ids]})
+    return {'schema':'query-text-v2','accepted':False,'offline_only':True,'branches':branches}
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +42,11 @@ class ChatTurnCommand:
     history: tuple[Mapping[str, Any], ...]
     current_part_ids: tuple[str, ...]
     conversation_context: Mapping[str, Any] | None
+    scope_comparison: tuple[str, str] | None = None
+    graph_query: GraphQuery | None = None
+    bom_rollup: BomRollupQuery | None = None
+    query_plan: QueryPlan | None = None
+    text_query: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +95,7 @@ class ChatDone:
     new_part_ids: tuple[str, ...]
     conversation_context: Mapping[str, Any] | None
     elapsed_ms: int | None
+    advanced_rag: Mapping[str, Any] | None = None
 
 
 ChatTurnEvent: TypeAlias = (
@@ -133,6 +150,7 @@ class ChatPersistence:
     ref_images: tuple[Any, ...]
     evidence: tuple[Mapping[str, Any], ...]
     citations: tuple[Mapping[str, Any], ...]
+    advanced_rag: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +244,7 @@ class ChatTurnRunner:
     ) -> Iterator[ChatTurnEvent]:
         yield ChatThinking("Đang suy nghĩ")
         try:
-            route = self._pilot_experiments.assign(actor, command)
+            route = self._pilot_experiments.assign(actor, command) if command.scope_comparison is None and command.graph_query is None and command.bom_rollup is None and command.query_plan is None and not command.text_query else None
         except ValueError:
             yield ChatError(
                 code="pilot_configuration_invalid",
@@ -292,6 +310,12 @@ class ChatTurnRunner:
                 answer,
             )
             citations = tuple(citations)
+            advanced_rag = ({'text_query':_text_query_metadata(debug_info,citations)}
+                            if command.text_query else {'query':debug_info['query_v2']}
+                            if command.query_plan is not None and isinstance(debug_info.get('query_v2'),Mapping)
+                            else {'math':debug_info['math_v2']} if (command.scope_comparison is not None or command.bom_rollup is not None)
+                            and isinstance(debug_info.get('math_v2'), Mapping) else {'graph':debug_info['graph_v2']}
+                            if command.graph_query is not None and isinstance(debug_info.get('graph_v2'),Mapping) else None)
 
             self._schedule_replay(
                 route,
@@ -316,6 +340,7 @@ class ChatTurnRunner:
                         ref_images=tuple(metadata.ref_images),
                         evidence=evidence,
                         citations=citations,
+                        advanced_rag=advanced_rag,
                     )
                 )
                 self._record_audit(command, actor, chat_id, evidence)
@@ -337,6 +362,7 @@ class ChatTurnRunner:
                     else None
                 ),
                 elapsed_ms=completed.elapsed_ms,
+                advanced_rag=advanced_rag,
             )
         except Exception as exc:
             logger.error("Chat turn failed: %s", exc, exc_info=True)

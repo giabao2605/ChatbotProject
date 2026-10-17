@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import text
+from mech_chatbot.db.evidence_snapshot import evidence_read_connection
 
 from mech_chatbot.application.document_review import (
     PublicationCommand,
@@ -246,7 +247,7 @@ class SqlAppSupportQueries:
             key = f"cid_{index}"
             keys.append(f":{key}")
             params[key] = chat_id
-        with engine.connect() as conn:
+        with evidence_read_connection(engine) as conn:
             rows = conn.execute(
                 text(
                     """

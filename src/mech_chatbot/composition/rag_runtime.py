@@ -142,6 +142,7 @@ class RagRuntime:
     provider: RagProviderAdapter
     semaphore: Any = field(repr=False)
     thread_pool: Any = field(repr=False)
+    math_v2_authorizer: Any = field(default=None, repr=False)
 
     def close(self) -> None:
         """Release resources owned by this process runtime."""
@@ -355,6 +356,8 @@ def _pipeline_environment(settings):
 
 
 def _retrieval_feature_settings(settings, process):
+    from mech_chatbot.governance.math_v2_activation import math_v2_bundle_selected
+    from pathlib import Path
     return {
         "strict_answer_mode": settings.STRICT_ANSWER_MODE,
         "strict_realtime_streaming": settings.STRICT_REALTIME_STREAMING,
@@ -368,7 +371,8 @@ def _retrieval_feature_settings(settings, process):
         "community_summaries_enabled": settings.RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED,
         "claim_repair_enabled": settings.RAG_CLAIM_REPAIR_ENABLED,
         "evidence_verifier_enabled": process.evidence_verifier_enabled,
-        "grounded_math_enabled": settings.RAG_GROUNDED_MATH_ENABLED,
+        "grounded_math_enabled": settings.RAG_GROUNDED_MATH_ENABLED and not math_v2_bundle_selected(
+            {'RAG_ACTIVATION_BUNDLE_PATH':settings.RAG_ACTIVATION_BUNDLE_PATH}, root=Path(__file__).resolve().parents[3]),
         "auto_source_cards": process.auto_source_cards,
         "history_summary_enabled": process.history_summary_enabled,
         "conversation_state_enabled": process.conversation_state_enabled,
@@ -582,6 +586,8 @@ def build_rag_runtime(
             thread_name_prefix="rag",
         )
     )
+    from mech_chatbot.governance.math_v2_activation import math_v2_authorizer_for_settings
+    math_authorizer = math_v2_authorizer_for_settings(existing_settings) if isinstance(existing_settings, Settings) else None
     return RagRuntime(
         settings=existing_settings,
         process_settings=process_settings,
@@ -596,6 +602,7 @@ def build_rag_runtime(
             ),
         ),
         executor=DefaultRagExecutor(
+            math_v2_authorizer=math_authorizer,
             execute_pipeline=resolved_execute,
             retrieval_adapter=resolved_retrieval,
             provider_adapter=resolved_provider,
@@ -607,6 +614,7 @@ def build_rag_runtime(
         provider=resolved_provider,
         semaphore=semaphore_factory(process_settings.max_concurrent_requests),
         thread_pool=pool_builder(process_settings.max_concurrent_requests),
+        math_v2_authorizer=math_authorizer,
     )
 
 

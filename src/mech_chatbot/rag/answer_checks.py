@@ -215,13 +215,8 @@ def has_required_source_citation(answer, require_version=True):
 
 def extract_source_ids(value):
     """Extract canonical source identifiers emitted by the RAG prompt."""
-    text = str(value or "")
-    matches = re.findall(
-        r"(?:source[_\s-]?id\s*[:#]?\s*|\[src:\s*)(D\d+P\d+)",
-        text,
-        flags=re.IGNORECASE,
-    )
-    return {match.upper() for match in matches}
+    from mech_chatbot.application.chat_citations import citation_source_ids
+    return set(citation_source_ids(value))
 
 
 def _canonical_source_id(metadata):
@@ -253,8 +248,36 @@ def source_id_for_evidence_quote(quote, documents):
     return ""
 
 
-def has_valid_source_citation(answer, documents, require_version=True):
+def has_valid_source_citation(answer, documents, require_version=True, *, dependency_sources=()):
     """Require exact SourceIDs that map to the generation evidence set."""
+    if dependency_sources:
+        from mech_chatbot.application.chat_citations import structured_citation
+        cards = [structured_citation(source, page_has_vision=lambda *_:False) for source in dependency_sources]
+        if any(card is None or not ((card.get('scope_id') and card.get('scope_hash'))
+                or (card.get('graph_context') and card.get('graph_hash'))) for card in cards):
+            return False
+        cited = extract_source_ids(answer)
+        if any(token.strip().upper() not in cited for token in re.findall(
+                r'\[SRC:\s*([^\]]+)\]',str(answer),flags=re.IGNORECASE)):
+            return False
+        bound = {card['source_id'] for card in cards}
+        locator_ids = {source for source in cited if re.fullmatch(r'D\d+L[0-9A-F]{16}',source)}
+        page_ids = cited - locator_ids
+        if not locator_ids or not locator_ids <= bound:
+            return False
+        if not page_ids:
+            return bool(locator_ids)
+        pages = {}
+        for document in documents or ():
+            metadata = getattr(document,'metadata',{}) or {}
+            try:
+                version = int(metadata.get('version_no'))
+            except (TypeError,ValueError):
+                continue
+            source_id = _canonical_source_id(metadata)
+            if source_id and (not require_version or version > 0):
+                pages.setdefault(source_id,set()).add(version)
+        return all(source in pages and len(pages[source]) == 1 for source in page_ids)
     if not has_required_source_citation(answer, require_version=require_version):
         return False
     cited = extract_source_ids(answer)

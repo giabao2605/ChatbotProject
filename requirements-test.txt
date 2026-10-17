@@ -2,6 +2,7 @@
 #   pip install -r requirements-test.txt
 pytest>=8.0
 pytest-cov>=5.0        # bao phu code: pytest --cov=mech_chatbot
+jsonschema>=4.0,<5     # validate structured planner output schemas in tests
 requests>=2.31         # goi RAG server trong test eval
 # Cac thu vien runtime (qdrant-client, sqlalchemy, bcrypt, streamlit, langchain...)
 # da nam trong requirements.txt cua project; test integration tai dung chung.

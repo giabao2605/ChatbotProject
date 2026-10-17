@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watchEffect } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ResourcePage from "@/components/ResourcePage.vue";
+import StructuredEvidenceReview from "@/components/StructuredEvidenceReview.vue";
 import LifecycleView from "@/views/LifecycleView.vue";
 import { apiGet, apiSend } from "@/api/client";
 import { useAuthStore } from "@/stores/auth";
@@ -14,6 +15,7 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const canManage = computed(() => isRoleAllowed(auth.user?.roles, ["reviewer", "admin"]));
+const evidenceDialog = reactive({ visible: false, docId: 0 });
 const requestedTab = computed<DocumentTab>(() => {
   const value = String(route.query.tab ?? "effective");
   return ["effective", "expired", "expiring-soon", "needs-review"].includes(value) ? value as DocumentTab : "effective";
@@ -152,6 +154,10 @@ const managementActions: RowAction[] = [
     run: (row) => openEdit(row),
   },
   {
+    label: "Kiểm tra chứng cứ",
+    run: async (row) => { evidenceDialog.docId = num(row, "DocID"); evidenceDialog.visible = true; },
+  },
+  {
     label: "Đặt hiện hành",
     visible: (row) => !num(row, "IsCurrentVersion"),
     run: (row) => apiSend(`/api/documents/${num(row, "DocID")}/current`, "PATCH"),
@@ -247,6 +253,10 @@ const toolbar = computed<ToolbarAction[]>(() => canManage.value ? [
     :toolbar="toolbar"
   />
   <LifecycleView v-else :key="activeTab" :group="lifecycleGroup" />
+
+  <Dialog v-model:visible="evidenceDialog.visible" header="Kiểm tra chứng cứ tài liệu" modal :style="{ width: 'min(1100px, 96vw)' }">
+    <StructuredEvidenceReview v-if="evidenceDialog.visible && canManage && evidenceDialog.docId" :key="evidenceDialog.docId" :doc-id="evidenceDialog.docId" />
+  </Dialog>
 
   <Dialog v-model:visible="editVisible" header="Sửa metadata tài liệu" modal :style="{ width: '560px' }">
     <Message v-if="editError" severity="error" v-text="editError"></Message>

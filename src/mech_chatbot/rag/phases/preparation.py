@@ -232,6 +232,40 @@ def _exact_cache_terminal(
     )
 
 
+def _intent_overflow_terminal(context: _PreparationContext, state: Any) -> PreparationOutcome | None:
+    from mech_chatbot.rag.query_decomposition import query_decomposition_requested
+    if not query_decomposition_requested(state):
+        return None
+    from mech_chatbot.rag.query_decomposition import (
+        QUERY_INTENT_OVERFLOW_NOTICE, split_query_intents,
+    )
+
+    intents, overflow = split_query_intents(context.user_question)
+    if not overflow:
+        return None
+    state.checkpoint("intent_overflow")
+    state.refuse("intent_overflow")
+    debug = {
+        **_empty_debug(),
+        "citation_docs": [],
+        "decomposition_schema": "rag-query-result-v1",
+        "decomposition_status": "clarification_required",
+        "decomposition_intent_overflow": True,
+        "decomposition_intent_count": len(intents),
+        "decomposition_intent_coverage": [False] * len(intents),
+        "decomposition_branches": [],
+    }
+    log_trace(
+        "rag_end", context.trace_id,
+        final_latency_ms=int((time.time() - context.started_at) * 1000),
+        refusal=True, refusal_reason="intent_overflow",
+    )
+    return PreparationOutcome(
+        terminal=(iter((QUERY_INTENT_OVERFLOW_NOTICE,)), "", (), context.current_part_ids, debug),
+        reason_code="intent_overflow",
+    )
+
+
 def _lookup_exact_cache(
     context: _PreparationContext,
     state: Any,
@@ -354,6 +388,9 @@ def prepare(state: Any) -> PreparationOutcome:
     safety_terminal = _safety_terminal(context, state)
     if safety_terminal is not None:
         return safety_terminal
+    overflow_terminal = _intent_overflow_terminal(context, state)
+    if overflow_terminal is not None:
+        return overflow_terminal
     cache_lookup = _lookup_exact_cache(context, state)
     if cache_lookup.terminal is not None:
         return cache_lookup.terminal

@@ -31,6 +31,7 @@ class BudgetDiagnostics:
     repairs: int = 0
     calculations: int = 0
     graph_edges: int = 0
+    graph_examined_relations: int = 0
     provider_retries: int = 0
     final_generations: int = 0
     deadline_exceeded: bool = False
@@ -82,6 +83,7 @@ def _budget_diagnostics(
         graph_edges=_as_int(
             raw.get("graph_edge_count") or getattr(ledger, "graph_edges", 0)
         ),
+        graph_examined_relations=_as_int(getattr(ledger,'graph_examined_relations',0)),
         provider_retries=_as_int(
             generation_raw.get("provider_retries")
             or getattr(ledger, "provider_retries", 0)

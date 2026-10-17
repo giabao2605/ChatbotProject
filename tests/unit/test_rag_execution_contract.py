@@ -44,7 +44,7 @@ def test_successful_calculation_route_emits_one_metadata_only_pilot_event(
 
     trace_messages = []
     clock = iter([100.0, 100.1, 100.2, 100.25])
-    monkeypatch.setattr(execution.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(execution.time, "monotonic", lambda: next(clock, 100.25))
     monkeypatch.setattr(trace_logging.trace_logger, "info", trace_messages.append)
 
     def scripted_pipeline(state):
@@ -497,7 +497,8 @@ def test_request_wide_retry_budget_stops_third_retry_before_any_token(monkeypatc
     attempts = []
 
     class FailingLlm:
-        def invoke(self, _messages):
+        def invoke(self, _messages, *, timeout):
+            assert 0 < timeout <= 120
             attempts.append("call")
             raise RuntimeError("429 no_capacity")
 
@@ -542,9 +543,12 @@ def test_parallel_decomposition_retries_share_atomic_request_budget(monkeypatch)
     attempts = []
     attempts_lock = threading.Lock()
     ledgers = []
+    branches_ready = threading.Barrier(2)
+    branches_finished = threading.Barrier(2)
 
     class FailingLlm:
-        def invoke(self, _messages):
+        def invoke(self, _messages, *, timeout):
+            assert 0 < timeout <= 120
             with attempts_lock:
                 attempts.append(threading.get_ident())
             raise RuntimeError("429 no_capacity")
@@ -569,7 +573,13 @@ def test_parallel_decomposition_retries_share_atomic_request_budget(monkeypatch)
         )
 
         def retrieve(query, *_args):
-            budgeted_invoke([query], surface="branch-test", trace_id=state.trace_id)
+            # Exercise concurrent branches rather than a queued, cancelled sibling.
+            branches_ready.wait(timeout=2)
+            try:
+                budgeted_invoke([query], surface="branch-test", trace_id=state.trace_id)
+            finally:
+                # The executor returns early; count attempts after both branches finish.
+                branches_finished.wait(timeout=2)
             return query
 
         execute_plan(plan, retrieve, {})
@@ -585,6 +595,7 @@ def test_parallel_decomposition_retries_share_atomic_request_budget(monkeypatch)
     assert [type(event) for event in events] == [RagPrepared, RagFailed]
     assert events[-1].code == "RequestBudgetExceeded"
     assert len(attempts) == 4
+    assert len(set(attempts)) == 2
     assert ledgers[0].provider_retries == 2
 
 
@@ -930,3 +941,64 @@ def test_legacy_adapter_mutates_same_debug_dictionary_after_stream_consumption(m
     assert token_started == [True]
     assert id(diagnostics) == original_identity
     assert diagnostics == {"phase": "completed"}
+
+
+@pytest.mark.parametrize('terminal_kind', ['failure', 'cancel_with_cause', 'cancel_without_cause'])
+def test_legacy_stream_propagates_late_failure_or_cancellation_and_closes_executor(monkeypatch, terminal_kind):
+    from mech_chatbot.rag import execution
+    from mech_chatbot.rag.pipeline import chat_with_rag
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    failure = RuntimeError('evidence read interrupted')
+    closed = []
+
+    class ScriptedExecutor:
+        def run(self, *_args, **_kwargs):
+            try:
+                yield RagPrepared('refs', (), (), {})
+                yield RagToken('confirmed prefix')
+                if terminal_kind == 'failure':
+                    yield RagFailed('RuntimeError', str(failure), True, failure)
+                else:
+                    yield RagCancelled('request cancelled', cause=failure if terminal_kind == 'cancel_with_cause' else None)
+                pytest.fail('terminal event must stop the legacy stream')
+            finally:
+                closed.append(True)
+
+    monkeypatch.setattr(execution, 'DefaultRagExecutor', ScriptedExecutor)
+    stream, *_rest = chat_with_rag('question')
+    assert next(stream) == 'confirmed prefix'
+    expected = ExternalAICallCancelled if terminal_kind == 'cancel_without_cause' else RuntimeError
+    with pytest.raises(expected) as raised:
+        next(stream)
+    if terminal_kind != 'cancel_without_cause':
+        assert raised.value is failure
+    assert closed == [True]
+
+
+def test_interleaved_requests_do_not_share_or_leak_retrieval_checkpoints():
+    import threading
+    from mech_chatbot.rag.execution import current_request_checkpoint
+    captured = []
+    def execute(state):
+        checkpoint = current_request_checkpoint()
+        assert callable(checkpoint)
+        captured.append(checkpoint)
+        def stream():
+            assert current_request_checkpoint() is checkpoint
+            checkpoint('retrieval')
+            yield state.request.question
+        return state.prepared((stream(), '', (), (), {}))
+    cancelled = threading.Event()
+    executor = DefaultRagExecutor(execute_pipeline=execute)
+    first = iter(executor.run(RagRequest('first',AccessScope()),RagInvocation('first',mode='test'),cancelled))
+    second = iter(executor.run(RagRequest('second',AccessScope()),RagInvocation('second',mode='test')))
+    assert isinstance(next(first),RagPrepared)
+    assert current_request_checkpoint() is None
+    assert isinstance(next(second),RagPrepared)
+    assert captured[0] is not captured[1]
+    cancelled.set()
+    assert isinstance(list(first)[-1],RagCancelled)
+    events = list(second)
+    assert ''.join(event.text for event in events if isinstance(event,RagToken)) == 'second'
+    assert isinstance(events[-1],RagCompleted)
+    assert current_request_checkpoint() is None and current_request_budget() is None

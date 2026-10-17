@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import ResourcePage from "@/components/ResourcePage.vue";
+import StructuredEvidenceReview from "@/components/StructuredEvidenceReview.vue";
 import { apiSend, apiGet } from "@/api/client";
 import { pickNum, pickStr } from "@/utils/rows";
 import type { ApiRow, ResourceColumn, RowAction } from "@/types";
@@ -9,6 +10,7 @@ import type { ApiRow, ResourceColumn, RowAction } from "@/types";
 type ContractIssue = { field?: string; code?: string; message?: string };
 const router = useRouter();
 const contractDialog = reactive({ visible: false, docId: 0, issues: [] as ContractIssue[] });
+const evidenceDialog = reactive({ visible: false, docId: 0 });
 
 async function load(): Promise<ApiRow[]> {
   const data = await apiGet<{ documents: ApiRow[] }>("/api/documents/pending-review");
@@ -149,6 +151,16 @@ async function reviewAction(
 }
 
 const rowActions: RowAction[] = [
+  {
+    label: "Duyệt dữ liệu có cấu trúc",
+    visible: (row) => docId(row) !== null,
+    run: async (row) => {
+      const id = docId(row);
+      if (id === null) throw new Error("Chưa có tài liệu để kiểm tra dữ liệu.");
+      evidenceDialog.docId = id;
+      evidenceDialog.visible = true;
+    },
+  },
   {
     label: "Xuất bản (version)",
     run: (r) =>
@@ -493,6 +505,10 @@ onMounted(async () => {
       <Button label="Đóng" severity="secondary" outlined @click="contractDialog.visible = false" />
       <Button label="Mở kho tài liệu để sửa metadata" @click="router.push({ path: '/documents', query: { tab: 'effective', doc: contractDialog.docId } }); contractDialog.visible = false" />
     </template>
+  </Dialog>
+  <Dialog v-model:visible="evidenceDialog.visible" header="Duyệt dữ liệu có cấu trúc" modal :style="{ width: 'min(1200px, 95vw)' }">
+    <StructuredEvidenceReview v-if="evidenceDialog.visible" :doc-id="evidenceDialog.docId" />
+    <template #footer><Button label="Đóng" severity="secondary" outlined @click="evidenceDialog.visible = false" /></template>
   </Dialog>
 </template>
 

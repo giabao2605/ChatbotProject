@@ -19,6 +19,7 @@ PreparationReason: TypeAlias = Literal[
     "prepared",
     "safety_block",
     "exact_cache_hit",
+    "intent_overflow",
 ]
 RoutingReason: TypeAlias = Literal[
     "routed",

@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from functools import partial
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from mech_chatbot.rag.execution import (
     RagInvocation,
     RagRequest,
     RagToken,
+    RagCancelled,
 )
 
 
@@ -159,6 +161,157 @@ def _trace_events(caplog, trace_id):
         if event.get("trace_id") == trace_id:
             events.append(event)
     return events
+
+
+@pytest.mark.parametrize("with_history_image", [False, True])
+def test_overflow_clarifies_before_cache_history_vision_routing_or_provider(monkeypatch, with_history_image):
+    from mech_chatbot.rag.phases import preparation, routing
+    from mech_chatbot.rag import semantic_cache
+
+    executor, runtime = _offline_executor([], [], semantic_cache_enabled=True)
+    runtime.query_decomposition_enabled = True
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("overflow must stop before cache, history, vision, routing and providers")
+
+    monkeypatch.setattr(semantic_cache, "lookup_exact", unexpected)
+    monkeypatch.setattr(preparation, "_prepare_history", unexpected)
+    monkeypatch.setattr(preparation, "_analyze_image", unexpected)
+    monkeypatch.setattr(routing, "route", unexpected)
+    executor._provider_adapter.invoke = unexpected
+    request = RagRequest(
+        "Tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn", AccessScope(),
+        image_path="drawing.png" if with_history_image else None,
+        history=({"role": "user", "content": "prior"},) if with_history_image else (),
+    )
+    events = list(executor.run(request, RagInvocation("overflow-early", mode="test")))
+    assert isinstance(events[-1], RagCompleted)
+    assert events[-1].outcome == "refused"
+    assert events[-1].refusal_reason == "intent_overflow"
+    assert "tối đa ba ý" in _answer(events)
+    debug = dict(events[-1].diagnostics)
+    assert debug["decomposition_status"] == "clarification_required"
+    assert debug["decomposition_intent_count"] == 4
+    assert debug["citation_docs"] == []
+    assert debug["decomposition_branches"] == []
+
+
+def test_cancelled_overflow_emits_cancellation_instead_of_clarification():
+    executor, runtime = _offline_executor([], [])
+    runtime.query_decomposition_enabled = True
+    cancellation = threading.Event()
+    cancellation.set()
+    events = list(executor.run(
+        RagRequest("BOM; vật liệu; dung sai; hàn", AccessScope()),
+        RagInvocation("overflow-cancel", mode="test"), cancellation,
+    ))
+    assert isinstance(events[-1], RagCancelled)
+    assert not any(isinstance(event, RagToken) for event in events)
+
+
+def test_invalid_oversized_planner_output_uses_the_whole_original_query_in_public_pipeline(offline_pipeline,monkeypatch):
+    _, _, executor, runtime = offline_pipeline
+    runtime.query_decomposition_enabled = True
+    planner_calls = []
+    query_calls = []
+    question = 'So sánh hai cách tổ chức đào tạo nội bộ'
+    def provider(_messages,**kwargs):
+        if kwargs.get('surface')=='query_decomposition':
+            planner_calls.append(True)
+            return SimpleNamespace(content=json.dumps({'subqueries':[
+                'cách tổ chức đào tạo thứ nhất', 'cách tổ chức đào tạo thứ hai',
+                'đào tạo nội bộ tổng quan', 'tìm thêm thông tin đào tạo']}))
+        return SimpleNamespace(content='')
+    executor = DefaultRagExecutor(retrieval_adapter=runtime,provider_adapter=SimpleNamespace(invoke=provider))
+    class Store:
+        def __init__(self,**kwargs): pass
+        def similarity_search(self,query,**kwargs):
+            query_calls.append(query)
+            return []
+    monkeypatch.setattr('langchain_qdrant.QdrantVectorStore',Store)
+    events = _run(question,trace_id='planner-bounds',executor=executor)
+    assert isinstance(events[-1],RagCompleted) and events[-1].outcome=='refused'
+    assert planner_calls == [True]
+    assert len(query_calls) == 2
+    assert all(query.replace('_',' ').casefold()==question.casefold() for query in query_calls)
+    assert events[-1].diagnostics.budget.planners == 1
+    assert events[-1].diagnostics.budget.final_generations == 0
+
+
+@pytest.mark.parametrize('stage', ['dense','sparse'])
+@pytest.mark.parametrize('stop', ['cancel_exception','cancel_signal','deadline','budget'])
+@pytest.mark.parametrize('route', ['general','strict','broad'])
+def test_retrieval_request_stop_never_starts_a_fallback_or_generation(offline_pipeline, monkeypatch, caplog, stage, stop, route):
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    from mech_chatbot.rag.execution import RagFailed, current_request_budget
+    import time
+    documents, _calls, executor, runtime = offline_pipeline
+    cancellation = threading.Event()
+    calls = []
+    phases = []
+    clock = [time.monotonic()]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+
+    class Store:
+        def __init__(self, **kwargs):
+            self.mode = kwargs['retrieval_mode'].value
+            if self.mode == 'dense':
+                phases.append('broad' if phases else 'strict')
+            self.phase = phases[-1]
+        def similarity_search(self, *_args, **kwargs):
+            calls.append(self.mode)
+            assert kwargs['timeout'] == 3
+            if self.mode == stage and (route != 'broad' or self.phase == 'broad'):
+                if stop == 'cancel_exception':
+                    raise ExternalAICallCancelled('stop request')
+                if stop == 'cancel_signal':
+                    cancellation.set()
+                if stop == 'deadline':
+                    clock[0] += 121
+                if stop == 'budget':
+                    current_request_budget().record('corrections', 2, cumulative=True)
+            return []
+
+    monkeypatch.setattr('langchain_qdrant.QdrantVectorStore', Store)
+    question = 'Quy trình nghỉ phép yêu cầu những gì?' if route == 'general' else 'BOM của 9.3.04080 chứa các chi tiết nào?'
+    with caplog.at_level(logging.INFO, logger='RagTrace'):
+        events = list(executor.run(RagRequest(question,AccessScope()),
+                                  RagInvocation('retrieval-stop',mode='test'),cancellation))
+    if stop.startswith('cancel'):
+        assert isinstance(events[-1], RagCancelled)
+    else:
+        assert isinstance(events[-1], RagFailed)
+        assert events[-1].code == ('TimeoutError' if stop == 'deadline' else 'RequestBudgetExceeded')
+    prefix = ['dense','sparse'] if route == 'broad' else []
+    assert calls == prefix + (['dense'] if stage == 'dense' else ['dense','sparse'])
+    assert not any(isinstance(event,RagToken) for event in events)
+    steps = [event for event in _trace_events(caplog,'retrieval-stop') if event.get('event')=='retrieval_step']
+    assert steps[-1]['step'] == stage + '_search' and steps[-1]['status'] == 'failed'
+    assert steps[-1]['attempted'] is True and steps[-1]['latency_ms'] >= 0
+    assert all(event['execution_context']=='test' for event in steps)
+    assert all(not {'question','query','filter','documents','doc_ids'}.intersection(event) for event in steps)
+
+
+def test_retrieval_trace_preserves_successful_dense_fallback_and_all_timeout_bounds(offline_pipeline,monkeypatch,caplog):
+    documents, _calls, executor, runtime = offline_pipeline
+    seen = []
+    documents.append(_document('Quy trình này áp dụng cho nhân viên chính thức. '
+                               'Tài liệu không ghi chi phí của quy trình nghỉ phép.'))
+    class Store:
+        def __init__(self,**kwargs): self.mode=kwargs['retrieval_mode'].value
+        def similarity_search(self,*_args,**kwargs):
+            seen.append((self.mode,kwargs['timeout']))
+            if self.mode=='sparse': raise TimeoutError('Private source data must not enter the step trace')
+            return list(documents)
+    monkeypatch.setattr('langchain_qdrant.QdrantVectorStore',Store)
+    with caplog.at_level(logging.INFO,logger='RagTrace'):
+        events=_run('Chi phí của quy trình nghỉ phép là bao nhiêu?',trace_id='retrieval-fallback',executor=executor)
+    assert isinstance(events[-1],RagCompleted) and events[-1].outcome=='answered'
+    assert seen==[('dense',3),('sparse',3)]
+    steps=[event for event in _trace_events(caplog,'retrieval-fallback') if event.get('event')=='retrieval_step']
+    assert [(e['step'],e['status']) for e in steps] == [('dense_search','completed'),('sparse_search','failed'),('serving_filter','completed')]
+    assert steps[1]['error_type']=='TimeoutError'
+    assert 'Private source data' not in json.dumps(steps)
 
 
 def test_phase_trace_maps_the_public_executor_path(offline_pipeline, caplog):

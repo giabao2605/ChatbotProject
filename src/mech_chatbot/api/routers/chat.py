@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import nullcontext
+from time import monotonic
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -16,9 +18,13 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
+from mech_chatbot.config.repository_runtime import current_repository_engine
+from mech_chatbot.db.evidence_snapshot import evidence_read_snapshot, EvidenceSnapshotLost
 
 from mech_chatbot.api import app_security
 from mech_chatbot.api.dependencies import csrf_profile, current_profile
+from mech_chatbot.api.evidence_contracts import ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, require_comparison_context
 from mech_chatbot.api.file_access import chat_image_path, data_raw_root, page_has_vision
 from mech_chatbot.api.request_limits import (
     UploadTooLarge,
@@ -63,6 +69,11 @@ class ChatMessageRequest(BaseModel):
     chat_history: list[dict[str, Any]] = Field(default_factory=list)
     current_part_ids: list[str] = Field(default_factory=list)
     conversation_context: dict[str, Any] | None = None
+    scope_comparison: ScopeComparisonRequest | None = None
+    graph_query: GraphQueryRequest | None = None
+    bom_rollup: BomRollupRequest | None = None
+    query_plan: QueryPlanRequest | None = None
+    text_query: bool = Field(False,strict=True)
 
 
 def _is_admin(profile: dict[str, Any]) -> bool:
@@ -122,6 +133,7 @@ def _chat_image_url_from_path(raw_path: Any) -> str | None:
 def _sources_for_chat_ids(
     chat_ids: list[int],
     runtime: Any,
+    revision_chat_ids: frozenset[int] = frozenset(),
 ) -> dict[int, list[dict[str, Any]]]:
     rows = runtime.app_support_queries.answer_sources_for_chat_ids(
         tuple(int(chat_id) for chat_id in chat_ids if chat_id)
@@ -131,6 +143,12 @@ def _sources_for_chat_ids(
         page_no = safe_int(chunk_ref)
         if doc_id is None or page_no is None:
             continue
+        revision_query = ''
+        if int(chat_id) in revision_chat_ids:
+            version = safe_int(version_no)
+            if version is None or version < 1:
+                continue
+            revision_query = f'?citation_version={version}'
         verified_vision = bool(has_vision) and page_has_vision(int(doc_id), page_no)
         out.setdefault(int(chat_id), []).append(
             {
@@ -142,11 +160,11 @@ def _sources_for_chat_ids(
                 "source_id": f"D{int(doc_id)}P{page_no}",
                 "has_vision": verified_vision,
                 "page_url": (
-                    f"/api/files/documents/{int(doc_id)}/pages/{page_no}"
+                    f"/api/files/documents/{int(doc_id)}/pages/{page_no}{revision_query}"
                     if verified_vision
                     else None
                 ),
-                "original_url": f"/api/files/documents/{int(doc_id)}/original",
+                "original_url": f"/api/files/documents/{int(doc_id)}/original{revision_query}",
             }
         )
     return out
@@ -156,11 +174,13 @@ def _decorate_history_messages(
     messages: list[dict[str, Any]],
     runtime: Any,
 ) -> list[dict[str, Any]]:
-    chat_ids = [int(message["chat_id"]) for message in messages if message.get("chat_id")]
-    sources = _sources_for_chat_ids(chat_ids, runtime)
+    chat_ids = [int(message["chat_id"]) for message in messages if message.get("chat_id") and not message.get('sources_redacted')]
+    revision_chat_ids = frozenset(int(message['chat_id']) for message in messages
+                                 if message.get('chat_id') and message.get('_advanced_rag_payload') is not None)
+    sources = _sources_for_chat_ids(chat_ids, runtime, revision_chat_ids)
     decorated: list[dict[str, Any]] = []
     for message in messages:
-        rendered = {key: value for key, value in message.items() if key != "ref_images"}
+        rendered = {key: value for key, value in message.items() if key not in {"ref_images","structured_citations","_advanced_rag_payload"}}
         image_url = _chat_image_url_from_path(message.get("image"))
         if image_url:
             rendered["image_url"] = image_url
@@ -169,14 +189,22 @@ def _decorate_history_messages(
             answer_body = _answer_body_without_reference_appendix(
                 message.get("content") or ""
             )
-            filtered = _filter_citations_by_answer(
-                sources.get(int(chat_id), []),
+            filtered = [] if message.get('sources_redacted') else _filter_citations_by_answer(
+                [*sources.get(int(chat_id), []),*build_citation_list(message.get('structured_citations') or (),
+                                                                 page_has_vision=page_has_vision)],
                 answer_body,
                 allow_legacy_fallback=True,
             )
             rendered["content"] = answer_body
             rendered["citations"] = filtered
             rendered["ref_text"] = _citation_ref_text(filtered)
+            if message.get('_advanced_rag_payload') is not None and not message.get('sources_redacted'):
+                from mech_chatbot.application.chat_result_history import restore_history_result
+                try:
+                    rendered['advanced_rag'] = restore_history_result(message['_advanced_rag_payload'], filtered)
+                except (ValueError, TypeError, KeyError):
+                    rendered = {**rendered, 'content':'Nội dung đã được ẩn vì không còn xác minh được nguồn.',
+                                'citations':[], 'ref_text':'', 'sources_redacted':True}
         decorated.append(rendered)
     return decorated
 
@@ -265,6 +293,7 @@ def _chat_event_sse(event: Any) -> str:
                 "new_part_ids": event.new_part_ids,
                 "conversation_context": event.conversation_context,
                 "elapsed_ms": event.elapsed_ms,
+                **({'advanced_rag':event.advanced_rag} if event.advanced_rag is not None else {}),
             },
         )
     raise TypeError(f"Unsupported chat event: {type(event).__name__}")
@@ -315,20 +344,29 @@ def history(
     session_id = str(body.get("session_id") or "").strip()
     if not session_id:
         raise HTTPException(status_code=400, detail="Missing session_id")
-    messages = get_chat_history(
-        session_id,
-        username=profile.get("username"),
-        is_admin=_is_admin(profile),
-        user_clearance=profile.get("max_security_level", "public"),
-        allowed_departments=profile.get("allowed_departments") or [],
-        allowed_sites=profile.get("allowed_sites") or [],
-    )
-    return {
-        "messages": _decorate_history_messages(
-            messages,
-            request.app.state.runtime,
-        )
-    }
+    selected_engine = getattr(getattr(request.app.state,'database_runtime',None),'engine',None)
+    if selected_engine is None:
+        selected_engine = current_repository_engine()
+    deadline = monotonic() + getattr(getattr(request.app.state,'settings_snapshot',None),'RAG_REQUEST_DEADLINE_SECONDS',120)
+    def checkpoint(_phase):
+        if monotonic()>=deadline:
+            raise TimeoutError('History request deadline exceeded')
+    snapshot = evidence_read_snapshot(checkpoint, deadline, db_engine=selected_engine) if selected_engine is not None else nullcontext()
+    try:
+        with snapshot:
+            messages = get_chat_history(
+                session_id,
+                username=profile.get("username"),
+                is_admin=_is_admin(profile),
+                user_clearance=profile.get("max_security_level", "public"),
+                allowed_departments=profile.get("allowed_departments") or [],
+                allowed_sites=profile.get("allowed_sites") or [],
+            )
+            return {'messages':_decorate_history_messages(messages, request.app.state.runtime)}
+    except TimeoutError:
+        raise HTTPException(504, detail='History request timed out') from None
+    except (EvidenceSnapshotLost, SQLAlchemyError, ValueError):
+        raise HTTPException(503, detail='History temporarily unavailable') from None
 
 
 @router.delete("/sessions/{session_id}")
@@ -394,6 +432,13 @@ def chat_message(
     req: ChatMessageRequest,
     profile: dict[str, Any] = Depends(csrf_profile),
 ):
+    if sum(value is not None for value in (req.scope_comparison,req.graph_query,req.bom_rollup,req.query_plan))+int(req.text_query)>1:
+        raise HTTPException(422,detail='Select one v2 template')
+    if req.scope_comparison is not None or req.graph_query is not None or req.bom_rollup is not None or req.query_plan is not None or req.text_query:
+        snapshot = getattr(request.app.state, 'settings_snapshot', None)
+        require_comparison_context(getattr(snapshot, 'RAG_EXECUTION_CONTEXT', 'production'), profile,
+            comparison_only=req.scope_comparison is not None,
+            authorizer=getattr(request.app.state.runtime, 'math_v2_authorizer', None))
     image_path = _verify_image_upload(profile, req.image_token)
     enforce_request_rate_limit(
         request,
@@ -411,6 +456,12 @@ def chat_message(
         conversation_context=(
             dict(req.conversation_context) if req.conversation_context else None
         ),
+        scope_comparison=((req.scope_comparison.scope_a, req.scope_comparison.scope_b)
+                          if req.scope_comparison is not None else None),
+        graph_query=req.graph_query.to_query() if req.graph_query is not None else None,
+        bom_rollup=req.bom_rollup.to_rollup() if req.bom_rollup is not None else None,
+        query_plan=req.query_plan.to_plan() if req.query_plan is not None else None,
+        text_query=req.text_query,
     )
     runner = request.app.state.runtime.chat_turn_runner
 

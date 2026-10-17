@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
-from typing import Any, Mapping
+from time import monotonic
+from typing import Annotated, Any, Mapping
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from sqlalchemy.exc import SQLAlchemyError
+from mech_chatbot.config.repository_runtime import current_repository_engine
+from mech_chatbot.db.evidence_snapshot import evidence_read_snapshot, EvidenceSnapshotLost
 from fastapi.responses import FileResponse
+from mech_chatbot.api.source_file_pins import file_pin,verify_file_pin,pinned_original_response
 
 from mech_chatbot.application.document_review import PublicationCommand, PublicationOutcome, ReviewDocumentsCommand, ReviewItem, normalize_publish_mode
 from mech_chatbot.application.document_upload import (
@@ -156,9 +161,55 @@ def _resolve_protected_file(request: Request, reference: ProtectedFileReference,
         ) from exc
 
 
+def _revision_file_response(request: Request, reference: ProtectedFileReference, profile: dict[str, Any], pin):
+    engine = getattr(getattr(request.app.state, 'database_runtime', None), 'engine', None)
+    if engine is None:
+        engine = current_repository_engine()
+    if engine is None:
+        raise HTTPException(503, detail='Source temporarily unavailable')
+    deadline = monotonic() + getattr(getattr(request.app.state, 'settings_snapshot', None), 'RAG_REQUEST_DEADLINE_SECONDS', 120)
+    def checkpoint(_phase):
+        if monotonic() >= deadline:
+            raise TimeoutError('Source request deadline exceeded')
+    response = None
+    completed = False
+    try:
+        with evidence_read_snapshot(checkpoint, deadline, db_engine=engine):
+            verify_file_pin(reference.doc_id, profile, pin, page_no=reference.page_no)
+            authorized = _resolve_protected_file(request, reference, profile)
+            if authorized.path is None:
+                raise HTTPException(404, detail='File not found')
+            # Freeze bytes before releasing the revision/ACL snapshot, reusing the
+            # existing bounded, no-store file response instead of a new streamer.
+            # Revision-only citations have no historical byte hash; full pins
+            # still verify the previously recorded hash during this single copy.
+            expected_hash = (pin.image_hash if reference.page_no is not None else pin.source_hash) if pin else None
+            response = pinned_original_response(authorized.path, authorized.filename, expected_hash,
+                                                inline=reference.page_no is not None, checkpoint=checkpoint)
+        completed = True
+        return response
+    except TimeoutError:
+        raise HTTPException(504, detail='Source request timed out') from None
+    except OSError:
+        raise HTTPException(404, detail='File not found') from None
+    except (EvidenceSnapshotLost, SQLAlchemyError, ValueError):
+        raise HTTPException(503, detail='Source temporarily unavailable') from None
+    finally:
+        if response is not None and not completed:
+            response.background.func()
+
+
 @files_router.get("/documents/{doc_id}/pages/{page_no}")
-def citation_page(doc_id: int, page_no: int, request: Request, profile: dict[str, Any] = Depends(current_profile)):
+def citation_page(doc_id: int, page_no: int, request: Request, profile: dict[str, Any] = Depends(current_profile), pin=Depends(file_pin),
+                  citation_version: Annotated[int | None, Query(ge=1)] = None):
+    if citation_version is not None:
+        return _revision_file_response(request, ProtectedFileReference.page(doc_id, page_no, expected_version=citation_version), profile, pin)
+    verify_file_pin(doc_id,profile,pin,page_no=page_no)
     authorized = _resolve_protected_file(request, ProtectedFileReference.page(doc_id, page_no), profile)
+    if pin is not None:
+        if authorized.placeholder:
+            raise HTTPException(404,detail='Source image unavailable')
+        return pinned_original_response(authorized.path,None,pin.image_hash,inline=True)
     if authorized.placeholder:
         svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
 <rect width="640" height="360" fill="#111827"/><rect x="24" y="24" width="592" height="312" rx="16" fill="#1f2937" stroke="#475569"/>
@@ -170,8 +221,14 @@ def citation_page(doc_id: int, page_no: int, request: Request, profile: dict[str
 
 
 @files_router.get("/documents/{doc_id}/original")
-def original_document(doc_id: int, request: Request, profile: dict[str, Any] = Depends(current_profile)):
+def original_document(doc_id: int, request: Request, profile: dict[str, Any] = Depends(current_profile), pin=Depends(file_pin),
+                      citation_version: Annotated[int | None, Query(ge=1)] = None):
+    if citation_version is not None:
+        return _revision_file_response(request, ProtectedFileReference.original(doc_id, expected_version=citation_version), profile, pin)
+    verify_file_pin(doc_id,profile,pin)
     authorized = _resolve_protected_file(request, ProtectedFileReference.original(doc_id), profile)
+    if pin is not None:
+        return pinned_original_response(authorized.path,authorized.filename,pin.source_hash)
     return _file_response(authorized.path, filename=authorized.filename)
 
 

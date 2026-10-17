@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from langchain_core.messages import HumanMessage
@@ -70,6 +71,7 @@ class _RetrievalContext:
     allowed_departments: tuple[str, ...]
     allowed_sites: tuple[str, ...]
     runtime: Any
+    dependencies: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,23 +129,29 @@ def _make_context(decision: RouteDecision, state: Any) -> _RetrievalContext:
         allowed_departments=tuple(request.allowed_departments),
         allowed_sites=tuple(request.allowed_sites),
         runtime=state.retrieval_adapter,
+        dependencies=state.text_dependencies,
     )
 
 
-def _access_context(context: _RetrievalContext) -> dict[str, Any]:
+def _access_context(context: _RetrievalContext) -> Mapping[str, Any]:
     request = context.decision.request
-    return {
+    return MappingProxyType({
         "user_department": request.user_department,
         "roles": tuple(context.user_roles or ()),
         "allowed_departments": tuple(context.allowed_departments or ()),
         "allowed_sites": tuple(context.allowed_sites or ()),
         "max_security_level": request.max_security_level,
         "version_policy": context.decision.intent_data.get("version_policy"),
-    }
+    })
 
 
 def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -> _PlannerResult:
-    from mech_chatbot.rag.query_decomposition import compile_query_plan
+    from mech_chatbot.rag.query_decomposition import BranchPlan, compile_query_plan
+
+    if state.explicit_text_intents:
+        intents=state.explicit_text_intents
+        return _PlannerResult(BranchPlan(context.effective_question, True, intents,
+            "explicit-mixed-v1", intents, (True,) * len(intents)), 0, 0, 0.0)
 
     deterministic_plan = compile_query_plan(
         context.effective_question,
@@ -156,9 +164,10 @@ def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -
         ),
     )
     if (
-        len(deterministic_plan.subqueries) > 1
+        deterministic_plan.intent_overflow
+        or (len(deterministic_plan.subqueries) > 1
         and not deterministic_plan.intent_overflow
-        and all(deterministic_plan.intent_coverage)
+        and all(deterministic_plan.intent_coverage))
     ):
         return _PlannerResult(deterministic_plan, 0, 0, 0.0)
 
@@ -258,6 +267,9 @@ def _branch_answer_policy(
     access_denied: bool | None = None,
 ) -> Any:
     branch_context = _assemble_context(documents, subquery) if documents else ""
+    from mech_chatbot.rag.query_dependencies import branch_dependencies, dependency_context
+    if documents:
+        branch_context += '\n' + dependency_context(branch_dependencies(context.dependencies, subquery))
     decision = evaluate_answerability(
         subquery,
         branch_context,
@@ -564,6 +576,10 @@ def _branch_diagnostics(
             "correction_attempted": result.correction_attempted,
             "deadline_exceeded": result.deadline_exceeded,
         })
+        if policy.outcome.value == 'full_answer':
+            from mech_chatbot.rag.query_dependencies import branch_dependencies
+            branches[-1]['citations'] += [card for dependency in branch_dependencies(context.dependencies, subquery)
+                                         for card in dependency.sources]
     return tuple(states), tuple(branches)
 
 
@@ -646,6 +662,8 @@ def _run_complex_plan(
     )
 
     plan = planner_result.plan
+    if state.explicit_text_intents:
+        state.budget.record("subqueries", len(plan.subqueries), cumulative=True)
     correction_budget = CorrectionBudget(state.budget.limits.corrections)
 
     def retrieve_branch(subquery: str, access: Any, budget: Any, deadline: Any) -> Any:
@@ -657,6 +675,7 @@ def _run_complex_plan(
         access_context,
         deadline_monotonic=state.budget.deadline_monotonic,
         on_timeout=lambda _query: _empty_deadline_branch(),
+        checkpoint=lambda: state.checkpoint("branch_retrieval"),
     )
     correction_cost, input_tokens, output_tokens = _record_decomposition_usage(
         state, plan, planner_result, branch_results
@@ -690,7 +709,8 @@ def _record_decomposition_usage(
     planner_result: _PlannerResult,
     branch_results: Sequence[Any],
 ) -> tuple[float, int, int]:
-    state.budget.record("subqueries", len(plan.subqueries))
+    if not state.explicit_text_intents:
+        state.budget.record("subqueries", len(plan.subqueries))
     state.budget.record(
         "corrections",
         sum(result.correction_attempted for result in branch_results),
@@ -755,6 +775,17 @@ def _run_decomposition(context: _RetrievalContext, state: Any) -> _Decomposition
     access_context = _access_context(context)
     planner_result = _compile_plan(context, state, access_context)
     plan = planner_result.plan
+    if plan.intent_overflow:
+        from mech_chatbot.rag.query_decomposition import QUERY_INTENT_OVERFLOW_NOTICE
+
+        return _DecompositionResult(
+            batch=_RetrievalBatch((), 0, "intent_overflow", time.time()),
+            notice=QUERY_INTENT_OVERFLOW_NOTICE,
+            intents=plan.intents,
+            intent_coverage=plan.intent_coverage,
+            intent_overflow=True,
+            usage=_decomposition_usage(state, plan, planner_result, ()),
+        )
     if plan.is_complex:
         return _run_complex_plan(context, state, access_context, planner_result)
     return _DecompositionResult(
@@ -820,18 +851,13 @@ def _apply_hyde(
 def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOutcome:
     context = _make_context(decision, state)
     state.transition("retrieval")
-    if bool(
-        getattr(
-            state.retrieval_adapter,
-            "query_decomposition_enabled",
-            False,
-        )
-    ):
+    from mech_chatbot.rag.query_decomposition import query_decomposition_requested
+    if query_decomposition_requested(state):
         result = _run_decomposition(context, state)
     else:
         result = _DecompositionResult(batch=_retrieve_direct(context, state))
     state.checkpoint("retrieval")
-    batch = _apply_hyde(context, state, result.batch)
+    batch = result.batch if result.intent_overflow else _apply_hyde(context, state, result.batch)
     has_active_filter = batch.active_filter is not _RETRIEVE_UNSET
     return PrimaryRetrievalOutcome(
         documents=batch.documents,
@@ -853,6 +879,7 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
         correction_estimated_cost=result.correction_estimated_cost,
         lookup_documents=batch.lookup_documents or batch.documents,
         decomposition_usage=result.usage,
+        reason_code="intent_overflow" if result.intent_overflow else "retrieved",
     )
 
 

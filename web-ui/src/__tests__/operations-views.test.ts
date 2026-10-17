@@ -8,6 +8,7 @@ import AnalyticsView from "@/views/AnalyticsView.vue";
 import AuditView from "@/views/AuditView.vue";
 import DictionaryView from "@/views/DictionaryView.vue";
 import DocumentsView from "@/views/DocumentsView.vue";
+import StructuredEvidenceReview from "@/components/StructuredEvidenceReview.vue";
 import FeedbackView from "@/views/FeedbackView.vue";
 import GlossaryView from "@/views/GlossaryView.vue";
 import HelpView from "@/views/HelpView.vue";
@@ -374,9 +375,10 @@ describe("access and document operations", () => {
     await actions[0].run({ DocID: 7 });
     await actions[1].run({ DocID: 7 });
     expect(open).toHaveBeenCalledTimes(2);
-    expect(actions[3].visible?.({ IsCurrentVersion: 0 })).toBe(true);
-    expect(actions[3].visible?.({ IsCurrentVersion: 1 })).toBe(false);
-    for (const action of actions.slice(3)) await action.run({ DocID: 7 });
+    const current = actions.find(action => action.label === 'Đặt hiện hành')!;
+    expect(current.visible?.({ IsCurrentVersion: 0 })).toBe(true);
+    expect(current.visible?.({ IsCurrentVersion: 1 })).toBe(false);
+    for (const action of actions.filter(action => ['Đặt hiện hành', 'Đánh dấu hết hạn', 'Xoá'].includes(action.label))) await action.run({ DocID: 7 });
 
     const edit = actions[2].run({
       DocID: 7,
@@ -402,6 +404,19 @@ describe("access and document operations", () => {
 });
 
 describe("dictionary and quality resources", () => {
+  it('offers evidence review from effective documents only to managing roles', async () => {
+    const manager = mountView(DocumentsView);
+    const action = pages(manager)[0].rowActions?.find(item => item.label === 'Kiểm tra chứng cứ');
+    expect(action).toBeDefined();
+    await action!.run({ DocID: 17 }); await flushPromises();
+    expect(manager.getComponent(StructuredEvidenceReview).props('docId')).toBe(17);
+    manager.unmount();
+    state.roles = ['reader'];
+    const reader = mountView(DocumentsView);
+    expect(pages(reader)[0].rowActions?.some(item => item.label === 'Kiểm tra chứng cứ')).toBe(false);
+    expect(reader.findComponent(StructuredEvidenceReview).exists()).toBe(false);
+    reader.unmount();
+  });
   it("normalizes and mutates glossary entries", async () => {
     const wrapper = mountView(GlossaryView);
     const contract = pages(wrapper)[0];

@@ -142,7 +142,7 @@ def _decide_evidence_policy(
         crag_enabled=bool(getattr(runtime, "crag_enabled", False)),
         verifier_enabled=bool(
             getattr(runtime, "evidence_verifier_enabled", False)
-        ),
+        ) and not any(dependency.depends_on for dependency in getattr(state, 'text_dependencies', ())),
     )
     sufficient_branch_count = sum(
         branch.get("outcome") == "full_answer"
@@ -162,7 +162,8 @@ def _decide_evidence_policy(
                 decision.crag_enabled
                 and state.budget.corrections < state.budget.limits.corrections
             ),
-            negative_evidence=bool(negative_quote),
+            # Branch policies already classify negatives; one quote cannot replace every answer.
+            negative_evidence=bool(negative_quote) and not decomposition_branches,
             negative_evidence_quote=negative_quote,
             sufficient_branch_count=sufficient_branch_count,
             total_branch_count=len(decomposition_branches),
@@ -313,6 +314,13 @@ def evaluate_evidence(
     documents = list(reranked.documents)
     decomposition_branches = list(primary.decomposition_branches)
     context_text = _assemble_context(documents, request.user_question) + primary.decomposition_notice
+    from mech_chatbot.rag.query_dependencies import dependency_context
+    dependencies = getattr(state, 'text_dependencies', ())
+    if dependencies:
+        usable_questions = {branch.get('subquery') for branch in decomposition_branches
+                            if branch.get('outcome') == 'full_answer'}
+        context_text += '\n' + dependency_context(tuple(dependency for dependency in dependencies
+                                                      if dependency.question in usable_questions))
     ref_text, ref_images = _select_citations(
         decision, primary, enrichment, documents, state
     )

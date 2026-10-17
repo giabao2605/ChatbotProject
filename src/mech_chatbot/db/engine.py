@@ -137,10 +137,17 @@ def bind_repository_engine(selected_engine: Any):
         yield selected_engine
 
 
+def _is_context_bound_engine(candidate: Any) -> bool:
+    # External imports can retain proxy instances after the module is reloaded.
+    return isinstance(candidate, _ContextBoundEngine) or (
+        type(candidate).__module__ == __name__ and type(candidate).__name__ == '_ContextBoundEngine'
+    )
+
+
 def _ensure_engine(candidate: Any | None = None) -> None:
     """Keep the legacy failure message while accepting explicit dependencies."""
     selected = current_repository_engine() if candidate is None else candidate
-    if isinstance(selected, _ContextBoundEngine):
+    if _is_context_bound_engine(selected):
         selected = current_repository_engine()
     if selected is None:
         raise RuntimeError(
@@ -152,7 +159,7 @@ def _ensure_engine(candidate: Any | None = None) -> None:
 def resolve_engine(candidate: Any | None = None) -> Any:
     """Return an explicitly supplied engine, with legacy fallback for shims."""
     selected = current_repository_engine() if candidate is None else candidate
-    if isinstance(selected, _ContextBoundEngine):
+    if _is_context_bound_engine(selected):
         selected = current_repository_engine()
     _ensure_engine(selected)
     return selected

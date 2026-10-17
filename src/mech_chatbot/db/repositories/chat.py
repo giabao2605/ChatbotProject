@@ -4,9 +4,15 @@ KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repo
 """
 import json
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
 from ._shared import _cap_len
+from .chat_provenance import SCHEMA, provenance_record, load_structured_history, table
+from mech_chatbot.application.chat_citations import citation_source_ids
+from mech_chatbot.application.protected_files import SHARE_ALL_DEPARTMENT
+from .chat_provenance import save_history_result, history_result_column_available, history_result_basis_current
+from ..evidence_snapshot import evidence_read_connection, evidence_snapshot_active, EvidenceSnapshotLost
 
 
 def resolve_engine(candidate=None):
@@ -108,12 +114,15 @@ def save_answer_sources(chat_id, retrieved_docs, *, db_engine=None):
                 if not isinstance(d, dict):
                     continue
                 is_cur = d.get("is_current")
+                provenance = provenance_record(d) if 'locator' in d else None
+                extra_column = ', SourceLocatorJson' if provenance else ''
+                extra_value = ', :locator_json' if provenance else ''
                 conn.execute(
-                    text("""
+                    text(f"""
                         INSERT INTO AnswerSource
-                            (ChatID, DocID, FileName, VersionNo, VariantCode, ChunkRef, Score, RankNo, IsCurrent)
+                            (ChatID, DocID, FileName, VersionNo, VariantCode, ChunkRef, Score, RankNo, IsCurrent{extra_column})
                         VALUES
-                            (:cid, :doc_id, :fn, :vn, :vc, :chunk, :score, :rank_no, :is_cur)
+                            (:cid, :doc_id, :fn, :vn, :vc, :chunk, :score, :rank_no, :is_cur{extra_value})
                     """),
                     {
                         "cid": chat_id,
@@ -121,17 +130,21 @@ def save_answer_sources(chat_id, retrieved_docs, *, db_engine=None):
                         "fn": _cap_len(d.get("file_goc"), 500),
                         "vn": _to_int(d.get("version_no")),
                         "vc": _cap_len(d.get("variant_code"), 100),
-                        "chunk": _cap_len(None if d.get("trang") is None else str(d.get("trang")), 200),
+                        "chunk": None if provenance else _cap_len(None if d.get("trang") is None else str(d.get("trang")), 200),
                         "score": _to_float(d.get("score")),
                         "rank_no": rank_no,
                         "is_cur": (None if is_cur is None else (1 if is_cur else 0)),
+                        **({'locator_json':json.dumps(provenance,ensure_ascii=False)} if provenance else {}),
                     },
                 )
+        return True
     except Exception as e:
         logger.error(f"Loi khi luu nguon cau tra loi (AnswerSource): {e}", exc_info=True)
+        return False
 
 
-def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *, db_engine=None):
+def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *, db_engine=None,
+                         advanced_rag=None, citation_cards=()):
     """Persist the complete access basis separately from display citations.
 
     ``AnswerSource`` intentionally contains only the citations attributed in
@@ -151,8 +164,11 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
 
     normalized = []
     seen = set()
+    source_versions = {}
     input_items = list(evidence_docs or [])
     complete = True
+    structured = any(isinstance(item,dict) and 'locator' in item for item in input_items)
+    result_history = advanced_rag is not None and any(key in advanced_rag for key in ('query','text_query'))
     for rank_no, item in enumerate(input_items, start=1):
         if not isinstance(item, dict):
             complete = False
@@ -165,12 +181,25 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
             }:
                 complete = False
             continue
-        page_no = _to_int(item.get("trang") or item.get("trang_so") or item.get("page_no"))
-        key = (doc_id, page_no)
+        try:
+            provenance = provenance_record(item) if 'locator' in item else None
+        except (ValueError,TypeError):
+            complete = False
+            continue
+        page_no = provenance['locator']['page'] if provenance else _to_int(item.get("trang") or item.get("trang_so") or item.get("page_no"))
+        key = provenance['source_id'] if provenance else (doc_id, page_no)
+        version = provenance['version_no'] if provenance else item.get('version_no')
+        source_version = _to_int(version) if type(version) in (int,str) else None
+        source_version = source_version if source_version is not None and source_version>0 else None
         if key in seen:
+            if result_history and source_version!=source_versions.get(key):
+                complete = False
             continue
         seen.add(key)
-        source_ref = str(item.get("source_id") or "").strip()[:80] or None
+        source_versions[key] = source_version
+        source_ref = provenance['source_id'] if provenance else str(item.get("source_id") or "").strip()[:80] or None
+        if result_history and source_version is None:
+            complete = False
         if page_no is not None and source_ref is None:
             source_ref = f"D{doc_id}P{page_no}"
         normalized.append(
@@ -180,6 +209,8 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
                 "source_ref": source_ref,
                 "security_level": _cap_len(item.get("security_level"), 30),
                 "rank_no": rank_no,
+                **({'locator_json':json.dumps(provenance,ensure_ascii=False) if provenance else None} if structured else {}),
+                **({'source_version':source_version} if result_history else {}),
             }
         )
 
@@ -191,25 +222,39 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
 
     try:
         with selected_engine.begin() as conn:
+            extra_column = ', SourceLocatorJson' if structured else ''
+            extra_value = ', :locator_json' if structured else ''
+            if result_history:
+                extra_column += ', SourceVersion'
+                extra_value += ', :source_version'
             conn.execute(
-                text("DELETE FROM dbo.AnswerEvidence WHERE ChatID = :chat_id"),
+                text(f"DELETE FROM {table(conn,'AnswerEvidence')} WHERE ChatID = :chat_id"),
                 {"chat_id": int(chat_id)},
             )
             if normalized:
                 conn.execute(
                     text(
-                        """
-                        INSERT INTO dbo.AnswerEvidence
-                            (ChatID, DocID, PageNo, SourceRef, SecurityLevel, RankNo)
+                        f"""
+                        INSERT INTO {table(conn,'AnswerEvidence')}
+                            (ChatID, DocID, PageNo, SourceRef, SecurityLevel, RankNo{extra_column})
                         VALUES
-                            (:chat_id, :doc_id, :page_no, :source_ref, :security_level, :rank_no)
+                            (:chat_id, :doc_id, :page_no, :source_ref, :security_level, :rank_no{extra_value})
                         """
                     ),
                     [{"chat_id": int(chat_id), **row} for row in normalized],
                 )
+            if getattr(getattr(conn,'dialect',None),'name',None) == 'sqlite':
+                conn.execute(text('INSERT INTO ChatEvidenceManifest(ChatID,RequiresAuthorization,IsComplete,EvidenceCount,SchemaVersion,IsStructuredComplete) '
+                                  'VALUES(:chat,:requires,:complete,:count,:schema,:structured_complete) ON CONFLICT(ChatID) DO UPDATE SET '
+                                  'RequiresAuthorization=excluded.RequiresAuthorization,IsComplete=excluded.IsComplete,'
+                                  'EvidenceCount=excluded.EvidenceCount,SchemaVersion=excluded.SchemaVersion,IsStructuredComplete=excluded.IsStructuredComplete'),
+                             {'chat':int(chat_id),'requires':int(requires),'complete':0 if structured else int(complete),
+                              'count':len(normalized),'schema':SCHEMA if structured else 'v1','structured_complete':int(complete) if structured else 0})
+                save_history_result(conn, int(chat_id), advanced_rag, citation_cards)
+                return bool(complete)
             conn.execute(
                 text(
-                    """
+                    f"""
                     MERGE dbo.ChatEvidenceManifest AS target
                     USING (SELECT :chat_id AS ChatID) AS source
                     ON target.ChatID = source.ChatID
@@ -217,22 +262,26 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
                         RequiresAuthorization = :requires_authorization,
                         IsComplete = :is_complete,
                         EvidenceCount = :evidence_count,
-                        SchemaVersion = 'v1',
+                        {'IsStructuredComplete = :structured_complete,' if structured else ''}
+                        SchemaVersion = '{SCHEMA if structured else 'v1'}',
                         UpdatedAt = GETDATE()
                     WHEN NOT MATCHED THEN INSERT
-                        (ChatID, RequiresAuthorization, IsComplete, EvidenceCount, SchemaVersion)
+                        (ChatID, RequiresAuthorization, IsComplete, EvidenceCount, SchemaVersion{', IsStructuredComplete' if structured else ''})
                     VALUES
                         (:chat_id, :requires_authorization, :is_complete,
-                         :evidence_count, 'v1');
+                         :evidence_count, '{SCHEMA if structured else 'v1'}'{', :structured_complete' if structured else ''});
                     """
                 ),
                 {
                     "chat_id": int(chat_id),
                     "requires_authorization": 1 if requires else 0,
-                    "is_complete": 1 if complete else 0,
+                    # V1 readers cannot certify v2 pins; keep their completeness false.
+                    "is_complete": 0 if structured else int(complete),
                     "evidence_count": len(normalized),
+                    **({'structured_complete':int(complete)} if structured else {}),
                 },
             )
+            save_history_result(conn, int(chat_id), advanced_rag, citation_cards)
         return bool(complete)
     except Exception as exc:
         logger.error("Loi khi luu evidence cua cau tra loi: %s", exc, exc_info=True)
@@ -292,6 +341,7 @@ def _history_source_redactions(
     allowed_sites,
     is_global_read_admin=False,
     strict_site_filter=True,
+    structured_sources=None,
 ):
     """Return chat IDs whose complete evidence basis is no longer readable."""
     if not chat_ids:
@@ -313,23 +363,25 @@ def _history_source_redactions(
     if is_global_read_admin:
         department_match = "1 = 1"
     elif departments:
+        params['shared_department'] = SHARE_ALL_DEPARTMENT
         department_keys = []
         for index, department in enumerate(departments):
             key = f"dept_{index}"
             department_keys.append(f":{key}")
             params[key] = department
         department_match = (
-            "EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pb "
-            "WHERE pb.DocID = t.DocID AND pb.DeptCode IN (" + ", ".join(department_keys) + "))"
+            f"EXISTS (SELECT 1 FROM {table(conn,'PhongBanChiaSe')} pb "
+            "WHERE pb.DocID = t.DocID AND (pb.DeptCode=:shared_department OR pb.DeptCode IN (" + ", ".join(department_keys) + ")))"
         )
     else:
-        department_match = "1 = 0"
+        params['shared_department'] = SHARE_ALL_DEPARTMENT
+        department_match = f"EXISTS (SELECT 1 FROM {table(conn,'PhongBanChiaSe')} pb WHERE pb.DocID=t.DocID AND pb.DeptCode=:shared_department)"
 
     manifest_rows = conn.execute(
         text(
-            """
-            SELECT ChatID, RequiresAuthorization, IsComplete, EvidenceCount
-            FROM dbo.ChatEvidenceManifest
+            f"""
+            SELECT ChatID, RequiresAuthorization, IsComplete, EvidenceCount, SchemaVersion
+            FROM {table(conn,'ChatEvidenceManifest')}
             WHERE ChatID IN ("""
             + ", ".join(chat_keys)
             + ")"
@@ -337,19 +389,20 @@ def _history_source_redactions(
         params,
     ).fetchall()
     manifests = {
-        int(chat_id): {
-            "requires": bool(requires),
-            "complete": bool(complete),
-            "count": int(count or 0),
+        int(row[0]): {
+            "requires": bool(row[1]),
+            "complete": bool(row[2]),
+            "count": int(row[3] or 0),
+            "schema":row[4] if len(row)>4 else 'v1',
         }
-        for chat_id, requires, complete, count in manifest_rows
+        for row in manifest_rows
     }
     redacted = set()
     for chat_id in {int(value) for value in chat_ids}:
         manifest = manifests.get(chat_id)
         # Older rows lack a complete evidence manifest.  Do not replay their
         # answer text after a permission change because it cannot be audited.
-        if not manifest or not manifest["complete"]:
+        if not manifest or (not manifest["complete"] and manifest['schema'] != SCHEMA):
             redacted.add(chat_id)
         elif manifest["requires"] and manifest["count"] <= 0:
             redacted.add(chat_id)
@@ -361,9 +414,9 @@ def _history_source_redactions(
                    t.Servable, t.PublicationState, t.LifecycleStatus, t.ReviewStatus,
                    CASE WHEN """
             + department_match
-            + """ THEN 1 ELSE 0 END AS DepartmentAllowed
-            FROM dbo.AnswerEvidence e
-            LEFT JOIN dbo.TaiLieu t ON t.DocID = e.DocID
+            + f""" THEN 1 ELSE 0 END AS DepartmentAllowed
+            FROM {table(conn,'AnswerEvidence')} e
+            LEFT JOIN {table(conn,'TaiLieu')} t ON t.DocID = e.DocID
             WHERE e.ChatID IN ("""
             + ", ".join(chat_keys)
             + ")"
@@ -409,6 +462,20 @@ def _history_source_redactions(
     for chat_id, manifest in manifests.items():
         if manifest["requires"] and observed_counts.get(chat_id, 0) != manifest["count"]:
             redacted.add(chat_id)
+        if manifest['schema'] == SCHEMA and chat_id not in redacted:
+            profile = {'roles':['admin'] if is_global_read_admin else [],'allowed_departments':departments,
+                       'allowed_sites':tuple(sites),'max_security_level':user_clearance}
+            try:
+                cards = load_structured_history(conn,chat_id,profile)
+                if structured_sources is not None:
+                    structured_sources[chat_id] = cards
+            except (EvidenceSnapshotLost, TimeoutError):
+                raise
+            except Exception as error:
+                if isinstance(error, SQLAlchemyError) and evidence_snapshot_active():
+                    raise
+                logger.warning('Structured history provenance could not be verified for chat %s',chat_id)
+                redacted.add(chat_id)
     return redacted
 
 
@@ -420,14 +487,16 @@ def get_chat_history(
     allowed_departments=None,
     allowed_sites=None,
     strict_site_filter=True,
+    *,
+    db_engine=None,
 ):
     """Return only the caller's own chat session with evidence re-authorization."""
-    _ensure_engine()
+    selected_engine = resolve_engine(db_engine)
     try:
         params = {"session_id": session_id, "username": username}
         user_filter = "AND Username = :username"
 
-        with engine.connect() as conn:
+        with evidence_read_connection(selected_engine) as conn:
             query = text(
                 f"""
                 SELECT ChatID, CauHoi_User, TraLoi_Bot, HinhAnhUpload, DanhGia, RefImages
@@ -442,6 +511,7 @@ def get_chat_history(
             # Re-evaluate every cited source on read. This protects history
             # after a clearance, department, or site grant is revoked.
             _redact_ids = set()
+            structured_sources = {}
             if rows:
                 try:
                     _redact_ids = _history_source_redactions(
@@ -452,15 +522,25 @@ def get_chat_history(
                         allowed_sites=allowed_sites,
                         is_global_read_admin=bool(is_admin),
                         strict_site_filter=strict_site_filter,
+                        structured_sources=structured_sources,
                     )
+                except (EvidenceSnapshotLost, TimeoutError):
+                    raise
                 except Exception as _e:
+                    if isinstance(_e, SQLAlchemyError) and evidence_snapshot_active():
+                        raise
                     # History is a data-read surface. A failed authorization
                     # recheck must fail closed for sourced answers.
                     logger.error(f"Loi tinh redaction lich su chat: {_e}", exc_info=True)
                     _redact_ids = {row[0] for row in rows if row[0] is not None}
 
             history = []
+            has_result_column = any(row[0] not in _redact_ids for row in rows) and history_result_column_available(conn)
             for row in rows:
+                mentioned = {source for source in citation_source_ids(row[2]) if 'L' in source}
+                pinned = {card['source_id'] for card in structured_sources.get(row[0],())}
+                if (mentioned and not pinned) or (pinned and (not mentioned or not mentioned.issubset(pinned))):
+                    _redact_ids.add(row[0])
                 # FIX C5: doc lai ref_images tu DB (JSON string -> list duong dan)
                 try:
                     ref_images = json.loads(row[5]) if row[5] else []
@@ -475,6 +555,21 @@ def get_chat_history(
                         "không còn quyền xem. Nội dung đã được ẩn theo phân quyền."
                     )
                     _assistant_imgs = []
+                result_payload = None
+                if has_result_column and row[0] not in _redact_ids:
+                    try:
+                        result_payload = conn.execute(text(f'SELECT AdvancedRagJson FROM {table(conn,"ChatEvidenceManifest")} WHERE ChatID=:chat'),
+                                                      {'chat':row[0]}).scalar()
+                        if result_payload is not None and not history_result_basis_current(conn, row[0]):
+                            _redact_ids.add(row[0])
+                            _assistant_content = 'Nội dung đã được ẩn vì không còn xác minh được nguồn.'
+                            _assistant_imgs = []
+                    except SQLAlchemyError:
+                        if evidence_snapshot_active():
+                            raise
+                        _redact_ids.add(row[0])
+                        _assistant_content = 'Nội dung đã được ẩn vì không còn xác minh được nguồn.'
+                        _assistant_imgs = []
                 history.append(
                     {
                         "role": "assistant",
@@ -482,10 +577,17 @@ def get_chat_history(
                         "chat_id": row[0],
                         "danh_gia": row[4],
                         "ref_images": _assistant_imgs,
+                        **({'_advanced_rag_payload':result_payload} if result_payload is not None and row[0] not in _redact_ids else {}),
+                        **({'sources_redacted':True} if row[0] in _redact_ids else {}),
+                        **({'structured_citations':structured_sources[row[0]]} if row[0] in structured_sources and row[0] not in _redact_ids else {}),
                     }
                 )
             return history
+    except (EvidenceSnapshotLost, TimeoutError):
+        raise
     except Exception as e:
+        if isinstance(e, SQLAlchemyError) and evidence_snapshot_active():
+            raise
         logger.error(f"Loi khi lay lich su chat: {e}", exc_info=True)
         return []
  

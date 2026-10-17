@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from mech_chatbot.config.settings import Settings
 
 import pytest
 from fastapi.testclient import TestClient
@@ -54,6 +55,61 @@ def _events(body):
         if event:
             parsed.append((event, data))
     return parsed
+
+
+def test_browser_comparison_is_gated_before_starting_chat_runner(monkeypatch, client):
+    class NoRun:
+        def stream(self, *args):
+            pytest.fail('V2 must not enter runner outside its approved evaluation scope')
+    monkeypatch.setattr(app_server.app.state, 'runtime', SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot',
+                        Settings(RAG_EXECUTION_CONTEXT='production'))
+    body = {'session_id':'comparison-1', 'question':'Compare',
+            'scope_comparison':{'scope_a':'a','scope_b':'b'}}
+    assert client.post('/api/chat/message', json=body).status_code == 409
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot',
+                        Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message', json=body).status_code == 403
+
+
+def test_browser_text_query_requires_evaluation_and_reviewer_before_runner(monkeypatch,client):
+    class NoRun:
+        def stream(self,*a):pytest.fail('must not enter runner')
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    body={'session_id':'text','question':'Tìm quy trình; tìm chính sách','text_query':True}
+    assert client.post('/api/chat/message',json=body).status_code==409
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message',json=body).status_code==403
+    assert client.post('/api/chat/message',json={**body,'text_query':'true'}).status_code==422
+
+
+def test_browser_graph_query_is_gated_before_entering_runner(monkeypatch,client):
+    class NoRun:
+        def stream(self,*a):pytest.fail('must not enter runner')
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    body={'session_id':'graph','question':'Contains what?',
+          'graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}}
+    assert client.post('/api/chat/message',json=body).status_code==409
+
+
+def test_browser_comparison_keeps_selected_scopes_and_versioned_steps_in_done_event(monkeypatch, client):
+    captured = []
+    metadata = {'schema':'grounded-calculation-v2', 'accepted':False, 'offline_only':True,
+                'status':'partial', 'domain_step_count':4}
+    class Runner:
+        def stream(self, command, actor):
+            captured.append((command, actor))
+            yield ChatDone(None, '', (), (), None, 10, advanced_rag={'math':metadata})
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile] = lambda: {**_profile(), 'roles':['reviewer']}
+    monkeypatch.setattr(app_server.app.state, 'runtime', SimpleNamespace(chat_turn_runner=Runner()))
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot', Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    response = client.post('/api/chat/message', json={'session_id':'compare', 'question':'Compare',
+                           'scope_comparison':{'scope_a':'a','scope_b':'b'}})
+    assert response.status_code == 200
+    assert _events(response.text)[-1][1]['advanced_rag'] == {'math':metadata}
+    assert captured[0][0].scope_comparison == ('a','b') and captured[0][1].user_id == 7
 
 
 def test_ingestion_eta_returns_flat_queue_metrics(monkeypatch):
@@ -314,3 +370,86 @@ def test_crag_pilot_replay_queue_is_bounded_and_drops_without_submitting(monkeyp
     assert events[0][2]["cohort_sha256"] == "cohort-v1"
     assert events[-1][2]["status"] == "dropped"
     assert events[-1][2]["fallback_reason"] == "replay_queue_full_or_stopped"
+
+
+def test_structured_citations_keep_sheet_cell_row_and_never_invent_a_pdf_page():
+    from mech_chatbot.application.chat_citations import build_citation_list, filter_citations_by_answer, citation_ref_text
+    from mech_chatbot.rag.execution import attributed_citations
+    records = [
+        {'doc_id':17,'file_goc':'ledger.xlsx','version_no':3,'snapshot_id':'s1','source_hash':'a'*64,
+         'locator':{'doc_id':'17','version':'3','sheet':'Ledger','cell':'B2','row_key':'Ledger:row-2'}},
+        {'doc_id':17,'file_goc':'ledger.xlsx','version_no':3,'snapshot_id':'s1','source_hash':'a'*64,
+         'locator':{'doc_id':'17','version':'3','sheet':'Ledger','cell':'B3','row_key':'Ledger:row-3'}},
+    ]
+    cards = build_citation_list(records,page_has_vision=lambda *a: pytest.fail('not a PDF page'))
+    assert len(cards) == 2 and len({c['source_id'] for c in cards}) == 2
+    assert all(c['page_no'] is None and c['page_url'] is None and not c['has_vision'] for c in cards)
+    assert cards[0]['locator']['cell'] == 'B2' and cards[1]['locator']['row_key'] == 'Ledger:row-3'
+    assert cards[0]['original_url'] == '/api/files/documents/17/original'
+    answer = f"Tổng A = 25 [SRC:{cards[0]['source_id']}]"
+    assert filter_citations_by_answer(cards, answer) == [cards[0]]
+    assert attributed_citations({'citation_docs':records}, answer) == (cards[0],)
+    assert 'Sheet Ledger' in citation_ref_text([cards[0]]) and 'B2' in citation_ref_text([cards[0]])
+    assert 'Trang ?' not in citation_ref_text([cards[0]])
+
+def test_browser_graph_context_and_completeness_survive_done_event(monkeypatch,client):
+    from mech_chatbot.domain.graph_query import GraphQuery
+    captured=[]
+    metadata={'contract_version':'graph-v2','status':'partial','accepted':False,'offline_only':True}
+    class Runner:
+        def stream(self,command,actor):
+            captured.append(command)
+            yield ChatDone(None,'',(),(),None,10,advanced_rag={'graph':metadata})
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile]=lambda:{**_profile(),'roles':['reviewer']}
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=Runner()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    response=client.post('/api/chat/message',json={'session_id':'graph','question':'Contains what?',
+        'graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}})
+    assert response.status_code==200 and _events(response.text)[-1][1]['advanced_rag']=={'graph':metadata}
+    assert captured[0].graph_query==GraphQuery('document:1','product','factory')
+
+
+def test_browser_bom_selection_is_gated_and_preserves_math_metadata(monkeypatch,client):
+    class NoRun:
+        def stream(self,*args):pytest.fail('Must not execute production or unprivileged BOM')
+    body={'session_id':'bom','question':'BOM','bom_rollup':{'root_key':'document:1','product_scope':'product',
+        'site':'factory','order_quantity':'3','rounding_scope':'policy'}}
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    assert client.post('/api/chat/message',json=body).status_code==409
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message',json=body).status_code==403
+    captured=[]
+    math={'schema':'grounded-calculation-v2','template':'bom_rollup','status':'complete','steps':[],'accepted':False}
+    class Runner:
+        def stream(self,command,actor):
+            captured.append(command)
+            yield ChatDone(None,'',(),(),None,10,advanced_rag={'math':math})
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile]=lambda:{**_profile(),'roles':['reviewer']}
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=Runner()))
+    response=client.post('/api/chat/message',json=body)
+    assert response.status_code==200 and _events(response.text)[-1][1]['advanced_rag']=={'math':math}
+    assert captured[0].bom_rollup.order_quantity=='3' and captured[0].bom_rollup.rounding_scope=='policy'
+
+
+def test_browser_query_plan_preserves_branch_metadata_and_context_guard(monkeypatch,client):
+    branch={'branch_id':'graph','question':'Cụm chứa gì','graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}}
+    body={'session_id':'plan','question':'Cụm chứa gì','query_plan':{'branches':[branch]}}
+    class NoRun:
+        def stream(self,*args):pytest.fail('Must not enter unapproved Query v2')
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    assert client.post('/api/chat/message',json=body).status_code==409
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message',json=body).status_code==403
+    captured=[]
+    metadata={'schema':'query-plan-v2','status':'partial','branches':[],'accepted':False}
+    class Runner:
+        def stream(self,command,actor):
+            captured.append(command)
+            yield ChatDone(None,'',(),(),None,10,advanced_rag={'query':metadata})
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile]=lambda:{**_profile(),'roles':['reviewer']}
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=Runner()))
+    response=client.post('/api/chat/message',json=body)
+    assert response.status_code==200 and _events(response.text)[-1][1]['advanced_rag']=={'query':metadata}
+    assert captured[0].query_plan.branches[0].branch_id=='graph'

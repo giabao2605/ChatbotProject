@@ -2,6 +2,8 @@
 """Auto-split tu rag/service.py (P1.2 refactor). Giu nguyen logic goc; chi tach file + import."""
 
 from mech_chatbot.config.logging import logger, log_trace
+from time import perf_counter
+from dataclasses import dataclass, field
 from qdrant_client import models
 from mech_chatbot.rag.rbac import (
     _part_id_should_filter,
@@ -9,6 +11,52 @@ from mech_chatbot.rag.rbac import (
     create_rbac_filter,
     LEVEL_ORDER,
 )
+
+
+def run_retrieval_step(operation, *, trace_id, step, phase, checkpoint=None):
+    """Measure one attempted retrieval boundary without logging its payload."""
+    started = perf_counter()
+    from mech_chatbot.rag.execution import current_execution_context
+    attempted = False
+    try:
+        if checkpoint:
+            checkpoint(step)
+        attempted = True
+        result = operation()
+        if checkpoint:
+            checkpoint(step)
+    except BaseException as exc:
+        if trace_id:
+            log_trace('retrieval_step', trace_id, step=step, phase=phase, status='failed',
+                      execution_context=current_execution_context(),
+                      attempted=attempted, latency_ms=int((perf_counter()-started)*1000),
+                      error_type=type(exc).__name__)
+        raise
+    if trace_id:
+        log_trace('retrieval_step', trace_id, step=step, phase=phase, status='completed',
+                  execution_context=current_execution_context(),
+                  attempted=attempted, latency_ms=int((perf_counter()-started)*1000))
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class TracedRetrievalDependency:
+    """Request-local view that times one SDK method without modifying its owner."""
+    dependency: object = field(repr=False)
+    method: str
+    step: str
+    trace_id: str | None
+    phase: str
+    checkpoint: object = field(default=None, repr=False)
+
+    def __getattr__(self, name):
+        attribute = getattr(self.dependency, name)
+        if name != self.method:
+            return attribute
+        def invoke(*args, **kwargs):
+            return run_retrieval_step(lambda: attribute(*args, **kwargs), trace_id=self.trace_id,
+                                      step=self.step, phase=self.phase, checkpoint=self.checkpoint)
+        return invoke
 
 def current_published_filter(rbac_filter=None):
     must = [

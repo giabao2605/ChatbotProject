@@ -14,6 +14,8 @@ from mech_chatbot.rag.execution import (
     RagToken,
 )
 from mech_chatbot.rag.execution_contracts import RagRuntimeContract
+from .test_structured_evidence_repository import store
+from .test_graph_v2_repository import connection
 
 
 pytestmark = pytest.mark.unit
@@ -98,6 +100,137 @@ def _replace_runtime(client, **changes):
     }
     values.update(changes)
     _replace_server_state(client, runtime=SimpleNamespace(**values))
+
+
+@pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
+def test_scope_comparison_cannot_use_production_or_pilot_contract(path, rag_client, monkeypatch):
+    monkeypatch.setattr(rag_server, '_open_rag_events',
+                        lambda *a, **kw: pytest.fail('V2 must be rejected before executor/source access'))
+    response = rag_client.post(path, headers=SERVICE_HEADERS, json={
+        'username':'viewer-test', 'user_question':'Compare',
+        'scope_comparison':{'scope_a':'a','scope_b':'b'}})
+    assert response.status_code == 409
+
+
+@pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
+def test_scope_comparison_requires_server_resolved_reviewer(path, rag_client):
+    _replace_runtime(rag_client, runtime_contract=RagRuntimeContract('evaluation', False, 120))
+    response = rag_client.post(path, headers=SERVICE_HEADERS, json={
+        'username':'viewer-test', 'user_question':'Compare', 'user_roles':['admin'],
+        'scope_comparison':{'scope_a':'a','scope_b':'b'}})
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
+def test_scope_comparison_body_rejects_client_approval_and_blank_scopes(path, rag_client):
+    for selection in ({'scope_a':' ','scope_b':'b'}, {'scope_a':'a','scope_b':'b','approved':True}):
+        response = rag_client.post(path, headers=SERVICE_HEADERS,
+                                  json={'user_question':'Compare', 'scope_comparison':selection})
+        assert response.status_code == 422
+
+
+@pytest.mark.parametrize('path',['/chat','/chat/stream'])
+def test_graph_query_v2_is_rejected_in_production_before_sql_or_executor(path,rag_client,monkeypatch):
+    monkeypatch.setattr(rag_server,'_open_rag_events',lambda *a,**k:pytest.fail('must not enter pipeline'))
+    response=rag_client.post(path,headers=SERVICE_HEADERS,json={'user_question':'Contains what?',
+        'graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}})
+    assert response.status_code==409
+
+
+@pytest.mark.parametrize('path',['/chat','/chat/stream'])
+def test_graph_v2_http_runs_the_real_executor_and_sql_policy(path,rag_client,connection,monkeypatch):
+    from contextlib import contextmanager
+    from sqlalchemy import create_engine,event
+    from sqlalchemy.pool import StaticPool
+    from mech_chatbot.auth import core
+    from mech_chatbot.rag.execution import DefaultRagExecutor
+    from mech_chatbot.db.repositories import graph_v2
+    from .test_graph_v2_repository import SqliteConnection
+    connection.conn.commit()
+    shared=create_engine('sqlite://',connect_args={'check_same_thread':False},poolclass=StaticPool)
+    import json
+    @event.listens_for(shared,'connect')
+    def functions(dbapi,record):
+        dbapi.create_function('CHARINDEX',2,lambda needle,value:value.find(needle)+1)
+        def json_value(value,path):
+            item=json.loads(value) if value else {}
+            for key in path[2:].split('.'):item=item.get(key) if isinstance(item,dict) else None
+            return item
+        dbapi.create_function('JSON_VALUE',2,json_value)
+    with shared.connect() as target:
+        connection.conn.connection.driver_connection.backup(target.connection.driver_connection)
+    class Engine:
+        @contextmanager
+        def connect(self):
+            with shared.connect() as conn:yield SqliteConnection(conn)
+    engine=Engine()
+    monkeypatch.setattr(core,'load_user_profile',lambda **kwargs:{**VIEWER_PROFILE,'roles':['reviewer'],
+        'allowed_departments':['tech'],'allowed_sites':['factory']})
+    _replace_runtime(rag_client,executor=DefaultRagExecutor(),runtime_contract=RagRuntimeContract('evaluation',False,120))
+    _replace_server_state(rag_client,database_runtime=SimpleNamespace(engine=engine))
+    try:
+        response=rag_client.post(path,headers=SERVICE_HEADERS,json={'user_id':7,'user_question':'Contains what?',
+            'graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}})
+        assert response.status_code==200 and 'part:p' in response.text
+        if path=='/chat':
+            assert response.json()['debug_info']['graph_v2']['status']=='complete'
+        else:
+            assert 'event: citation' in response.text and 'event: done' in response.text
+    finally:shared.dispose()
+
+
+@pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
+def test_reviewed_scope_comparison_runs_real_executor_through_chat_http(path, rag_client, store, monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import StaticPool
+    from mech_chatbot.auth import core
+    from mech_chatbot.rag.execution import DefaultRagExecutor
+    from .test_rag_scope_comparison import approved_pair
+    from .test_structured_evidence_repository import PROFILE
+
+    approved_pair(store, values=('0','8'))
+    shared = create_engine('sqlite://', connect_args={'check_same_thread':False}, poolclass=StaticPool)
+    with store.connect() as original, shared.connect() as target:
+        original.connection.driver_connection.backup(target.connection.driver_connection)
+    _replace_server_state(rag_client, database_runtime=SimpleNamespace(engine=shared))
+    _replace_runtime(rag_client, executor=DefaultRagExecutor(),
+                     runtime_contract=RagRuntimeContract('evaluation', False, 120))
+    monkeypatch.setattr(core, 'load_user_profile', lambda **kw: PROFILE)
+    try:
+        response = rag_client.post(path, headers=SERVICE_HEADERS, json={
+            'user_id':7, 'user_question':'So sánh hai kỳ', 'scope_comparison':{'scope_a':'a','scope_b':'b'}})
+        assert response.status_code == 200
+        if path == '/chat':
+            math = response.json()['debug_info']['math_v2']
+            assert 'Sheet CSV' in response.json()['ref_text'] and 'Trang None' not in response.json()['ref_text']
+        else:
+            import json
+            events = [(block.splitlines()[0], json.loads(block.splitlines()[1][6:]))
+                      for block in response.text.strip().split('\n\n')]
+            assert events[-1][0] == 'event: done'
+            math = next(body['debug_info']['math_v2'] for name, body in events if name == 'event: metadata')
+            citations = [body for name, body in events if name == 'event: citation']
+            assert len(citations) == 2 and all(card['page_no'] is None for card in citations)
+        assert math['status'] == 'partial' and math['domain_step_count'] == 4
+        assert [s['display_value'] for s in math['steps'][:3]] == ['0.00','8.00','8.00']
+        assert math['steps'][3]['value'] is None and not math['accepted'] and math['offline_only']
+    finally:
+        shared.dispose()
+
+
+@pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
+def test_comparison_storage_failure_never_exposes_database_or_source_details(path, rag_client, monkeypatch):
+    from mech_chatbot.auth import core
+    from .test_structured_evidence_repository import PROFILE
+    monkeypatch.setattr(core, 'load_user_profile', lambda **kw: PROFILE)
+    _replace_runtime(rag_client, runtime_contract=RagRuntimeContract('evaluation', False, 120))
+    def unavailable(*args, **kwargs):
+        raise RuntimeError('private database SELECT payroll.xlsx')
+    monkeypatch.setattr(rag_server, '_open_rag_events', unavailable)
+    response = rag_client.post(path, headers=SERVICE_HEADERS, json={
+        'user_id':7, 'user_question':'Compare', 'scope_comparison':{'scope_a':'a','scope_b':'b'}})
+    assert 'payroll' not in response.text and 'SELECT' not in response.text
+    assert (response.status_code == 500 if path == '/chat' else 'event: error' in response.text)
 
 
 def _successful_rag_events():
@@ -758,3 +891,62 @@ def test_feedback_normalizes_the_public_rating_contract(
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert saved == [(91, stored_rating, "viewer-test")]
+
+
+@pytest.mark.parametrize('path',['/chat','/chat/stream'])
+def test_bom_v2_is_gated_in_production_before_entering_executor(path,rag_client,monkeypatch):
+    monkeypatch.setattr(rag_server,'_open_rag_events',lambda *a,**k:pytest.fail('Must not execute production BOM v2'))
+    response=rag_client.post(path,headers=SERVICE_HEADERS,json={'user_id':7,'user_question':'BOM',
+        'bom_rollup':{'root_key':'document:1','product_scope':'product','site':'factory','order_quantity':'3','rounding_scope':'policy'}})
+    assert response.status_code==409
+
+
+@pytest.mark.parametrize('selection',[
+    {'order_quantity':'NaN'}, {'order_quantity':3}, {'direction':'where_used'}, {'rounding_scope':' '}, {'approved':True}])
+def test_bom_request_rejects_client_approval_noncanonical_quantity_and_reverse_direction(selection,rag_client):
+    body={'root_key':'document:1','product_scope':'product','site':'factory','order_quantity':'3','rounding_scope':'policy'}
+    response=rag_client.post('/chat',headers=SERVICE_HEADERS,json={'user_question':'BOM','bom_rollup':{**body,**selection}})
+    assert response.status_code==422
+
+
+def test_bom_request_rejects_multiple_templates_before_execution(rag_client):
+    selection={'root_key':'document:1','product_scope':'product','site':'factory','order_quantity':'3','rounding_scope':'policy'}
+    response=rag_client.post('/chat',headers=SERVICE_HEADERS,json={'user_question':'BOM','bom_rollup':selection,
+        'graph_query':{key:selection[key] for key in ('root_key','product_scope','site')}})
+    assert response.status_code==422
+
+
+@pytest.mark.parametrize('path',['/chat','/chat/stream'])
+def test_query_plan_is_rejected_in_production_before_executor(path,rag_client,monkeypatch):
+    monkeypatch.setattr(rag_server,'_open_rag_events',lambda *a,**k:pytest.fail('Must not enter production Query v2'))
+    body={'branches':[{'branch_id':'graph','question':'Contains what?',
+        'graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}}]}
+    response=rag_client.post(path,headers=SERVICE_HEADERS,json={'user_question':'Contains what?','query_plan':body})
+    assert response.status_code==409
+
+
+@pytest.mark.parametrize('path',['/chat','/chat/stream'])
+def test_text_query_requires_evaluation_context_and_reviewer_before_executor(path,rag_client,monkeypatch):
+    class NoRun:
+        def run(self,*a,**k): pytest.fail('must not execute')
+    _replace_runtime(rag_client,executor=NoRun())
+    body={'user_id':7,'user_question':'Tìm quy trình; tìm chính sách','text_query':True}
+    assert rag_client.post(path,headers=SERVICE_HEADERS,json=body).status_code==409
+    _replace_runtime(rag_client,runtime_contract=RagRuntimeContract('evaluation',False,120))
+    assert rag_client.post(path,headers=SERVICE_HEADERS,json=body).status_code==403
+    assert rag_client.post(path,headers=SERVICE_HEADERS,json={**body,'text_query':1}).status_code==422
+    assert rag_client.post(path,headers=SERVICE_HEADERS,json={**body,'scope_comparison':{'scope_a':'a','scope_b':'b'}}).status_code==422
+
+
+@pytest.mark.parametrize('change',['four','duplicate','dependency','two_actions','approval','bounds'])
+def test_query_plan_schema_refuses_unsafe_or_oversized_client_plan(rag_client,change):
+    branch={'branch_id':'graph','question':'Contains what?','graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}}
+    plan={'branches':[branch]}
+    if change=='four':plan['branches']=[{**branch,'branch_id':str(i)} for i in range(4)]
+    if change=='duplicate':plan['branches']=[branch,branch]
+    if change=='dependency':plan['branches']=[{**branch,'depends_on':['missing']}]
+    if change=='two_actions':plan['branches']=[{**branch,'scope_comparison':{'scope_a':'a','scope_b':'b'}}]
+    if change=='approval':plan['accepted']=True
+    if change=='bounds':plan['branches']=[{**branch,'graph_query':{**branch['graph_query'],'max_relations':501}}]
+    response=rag_client.post('/chat',headers=SERVICE_HEADERS,json={'user_question':'Contains what?','query_plan':plan})
+    assert response.status_code==422

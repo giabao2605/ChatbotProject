@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
+from mech_chatbot.db.evidence_snapshot import evidence_read_connection
 
 from mech_chatbot.application.protected_files import (
     DocumentAccessRecord,
@@ -26,13 +27,13 @@ class SqlProtectedFileStore:
         engine = self._engine_provider()
         if engine is None:
             return None
-        with engine.connect() as connection:
+        with evidence_read_connection(engine) as connection:
             row = connection.execute(
                 text(
                     """
                     SELECT DocID, TenFile, FilePath, ThuMuc, SecurityLevel, Site,
                            LifecycleStatus, ReviewStatus, Servable, PublicationState,
-                           IsCurrent, EffectiveStatus, EffectiveDate, ExpiryDate
+                           IsCurrent, EffectiveStatus, EffectiveDate, ExpiryDate, VersionNo
                     FROM dbo.TaiLieu
                     WHERE DocID = :doc_id
                     """
@@ -69,13 +70,14 @@ class SqlProtectedFileStore:
             effective_status=row[11],
             effective_date=row[12],
             expiry_date=row[13],
+            version_no=row[14],
         )
 
     def load_page_image(self, doc_id: int, page_no: int) -> str | None:
         engine = self._engine_provider()
         if engine is None:
             return None
-        with engine.connect() as connection:
+        with evidence_read_connection(engine) as connection:
             row = connection.execute(
                 text(
                     """
@@ -93,7 +95,7 @@ class SqlProtectedFileStore:
         engine = self._engine_provider()
         if engine is None:
             return None
-        with engine.connect() as connection:
+        with evidence_read_connection(engine) as connection:
             row = connection.execute(
                 text(
                     """
@@ -174,10 +176,12 @@ class FilesystemProtectedFileStorage:
     def resolve_original(self, stored_path: str | None) -> Path | None:
         return self.resolve_under_root(stored_path, (self._raw_root,))
 
-    def resolve_page_image(self, stored_path: str | None) -> Path | None:
+    def resolve_page_image(self, stored_path: str | None, *, allow_fallback: bool = True) -> Path | None:
         resolved = self.resolve_under_root(stored_path, (self._processed_root,))
         if resolved is not None and resolved.exists() and resolved.is_file():
             return resolved
+        if not allow_fallback:
+            return None
         try:
             basename = Path(str(stored_path or "").replace("\\", "/")).name
         except (OSError, ValueError):

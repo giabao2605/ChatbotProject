@@ -44,6 +44,17 @@ def test_app_rejects_oversized_upload_before_multipart_parsing() -> None:
     assert response.status_code == 413
 
 
+def test_app_limits_dynamic_evidence_body_before_validation_and_authentication():
+    from mech_chatbot.api import app_server
+
+    application = app_server.create_app(Settings.from_env({}))
+    response = TestClient(application).post(
+        '/api/rag-evidence/scopes/one/review', content=b'x',
+        headers={'Content-Length': str(3 * 1024 * 1024), 'Content-Type': 'application/json'},
+    )
+    assert response.status_code == 413
+
+
 def test_request_body_limit_rejects_chunked_body_before_inner_app_retains_it():
     received_by_inner = bytearray()
     sent = []

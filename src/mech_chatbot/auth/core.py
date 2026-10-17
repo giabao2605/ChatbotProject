@@ -16,6 +16,7 @@ import bcrypt
 from sqlalchemy import text
 
 from mech_chatbot.db.engine import engine
+from mech_chatbot.db.evidence_snapshot import evidence_read_connection
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
 from mech_chatbot.config.logging import logger
 from mech_chatbot.auth import rate_limit
@@ -44,7 +45,18 @@ def _load_user_preferred_language(conn, user_id):
         return _DEFAULT_PREFERRED_LANGUAGE
 
 
-def _build_user_profile(conn, user):
+def _strict_departments(conn, allowed):
+    rows = conn.execute(text('SELECT DeptCode, Status, IsActive FROM Departments ORDER BY DeptCode')).fetchall()
+    if any(not isinstance(code, str) or not code.strip() or status not in {'active','disabled','archived'}
+           or type(active) not in (int, bool) or active not in (0,1) for code,status,active in rows):
+        raise PermissionError('Actor profile unavailable')
+    active_codes = {code for code,status,active in rows if status == 'active' and active == 1}
+    if any(not isinstance(code, str) or code not in active_codes for code in allowed):
+        raise PermissionError('Actor profile unavailable')
+    return allowed
+
+
+def _build_user_profile(conn, user, *, strict=False):
     roles = conn.execute(
         text(
             """
@@ -58,6 +70,8 @@ def _build_user_profile(conn, user):
     ).fetchall()
 
     role_list = [r[0] for r in roles]
+    if strict and any(not isinstance(role, str) or not role.strip() for role in role_list):
+        raise PermissionError('Actor profile unavailable')
 
     try:
         dept_rows = conn.execute(
@@ -66,11 +80,15 @@ def _build_user_profile(conn, user):
         ).fetchall()
         allowed_departments = [r[0] for r in dept_rows]
     except Exception:
+        if strict:
+            raise
         allowed_departments = []
 
     # P0#1: loai bo phong ban da disable/archive khoi allowed_departments.
     # Giu lai: sentinel CHUNG, phong khong co trong bang Departments (legacy), va phong active.
-    if allowed_departments:
+    if strict:
+        allowed_departments = _strict_departments(conn, allowed_departments)
+    elif allowed_departments:
         try:
             from mech_chatbot.db.repositories.catalog import list_known_departments
             _active_codes = {d["code"] for d in list_known_departments(active_only=True)}
@@ -87,7 +105,7 @@ def _build_user_profile(conn, user):
     # LUU Y: KHONG tu dong them user[3] (department display label nhu "Technical")
     # vao allowed_departments. Department chi la nhan hien thi; quyen xem tai lieu
     # duoc kiem soat duy nhat boi bang UserDepartments.
-    if not allowed_departments:
+    if not allowed_departments and not strict:
         # Fallback an toan: neu UserDepartments chua co du lieu, chi cho xem CHUNG
         allowed_departments = [SHARE_ALL_DEPARTMENT]
         logger.warning(
@@ -103,6 +121,8 @@ def _build_user_profile(conn, user):
         # An toan mac dinh: thieu/khong hop le -> 'public' (khong phai 'internal')
         max_security_level = resolve_clearance(clr[0] if clr else None)
     except Exception:
+        if strict:
+            raise
         max_security_level = DEFAULT_MAX_SECURITY_LEVEL
 
     # P1.2: RBAC chieu thu 3 - site. List rong = KHONG gioi han theo site.
@@ -113,7 +133,11 @@ def _build_user_profile(conn, user):
         ).fetchall()
         allowed_sites = [r[0] for r in site_rows]
     except Exception:
+        if strict:
+            raise
         allowed_sites = []
+    if strict and any(not isinstance(site, str) or not site.strip() for site in allowed_sites):
+        raise PermissionError('Actor profile unavailable')
 
     return {
         "user_id": user[0],
@@ -152,12 +176,32 @@ def update_user_preferred_language(user_id, lang):
         return False
 
 
-def load_user_profile(user_id=None, username=None):
+def _load_strict_user_profile(user_id, username):
+    if type(user_id) is not int or user_id <= 0 or not isinstance(username, str) or not username.strip():
+        raise ValueError('An explicit actor identity is required')
+    try:
+        with evidence_read_connection(engine) as conn:
+            user = conn.execute(text(
+                'SELECT UserID, Username, DisplayName, Department, IsActive FROM Users WHERE UserID = :uid'
+            ), {'uid': user_id}).fetchone()
+            if (not user or type(user[0]) is not int or user[0] != user_id or user[1] != username
+                    or type(user[4]) not in (int, bool) or user[4] != 1):
+                raise PermissionError('Actor profile unavailable')
+            return _build_user_profile(conn, user, strict=True)
+    except Exception:
+        raise PermissionError('Actor profile unavailable') from None
+
+
+def load_user_profile(user_id=None, username=None, *, strict=False):
     """Nap profile/quyen hien tai tu DB ma khong can mat khau.
 
     Dung cho cac service noi bo da xac thuc service-to-service. Neu truyen ca
     user_id va username thi username phai khop voi dong DB.
+    Strict requires both identities, reuses the evidence snapshot and raises
+    on actor/ACL failures; it never reads PasswordHash or invents permissions.
     """
+    if strict:
+        return _load_strict_user_profile(user_id, username)
     if engine is None:
         return None
     if user_id in (None, "") and not username:

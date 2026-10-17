@@ -67,7 +67,7 @@ def _run_graph(
     trace_messages = []
     monkeypatch.setattr(trace_logging.trace_logger, "info", trace_messages.append)
     if clock is not None:
-        monkeypatch.setattr(execution.time, "monotonic", lambda: next(clock))
+        monkeypatch.setattr(execution.time, "monotonic", lambda: next(clock, 100.25))
     binding = (
         trace_logging.bind_trace_runtime(
             trace_logging.TraceRuntime(runtime_identity_sha256=runtime_identity)

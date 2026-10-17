@@ -38,6 +38,7 @@ class DocumentAccessRecord:
     effective_status: str | None = "effective"
     effective_date: date | str | None = None
     expiry_date: date | str | None = None
+    version_no: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,14 +93,15 @@ class ProtectedFileReference:
     doc_id: int | None = None
     page_no: int | None = None
     image_id: str | None = None
+    expected_version: int | None = None
 
     @classmethod
-    def original(cls, doc_id: int) -> "ProtectedFileReference":
-        return cls(kind="document_original", doc_id=int(doc_id))
+    def original(cls, doc_id: int, *, expected_version: int | None = None) -> "ProtectedFileReference":
+        return cls(kind="document_original", doc_id=int(doc_id), expected_version=expected_version)
 
     @classmethod
-    def page(cls, doc_id: int, page_no: int) -> "ProtectedFileReference":
-        return cls(kind="document_page", doc_id=int(doc_id), page_no=int(page_no))
+    def page(cls, doc_id: int, page_no: int, *, expected_version: int | None = None) -> "ProtectedFileReference":
+        return cls(kind="document_page", doc_id=int(doc_id), page_no=int(page_no), expected_version=expected_version)
 
     @classmethod
     def chat_image(cls, image_id: str) -> "ProtectedFileReference":
@@ -141,7 +143,7 @@ class ProtectedFileStore(Protocol):
 class ProtectedFileStorage(Protocol):
     def resolve_original(self, stored_path: str | None) -> Path | None: ...
 
-    def resolve_page_image(self, stored_path: str | None) -> Path | None: ...
+    def resolve_page_image(self, stored_path: str | None, *, allow_fallback: bool = True) -> Path | None: ...
 
     def resolve_chat_image(self, image_id: str) -> Path | None: ...
 
@@ -256,13 +258,19 @@ class ProtectedFileResolver:
             record,
             strict_site_filter=self._strict_site_filter,
         )
+        if reference.expected_version is not None and (
+            reference.expected_version < 1 or record is None or not decision.allowed
+            or str(record.version_no) != str(reference.expected_version)
+        ):
+            raise ProtectedFileError("not_found", "File not found")
         if not decision.allowed or record is None:
             raise ProtectedFileError("unauthorized", decision.reason)
 
         if reference.kind == "document_page":
             page_no = int(reference.page_no or 0)
             stored_path = self._store.load_page_image(doc_id, page_no)
-            path = self._storage.resolve_page_image(stored_path)
+            path = (self._storage.resolve_page_image(stored_path, allow_fallback=False)
+                    if reference.expected_version is not None else self._storage.resolve_page_image(stored_path))
             if "admin" in actor.roles or decision.security_level == "confidential":
                 self._record_audit(
                     actor,

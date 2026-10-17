@@ -94,6 +94,24 @@ def _generation_plan(
     outcome: GenerationOutcome,
 ) -> GenerationPlan:
     request = decision.request
+    dependencies = tuple(dependency for dependency in getattr(state, 'text_dependencies', ()) if any(
+        branch.get('subquery') == dependency.question and branch.get('outcome') == 'full_answer'
+        for branch in primary.decomposition_branches))
+    dependency_sources = tuple(card for dependency in dependencies for card in dependency.sources)
+    dependent_questions = {dependency.question for dependency in dependencies if dependency.depends_on}
+    dependent_ids = {card['source_id'] for branch in primary.decomposition_branches
+                     if branch.get('subquery') in dependent_questions for card in branch.get('citations', ())}
+    independent_ids = {card['source_id'] for branch in primary.decomposition_branches
+                       if branch.get('subquery') not in dependent_questions and branch.get('outcome') == 'full_answer'
+                       for card in branch.get('citations', ())} - dependent_ids
+    recheck = None
+    source_attributes = ()
+    if dependency_sources:
+        from mech_chatbot.services.rag_evidence_service import dependency_source_attributes
+        from mech_chatbot.rag.query_dependencies import dependency_profile
+        profile = dependency_profile(state.request.access)
+        recheck = lambda: dependency_source_attributes(dependency_sources, profile)
+        source_attributes = recheck()
     return GenerationPlan(
         turn=GenerationTurn(
             user_question=request.user_question,
@@ -118,6 +136,10 @@ def _generation_plan(
             active_filter=(
                 enrichment.active_filter if enrichment.has_active_filter else None
             ),
+            dependency_sources=dependency_sources,
+            independent_numeric_source_ids=tuple(sorted(independent_ids)),
+            dependency_source_attributes=source_attributes,
+            dependency_recheck=recheck,
         ),
         control=GenerationControl(
             trace_id=request.trace_id,
@@ -222,6 +244,8 @@ def _decorate_generated_stream(
     state: Any,
 ) -> Any:
     citation_snapshot = make_source_snapshot(documents)
+    citation_snapshot += [card for branch in decomposition_branches for card in branch.get('citations', ())
+                          if card.get('locator') and card not in citation_snapshot]
     evidence_snapshot = make_source_snapshot(documents)
     debug_info["citation_docs"] = citation_snapshot
     if decomposition_branches:

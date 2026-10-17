@@ -1,4 +1,4 @@
-import type { Citation, ChatMessage, SessionItem, UserProfile } from "@/types";
+import type { AdvancedRagMetadata, Citation, ChatMessage, SessionItem, UserProfile } from "@/types";
 import { parseSseBuffer } from "@/api/sse";
 
 let csrfToken = "";
@@ -170,6 +170,7 @@ export type ChatStreamCallbacks = {
     chat_id?: number | null;
     ref_text?: string;
     citations?: Citation[];
+    advanced_rag?: AdvancedRagMetadata;
     new_part_ids?: string[];
     conversation_context?: Record<string, unknown> | null;
   }) => void;

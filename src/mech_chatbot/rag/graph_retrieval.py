@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import re
+from time import monotonic
 
 from langchain_core.documents import Document
 from qdrant_client import models
 
 from mech_chatbot.domain.graph_policy import expand_seed_keys
+from mech_chatbot.config.logging import log_trace
 
 
 _LEVELS = {"public": 0, "internal": 1, "confidential": 2}
@@ -79,7 +81,22 @@ def filter_servable_edges(edges, access_context):
     return accepted
 
 
-def hydrate_graph_edges(edges, client, collection_name):
+def _scroll_graph_page(client, trace_id, **kwargs):
+    started = monotonic()
+    status = "failed"
+    count = 0
+    try:
+        result = client.scroll(**kwargs)
+        count = len(result[0])
+        status = "complete"
+        return result
+    finally:
+        log_trace("graph_stage", trace_id, stage="qdrant_scroll", status=status,
+                  latency_ms=int((monotonic() - started) * 1000),
+                  point_count=count, continuation=kwargs.get("offset") is not None)
+
+
+def hydrate_graph_edges(edges, client, collection_name, *, trace_id=None):
     """Hydrate approved SQL edges from the exact Qdrant document page or drop them."""
     hydrated = []
     points_by_doc = {}
@@ -96,7 +113,7 @@ def hydrate_graph_edges(edges, client, collection_name):
             doc_points = []
             offset = None
             while True:
-                batch, offset = client.scroll(
+                batch, offset = _scroll_graph_page(client, trace_id,
                     collection_name=collection_name,
                     scroll_filter=models.Filter(must=[
                         models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=doc_id)),

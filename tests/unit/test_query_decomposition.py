@@ -14,11 +14,93 @@ from mech_chatbot.rag.query_decomposition import (
     compile_query_plan,
     execute_plan,
     sufficient_branch_documents,
+    split_query_intents,
 )
 from langchain_core.documents import Document
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_overflow_keeps_all_explicit_intents_and_never_calls_planner_or_retrieval():
+    question = "Tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn"
+    expected = ("Tìm BOM", "tìm vật liệu", "tìm dung sai", "tìm hướng dẫn hàn")
+    calls = []
+    assert split_query_intents(question) == (expected, True)
+    plan = compile_query_plan(question, {}, planner=lambda _: calls.append("planner"))
+    assert plan.intent_overflow is True
+    assert plan.intents == expected
+    assert plan.subqueries == ()
+    assert plan.intent_coverage == (False,) * 4
+    assert execute_plan(plan, lambda *_: calls.append("retrieval"), {}) == []
+    assert calls == []
+
+
+def test_execute_plan_checks_request_before_each_queued_branch():
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+
+    calls = []
+    cancelled = threading.Event()
+    plan = build_plan("BOM và vật liệu và dung sai")
+
+    def checkpoint():
+        if cancelled.is_set():
+            raise ExternalAICallCancelled("cancelled")
+
+    def retrieve(query, *_):
+        calls.append(query)
+        cancelled.set()
+        return [query]
+
+    with pytest.raises(ExternalAICallCancelled):
+        execute_plan(plan, retrieve, {}, max_workers=1, checkpoint=checkpoint)
+    assert calls == ["BOM"]
+
+
+def test_execute_plan_does_not_start_retrieval_after_deadline():
+    calls = []
+    plan = build_plan("BOM và vật liệu")
+    results = execute_plan(
+        plan, lambda query, *_: calls.append(query), {},
+        deadline_monotonic=time.monotonic() - 1,
+        on_timeout=lambda query: "timeout:" + query,
+    )
+    assert calls == []
+    assert results == ["timeout:BOM", "timeout:vật liệu"]
+
+
+def test_question_mark_separated_overflow_preserves_each_question():
+    question = "BOM là gì? Vật liệu gì? Dung sai gì? Hàn thế nào?"
+    plan = build_plan(question)
+    assert plan.intent_overflow is True
+    assert plan.intents == ("BOM là gì", "Vật liệu gì", "Dung sai gì", "Hàn thế nào")
+
+
+@pytest.mark.parametrize("exception_type", ["cancel", "budget"])
+def test_terminal_branch_failure_propagates_without_waiting_for_slow_sibling(exception_type):
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    from mech_chatbot.rag.execution import RequestBudgetExceeded
+
+    failure = ExternalAICallCancelled if exception_type == "cancel" else RequestBudgetExceeded
+    release = threading.Event()
+    entered = threading.Event()
+    plan = build_plan("BOM và vật liệu")
+
+    def retrieve(query, *_):
+        if query == "BOM":
+            entered.wait(1)
+            raise failure("terminal")
+        entered.set()
+        release.wait(1)
+        return [query]
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(failure):
+            execute_plan(plan, retrieve, {})
+    finally:
+        release.set()
+    assert time.monotonic() - started < 0.5
 
 
 def test_decomposition_stream_marks_partial_and_audits_rendered_branch_sources():
@@ -82,6 +164,13 @@ def test_simple_query_does_not_call_planner():
 
     assert plan.is_complex is False
     assert plan.subqueries == ()
+    assert calls == []
+
+
+def test_simple_question_with_introductory_comma_does_not_call_planner():
+    calls = []
+    plan = build_plan("Theo tài liệu, quy trình bảo trì là gì?", planner=lambda _: calls.append(True))
+    assert plan.is_complex is False
     assert calls == []
 
 
@@ -155,6 +244,31 @@ def test_compile_query_plan_keeps_complete_bounded_planner_output():
     assert plan.subqueries == ("BOM MA-100", "quy trình bảo trì MA-200")
     assert plan.intent_coverage == (True, True)
     assert plan.used_fallback is False
+
+
+def test_planner_fourth_branch_is_not_silently_discarded():
+    question = 'Tìm BOM MA-100; tìm vật liệu MA-200; tìm hướng dẫn bảo trì MA-300'
+    plan = compile_query_plan(question, {}, planner=lambda _: {'subqueries':[
+        'BOM MA-100', 'vật liệu MA-200', 'hướng dẫn bảo trì MA-300', 'kiểm tra thêm BOM MA-100']})
+    assert plan.used_fallback is True
+    assert plan.subqueries == ('Tìm BOM MA-100', 'tìm vật liệu MA-200', 'tìm hướng dẫn bảo trì MA-300')
+    assert plan.intent_coverage == (True, True, True)
+
+
+@pytest.mark.parametrize('proposed', [None, 3, 'BOM MA-100', {'BOM MA-100':'material'},
+                                     [{'query':'BOM MA-100'}, True, 17]])
+def test_malformed_planner_branches_keep_the_original_request(proposed):
+    plan = compile_query_plan('Tìm BOM MA-100; tìm vật liệu MA-200', {},
+                              planner=lambda _: {'subqueries':proposed})
+    assert plan.used_fallback and plan.subqueries == ('Tìm BOM MA-100', 'tìm vật liệu MA-200')
+
+
+def test_executor_rejects_oversized_handbuilt_plan_before_any_source_lookup():
+    calls = []
+    plan = BranchPlan('Four requested branches', True, ('BOM','materials','tolerance','welding'))
+    with pytest.raises(ValueError,match='three'):
+        execute_plan(plan,lambda query,*_:calls.append(query),{})
+    assert calls == []
 
 
 def test_decomposed_retrieval_reuses_access_context_and_one_shared_correction():
