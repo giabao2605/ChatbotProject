@@ -6,7 +6,7 @@ import json
 from sqlalchemy import text
 
 from ..engine import _ensure_engine, engine
-from .graph_v2 import SqlGraphV2Reader, _ELIGIBLE_DOCUMENTS, _EDGE_BOM_QUOTE_PROOF
+from .graph_v2 import SqlGraphV2Reader, _ELIGIBLE_DOCUMENTS, _EDGE_BOM_QUOTE_PROOF, _bom_row_proof
 from .structured_evidence import _reviewer, _table
 
 
@@ -119,7 +119,8 @@ def _proof(conn, kind, values, params):
             AND sn.CanonicalKey='document:'+CAST(:parent_doc_id AS NVARCHAR(30))
             AND tn.CanonicalKey=:part_key
             AND 'part:'+LOWER(LTRIM(RTRIM(bom.MaHang)))=:part_key
-            AND JSON_VALUE(bom.RawRowJson,'$.source_row_id')=:row_key
+            AND """ + _bom_row_proof(row_key=':row_key', full_row_key=':quantity_row_key',
+                part_key=':part_key', page=':source_page', quantity=':quantity', unit=':unit') + """
             AND CHARINDEX(:source_quote,COALESCE(bom.RawRowJson,N''))>0
         """ + _EDGE_BOM_QUOTE_PROOF + """
         ) AND EXISTS (

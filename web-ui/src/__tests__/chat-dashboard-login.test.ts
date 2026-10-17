@@ -166,6 +166,65 @@ afterEach(() => {
 });
 
 describe("ChatView public behavior", () => {
+  it.each(['contains','scope_comparison'])('sends %s with the shared Math and Graph grant as a standalone action',async action=>{
+    vi.mocked(api.apiGet).mockImplementation(async path=>{
+      if(path.endsWith('evaluation-capabilities'))return {schema:'advanced-rag-v2-controlled-demo',
+        contract:'math-graph-v2-controlled-demo-v1',accepted:false,offline_only:false,max_branches:1,
+        actions:['contains','where_used','scope_comparison'],text_query:false} as never;
+      if(path.endsWith('/graph-scopes'))return {items:[{product_scope:'assembly-A',site:'factory'}],offset:0,has_more:false} as never;
+      if(path.endsWith('/approved-scopes'))return {items:[{scope_id:'a',definition:'Quantity',period:'A',unit:'piece'},
+        {scope_id:'b',definition:'Quantity',period:'B',unit:'piece'}],offset:0,has_more:false} as never;
+      return {documents:[{DocID:1,TenFile:'Source.csv'}]} as never;
+    });
+    vi.mocked(api.sendChatMessage).mockImplementation(async(_payload,callbacks)=>{callbacks.onDelta('Kết quả có nguồn');callbacks.onDone({});});
+    const {wrapper,pinia}=mountWithPinia(ChatView);
+    useAuthStore(pinia).user={...user,roles:['viewer'],allowed_sites:['factory']};await flushPromises();
+    await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises();
+    expect(wrapper.get('select[aria-label="Tác vụ ý 1"]').findAll('option').map(item=>item.element.value)).toEqual(['contains','where_used','scope_comparison']);
+    expect(wrapper.findAll('button').some(item=>item.text()==='Thêm ý')).toBe(false);
+    await wrapper.get('select[aria-label="Tác vụ ý 1"]').setValue(action);await flushPromises();
+    if(action==='contains'){
+      await wrapper.get('select[aria-label="Bản vẽ ý 1"]').setValue('1');await flushPromises();
+      await wrapper.get('select[aria-label="Phạm vi sản phẩm ý 1"]').setValue('assembly-A');
+    }else{
+      await wrapper.get('select[aria-label="Tài liệu Phạm vi A ý 1"]').setValue('1');await flushPromises();
+      await wrapper.get('select[aria-label="Phạm vi A ý 1"]').setValue('a');
+      await wrapper.get('select[aria-label="Tài liệu Phạm vi B ý 1"]').setValue('1');await flushPromises();
+      await wrapper.get('select[aria-label="Phạm vi B ý 1"]').setValue('b');
+    }
+    await wrapper.get('textarea').setValue('Tác vụ đã chọn');await button(wrapper,'Gửi').trigger('click');await flushPromises();
+    const payload=vi.mocked(api.sendChatMessage).mock.calls[0][0];
+    if(action==='contains'){
+      expect(payload.graph_query).toMatchObject({root_key:'document:1',product_scope:'assembly-A'});
+      expect(payload).not.toHaveProperty('scope_comparison');
+    }else{
+      expect(payload.scope_comparison).toEqual({scope_a:'a',scope_b:'b'});expect(payload).not.toHaveProperty('graph_query');
+    }
+    expect(payload).not.toHaveProperty('query_plan');expect(payload).not.toHaveProperty('bom_rollup');expect(payload).not.toHaveProperty('text_query');
+  });
+  it('sends a granted standalone Graph query without enabling Math or Query',async()=>{
+    vi.mocked(api.apiGet).mockImplementation(async path=>{
+      if(path.endsWith('evaluation-capabilities')) return {schema:'advanced-rag-v2-controlled-demo',
+        contract:'graph-v2-reviewed-query-controlled-demo-v1',accepted:false,offline_only:false,
+        max_branches:1,actions:['contains','where_used'],text_query:false} as never;
+      if(path.endsWith('/graph-scopes')) return {items:[{product_scope:'assembly-A',site:'factory'}],offset:0,has_more:false} as never;
+      return {documents:[{DocID:1,TenFile:'Assembly.pdf'}]} as never;
+    });
+    vi.mocked(api.sendChatMessage).mockImplementation(async(_payload,callbacks)=>{callbacks.onDelta('Quan hệ có nguồn');callbacks.onDone({});});
+    const {wrapper,pinia}=mountWithPinia(ChatView);
+    useAuthStore(pinia).user={...user,roles:['viewer'],allowed_sites:['factory']}; await flushPromises();
+    await wrapper.get('input[type="checkbox"]').setValue(true); await flushPromises();
+    expect(wrapper.get('select[aria-label="Tác vụ ý 1"]').findAll('option').map(item=>item.element.value)).toEqual(['contains','where_used']);
+    expect(wrapper.findAll('button').some(item=>item.text()==='Thêm ý')).toBe(false);
+    await wrapper.get('select[aria-label="Bản vẽ ý 1"]').setValue('1');await flushPromises();
+    await wrapper.get('select[aria-label="Phạm vi sản phẩm ý 1"]').setValue('assembly-A');
+    await wrapper.get('textarea').setValue('Cụm này có những chi tiết nào?');
+    await button(wrapper,'Gửi').trigger('click');await flushPromises();
+    const payload=vi.mocked(api.sendChatMessage).mock.calls[0][0];
+    expect(payload.graph_query).toEqual({root_key:'document:1',product_scope:'assembly-A',site:'factory',direction:'contains'});
+    expect(payload).not.toHaveProperty('query_plan');expect(payload).not.toHaveProperty('scope_comparison');
+    expect(payload).not.toHaveProperty('bom_rollup');expect(payload).not.toHaveProperty('text_query');
+  });
   it('sends a granted standalone comparison without opening Query or Graph', async () => {
     vi.mocked(api.apiGet).mockImplementation(async path => {
       if (path.endsWith('evaluation-capabilities')) return {schema:'advanced-rag-v2-controlled-demo',

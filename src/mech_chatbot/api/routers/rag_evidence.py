@@ -141,6 +141,20 @@ def _result(value):
 @router.get('/evaluation-capabilities')
 def evaluation_capabilities(request: Request, profile: dict[str, Any] = Depends(current_profile)):
     mode = getattr(request.app.state.settings_snapshot, 'RAG_EXECUTION_CONTEXT', 'production')
+    graph_authorizer=getattr(getattr(request.app.state,'runtime',None),'graph_v2_authorizer',None)
+    graph_cap=graph_authorizer() if callable(graph_authorizer) and mode=='production' else None
+    if graph_cap is not None:
+        from mech_chatbot.api.evidence_contracts import require_graph_context
+        require_graph_context(mode,profile,authorizer=graph_authorizer)
+        math_authorizer=getattr(getattr(request.app.state,'runtime',None),'math_v2_authorizer',None)
+        math_cap=math_authorizer() if callable(math_authorizer) else None
+        if math_cap is not None and (math_cap.bundle_sha256,math_cap.source_commit)==(graph_cap.bundle_sha256,graph_cap.source_commit):
+            from mech_chatbot.governance.math_graph_v2_activation import CONTRACT
+            require_comparison_context(mode,profile,comparison_only=True,authorizer=math_authorizer)
+            return {'schema':'advanced-rag-v2-controlled-demo','contract':CONTRACT,'accepted':False,'offline_only':False,
+                    'max_branches':1,'actions':['contains','where_used','scope_comparison'],'text_query':False}
+        return {'schema':'advanced-rag-v2-controlled-demo','contract':graph_cap.contract,'accepted':False,'offline_only':False,
+                'max_branches':1,'actions':['contains','where_used'],'text_query':False}
     require_comparison_context(mode, profile, comparison_only=True,
         authorizer=getattr(getattr(request.app.state, 'runtime', None), 'math_v2_authorizer', None))
     if mode == 'production':
@@ -185,9 +199,20 @@ def approved_graph_scopes(request: Request, doc_id: int = Path(ge=1, le=21474836
                           site: str = Query(min_length=1, max_length=100, pattern=r'.*\S.*'),
                           offset: int = Query(0, ge=0, le=100000), limit: int = Query(50, ge=1, le=50),
                           profile: dict[str, Any] = Depends(current_profile)):
-    _evaluation(request, profile)
-    return _call(service.list_approved_graph_scopes, doc_id, profile, site=site, offset=offset, limit=limit,
-                 deadline_seconds=getattr(request.app.state.settings_snapshot, 'RAG_REQUEST_DEADLINE_SECONDS', 120))
+    from mech_chatbot.api.evidence_contracts import require_graph_context
+    mode=getattr(request.app.state.settings_snapshot,'RAG_EXECUTION_CONTEXT','production')
+    authorizer=getattr(getattr(request.app.state,'runtime',None),'graph_v2_authorizer',None)
+    require_graph_context(mode,profile,authorizer=authorizer)
+    page=_call(service.list_approved_graph_scopes, doc_id, profile, site=site, offset=offset, limit=limit,
+               deadline_seconds=getattr(request.app.state.settings_snapshot, 'RAG_REQUEST_DEADLINE_SECONDS', 120))
+    if mode=='production':
+        from mech_chatbot.domain.graph_query import GraphQuery
+        cap=authorizer()
+        if cap is None:
+            raise HTTPException(409,detail='Graph v2 source authority unavailable')
+        page={**page,'items':[item for item in page['items'] if cap.permits_query(
+            GraphQuery(f'document:{doc_id}',item['product_scope'],item['site']))]}
+    return page
 
 
 @router.get('/scopes/{scope_id}/facts')

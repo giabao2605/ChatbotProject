@@ -319,6 +319,8 @@ class _ExecutionState:
     budget: RequestBudgetLedger
     math_v2_capability: Any | None = field(default=None, repr=False)
     math_v2_authorizer: Any | None = field(default=None, repr=False)
+    graph_v2_capability: Any | None = field(default=None, repr=False)
+    graph_v2_authorizer: Any | None = field(default=None, repr=False)
     retrieval_adapter: Any | None = field(default=None, repr=False)
     provider_adapter: Any | None = field(default=None, repr=False)
     refusal_reason: str | None = None
@@ -753,12 +755,14 @@ class DefaultRagExecutor:
         provider_adapter: Any | None = None,
         budget_limits: RequestBudgetLimits | None = None,
         math_v2_authorizer: Callable | None = None,
+        graph_v2_authorizer: Callable | None = None,
     ) -> None:
         self._execute_pipeline = execute_pipeline
         self._retrieval_adapter = retrieval_adapter
         self._provider_adapter = provider_adapter
         self._budget_limits = budget_limits or RequestBudgetLimits()
         self._math_v2_authorizer = math_v2_authorizer
+        self._graph_v2_authorizer = graph_v2_authorizer
 
     def run(
         self,
@@ -826,17 +830,27 @@ class DefaultRagExecutor:
         try:
             if invocation.mode not in {'evaluation', 'test'} and any((request.scope_comparison,
                     request.graph_query, request.bom_rollup, request.query_plan, request.text_query)):
-                from mech_chatbot.governance.math_v2_activation import MathV2Capability, CONTRACT
-                cap = self._math_v2_authorizer() if self._math_v2_authorizer else None
-                if invocation.mode != 'production' or cap is None:
-                    raise ValueError('V2 contract requires evaluation context or comparison authority')
-                if (request.scope_comparison is None
-                        or not isinstance(cap, MathV2Capability) or cap.contract != CONTRACT
-                        or cap.template != 'compare_two_scopes' or cap.context != 'controlled_demo'):
-                    raise PermissionError('Math v2 comparison authority required')
-                state.math_v2_capability = cap
-                state.math_v2_authorizer = self._math_v2_authorizer
-                state.budget.limits = replace(state.budget.limits, calculations=4)
+                if request.graph_query is not None and not any((request.scope_comparison,request.bom_rollup,request.query_plan,request.text_query)):
+                    from mech_chatbot.governance.graph_v2_activation import GraphV2Capability, CONTRACT
+                    cap = self._graph_v2_authorizer() if self._graph_v2_authorizer else None
+                    if invocation.mode!='production' or cap is None:
+                        raise ValueError('Graph v2 requires evaluation context or source authority')
+                    if (not isinstance(cap,GraphV2Capability)
+                            or cap.contract!=CONTRACT or cap.context!='controlled_demo' or not cap.permits_query(request.graph_query)):
+                        raise PermissionError('Graph v2 source authority unavailable')
+                    state.graph_v2_capability,state.graph_v2_authorizer=cap,self._graph_v2_authorizer
+                else:
+                    from mech_chatbot.governance.math_v2_activation import MathV2Capability, CONTRACT
+                    cap = self._math_v2_authorizer() if self._math_v2_authorizer else None
+                    if invocation.mode != 'production' or cap is None:
+                        raise ValueError('V2 contract requires evaluation context or comparison authority')
+                    if (request.scope_comparison is None
+                            or not isinstance(cap, MathV2Capability) or cap.contract != CONTRACT
+                            or cap.template != 'compare_two_scopes' or cap.context != 'controlled_demo'):
+                        raise PermissionError('Math v2 comparison authority required')
+                    state.math_v2_capability = cap
+                    state.math_v2_authorizer = self._math_v2_authorizer
+                    state.budget.limits = replace(state.budget.limits, calculations=4)
             if invocation.capture_math_observations and not {
                     role.lower() for role in request.access.roles}.intersection({'reviewer', 'knowledge_approver', 'admin'}):
                 raise PermissionError('Evaluation reviewer required for Math observations')

@@ -140,6 +140,11 @@ def load_math_v2_capability(environ, *, root='.', current_commit=None):
         bundle, raw = read_json_object(resolve_path(path, Path(root)))
         if raw is None or hashlib.sha256(raw).hexdigest() != digest:
             return None
+        if bundle.get('schema') == 'rag-activation-bundle-v4':
+            from mech_chatbot.governance.math_graph_v2_activation import validate_math_graph_v2_bundle
+            pair = validate_math_graph_v2_bundle(bundle, root=root, environ=environ,
+                                                 current_commit=current_commit, bundle_sha256=digest)
+            return pair.math if pair else None
         return validate_math_v2_bundle(bundle, root=root, environ=environ,
                                        current_commit=current_commit, bundle_sha256=digest)
     except (TypeError, ValueError, OSError):

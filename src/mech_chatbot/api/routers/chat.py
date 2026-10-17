@@ -436,9 +436,14 @@ def chat_message(
         raise HTTPException(422,detail='Select one v2 template')
     if req.scope_comparison is not None or req.graph_query is not None or req.bom_rollup is not None or req.query_plan is not None or req.text_query:
         snapshot = getattr(request.app.state, 'settings_snapshot', None)
-        require_comparison_context(getattr(snapshot, 'RAG_EXECUTION_CONTEXT', 'production'), profile,
-            comparison_only=req.scope_comparison is not None,
-            authorizer=getattr(request.app.state.runtime, 'math_v2_authorizer', None))
+        if req.graph_query is not None:
+            from mech_chatbot.api.evidence_contracts import require_graph_context
+            require_graph_context(getattr(snapshot,'RAG_EXECUTION_CONTEXT','production'),profile,
+                authorizer=getattr(request.app.state.runtime,'graph_v2_authorizer',None))
+        else:
+            require_comparison_context(getattr(snapshot, 'RAG_EXECUTION_CONTEXT', 'production'), profile,
+                comparison_only=req.scope_comparison is not None,
+                authorizer=getattr(request.app.state.runtime, 'math_v2_authorizer', None))
     image_path = _verify_image_upload(profile, req.image_token)
     enforce_request_rate_limit(
         request,

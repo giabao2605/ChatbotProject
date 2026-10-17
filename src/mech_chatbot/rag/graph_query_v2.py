@@ -33,10 +33,10 @@ def graph_source_records(value,query,*,occurrences=False):
 
 def execute_graph_query(state):
     state.checkpoint('graph_v2')
-    if state.invocation.mode not in {'evaluation','test'}:
+    if state.invocation.mode not in {'evaluation','test'} and state.graph_v2_capability is None:
         raise ValueError('Graph v2 requires evaluation context')
     access=state.request.access
-    if not {role.lower() for role in access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
+    if state.graph_v2_capability is None and not {role.lower() for role in access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
         raise PermissionError('Evaluation reviewer required')
     terminal=fixed_task_guard(state)
     if terminal is not None:
@@ -65,6 +65,9 @@ def _read_graph(state):
                             direction=query.direction,deadline=state.budget.deadline_monotonic,
                             max_relations=query.max_relations,max_generation_edges=query.max_generation_edges)
     state.checkpoint('graph_v2')
+    cap=state.graph_v2_capability
+    if cap is not None and (state.graph_v2_authorizer()!=cap or not cap.permits_result(query,value)):
+        raise PermissionError('Graph v2 source authority unavailable')
     records=graph_source_records(value,query)
     if ('snapshot_mismatch' in value.get('reasons',())
             or any(structured_citation(record,page_has_vision=lambda *_:False) is None for record in records)):
@@ -101,7 +104,8 @@ def _read_graph(state):
         notice = 'Verified source preview is unavailable.' if english else 'Chưa có ảnh xem trước nguồn đã xác minh.'
         lines.append(notice+' '+' '.join(f'[SRC:{key}]' for key in unavailable_previews))
     metadata={**value,'source_status':value['status'],'status':value['status'] if complete else 'partial' if cards else 'unknown',
-              'graph_context':graph_query_context(query),'graph_hash':graph_fingerprint(value),'accepted':False,'offline_only':True,
+              'graph_context':graph_query_context(query),'graph_hash':graph_fingerprint(value),'accepted':False,'offline_only':cap is None,
+              **({'contract':cap.contract,'activation_scope':cap.context} if cap is not None else {}),
               'read_consistency':'serializable'}
     diagnostics={'graph_v2':metadata,'citation_docs':records,'retrieved_docs':records,
                  'answer_outcome':'full_answer' if cards and complete else 'partial_answer' if cards else 'refused',

@@ -16,6 +16,9 @@ const emit=defineEmits<{change:[state:QueryActionState]}>();
 const auth=useAuthStore();
 const available=ref(false);
 const comparisonPilot=ref(false);
+const graphPilot=ref(false);
+const combinedPilot=ref(false);
+const standalone=computed(()=>comparisonPilot.value || graphPilot.value || combinedPilot.value);
 const textAvailable=ref(false);
 const mode=ref<'structured'|'text'>('structured');
 const enabled=ref(false);
@@ -61,8 +64,10 @@ const state=computed<QueryActionState>(()=>{
     Boolean(row.question.trim()) && (row.action==='scope_comparison'?Boolean(row.scopeA && row.scopeB):
       Boolean(row.product.trim() && row.site && (row.action==='where_used'?row.part.trim():row.doc)
         && (row.action!=='bom_rollup' || ((row.quantityMode==='source'?Boolean(row.quantityScope):/^[0-9]+(?:\.[0-9]+)?$/.test(row.quantity)) && row.policy)))));
-  if (comparisonPilot.value) return {active:true,valid:valid && rows.value.length===1 && rows.value[0]?.action==='scope_comparison'
+  if (comparisonPilot.value || (combinedPilot.value && rows.value[0]?.action==='scope_comparison')) return {active:true,valid:valid && rows.value.length===1 && rows.value[0]?.action==='scope_comparison'
     && rows.value[0].scopeA!==rows.value[0].scopeB,scope_comparison:branches[0]?.scope_comparison};
+  if (graphPilot.value || combinedPilot.value) return {active:true,valid:valid && rows.value.length===1
+    && ['contains','where_used'].includes(rows.value[0]?.action),graph_query:branches[0]?.graph_query};
   return {active:true,valid,query_plan:{branches}};
 });
 watch(state,value=>emit('change',value),{immediate:true});
@@ -70,7 +75,7 @@ watch(()=>JSON.stringify(auth.user),async()=>{
   const request=++capabilitySerial;
   documentSerial++;
   available.value=false;enabled.value=false;rows.value=[];documents.value=[];error.value='';loading.value=false;
-  textAvailable.value=false;comparisonPilot.value=false;mode.value='structured';
+  textAvailable.value=false;comparisonPilot.value=false;graphPilot.value=false;combinedPilot.value=false;mode.value='structured';
   if (!auth.user) return;
   try {
     const capabilities=await apiGet<{schema:string;contract?:string;accepted:boolean;offline_only:boolean;max_branches:number;actions:string[];text_query?:boolean}>(
@@ -80,11 +85,19 @@ watch(()=>JSON.stringify(auth.user),async()=>{
       && capabilities.contract==='grounded-math-v2-comparison-pilot-v1' && capabilities.offline_only===false
       && capabilities.max_branches===1 && capabilities.actions?.length===1 && capabilities.actions[0]==='scope_comparison'
       && capabilities.text_query===false;
-    available.value=comparisonPilot.value || (auth.user.roles.some(role=>['reviewer','knowledge_approver','admin'].includes(role.toLowerCase()))
+    graphPilot.value=capabilities.schema==='advanced-rag-v2-controlled-demo'
+      && capabilities.contract==='graph-v2-reviewed-query-controlled-demo-v1' && capabilities.accepted===false
+      && capabilities.offline_only===false && capabilities.max_branches===1 && capabilities.text_query===false
+      && capabilities.actions?.length===2 && capabilities.actions.includes('contains') && capabilities.actions.includes('where_used');
+    combinedPilot.value=capabilities.schema==='advanced-rag-v2-controlled-demo'
+      && capabilities.contract==='math-graph-v2-controlled-demo-v1' && capabilities.accepted===false
+      && capabilities.offline_only===false && capabilities.max_branches===1 && capabilities.text_query===false
+      && capabilities.actions?.length===3 && ['contains','where_used','scope_comparison'].every(action=>capabilities.actions.includes(action));
+    available.value=standalone.value || (auth.user.roles.some(role=>['reviewer','knowledge_approver','admin'].includes(role.toLowerCase()))
       && capabilities.schema==='advanced-rag-v2-evaluation' && capabilities.accepted===false
       && capabilities.offline_only===true && capabilities.max_branches===3
       && Object.keys(labels).every(action=>capabilities.actions?.includes(action)));
-    textAvailable.value=!comparisonPilot.value && available.value && capabilities.text_query===true;
+    textAvailable.value=!standalone.value && available.value && capabilities.text_query===true;
   } catch {
     if (request===capabilitySerial) available.value=false;
   }
@@ -108,7 +121,7 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
 
 <template>
   <section v-if="available" class="advanced-actions">
-    <label><input v-model="enabled" type="checkbox" :disabled="disabled" /> {{ comparisonPilot ? 'So sánh số liệu có căn cứ (bật thử)' : 'Chọn tác vụ có căn cứ (đánh giá)' }}</label>
+    <label><input v-model="enabled" type="checkbox" :disabled="disabled" /> {{ combinedPilot ? 'Tra bản vẽ hoặc so sánh số liệu có căn cứ (bật thử)' : comparisonPilot ? 'So sánh số liệu có căn cứ (bật thử)' : graphPilot ? 'Tra quan hệ bản vẽ có căn cứ (bật thử)' : 'Chọn tác vụ có căn cứ (đánh giá)' }}</label>
     <template v-if="enabled">
       <label v-if="textAvailable">Chế độ đánh giá
         <select v-model="mode" aria-label="Chế độ đánh giá" :disabled="disabled">
@@ -119,6 +132,8 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
       <p v-if="mode==='text'">Nhập tối đa ba ý độc lập trong ô chat. Hệ thống tìm nguồn theo từng ý và sinh một câu trả lời chung. Phép tính dùng tác vụ Math với phạm vi đã duyệt.</p>
       <template v-else>
       <p v-if="comparisonPilot">Chọn hai phạm vi số liệu đã duyệt để so sánh. Phạm vi được phép dùng do máy chủ kiểm tra khi gửi.</p>
+      <p v-else-if="graphPilot">Chọn bản vẽ và phạm vi quan hệ đã duyệt. Kết quả cho biết phần đã xác nhận và độ đầy đủ của nguồn.</p>
+      <p v-else-if="combinedPilot">Chọn một tác vụ và nguồn đã duyệt: tra quan hệ bản vẽ hoặc so sánh hai phạm vi số liệu.</p>
       <p v-else>Chọn tối đa ba ý và nguồn đã duyệt. Các tác vụ này xác định phạm vi trả lời; kết quả chưa phải nghiệm thu phát hành.</p>
       <p v-if="loading" role="status">Đang tải tài liệu…</p>
       <p v-if="error" role="alert">{{ error }}</p>
@@ -127,7 +142,7 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
         <label>Tác vụ
           <select :value="row.action" :aria-label="`Tác vụ ý ${index+1}`"
             @change="changeAction(row,($event.target as HTMLSelectElement).value as Action)">
-            <option v-for="(label,action) in (comparisonPilot ? {scope_comparison:labels.scope_comparison} : labels)" :key="action" :value="action">{{ label }}</option>
+            <option v-for="(label,action) in (comparisonPilot ? {scope_comparison:labels.scope_comparison} : graphPilot ? {contains:labels.contains,where_used:labels.where_used} : combinedPilot ? {contains:labels.contains,where_used:labels.where_used,scope_comparison:labels.scope_comparison} : labels)" :key="action" :value="action">{{ label }}</option>
           </select>
         </label>
         <label>Nội dung ý {{ index+1 }}
@@ -188,7 +203,7 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
         </label>
         <button v-if="rows.length>1" type="button" @click="remove(row.id)">Bỏ ý {{ index+1 }}</button>
       </fieldset>
-      <button v-if="!comparisonPilot" type="button" :disabled="disabled || loading || rows.length>=3" @click="rows=[...rows,draft()]">Thêm ý</button>
+      <button v-if="!standalone" type="button" :disabled="disabled || loading || rows.length>=3" @click="rows=[...rows,draft()]">Thêm ý</button>
       <p v-if="!state.valid && !loading && !error" role="status">Chọn đủ nguồn và phạm vi cho từng ý trước khi gửi.</p>
       </template>
     </template>

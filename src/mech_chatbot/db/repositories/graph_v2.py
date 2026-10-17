@@ -45,6 +45,40 @@ _EDGE_BOM_QUOTE_PROOF = """
 """
 
 
+def _bom_row_proof(*, row_key, full_row_key, part_key, page, quantity, unit):
+    # SQL expressions below are repository constants, never request text.
+    # shortcut: legacy rows need a reviewed edge proposal per row; repeated/cross-page rows use native row IDs.
+    return f"""(JSON_VALUE(bom.RawRowJson,'$.source_row_id')={row_key}
+      OR (JSON_VALUE(bom.RawRowJson,'$.source_row_id') IS NULL AND EXISTS (
+        SELECT 1 FROM dbo.GraphExtractionProposal rp
+        JOIN dbo.StructuredNumericFact rf ON
+          JSON_VALUE(rf.ReviewedPayloadJson,'$.fact_id')=JSON_VALUE(rp.EvidenceJson,'$.numeric_fact_id')
+        JOIN dbo.StructuredEvidenceScope rs ON rs.ScopeID=rf.ScopeID
+        JOIN dbo.StructuredSourceSnapshot pin ON pin.DocID=rf.SourceDocID
+          AND pin.VersionNo=rf.SourceVersion AND pin.SnapshotID=rs.SnapshotID
+          AND pin.SourceHash=rf.SourceHash AND pin.CurrentSnapshot=1
+        WHERE rp.Status='approved' AND rp.ReviewedBy IS NOT NULL AND rp.ReviewedAt IS NOT NULL
+          AND rp.RelationType='CONTAINS_PART' AND rp.SourceNodeID=e.SourceNodeID
+          AND rp.TargetNodeID=e.TargetNodeID AND rp.SourceDocID=e.SourceDocID
+          AND rp.SourceVersion=e.SourceVersion AND rp.SourcePage=e.SourcePage AND rp.SourcePage={page}
+          AND JSON_VALUE(rp.EvidenceJson,'$.evidence_schema')='pending-typed-bom-row-v1'
+          AND JSON_VALUE(rp.EvidenceJson,'$.source_quote')=e.SourceQuote
+          AND JSON_VALUE(rp.EvidenceJson,'$.source_quote')=bom.RawRowJson
+          AND rf.SourceDocID=e.SourceDocID AND rf.SourceVersion=e.SourceVersion
+          AND rf.ReviewStatus='approved' AND rf.ReviewedBy IS NOT NULL
+          AND JSON_VALUE(rp.EvidenceJson,'$.source_hash')=rf.SourceHash
+          AND JSON_VALUE(rp.EvidenceJson,'$.numeric_review_payload') COLLATE Latin1_General_100_BIN2
+              =rf.ReviewedPayloadJson COLLATE Latin1_General_100_BIN2
+          AND DATALENGTH(JSON_VALUE(rp.EvidenceJson,'$.numeric_review_payload'))=DATALENGTH(rf.ReviewedPayloadJson)
+          AND JSON_VALUE(rp.EvidenceJson,'$.row_locator.row_key')={full_row_key}
+          AND JSON_VALUE(rf.ReviewedPayloadJson,'$.locator.row_key')={full_row_key}
+          AND JSON_VALUE(rf.ReviewedPayloadJson,'$.locator.page')=CAST({page} AS NVARCHAR(30))
+          AND 'part:'+LOWER(LTRIM(RTRIM(JSON_VALUE(rf.ReviewedPayloadJson,'$.label'))))={part_key}
+          AND JSON_VALUE(rf.ReviewedPayloadJson,'$.value')={quantity}
+          AND JSON_VALUE(rf.ReviewedPayloadJson,'$.unit')={unit}
+      )))"""
+
+
 _ELIGIBLE_DOCUMENTS = _CURRENT_DOCUMENTS + """, SafeOccurrences AS (
     SELECT o.*, b.DocID AS ChildDocID, b.VersionNo AS ChildVersion,
            b.SourceDocID AS BindingSourceDocID, b.SourceVersion AS BindingSourceVersion,
@@ -99,7 +133,9 @@ _ELIGIBLE_DOCUMENTS = _CURRENT_DOCUMENTS + """, SafeOccurrences AS (
         SELECT 1 FROM dbo.BangKeVatTu bom
         WHERE bom.DocID=o.ParentDocID AND bom.TrangSo=o.SourcePage
           AND 'part:'+LOWER(LTRIM(RTRIM(bom.MaHang)))=o.PartKey
-          AND JSON_VALUE(bom.RawRowJson,'$.source_row_id')=o.RowKey
+          AND """ + _bom_row_proof(row_key='o.RowKey',
+              full_row_key="'page-'+CAST(o.SourcePage AS NVARCHAR(30))+':'+o.RowKey",
+              part_key='o.PartKey', page='o.SourcePage', quantity='o.Quantity', unit='o.Unit') + """
           AND CHARINDEX(o.SourceQuote,COALESCE(bom.RawRowJson,N''))>0
       )""" + _EDGE_BOM_QUOTE_PROOF + """
       AND (o.ChildBindingID IS NULL OR (

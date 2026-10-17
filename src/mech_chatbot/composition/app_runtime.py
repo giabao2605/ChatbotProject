@@ -148,6 +148,7 @@ class AppRuntime:
     protected_file_resolver: ProtectedFileResolver | None
     strict_site_filter: bool
     math_v2_authorizer: Any = None
+    graph_v2_authorizer: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +207,7 @@ def build_app_runtime(
     protected_file_resolver: ProtectedFileResolver | None = None,
     strict_site_filter: bool = True,
     math_v2_authorizer: Any = None,
+    graph_v2_authorizer: Any = None,
 ) -> AppRuntime:
     """Build an immutable app runtime from explicitly supplied adapters."""
     runner = ChatTurnRunner(
@@ -241,6 +243,7 @@ def build_app_runtime(
         protected_file_resolver=protected_file_resolver,
         strict_site_filter=bool(strict_site_filter),
         math_v2_authorizer=math_v2_authorizer,
+        graph_v2_authorizer=graph_v2_authorizer,
     )
 
 
@@ -357,7 +360,7 @@ def build_default_app_runtime(
     delete_document_completely: Callback | None = None,
     delete_ingestion_job: Callback | None = None, publish_document: Callback | None = None,
     mark_job_published: Callback | None = None,
-    engine: Any = None, strict_site_filter: bool = True, math_v2_authorizer: Any = None,
+    engine: Any = None, strict_site_filter: bool = True, math_v2_authorizer: Any = None, graph_v2_authorizer: Any = None,
 ) -> AppRuntime:
     """Compose production adapters without exposing them to the API router."""
     chat = _build_default_chat_adapters(
@@ -392,6 +395,7 @@ def build_default_app_runtime(
         ),
         strict_site_filter=strict_site_filter,
         math_v2_authorizer=math_v2_authorizer,
+        graph_v2_authorizer=graph_v2_authorizer,
     )
 
 

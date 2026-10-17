@@ -17,6 +17,7 @@ pytestmark = pytest.mark.unit
 
 def sqlite_sql(sql):
     sql = str(sql).replace("dbo.", "").replace("ISNULL(", "IFNULL(")
+    sql = sql.replace('DATALENGTH(', 'LENGTH(').replace('Latin1_General_100_BIN2', 'BINARY')
     sql = sql.replace("CAST(GETDATE() AS DATE)", "date('now')")
     sql = sql.replace("OPENJSON(", "json_each(")
     sql = sql.replace("'document:'+CAST", "'document:'||CAST")
@@ -81,6 +82,7 @@ def connection():
             "StructuredSourceSnapshot": "DocID INT,VersionNo INT,SnapshotID TEXT,SourceHash TEXT,CurrentSnapshot INT",
             "StructuredNumericFact": "SourceDocID INT,SourceVersion INT,SourceHash TEXT,ReviewStatus TEXT,ReviewedBy INT,ReviewedPayloadJson TEXT,ScopeID TEXT",
             "StructuredEvidenceScope": "ScopeID TEXT,SnapshotID TEXT",
+            "GraphExtractionProposal": "SourceNodeID INT,TargetNodeID INT,RelationType TEXT,SourceDocID INT,SourcePage INT,SourceVersion INT,Status TEXT,ReviewedBy TEXT,ReviewedAt TEXT,EvidenceJson TEXT",
         }
         for table, fields in schemas.items():
             conn.execute(text(f"CREATE TABLE {table} ({fields})"))

@@ -34,8 +34,10 @@ def build_activation_bundle(
     release_signature: str | Path | None = None,
     versions: dict | None = None, graph_fingerprint: str | None = None,
     enabled_features: set[str] | frozenset[str] | None = None,
-    math_v2: bool = False,
+    math_v2: bool = False, graph_v2: bool = False, math_graph_v2: bool = False,
 ) -> tuple[dict, str]:
+    if sum((math_v2, graph_v2, math_graph_v2)) > 1:
+        raise ValueError('Math v2, Graph v2 and Math/Graph v2 bundle modes are mutually exclusive')
     project_root = Path(root)
     scope = str(scope or "").strip()
     if scope not in _LEDGER_SCHEMAS:
@@ -81,12 +83,18 @@ def build_activation_bundle(
             governance_path, root=project_root,
             expected_schema="rag-review-governance-v1",
         )
-    if math_v2:
+    if math_graph_v2:
+        from mech_chatbot.governance.math_graph_v2_activation import LEDGER_SCHEMA
+        ledger_schema = LEDGER_SCHEMA
+    elif math_v2:
         from mech_chatbot.governance.math_v2_activation import LEDGER_SCHEMA
+        ledger_schema = LEDGER_SCHEMA
+    elif graph_v2:
+        from mech_chatbot.governance.graph_v2_activation import LEDGER_SCHEMA
         ledger_schema = LEDGER_SCHEMA
     else:
         ledger_schema = _LEDGER_SCHEMAS[scope]
-    if not math_v2 and scope == "default_rollout":
+    if not (math_v2 or graph_v2 or math_graph_v2) and scope == "default_rollout":
         if not validate_release_decision_ledger(
             ledger,
             root=project_root,
@@ -97,7 +105,7 @@ def build_activation_bundle(
             raise ValueError(
                 "default_rollout requires a verified release decision ledger"
             )
-    elif not math_v2:
+    elif not (math_v2 or graph_v2 or math_graph_v2):
         active_milestones = {
             milestone
             for milestone, flags in MILESTONE_FLAGS.items()
@@ -118,7 +126,8 @@ def build_activation_bundle(
         expected_schema=ledger_schema,
     )
     bundle = {
-        "schema": "rag-activation-bundle-v2" if math_v2 else "rag-activation-bundle-v1",
+        "schema": ("rag-activation-bundle-v4" if math_graph_v2 else "rag-activation-bundle-v3" if graph_v2 else
+                   "rag-activation-bundle-v2" if math_v2 else "rag-activation-bundle-v1"),
         "scope": scope,
         "source_commit": source_commit,
         "activation_profile": profile,
@@ -130,7 +139,7 @@ def build_activation_bundle(
         "graph_fingerprint": str(graph_fingerprint or "").strip() or None,
         "decision_ledger": ledger_reference,
     }
-    if math_v2 or (scope == "default_rollout" and profile != "all_off"):
+    if math_v2 or graph_v2 or math_graph_v2 or (scope == "default_rollout" and profile != "all_off"):
         if release_signature is None:
             raise ValueError(
                 "default_rollout feature-on activation requires a "
@@ -162,6 +171,24 @@ def build_activation_bundle(
         if validate_math_v2_bundle(bundle, root=project_root, environ=environment,
                                   current_commit=source_commit, bundle_sha256='0' * 64) is None:
             raise ValueError('A signed approved Math v2 comparison controlled-demo grant is required')
+    if graph_v2:
+        from mech_chatbot.governance.graph_v2_activation import validate_graph_v2_bundle
+        environment = {**rendered_flags, **resolved_versions,
+            'RAG_ACTIVATION_PROFILE': profile, 'RAG_ACTIVATION_SCOPE': scope,
+            'RAG_DEPLOYMENT_GIT_SHA': source_commit,
+            'RAG_SNAPSHOT_FINGERPRINT': ledger.get('snapshot_fingerprint')}
+        if validate_graph_v2_bundle(bundle, root=project_root, environ=environment,
+                                   current_commit=source_commit, bundle_sha256='0' * 64) is None:
+            raise ValueError('A signed approved Graph v2 controlled-demo grant is required')
+    if math_graph_v2:
+        from mech_chatbot.governance.math_graph_v2_activation import validate_math_graph_v2_bundle
+        environment = {**rendered_flags, **resolved_versions,
+            'RAG_ACTIVATION_PROFILE': profile, 'RAG_ACTIVATION_SCOPE': scope,
+            'RAG_DEPLOYMENT_GIT_SHA': source_commit,
+            'RAG_SNAPSHOT_FINGERPRINT': ledger.get('snapshot_fingerprint')}
+        if validate_math_graph_v2_bundle(bundle, root=project_root, environ=environment,
+                                       current_commit=source_commit, bundle_sha256='0' * 64) is None:
+            raise ValueError('A signed approved Math/Graph v2 combination grant is required')
     output_path = Path(output)
     if not output_path.is_absolute():
         output_path = project_root / output_path
@@ -189,7 +216,10 @@ def main(argv=None):
     parser.add_argument("--graph-serving-epoch", default=VERSION_DEFAULTS["RAG_GRAPH_SERVING_EPOCH"])
     parser.add_argument("--community-serving-epoch", default=VERSION_DEFAULTS["RAG_COMMUNITY_SERVING_EPOCH"])
     parser.add_argument("--graph-fingerprint")
-    parser.add_argument("--math-v2", action="store_true")
+    v2_mode = parser.add_mutually_exclusive_group()
+    v2_mode.add_argument("--math-v2", action="store_true")
+    v2_mode.add_argument("--graph-v2", action="store_true")
+    v2_mode.add_argument("--math-graph-v2", action="store_true")
     args = parser.parse_args(argv)
     bundle, digest = build_activation_bundle(
         scope=args.scope, profile=args.profile,
@@ -207,6 +237,8 @@ def main(argv=None):
         graph_fingerprint=args.graph_fingerprint,
         enabled_features=set(args.enable_feature),
         math_v2=args.math_v2,
+        graph_v2=args.graph_v2,
+        math_graph_v2=args.math_graph_v2,
     )
     print(json.dumps({
         "path": str(args.output), "sha256": digest,

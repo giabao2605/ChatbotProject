@@ -94,6 +94,26 @@ def test_browser_graph_query_is_gated_before_entering_runner(monkeypatch,client)
     assert client.post('/api/chat/message',json=body).status_code==409
 
 
+def test_browser_graph_grant_keeps_standalone_query_and_actor_for_runner(monkeypatch,client):
+    from datetime import datetime,timedelta,timezone
+    from mech_chatbot.governance.graph_v2_activation import CONTRACT,GraphV2Capability
+    captured=[]
+    class Runner:
+        def stream(self,command,actor):
+            captured.append((command,actor))
+            yield ChatDone(None,'',(),(),None,1,advanced_rag={'graph':{'offline_only':False}})
+    context={'root_key':'document:1','product_scope':'product','site':'HN','direction':'contains'}
+    cap=GraphV2Capability(CONTRACT,((json.dumps(context,sort_keys=True,separators=(',',':')),'a'*64),),
+        'b'*40,'c'*64,'d'*64,(datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat())
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=Runner(),graph_v2_authorizer=lambda:cap))
+    response=client.post('/api/chat/message',json={'session_id':'granted-graph','question':'Cụm này chứa gì?','graph_query':context})
+    assert response.status_code==200
+    assert captured[0][0].graph_query.root_key=='document:1' and captured[0][1].user_id==7
+    assert captured[0][0].query_plan is None and captured[0][0].scope_comparison is None
+    assert _events(response.text)[-1][1]['advanced_rag']=={'graph':{'offline_only':False}}
+
+
 def test_browser_comparison_keeps_selected_scopes_and_versioned_steps_in_done_event(monkeypatch, client):
     captured = []
     metadata = {'schema':'grounded-calculation-v2', 'accepted':False, 'offline_only':True,

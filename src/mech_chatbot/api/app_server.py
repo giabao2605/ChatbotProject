@@ -217,10 +217,12 @@ def _build_default_app_runtime(
     from mech_chatbot.evaluation.crag_pilot import assign_pilot_route, load_pilot_config
     from mech_chatbot.governance.math_v2_activation import math_v2_authorizer_for_settings
     authorizer = math_v2_authorizer_for_settings(settings_snapshot) if settings_snapshot else None
+    from mech_chatbot.governance.graph_v2_activation import graph_v2_authorizer_for_settings
+    graph_authorizer = graph_v2_authorizer_for_settings(settings_snapshot) if settings_snapshot else None
 
     def headers():
         values = _rag_headers(process)
-        cap = authorizer() if authorizer else None
+        cap = (authorizer() if authorizer else None) or (graph_authorizer() if graph_authorizer else None)
         return {**values, **({'X-RAG-Activation-Bundle-SHA256':cap.bundle_sha256} if cap else {})}
 
     return build_default_app_runtime(
@@ -229,6 +231,7 @@ def _build_default_app_runtime(
         base_url=process.rag_base_url,
         headers=headers,
         math_v2_authorizer=authorizer,
+        graph_v2_authorizer=graph_authorizer,
         timeout=(10, process.rag_chat_timeout_seconds),
         save_chat_history=lambda **kwargs: save_chat_history(
             **kwargs,

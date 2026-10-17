@@ -136,3 +136,14 @@ def require_comparison_context(mode, profile, *, comparison_only, authorizer=Non
             or cap.contract != CONTRACT or cap.template != 'compare_two_scopes' or cap.context != 'controlled_demo'):
         raise HTTPException(409, detail='Math v2 comparison authority required')
     return mode
+
+
+def require_graph_context(mode, profile, *, authorizer=None):
+    if mode in {'evaluation','test'}:
+        return require_v2_evaluation_context(mode,profile)
+    from mech_chatbot.governance.graph_v2_activation import GraphV2Capability,CONTRACT
+    cap=authorizer() if callable(authorizer) else None
+    if (mode!='production' or not isinstance(cap,GraphV2Capability) or cap.contract!=CONTRACT
+            or cap.context!='controlled_demo'):
+        raise HTTPException(409,detail='Graph v2 source authority required')
+    return mode
