@@ -14,9 +14,15 @@ def list_document_scopes(doc_id, profile):
     return load(doc_id, profile)
 
 
-def list_scope_facts(scope_id, profile, **pagination):
+def list_scope_facts(scope_id, profile, *, source_storage=None, **pagination):
     from mech_chatbot.db.repositories.structured_evidence import list_scope_facts as load
-    return load(scope_id, profile, **pagination)
+    page = load(scope_id, profile, **pagination)
+    if source_storage is None or not page['items']:
+        return page
+    from mech_chatbot.db.repositories.structured_evidence import scope_review_sources
+    from mech_chatbot.services.evidence_row_context import with_source_rows
+    sources = scope_review_sources(scope_id, profile, db_engine=pagination.get('db_engine'))
+    return with_source_rows(page, sources, source_storage)
 
 
 def list_approved_document_scopes(doc_id, profile, *, offset=0, limit=50, deadline_seconds=120):

@@ -82,6 +82,24 @@ function button(wrapper: VueWrapper, text: string) {
   return found!;
 }
 
+it('shows original row context as text and clears it on the next page', async () => {
+  vi.mocked(api.apiGet).mockImplementation(async (path, params) => {
+    if (path.endsWith('/scopes')) return { scopes: [{ scope_id: 'scope-1', snapshot_id: 'snapshot-1' }] } as never;
+    return { items: [{ ...fact, locator: { ...fact.locator, sheet: 'Ledger' }, source_row: params?.offset ? null : {
+      headers: ['ID', 'Status'], cells: ['001', '<img src=x onerror=alert(1)>'], source_row: 2,
+    } }], offset: Number(params?.offset ?? 0), has_more: !params?.offset } as never;
+  });
+  const wrapper = mount(StructuredEvidenceReview, { props: { docId: 17 } });
+  await flushPromises();
+  expect(wrapper.get('[data-source="original-row"]').text()).toContain('001');
+  expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>');
+  expect(wrapper.find('img').exists()).toBe(false);
+  expect(wrapper.text()).toContain('(chưa xác nhận)');
+  await button(wrapper, 'Trang sau').trigger('click'); await flushPromises();
+  expect(wrapper.find('[data-source="original-row"]').exists()).toBe(false);
+  expect(wrapper.text()).toContain('Không đọc được dòng nguồn đúng phiên bản');
+});
+
 it('requires an entered value for a numeric cell with a source type conflict', async () => {
   vi.mocked(api.apiGet).mockImplementation(async (path) => {
     if (path.endsWith('/scopes')) return { scopes: [{ scope_id: 'scope-1', snapshot_id: 'snapshot-1', completeness_reviewed: false }] } as never;

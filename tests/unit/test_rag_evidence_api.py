@@ -228,6 +228,20 @@ def test_paginated_evidence_preserves_access_profile(monkeypatch):
     assert api.get('/api/rag-evidence/scopes/a/facts?offset=50&limit=50').json()['offset'] == 50
 
 
+def test_review_facts_receive_composed_protected_storage(monkeypatch):
+    from mech_chatbot.application.protected_files import ProtectedFileResolver
+    storage = object()
+    resolver = ProtectedFileResolver(store=None, storage=storage, audit=None, strict_site_filter=True)
+    api = client(monkeypatch)
+    api.app.state.runtime = SimpleNamespace(protected_file_resolver=resolver)
+    def load(scope, profile, **kwargs):
+        assert kwargs['source_storage'] is storage
+        assert profile['user_id'] == 7
+        return {'items': [], 'offset': 0, 'has_more': False}
+    monkeypatch.setattr(rag_evidence.service, 'list_scope_facts', load)
+    assert api.get('/api/rag-evidence/scopes/a/facts').status_code == 200
+
+
 def test_serving_citation_fact_pages_accept_readers_but_hide_inaccessible_sources(monkeypatch):
     calls = []
     monkeypatch.setattr(rag_evidence.service, 'list_approved_scope_facts',

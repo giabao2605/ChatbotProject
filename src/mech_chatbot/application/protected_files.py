@@ -235,6 +235,11 @@ class ProtectedFileResolver:
         self._audit = audit
         self._strict_site_filter = bool(strict_site_filter)
 
+    @property
+    def storage(self) -> ProtectedFileStorage:
+        """Path boundary only; callers must separately authorize source access."""
+        return self._storage
+
     def resolve(
         self,
         reference: ProtectedFileReference,

@@ -216,9 +216,12 @@ def approved_graph_scopes(request: Request, doc_id: int = Path(ge=1, le=21474836
 
 
 @router.get('/scopes/{scope_id}/facts')
-def facts(scope_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=500),
+def facts(request: Request, scope_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=500),
           profile: dict[str, Any] = Depends(current_profile)):
-    return _call(service.list_scope_facts, scope_id, profile, offset=offset, limit=limit)
+    runtime = getattr(request.app.state, 'runtime', None)
+    resolver = getattr(runtime, 'protected_file_resolver', None)
+    return _call(service.list_scope_facts, scope_id, profile, offset=offset, limit=limit,
+                 source_storage=resolver.storage if resolver is not None else None)
 
 
 @router.get('/approved-scopes/{scope_id}/facts')

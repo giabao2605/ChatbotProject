@@ -229,6 +229,15 @@ def list_scope_facts(scope_id, profile, *, offset=0, limit=50, db_engine=None):
     return {"items": items, "offset": offset, "limit": limit, "has_more": len(rows) > offset + limit}
 
 
+def scope_review_sources(scope_id, profile, *, db_engine=None):
+    """Internal file references, only after the assigned-reviewer and pin checks."""
+    with resolve_engine(db_engine).connect() as conn:
+        scope, rows = _scope_rows(conn, scope_id)
+        _authorize(conn, scope, rows, profile, review=True)
+        pins = dict.fromkeys((str(row['SourceDocID']), str(row['SourceVersion']), row['SourceHash']) for row in rows)
+        return {pin: _source(conn, pin[0], pin[1], profile, review=True)['FilePath'] for pin in pins}
+
+
 def review_numeric_fact(fact_id, profile, *, action, value_text=None, unit=None, currency=None, note, db_engine=None):
     if action not in {"approve", "reject"} or not str(note or "").strip():
         raise ValueError("Review action and note required")

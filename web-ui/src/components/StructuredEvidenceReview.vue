@@ -5,7 +5,8 @@ import TechnicalFieldReview from '@/components/TechnicalFieldReview.vue';
 import DrawingBindingReview from '@/components/DrawingBindingReview.vue';
 
 type Locator = { doc_id: string | number; version: string | number; page?: number; row_key: string; sheet?: string; cell?: string; table_index?: number; bbox?: number[] };
-type Fact = { fact_id: string; label: string; raw_value: string; value: string | null; unit: string; currency?: string; review_status: string; conflicts: string[]; extraction_method?: string; locator: Locator };
+type Fact = { fact_id: string; label: string; raw_value: string; value: string | null; unit: string; currency?: string; review_status: string; conflicts: string[]; extraction_method?: string; locator: Locator;
+  source_row?: { headers: string[]; cells: string[]; source_row: number } | null };
 type Scope = { scope_id: string; snapshot_id: string; completeness_reviewed: boolean; expected_row_ids?: string[]; excluded_row_reasons?: Record<string, string>; rounding_scale?: number; rounding_mode?: string; definition?: string; period?: string; unit?: string; currency?: string; empty_source_locator?: Locator; empty_source_hash?: string; empty_source_extraction_method?: string;
   quantity_binding?: { root_doc_id: number; root_version: number; root_source_hash: string; product_scope: string; site: string } | null };
 type Result = { ok?: boolean; error?: string };
@@ -220,7 +221,15 @@ onBeforeUnmount(() => { requestSerial += 1; });
           <caption>Giá trị và chứng cứ nguồn, {{ facts.length }} dòng trên trang</caption>
           <thead><tr><th scope="col">Dòng / trường</th><th scope="col">Giá trị gốc</th><th scope="col">Chuẩn hóa / đơn vị</th><th scope="col">Trạng thái / xung đột</th><th scope="col">Vị trí nguồn</th><th scope="col">Thao tác</th></tr></thead>
           <tbody><tr v-for="fact in facts" :key="fact.fact_id">
-            <td>{{ fact.locator.row_key }}<br>{{ fact.label }}</td>
+            <td>{{ fact.locator.row_key }}<br>{{ fact.label }}
+              <details v-if="fact.source_row" data-source="original-row">
+                <summary>Dòng nguồn gốc {{ fact.source_row.source_row }} (chưa xác nhận)</summary>
+                <dl><template v-for="(cell, index) in fact.source_row.cells" :key="index">
+                  <dt>{{ fact.source_row.headers[index] || `Cột ${index + 1}` }}</dt><dd>{{ cell }}</dd>
+                </template></dl>
+              </details>
+              <p v-else-if="fact.source_row === null && fact.locator.sheet">Không đọc được dòng nguồn đúng phiên bản. Hãy kiểm tra tệp gốc.</p>
+            </td>
             <td>{{ fact.raw_value }}</td>
             <td>{{ fact.value ?? 'Chưa xác định' }} {{ fact.unit }} {{ fact.currency }}</td>
             <td>{{ statusLabel(fact.review_status) }}<p v-for="conflict in fact.conflicts" :key="conflict">{{ conflictLabels[conflict] || conflict }}</p></td>
