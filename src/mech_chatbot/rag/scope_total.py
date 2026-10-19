@@ -32,7 +32,7 @@ def execute_scope_total(state):
         result = serialize_result(sum_reviewed_scope(scope) if current else
             MathResult('sum_reviewed_scope', 'blocked', reason='invalid_scope_evidence'))
         usable = result['status'] == 'complete'
-        records = _sources((scope,)) if usable else []
+        records = _sources((scope,), profile) if usable else []
         cards = build_citation_list(records, page_has_vision=lambda *_: False)
         if usable and len(cards) != len(records):
             usable, records, cards = False, [], []

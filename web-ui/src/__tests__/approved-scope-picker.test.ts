@@ -39,3 +39,15 @@ it('discards a late page after changing source and fails closed on a failed page
   expect(wrapper.text()).toContain('Không tải được phạm vi đã duyệt');
   expect(wrapper.emitted('update:modelValue')!.at(-1)).toEqual(['']);
 });
+
+it('loads scopes for the selected template and clears the old selection on a template change',async()=>{
+  vi.mocked(api.apiGet).mockResolvedValue({items:[first],offset:0,limit:50,has_more:false});
+  const wrapper=mount(ApprovedScopePicker,{props:{label:'Phạm vi',documents,modelValue:'a',template:'scope_total'}});
+  await wrapper.get('select[aria-label="Tài liệu Phạm vi"]').setValue('1');await flushPromises();
+  expect(api.apiGet).toHaveBeenLastCalledWith('/api/rag-evidence/documents/1/approved-scopes',
+    {offset:0,limit:50,template:'scope_total'});
+  await wrapper.setProps({template:'scope_comparison'});await flushPromises();
+  expect(api.apiGet).toHaveBeenLastCalledWith('/api/rag-evidence/documents/1/approved-scopes',
+    {offset:0,limit:50,template:'scope_comparison'});
+  expect(wrapper.emitted('update:modelValue')!.at(-1)).toEqual(['']);
+});

@@ -55,7 +55,7 @@ def _read_bom(state,*,graph_dependency=None):
                 if tree and policy and quantity is not None else MathResult('bom_rollup','blocked',reason='bom_evidence_unavailable'))
     records=[]
     if calculated.status=='complete':
-        policy_records=_sources((policy, *((order_scope,) if order_scope else ())))
+        policy_records=_sources((policy, *((order_scope,) if order_scope else ())), profile)
         records=graph_source_records(tree,query,occurrences=True)+policy_records
         if not policy_records or any(structured_citation(record,page_has_vision=lambda *_:False) is None for record in records):
             calculated=MathResult('bom_rollup','blocked',reason='invalid_source_provenance')

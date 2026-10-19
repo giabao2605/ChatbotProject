@@ -29,8 +29,16 @@ def _read_table(path, pin):
         return extract_structured_table_file(copy, doc_id=pin[0], version=pin[1])
 
 
+def _row_context(fact, rows, warnings):
+    loc = fact['locator']
+    key = (str(loc['doc_id']), str(loc['version']), fact['source_hash'], loc.get('table_index'), loc.get('sheet'), loc['row_key'])
+    row = rows.get(key)
+    flags = warnings.get((*key, loc.get('cell')))
+    return {**row, **({'warnings': flags} if flags else {})} if row else None
+
+
 def with_source_rows(page, sources, storage):
-    rows = {}
+    rows, warnings = {}, {}
     wanted = {(str(f['locator']['doc_id']), str(f['locator']['version']), f['source_hash']) for f in page['items']}
     locations = {(f['locator'].get('table_index'), f['locator'].get('sheet'), f['locator']['row_key']) for f in page['items']}
     for pin in wanted:
@@ -46,8 +54,14 @@ def with_source_rows(page, sources, storage):
                         continue
                     rows[(*pin, index, table.name, row.row_id)] = {
                         'headers': list(table.headers), 'cells': list(row.cells), 'source_row': row.source_row}
+                for scope in table.scopes:
+                    for fact in scope.facts:
+                        if (index, table.name, fact.locator.row_key) not in locations:
+                            continue
+                        flags = sorted(set(fact.conflicts).intersection(
+                            {'filter_scope_requires_review', 'hidden_row', 'formula_requires_validation'}))
+                        if flags:
+                            warnings[(*pin, index, table.name, fact.locator.row_key, fact.locator.cell)] = flags
         except (OSError, ValueError, BadZipFile, ParseError) as exc:
             logger.warning('Evidence row context unavailable: %s', type(exc).__name__)
-    return {**page, 'items': [{**fact, 'source_row': rows.get((str(fact['locator']['doc_id']),
-        str(fact['locator']['version']), fact['source_hash'], fact['locator'].get('table_index'),
-        fact['locator'].get('sheet'), fact['locator']['row_key']))} for fact in page['items']]}
+    return {**page, 'items': [{**fact, 'source_row': _row_context(fact, rows, warnings)} for fact in page['items']]}

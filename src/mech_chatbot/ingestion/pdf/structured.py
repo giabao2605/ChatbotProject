@@ -115,7 +115,7 @@ def _row_currency_conflicts(row, columns, flags, currency):
     if len(columns) != 1:
         return ('ambiguous_currency_column',)
     index = columns[0]
-    if flags.get(f'{_column_letter(index + 1)}{row.source_row}'):
+    if any(flag != 'filter_scope_requires_review' for flag in flags.get(f'{_column_letter(index + 1)}{row.source_row}', ())):
         return ('unverified_row_currency',)
     token = row.cells[index].strip().upper()
     if not token:
@@ -131,7 +131,7 @@ def _row_transaction_conflicts(row, columns, flags):
     if len(columns) != 1:
         return ('ambiguous_transaction_identifier',)
     index = columns[0]
-    if flags.get(f'{_column_letter(index + 1)}{row.source_row}'):
+    if any(flag != 'filter_scope_requires_review' for flag in flags.get(f'{_column_letter(index + 1)}{row.source_row}', ())):
         return ('unverified_transaction_identifier',)
     return () if row.cells[index].strip() else ('missing_transaction_identifier',)
 
@@ -228,6 +228,62 @@ def _xlsx_date_styles(archive):
     return tuple(date_style(item) for item in styles.findall('s:cellXfs/s:xf', _NS))
 
 
+def _xlsx_filter_rows(archive, member, worksheet):
+    containers = [worksheet]
+    parts = worksheet.findall('s:tableParts/s:tablePart', _NS)
+    if parts:
+        rels_member = posixpath.join(posixpath.dirname(member), '_rels', posixpath.basename(member) + '.rels')
+        try:
+            relationships = ET.fromstring(archive.read(rels_member))
+            namespace = 'http://schemas.openxmlformats.org/package/2006/relationships'
+            office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+            relation_rows = relationships.findall(f'{{{namespace}}}Relationship')
+            relations = {item.attrib.get('Id'): item for item in relation_rows}
+            identities = tuple(part.attrib.get(f'{{{office}}}id') for part in parts)
+            if (len(relations) != len(relation_rows) or len(set(identities)) != len(identities)
+                    or not all(identities)):
+                raise ValueError('Invalid XLSX table relationship')
+            targets = []
+            for identity in identities:
+                if identity not in relations:
+                    raise ValueError('Invalid XLSX table relationship')
+                relation = relations[identity]
+                target = relation.attrib.get('Target', '')
+                if (relation.attrib.get('Type') != office + '/table'
+                        or relation.attrib.get('TargetMode') not in (None, 'Internal')
+                        or not target or any(char in target for char in ('\\', ':', '?', '#', '%'))
+                        or target.startswith('//')):
+                    raise ValueError('Invalid XLSX table target')
+                target = (target.lstrip('/') if target.startswith('/') else
+                          posixpath.join(posixpath.dirname(member), target))
+                target = posixpath.normpath(target)
+                if not target.startswith('xl/') or '..' in target.split('/'):
+                    raise ValueError('Invalid XLSX table target')
+                targets.append(target)
+            if len(set(targets)) != len(targets):
+                raise ValueError('Duplicate XLSX table target')
+            for target in targets:
+                table = ET.fromstring(archive.read(target))
+                if table.tag != f"{{{_NS['s']}}}table":
+                    raise ValueError('Invalid XLSX table part')
+                containers.append(table)
+        except (KeyError, ET.ParseError) as error:
+            raise ValueError('Invalid XLSX table part') from error
+    ranges = []
+    for container in containers:
+        for auto_filter in container.findall('s:autoFilter', _NS):
+            references = auto_filter.attrib.get('ref', '').split(':')
+            if len(references) not in (1, 2):
+                raise ValueError('Invalid XLSX filter range')
+            x1, y1 = _column_index(references[0])
+            x2, y2 = _column_index(references[-1])
+            if x2 < x1 or y2 < y1:
+                raise ValueError('Invalid XLSX filter range')
+            if auto_filter.findall('s:filterColumn', _NS):
+                ranges.append((y1, y2))
+    return tuple(ranges)
+
+
 def _xlsx_tables(path):
     with ZipFile(path) as archive:
         _validate_archive(archive)
@@ -246,6 +302,7 @@ def _xlsx_tables(path):
             if not member.startswith("xl/") or ".." in member.split("/"):
                 raise ValueError("Invalid XLSX sheet target")
             xml = ET.fromstring(archive.read(member))
+            filtered_rows = _xlsx_filter_rows(archive, member, xml)
             rows, flags, canonical = [], {}, set()
             for row in xml.findall("s:sheetData/s:row", _NS):
                 number = int(row.attrib["r"])
@@ -263,7 +320,9 @@ def _xlsx_tables(path):
                     if style is not None and (not re.fullmatch(r'\d+', style) or int(style) >= len(date_styles)):
                         raise ValueError('Invalid XLSX cell style')
                     date_style = date_styles[int(style or '0')] if date_styles else False
-                    conflicts = ("hidden_row",) if row.attrib.get("hidden") == "1" else ()
+                    conflicts = ("hidden_row",) if row.attrib.get("hidden") in {'1', 'true'} else ()
+                    if any(first <= number <= last for first, last in filtered_rows):
+                        conflicts += ('filter_scope_requires_review',)
                     if cell.find("s:f", _NS) is not None:
                         raw = "=" + cell.findtext("s:f", default="", namespaces=_NS)
                         conflicts += ("formula_requires_validation",)

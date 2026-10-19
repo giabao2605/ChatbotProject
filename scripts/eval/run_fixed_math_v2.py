@@ -13,7 +13,7 @@ import re
 from time import monotonic
 
 from mech_chatbot.api.evidence_contracts import (
-    ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, CandidateSelectionContextRequest,
+    ScopeTotalRequest, ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, CandidateSelectionContextRequest,
 )
 from mech_chatbot.db.evidence_snapshot import evidence_read_snapshot, evidence_snapshot_active
 from mech_chatbot.evaluation.grounded_math_v2 import (
@@ -61,7 +61,7 @@ def _frozen_case(reference, root, binding, task_routing_contract=None):
 
 def _case_request(case):
     selection = case['selection']
-    codecs = {'scope_comparison':ScopeComparisonRequest, 'graph_query':GraphQueryRequest,
+    codecs = {'scope_total':ScopeTotalRequest, 'scope_comparison':ScopeComparisonRequest, 'graph_query':GraphQueryRequest,
               'bom_rollup':BomRollupRequest, 'query_plan':QueryPlanRequest}
     if case.get('task_routing_contract') == CANDIDATE_TASK_ROUTING:
         codecs = {'candidate_selection_context': CandidateSelectionContextRequest}
@@ -69,7 +69,8 @@ def _case_request(case):
         raise ValueError('One explicit fixed-template selection is required')
     kind = next(iter(selection))
     parsed = codecs[kind].model_validate(selection[kind])
-    value = ((parsed.scope_a,parsed.scope_b) if kind == 'scope_comparison' else
+    value = (parsed.scope_id if kind == 'scope_total' else
+             (parsed.scope_a,parsed.scope_b) if kind == 'scope_comparison' else
              parsed.to_query() if kind == 'graph_query' else
              parsed.to_rollup() if kind == 'bom_rollup' else
              parsed.to_context() if kind == 'candidate_selection_context' else parsed.to_plan())

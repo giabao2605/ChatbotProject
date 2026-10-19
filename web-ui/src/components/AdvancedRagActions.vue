@@ -19,7 +19,8 @@ const comparisonPilot=ref(false);
 const graphPilot=ref(false);
 const combinedPilot=ref(false);
 const totalPilot=ref(false);
-const standalone=computed(()=>comparisonPilot.value || graphPilot.value || combinedPilot.value || totalPilot.value);
+const mathTemplatesPilot=ref(false);
+const standalone=computed(()=>comparisonPilot.value || graphPilot.value || combinedPilot.value || totalPilot.value || mathTemplatesPilot.value);
 const textAvailable=ref(false);
 const totalAvailable=ref(false);
 const totalQueryAvailable=ref(false);
@@ -73,7 +74,7 @@ const state=computed<QueryActionState>(()=>{
     Boolean(row.question.trim()) && (row.action==='scope_total'?Boolean(totalQueryAvailable.value && row.scopeA):row.action==='scope_comparison'?Boolean(row.scopeA && row.scopeB):
       Boolean(row.product.trim() && row.site && (row.action==='where_used'?row.part.trim():row.doc)
         && (row.action!=='bom_rollup' || ((row.quantityMode==='source'?Boolean(row.quantityScope):/^[0-9]+(?:\.[0-9]+)?$/.test(row.quantity)) && row.policy)))));
-  if (comparisonPilot.value || (combinedPilot.value && rows.value[0]?.action==='scope_comparison')) return {active:true,valid:valid && rows.value.length===1 && rows.value[0]?.action==='scope_comparison'
+  if (comparisonPilot.value || ((combinedPilot.value || mathTemplatesPilot.value) && rows.value[0]?.action==='scope_comparison')) return {active:true,valid:valid && rows.value.length===1 && rows.value[0]?.action==='scope_comparison'
     && rows.value[0].scopeA!==rows.value[0].scopeB,scope_comparison:branches[0]?.scope_comparison};
   if (graphPilot.value || combinedPilot.value) return {active:true,valid:valid && rows.value.length===1
     && ['contains','where_used'].includes(rows.value[0]?.action),graph_query:branches[0]?.graph_query};
@@ -84,12 +85,16 @@ watch(()=>JSON.stringify(auth.user),async()=>{
   const request=++capabilitySerial;
   documentSerial++;
   available.value=false;enabled.value=false;rows.value=[];documents.value=[];error.value='';loading.value=false;
-  textAvailable.value=false;totalAvailable.value=false;totalQueryAvailable.value=false;comparisonPilot.value=false;graphPilot.value=false;combinedPilot.value=false;totalPilot.value=false;mode.value='structured';
+  textAvailable.value=false;totalAvailable.value=false;totalQueryAvailable.value=false;comparisonPilot.value=false;graphPilot.value=false;combinedPilot.value=false;totalPilot.value=false;mathTemplatesPilot.value=false;mode.value='structured';
   if (!auth.user) return;
   try {
     const capabilities=await apiGet<{schema:string;contract?:string;accepted:boolean;offline_only:boolean;max_branches:number;actions:string[];text_query?:boolean;scope_total_query?:boolean}>(
       '/api/rag-evidence/evaluation-capabilities');
     if (request!==capabilitySerial) return;
+    mathTemplatesPilot.value=capabilities.schema==='advanced-rag-v2-controlled-demo'
+      && capabilities.contract==='math-reviewed-templates-controlled-demo-v1' && capabilities.accepted===false
+      && capabilities.offline_only===false && capabilities.max_branches===1 && capabilities.text_query===false
+      && capabilities.actions?.length===2 && ['scope_comparison','scope_total'].every(action=>capabilities.actions.includes(action));
     totalPilot.value=capabilities.schema==='advanced-rag-v2-controlled-demo'
       && capabilities.contract==='grounded-math-scope-total-controlled-demo-v1' && capabilities.accepted===false
       && capabilities.offline_only===false && capabilities.max_branches===1 && capabilities.text_query===false
@@ -110,7 +115,7 @@ watch(()=>JSON.stringify(auth.user),async()=>{
       && capabilities.schema==='advanced-rag-v2-evaluation' && capabilities.accepted===false
       && capabilities.offline_only===true && capabilities.max_branches===3
       && ['contains','where_used','bom_rollup','scope_comparison'].every(action=>capabilities.actions?.includes(action)));
-    totalAvailable.value=totalPilot.value || (!standalone.value && available.value && capabilities.actions?.includes('scope_total'));
+    totalAvailable.value=totalPilot.value || mathTemplatesPilot.value || (!standalone.value && available.value && capabilities.actions?.includes('scope_total'));
     totalQueryAvailable.value=!standalone.value && totalAvailable.value && capabilities.scope_total_query===true;
     textAvailable.value=!standalone.value && available.value && capabilities.text_query===true;
   } catch {
@@ -119,7 +124,7 @@ watch(()=>JSON.stringify(auth.user),async()=>{
 },{immediate:true});
 watch(enabled,async value=>{
   const request=++documentSerial;
-  rows.value=value?[draft(totalPilot.value?'scope_total':comparisonPilot.value?'scope_comparison':'contains')]:[];
+  rows.value=value?[draft(totalPilot.value?'scope_total':comparisonPilot.value || mathTemplatesPilot.value?'scope_comparison':'contains')]:[];
   error.value='';loading.value=value;
   if (!value) return;
   try {
@@ -136,7 +141,7 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
 
 <template>
   <section v-if="available" class="advanced-actions">
-    <label><input v-model="enabled" type="checkbox" :disabled="disabled" /> {{ totalPilot ? 'Tính tổng có căn cứ (bật thử)' : combinedPilot ? 'Tra bản vẽ hoặc so sánh số liệu có căn cứ (bật thử)' : comparisonPilot ? 'So sánh số liệu có căn cứ (bật thử)' : graphPilot ? 'Tra quan hệ bản vẽ có căn cứ (bật thử)' : 'Chọn tác vụ có căn cứ (đánh giá)' }}</label>
+    <label><input v-model="enabled" type="checkbox" :disabled="disabled" /> {{ mathTemplatesPilot ? 'Tính tổng hoặc so sánh có căn cứ (bật thử)' : totalPilot ? 'Tính tổng có căn cứ (bật thử)' : combinedPilot ? 'Tra bản vẽ hoặc so sánh số liệu có căn cứ (bật thử)' : comparisonPilot ? 'So sánh số liệu có căn cứ (bật thử)' : graphPilot ? 'Tra quan hệ bản vẽ có căn cứ (bật thử)' : 'Chọn tác vụ có căn cứ (đánh giá)' }}</label>
     <template v-if="enabled">
       <label v-if="textAvailable">Chế độ đánh giá
         <select v-model="mode" aria-label="Chế độ đánh giá" :disabled="disabled">
@@ -146,7 +151,8 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
       </label>
       <p v-if="mode==='text'">Nhập tối đa ba ý độc lập trong ô chat. Hệ thống tìm nguồn theo từng ý và sinh một câu trả lời chung. Phép tính dùng tác vụ Math với phạm vi đã duyệt.</p>
       <template v-else>
-      <p v-if="totalPilot">Chọn một phạm vi số liệu đã duyệt để cộng đủ các dòng. Máy chủ kiểm tra quyền và phiên bản nguồn khi gửi.</p>
+      <p v-if="mathTemplatesPilot">Chọn một tác vụ: tính tổng một phạm vi hoặc so sánh hai phạm vi đã duyệt. Máy chủ kiểm tra quyền và phiên bản nguồn của từng tác vụ.</p>
+      <p v-else-if="totalPilot">Chọn một phạm vi số liệu đã duyệt để cộng đủ các dòng. Máy chủ kiểm tra quyền và phiên bản nguồn khi gửi.</p>
       <p v-else-if="comparisonPilot">Chọn hai phạm vi số liệu đã duyệt để so sánh. Phạm vi được phép dùng do máy chủ kiểm tra khi gửi.</p>
       <p v-else-if="graphPilot">Chọn bản vẽ và phạm vi quan hệ đã duyệt. Kết quả cho biết phần đã xác nhận và độ đầy đủ của nguồn.</p>
       <p v-else-if="combinedPilot">Chọn một tác vụ và nguồn đã duyệt: tra quan hệ bản vẽ hoặc so sánh hai phạm vi số liệu.</p>
@@ -158,7 +164,7 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
         <label>Tác vụ
           <select :value="row.action" :aria-label="`Tác vụ ý ${index+1}`"
             @change="changeAction(row,($event.target as HTMLSelectElement).value as Action)">
-            <option v-for="(label,action) in (totalPilot ? {scope_total:labels.scope_total} : comparisonPilot ? {scope_comparison:labels.scope_comparison} : graphPilot ? {contains:labels.contains,where_used:labels.where_used} : combinedPilot ? {contains:labels.contains,where_used:labels.where_used,scope_comparison:labels.scope_comparison} : evaluationLabels)" :key="action" :value="action">{{ label }}</option>
+            <option v-for="(label,action) in (mathTemplatesPilot ? {scope_comparison:labels.scope_comparison,scope_total:labels.scope_total} : totalPilot ? {scope_total:labels.scope_total} : comparisonPilot ? {scope_comparison:labels.scope_comparison} : graphPilot ? {contains:labels.contains,where_used:labels.where_used} : combinedPilot ? {contains:labels.contains,where_used:labels.where_used,scope_comparison:labels.scope_comparison} : evaluationLabels)" :key="action" :value="action">{{ label }}</option>
           </select>
         </label>
         <label>Nội dung ý {{ index+1 }}
@@ -166,14 +172,14 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
             @input="update(row.id,{question:($event.target as HTMLInputElement).value})" />
         </label>
         <template v-if="row.action==='scope_total'">
-          <ApprovedScopePicker :documents="documents" :label="`Phạm vi tính tổng ý ${index+1}`" :model-value="row.scopeA" :disabled="disabled"
+          <ApprovedScopePicker template="scope_total" :documents="documents" :label="`Phạm vi tính tổng ý ${index+1}`" :model-value="row.scopeA" :disabled="disabled"
             @update:model-value="update(row.id,{scopeA:$event})" />
-          <p>Cộng đủ dòng trong phạm vi đã duyệt. <template v-if="!totalPilot">Có thể kết hợp tối đa ba tác vụ khi máy chủ hỗ trợ.</template></p>
+          <p>Cộng đủ dòng trong phạm vi đã duyệt. <template v-if="!standalone">Có thể kết hợp tối đa ba tác vụ khi máy chủ hỗ trợ.</template></p>
         </template>
         <template v-else-if="row.action==='scope_comparison'">
-          <ApprovedScopePicker :documents="documents" :label="`Phạm vi A ý ${index+1}`" :model-value="row.scopeA" :disabled="disabled"
+          <ApprovedScopePicker template="scope_comparison" :documents="documents" :label="`Phạm vi A ý ${index+1}`" :model-value="row.scopeA" :disabled="disabled"
             @update:model-value="update(row.id,{scopeA:$event})" />
-          <ApprovedScopePicker :documents="documents" :label="`Phạm vi B ý ${index+1}`" :model-value="row.scopeB" :disabled="disabled"
+          <ApprovedScopePicker template="scope_comparison" :documents="documents" :label="`Phạm vi B ý ${index+1}`" :model-value="row.scopeB" :disabled="disabled"
             @update:model-value="update(row.id,{scopeB:$event})" />
         </template>
         <template v-else>

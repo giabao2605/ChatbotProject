@@ -344,12 +344,19 @@ def export_math_observation(result):
     budget = result.diagnostics.budget
     count = budget.calculations
     if (type(count) is not int or not 0 <= count <= 508 or len(records) > 3
-            or any(record.get('schema') != 'grounded-calculation-v2'
+            or any(((record.get('schema') != 'grounded-calculation-v2' or record.get('template') == 'sum_reviewed_scope')
+                    and not (record.get('schema') == 'grounded-calculation-scope-total-v1'
+                             and record.get('template') == 'sum_reviewed_scope'
+                             and record.get('status') in {'complete', 'blocked'}
+                             and record.get('domain_step_count') == int(record.get('status') == 'complete')))
                    or type(record.get('domain_step_count')) is not int
                    or not isinstance(record.get('steps'), list)
                    or record['domain_step_count'] != len(record['steps']) for record in records)
             or sum(record['domain_step_count'] for record in records) != count):
         raise ValueError('Incomplete recorded Math steps')
+    if any(record.get('schema') == 'grounded-calculation-scope-total-v1' for record in records) and (
+            len(records) != 1 or result.diagnostics.get('query_v2')):
+        raise ValueError('Scope total observations require one standalone template')
     source_ids = {card['source_id'] for card in result.citations}
     query = result.diagnostics.get('query_v2') or {}
     branches = [{field: branch[field] for field in (

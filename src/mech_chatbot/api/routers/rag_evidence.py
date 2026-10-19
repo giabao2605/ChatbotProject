@@ -143,6 +143,14 @@ def evaluation_capabilities(request: Request, profile: dict[str, Any] = Depends(
     mode = getattr(request.app.state.settings_snapshot, 'RAG_EXECUTION_CONTEXT', 'production')
     math_authorizer = getattr(getattr(request.app.state, 'runtime', None), 'math_v2_authorizer', None)
     math_cap = math_authorizer() if callable(math_authorizer) and mode == 'production' else None
+    from mech_chatbot.governance.math_templates_activation import MathTemplatesCapability
+    if isinstance(math_cap, MathTemplatesCapability):
+        from mech_chatbot.api.evidence_contracts import require_scope_total_context
+        require_comparison_context(mode, profile, comparison_only=True, authorizer=lambda: math_cap)
+        require_scope_total_context(mode, profile, authorizer=lambda: math_cap)
+        return {'schema':'advanced-rag-v2-controlled-demo', 'contract':math_cap.contract,
+                'accepted':False, 'offline_only':False, 'max_branches':1,
+                'actions':['scope_comparison','scope_total'], 'text_query':False}
     from mech_chatbot.governance.scope_total_activation import ScopeTotalCapability
     if isinstance(math_cap, ScopeTotalCapability):
         from mech_chatbot.api.evidence_contracts import require_scope_total_context
@@ -182,28 +190,41 @@ def document_scopes(doc_id: int, profile: dict[str, Any] = Depends(current_profi
 @router.get('/documents/{doc_id}/approved-scopes')
 def approved_document_scopes(request: Request, doc_id: int = Path(ge=1, le=2147483647),
                              offset: int = Query(0, ge=0, le=100000), limit: int = Query(50, ge=1, le=50),
+                             template: Literal['scope_comparison', 'scope_total'] | None = Query(None),
                              profile: dict[str, Any] = Depends(current_profile)):
     mode = getattr(request.app.state.settings_snapshot, 'RAG_EXECUTION_CONTEXT', 'production')
     authorizer = getattr(getattr(request.app.state, 'runtime', None), 'math_v2_authorizer', None)
     cap = authorizer() if callable(authorizer) and mode == 'production' else None
+    from mech_chatbot.governance.math_templates_activation import MathTemplatesCapability
     from mech_chatbot.governance.scope_total_activation import ScopeTotalCapability
-    if isinstance(cap, ScopeTotalCapability):
+    if isinstance(cap, (ScopeTotalCapability, MathTemplatesCapability)):
         from mech_chatbot.api.evidence_contracts import require_scope_total_context
         require_scope_total_context(mode, profile, authorizer=lambda: cap)
+        if isinstance(cap, MathTemplatesCapability):
+            require_comparison_context(mode, profile, comparison_only=True, authorizer=lambda: cap)
     else:
         require_comparison_context(mode, profile, comparison_only=True, authorizer=authorizer)
+    if mode == 'production' and template == 'scope_total':
+        from mech_chatbot.api.evidence_contracts import require_scope_total_context
+        require_scope_total_context(mode, profile, authorizer=lambda: cap)
+    elif mode == 'production' and template == 'scope_comparison':
+        require_comparison_context(mode, profile, comparison_only=True, authorizer=lambda: cap)
     page = _call(service.list_approved_document_scopes, doc_id, profile, offset=offset, limit=limit,
                  deadline_seconds=getattr(request.app.state.settings_snapshot, 'RAG_REQUEST_DEADLINE_SECONDS', 120))
     if mode == 'production':
         from mech_chatbot.db.repositories.structured_evidence import load_approved_scope
         from mech_chatbot.domain.structured_evidence import reviewed_scope_fingerprint
-        cap = authorizer()
-        if cap is None:
+        from mech_chatbot.governance.math_templates_activation import select_math_capability
+        grant = authorizer()
+        templates = (('compare_two_scopes',) if template == 'scope_comparison' else
+                     ('sum_reviewed_scope',) if template == 'scope_total' else ('compare_two_scopes', 'sum_reviewed_scope'))
+        caps = tuple(cap for name in templates if (cap := select_math_capability(grant, name)) is not None)
+        if not caps:
             raise HTTPException(409, detail='Math v2 comparison authority required')
         items = []
         for item in page['items']:
             scope = _call(load_approved_scope, item['scope_id'], profile)
-            if scope is not None and (scope.scope_id,scope.snapshot_id,reviewed_scope_fingerprint(scope)) in cap.scope_pins:
+            if scope is not None and any((scope.scope_id,scope.snapshot_id,reviewed_scope_fingerprint(scope)) in cap.scope_pins for cap in caps):
                 items.append(item)
         page = {**page,'items':items}
     return page

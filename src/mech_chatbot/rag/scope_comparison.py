@@ -3,17 +3,17 @@ from dataclasses import asdict
 from decimal import Decimal
 import hashlib
 import json
-from mech_chatbot.db.evidence_snapshot import evidence_read_snapshot
+from mech_chatbot.db.evidence_snapshot import evidence_read_connection, evidence_read_snapshot
 
 from mech_chatbot.application.chat_citations import build_citation_list, citation_ref_text
-from mech_chatbot.db.repositories.structured_evidence import load_approved_scope
+from mech_chatbot.db.repositories.structured_evidence import _source, load_approved_scope
 from mech_chatbot.db.repositories.source_page_images import load_source_page_hash
 from mech_chatbot.domain.structured_evidence import reviewed_scope_fingerprint, source_bindings
 from mech_chatbot.rag.grounded_math_v2 import MathResult, compare_two_scopes, serialize_result
 from mech_chatbot.services.rag_evidence_service import scope_is_current
 
 
-def _sources(scopes):
+def _sources(scopes, profile):
     records = []
     for scope in scopes:
         scope_hash = reviewed_scope_fingerprint(scope)
@@ -38,7 +38,12 @@ def _sources(scopes):
                             'scope_id': scope.scope_id, 'scope_hash':scope_hash, 'fact_count': len(facts),
                             'image_hash':load_source_page_hash(first.locator.doc_id,first.locator.version,scope.snapshot_id,
                                                              first.source_hash,first.locator.page) if first.locator.page else None})
-    return records
+    with evidence_read_connection() as conn:
+        pins = dict.fromkeys((record['doc_id'], record['version_no']) for record in records)
+        names = {pin: _source(conn, *pin, profile)['TenFile'] for pin in pins}
+    if any(not isinstance(name, str) or not name.strip() for name in names.values()):
+        raise PermissionError('Evidence source unavailable')
+    return [{**record, 'file_name': names[(record['doc_id'], record['version_no'])]} for record in records]
 
 
 def _scope_manifest(scope):
@@ -104,7 +109,7 @@ def _read_comparison(state):
     result = serialize_result(compare_two_scopes(*scopes) if current else
                               MathResult('compare_two_scopes', 'blocked', reason='invalid_scope_evidence'))
     usable = result['status'] in {'complete', 'partial'}
-    records = _sources(scopes) if usable else []
+    records = _sources(scopes, profile) if usable else []
     cards = build_citation_list(records, page_has_vision=lambda *_: False)
     if usable and len(cards) != len(records):
         usable, records = False, []

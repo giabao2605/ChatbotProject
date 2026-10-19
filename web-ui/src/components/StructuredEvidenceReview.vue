@@ -6,12 +6,17 @@ import DrawingBindingReview from '@/components/DrawingBindingReview.vue';
 
 type Locator = { doc_id: string | number; version: string | number; page?: number; row_key: string; sheet?: string; cell?: string; table_index?: number; bbox?: number[] };
 type Fact = { fact_id: string; label: string; raw_value: string; value: string | null; unit: string; currency?: string; review_status: string; conflicts: string[]; extraction_method?: string; locator: Locator;
-  source_row?: { headers: string[]; cells: string[]; source_row: number } | null };
+  source_row?: { headers: string[]; cells: string[]; source_row: number; warnings?: string[] } | null };
 type Scope = { scope_id: string; snapshot_id: string; completeness_reviewed: boolean; expected_row_ids?: string[]; excluded_row_reasons?: Record<string, string>; rounding_scale?: number; rounding_mode?: string; definition?: string; period?: string; unit?: string; currency?: string; empty_source_locator?: Locator; empty_source_hash?: string; empty_source_extraction_method?: string;
   quantity_binding?: { root_doc_id: number; root_version: number; root_source_hash: string; product_scope: string; site: string } | null };
 type Result = { ok?: boolean; error?: string };
 const props = defineProps<{ docId: number }>();
-const conflictLabels: Record<string, string> = { non_numeric_cell_type: 'Ô có kiểu dữ liệu hoặc định dạng cần kiểm tra trước khi dùng làm số' };
+const conflictLabels: Record<string, string> = {
+  non_numeric_cell_type: 'Ô có kiểu dữ liệu hoặc định dạng cần kiểm tra trước khi dùng làm số',
+  filter_scope_requires_review: 'Tệp có khai báo bộ lọc. Đối chiếu toàn bộ dòng trước khi xác nhận phạm vi; hệ thống chưa tự áp bộ lọc.',
+  hidden_row: 'Dòng nguồn đang bị ẩn. Xác nhận rõ giữ hay loại dòng này trong phạm vi.',
+  formula_requires_validation: 'Ô chứa công thức. Kiểm tra kết quả từ nguồn và nhập giá trị đã xác minh; hệ thống không thực thi công thức.',
+};
 const showTechnicalFields = ref(false);
 const showDrawingBindings = ref(false);
 const scopes = ref<Scope[]>([]);
@@ -117,9 +122,13 @@ async function loadScopes() {
   }
 }
 
+function conflictsFor(fact: Fact) {
+  return [...new Set([...fact.conflicts, ...(fact.source_row?.warnings || [])])];
+}
+
 function editFact(fact: Fact) {
   selected.value = fact;
-  draft.value = { value: fact.conflicts.length ? "" : fact.value ?? "", unit: fact.unit, currency: fact.currency || "", note: "" };
+  draft.value = { value: conflictsFor(fact).length ? "" : fact.value ?? "", unit: fact.unit, currency: fact.currency || "", note: "" };
   error.value = "";
   notice.value = "";
 }
@@ -232,7 +241,7 @@ onBeforeUnmount(() => { requestSerial += 1; });
             </td>
             <td>{{ fact.raw_value }}</td>
             <td>{{ fact.value ?? 'Chưa xác định' }} {{ fact.unit }} {{ fact.currency }}</td>
-            <td>{{ statusLabel(fact.review_status) }}<p v-for="conflict in fact.conflicts" :key="conflict">{{ conflictLabels[conflict] || conflict }}</p></td>
+            <td>{{ statusLabel(fact.review_status) }}<p v-for="conflict in conflictsFor(fact)" :key="conflict">{{ conflictLabels[conflict] || conflict }}</p></td>
             <td>Phiên bản {{ fact.locator.version }}<template v-if="fact.locator.page">, trang {{ fact.locator.page }}</template><template v-if="fact.locator.sheet">, sheet {{ fact.locator.sheet }}</template><template v-if="fact.locator.cell">, ô {{ fact.locator.cell }}</template><template v-if="fact.locator.table_index != null">, bảng {{ fact.locator.table_index }}</template><br>{{ fact.extraction_method }}<template v-if="fact.locator.bbox"><br>Vùng: {{ fact.locator.bbox.join(', ') }}</template><br>
               <a v-if="sourceUrl(fact, true)" data-source="page" :href="sourceUrl(fact, true)" target="_blank" rel="noopener noreferrer">Xem trang nguồn</a>
               <a v-if="sourceUrl(fact)" :href="sourceUrl(fact)" target="_blank" rel="noopener noreferrer">Mở tệp gốc</a>
@@ -249,7 +258,7 @@ onBeforeUnmount(() => { requestSerial += 1; });
       <form v-if="selected" @submit.prevent="reviewFact('approve')">
         <h3>Kiểm tra {{ selected.label }} — {{ selected.locator.row_key }}</h3>
         <p>Giá trị gốc: {{ selected.raw_value }}. Sửa dưới đây giữ nguyên chứng cứ gốc.</p>
-        <p v-if="selected.conflicts.length">Dòng có xung đột. Đối chiếu tệp gốc rồi nhập giá trị đã xác minh trước khi duyệt.</p>
+        <p v-if="conflictsFor(selected).length">Dòng có xung đột. Đối chiếu tệp gốc rồi nhập giá trị đã xác minh trước khi duyệt.</p>
         <div class="review-fields">
           <label class="stack-field">Giá trị chuẩn hóa<input name="value_text" v-model="draft.value" :disabled="saving" required></label>
           <label class="stack-field">Đơn vị<input name="unit" v-model="draft.unit" :disabled="saving"></label>

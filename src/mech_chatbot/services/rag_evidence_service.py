@@ -150,7 +150,7 @@ def dependency_source_attributes(cards, profile):
                 key = card['scope_id']
                 if key not in scopes:
                     scope = approved_scope_in_connection(conn,key,profile)
-                    scopes[key] = {c['source_id'] for record in _sources((scope,))
+                    scopes[key] = {c['source_id'] for record in _sources((scope,), profile)
                         if (c := structured_citation(record,page_has_vision=lambda *_:False))} if scope else set()
                 if card['source_id'] not in scopes[key]:
                     raise PermissionError('Dependency evidence unavailable')

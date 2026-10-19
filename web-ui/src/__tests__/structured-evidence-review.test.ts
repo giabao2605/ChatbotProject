@@ -100,6 +100,42 @@ it('shows original row context as text and clears it on the next page', async ()
   expect(wrapper.text()).toContain('Không đọc được dòng nguồn đúng phiên bản');
 });
 
+it.each([
+  ['filter_scope_requires_review', '100', 'Tệp có khai báo bộ lọc. Đối chiếu toàn bộ dòng trước khi xác nhận phạm vi; hệ thống chưa tự áp bộ lọc.'],
+  ['hidden_row', '100', 'Dòng nguồn đang bị ẩn. Xác nhận rõ giữ hay loại dòng này trong phạm vi.'],
+  ['formula_requires_validation', '=SUM(B2:B3)', 'Ô chứa công thức. Kiểm tra kết quả từ nguồn và nhập giá trị đã xác minh; hệ thống không thực thi công thức.'],
+])('explains Excel source warnings without approving or computing %s', async (conflict, raw, warning) => {
+  vi.mocked(api.apiGet).mockImplementation(async (path) => {
+    if (path.endsWith('/scopes')) return { scopes: [{ scope_id: 'scope-1', snapshot_id: 'snapshot-1' }] } as never;
+    return { items: [{ ...fact, raw_value: raw, value: conflict === 'formula_requires_validation' ? null : '100',
+      conflicts: [conflict], locator: { ...fact.locator, sheet: 'Ledger', cell: 'B2' } }], offset: 0, has_more: false } as never;
+  });
+  const wrapper = mount(StructuredEvidenceReview, { props: { docId: 17 } });
+  await flushPromises();
+  expect(wrapper.text()).toContain(warning);
+  expect(wrapper.text()).toContain(raw);
+  await button(wrapper, 'Kiểm tra dòng').trigger('click');
+  expect(wrapper.get<HTMLInputElement>('input[name="value_text"]').element.value).toBe('');
+  expect(api.apiSend).not.toHaveBeenCalled();
+});
+
+it('shows pinned row warnings for existing facts without changing their saved conflicts', async () => {
+  const existing = { ...fact, raw_value: '100', value: '100', conflicts: [], source_row: {
+    headers: ['Amount'], cells: ['100'], source_row: 2, warnings: ['filter_scope_requires_review'],
+  } };
+  vi.mocked(api.apiGet).mockImplementation(async (path) => {
+    if (path.endsWith('/scopes')) return { scopes: [{ scope_id: 'scope-1', snapshot_id: 'snapshot-1' }] } as never;
+    return { items: [existing], offset: 0, has_more: false } as never;
+  });
+  const wrapper = mount(StructuredEvidenceReview, { props: { docId: 17 } });
+  await flushPromises();
+  expect(wrapper.text()).toContain('Tệp có khai báo bộ lọc.');
+  await button(wrapper, 'Kiểm tra dòng').trigger('click');
+  expect(wrapper.get<HTMLInputElement>('input[name="value_text"]').element.value).toBe('');
+  expect(existing.conflicts).toEqual([]);
+  expect(api.apiSend).not.toHaveBeenCalled();
+});
+
 it('requires an entered value for a numeric cell with a source type conflict', async () => {
   vi.mocked(api.apiGet).mockImplementation(async (path) => {
     if (path.endsWith('/scopes')) return { scopes: [{ scope_id: 'scope-1', snapshot_id: 'snapshot-1', completeness_reviewed: false }] } as never;

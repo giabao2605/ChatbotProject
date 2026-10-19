@@ -3,7 +3,8 @@ import { onBeforeUnmount, ref, watch } from 'vue';
 import { apiGet } from '@/api/client';
 import type { EvidenceDocument, ApprovedScopeChoice } from '@/types';
 
-const props = defineProps<{label:string; documents:EvidenceDocument[]; modelValue:string; disabled?:boolean}>();
+const props = defineProps<{label:string; documents:EvidenceDocument[]; modelValue:string; disabled?:boolean;
+  template?:'scope_comparison'|'scope_total'}>();
 const emit = defineEmits<{'update:modelValue':[value:string]}>();
 const doc = ref('');
 const scopes = ref<ApprovedScopeChoice[]>([]);
@@ -23,7 +24,8 @@ async function load(nextOffset=0) {
   if (!doc.value) return;
   try {
     const page = await apiGet<{items:ApprovedScopeChoice[];offset:number;has_more:boolean}>(
-      `/api/rag-evidence/documents/${doc.value}/approved-scopes`, {offset:nextOffset,limit:50});
+      `/api/rag-evidence/documents/${doc.value}/approved-scopes`,
+      {offset:nextOffset,limit:50,...(props.template ? {template:props.template} : {})});
     if (request !== serial) return;
     scopes.value = page.items;
     offset.value = page.offset;
@@ -34,7 +36,7 @@ async function load(nextOffset=0) {
     if (request === serial) loading.value = false;
   }
 }
-watch(doc,()=>load());
+watch([doc,()=>props.template],()=>load());
 onBeforeUnmount(()=>{serial++;});
 </script>
 

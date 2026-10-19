@@ -151,6 +151,80 @@ def test_reviewed_comparison_emits_four_real_steps_and_structured_citations(stor
     assert result.diagnostics.budget.final_generations == 0
 
 
+@pytest.mark.parametrize('empty', [False, True])
+@pytest.mark.parametrize('template', ['comparison', 'total'])
+def test_executor_citations_keep_authorized_sql_filename_for_exact_revision(store, tmp_path, monkeypatch, empty, template):
+    from sqlalchemy import event, text
+    from mech_chatbot.rag import scope_comparison
+    if empty:
+        selected, _ = approved_empty_pair(store, tmp_path)
+    else:
+        approved_pair(store)
+        selected = request()
+    with store.begin() as conn:
+        conn.execute(text("UPDATE TaiLieu SET TenFile='reviewed-v2.csv',FilePath='private/path/not-the-filename.csv' WHERE DocID=1"))
+        if empty:
+            conn.execute(text("UPDATE TaiLieu SET TenFile='other-v2.csv' WHERE DocID=2"))
+    if template == 'total':
+        selected = replace(selected, question='Total selected scope', scope_total=selected.scope_comparison[0], scope_comparison=None)
+    filename_reads = []
+    name_pins = []
+    original_source = scope_comparison._source
+    def source(conn, doc, version, profile):
+        name_pins.append((doc, version))
+        return original_source(conn, doc, version, profile)
+    monkeypatch.setattr(scope_comparison, '_source', source)
+    def capture(conn, cursor, sql, params, context, many):
+        if 'SELECT * FROM TaiLieu WHERE DocID=' in sql:
+            filename_reads.append(id(conn))
+    event.listen(store, 'before_cursor_execute', capture)
+    try:
+        with bind_repository_runtime(db_engine=store):
+            result = collect_rag_events(DefaultRagExecutor().run(selected,
+                RagInvocation('filename-comparison', mode='evaluation')))
+    finally:
+        event.remove(store, 'before_cursor_execute', capture)
+    assert result.outcome == 'answered'
+    assert all(card['version_no'] == 2 for card in result.citations)
+    assert {card['doc_id']: card['file_name'] for card in result.citations} == (
+        {1: 'reviewed-v2.csv', 2: 'other-v2.csv'} if empty and template == 'comparison' else {1: 'reviewed-v2.csv'})
+    assert len(name_pins) == len(set(name_pins)) == len({card['doc_id'] for card in result.citations})
+    assert len(set(filename_reads)) == 1
+    assert 'reviewed-v2.csv' in result.ref_text
+
+
+@pytest.mark.parametrize('fault', ['rights', 'revision', 'not_current'])
+def test_citation_filename_lookup_rechecks_source_access_and_revision(store, fault):
+    from sqlalchemy import text
+    from mech_chatbot.db.repositories.structured_evidence import load_approved_scope
+    from mech_chatbot.rag.scope_comparison import _sources
+    approved_pair(store)
+    scope = load_approved_scope('a', PROFILE, db_engine=store)
+    profile = PROFILE
+    if fault == 'rights':
+        profile = {**PROFILE, 'allowed_sites': ['other']}
+    else:
+        with store.begin() as conn:
+            conn.execute(text('UPDATE TaiLieu SET VersionNo=3' if fault == 'revision' else 'UPDATE TaiLieu SET IsCurrent=0'))
+    with bind_repository_runtime(db_engine=store), pytest.raises(PermissionError, match='Evidence source unavailable'):
+        _sources((scope,), profile)
+
+
+@pytest.mark.parametrize('file_name', [None, '', '   '])
+def test_missing_source_filename_never_returns_numbers_or_invented_path_name(store, file_name):
+    from sqlalchemy import text
+    from mech_chatbot.rag.execution import consume_rag_events
+    approved_pair(store)
+    with store.begin() as conn:
+        conn.execute(text('UPDATE TaiLieu SET TenFile=:name,FilePath=:path'),
+            {'name': file_name, 'path': 'private/should-not-be-cited.csv'})
+    with bind_repository_runtime(db_engine=store):
+        result = consume_rag_events(DefaultRagExecutor().run(request(), RagInvocation('missing-filename', mode='evaluation')))
+    assert isinstance(result, RagFailed) and result.code == 'PermissionError'
+    assert result.message == 'Evidence source unavailable'
+    assert not result.diagnostics.get('citation_docs') and not result.diagnostics.get('retrieved_docs')
+
+
 def test_opt_in_capture_retains_actual_operands_only_on_the_completed_result(store):
     approved_pair(store)
     with bind_repository_runtime(db_engine=store):

@@ -112,3 +112,31 @@ def test_xlsx_context_keeps_sheet_identity_and_literal_text(store, tmp_path):
     storage = FilesystemProtectedFileStorage(project_root=tmp_path, raw_root=tmp_path, processed_root=tmp_path)
     page = list_scope_facts(document.tables[1].scopes[0].scope_id, PROFILE, db_engine=store, source_storage=storage)
     assert page['items'][0]['source_row']['cells'] == ['001', '20', 'Second']
+
+
+@pytest.mark.parametrize('column', [0, 1])
+def test_existing_pending_facts_show_filter_warning_from_pinned_original_without_reingestion(store, tmp_path, column):
+    from dataclasses import replace
+    from openpyxl import Workbook
+    book = Workbook()
+    book.active.append(['Status', 'Amount', 'Other Amount'])
+    book.active.append(['keep', 10, '=B2*2'])
+    book.active.append(['other', 20, 30])
+    book.active.row_dimensions[3].hidden = True
+    book.active.auto_filter.ref = 'A1:A3'
+    book.active.auto_filter.add_filter_column(0, ['keep'])
+    path = tmp_path / 'filtered.xlsx'
+    book.save(path)
+    scope = extract_structured_table_file(path, doc_id='1', version='2', snapshot_id='old-parser').tables[0].scopes[column]
+    # Existing pending facts predate filter detection; their saved evidence stays unchanged.
+    scope = replace(scope, facts=tuple(replace(fact, conflicts=()) for fact in scope.facts))
+    save_extracted_scope(scope, db_engine=store)
+    with store.begin() as conn:
+        conn.execute(text('UPDATE TaiLieu SET FilePath=:path'), {'path': str(path)})
+    storage = FilesystemProtectedFileStorage(project_root=tmp_path, raw_root=tmp_path, processed_root=tmp_path)
+    page = list_scope_facts(scope.scope_id, PROFILE, db_engine=store, source_storage=storage)
+    assert [fact['source_row']['cells'] for fact in page['items']] == [['keep', '10', '=B2*2'], ['other', '20', '30']]
+    assert [fact['source_row']['warnings'] for fact in page['items']] == [
+        ['filter_scope_requires_review', 'formula_requires_validation'] if column else ['filter_scope_requires_review'],
+        ['filter_scope_requires_review', 'hidden_row']]
+    assert all(fact['conflicts'] == [] and fact['review_status'] == 'pending' for fact in page['items'])

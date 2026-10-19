@@ -111,6 +111,33 @@ it('offers only one scope total to a viewer with the exact live total contract',
   expect(wrapper.emitted('change')!.at(-1)).toEqual([{active:true,valid:true,scope_total:{scope_id:'total-a'}}]);
 });
 
+it('switches between granted total and comparison without a stale scope or query branch',async()=>{
+  vi.mocked(api.apiGet).mockImplementation(async path=>{
+    if(path.endsWith('evaluation-capabilities')) return {schema:'advanced-rag-v2-controlled-demo',
+      contract:'math-reviewed-templates-controlled-demo-v1',accepted:false,offline_only:false,
+      max_branches:1,actions:['scope_comparison','scope_total'],text_query:false} as never;
+    if(path==='/api/documents') return {documents:[{DocID:1,TenFile:'Chi phí.csv'}]} as never;
+    return {items:[{scope_id:'a',definition:'Kỳ A',unit:'VND'},{scope_id:'b',definition:'Kỳ B',unit:'VND'}],offset:0,has_more:false} as never;
+  });
+  const wrapper=create();
+  useAuthStore().user={...useAuthStore().user!,roles:['viewer']};await flushPromises();
+  await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises();
+  const action=wrapper.get('select[aria-label="Tác vụ ý 1"]');
+  expect(action.findAll('option').map(option=>option.element.value)).toEqual(['scope_comparison','scope_total']);
+  expect(wrapper.findAll('button').some(button=>button.text()==='Thêm ý')).toBe(false);
+  await action.setValue('scope_total');
+  await wrapper.get('select[aria-label="Tài liệu Phạm vi tính tổng ý 1"]').setValue('1');await flushPromises();
+  await wrapper.get('select[aria-label="Phạm vi tính tổng ý 1"]').setValue('a');
+  expect(wrapper.emitted('change')!.at(-1)).toEqual([{active:true,valid:true,scope_total:{scope_id:'a'}}]);
+  await action.setValue('scope_comparison');await flushPromises();
+  expect((wrapper.emitted('change')!.at(-1)![0] as QueryActionState).valid).toBe(false);
+  for(const [label,id] of [['A','a'],['B','b']]) {
+    await wrapper.get(`select[aria-label="Tài liệu Phạm vi ${label} ý 1"]`).setValue('1');await flushPromises();
+    await wrapper.get(`select[aria-label="Phạm vi ${label} ý 1"]`).setValue(id);
+  }
+  expect(wrapper.emitted('change')!.at(-1)).toEqual([{active:true,valid:true,scope_comparison:{scope_a:'a',scope_b:'b'}}]);
+});
+
 it('builds an explicit bounded graph action and clears it when disabled',async()=>{
   const wrapper=create(); await flushPromises();
   await wrapper.get('input[type="checkbox"]').setValue(true); await flushPromises();

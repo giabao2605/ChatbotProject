@@ -843,15 +843,19 @@ class DefaultRagExecutor:
                     and any(branch.scope_total is not None for branch in request.query_plan.branches)):
                 if invocation.mode not in {'evaluation', 'test'}:
                     from mech_chatbot.governance.scope_total_activation import ScopeTotalCapability, CONTRACT
-                    cap = self._math_v2_authorizer() if self._math_v2_authorizer else None
-                    if invocation.mode != 'production' or cap is None:
+                    from mech_chatbot.governance.math_templates_activation import select_math_capability
+                    authorize_total = lambda: select_math_capability(
+                        self._math_v2_authorizer() if self._math_v2_authorizer else None, 'sum_reviewed_scope')
+                    grant = self._math_v2_authorizer() if self._math_v2_authorizer else None
+                    cap = select_math_capability(grant, 'sum_reviewed_scope')
+                    if invocation.mode != 'production' or grant is None:
                         raise ValueError('Scope total requires evaluation context or source authority')
                     if (request.scope_total is None or request.query_plan is not None
                             or not isinstance(cap, ScopeTotalCapability) or cap.contract != CONTRACT
                             or cap.template != 'sum_reviewed_scope' or cap.context != 'controlled_demo'
                             or invocation.task_routing_contract is not None):
                         raise PermissionError('Scope total source authority unavailable')
-                    state.math_v2_capability, state.math_v2_authorizer = cap, self._math_v2_authorizer
+                    state.math_v2_capability, state.math_v2_authorizer = cap, authorize_total
                     state.budget.limits = replace(state.budget.limits, calculations=1)
                 if invocation.task_routing_contract and invocation.task_routing_contract != 'semantic-scope-total-query-routing-v1-draft':
                     raise ValueError('Scope total does not use a planner')
@@ -868,15 +872,19 @@ class DefaultRagExecutor:
                     state.graph_v2_capability,state.graph_v2_authorizer=cap,self._graph_v2_authorizer
                 else:
                     from mech_chatbot.governance.math_v2_activation import MathV2Capability, CONTRACT
-                    cap = self._math_v2_authorizer() if self._math_v2_authorizer else None
-                    if invocation.mode != 'production' or cap is None:
+                    from mech_chatbot.governance.math_templates_activation import select_math_capability
+                    authorize_comparison = lambda: select_math_capability(
+                        self._math_v2_authorizer() if self._math_v2_authorizer else None, 'compare_two_scopes')
+                    grant = self._math_v2_authorizer() if self._math_v2_authorizer else None
+                    cap = select_math_capability(grant, 'compare_two_scopes')
+                    if invocation.mode != 'production' or grant is None:
                         raise ValueError('V2 contract requires evaluation context or comparison authority')
                     if (request.scope_comparison is None
                             or not isinstance(cap, MathV2Capability) or cap.contract != CONTRACT
                             or cap.template != 'compare_two_scopes' or cap.context != 'controlled_demo'):
                         raise PermissionError('Math v2 comparison authority required')
                     state.math_v2_capability = cap
-                    state.math_v2_authorizer = self._math_v2_authorizer
+                    state.math_v2_authorizer = authorize_comparison
                     state.budget.limits = replace(state.budget.limits, calculations=4)
             if invocation.capture_math_observations and not {
                     role.lower() for role in request.access.roles}.intersection({'reviewer', 'knowledge_approver', 'admin'}):
