@@ -676,9 +676,12 @@ def _successful_rag_events(
     if state.math_v2_capability is not None:
         from mech_chatbot.config.logging import log_trace
         from mech_chatbot.rag.math_v2_pilot import comparison_event_fields
+        from mech_chatbot.rag.scope_total import total_event_fields
         # Only count a request after its consumer drains the completed event.
-        log_trace('math_v2_comparison_completed',trace_id,execution_context=current_execution_context(),
-            **comparison_event_fields(final_diagnostics,final_answer,state.budget,state.math_v2_capability,
+        total = state.math_v2_capability.template == 'sum_reviewed_scope'
+        fields = total_event_fields if total else comparison_event_fields
+        log_trace('math_scope_total_completed' if total else 'math_v2_comparison_completed',trace_id,execution_context=current_execution_context(),
+            **fields(final_diagnostics,final_answer,state.budget,state.math_v2_capability,
                 final_latency_ms=round((time.monotonic()-state.budget.started_monotonic)*1000),outcome=outcome))
 
 
@@ -744,7 +747,8 @@ def _terminal_rag_events(
     if state.math_v2_capability is not None:
         from mech_chatbot.config.logging import log_trace
         log_trace("rag_error", state.trace_id, execution_context=current_execution_context(),
-            contract=state.math_v2_capability.contract, code="comparison_not_completed")
+            contract=state.math_v2_capability.contract,
+            code='scope_total_not_completed' if state.math_v2_capability.template == 'sum_reviewed_scope' else 'comparison_not_completed')
     if state.phase != "prepared":
         owner.note_setup_terminal(terminal)
         yield RagPrepared("", (), (), {})
@@ -838,7 +842,17 @@ class DefaultRagExecutor:
             if request.scope_total is not None or (request.query_plan is not None
                     and any(branch.scope_total is not None for branch in request.query_plan.branches)):
                 if invocation.mode not in {'evaluation', 'test'}:
-                    raise ValueError('Scope total requires evaluation context')
+                    from mech_chatbot.governance.scope_total_activation import ScopeTotalCapability, CONTRACT
+                    cap = self._math_v2_authorizer() if self._math_v2_authorizer else None
+                    if invocation.mode != 'production' or cap is None:
+                        raise ValueError('Scope total requires evaluation context or source authority')
+                    if (request.scope_total is None or request.query_plan is not None
+                            or not isinstance(cap, ScopeTotalCapability) or cap.contract != CONTRACT
+                            or cap.template != 'sum_reviewed_scope' or cap.context != 'controlled_demo'
+                            or invocation.task_routing_contract is not None):
+                        raise PermissionError('Scope total source authority unavailable')
+                    state.math_v2_capability, state.math_v2_authorizer = cap, self._math_v2_authorizer
+                    state.budget.limits = replace(state.budget.limits, calculations=1)
                 if invocation.task_routing_contract and invocation.task_routing_contract != 'semantic-scope-total-query-routing-v1-draft':
                     raise ValueError('Scope total does not use a planner')
             if invocation.mode not in {'evaluation', 'test'} and any((request.scope_comparison,

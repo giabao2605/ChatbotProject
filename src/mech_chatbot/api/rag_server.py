@@ -1036,7 +1036,11 @@ def _scope_comparison_mode(req, profile, runtime, *, replay=False, headers=None)
     if sum(value is not None for value in (req.scope_total,req.scope_comparison,req.graph_query,req.bom_rollup,req.query_plan))+int(req.text_query)>1:
         raise HTTPException(422,detail='Select one v2 template')
     mode = getattr(getattr(runtime, 'runtime_contract', None), 'execution_context', 'production')
-    if req.graph_query is not None:
+    if req.scope_total is not None:
+        from mech_chatbot.api.evidence_contracts import require_scope_total_context
+        authorizer = getattr(runtime, 'math_v2_authorizer', None)
+        selected = require_scope_total_context('pilot_replay' if replay else mode, profile, authorizer=authorizer)
+    elif req.graph_query is not None:
         from mech_chatbot.api.evidence_contracts import require_graph_context
         authorizer=getattr(runtime,'graph_v2_authorizer',None)
         selected=require_graph_context('pilot_replay' if replay else mode,profile,authorizer=authorizer)

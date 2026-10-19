@@ -5,7 +5,8 @@ import pytest
 from mech_chatbot.application.chat_result_history import serialize_history_result, restore_history_result
 
 
-def test_scope_total_history_round_trip_uses_checked_cards_and_rejects_missing_sources():
+@pytest.mark.parametrize('live', [False, True])
+def test_scope_total_history_round_trip_uses_checked_cards_and_rejects_missing_sources(live):
     card = {'source_id':'D1Ltotal', 'scope_id':'s', 'scope_hash':'a'*64}
     math = {'schema':'grounded-calculation-scope-total-v1','template':'sum_reviewed_scope',
             'contract':'grounded-math-v2-scope-total-evaluation-v1', 'status':'complete',
@@ -13,13 +14,20 @@ def test_scope_total_history_round_trip_uses_checked_cards_and_rejects_missing_s
             'steps':[{'step_id':'sum','formula':'sum(s)','value':'1.235','display_value':'1.24','unit':'VND','currency':'VND'}],
             'rounding_rule':{'scale':2,'mode':'ROUND_HALF_UP','reviewed':True},
             'scopes':[{'scope_id':'s','scope_hash':'a'*64,'snapshot_id':'batch','row_count':1}]}
+    if live:
+        math = {**math, 'contract':'grounded-math-scope-total-controlled-demo-v1',
+                'activation_scope':'controlled_demo', 'offline_only':False}
     payload = serialize_history_result({'math':math}, [card])
     assert payload is not None
     restored = restore_history_result(payload, [card])['math']
     assert restored['steps'] == math['steps'] and restored['sources'] == [card]
+    assert restored['contract'] == math['contract'] and restored['offline_only'] is (not live)
     with pytest.raises(ValueError): restore_history_result(payload, [])
     with pytest.raises(ValueError): restore_history_result(payload, [{**card,'scope_hash':'b'*64}])
     with pytest.raises(ValueError): serialize_history_result({'math':{**math,'accepted':True}}, [card])
+    with pytest.raises(ValueError): serialize_history_result({'math':{**math,'offline_only':live}}, [card])
+    if live:
+        with pytest.raises(ValueError): serialize_history_result({'math':{**math,'activation_scope':'default_rollout'}}, [card])
 
 
 def test_query_scope_total_history_preserves_branch_scope_binding():

@@ -154,3 +154,14 @@ def require_graph_context(mode, profile, *, authorizer=None):
             or cap.context!='controlled_demo'):
         raise HTTPException(409,detail='Graph v2 source authority required')
     return mode
+
+
+def require_scope_total_context(mode, profile, *, authorizer=None):
+    if mode in {'evaluation', 'test'}:
+        return require_v2_evaluation_context(mode, profile)
+    from mech_chatbot.governance.scope_total_activation import ScopeTotalCapability, CONTRACT
+    cap = authorizer() if callable(authorizer) else None
+    if (mode != 'production' or not isinstance(cap, ScopeTotalCapability)
+            or cap.contract != CONTRACT or cap.template != 'sum_reviewed_scope' or cap.context != 'controlled_demo'):
+        raise HTTPException(409, detail='Scope total authority required')
+    return mode

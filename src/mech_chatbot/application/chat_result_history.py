@@ -109,10 +109,13 @@ def restore_history_result(payload, citations):
 
 
 def _total_body(value):
+    evaluation = (isinstance(value, Mapping) and value.get('contract') == 'grounded-math-v2-scope-total-evaluation-v1'
+                  and value.get('offline_only') is True)
+    live = (isinstance(value, Mapping) and value.get('contract') == 'grounded-math-scope-total-controlled-demo-v1'
+            and value.get('offline_only') is False and value.get('activation_scope') == 'controlled_demo')
     if (not isinstance(value, Mapping) or value.get('schema') != 'grounded-calculation-scope-total-v1'
             or value.get('template') != 'sum_reviewed_scope'
-            or value.get('contract') != 'grounded-math-v2-scope-total-evaluation-v1'
-            or value.get('accepted') is not False or value.get('offline_only') is not True
+            or not (evaluation or live) or value.get('accepted') is not False
             or value.get('status') not in ('complete','blocked')):
         raise ValueError('Invalid total history contract')
     complete = value['status']=='complete'
@@ -122,6 +125,8 @@ def _total_body(value):
             or not isinstance(scopes,(list,tuple)) or len(scopes)!=int(complete)):
         raise ValueError('Invalid total history evidence')
     body = _pick(value, ('schema','template','contract','status','domain_step_count','accepted','offline_only'))
+    if live:
+        body['activation_scope'] = value['activation_scope']
     body['steps'] = [_pick(step, ('step_id','formula','value','display_value','unit','currency','status')) for step in steps]
     if complete and body['steps'][0].get('step_id')!='sum':
         raise ValueError('Invalid total history step')

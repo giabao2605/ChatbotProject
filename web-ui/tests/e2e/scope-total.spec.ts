@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-test('selected scope total reaches chat and renders its exact step and source', async ({ page, context }) => {
+for (const live of [false, true]) {
+test(`selected scope total renders its exact step and source (${live ? 'granted' : 'evaluation'})`, async ({ page, context }) => {
   let sent: Record<string, unknown> | undefined;
   const card = { doc_id: 17, version_no: 3, page_no: null, source_id: 'D17L1234567890abcdef',
     file_name: 'synthetic-ledger.csv', citation_schema: 'source-locator-v2', scope_id: 'ledger',
@@ -16,15 +17,19 @@ test('selected scope total reaches chat and renders its exact step and source', 
         'event: delta\ndata: ' + JSON.stringify({ text: 'Tổng: 0.01 VND (trước làm tròn: 0.009 VND).' }) + '\n\n' +
         'event: done\ndata: ' + JSON.stringify({ advanced_rag: { math: {
           schema: 'grounded-calculation-scope-total-v1', template: 'sum_reviewed_scope',
-          contract: 'grounded-math-v2-scope-total-evaluation-v1', accepted: false, offline_only: true,
+          contract: live ? 'grounded-math-scope-total-controlled-demo-v1' : 'grounded-math-v2-scope-total-evaluation-v1',
+          accepted: false, offline_only: !live, ...(live ? {activation_scope:'controlled_demo'} : {}),
           status: 'complete', domain_step_count: 1, scopes: [{ scope_id: 'ledger' }], sources: [card],
           steps: [{ step_id: 'sum', formula: 'sum(ledger)', value: '0.009', display_value: '0.01', unit: 'VND', status: 'valid' }],
         } } }) + '\n\n' });
     }
     let data: unknown = {};
-    if (url.pathname === '/api/auth/me') data = { ok: true, user: { user_id: 7, username: 'synthetic-reviewer', roles: ['reviewer'],
+    if (url.pathname === '/api/auth/me') data = { ok: true, user: { user_id: 7, username: 'synthetic-reviewer', roles: [live ? 'viewer' : 'reviewer'],
       allowed_departments: ['Accountant'], allowed_sites: ['factory'], max_security_level: 'internal', csrf_token: 'synthetic-csrf' } };
-    else if (url.pathname.endsWith('/evaluation-capabilities')) data = { schema: 'advanced-rag-v2-evaluation', accepted: false,
+    else if (url.pathname.endsWith('/evaluation-capabilities')) data = live ? {
+      schema:'advanced-rag-v2-controlled-demo',contract:'grounded-math-scope-total-controlled-demo-v1',
+      accepted:false,offline_only:false,max_branches:1,actions:['scope_total'],text_query:false
+    } : { schema: 'advanced-rag-v2-evaluation', accepted: false,
       offline_only: true, max_branches: 3, actions: ['contains', 'where_used', 'bom_rollup', 'scope_comparison', 'scope_total'] };
     else if (url.pathname === '/api/documents') data = { documents: [{ DocID: 17, TenFile: 'synthetic-ledger.csv' }] };
     else if (url.pathname.endsWith('/approved-scopes')) data = { items: [{ scope_id: 'ledger', definition: 'Whole reviewed export', unit: 'VND' }], offset: 0, has_more: false };
@@ -33,11 +38,12 @@ test('selected scope total reaches chat and renders its exact step and source', 
   });
   await page.goto('/chat');
   await expect(page.getByRole('heading', { name: 'Trợ lý tài liệu nội bộ', exact: true })).toBeVisible();
-  await page.getByRole('checkbox', { name: 'Chọn tác vụ có căn cứ (đánh giá)', exact: true }).check();
+  await page.getByRole('checkbox', { name: live ? 'Tính tổng có căn cứ (bật thử)' : 'Chọn tác vụ có căn cứ (đánh giá)', exact: true }).check();
   await page.getByLabel('Tác vụ ý 1', { exact: true }).selectOption('scope_total');
   await page.getByLabel('Tài liệu Phạm vi tính tổng ý 1', { exact: true }).selectOption('17');
   await page.getByLabel('Phạm vi tính tổng ý 1', { exact: true }).selectOption('ledger');
-  await expect(page.getByRole('button', { name: 'Thêm ý', exact: true })).toBeDisabled();
+  if (live) await expect(page.getByRole('button', { name: 'Thêm ý', exact: true })).toHaveCount(0);
+  else await expect(page.getByRole('button', { name: 'Thêm ý', exact: true })).toBeDisabled();
   await page.locator('textarea').fill('Tổng phạm vi đã chọn');
   await page.getByRole('button', { name: 'Gửi', exact: true }).click();
   const result = page.getByRole('region', { name: 'Tổng một phạm vi', exact: true });
@@ -50,6 +56,7 @@ test('selected scope total reaches chat and renders its exact step and source', 
   expect(sent).not.toHaveProperty('scope_comparison');
   await expect(result.getByRole('link')).toHaveCount(1);
 });
+}
 
 test('two explicit scope totals stay separate and the UI refuses a fourth branch', async ({ page, context }) => {
   let sent: Record<string, unknown> | undefined;

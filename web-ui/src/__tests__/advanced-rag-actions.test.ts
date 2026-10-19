@@ -91,6 +91,26 @@ it('allows explicit total branches only when the server advertises that contract
   expect(state.query_plan!.branches.map(branch=>branch.scope_total)).toEqual([{scope_id:'total-a'},{scope_id:'total-a'}]);
 });
 
+it('offers only one scope total to a viewer with the exact live total contract',async()=>{
+  vi.mocked(api.apiGet).mockImplementation(async path=>{
+    if(path.endsWith('evaluation-capabilities')) return {schema:'advanced-rag-v2-controlled-demo',
+      contract:'grounded-math-scope-total-controlled-demo-v1',accepted:false,offline_only:false,
+      max_branches:1,actions:['scope_total'],text_query:false} as never;
+    if(path==='/api/documents') return {documents:[{DocID:1,TenFile:'Chi phí.csv'}]} as never;
+    return {items:[{scope_id:'total-a',definition:'Chi phí',unit:'VND'}],offset:0,has_more:false} as never;
+  });
+  const wrapper=create();
+  useAuthStore().user={...useAuthStore().user!,roles:['viewer']};await flushPromises();
+  expect(wrapper.text()).toContain('Tính tổng có căn cứ (bật thử)');
+  await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises();
+  expect(wrapper.get('select[aria-label="Tác vụ ý 1"]').findAll('option').map(option=>option.element.value)).toEqual(['scope_total']);
+  expect(wrapper.findAll('button').some(button=>button.text()==='Thêm ý')).toBe(false);
+  expect(wrapper.find('select[aria-label="Chế độ đánh giá"]').exists()).toBe(false);
+  await wrapper.get('select[aria-label="Tài liệu Phạm vi tính tổng ý 1"]').setValue('1');await flushPromises();
+  await wrapper.get('select[aria-label="Phạm vi tính tổng ý 1"]').setValue('total-a');
+  expect(wrapper.emitted('change')!.at(-1)).toEqual([{active:true,valid:true,scope_total:{scope_id:'total-a'}}]);
+});
+
 it('builds an explicit bounded graph action and clears it when disabled',async()=>{
   const wrapper=create(); await flushPromises();
   await wrapper.get('input[type="checkbox"]').setValue(true); await flushPromises();

@@ -141,6 +141,15 @@ def _result(value):
 @router.get('/evaluation-capabilities')
 def evaluation_capabilities(request: Request, profile: dict[str, Any] = Depends(current_profile)):
     mode = getattr(request.app.state.settings_snapshot, 'RAG_EXECUTION_CONTEXT', 'production')
+    math_authorizer = getattr(getattr(request.app.state, 'runtime', None), 'math_v2_authorizer', None)
+    math_cap = math_authorizer() if callable(math_authorizer) and mode == 'production' else None
+    from mech_chatbot.governance.scope_total_activation import ScopeTotalCapability
+    if isinstance(math_cap, ScopeTotalCapability):
+        from mech_chatbot.api.evidence_contracts import require_scope_total_context
+        require_scope_total_context(mode, profile, authorizer=lambda: math_cap)
+        return {'schema':'advanced-rag-v2-controlled-demo', 'contract':math_cap.contract,
+                'accepted':False, 'offline_only':False, 'max_branches':1,
+                'actions':['scope_total'], 'text_query':False}
     graph_authorizer=getattr(getattr(request.app.state,'runtime',None),'graph_v2_authorizer',None)
     graph_cap=graph_authorizer() if callable(graph_authorizer) and mode=='production' else None
     if graph_cap is not None:
@@ -176,7 +185,13 @@ def approved_document_scopes(request: Request, doc_id: int = Path(ge=1, le=21474
                              profile: dict[str, Any] = Depends(current_profile)):
     mode = getattr(request.app.state.settings_snapshot, 'RAG_EXECUTION_CONTEXT', 'production')
     authorizer = getattr(getattr(request.app.state, 'runtime', None), 'math_v2_authorizer', None)
-    require_comparison_context(mode, profile, comparison_only=True, authorizer=authorizer)
+    cap = authorizer() if callable(authorizer) and mode == 'production' else None
+    from mech_chatbot.governance.scope_total_activation import ScopeTotalCapability
+    if isinstance(cap, ScopeTotalCapability):
+        from mech_chatbot.api.evidence_contracts import require_scope_total_context
+        require_scope_total_context(mode, profile, authorizer=lambda: cap)
+    else:
+        require_comparison_context(mode, profile, comparison_only=True, authorizer=authorizer)
     page = _call(service.list_approved_document_scopes, doc_id, profile, offset=offset, limit=limit,
                  deadline_seconds=getattr(request.app.state.settings_snapshot, 'RAG_REQUEST_DEADLINE_SECONDS', 120))
     if mode == 'production':

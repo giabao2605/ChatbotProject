@@ -48,12 +48,15 @@ def read_history(store, *, sites=('factory',)):
 
 
 @pytest.mark.parametrize('change', ['site', 'revision', 'correction'])
-def test_scope_total_history_keeps_steps_and_redacts_unavailable_basis(history_store, change):
+@pytest.mark.parametrize('live', [False, True])
+def test_scope_total_history_keeps_steps_and_redacts_unavailable_basis(history_store, change, live):
     from mech_chatbot.application.chat_result_history import restore_history_result
+    from .test_scope_total_production import capability
     approved_pair(history_store)
+    cap = capability(history_store) if live else None
     with bind_repository_runtime(db_engine=history_store):
-        result = collect_rag_events(DefaultRagExecutor().run(
-            replace(request(),scope_comparison=None,scope_total='a'),RagInvocation('sum-history',mode='test')))
+        result = collect_rag_events(DefaultRagExecutor(math_v2_authorizer=lambda: cap).run(
+            replace(request(),scope_comparison=None,scope_total='a'),RagInvocation('sum-history',mode='production' if live else 'test')))
     with history_store.begin() as conn:
         conn.execute(text("INSERT INTO LichSuChat VALUES(11,'s1','Total',:answer,NULL,NULL,NULL,'approver','2026-10-19')"),
                      {'answer':result.answer+result.ref_text})

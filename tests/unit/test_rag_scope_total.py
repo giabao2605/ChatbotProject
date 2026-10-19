@@ -52,9 +52,12 @@ def test_scope_total_denies_unavailable_source_without_number_or_citation(store,
 @pytest.mark.parametrize('mode', ['production', 'pilot_replay'])
 def test_old_live_authority_cannot_enable_scope_total(mode, monkeypatch):
     from mech_chatbot.db.repositories import structured_evidence
+    from mech_chatbot.governance.math_v2_activation import MathV2Capability, CONTRACT
     monkeypatch.setattr(structured_evidence, 'load_approved_scope', lambda *_: pytest.fail('source read before authority'))
-    executor = DefaultRagExecutor(math_v2_authorizer=lambda: pytest.fail('old comparison grant cannot authorize sum'))
-    with pytest.raises(ValueError, match='Scope total requires evaluation context'):
+    cap = MathV2Capability(CONTRACT, 'compare_two_scopes', (), 'candidate', 'b'*64, 'c'*64, '2099-01-01T00:00:00Z')
+    executor = DefaultRagExecutor(math_v2_authorizer=lambda: cap)
+    error = PermissionError if mode == 'production' else ValueError
+    with pytest.raises(error, match='Scope total'):
         collect_rag_events(executor.run(selected(), RagInvocation('no-live-total', mode=mode)))
 
 

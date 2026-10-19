@@ -437,7 +437,11 @@ def chat_message(
         raise HTTPException(422,detail='Select one v2 template')
     if req.scope_total is not None or req.scope_comparison is not None or req.graph_query is not None or req.bom_rollup is not None or req.query_plan is not None or req.text_query:
         snapshot = getattr(request.app.state, 'settings_snapshot', None)
-        if req.graph_query is not None:
+        if req.scope_total is not None:
+            from mech_chatbot.api.evidence_contracts import require_scope_total_context
+            require_scope_total_context(getattr(snapshot, 'RAG_EXECUTION_CONTEXT', 'production'), profile,
+                authorizer=getattr(request.app.state.runtime, 'math_v2_authorizer', None))
+        elif req.graph_query is not None:
             from mech_chatbot.api.evidence_contracts import require_graph_context
             require_graph_context(getattr(snapshot,'RAG_EXECUTION_CONTEXT','production'),profile,
                 authorizer=getattr(request.app.state.runtime,'graph_v2_authorizer',None))
