@@ -84,7 +84,8 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
 def _query_plan_payload(plan):
     branches=[]
     for branch in plan.branches:
-        action=({'graph_query':graph_query_context(branch.graph_query)} if branch.graph_query else
+        action=({'scope_total':{'scope_id':branch.scope_total}} if branch.scope_total is not None else
+                {'graph_query':graph_query_context(branch.graph_query)} if branch.graph_query else
                 {'bom_rollup':bom_rollup_context(branch.bom_rollup)} if branch.bom_rollup else
                 {'scope_comparison':{'scope_a':branch.scope_comparison[0],'scope_b':branch.scope_comparison[1]}})
         branches.append({'branch_id':branch.branch_id,'question':branch.question,'depends_on':branch.depends_on,**action})
@@ -113,6 +114,7 @@ def _default_payload(request: RagStreamRequest) -> dict[str, Any]:
             if isinstance(command.conversation_context, Mapping)
             else command.conversation_context
         ),
+        **({'scope_total': {'scope_id':command.scope_total}} if command.scope_total is not None else {}),
         **({'scope_comparison': {'scope_a':command.scope_comparison[0], 'scope_b':command.scope_comparison[1]}}
            if command.scope_comparison is not None else {}),
         **({'graph_query':graph_query_context(command.graph_query)} if command.graph_query is not None else {}),

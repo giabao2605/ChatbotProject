@@ -73,7 +73,7 @@ def test_ui_capabilities_are_evaluation_only_and_require_reviewer(monkeypatch):
     assert client(monkeypatch, roles=('viewer',)).get(path).status_code == 403
     value = client(monkeypatch).get(path).json()
     assert value == {'schema':'advanced-rag-v2-evaluation', 'accepted':False, 'offline_only':True,
-                     'max_branches':3, 'actions':['contains','where_used','bom_rollup','scope_comparison'],'text_query':True}
+                     'max_branches':3, 'actions':['contains','where_used','bom_rollup','scope_comparison','scope_total'],'text_query':True,'scope_total_query':True}
 
 
 def test_graph_scope_picker_guard_pagination_and_safe_storage_error(monkeypatch):

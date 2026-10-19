@@ -6,11 +6,11 @@ import ApprovedScopePicker from '@/components/ApprovedScopePicker.vue';
 import GraphScopePicker from '@/components/GraphScopePicker.vue';
 import type { EvidenceDocument, QueryAction, QueryActionState } from '@/types';
 
-type Action = 'contains'|'where_used'|'bom_rollup'|'scope_comparison';
+type Action = 'contains'|'where_used'|'bom_rollup'|'scope_comparison'|'scope_total';
 type Draft = {id:string;action:Action;question:string;doc:string;part:string;product:string;site:string;
   quantity:string;quantityMode:'literal'|'source';quantityScope:string;scopeA:string;scopeB:string;policy:string;dependencies:string[]};
 const labels:Record<Action,string> = {contains:'Cụm chứa gì?',where_used:'Chi tiết dùng ở đâu?',
-  bom_rollup:'Tổng hợp BOM',scope_comparison:'So sánh hai phạm vi'};
+  bom_rollup:'Tổng hợp BOM',scope_comparison:'So sánh hai phạm vi',scope_total:'Tổng một phạm vi'};
 const props=defineProps<{disabled:boolean}>();
 const emit=defineEmits<{change:[state:QueryActionState]}>();
 const auth=useAuthStore();
@@ -20,6 +20,9 @@ const graphPilot=ref(false);
 const combinedPilot=ref(false);
 const standalone=computed(()=>comparisonPilot.value || graphPilot.value || combinedPilot.value);
 const textAvailable=ref(false);
+const totalAvailable=ref(false);
+const totalQueryAvailable=ref(false);
+const evaluationLabels=computed(()=>Object.fromEntries(Object.entries(labels).filter(([action])=>action!=='scope_total' || (totalAvailable.value && (rows.value.length===1 || totalQueryAvailable.value)))));
 const mode=ref<'structured'|'text'>('structured');
 const enabled=ref(false);
 const loading=ref(false);
@@ -53,15 +56,20 @@ function depend(row:Draft,id:string,checked:boolean) {
 const state=computed<QueryActionState>(()=>{
   if (!available.value || !enabled.value) return {active:false,valid:true};
   if (mode.value==='text' && textAvailable.value) return {active:true,valid:true,text_query:true};
+  if (rows.value.length===1 && rows.value[0]?.action==='scope_total') {
+    const row=rows.value[0];
+    return {active:true,valid:totalAvailable.value && !loading.value && !error.value && rows.value.length===1
+      && row.action==='scope_total' && Boolean(row.scopeA && row.question.trim()),scope_total:{scope_id:row.scopeA}};
+  }
   const branches:QueryAction[]=rows.value.map(row=>{
     const graph={root_key:row.action==='where_used'?`part:${row.part.trim()}`:`document:${row.doc}`,
       product_scope:row.product.trim(),site:row.site,direction:row.action==='where_used'?'where_used' as const:'contains' as const};
     return {branch_id:row.id,question:row.question.trim(),depends_on:[...row.dependencies],
-      ...(row.action==='scope_comparison'?{scope_comparison:{scope_a:row.scopeA,scope_b:row.scopeB}}:
+      ...(row.action==='scope_total'?{scope_total:{scope_id:row.scopeA}}:row.action==='scope_comparison'?{scope_comparison:{scope_a:row.scopeA,scope_b:row.scopeB}}:
         row.action==='bom_rollup'?{bom_rollup:{...graph,...(row.quantityMode==='source'?{quantity_scope:row.quantityScope}:{order_quantity:row.quantity}),rounding_scope:row.policy}}:{graph_query:graph})};
   });
   const valid=!loading.value && !error.value && rows.value.length>=1 && rows.value.length<=3 && rows.value.every(row=>
-    Boolean(row.question.trim()) && (row.action==='scope_comparison'?Boolean(row.scopeA && row.scopeB):
+    Boolean(row.question.trim()) && (row.action==='scope_total'?Boolean(totalQueryAvailable.value && row.scopeA):row.action==='scope_comparison'?Boolean(row.scopeA && row.scopeB):
       Boolean(row.product.trim() && row.site && (row.action==='where_used'?row.part.trim():row.doc)
         && (row.action!=='bom_rollup' || ((row.quantityMode==='source'?Boolean(row.quantityScope):/^[0-9]+(?:\.[0-9]+)?$/.test(row.quantity)) && row.policy)))));
   if (comparisonPilot.value || (combinedPilot.value && rows.value[0]?.action==='scope_comparison')) return {active:true,valid:valid && rows.value.length===1 && rows.value[0]?.action==='scope_comparison'
@@ -75,10 +83,10 @@ watch(()=>JSON.stringify(auth.user),async()=>{
   const request=++capabilitySerial;
   documentSerial++;
   available.value=false;enabled.value=false;rows.value=[];documents.value=[];error.value='';loading.value=false;
-  textAvailable.value=false;comparisonPilot.value=false;graphPilot.value=false;combinedPilot.value=false;mode.value='structured';
+  textAvailable.value=false;totalAvailable.value=false;totalQueryAvailable.value=false;comparisonPilot.value=false;graphPilot.value=false;combinedPilot.value=false;mode.value='structured';
   if (!auth.user) return;
   try {
-    const capabilities=await apiGet<{schema:string;contract?:string;accepted:boolean;offline_only:boolean;max_branches:number;actions:string[];text_query?:boolean}>(
+    const capabilities=await apiGet<{schema:string;contract?:string;accepted:boolean;offline_only:boolean;max_branches:number;actions:string[];text_query?:boolean;scope_total_query?:boolean}>(
       '/api/rag-evidence/evaluation-capabilities');
     if (request!==capabilitySerial) return;
     comparisonPilot.value=capabilities.schema==='advanced-rag-v2-controlled-demo'
@@ -96,7 +104,9 @@ watch(()=>JSON.stringify(auth.user),async()=>{
     available.value=standalone.value || (auth.user.roles.some(role=>['reviewer','knowledge_approver','admin'].includes(role.toLowerCase()))
       && capabilities.schema==='advanced-rag-v2-evaluation' && capabilities.accepted===false
       && capabilities.offline_only===true && capabilities.max_branches===3
-      && Object.keys(labels).every(action=>capabilities.actions?.includes(action)));
+      && ['contains','where_used','bom_rollup','scope_comparison'].every(action=>capabilities.actions?.includes(action)));
+    totalAvailable.value=!standalone.value && available.value && capabilities.actions?.includes('scope_total');
+    totalQueryAvailable.value=totalAvailable.value && capabilities.scope_total_query===true;
     textAvailable.value=!standalone.value && available.value && capabilities.text_query===true;
   } catch {
     if (request===capabilitySerial) available.value=false;
@@ -142,14 +152,19 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
         <label>Tác vụ
           <select :value="row.action" :aria-label="`Tác vụ ý ${index+1}`"
             @change="changeAction(row,($event.target as HTMLSelectElement).value as Action)">
-            <option v-for="(label,action) in (comparisonPilot ? {scope_comparison:labels.scope_comparison} : graphPilot ? {contains:labels.contains,where_used:labels.where_used} : combinedPilot ? {contains:labels.contains,where_used:labels.where_used,scope_comparison:labels.scope_comparison} : labels)" :key="action" :value="action">{{ label }}</option>
+            <option v-for="(label,action) in (comparisonPilot ? {scope_comparison:labels.scope_comparison} : graphPilot ? {contains:labels.contains,where_used:labels.where_used} : combinedPilot ? {contains:labels.contains,where_used:labels.where_used,scope_comparison:labels.scope_comparison} : evaluationLabels)" :key="action" :value="action">{{ label }}</option>
           </select>
         </label>
         <label>Nội dung ý {{ index+1 }}
           <input :value="row.question" :aria-label="`Nội dung ý ${index+1}`" maxlength="20000"
             @input="update(row.id,{question:($event.target as HTMLInputElement).value})" />
         </label>
-        <template v-if="row.action==='scope_comparison'">
+        <template v-if="row.action==='scope_total'">
+          <ApprovedScopePicker :documents="documents" :label="`Phạm vi tính tổng ý ${index+1}`" :model-value="row.scopeA" :disabled="disabled"
+            @update:model-value="update(row.id,{scopeA:$event})" />
+          <p>Cộng đủ dòng trong phạm vi đã duyệt. Có thể kết hợp tối đa ba tác vụ khi máy chủ hỗ trợ.</p>
+        </template>
+        <template v-else-if="row.action==='scope_comparison'">
           <ApprovedScopePicker :documents="documents" :label="`Phạm vi A ý ${index+1}`" :model-value="row.scopeA" :disabled="disabled"
             @update:model-value="update(row.id,{scopeA:$event})" />
           <ApprovedScopePicker :documents="documents" :label="`Phạm vi B ý ${index+1}`" :model-value="row.scopeB" :disabled="disabled"
@@ -203,7 +218,7 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
         </label>
         <button v-if="rows.length>1" type="button" @click="remove(row.id)">Bỏ ý {{ index+1 }}</button>
       </fieldset>
-      <button v-if="!standalone" type="button" :disabled="disabled || loading || rows.length>=3" @click="rows=[...rows,draft()]">Thêm ý</button>
+      <button v-if="!standalone" type="button" :disabled="disabled || loading || rows.length>=3 || (rows[0]?.action==='scope_total' && !totalQueryAvailable)" @click="rows=[...rows,draft()]">Thêm ý</button>
       <p v-if="!state.valid && !loading && !error" role="status">Chọn đủ nguồn và phạm vi cho từng ý trước khi gửi.</p>
       </template>
     </template>

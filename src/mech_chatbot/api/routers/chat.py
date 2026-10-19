@@ -24,7 +24,7 @@ from mech_chatbot.db.evidence_snapshot import evidence_read_snapshot, EvidenceSn
 
 from mech_chatbot.api import app_security
 from mech_chatbot.api.dependencies import csrf_profile, current_profile
-from mech_chatbot.api.evidence_contracts import ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, require_comparison_context
+from mech_chatbot.api.evidence_contracts import ScopeTotalRequest, ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, require_comparison_context
 from mech_chatbot.api.file_access import chat_image_path, data_raw_root, page_has_vision
 from mech_chatbot.api.request_limits import (
     UploadTooLarge,
@@ -69,6 +69,7 @@ class ChatMessageRequest(BaseModel):
     chat_history: list[dict[str, Any]] = Field(default_factory=list)
     current_part_ids: list[str] = Field(default_factory=list)
     conversation_context: dict[str, Any] | None = None
+    scope_total: ScopeTotalRequest | None = None
     scope_comparison: ScopeComparisonRequest | None = None
     graph_query: GraphQueryRequest | None = None
     bom_rollup: BomRollupRequest | None = None
@@ -432,9 +433,9 @@ def chat_message(
     req: ChatMessageRequest,
     profile: dict[str, Any] = Depends(csrf_profile),
 ):
-    if sum(value is not None for value in (req.scope_comparison,req.graph_query,req.bom_rollup,req.query_plan))+int(req.text_query)>1:
+    if sum(value is not None for value in (req.scope_total,req.scope_comparison,req.graph_query,req.bom_rollup,req.query_plan))+int(req.text_query)>1:
         raise HTTPException(422,detail='Select one v2 template')
-    if req.scope_comparison is not None or req.graph_query is not None or req.bom_rollup is not None or req.query_plan is not None or req.text_query:
+    if req.scope_total is not None or req.scope_comparison is not None or req.graph_query is not None or req.bom_rollup is not None or req.query_plan is not None or req.text_query:
         snapshot = getattr(request.app.state, 'settings_snapshot', None)
         if req.graph_query is not None:
             from mech_chatbot.api.evidence_contracts import require_graph_context
@@ -461,6 +462,7 @@ def chat_message(
         conversation_context=(
             dict(req.conversation_context) if req.conversation_context else None
         ),
+        scope_total=req.scope_total.scope_id if req.scope_total is not None else None,
         scope_comparison=((req.scope_comparison.scope_a, req.scope_comparison.scope_b)
                           if req.scope_comparison is not None else None),
         graph_query=req.graph_query.to_query() if req.graph_query is not None else None,

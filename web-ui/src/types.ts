@@ -48,10 +48,10 @@ export type ApprovedScopeChoice = {scope_id:string; definition:string; period:st
 export type GraphAction = {root_key:string; product_scope:string; site:string; direction:'contains'|'where_used'};
 export type BomQuantity = {order_quantity:string;quantity_scope?:never}|{quantity_scope:string;order_quantity?:never};
 export type QueryAction = {branch_id:string; question:string; depends_on:string[]; graph_query?:GraphAction;
-  scope_comparison?:{scope_a:string;scope_b:string}; bom_rollup?:GraphAction & BomQuantity & {rounding_scope:string}};
-export type QueryActionState = {active:boolean;valid:boolean;query_plan?:{branches:QueryAction[]};text_query?:true;scope_comparison?:{scope_a:string;scope_b:string};graph_query?:GraphAction};
-export type MathEvidenceResult = {steps?:{step_id:string;formula:string;display_value?:string;value?:string|null;unit:string;status?:string}[]};
-export type AdvancedRagMetadata = {text_query?:{schema:string;accepted:boolean;offline_only:boolean;
+  scope_total?:{scope_id:string};scope_comparison?:{scope_a:string;scope_b:string}; bom_rollup?:GraphAction & BomQuantity & {rounding_scope:string}};
+export type QueryActionState = {active:boolean;valid:boolean;scope_total?:{scope_id:string};query_plan?:{branches:QueryAction[]};text_query?:true;scope_comparison?:{scope_a:string;scope_b:string};graph_query?:GraphAction};
+export type MathEvidenceResult = {schema?:string;steps?:{step_id:string;formula:string;display_value?:string;value?:string|null;unit:string;status?:string}[]};
+export type AdvancedRagMetadata = {math?:MathEvidenceResult & {schema:string;template:string;status:string;accepted:boolean;offline_only:boolean;sources?:Citation[]};text_query?:{schema:string;accepted:boolean;offline_only:boolean;
   branches:{branch_id:string;subquery:string;outcome:string;evaluator_state?:string|null;cited_sources:Citation[]}[]};
   query?:{schema:string;status:string;accepted:boolean;offline_only:boolean;
   branches:{branch_id:string;question:string;status:string;data_complete?:boolean;sources:Citation[];

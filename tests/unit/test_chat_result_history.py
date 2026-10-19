@@ -4,6 +4,46 @@ import json
 import pytest
 from mech_chatbot.application.chat_result_history import serialize_history_result, restore_history_result
 
+
+def test_scope_total_history_round_trip_uses_checked_cards_and_rejects_missing_sources():
+    card = {'source_id':'D1Ltotal', 'scope_id':'s', 'scope_hash':'a'*64}
+    math = {'schema':'grounded-calculation-scope-total-v1','template':'sum_reviewed_scope',
+            'contract':'grounded-math-v2-scope-total-evaluation-v1', 'status':'complete',
+            'accepted':False,'offline_only':True,'domain_step_count':1,
+            'steps':[{'step_id':'sum','formula':'sum(s)','value':'1.235','display_value':'1.24','unit':'VND','currency':'VND'}],
+            'rounding_rule':{'scale':2,'mode':'ROUND_HALF_UP','reviewed':True},
+            'scopes':[{'scope_id':'s','scope_hash':'a'*64,'snapshot_id':'batch','row_count':1}]}
+    payload = serialize_history_result({'math':math}, [card])
+    assert payload is not None
+    restored = restore_history_result(payload, [card])['math']
+    assert restored['steps'] == math['steps'] and restored['sources'] == [card]
+    with pytest.raises(ValueError): restore_history_result(payload, [])
+    with pytest.raises(ValueError): restore_history_result(payload, [{**card,'scope_hash':'b'*64}])
+    with pytest.raises(ValueError): serialize_history_result({'math':{**math,'accepted':True}}, [card])
+
+
+def test_query_scope_total_history_preserves_branch_scope_binding():
+    card={'source_id':'D1Lsum','scope_id':'s','scope_hash':'a'*64}
+    math={'schema':'grounded-calculation-scope-total-v1','template':'sum_reviewed_scope',
+          'contract':'grounded-math-v2-scope-total-evaluation-v1','status':'complete','accepted':False,
+          'offline_only':True,'domain_step_count':1,'steps':[{'step_id':'sum','value':'2.345','display_value':'2.35','formula':'sum(s)','unit':'VND'}],
+          'scopes':[{'scope_id':'s','scope_hash':'a'*64,'snapshot_id':'batch'}]}
+    metadata={'query':{'schema':'query-plan-scope-total-v1','contract':'query-plan-scope-total-v1',
+        'status':'partial','accepted':False,'offline_only':True,'branches':[
+            {'branch_id':'sum','question':'Tổng','status':'complete','math':math,'sources':[card]},
+            {'branch_id':'missing','question':'Thiếu','status':'blocked','sources':[]}]}}
+    payload=serialize_history_result(metadata,[card])
+    restored=restore_history_result(payload,[card])['query']
+    assert restored['contract']=='query-plan-scope-total-v1'
+    assert restored['branches'][0]['math']['steps']==math['steps']
+    assert restored['branches'][0]['sources']==[card]
+    with pytest.raises(ValueError):restore_history_result(payload,[{**card,'scope_hash':'b'*64}])
+    swapped=json.loads(payload)
+    swapped['result']['branches'][0]['source_ids']=['other']
+    with pytest.raises(ValueError):restore_history_result(json.dumps(swapped),[card,{**card,'source_id':'other','scope_id':'other-scope'}])
+    with pytest.raises(ValueError):serialize_history_result(metadata,[])
+    with pytest.raises(ValueError):serialize_history_result({'query':{**metadata['query'],'schema':'query-plan-v2'}},[card])
+
 CARD = {'source_id':'D17P2','original_url':'/api/current-source','file_name':'current.pdf'}
 
 

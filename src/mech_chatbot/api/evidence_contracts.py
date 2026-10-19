@@ -9,6 +9,11 @@ from mech_chatbot.domain.task_routing import CandidateSelection, CandidateSelect
 from mech_chatbot.api.transport_utils import assert_any_role
 
 
+class ScopeTotalRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', frozen=True)
+    scope_id: str = Field(strict=True, min_length=1, max_length=255, pattern=r'\S')
+
+
 class ScopeComparisonRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     scope_a: str = Field(strict=True, min_length=1, max_length=255, pattern=r'\S')
@@ -58,6 +63,7 @@ class QueryBranchRequest(BaseModel):
     bom_rollup:BomRollupRequest|None=None
     depends_on:tuple[str,...]=Field(default=(),max_length=2)
     text_query:bool=Field(default=False,strict=True)
+    scope_total:ScopeTotalRequest|None=None
 
     @model_validator(mode='after')
     def one_action(self):
@@ -68,7 +74,8 @@ class QueryBranchRequest(BaseModel):
         return QueryBranch(self.branch_id,self.question,
             scope_comparison=(self.scope_comparison.scope_a,self.scope_comparison.scope_b) if self.scope_comparison else None,
             graph_query=self.graph_query.to_query() if self.graph_query else None,
-            bom_rollup=self.bom_rollup.to_rollup() if self.bom_rollup else None,depends_on=self.depends_on,text_query=self.text_query)
+            bom_rollup=self.bom_rollup.to_rollup() if self.bom_rollup else None,depends_on=self.depends_on,text_query=self.text_query,
+            scope_total=self.scope_total.scope_id if self.scope_total else None)
 
 
 class QueryPlanRequest(BaseModel):

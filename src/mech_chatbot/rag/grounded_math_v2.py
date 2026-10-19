@@ -20,6 +20,8 @@ _ROUNDING_MODES = {
     "ROUND_DOWN", "ROUND_CEILING", "ROUND_FLOOR", "ROUND_05UP",
 }
 
+SCOPE_TOTAL_CONTRACT = 'grounded-math-v2-scope-total-evaluation-v1'
+
 
 @dataclass(frozen=True)
 class MathStep:
@@ -125,6 +127,28 @@ def _scope_valid(scope) -> bool:
             return False
         hashes[doc_key] = fact.source_hash
     return bool(revisions) and set(hashes) <= set(revisions)
+
+
+def sum_reviewed_scope(scope: ScopeManifest) -> MathResult:
+    """Sum the complete reviewed row set once, then apply its rounding policy."""
+    template = 'sum_reviewed_scope'
+    try:
+        valid = _scope_valid(scope)
+    except (ValueError, TypeError, AttributeError):
+        valid = False
+    if not valid:
+        return MathResult(template, 'blocked', reason='invalid_scope_evidence')
+    values = tuple(fact.value for fact in scope.facts)
+    try:
+        with localcontext() as context:
+            context.prec = _precision(values)
+            total = sum(values, Decimal(0))
+            step = _step('sum', total, scope.unit, scope.currency,
+                         f'sum({scope.scope_id})', (scope.scope_id,), scope.rounding_rule)
+    except DecimalException:
+        return MathResult(template, 'blocked', reason='numeric_range')
+    return MathResult(template, 'complete', (step,), evidence_json=json.dumps(
+        _json_value((scope,)), ensure_ascii=False), rounding_rule=scope.rounding_rule)
 
 
 def compare_two_scopes(scope_a: ScopeManifest, scope_b: ScopeManifest) -> MathResult:
@@ -275,7 +299,8 @@ def bom_rollup(manifest: Mapping, order_quantity: Decimal, rounding_rule: Roundi
 def serialize_result(result: MathResult) -> dict:
     """Return recorded operands and real source locators; invent no citations."""
     return {
-        "schema": "grounded-calculation-v2", "template": result.template,
+        "schema": ("grounded-calculation-scope-total-v1" if result.template == 'sum_reviewed_scope'
+                   else "grounded-calculation-v2"), "template": result.template,
         "status": result.status, "reason": result.reason,
         "domain_step_count": len(result.steps), "steps": _json_value(result.steps),
         "sources": json.loads(result.evidence_json),

@@ -134,6 +134,28 @@ def test_comparison_selection_crosses_http_adapter_without_client_approval_or_ro
     assert 'user_roles' not in bodies[0] and 'approved' not in bodies[0]['scope_comparison']
 
 
+def test_scope_total_selection_crosses_http_adapter_without_approval():
+    bodies = []
+    adapter = HttpRagStreamAdapter(post=lambda url, **kw: bodies.append(kw['json']) or Response(
+        events=(('done', {'trace_id':'total'}),)), base_url='http://rag')
+    list(adapter.stream(RagStreamRequest(replace(command(), scope_total='a'), actor()), None))
+    assert bodies[0]['scope_total'] == {'scope_id':'a'}
+    assert 'scope_comparison' not in bodies[0] and 'query_plan' not in bodies[0]
+
+
+def test_query_scope_total_branch_crosses_adapter_with_dependency():
+    from mech_chatbot.api.evidence_contracts import QueryPlanRequest
+    plan=QueryPlanRequest.model_validate({'branches':[
+        {'branch_id':'a','question':'Tổng A','scope_total':{'scope_id':'scope-a'}},
+        {'branch_id':'b','question':'Tổng B','scope_total':{'scope_id':'scope-b'},'depends_on':['a']}]}).to_plan()
+    bodies=[]
+    adapter=HttpRagStreamAdapter(post=lambda url,**kw:bodies.append(kw['json']) or Response(
+        events=(('done',{'trace_id':'query-total'}),)),base_url='http://rag')
+    list(adapter.stream(RagStreamRequest(replace(command(),query_plan=plan),actor()),None))
+    assert bodies[0]['query_plan']['branches'][1]['scope_total']=={'scope_id':'scope-b'}
+    assert bodies[0]['query_plan']['branches'][1]['depends_on']==('a',)
+
+
 def test_http_adapter_maps_busy_without_starting_persistence_contract():
     response = Response(status=503, text="busy")
     adapter = HttpRagStreamAdapter(

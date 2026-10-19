@@ -56,6 +56,41 @@ function create(user:UserProfile|null=profile) {
   return mount(AdvancedRagActions,{props:{disabled:false},global:{plugins:[pinia]}});
 }
 
+it('sends a single reviewed scope total independently and disables adding branches',async()=>{
+  vi.mocked(api.apiGet).mockImplementation(async path=>{
+    if(path.endsWith('evaluation-capabilities')) return {...capabilities,actions:[...capabilities.actions,'scope_total']} as never;
+    if(path==='/api/documents') return {documents:[{DocID:1,TenFile:'Chi phí.csv'}]} as never;
+    return {items:[{scope_id:'total-a',definition:'Chi phí',unit:'VND'}],offset:0,has_more:false} as never;
+  });
+  const wrapper=create();await flushPromises();
+  await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises();
+  await wrapper.get('select[aria-label="Tác vụ ý 1"]').setValue('scope_total');
+  await wrapper.get('select[aria-label="Tài liệu Phạm vi tính tổng ý 1"]').setValue('1');await flushPromises();
+  await wrapper.get('select[aria-label="Phạm vi tính tổng ý 1"]').setValue('total-a');
+  expect(wrapper.emitted('change')!.at(-1)).toEqual([{active:true,valid:true,scope_total:{scope_id:'total-a'}}]);
+  expect(wrapper.findAll('button').find(button=>button.text()==='Thêm ý')!.attributes('disabled')).toBeDefined();
+});
+
+it('allows explicit total branches only when the server advertises that contract',async()=>{
+  vi.mocked(api.apiGet).mockImplementation(async path=>{
+    if(path.endsWith('evaluation-capabilities')) return {...capabilities,scope_total_query:true,actions:[...capabilities.actions,'scope_total']} as never;
+    if(path==='/api/documents') return {documents:[{DocID:1,TenFile:'Chi phí.csv'}]} as never;
+    return {items:[{scope_id:'total-a',definition:'Chi phí',unit:'VND'}],offset:0,has_more:false} as never;
+  });
+  const wrapper=create();await flushPromises();
+  await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises();
+  await wrapper.get('select[aria-label="Tác vụ ý 1"]').setValue('scope_total');
+  await wrapper.get('select[aria-label="Tài liệu Phạm vi tính tổng ý 1"]').setValue('1');await flushPromises();
+  await wrapper.get('select[aria-label="Phạm vi tính tổng ý 1"]').setValue('total-a');
+  await wrapper.findAll('button').find(button=>button.text()==='Thêm ý')!.trigger('click');
+  await wrapper.get('select[aria-label="Tác vụ ý 2"]').setValue('scope_total');
+  await wrapper.get('select[aria-label="Tài liệu Phạm vi tính tổng ý 2"]').setValue('1');await flushPromises();
+  await wrapper.get('select[aria-label="Phạm vi tính tổng ý 2"]').setValue('total-a');
+  const state=wrapper.emitted('change')!.at(-1)![0] as QueryActionState;
+  expect(state.valid).toBe(true);expect(state).not.toHaveProperty('scope_total');
+  expect(state.query_plan!.branches.map(branch=>branch.scope_total)).toEqual([{scope_id:'total-a'},{scope_id:'total-a'}]);
+});
+
 it('builds an explicit bounded graph action and clears it when disabled',async()=>{
   const wrapper=create(); await flushPromises();
   await wrapper.get('input[type="checkbox"]').setValue(true); await flushPromises();

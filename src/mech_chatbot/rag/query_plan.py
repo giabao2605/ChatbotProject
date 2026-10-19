@@ -6,10 +6,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from mech_chatbot.application.chat_citations import build_citation_list,citation_ref_text
 from mech_chatbot.db.evidence_snapshot import evidence_read_snapshot, evidence_snapshot_active
 from mech_chatbot.domain.graph_query import GraphQuery, graph_fingerprint
+from mech_chatbot.domain.query_plan import SCOPE_TOTAL_QUERY_SCHEMA
 from mech_chatbot.rag.bom_rollup import execute_bom_rollup
 from mech_chatbot.rag.graph_query_v2 import execute_graph_query
 from mech_chatbot.rag.scope_comparison import execute_scope_comparison
-from mech_chatbot.rag.query_decomposition import fixed_task_guard
+from mech_chatbot.rag.scope_total import execute_scope_total
+from mech_chatbot.rag.query_decomposition import SCOPE_TOTAL_TASK_ROUTING, fixed_task_guard
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +41,14 @@ def _dependency_graph(branch, prior_results):
 
 
 def _execute_branch(state,branch,prior_results=()):
-    request=replace(state.request,question=branch.question,query_plan=None,scope_comparison=branch.scope_comparison,
+    request=replace(state.request,question=branch.question,query_plan=None,scope_total=branch.scope_total,scope_comparison=branch.scope_comparison,
                     graph_query=branch.graph_query,bom_rollup=branch.bom_rollup)
     child=replace(state,request=request,refusal_reason=None,generation_outcome=None)
     if state.task_binding is not None:
         child=replace(child,task_binding=state.task_binding.child(request,branch.branch_id),task_slot=branch.branch_id)
     execute=execute_graph_query if branch.graph_query else execute_bom_rollup if branch.bom_rollup else execute_scope_comparison
+    if branch.scope_total is not None:
+        execute=execute_scope_total
     dependency = _dependency_graph(branch,prior_results)
     prepared=execute(child,graph_dependency=dependency) if dependency else execute(child)
     outcome=prepared.diagnostics['answer_outcome']
@@ -65,6 +69,8 @@ def execute_query_plan(state):
         raise ValueError('Query v2 requires evaluation context')
     if not {role.lower() for role in state.request.access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
         raise PermissionError('Evaluation reviewer required')
+    if state.invocation.task_routing_contract not in (None, SCOPE_TOTAL_TASK_ROUTING) and any(branch.scope_total is not None for branch in state.request.query_plan.branches):
+        raise ValueError('Scope total does not use a planner')
     if (any(branch.text_query for branch in state.request.query_plan.branches) and state.invocation.task_routing_contract
             and state.invocation.task_routing_contract != 'semantic-mixed-candidate-task-routing-v5-draft'):
         raise ValueError("Mixed draft requires explicit branches without a fixed routing contract")
@@ -100,7 +106,7 @@ def _execute_branches(state):
                 logger.warning('Query branch evidence unavailable', exc_info=True)
                 result={'branch_id':branch.branch_id,'question':branch.question,'status':'unknown','reason':'evidence_unavailable',
                         'answer':'Chưa đủ chứng cứ khả dụng cho ý này.','sources':[]}
-        results.append({**result,'template':'graph_query' if branch.graph_query else 'bom_rollup' if branch.bom_rollup else 'compare_two_scopes',
+        results.append({**result,'template':'sum_reviewed_scope' if branch.scope_total is not None else 'graph_query' if branch.graph_query else 'bom_rollup' if branch.bom_rollup else 'compare_two_scopes',
                         'depends_on':list(branch.depends_on),'executed':executed,'data_complete':result.get('data_complete',False),
                         'elapsed_ms':int((monotonic()-started)*1000)})
     text_answer=""
@@ -188,7 +194,9 @@ def _prepared_result(state,results,records,observed=(),text_answer='',text_usage
     cards=build_citation_list(records,page_has_vision=lambda *_:False)
     answer='\n\n'.join(f"{n}. {b['question']}\n{b['answer']}" for n,b in enumerate(results,1) if b['answer'])
     if text_answer:answer+='\n\n'+text_answer
-    diagnostics={**(text_usage or {}),'query_v2':{'schema':'query-plan-mixed-v1-draft' if state.invocation.task_routing_contract=='semantic-mixed-candidate-task-routing-v5-draft' or any(b['template']=='text_query' for b in results) else 'query-plan-v2','status':status,'branches':results,'accepted':False,'offline_only':True,
+    scope_totals=any(branch.scope_total is not None for branch in state.request.query_plan.branches)
+    schema=SCOPE_TOTAL_QUERY_SCHEMA if scope_totals else 'query-plan-mixed-v1-draft' if state.invocation.task_routing_contract=='semantic-mixed-candidate-task-routing-v5-draft' or any(b['template']=='text_query' for b in results) else 'query-plan-v2'
+    diagnostics={**(text_usage or {}),'query_v2':{'schema':schema,**({'contract':SCOPE_TOTAL_QUERY_SCHEMA} if scope_totals else {}),'status':status,'branches':results,'accepted':False,'offline_only':True,
                               'read_consistency':'sql_serializable_text_current' if text_answer else 'serializable',
                               **({'text_answer':text_answer} if text_answer else {})},
                  'citation_docs':records,'retrieved_docs':records,

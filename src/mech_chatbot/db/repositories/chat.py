@@ -168,7 +168,8 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
     input_items = list(evidence_docs or [])
     complete = True
     structured = any(isinstance(item,dict) and 'locator' in item for item in input_items)
-    result_history = advanced_rag is not None and any(key in advanced_rag for key in ('query','text_query'))
+    result_history = advanced_rag is not None and (any(key in advanced_rag for key in ('query','text_query'))
+        or isinstance(advanced_rag.get('math'),dict) and advanced_rag['math'].get('schema')=='grounded-calculation-scope-total-v1')
     for rank_no, item in enumerate(input_items, start=1):
         if not isinstance(item, dict):
             complete = False

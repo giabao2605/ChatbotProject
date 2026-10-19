@@ -32,6 +32,59 @@ VIEWER_PROFILE = {
 }
 
 
+@pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
+def test_scope_total_boundary_is_evaluation_only_and_strict(path, rag_client, monkeypatch):
+    monkeypatch.setattr(rag_server, '_open_rag_events', lambda *a, **kw: pytest.fail('must reject before executor'))
+    body = {'user_question':'Tổng', 'scope_total':{'scope_id':'a'}}
+    assert rag_client.post(path, headers=SERVICE_HEADERS, json=body).status_code == 409
+    _replace_runtime(rag_client, runtime_contract=RagRuntimeContract('evaluation', False, 120))
+    assert rag_client.post(path, headers=SERVICE_HEADERS, json={**body,'user_roles':['admin']}).status_code == 403
+    for selection in ({'scope_id':' '}, {'scope_id':'a','approved':True}):
+        assert rag_client.post(path, headers=SERVICE_HEADERS,json={**body,'scope_total':selection}).status_code == 422
+    assert rag_client.post(path, headers=SERVICE_HEADERS,json={**body,'text_query':True}).status_code == 422
+
+
+@pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
+@pytest.mark.parametrize('query', [False, True])
+def test_scope_total_http_uses_real_executor_and_preserves_csv_citation(path, rag_client, store, monkeypatch, query):
+    import json
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import StaticPool
+    from mech_chatbot.auth import core
+    from mech_chatbot.rag.execution import DefaultRagExecutor
+    from .test_rag_scope_comparison import approved_pair
+    from .test_structured_evidence_repository import PROFILE
+    approved_pair(store, values=('1.235','8'))
+    shared = create_engine('sqlite://', connect_args={'check_same_thread':False}, poolclass=StaticPool)
+    with store.connect() as original, shared.connect() as target:
+        original.connection.driver_connection.backup(target.connection.driver_connection)
+    _replace_server_state(rag_client, database_runtime=SimpleNamespace(engine=shared))
+    _replace_runtime(rag_client, executor=DefaultRagExecutor(), runtime_contract=RagRuntimeContract('evaluation', False, 120))
+    monkeypatch.setattr(core, 'load_user_profile', lambda **kw: PROFILE)
+    try:
+        action={'query_plan':{'branches':[{'branch_id':'sum','question':'Tổng A','scope_total':{'scope_id':'a'}}]}} if query else {'scope_total':{'scope_id':'a'}}
+        response = rag_client.post(path, headers=SERVICE_HEADERS, json={
+            'user_id':7, 'user_question':'Tổng phạm vi', **action})
+        assert response.status_code == 200
+        if path == '/chat':
+            debug = response.json()['debug_info']
+            citations = response.json()['citations']
+        else:
+            events = [(block.splitlines()[0], json.loads(block.splitlines()[1][6:]))
+                      for block in response.text.strip().split('\n\n')]
+            assert events[-1][0] == 'event: done'
+            debug = next(body['debug_info'] for name, body in events if name == 'event: metadata')
+            citations = [body for name, body in events if name == 'event: citation']
+        math=debug['query_v2']['branches'][0]['math'] if query else debug['math_v2']
+        if query:
+            assert debug['query_v2']['schema']==debug['query_v2']['contract']=='query-plan-scope-total-v1'
+        assert math['schema'] == 'grounded-calculation-scope-total-v1'
+        assert math['domain_step_count'] == 1 and math['steps'][0]['display_value'] == '1.24'
+        assert len(citations) == 1 and citations[0]['page_no'] is None
+    finally:
+        shared.dispose()
+
+
 @pytest.fixture
 def rag_client(monkeypatch):
     from mech_chatbot.auth import core

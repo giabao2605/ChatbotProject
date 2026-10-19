@@ -156,6 +156,7 @@ async function send() {
   const request=++contentSerial, actor=identity.value;
   const current=()=>request===contentSerial && actor===identity.value && sessionId.value===currentSession;
   const actionPayload=actionState.value.active ? (actionState.value.text_query ? {text_query:true} :
+    actionState.value.scope_total ? {scope_total:{...actionState.value.scope_total}} :
     actionState.value.scope_comparison ? {scope_comparison:{...actionState.value.scope_comparison}} :
     actionState.value.graph_query ? {graph_query:{...actionState.value.graph_query}} :
     {query_plan:JSON.parse(JSON.stringify(actionState.value.query_plan))}) : {};

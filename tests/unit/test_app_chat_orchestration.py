@@ -72,6 +72,27 @@ def test_browser_comparison_is_gated_before_starting_chat_runner(monkeypatch, cl
     assert client.post('/api/chat/message', json=body).status_code == 403
 
 
+def test_browser_scope_total_requires_evaluation_and_forwards_one_scope(monkeypatch, client):
+    captured = []
+    class Runner:
+        def stream(self, command, actor):
+            captured.append(command)
+            yield ChatDone(None, '', (), (), None, 1)
+    monkeypatch.setattr(app_server.app.state, 'runtime', SimpleNamespace(chat_turn_runner=Runner()))
+    body = {'session_id':'total', 'question':'Tổng phạm vi', 'scope_total':{'scope_id':'approved-a'}}
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot', Settings(RAG_EXECUTION_CONTEXT='production'))
+    assert client.post('/api/chat/message', json=body).status_code == 409
+    assert not captured
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot', Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message', json=body).status_code == 403
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile] = lambda: {**_profile(), 'roles':['reviewer']}
+    assert client.post('/api/chat/message', json=body).status_code == 200
+    assert captured[-1].scope_total == 'approved-a'
+    assert client.post('/api/chat/message', json={**body,'text_query':True}).status_code == 422
+    for selection in ({'scope_id':' '}, {'scope_id':'a','approved':True}):
+        assert client.post('/api/chat/message', json={**body,'scope_total':selection}).status_code == 422
+
+
 def test_browser_text_query_requires_evaluation_and_reviewer_before_runner(monkeypatch,client):
     class NoRun:
         def stream(self,*a):pytest.fail('must not enter runner')

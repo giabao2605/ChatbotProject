@@ -162,7 +162,7 @@ def evaluation_capabilities(request: Request, profile: dict[str, Any] = Depends(
         return {'schema':'advanced-rag-v2-controlled-demo','contract':CONTRACT,'accepted':False,'offline_only':False,
                 'max_branches':1,'actions':['scope_comparison'],'text_query':False}
     return {'schema':'advanced-rag-v2-evaluation', 'accepted':False, 'offline_only':True,
-            'max_branches':3, 'actions':['contains','where_used','bom_rollup','scope_comparison'],'text_query':True}
+            'max_branches':3, 'actions':['contains','where_used','bom_rollup','scope_comparison','scope_total'],'text_query':True,'scope_total_query':True}
 
 
 @router.get('/documents/{doc_id}/scopes')

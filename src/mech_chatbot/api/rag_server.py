@@ -223,7 +223,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
-from mech_chatbot.api.evidence_contracts import ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, require_comparison_context
+from mech_chatbot.api.evidence_contracts import ScopeTotalRequest, ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, require_comparison_context
 
 
 class ChatRequest(BaseModel):
@@ -248,6 +248,7 @@ class ChatRequest(BaseModel):
     allowed_sites: List[str] = Field(default_factory=list)
     response_language: Optional[str] = "vi"
     conversation_context: Optional[Dict[str, Any]] = None
+    scope_total: ScopeTotalRequest | None = None
     scope_comparison: ScopeComparisonRequest | None = None
     graph_query: GraphQueryRequest | None = None
     bom_rollup: BomRollupRequest | None = None
@@ -1030,9 +1031,9 @@ async def save_chat_feedback(req: FeedbackRequest):
 
 
 def _scope_comparison_mode(req, profile, runtime, *, replay=False, headers=None):
-    if req.scope_comparison is None and req.graph_query is None and req.bom_rollup is None and req.query_plan is None and not req.text_query:
+    if req.scope_total is None and req.scope_comparison is None and req.graph_query is None and req.bom_rollup is None and req.query_plan is None and not req.text_query:
         return 'pilot_replay' if replay else 'production'
-    if sum(value is not None for value in (req.scope_comparison,req.graph_query,req.bom_rollup,req.query_plan))+int(req.text_query)>1:
+    if sum(value is not None for value in (req.scope_total,req.scope_comparison,req.graph_query,req.bom_rollup,req.query_plan))+int(req.text_query)>1:
         raise HTTPException(422,detail='Select one v2 template')
     mode = getattr(getattr(runtime, 'runtime_contract', None), 'execution_context', 'production')
     if req.graph_query is not None:
@@ -1066,7 +1067,7 @@ def _open_rag_events(
         RagRequest,
     )
 
-    if req.scope_comparison is not None or req.graph_query is not None or req.bom_rollup is not None or req.query_plan is not None or req.text_query:
+    if req.scope_total is not None or req.scope_comparison is not None or req.graph_query is not None or req.bom_rollup is not None or req.query_plan is not None or req.text_query:
         mode = _scope_comparison_mode(req, user_profile, runtime, replay=mode == 'pilot_replay')
     request = RagRequest(
         question=req.user_question,
@@ -1082,6 +1083,7 @@ def _open_rag_events(
         ),
         response_language=req.response_language or "vi",
         conversation_context=req.conversation_context,
+        scope_total=req.scope_total.scope_id if req.scope_total is not None else None,
         scope_comparison=((req.scope_comparison.scope_a, req.scope_comparison.scope_b)
                           if req.scope_comparison is not None else None),
         graph_query=req.graph_query.to_query() if req.graph_query is not None else None,

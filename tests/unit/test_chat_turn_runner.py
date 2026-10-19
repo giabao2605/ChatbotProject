@@ -210,6 +210,18 @@ def test_v2_comparison_returns_versioned_steps_without_entering_v1_pilot():
     assert rag.requests[0][1] is None
 
 
+def test_scope_total_returns_its_metadata_without_entering_v1_pilot():
+    math = {'schema':'grounded-calculation-scope-total-v1', 'template':'sum_reviewed_scope',
+            'accepted':False, 'offline_only':True, 'steps':[{'step_id':'sum','display_value':'4.00'}]}
+    pilot = ScriptedPilotExperiments(route=object())
+    runner, rag, store, audit, pilot, citations = _runner(_success_events(debug_info={'math_v2':math}), pilot=pilot)
+    events = list(runner.stream(replace(_command(), scope_total='a'), _actor()))
+    assert events[-1].advanced_rag == {'math':{**math,'sources':()}}
+    assert store.records[-1].advanced_rag == {'math':{**math,'sources':()}}
+    assert pilot.assignments == [] and pilot.replays == []
+    assert rag.requests[0][1] is None
+
+
 def test_final_citations_and_ref_text_are_attributed_from_the_complete_answer() -> None:
     citation_doc = {
         "doc_id": 42,

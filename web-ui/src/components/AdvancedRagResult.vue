@@ -10,6 +10,19 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
 </script>
 
 <template>
+  <section v-if="result.math?.schema==='grounded-calculation-scope-total-v1' && result.math.template==='sum_reviewed_scope'" class="branch-results" aria-label="Tổng một phạm vi">
+    <h3>Tổng một phạm vi</h3>
+    <p v-if="result.math.offline_only">Kết quả đánh giá, chưa nghiệm thu phát hành.</p>
+    <p>Trạng thái: {{ statuses[result.math.status] || statuses.unknown }}</p>
+    <div v-for="step in result.math.steps" :key="step.step_id">
+      <p>{{ step.formula }}: {{ step.display_value ?? step.value }} {{ step.unit }}</p>
+      <p>Trước làm tròn: {{ step.value }} {{ step.unit }}</p>
+    </div>
+    <div v-for="source in result.math.sources" :key="source.source_id">
+      <a :href="source.original_url" target="_blank" rel="noopener">{{ source.file_name || `Tài liệu ${source.doc_id}` }}</a>
+      <StructuredSourceFacts v-if="source.scope_id" :citation="source" @unavailable="emit('unavailable')" />
+    </div>
+  </section>
   <section v-if="result.text_query?.schema==='query-text-v2'" class="branch-results" aria-label="Chứng cứ từng ý">
     <h3>Chứng cứ từng ý</h3>
     <p>Đây là trạng thái truy xuất của từng ý; câu trả lời được sinh chung phía trên. Kết quả đánh giá chưa được nghiệm thu phát hành.</p>
@@ -22,7 +35,7 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
       </div>
     </article>
   </section>
-  <section v-if="result.query?.schema==='query-plan-v2'" class="branch-results" aria-label="Kết quả từng ý">
+  <section v-if="result.query?.schema==='query-plan-v2' || result.query?.schema==='query-plan-scope-total-v1'" class="branch-results" aria-label="Kết quả từng ý">
     <p v-if="result.query.offline_only">Kết quả đánh giá, chưa nghiệm thu phát hành.</p>
     <article v-for="(branch,index) in result.query.branches" :key="branch.branch_id">
       <h3>Ý {{ index+1 }}: {{ branch.question }}</h3>
@@ -34,6 +47,7 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
             <td>{{ step.formula }}</td><td>{{ step.status==='undefined'?'Không xác định':(step.display_value ?? step.value) }}</td><td>{{ step.unit }}</td>
           </tr></tbody>
         </table>
+        <p v-if="branch.math.schema==='grounded-calculation-scope-total-v1'" v-for="step in branch.math.steps" :key="`raw-${step.step_id}`">Trước làm tròn: {{ step.value }} {{ step.unit }}</p>
       </div>
       <details v-if="branch.sources.length"><summary>Nguồn của ý {{ index+1 }}</summary>
         <div v-for="source in branch.sources" :key="source.source_id || source.original_url">

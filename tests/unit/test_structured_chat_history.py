@@ -47,6 +47,51 @@ def read_history(store, *, sites=('factory',)):
                                  allowed_departments=('ENG',),allowed_sites=sites,db_engine=store)
 
 
+@pytest.mark.parametrize('change', ['site', 'revision', 'correction'])
+def test_scope_total_history_keeps_steps_and_redacts_unavailable_basis(history_store, change):
+    from mech_chatbot.application.chat_result_history import restore_history_result
+    approved_pair(history_store)
+    with bind_repository_runtime(db_engine=history_store):
+        result = collect_rag_events(DefaultRagExecutor().run(
+            replace(request(),scope_comparison=None,scope_total='a'),RagInvocation('sum-history',mode='test')))
+    with history_store.begin() as conn:
+        conn.execute(text("INSERT INTO LichSuChat VALUES(11,'s1','Total',:answer,NULL,NULL,NULL,'approver','2026-10-19')"),
+                     {'answer':result.answer+result.ref_text})
+    assert chat.save_answer_evidence(11,list(result.diagnostics['retrieved_docs']),db_engine=history_store,
+        advanced_rag={'math':result.diagnostics['math_v2']},citation_cards=result.citations)
+    assert chat.save_answer_sources(11,[{**c,'file_goc':c['file_name'],'trang':c['page_no']} for c in result.citations],db_engine=history_store)
+    before=read_history(history_store)[-1]
+    restored=restore_history_result(before['_advanced_rag_payload'],before['structured_citations'])
+    assert restored['math']['steps'][0]['display_value']=='4.00'
+    if change=='revision':
+        with history_store.begin() as conn:conn.execute(text('UPDATE TaiLieu SET VersionNo=3'))
+    elif change=='correction':
+        from mech_chatbot.db.repositories.structured_evidence import review_numeric_fact
+        review_numeric_fact('fact-a',PROFILE,action='reject',note='Rechecked source',db_engine=history_store)
+    after=read_history(history_store,sites=('other',) if change=='site' else ('factory',))[-1]
+    assert after['sources_redacted'] and '_advanced_rag_payload' not in after and '4.00' not in after['content']
+
+
+def test_query_scope_totals_history_preserves_each_scope_and_redacts_changed_basis(history_store):
+    from mech_chatbot.application.chat_result_history import restore_history_result
+    from mech_chatbot.domain.query_plan import QueryBranch,QueryPlan
+    approved_pair(history_store)
+    plan=QueryPlan((QueryBranch('a','Tổng A',scope_total='a'),QueryBranch('b','Tổng B',scope_total='b')))
+    with bind_repository_runtime(db_engine=history_store):
+        result=collect_rag_events(DefaultRagExecutor().run(replace(request(),scope_comparison=None,query_plan=plan),RagInvocation('query-sum-history',mode='test')))
+    with history_store.begin() as conn:
+        conn.execute(text("INSERT INTO LichSuChat VALUES(11,'s1','Totals',:answer,NULL,NULL,NULL,'approver','2026-10-19')"),{'answer':result.answer+result.ref_text})
+    assert chat.save_answer_evidence(11,list(result.diagnostics['retrieved_docs']),db_engine=history_store,
+        advanced_rag={'query':result.diagnostics['query_v2']},citation_cards=result.citations)
+    assert chat.save_answer_sources(11,[{**c,'file_goc':c['file_name'],'trang':c['page_no']} for c in result.citations],db_engine=history_store)
+    before=read_history(history_store)[-1]
+    restored=restore_history_result(before['_advanced_rag_payload'],before['structured_citations'])['query']
+    assert [branch['sources'][0]['scope_id'] for branch in restored['branches']]==['a','b']
+    with history_store.begin() as conn:conn.execute(text('UPDATE TaiLieu SET VersionNo=3'))
+    after=read_history(history_store)[-1]
+    assert after['sources_redacted'] and '_advanced_rag_payload' not in after
+
+
 @pytest.mark.parametrize('change', ['excluded_review', 'excluded_revision'])
 def test_detail_selection_history_invalidates_when_excluded_source_changes(history_store, change):
     from .test_structured_detail_selection import prepare, review

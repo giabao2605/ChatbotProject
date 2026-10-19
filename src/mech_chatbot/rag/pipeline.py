@@ -146,6 +146,9 @@ def _reconcile_grounded_math(primary, enrichment):
 
 
 def execute_pipeline(state):
+    if state.request.scope_total is not None:
+        from mech_chatbot.rag.scope_total import execute_scope_total
+        return _run_traced_phase(state, 'evidence', lambda: execute_scope_total(state))
     if state.request.candidate_selection_context is not None and state.invocation.task_routing_contract not in (
             'semantic-candidate-task-routing-v4-draft', 'semantic-mixed-candidate-task-routing-v5-draft'):
         raise ValueError('Candidate context requires the exact evaluation contract')

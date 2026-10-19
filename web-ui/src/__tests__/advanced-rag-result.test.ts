@@ -6,6 +6,31 @@ import type { AdvancedRagMetadata, Citation } from '@/types';
 
 vi.mock('@/api/client',()=>({apiGet:vi.fn()}));
 
+it('renders total query branches with exact raw values under the new schema',()=>{
+  const wrapper=mount(AdvancedRagResult,{props:{result:{query:{schema:'query-plan-scope-total-v1',
+    status:'complete',accepted:false,offline_only:true,branches:[{branch_id:'s',question:'Tổng A',
+      status:'complete',sources:[],math:{schema:'grounded-calculation-scope-total-v1',steps:[
+        {step_id:'sum',formula:'sum(a)',value:'2.345',display_value:'2.35',unit:'VND'}]}}]}}}});
+  expect(wrapper.text()).toContain('Tổng A');expect(wrapper.text()).toContain('2.345');
+  expect(wrapper.get('table').text()).toContain('2.35');
+});
+
+it('renders a scope total with exact values and invalidates its changed source',async()=>{
+  const source:Citation={doc_id:17,page_no:null,has_vision:false,source_id:'D17L1234567890abcdef',scope_id:'s',
+    snapshot_id:'snapshot',scope_hash:'b'.repeat(64),citation_schema:'source-locator-v2',
+    original_url:'/api/files/documents/17/original?scope_id=s'};
+  const wrapper=mount(AdvancedRagResult,{props:{result:{math:{schema:'grounded-calculation-scope-total-v1',
+    template:'sum_reviewed_scope',status:'complete',accepted:false,offline_only:true,steps:[
+      {step_id:'sum',formula:'sum(s)',value:'9007199254740993.015',display_value:'9007199254740993.02',unit:'VND'}],sources:[source]}}}});
+  expect(wrapper.text()).toContain('9007199254740993.015');
+  expect(wrapper.text()).toContain('9007199254740993.02');
+  expect(wrapper.text()).toContain('sum(s)');
+  expect(wrapper.get('a').attributes('href')).toBe(source.original_url);
+  vi.mocked(api.apiGet).mockResolvedValue({items:[],scope_hash:'c'.repeat(64),snapshot_id:'snapshot',offset:0,has_more:false});
+  await wrapper.get('button').trigger('click');await flushPromises();
+  expect(wrapper.emitted('unavailable')).toHaveLength(1);
+});
+
 
 it('shows text branch evidence separately from the shared answer and only resolved links',()=>{
   const source={doc_id:17,page_no:2,source_id:'D17P2',file_name:'policy.pdf',has_vision:false,

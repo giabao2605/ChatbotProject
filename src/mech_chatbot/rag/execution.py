@@ -94,8 +94,14 @@ class RagRequest:
     query_plan: QueryPlan | None = None
     text_query: bool = False
     candidate_selection_context: CandidateSelectionContext | None = None
+    scope_total: str | None = None
 
     def __post_init__(self):
+        if self.scope_total is not None and (
+                not isinstance(self.scope_total, str) or not self.scope_total.strip() or len(self.scope_total) > 255
+                or self.text_query or any(value is not None for value in (self.scope_comparison, self.graph_query,
+                    self.bom_rollup, self.query_plan, self.candidate_selection_context))):
+            raise ValueError('One bounded scope total action required')
         if self.candidate_selection_context is not None and (
                 not isinstance(self.candidate_selection_context, CandidateSelectionContext)
                 or self.text_query or any(value is not None for value in
@@ -130,7 +136,7 @@ class RagInvocation:
         if self.task_routing_contract is not None and (type(self.task_routing_contract) is not str
                 or self.task_routing_contract not in {'semantic-fixed-task-routing-v2-draft',
                                                      'semantic-graph-fixed-task-routing-v3-draft', CANDIDATE_TASK_ROUTING,
-                                                     MIXED_CANDIDATE_TASK_ROUTING}
+                                                     MIXED_CANDIDATE_TASK_ROUTING, 'semantic-scope-total-query-routing-v1-draft'}
                 or self.mode not in {'test', 'evaluation'}):
             raise ValueError('Task routing requires the exact draft contract in evaluation or test mode')
         if type(self.capture_math_observations) is not bool or (
@@ -353,6 +359,7 @@ class _ExecutionState:
                 branches = request.query_plan.branches
                 calculations = (MAX_RELATIONS if any(b.bom_rollup for b in branches) else 0)
                 calculations += 4 * sum(b.scope_comparison is not None for b in branches)
+                calculations += sum(b.scope_total is not None for b in branches)
                 limits = replace(limits, calculations=calculations)
             elif request.bom_rollup is not None:
                 limits = replace(limits, calculations=MAX_RELATIONS)
@@ -828,6 +835,12 @@ class DefaultRagExecutor:
         budget_token = _REQUEST_BUDGET.set(state.budget)
         checkpoint_token = _REQUEST_CHECKPOINT.set(state.checkpoint)
         try:
+            if request.scope_total is not None or (request.query_plan is not None
+                    and any(branch.scope_total is not None for branch in request.query_plan.branches)):
+                if invocation.mode not in {'evaluation', 'test'}:
+                    raise ValueError('Scope total requires evaluation context')
+                if invocation.task_routing_contract and invocation.task_routing_contract != 'semantic-scope-total-query-routing-v1-draft':
+                    raise ValueError('Scope total does not use a planner')
             if invocation.mode not in {'evaluation', 'test'} and any((request.scope_comparison,
                     request.graph_query, request.bom_rollup, request.query_plan, request.text_query)):
                 if request.graph_query is not None and not any((request.scope_comparison,request.bom_rollup,request.query_plan,request.text_query)):
