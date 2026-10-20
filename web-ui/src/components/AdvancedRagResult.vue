@@ -25,7 +25,7 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
   </section>
   <section v-if="result.text_query?.schema==='query-text-v2'" class="branch-results" aria-label="Chứng cứ từng ý">
     <h3>Chứng cứ từng ý</h3>
-    <p>Đây là trạng thái truy xuất của từng ý; câu trả lời được sinh chung phía trên. Kết quả đánh giá chưa được nghiệm thu phát hành.</p>
+    <p>Đây là trạng thái truy xuất của từng ý; câu trả lời được sinh chung phía trên. <template v-if="result.text_query.offline_only">Kết quả đánh giá chưa được nghiệm thu phát hành.</template></p>
     <article v-for="(branch,index) in result.text_query.branches" :key="branch.branch_id">
       <h3>Ý {{ index+1 }}: {{ branch.subquery }}</h3>
       <p>{{ evidenceStatuses[branch.outcome] || 'Chưa xác định' }}</p>
@@ -35,7 +35,7 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
       </div>
     </article>
   </section>
-  <section v-if="result.query?.schema==='query-plan-v2' || result.query?.schema==='query-plan-scope-total-v1'" class="branch-results" aria-label="Kết quả từng ý">
+  <section v-if="['query-plan-v2','query-plan-scope-total-v1','query-plan-mixed-v1-draft'].includes(result.query?.schema || '') && result.query" class="branch-results" aria-label="Kết quả từng ý">
     <p v-if="result.query.offline_only">Kết quả đánh giá, chưa nghiệm thu phát hành.</p>
     <article v-for="(branch,index) in result.query.branches" :key="branch.branch_id">
       <h3>Ý {{ index+1 }}: {{ branch.question }}</h3>

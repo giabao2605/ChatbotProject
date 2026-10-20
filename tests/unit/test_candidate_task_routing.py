@@ -288,10 +288,11 @@ def test_candidate_input_is_not_allowed_through_legacy_contract(bom_store):
         execute(engine, candidate_request(), Planner(''), version='semantic-graph-fixed-task-routing-v3-draft')
 
 
-def test_candidate_contract_requires_evaluation_and_reviewer(bom_store):
-    from mech_chatbot.rag.execution import RagInvocation
-    with pytest.raises(ValueError):
-        RagInvocation('production', task_routing_contract=CANDIDATE_TASK_ROUTING)
+def test_candidate_contract_requires_production_authority_or_evaluation_reviewer(bom_store):
+    from mech_chatbot.rag.execution import DefaultRagExecutor, RagInvocation, collect_rag_events
+    with pytest.raises(ValueError, match='source authority'):
+        collect_rag_events(DefaultRagExecutor().run(candidate_request(),
+            RagInvocation('production', task_routing_contract=CANDIDATE_TASK_ROUTING)))
     _, engine = bom_store
     selected = candidate_request()
     selected = replace(selected, access=replace(selected.access, roles=frozenset({'employee'})))

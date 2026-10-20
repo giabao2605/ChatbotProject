@@ -134,6 +134,16 @@ def require_v2_evaluation_context(mode, profile):
     return mode
 
 
+def require_query_context(mode, profile, *, authorizer=None):
+    if mode in {'evaluation', 'test'}:
+        return require_v2_evaluation_context(mode, profile)
+    from mech_chatbot.governance.query_v2_activation import select_query_capability
+    cap = select_query_capability(authorizer() if callable(authorizer) else None)
+    if mode != 'production' or cap is None:
+        raise HTTPException(409, detail='Query v2 source authority required')
+    return mode
+
+
 def require_comparison_context(mode, profile, *, comparison_only, authorizer=None):
     if mode in {'evaluation', 'test'}:
         return require_v2_evaluation_context(mode, profile)

@@ -119,6 +119,39 @@ def test_granted_scope_total_rest_and_sse_use_the_real_executor(path, rag_client
     assert rag_client.post(path, headers=headers, json={**body,'text_query':True}).status_code == 422
 
 
+@pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
+def test_full_query_rest_and_sse_keep_branch_history_and_parent_header(path, rag_client, live_store, monkeypatch):
+    import json
+    from mech_chatbot.application.chat_result_history import serialize_history_result, restore_history_result
+    from mech_chatbot.auth import core
+    from mech_chatbot.rag.execution_contracts import RagRuntimeContract
+    from .test_query_v2_production import capability as query_capability
+    cap = query_capability(live_store)
+    monkeypatch.setattr(core, 'load_user_profile', lambda **kw: PROFILE)
+    _replace_server_state(rag_client, database_runtime=SimpleNamespace(engine=live_store))
+    _replace_runtime(rag_client, executor=DefaultRagExecutor(math_v2_authorizer=lambda:cap),
+        math_v2_authorizer=lambda:cap, runtime_contract=RagRuntimeContract('production', False, 120))
+    body = {'user_id':7, 'user_question':'Total and compare', 'query_plan':{'branches':[
+        {'branch_id':'total', 'question':'Total A', 'scope_total':{'scope_id':'a'}},
+        {'branch_id':'compare', 'question':'Compare A and B', 'scope_comparison':{'scope_a':'a','scope_b':'b'}}]}}
+    assert rag_client.post(path, headers=SERVICE_HEADERS, json=body).status_code == 409
+    response = rag_client.post(path, headers={**SERVICE_HEADERS, 'X-RAG-Activation-Bundle-SHA256':cap.bundle_sha256}, json=body)
+    assert response.status_code == 200, response.text
+    if path == '/chat':
+        query, cards = response.json()['debug_info']['query_v2'], response.json()['citations']
+    else:
+        events = [(block.splitlines()[0], json.loads(block.splitlines()[1][6:]))
+                  for block in response.text.strip().split('\n\n')]
+        query = next(value['debug_info']['query_v2'] for event, value in events if event == 'event: metadata')
+        cards = [value for event, value in events if event == 'event: citation']
+        assert events[-1][0] == 'event: done'
+    assert query['offline_only'] is False and query['contract'] == cap.contract
+    assert [branch['math']['domain_step_count'] for branch in query['branches']] == [1,4]
+    restored = restore_history_result(serialize_history_result({'query':query}, cards), cards)['query']
+    assert restored['branches'][0]['math']['steps'][0]['display_value'] == '4.00'
+    assert {source['scope_id'] for source in restored['branches'][1]['sources']} == {'a','b'}
+
+
 def test_signed_total_bundle_executes_only_its_scope_and_revocation_blocks_next_request(grant, live_store):
     from mech_chatbot.governance.math_v2_activation import load_math_v2_capability
     root, _, gate, decision, issue, environment = grant

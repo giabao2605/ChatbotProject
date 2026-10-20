@@ -304,6 +304,9 @@ def _resolve(state, value, tasks, context_key):
     if len({branch.branch_id for branch in branches}) != len(branches):
         return False
     request = replace(state.request, candidate_selection_context=None, query_plan=QueryPlan(tuple(branches)))
+    state.require_query_authority()
+    if state.query_v2_capability is not None and not state.query_v2_capability.permits_plan(request.query_plan):
+        raise PermissionError('Query v2 source authority unavailable')
     slots = tuple((branch.branch_id, _selection_template(branch, _routing_contract(contract)),
         _resolved_key(replace(request, question=branch.question, query_plan=None, scope_comparison=branch.scope_comparison,
                               graph_query=branch.graph_query, bom_rollup=branch.bom_rollup,
@@ -313,7 +316,8 @@ def _resolve(state, value, tasks, context_key):
     state.request = request
     calculations = (MAX_RELATIONS if any(branch.bom_rollup for branch in branches) else 0)
     calculations += 4 * sum(branch.scope_comparison is not None for branch in branches)
-    state.budget.limits = replace(state.budget.limits, calculations=calculations,
+    state.budget.limits = replace(state.budget.limits,
+        calculations=min(state.budget.limits.calculations, calculations) if state.query_v2_capability else calculations,
         graph_edges=min(state.budget.limits.graph_edges, MAX_GENERATION_EDGES),
         graph_examined_relations=min(state.budget.limits.graph_examined_relations, MAX_RELATIONS))
     return True
@@ -322,8 +326,9 @@ def _resolve(state, value, tasks, context_key):
 def candidate_task_guard(state):
     """Resolve once, or verify a bound child without another provider call."""
     state.checkpoint('candidate_routing')
-    if state.invocation.mode not in {'test', 'evaluation'} or not {role.lower() for role in state.request.access.roles}.intersection(
-            {'reviewer', 'knowledge_approver', 'admin'}):
+    state.require_query_authority()
+    if state.query_v2_capability is None and (state.invocation.mode not in {'test', 'evaluation'} or not {role.lower() for role in state.request.access.roles}.intersection(
+            {'reviewer', 'knowledge_approver', 'admin'})):
         raise PermissionError('Evaluation reviewer required for candidate routing')
     if state.task_binding is not None:
         if (isinstance(state.task_binding, CandidateTaskBinding) and state.request.candidate_selection_context is None

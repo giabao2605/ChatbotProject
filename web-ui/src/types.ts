@@ -51,9 +51,9 @@ export type QueryAction = {branch_id:string; question:string; depends_on:string[
   scope_total?:{scope_id:string};scope_comparison?:{scope_a:string;scope_b:string}; bom_rollup?:GraphAction & BomQuantity & {rounding_scope:string}};
 export type QueryActionState = {active:boolean;valid:boolean;scope_total?:{scope_id:string};query_plan?:{branches:QueryAction[]};text_query?:true;scope_comparison?:{scope_a:string;scope_b:string};graph_query?:GraphAction};
 export type MathEvidenceResult = {schema?:string;steps?:{step_id:string;formula:string;display_value?:string;value?:string|null;unit:string;status?:string}[]};
-export type AdvancedRagMetadata = {math?:MathEvidenceResult & {schema:string;template:string;status:string;accepted:boolean;offline_only:boolean;sources?:Citation[]};text_query?:{schema:string;accepted:boolean;offline_only:boolean;
+export type AdvancedRagMetadata = {math?:MathEvidenceResult & {schema:string;template:string;status:string;accepted:boolean;offline_only:boolean;sources?:Citation[]};text_query?:{schema:string;contract?:string;activation_scope?:string;accepted:boolean;offline_only:boolean;
   branches:{branch_id:string;subquery:string;outcome:string;evaluator_state?:string|null;cited_sources:Citation[]}[]};
-  query?:{schema:string;status:string;accepted:boolean;offline_only:boolean;
+  query?:{schema:string;contract?:string;activation_scope?:string;status:string;accepted:boolean;offline_only:boolean;
   branches:{branch_id:string;question:string;status:string;data_complete?:boolean;sources:Citation[];
     graph?:{source_status?:string};math?:MathEvidenceResult}[]}};
 

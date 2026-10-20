@@ -20,6 +20,7 @@ const graphPilot=ref(false);
 const combinedPilot=ref(false);
 const totalPilot=ref(false);
 const mathTemplatesPilot=ref(false);
+const queryPilot=ref(false);
 const standalone=computed(()=>comparisonPilot.value || graphPilot.value || combinedPilot.value || totalPilot.value || mathTemplatesPilot.value);
 const textAvailable=ref(false);
 const totalAvailable=ref(false);
@@ -85,12 +86,17 @@ watch(()=>JSON.stringify(auth.user),async()=>{
   const request=++capabilitySerial;
   documentSerial++;
   available.value=false;enabled.value=false;rows.value=[];documents.value=[];error.value='';loading.value=false;
-  textAvailable.value=false;totalAvailable.value=false;totalQueryAvailable.value=false;comparisonPilot.value=false;graphPilot.value=false;combinedPilot.value=false;totalPilot.value=false;mathTemplatesPilot.value=false;mode.value='structured';
+  textAvailable.value=false;totalAvailable.value=false;totalQueryAvailable.value=false;comparisonPilot.value=false;graphPilot.value=false;combinedPilot.value=false;totalPilot.value=false;mathTemplatesPilot.value=false;queryPilot.value=false;mode.value='structured';
   if (!auth.user) return;
   try {
     const capabilities=await apiGet<{schema:string;contract?:string;accepted:boolean;offline_only:boolean;max_branches:number;actions:string[];text_query?:boolean;scope_total_query?:boolean}>(
       '/api/rag-evidence/evaluation-capabilities');
     if (request!==capabilitySerial) return;
+    queryPilot.value=capabilities.schema==='advanced-rag-v2-controlled-demo'
+      && capabilities.contract==='query-reviewed-actions-controlled-demo-v1' && capabilities.accepted===false
+      && capabilities.offline_only===false && capabilities.max_branches===3 && capabilities.text_query===true
+      && capabilities.scope_total_query===true && capabilities.actions?.length===5
+      && ['contains','where_used','bom_rollup','scope_comparison','scope_total'].every(action=>capabilities.actions.includes(action));
     mathTemplatesPilot.value=capabilities.schema==='advanced-rag-v2-controlled-demo'
       && capabilities.contract==='math-reviewed-templates-controlled-demo-v1' && capabilities.accepted===false
       && capabilities.offline_only===false && capabilities.max_branches===1 && capabilities.text_query===false
@@ -111,7 +117,7 @@ watch(()=>JSON.stringify(auth.user),async()=>{
       && capabilities.contract==='math-graph-v2-controlled-demo-v1' && capabilities.accepted===false
       && capabilities.offline_only===false && capabilities.max_branches===1 && capabilities.text_query===false
       && capabilities.actions?.length===3 && ['contains','where_used','scope_comparison'].every(action=>capabilities.actions.includes(action));
-    available.value=standalone.value || (auth.user.roles.some(role=>['reviewer','knowledge_approver','admin'].includes(role.toLowerCase()))
+    available.value=standalone.value || queryPilot.value || (auth.user.roles.some(role=>['reviewer','knowledge_approver','admin'].includes(role.toLowerCase()))
       && capabilities.schema==='advanced-rag-v2-evaluation' && capabilities.accepted===false
       && capabilities.offline_only===true && capabilities.max_branches===3
       && ['contains','where_used','bom_rollup','scope_comparison'].every(action=>capabilities.actions?.includes(action)));
@@ -141,9 +147,9 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
 
 <template>
   <section v-if="available" class="advanced-actions">
-    <label><input v-model="enabled" type="checkbox" :disabled="disabled" /> {{ mathTemplatesPilot ? 'Tính tổng hoặc so sánh có căn cứ (bật thử)' : totalPilot ? 'Tính tổng có căn cứ (bật thử)' : combinedPilot ? 'Tra bản vẽ hoặc so sánh số liệu có căn cứ (bật thử)' : comparisonPilot ? 'So sánh số liệu có căn cứ (bật thử)' : graphPilot ? 'Tra quan hệ bản vẽ có căn cứ (bật thử)' : 'Chọn tác vụ có căn cứ (đánh giá)' }}</label>
+    <label><input v-model="enabled" type="checkbox" :disabled="disabled" /> {{ queryPilot ? 'Chọn tác vụ có căn cứ (bật thử)' : mathTemplatesPilot ? 'Tính tổng hoặc so sánh có căn cứ (bật thử)' : totalPilot ? 'Tính tổng có căn cứ (bật thử)' : combinedPilot ? 'Tra bản vẽ hoặc so sánh số liệu có căn cứ (bật thử)' : comparisonPilot ? 'So sánh số liệu có căn cứ (bật thử)' : graphPilot ? 'Tra quan hệ bản vẽ có căn cứ (bật thử)' : 'Chọn tác vụ có căn cứ (đánh giá)' }}</label>
     <template v-if="enabled">
-      <label v-if="textAvailable">Chế độ đánh giá
+      <label v-if="textAvailable">{{ queryPilot ? 'Chế độ trả lời' : 'Chế độ đánh giá' }}
         <select v-model="mode" aria-label="Chế độ đánh giá" :disabled="disabled">
           <option value="structured">Chọn tác vụ và phạm vi</option>
           <option value="text">Tự tách câu hỏi văn bản</option>
@@ -151,7 +157,8 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
       </label>
       <p v-if="mode==='text'">Nhập tối đa ba ý độc lập trong ô chat. Hệ thống tìm nguồn theo từng ý và sinh một câu trả lời chung. Phép tính dùng tác vụ Math với phạm vi đã duyệt.</p>
       <template v-else>
-      <p v-if="mathTemplatesPilot">Chọn một tác vụ: tính tổng một phạm vi hoặc so sánh hai phạm vi đã duyệt. Máy chủ kiểm tra quyền và phiên bản nguồn của từng tác vụ.</p>
+      <p v-if="queryPilot">Chọn tối đa ba ý và nguồn đã duyệt. Máy chủ kiểm tra quyền, phiên bản và độ đầy đủ của nguồn cho từng ý.</p>
+      <p v-else-if="mathTemplatesPilot">Chọn một tác vụ: tính tổng một phạm vi hoặc so sánh hai phạm vi đã duyệt. Máy chủ kiểm tra quyền và phiên bản nguồn của từng tác vụ.</p>
       <p v-else-if="totalPilot">Chọn một phạm vi số liệu đã duyệt để cộng đủ các dòng. Máy chủ kiểm tra quyền và phiên bản nguồn khi gửi.</p>
       <p v-else-if="comparisonPilot">Chọn hai phạm vi số liệu đã duyệt để so sánh. Phạm vi được phép dùng do máy chủ kiểm tra khi gửi.</p>
       <p v-else-if="graphPilot">Chọn bản vẽ và phạm vi quan hệ đã duyệt. Kết quả cho biết phần đã xác nhận và độ đầy đủ của nguồn.</p>

@@ -158,9 +158,9 @@ def execute_pipeline(state):
         if terminal is not None:
             return terminal
     if state.request.text_query:
-        if state.invocation.mode not in {'test','evaluation'}:
+        if state.invocation.mode not in {'test','evaluation'} and state.query_v2_capability is None:
             raise ValueError('Text query contract requires evaluation context')
-        if not {role.lower() for role in state.request.access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
+        if state.query_v2_capability is None and not {role.lower() for role in state.request.access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
             raise PermissionError('Evaluation reviewer required')
     if state.request.query_plan is not None:
         from mech_chatbot.rag.query_plan import execute_query_plan

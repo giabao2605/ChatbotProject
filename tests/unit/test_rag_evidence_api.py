@@ -11,6 +11,80 @@ from .test_text_evidence_repository import PROFILE, caption_steps, text_store
 
 pytestmark = pytest.mark.unit
 
+from .test_query_v2_activation import grant as query_grant
+
+
+def test_full_query_capability_is_advertised_and_transport_binds_parent_identity(query_grant, monkeypatch):
+    from fastapi import HTTPException
+    from mech_chatbot.api.evidence_contracts import require_query_context
+    from mech_chatbot.api.rag_server import ChatRequest, _scope_comparison_mode
+    from mech_chatbot.governance.math_v2_activation import load_math_v2_capability
+    root, issue, *_ = query_grant
+    _, digest, env = issue()
+    cap = load_math_v2_capability(env, root=root, current_commit='candidate')
+    runtime = SimpleNamespace(math_v2_authorizer=lambda:cap,
+        runtime_contract=SimpleNamespace(execution_context='production'))
+    with client(monkeypatch, 'production', roles=('viewer',)) as api:
+        api.app.state.runtime = runtime
+        response = api.get('/api/rag-evidence/evaluation-capabilities')
+    assert response.status_code == 200
+    assert response.json() == {'schema':'advanced-rag-v2-controlled-demo', 'contract':cap.contract,
+        'accepted':False, 'offline_only':False, 'max_branches':3,
+        'actions':['contains','where_used','bom_rollup','scope_comparison','scope_total'],
+        'text_query':True, 'scope_total_query':True}
+    actions = [{'query_plan':{'branches':[{'branch_id':'sum','question':'Sum','scope_total':{'scope_id':'A'}}]}},
+               {'text_query':True}, {'bom_rollup':{'root_key':'document:1', 'product_scope':'assembly',
+                'site':'factory', 'order_quantity':'1', 'rounding_scope':'reviewed-policy'}}]
+    for action in actions:
+        request = ChatRequest(user_question='Reviewed action', **action)
+        assert _scope_comparison_mode(request, {}, runtime,
+            headers={'X-RAG-Activation-Bundle-SHA256':digest}) == 'production'
+        with pytest.raises(HTTPException) as mismatch:
+            _scope_comparison_mode(request, {}, runtime, headers={})
+        assert mismatch.value.status_code == 409
+        with pytest.raises(HTTPException):
+            _scope_comparison_mode(request, {}, runtime, replay=True)
+    for grant in (None, cap.math, cap.math.comparison, cap.graph):
+        with pytest.raises(HTTPException) as denied:
+            require_query_context('production', {}, authorizer=lambda:grant)
+        assert denied.value.status_code == 409
+    assert require_query_context('evaluation', {'roles':['reviewer']}) == 'evaluation'
+    with pytest.raises(HTTPException) as denied:
+        require_query_context('evaluation', {'roles':['viewer']})
+    assert denied.value.status_code == 403
+
+
+def test_browser_query_guard_runs_before_forwarding_and_preserves_bounded_selection(query_grant, monkeypatch):
+    from mech_chatbot.api.routers import chat
+    from mech_chatbot.governance.math_v2_activation import load_math_v2_capability
+    root, issue, *_ = query_grant
+    _, _, env = issue()
+    cap = load_math_v2_capability(env, root=root, current_commit='candidate')
+    calls = []
+    class Runner:
+        def stream(self, command, actor):
+            calls.append((command, actor))
+            return iter(())
+    app = FastAPI()
+    app.include_router(chat.router)
+    app.state.settings_snapshot = SimpleNamespace(RAG_EXECUTION_CONTEXT='production')
+    grants = [cap.math]
+    app.state.runtime = SimpleNamespace(math_v2_authorizer=lambda:grants[0], chat_turn_runner=Runner())
+    app.dependency_overrides[csrf_profile] = lambda:{'user_id':7, 'username':'viewer', 'roles':['viewer']}
+    monkeypatch.setattr(chat, 'enforce_request_rate_limit', lambda *a, **kw:None)
+    body = {'session_id':'bounded', 'question':'Sum and compare', 'query_plan':{'branches':[
+        {'branch_id':'sum', 'question':'Sum', 'scope_total':{'scope_id':'A'}},
+        {'branch_id':'compare', 'question':'Compare', 'scope_comparison':{'scope_a':'A', 'scope_b':'B'}}]}}
+    with TestClient(app) as api:
+        assert api.post('/api/chat/message', json=body).status_code == 409
+        assert calls == []
+        grants[0] = cap
+        assert api.post('/api/chat/message', json=body).status_code == 200
+        assert [branch.branch_id for branch in calls[0][0].query_plan.branches] == ['sum','compare']
+        grants[0] = None
+        assert api.post('/api/chat/message', json=body).status_code == 409
+        assert len(calls) == 1
+
 
 def client(monkeypatch, mode='evaluation', roles=('reviewer',)):
     app = FastAPI()

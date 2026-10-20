@@ -139,6 +139,9 @@ def validate_math_templates_bundle(bundle, *, root, environ, current_commit, bun
 
 def select_math_capability(grant, template):
     """Select one fixed authority while preserving each child contract and pins."""
+    from mech_chatbot.governance.query_v2_activation import QueryV2Capability, select_query_capability
+    if type(grant) is QueryV2Capability:
+        grant = grant.math if select_query_capability(grant) else None
     if type(grant) is MathTemplatesCapability:
         if grant.contract != CONTRACT or grant.context != 'controlled_demo':
             return None

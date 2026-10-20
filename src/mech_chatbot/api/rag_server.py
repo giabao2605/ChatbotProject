@@ -1044,6 +1044,10 @@ def _scope_comparison_mode(req, profile, runtime, *, replay=False, headers=None)
         from mech_chatbot.api.evidence_contracts import require_graph_context
         authorizer=getattr(runtime,'graph_v2_authorizer',None)
         selected=require_graph_context('pilot_replay' if replay else mode,profile,authorizer=authorizer)
+    elif req.bom_rollup is not None or req.query_plan is not None or req.text_query:
+        from mech_chatbot.api.evidence_contracts import require_query_context
+        authorizer = getattr(runtime, 'math_v2_authorizer', None)
+        selected = require_query_context('pilot_replay' if replay else mode, profile, authorizer=authorizer)
     else:
         authorizer = getattr(runtime, 'math_v2_authorizer', None)
         selected = require_comparison_context('pilot_replay' if replay else mode, profile,

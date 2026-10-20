@@ -19,14 +19,20 @@ def _pick(value, keys):
 
 def _body(value, kind):
     schemas = ('query-text-v2',) if kind=='text_query' else ('query-plan-v2', 'query-plan-mixed-v1-draft','query-plan-scope-total-v1')
+    live = (isinstance(value, Mapping) and value.get('contract') == 'query-reviewed-actions-controlled-demo-v1'
+            and value.get('offline_only') is False and value.get('activation_scope') == 'controlled_demo')
+    evaluation = (isinstance(value, Mapping) and value.get('offline_only') is True
+                  and value.get('contract') != 'query-reviewed-actions-controlled-demo-v1')
     if (not isinstance(value, Mapping) or value.get('schema') not in schemas
-            or value.get('accepted') is not False or value.get('offline_only') is not True):
+            or value.get('accepted') is not False or not (evaluation or live)):
         raise ValueError('Invalid history result contract')
     branches = value.get('branches')
     if not isinstance(branches, list) or len(branches)>3:
         raise ValueError('Invalid history branches')
     result = _pick(value, ('schema','status','accepted','offline_only')) | {'branches':[]}
-    if value['schema']=='query-plan-scope-total-v1':
+    if live:
+        result.update(contract=value['contract'], activation_scope=value['activation_scope'])
+    elif value['schema']=='query-plan-scope-total-v1':
         if value.get('contract')!='query-plan-scope-total-v1':
             raise ValueError('Invalid total query history contract')
         result['contract']=value['contract']

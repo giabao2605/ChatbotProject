@@ -775,6 +775,14 @@ def activation_status(
     if failure is not None:
         return failure
     assert bundle is not None and digest is not None
+    if bundle.get('schema') == 'rag-activation-bundle-v7':
+        from mech_chatbot.governance.query_v2_activation import validate_query_v2_bundle
+        capability = validate_query_v2_bundle(bundle, root=project_root, environ=env,
+                                              current_commit=current_commit, bundle_sha256=digest)
+        return _status(bool(capability), bool(capability), scope,
+                       'query_v2_controlled_demo_accepted' if capability else 'query_v2_grant_invalid',
+                       enabled, profile=profile, decision_source_commit=current_commit,
+                       bundle_sha256=digest, review_mode=capability.review_mode if capability else 'multi_reviewer')
     if bundle.get('schema') == 'rag-activation-bundle-v6':
         from mech_chatbot.governance.math_templates_activation import validate_math_templates_bundle
         capability = validate_math_templates_bundle(bundle, root=project_root, environ=env,

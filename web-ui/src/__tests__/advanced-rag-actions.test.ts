@@ -56,6 +56,27 @@ function create(user:UserProfile|null=profile) {
   return mount(AdvancedRagActions,{props:{disabled:false},global:{plugins:[pinia]}});
 }
 
+it('offers three bounded live actions and text only for the exact full Query grant',async()=>{
+  vi.mocked(api.apiGet).mockImplementation(async path=>{
+    if(path.endsWith('evaluation-capabilities')) return {...capabilities,schema:'advanced-rag-v2-controlled-demo',
+      contract:'query-reviewed-actions-controlled-demo-v1',offline_only:false,text_query:true,scope_total_query:true,
+      actions:[...capabilities.actions,'scope_total']} as never;
+    if(path==='/api/documents') return {documents:[]} as never;
+    return {items:[],has_more:false,offset:0} as never;
+  });
+  const wrapper=create({...profile,roles:['viewer']});await flushPromises();
+  expect(wrapper.text()).toContain('Chọn tác vụ có căn cứ (bật thử)');
+  await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises();
+  expect(wrapper.get('select[aria-label="Tác vụ ý 1"]').findAll('option').map(option=>option.element.value))
+    .toEqual(['contains','where_used','bom_rollup','scope_comparison','scope_total']);
+  const add=()=>wrapper.findAll('button').find(button=>button.text()==='Thêm ý')!;
+  await add().trigger('click');await add().trigger('click');
+  expect(wrapper.findAll('fieldset')).toHaveLength(3);
+  expect(add().attributes('disabled')).toBeDefined();
+  await wrapper.get('select[aria-label="Chế độ đánh giá"]').setValue('text');
+  expect(wrapper.emitted('change')!.at(-1)).toEqual([{active:true,valid:true,text_query:true}]);
+});
+
 it('sends a single reviewed scope total independently and disables adding branches',async()=>{
   vi.mocked(api.apiGet).mockImplementation(async path=>{
     if(path.endsWith('evaluation-capabilities')) return {...capabilities,actions:[...capabilities.actions,'scope_total']} as never;

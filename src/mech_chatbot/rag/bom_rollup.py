@@ -15,11 +15,12 @@ from mech_chatbot.services.rag_evidence_service import scope_is_current
 
 def execute_bom_rollup(state,*,graph_dependency=None):
     state.checkpoint('bom_rollup')
-    if state.invocation.mode not in {'evaluation','test'}:
+    if state.invocation.mode not in {'evaluation','test'} and state.query_v2_capability is None:
         raise ValueError('BOM v2 requires evaluation context')
     access=state.request.access
-    if not {role.lower() for role in access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
+    if state.query_v2_capability is None and not {role.lower() for role in access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
         raise PermissionError('Evaluation reviewer required')
+    state.require_query_authority()
     terminal=fixed_task_guard(state)
     if terminal is not None:
         return terminal
@@ -41,6 +42,10 @@ def _read_bom(state,*,graph_dependency=None):
                               deadline=state.budget.deadline_monotonic,max_relations=query.max_relations,
                               max_generation_edges=query.max_generation_edges)
     state.checkpoint('bom_rollup')
+    state.require_query_authority()
+    cap = state.query_v2_capability
+    if cap is not None and tree is not None and not cap.graph.permits_result(query, tree):
+        raise PermissionError('BOM Graph source authority unavailable')
     if policy and not scope_is_current(policy,profile):
         policy=None
     order_scope=load_approved_scope(selection.quantity_scope,profile) if selection.quantity_scope else None
@@ -76,7 +81,8 @@ def _read_bom(state,*,graph_dependency=None):
                        if order_scope is not None and result['status']=='complete' else None)
     metadata={**result,'order_quantity':quantity_text if result['status']=='complete' or not selection.quantity_scope else None,
               **({'quantity_scope':quantity_metadata} if selection.quantity_scope else {}),
-              'accepted':False,'offline_only':True,'read_consistency':'serializable',
+              'accepted':False,'offline_only':cap is None,'read_consistency':'serializable',
+              **({'contract':cap.contract,'activation_scope':cap.context} if cap else {}),
               'rounding_scope':_scope_manifest(policy) if result['status']=='complete' else None,
               **({'graph_reused_from':graph_dependency[0]} if graph_dependency else {})}
     diagnostics={'math_v2':metadata,'citation_docs':records,'retrieved_docs':records,

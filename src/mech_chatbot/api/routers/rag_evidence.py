@@ -143,6 +143,15 @@ def evaluation_capabilities(request: Request, profile: dict[str, Any] = Depends(
     mode = getattr(request.app.state.settings_snapshot, 'RAG_EXECUTION_CONTEXT', 'production')
     math_authorizer = getattr(getattr(request.app.state, 'runtime', None), 'math_v2_authorizer', None)
     math_cap = math_authorizer() if callable(math_authorizer) and mode == 'production' else None
+    from mech_chatbot.governance.query_v2_activation import select_query_capability
+    query_cap = select_query_capability(math_cap)
+    if query_cap is not None:
+        from mech_chatbot.api.evidence_contracts import require_query_context
+        require_query_context(mode, profile, authorizer=lambda: query_cap)
+        return {'schema':'advanced-rag-v2-controlled-demo', 'contract':query_cap.contract,
+                'accepted':False, 'offline_only':False, 'max_branches':3,
+                'actions':['contains','where_used','bom_rollup','scope_comparison','scope_total'],
+                'text_query':True, 'scope_total_query':True}
     from mech_chatbot.governance.math_templates_activation import MathTemplatesCapability
     if isinstance(math_cap, MathTemplatesCapability):
         from mech_chatbot.api.evidence_contracts import require_scope_total_context

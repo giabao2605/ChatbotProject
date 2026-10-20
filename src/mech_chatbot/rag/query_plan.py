@@ -41,9 +41,15 @@ def _dependency_graph(branch, prior_results):
 
 
 def _execute_branch(state,branch,prior_results=()):
+    state.require_query_authority()
     request=replace(state.request,question=branch.question,query_plan=None,scope_total=branch.scope_total,scope_comparison=branch.scope_comparison,
                     graph_query=branch.graph_query,bom_rollup=branch.bom_rollup)
     child=replace(state,request=request,refusal_reason=None,generation_outcome=None)
+    if state.query_v2_capability is not None and (branch.scope_total is not None or branch.scope_comparison is not None):
+        from mech_chatbot.governance.math_templates_activation import select_math_capability
+        template = 'sum_reviewed_scope' if branch.scope_total is not None else 'compare_two_scopes'
+        child.math_v2_capability = select_math_capability(state.query_v2_capability, template)
+        child.math_v2_authorizer = lambda: select_math_capability(state.query_v2_authorizer(), template)
     if state.task_binding is not None:
         child=replace(child,task_binding=state.task_binding.child(request,branch.branch_id),task_slot=branch.branch_id)
     execute=execute_graph_query if branch.graph_query else execute_bom_rollup if branch.bom_rollup else execute_scope_comparison
@@ -65,10 +71,13 @@ def _execute_branch(state,branch,prior_results=()):
 
 def execute_query_plan(state):
     state.checkpoint('query_plan')
-    if state.invocation.mode not in {'evaluation','test'}:
+    if state.invocation.mode not in {'evaluation','test'} and state.query_v2_capability is None:
         raise ValueError('Query v2 requires evaluation context')
-    if not {role.lower() for role in state.request.access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
+    if state.query_v2_capability is None and not {role.lower() for role in state.request.access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
         raise PermissionError('Evaluation reviewer required')
+    state.require_query_authority()
+    if state.query_v2_capability is not None and not state.query_v2_capability.permits_plan(state.request.query_plan):
+        raise PermissionError('Query v2 source authority unavailable')
     if state.invocation.task_routing_contract not in (None, SCOPE_TOTAL_TASK_ROUTING) and any(branch.scope_total is not None for branch in state.request.query_plan.branches):
         raise ValueError('Scope total does not use a planner')
     if (any(branch.text_query for branch in state.request.query_plan.branches) and state.invocation.task_routing_contract
@@ -196,7 +205,9 @@ def _prepared_result(state,results,records,observed=(),text_answer='',text_usage
     if text_answer:answer+='\n\n'+text_answer
     scope_totals=any(branch.scope_total is not None for branch in state.request.query_plan.branches)
     schema=SCOPE_TOTAL_QUERY_SCHEMA if scope_totals else 'query-plan-mixed-v1-draft' if state.invocation.task_routing_contract=='semantic-mixed-candidate-task-routing-v5-draft' or any(b['template']=='text_query' for b in results) else 'query-plan-v2'
-    diagnostics={**(text_usage or {}),'query_v2':{'schema':schema,**({'contract':SCOPE_TOTAL_QUERY_SCHEMA} if scope_totals else {}),'status':status,'branches':results,'accepted':False,'offline_only':True,
+    cap = state.query_v2_capability
+    diagnostics={**(text_usage or {}),'query_v2':{'schema':schema,**({'contract':SCOPE_TOTAL_QUERY_SCHEMA} if scope_totals else {}),'status':status,'branches':results,'accepted':False,'offline_only':cap is None,
+                              **({'contract':cap.contract,'activation_scope':cap.context} if cap else {}),
                               'read_consistency':'sql_serializable_text_current' if text_answer else 'serializable',
                               **({'text_answer':text_answer} if text_answer else {})},
                  'citation_docs':records,'retrieved_docs':records,

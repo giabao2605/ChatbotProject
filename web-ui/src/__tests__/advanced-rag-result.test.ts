@@ -6,6 +6,18 @@ import type { AdvancedRagMetadata, Citation } from '@/types';
 
 vi.mock('@/api/client',()=>({apiGet:vi.fn()}));
 
+it('renders live mixed branch results and keeps partial status without an offline label',()=>{
+  const wrapper=mount(AdvancedRagResult,{props:{result:{query:{schema:'query-plan-mixed-v1-draft',
+    contract:'query-reviewed-actions-controlled-demo-v1',activation_scope:'controlled_demo',
+    status:'partial',accepted:false,offline_only:false,branches:[
+      {branch_id:'sum',question:'Tổng',status:'complete',sources:[],math:{steps:[{step_id:'sum',formula:'sum(a)',value:'1500',unit:'VND'}]}},
+      {branch_id:'graph',question:'Quan hệ',status:'partial',sources:[],graph:{source_status:'partial'}}]}}}});
+  expect(wrapper.findAll('article')).toHaveLength(2);
+  expect(wrapper.text()).toContain('Một phần');
+  expect(wrapper.text()).not.toContain('Kết quả đánh giá');
+  expect(wrapper.get('table').text()).toContain('1500');
+});
+
 it('renders total query branches with exact raw values under the new schema',()=>{
   const wrapper=mount(AdvancedRagResult,{props:{result:{query:{schema:'query-plan-scope-total-v1',
     status:'complete',accepted:false,offline_only:true,branches:[{branch_id:'s',question:'Tổng A',

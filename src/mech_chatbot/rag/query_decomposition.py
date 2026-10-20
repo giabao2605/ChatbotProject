@@ -328,7 +328,8 @@ def fixed_task_guard(state):
         reason = None
         origin, disposition, slots, tasks = 'prevalidation', 'invalid', (), ()
         state.checkpoint('task_routing')
-        if state.invocation.mode not in {'evaluation', 'test'} or not {r.lower() for r in state.request.access.roles}.intersection({'reviewer', 'knowledge_approver', 'admin'}):
+        state.require_query_authority()
+        if state.query_v2_capability is None and (state.invocation.mode not in {'evaluation', 'test'} or not {r.lower() for r in state.request.access.roles}.intersection({'reviewer', 'knowledge_approver', 'admin'})):
             raise PermissionError('Evaluation reviewer required for task routing')
         if type(state.request.question) is not str or not state.request.question.strip() or len(state.request.question) > 20000:
             reason = 'task_unsupported'

@@ -445,6 +445,10 @@ def chat_message(
             from mech_chatbot.api.evidence_contracts import require_graph_context
             require_graph_context(getattr(snapshot,'RAG_EXECUTION_CONTEXT','production'),profile,
                 authorizer=getattr(request.app.state.runtime,'graph_v2_authorizer',None))
+        elif req.bom_rollup is not None or req.query_plan is not None or req.text_query:
+            from mech_chatbot.api.evidence_contracts import require_query_context
+            require_query_context(getattr(snapshot, 'RAG_EXECUTION_CONTEXT', 'production'), profile,
+                authorizer=getattr(request.app.state.runtime, 'math_v2_authorizer', None))
         else:
             require_comparison_context(getattr(snapshot, 'RAG_EXECUTION_CONTEXT', 'production'), profile,
                 comparison_only=req.scope_comparison is not None,

@@ -35,9 +35,9 @@ def build_activation_bundle(
     versions: dict | None = None, graph_fingerprint: str | None = None,
     enabled_features: set[str] | frozenset[str] | None = None,
     math_v2: bool = False, graph_v2: bool = False, math_graph_v2: bool = False, scope_total: bool = False,
-    math_templates: bool = False,
+    math_templates: bool = False, query_v2: bool = False,
 ) -> tuple[dict, str]:
-    if sum((math_v2, graph_v2, math_graph_v2, scope_total, math_templates)) > 1:
+    if sum((math_v2, graph_v2, math_graph_v2, scope_total, math_templates, query_v2)) > 1:
         raise ValueError('Activation bundle modes are mutually exclusive')
     project_root = Path(root)
     scope = str(scope or "").strip()
@@ -84,7 +84,10 @@ def build_activation_bundle(
             governance_path, root=project_root,
             expected_schema="rag-review-governance-v1",
         )
-    if math_templates:
+    if query_v2:
+        from mech_chatbot.governance.query_v2_activation import LEDGER_SCHEMA
+        ledger_schema = LEDGER_SCHEMA
+    elif math_templates:
         from mech_chatbot.governance.math_templates_activation import LEDGER_SCHEMA
         ledger_schema = LEDGER_SCHEMA
     elif scope_total:
@@ -101,7 +104,7 @@ def build_activation_bundle(
         ledger_schema = LEDGER_SCHEMA
     else:
         ledger_schema = _LEDGER_SCHEMAS[scope]
-    if not (math_v2 or graph_v2 or math_graph_v2 or scope_total or math_templates) and scope == "default_rollout":
+    if not (math_v2 or graph_v2 or math_graph_v2 or scope_total or math_templates or query_v2) and scope == "default_rollout":
         if not validate_release_decision_ledger(
             ledger,
             root=project_root,
@@ -112,7 +115,7 @@ def build_activation_bundle(
             raise ValueError(
                 "default_rollout requires a verified release decision ledger"
             )
-    elif not (math_v2 or graph_v2 or math_graph_v2 or scope_total or math_templates):
+    elif not (math_v2 or graph_v2 or math_graph_v2 or scope_total or math_templates or query_v2):
         active_milestones = {
             milestone
             for milestone, flags in MILESTONE_FLAGS.items()
@@ -133,7 +136,7 @@ def build_activation_bundle(
         expected_schema=ledger_schema,
     )
     bundle = {
-        "schema": ("rag-activation-bundle-v6" if math_templates else "rag-activation-bundle-v5" if scope_total else "rag-activation-bundle-v4" if math_graph_v2 else "rag-activation-bundle-v3" if graph_v2 else
+        "schema": ("rag-activation-bundle-v7" if query_v2 else "rag-activation-bundle-v6" if math_templates else "rag-activation-bundle-v5" if scope_total else "rag-activation-bundle-v4" if math_graph_v2 else "rag-activation-bundle-v3" if graph_v2 else
                    "rag-activation-bundle-v2" if math_v2 else "rag-activation-bundle-v1"),
         "scope": scope,
         "source_commit": source_commit,
@@ -146,7 +149,7 @@ def build_activation_bundle(
         "graph_fingerprint": str(graph_fingerprint or "").strip() or None,
         "decision_ledger": ledger_reference,
     }
-    if math_v2 or graph_v2 or math_graph_v2 or scope_total or math_templates or (scope == "default_rollout" and profile != "all_off"):
+    if math_v2 or graph_v2 or math_graph_v2 or scope_total or math_templates or query_v2 or (scope == "default_rollout" and profile != "all_off"):
         if release_signature is None:
             raise ValueError(
                 "default_rollout feature-on activation requires a "
@@ -169,6 +172,15 @@ def build_activation_bundle(
             raise ValueError("release authority signature is invalid")
     if governance_reference is not None:
         bundle["review_governance"] = governance_reference
+    if query_v2:
+        from mech_chatbot.governance.query_v2_activation import validate_query_v2_bundle
+        environment = {**rendered_flags, **resolved_versions,
+            'RAG_ACTIVATION_PROFILE': profile, 'RAG_ACTIVATION_SCOPE': scope,
+            'RAG_DEPLOYMENT_GIT_SHA': source_commit,
+            'RAG_SNAPSHOT_FINGERPRINT': ledger.get('snapshot_fingerprint')}
+        if validate_query_v2_bundle(bundle, root=project_root, environ=environment,
+                                    current_commit=source_commit, bundle_sha256='0' * 64) is None:
+            raise ValueError('A signed approved Query actions grant is required')
     if math_templates:
         from mech_chatbot.governance.math_templates_activation import validate_math_templates_bundle
         environment = {**rendered_flags, **resolved_versions,
@@ -242,6 +254,7 @@ def main(argv=None):
     parser.add_argument("--community-serving-epoch", default=VERSION_DEFAULTS["RAG_COMMUNITY_SERVING_EPOCH"])
     parser.add_argument("--graph-fingerprint")
     v2_mode = parser.add_mutually_exclusive_group()
+    v2_mode.add_argument("--query-v2", action="store_true")
     v2_mode.add_argument("--math-templates", action="store_true")
     v2_mode.add_argument("--scope-total", action="store_true")
     v2_mode.add_argument("--math-v2", action="store_true")
@@ -263,6 +276,7 @@ def main(argv=None):
         },
         graph_fingerprint=args.graph_fingerprint,
         enabled_features=set(args.enable_feature),
+        query_v2=args.query_v2,
         math_templates=args.math_templates,
         scope_total=args.scope_total,
         math_v2=args.math_v2,

@@ -138,3 +138,24 @@ def test_text_history_cannot_claim_the_mixed_query_schema():
         serialize_history_result({'text_query': {
             'schema': 'query-plan-mixed-v1-draft', 'accepted': False,
             'offline_only': True, 'branches': []}}, [])
+
+
+@pytest.mark.parametrize('kind', ['query', 'text_query'])
+def test_live_query_history_requires_its_exact_authority_and_checked_sources(kind):
+    query = metadata()['query'] if kind == 'query' else {
+        'schema':'query-text-v2', 'branches':[{'branch_id':'text', 'subquery':'Terms',
+            'outcome':'partial_answer', 'cited_sources':[CARD]}]}
+    query = {**query, 'accepted':False, 'offline_only':False,
+             'contract':'query-reviewed-actions-controlled-demo-v1', 'activation_scope':'controlled_demo'}
+    original = {kind:query}
+    payload = serialize_history_result(original, [CARD])
+    restored = restore_history_result(payload, [CARD])[kind]
+    assert restored['contract'] == query['contract'] and restored['activation_scope'] == 'controlled_demo'
+    assert restored['offline_only'] is False and restored['accepted'] is False
+    assert restored['branches'][0]['cited_sources' if kind == 'text_query' else 'sources'] == [CARD]
+    with pytest.raises(ValueError):
+        restore_history_result(payload, [])
+    for changes in ({'contract':'math-reviewed-templates-controlled-demo-v1'},
+                    {'activation_scope':'unrestricted'}, {'accepted':True}, {'contract':None}, {'offline_only':True}):
+        with pytest.raises(ValueError, match='contract'):
+            serialize_history_result({kind:{**query, **changes}}, [CARD])
