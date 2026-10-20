@@ -1099,9 +1099,14 @@ def _open_rag_events(
         query_plan=req.query_plan.to_plan() if req.query_plan is not None else None,
         text_query=req.text_query,
     )
+    routing_contract = None
+    if mode == 'production' and request.query_plan is not None and not any(
+            branch.text_query for branch in request.query_plan.branches):
+        from mech_chatbot.rag.query_decomposition import SCOPE_TOTAL_TASK_ROUTING
+        routing_contract = SCOPE_TOTAL_TASK_ROUTING
     return runtime.executor.run(
         request,
-        RagInvocation(trace_id=trace_id, mode=mode),
+        RagInvocation(trace_id=trace_id, mode=mode, task_routing_contract=routing_contract),
         cancellation=cancel_event or NEVER_CANCELLED,
     )
 

@@ -152,6 +152,30 @@ def test_full_query_rest_and_sse_keep_branch_history_and_parent_header(path, rag
     assert {source['scope_id'] for source in restored['branches'][1]['sources']} == {'a','b'}
 
 
+@pytest.mark.parametrize('selection,mode,classified', [
+    ({'query_plan':{'branches':[{'branch_id':'total','question':'Total A','scope_total':{'scope_id':'a'}}]}}, 'production', True),
+    ({'query_plan':{'branches':[{'branch_id':'text','question':'Explain','text_query':True}]}}, 'production', False),
+    ({'query_plan':{'branches':[{'branch_id':'total','question':'Total A','scope_total':{'scope_id':'a'}}]}}, 'evaluation', False),
+    ({'scope_total':{'scope_id':'a'}}, 'production', False),
+])
+def test_http_selects_existing_classifier_only_for_live_fixed_query_plan(live_store, selection, mode, classified):
+    from mech_chatbot.api import rag_server
+    from mech_chatbot.rag.execution_contracts import RagRuntimeContract
+    from mech_chatbot.rag.query_decomposition import SCOPE_TOTAL_TASK_ROUTING
+    from .test_query_v2_production import capability as full_capability
+    calls = []
+    class Executor:
+        def run(self, request, invocation, **kwargs):
+            calls.append(invocation)
+            return ()
+    runtime = SimpleNamespace(runtime_contract=RagRuntimeContract(mode, False, 120),
+        math_v2_authorizer=lambda:full_capability(live_store), executor=Executor())
+    req = rag_server.ChatRequest(user_question='Total for the selected period, including its reviewed rows', **selection)
+    rag_server._open_rag_events(req, PROFILE, 'classify-once', None, mode=mode, runtime=runtime)
+    assert len(calls)==1
+    assert calls[0].task_routing_contract == (SCOPE_TOTAL_TASK_ROUTING if classified else None)
+
+
 def test_signed_total_bundle_executes_only_its_scope_and_revocation_blocks_next_request(grant, live_store):
     from mech_chatbot.governance.math_v2_activation import load_math_v2_capability
     root, _, gate, decision, issue, environment = grant
