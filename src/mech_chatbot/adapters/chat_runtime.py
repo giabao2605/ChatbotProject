@@ -267,7 +267,11 @@ class RepositoryChatStore:
         if not chat_id:
             return None
         structured = any('locator' in item for item in record.evidence)
-        metadata = record.advanced_rag if record.advanced_rag and any(key in record.advanced_rag for key in ('query','text_query')) else None
+        metadata = record.advanced_rag if record.advanced_rag and (
+            any(key in record.advanced_rag for key in ('query','text_query'))
+            or isinstance(record.advanced_rag.get('math'), Mapping)
+            and record.advanced_rag['math'].get('schema') == 'grounded-calculation-scope-total-v1'
+        ) else None
         options = {'advanced_rag':metadata,'citation_cards':list(record.citations)} if metadata is not None else {}
         if self._save_answer_evidence(chat_id, list(record.evidence), **options) is False and (structured or metadata is not None):
             raise RuntimeError('Structured chat evidence was not persisted')

@@ -241,11 +241,15 @@ def test_repository_store_keeps_structured_pins_and_reports_failed_evidence_writ
         failed.persist(record)
 
 
-def test_repository_store_passes_branch_result_with_final_citations_and_reports_missing_migration():
+@pytest.mark.parametrize(('selection', 'metadata'), [
+    ({'text_query':True}, {'text_query':{'schema':'query-text-v2','accepted':False,'offline_only':True,'branches':[]}}),
+    ({'query_plan':object()}, {'query':{'schema':'query-plan-v2','accepted':False,'offline_only':True,'branches':[]}}),
+    ({'scope_total':'a'}, {'math':{'schema':'grounded-calculation-scope-total-v1','accepted':False,'offline_only':False}}),
+], ids=['text-query', 'query', 'scope-total'])
+def test_repository_store_passes_branch_result_with_final_citations_and_reports_missing_migration(selection, metadata):
     captured = []
-    metadata = {'text_query':{'schema':'query-text-v2','accepted':False,'offline_only':True,'branches':[]}}
     card = {'doc_id':1,'version_no':2,'source_id':'D1P1'}
-    record = ChatPersistence(command=replace(command(),text_query=True),actor=actor(),answer='Answer',
+    record = ChatPersistence(command=replace(command(),**selection),actor=actor(),answer='Answer',
         ref_text='',ref_images=(),evidence=(card,),citations=(card,),advanced_rag=metadata)
     store = RepositoryChatStore(save_chat_history=lambda **kw:11,
         save_answer_evidence=lambda *a,**kw:captured.append(kw) or True,save_answer_sources=lambda *a:True)
@@ -254,6 +258,20 @@ def test_repository_store_passes_branch_result_with_final_citations_and_reports_
     failed = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a,**kw:False,
         save_answer_sources=lambda *a:pytest.fail('must not pretend the advanced history was saved'))
     with pytest.raises(RuntimeError):failed.persist(record)
+
+
+@pytest.mark.parametrize('metadata', [
+    {'math':{'schema':'grounded-calculation-v2'}},
+    {'graph':{'schema':'graph-query-v2'}},
+], ids=['legacy-math', 'graph'])
+def test_repository_store_keeps_legacy_results_on_the_existing_evidence_api(metadata):
+    captured = []
+    store = RepositoryChatStore(save_chat_history=lambda **kw:11,
+        save_answer_evidence=lambda *a,**kw:captured.append(kw) or True,save_answer_sources=lambda *a:True)
+    record = ChatPersistence(command=command(),actor=actor(),answer='Answer',ref_text='',ref_images=(),
+                             evidence=(),citations=(),advanced_rag=metadata)
+    assert store.persist(record)==11
+    assert captured == [{}]
 
 
 def test_audit_adapter_preserves_typed_record_fields():
