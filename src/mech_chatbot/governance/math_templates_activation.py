@@ -36,10 +36,11 @@ class MathTemplatesCapability:
     source_commit: str
     bundle_sha256: str
     snapshot_fingerprint: str
-    expires_at: str
+    expires_at: str | None
     contract: str = CONTRACT
     context: str = 'controlled_demo'
     review_mode: str = 'multi_reviewer'
+    reviewed_sources: bool = False
 
 
 def _child(reference, name, parent, environ, *, root, current_commit):
@@ -143,7 +144,7 @@ def select_math_capability(grant, template):
     if type(grant) is QueryV2Capability:
         grant = grant.math if select_query_capability(grant) else None
     if type(grant) is MathTemplatesCapability:
-        if grant.contract != CONTRACT or grant.context != 'controlled_demo':
+        if grant.contract != CONTRACT or grant.context not in {'controlled_demo', 'default_rollout'}:
             return None
         grant = (grant.comparison if template == 'compare_two_scopes' else
                  grant.total if template == 'sum_reviewed_scope' else None)

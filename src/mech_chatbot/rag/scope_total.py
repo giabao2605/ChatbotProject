@@ -64,12 +64,11 @@ def execute_scope_total(state):
 
 def total_event_fields(diagnostics, answer, budget, capability, *, final_latency_ms, outcome):
     """Keep the one-step completion receipt separate from comparison evidence."""
+    from mech_chatbot.rag.math_v2_pilot import completion_provenance
     math = diagnostics.get('math_v2') or {}
     scopes, steps = math.get('scopes') or (), math.get('steps') or ()
     pins = {(s.get('scope_id'), s.get('snapshot_id'), s.get('scope_hash')) for s in scopes}
-    provenance = (len(pins) == 1 and pins <= set(capability.scope_pins)
-        and math.get('contract') == capability.contract and math.get('activation_scope') == capability.context
-        and math.get('offline_only') is False)
+    provenance = completion_provenance(math, capability, 1)
     records = diagnostics.get('citation_docs') or ()
     cards = build_citation_list(records, page_has_vision=lambda *_: False)
     cited = {(c.get('scope_id'), c.get('snapshot_id'), c.get('scope_hash')) for c in cards}

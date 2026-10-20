@@ -775,6 +775,14 @@ def activation_status(
     if failure is not None:
         return failure
     assert bundle is not None and digest is not None
+    if bundle.get('schema') == 'rag-activation-bundle-v8':
+        from mech_chatbot.governance.permanent_activation import validate_permanent_bundle
+        capability = validate_permanent_bundle(bundle, root=project_root, environ=env,
+            current_commit=current_commit, bundle_sha256=digest)
+        return _status(bool(capability), bool(capability), scope,
+            'permanent_core_authorized' if capability else 'permanent_core_grant_invalid',
+            enabled, profile=profile, decision_source_commit=current_commit, bundle_sha256=digest,
+            review_mode=capability.review_mode if capability else 'multi_reviewer')
     if bundle.get('schema') == 'rag-activation-bundle-v7':
         from mech_chatbot.governance.query_v2_activation import validate_query_v2_bundle
         capability = validate_query_v2_bundle(bundle, root=project_root, environ=env,

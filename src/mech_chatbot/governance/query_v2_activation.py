@@ -37,17 +37,19 @@ class QueryV2Capability:
     source_commit: str
     bundle_sha256: str
     snapshot_fingerprint: str
-    expires_at: str
+    expires_at: str | None
     contract: str = CONTRACT
     context: str = 'controlled_demo'
     review_mode: str = 'multi_reviewer'
+    reviewed_sources: bool = False
 
 
     def permits_plan(self, plan):
         """Authorize bounded actions; current source ACL and hashes remain child checks."""
+        from mech_chatbot.governance.permanent_activation import capability_active
         try:
             if (select_query_capability(self) is None or type(plan) is not QueryPlan
-                    or datetime.now(timezone.utc) >= _timestamp(self.expires_at)):
+                    or not capability_active(self)):
                 return False
             # Revalidate frozen descriptors too, since callers may bypass constructors.
             QueryPlan(tuple(QueryBranch(**{field: getattr(branch, field)
@@ -55,10 +57,10 @@ class QueryV2Capability:
             total_scopes = {pin[0] for pin in self.math.total.scope_pins}
             comparison_scopes = {pin[0] for pin in self.math.comparison.scope_pins}
             for branch in plan.branches:
-                if branch.scope_total is not None and branch.scope_total not in total_scopes:
+                if branch.scope_total is not None and not (self.reviewed_sources and self.context == 'default_rollout') and branch.scope_total not in total_scopes:
                     return False
                 if branch.scope_comparison is not None and (len(set(branch.scope_comparison)) != 2
-                        or not set(branch.scope_comparison) <= comparison_scopes):
+                        or (not (self.reviewed_sources and self.context == 'default_rollout') and not set(branch.scope_comparison) <= comparison_scopes)):
                     return False
                 graph = branch.graph_query or (branch.bom_rollup.graph if branch.bom_rollup else None)
                 if graph is not None and not self.graph.permits_query(graph):
@@ -168,4 +170,4 @@ def validate_query_v2_bundle(bundle, *, root, environ, current_commit, bundle_sh
 def select_query_capability(grant):
     """Recognize only the reviewed Query contract, never a duck-typed fixture."""
     return grant if (type(grant) is QueryV2Capability and grant.contract == CONTRACT
-                     and grant.context == 'controlled_demo') else None
+                     and (grant.context == 'controlled_demo' or (grant.context == 'default_rollout' and grant.reviewed_sources))) else None

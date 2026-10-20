@@ -20,7 +20,7 @@ def _pick(value, keys):
 def _body(value, kind):
     schemas = ('query-text-v2',) if kind=='text_query' else ('query-plan-v2', 'query-plan-mixed-v1-draft','query-plan-scope-total-v1')
     live = (isinstance(value, Mapping) and value.get('contract') == 'query-reviewed-actions-controlled-demo-v1'
-            and value.get('offline_only') is False and value.get('activation_scope') == 'controlled_demo')
+            and value.get('offline_only') is False and value.get('activation_scope') in {'controlled_demo', 'default_rollout'})
     evaluation = (isinstance(value, Mapping) and value.get('offline_only') is True
                   and value.get('contract') != 'query-reviewed-actions-controlled-demo-v1')
     if (not isinstance(value, Mapping) or value.get('schema') not in schemas
@@ -118,7 +118,7 @@ def _total_body(value):
     evaluation = (isinstance(value, Mapping) and value.get('contract') == 'grounded-math-v2-scope-total-evaluation-v1'
                   and value.get('offline_only') is True)
     live = (isinstance(value, Mapping) and value.get('contract') == 'grounded-math-scope-total-controlled-demo-v1'
-            and value.get('offline_only') is False and value.get('activation_scope') == 'controlled_demo')
+            and value.get('offline_only') is False and value.get('activation_scope') in {'controlled_demo', 'default_rollout'})
     if (not isinstance(value, Mapping) or value.get('schema') != 'grounded-calculation-scope-total-v1'
             or value.get('template') != 'sum_reviewed_scope'
             or not (evaluation or live) or value.get('accepted') is not False

@@ -21,18 +21,21 @@ class ScopeTotalCapability:
     source_commit: str
     bundle_sha256: str
     snapshot_fingerprint: str
-    expires_at: str
+    expires_at: str | None
     context: str = 'controlled_demo'
     review_mode: str = 'multi_reviewer'
+    reviewed_sources: bool = False
+
+    def permits_scope(self, scope):
+        """The repository supplies current source hashes, review state and actor ACL."""
+        from mech_chatbot.governance.permanent_activation import capability_active
+        return (capability_active(self) and scope is not None
+                and scope.authorized is True and scope.completeness_reviewed is True
+                and ((self.context == 'default_rollout' and self.reviewed_sources)
+                     or (scope.scope_id, scope.snapshot_id, reviewed_scope_fingerprint(scope)) in self.scope_pins))
 
     def permits_scopes(self, scopes):
-        """Call after current approved scopes have been loaded with the actor's ACL."""
-        return (datetime.now(timezone.utc) < _timestamp(self.expires_at)
-                and len(scopes) == 1 and all(scope is not None for scope in scopes)
-                and all(scope.authorized is True and scope.completeness_reviewed is True
-                    and (scope.scope_id, scope.snapshot_id, reviewed_scope_fingerprint(scope)) in self.scope_pins
-                    for scope in scopes))
-
+        return (len(scopes) == 1 and all(self.permits_scope(scope) for scope in scopes))
 
 def _timestamp(value):
     parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))

@@ -151,7 +151,7 @@ def require_comparison_context(mode, profile, *, comparison_only, authorizer=Non
     from mech_chatbot.governance.math_templates_activation import select_math_capability
     cap = select_math_capability(authorizer() if callable(authorizer) else None, 'compare_two_scopes')
     if (mode != 'production' or not comparison_only or not isinstance(cap, MathV2Capability)
-            or cap.contract != CONTRACT or cap.template != 'compare_two_scopes' or cap.context != 'controlled_demo'):
+            or cap.contract != CONTRACT or cap.template != 'compare_two_scopes' or cap.context not in {'controlled_demo', 'default_rollout'}):
         raise HTTPException(409, detail='Math v2 comparison authority required')
     return mode
 
@@ -162,7 +162,7 @@ def require_graph_context(mode, profile, *, authorizer=None):
     from mech_chatbot.governance.graph_v2_activation import GraphV2Capability,CONTRACT
     cap=authorizer() if callable(authorizer) else None
     if (mode!='production' or not isinstance(cap,GraphV2Capability) or cap.contract!=CONTRACT
-            or cap.context!='controlled_demo'):
+            or cap.context not in {'controlled_demo', 'default_rollout'}):
         raise HTTPException(409,detail='Graph v2 source authority required')
     return mode
 
@@ -174,6 +174,6 @@ def require_scope_total_context(mode, profile, *, authorizer=None):
     from mech_chatbot.governance.math_templates_activation import select_math_capability
     cap = select_math_capability(authorizer() if callable(authorizer) else None, 'sum_reviewed_scope')
     if (mode != 'production' or not isinstance(cap, ScopeTotalCapability)
-            or cap.contract != CONTRACT or cap.template != 'sum_reviewed_scope' or cap.context != 'controlled_demo'):
+            or cap.contract != CONTRACT or cap.template != 'sum_reviewed_scope' or cap.context not in {'controlled_demo', 'default_rollout'}):
         raise HTTPException(409, detail='Scope total authority required')
     return mode

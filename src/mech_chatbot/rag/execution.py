@@ -905,7 +905,7 @@ class DefaultRagExecutor:
                         raise ValueError('Scope total requires evaluation context or source authority')
                     if (request.scope_total is None or request.query_plan is not None
                             or not isinstance(cap, ScopeTotalCapability) or cap.contract != CONTRACT
-                            or cap.template != 'sum_reviewed_scope' or cap.context != 'controlled_demo'
+                            or cap.template != 'sum_reviewed_scope' or cap.context not in {'controlled_demo', 'default_rollout'}
                             or invocation.task_routing_contract is not None):
                         raise PermissionError('Scope total source authority unavailable')
                     state.math_v2_capability, state.math_v2_authorizer = cap, authorize_total
@@ -921,7 +921,7 @@ class DefaultRagExecutor:
                     if invocation.mode!='production' or cap is None:
                         raise ValueError('Graph v2 requires evaluation context or source authority')
                     if (not isinstance(cap,GraphV2Capability)
-                            or cap.contract!=CONTRACT or cap.context!='controlled_demo' or not cap.permits_query(request.graph_query)):
+                            or cap.contract!=CONTRACT or cap.context not in {'controlled_demo', 'default_rollout'} or not cap.permits_query(request.graph_query)):
                         raise PermissionError('Graph v2 source authority unavailable')
                     state.graph_v2_capability,state.graph_v2_authorizer=cap,self._graph_v2_authorizer
                 else:
@@ -935,7 +935,7 @@ class DefaultRagExecutor:
                         raise ValueError('V2 contract requires evaluation context or comparison authority')
                     if (request.scope_comparison is None
                             or not isinstance(cap, MathV2Capability) or cap.contract != CONTRACT
-                            or cap.template != 'compare_two_scopes' or cap.context != 'controlled_demo'):
+                            or cap.template != 'compare_two_scopes' or cap.context not in {'controlled_demo', 'default_rollout'}):
                         raise PermissionError('Math v2 comparison authority required')
                     state.math_v2_capability = cap
                     state.math_v2_authorizer = authorize_comparison

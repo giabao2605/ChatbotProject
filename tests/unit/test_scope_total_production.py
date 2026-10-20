@@ -120,16 +120,27 @@ def test_granted_scope_total_rest_and_sse_use_the_real_executor(path, rag_client
 
 
 @pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
-def test_full_query_rest_and_sse_keep_branch_history_and_parent_header(path, rag_client, live_store, monkeypatch):
+@pytest.mark.parametrize('permanent_mode', [False, True])
+def test_full_query_rest_and_sse_keep_branch_history_and_parent_header(path, permanent_mode, rag_client, live_store, monkeypatch):
     import json
     from mech_chatbot.application.chat_result_history import serialize_history_result, restore_history_result
     from mech_chatbot.auth import core
     from mech_chatbot.rag.execution_contracts import RagRuntimeContract
     from .test_query_v2_production import capability as query_capability
     cap = query_capability(live_store)
+    if permanent_mode:
+        from .test_permanent_feature_sources import permanent
+        cap = permanent(cap)
     monkeypatch.setattr(core, 'load_user_profile', lambda **kw: PROFILE)
     _replace_server_state(rag_client, database_runtime=SimpleNamespace(engine=live_store))
-    _replace_runtime(rag_client, executor=DefaultRagExecutor(math_v2_authorizer=lambda:cap),
+    from .test_query_scope_total_routing import Planner, VERSION
+    # The HTTP boundary now classifies once; this transport fixture never calls a provider.
+    planner = Planner({'schema':VERSION, 'disposition':'ready', 'unresolved':[], 'tasks':[
+        {'task_id':'total', 'selection_id':'total', 'template':'sum_reviewed_scope',
+         'spans':[{'start':0,'end':5,'text':'Total'}], 'requested_outputs':['sum','citations']},
+        {'task_id':'compare', 'selection_id':'compare', 'template':'compare_two_scopes',
+         'spans':[{'start':10,'end':17,'text':'compare'}], 'requested_outputs':['sum_a','sum_b','delta','percent_change','citations']}]})
+    _replace_runtime(rag_client, executor=DefaultRagExecutor(provider_adapter=planner,math_v2_authorizer=lambda:cap),
         math_v2_authorizer=lambda:cap, runtime_contract=RagRuntimeContract('production', False, 120))
     body = {'user_id':7, 'user_question':'Total and compare', 'query_plan':{'branches':[
         {'branch_id':'total', 'question':'Total A', 'scope_total':{'scope_id':'a'}},

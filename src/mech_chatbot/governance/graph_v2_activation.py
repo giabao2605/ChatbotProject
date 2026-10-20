@@ -61,14 +61,18 @@ class GraphV2Capability:
     source_commit: str
     bundle_sha256: str
     snapshot_fingerprint: str
-    expires_at: str
+    expires_at: str | None
     context: str = 'controlled_demo'
     review_mode: str = 'multi_reviewer'
+    reviewed_sources: bool = False
 
     def permits_query(self, query):
+        from mech_chatbot.governance.permanent_activation import capability_active
         try:
-            return (datetime.now(timezone.utc) < _timestamp(self.expires_at)
-                    and any(context == _context(query) for context, _ in self.graph_pins))
+            _context(query)
+            return (capability_active(self)
+                    and ((self.context == 'default_rollout' and self.reviewed_sources)
+                         or any(context == _context(query) for context, _ in self.graph_pins)))
         except (TypeError, ValueError, AttributeError):
             return False
 
@@ -77,7 +81,8 @@ class GraphV2Capability:
         return (self.permits_query(query) and isinstance(result, dict)
                 and result.get('contract_version') == 'graph-v2'
                 and result.get('status') in {'complete', 'partial', 'unknown'}
-                and (_context(query), graph_fingerprint(result)) in self.graph_pins)
+                and ((self.context == 'default_rollout' and self.reviewed_sources)
+                     or (_context(query), graph_fingerprint(result)) in self.graph_pins))
 
 
 def validate_graph_v2_bundle(bundle, *, root, environ, current_commit, bundle_sha256):
@@ -159,6 +164,11 @@ def load_graph_v2_capability(environ, *, root='.', current_commit=None):
         bundle, raw = read_json_object(resolve_path(path, Path(root)))
         if raw is None or hashlib.sha256(raw).hexdigest() != digest:
             return None
+        if bundle.get('schema') == 'rag-activation-bundle-v8':
+            from mech_chatbot.governance.permanent_activation import validate_permanent_bundle
+            grant = validate_permanent_bundle(bundle, root=root, environ=environ,
+                current_commit=current_commit, bundle_sha256=digest)
+            return grant.graph if grant else None
         if bundle.get('schema') == 'rag-activation-bundle-v7':
             from mech_chatbot.governance.query_v2_activation import validate_query_v2_bundle
             query = validate_query_v2_bundle(bundle, root=root, environ=environ,

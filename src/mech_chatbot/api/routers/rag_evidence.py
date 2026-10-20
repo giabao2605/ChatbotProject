@@ -151,7 +151,8 @@ def evaluation_capabilities(request: Request, profile: dict[str, Any] = Depends(
         return {'schema':'advanced-rag-v2-controlled-demo', 'contract':query_cap.contract,
                 'accepted':False, 'offline_only':False, 'max_branches':3,
                 'actions':['contains','where_used','bom_rollup','scope_comparison','scope_total'],
-                'text_query':True, 'scope_total_query':True}
+                'text_query':True, 'scope_total_query':True, 'activation_scope':query_cap.context,
+                'expires_at':query_cap.expires_at}
     from mech_chatbot.governance.math_templates_activation import MathTemplatesCapability
     if isinstance(math_cap, MathTemplatesCapability):
         from mech_chatbot.api.evidence_contracts import require_scope_total_context
@@ -233,7 +234,7 @@ def approved_document_scopes(request: Request, doc_id: int = Path(ge=1, le=21474
         items = []
         for item in page['items']:
             scope = _call(load_approved_scope, item['scope_id'], profile)
-            if scope is not None and any((scope.scope_id,scope.snapshot_id,reviewed_scope_fingerprint(scope)) in cap.scope_pins for cap in caps):
+            if scope is not None and any(cap.permits_scope(scope) for cap in caps):
                 items.append(item)
         page = {**page,'items':items}
     return page

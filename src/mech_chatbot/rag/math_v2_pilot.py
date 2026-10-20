@@ -1,5 +1,23 @@
 """Metadata-only completion evidence for the signed comparison pilot."""
+import re
 from mech_chatbot.application.chat_citations import build_citation_list
+
+
+def completion_provenance(math, capability, count):
+    """Current reviewed scopes replace pilot pins; source and citation hashes remain exact."""
+    scopes = math.get('scopes') or ()
+    pins = {(scope.get('scope_id'), scope.get('snapshot_id'), scope.get('scope_hash')) for scope in scopes}
+    if capability.context == 'default_rollout' and capability.reviewed_sources is True:
+        authorized = (math.get('read_consistency') == 'serializable' and len(scopes) == count
+            and len({scope.get('scope_id') for scope in scopes}) == count
+            and all(all(isinstance(scope.get(key), str) and scope[key].strip() for key in ('scope_id', 'snapshot_id'))
+                    and all(isinstance(scope.get(key), str) and re.fullmatch('[a-f0-9]{64}', scope[key])
+                            for key in ('scope_hash', 'row_set_sha256'))
+                    and type(scope.get('row_count')) is int and scope['row_count'] >= 0 for scope in scopes))
+    else:
+        authorized = pins <= set(capability.scope_pins)
+    return (len(pins) == count and authorized and math.get('contract') == capability.contract
+            and math.get('activation_scope') == capability.context and math.get('offline_only') is False)
 
 
 def comparison_event_fields(diagnostics,answer,budget,capability,*,final_latency_ms,outcome):
@@ -7,9 +25,7 @@ def comparison_event_fields(diagnostics,answer,budget,capability,*,final_latency
     scopes=math.get('scopes') or ()
     steps=math.get('steps') or ()
     pins={(scope.get('scope_id'),scope.get('snapshot_id'),scope.get('scope_hash')) for scope in scopes}
-    provenance=(len(pins)==2 and pins<=set(capability.scope_pins)
-        and math.get('contract')==capability.contract and math.get('activation_scope')==capability.context
-        and math.get('offline_only') is False)
+    provenance=completion_provenance(math,capability,2)
     records=diagnostics.get('citation_docs') or ()
     cards=build_citation_list(records,page_has_vision=lambda *_:False)
     cited={(card.get('scope_id'),card.get('snapshot_id'),card.get('scope_hash')) for card in cards}
