@@ -292,11 +292,13 @@ def _lookup_exact_cache(
                         "semantic_cache_environment",
                         None,
                     ),
+                    response_language=context.response_language,
                 )
                 hit = semantic_cache.lookup_exact(
                     context.user_question,
                     cache_scope,
                     ttl=getattr(runtime, "semantic_cache_ttl_hours", 24.0),
+                    actor=state.request.access,
                 )
                 if hit:
                     return _CacheLookup(

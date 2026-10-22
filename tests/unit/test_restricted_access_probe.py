@@ -106,3 +106,14 @@ def test_probe_reports_cross_department_document_as_access_denied(monkeypatch):
 
     assert blocked is True
     assert reason == "department_restricted"
+
+
+def test_probe_display_department_does_not_restore_revoked_grant():
+    client = FakeQdrantClient([{
+        "phong_ban_quyen": ["Technical"], "security_level": "internal", "site": "HQ",
+    }])
+    assert probe_restricted_access(
+        "part", user_department="Technical", allowed_departments=["CHUNG"],
+        max_security_level="internal", allowed_sites=["HQ"], part_ids=["part"],
+        client=client, collection_name=QDRANT_COLLECTION,
+    ) == (True, "department_restricted")

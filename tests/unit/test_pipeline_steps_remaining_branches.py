@@ -646,16 +646,16 @@ def test_grounded_math_malformed_provenance_fails_closed_without_provider(
     assert outcome.refusal_reason == "grounded_math_post_check"
 
 
-def test_normal_streaming_returns_provider_chunks_when_strict_mode_is_disabled(
+def test_document_answer_is_buffered_for_attribution_when_strict_mode_is_disabled(
     load_steps,
     monkeypatch,
 ):
     steps = load_steps(strict=False)
-    provider = _prepare_provider(steps, monkeypatch, [["Approved ", "policy."]])
+    provider = _prepare_provider(steps, monkeypatch, [["Approved ", "policy. [SRC:D77P4]"]])
 
     answer = list(steps.generate_answer(_plan(steps, provider=provider)))
 
-    assert answer == ["Approved ", "policy."]
+    assert answer == ["Approved policy. [SRC:D77P4]"]
 
 
 def test_normal_streaming_retries_rate_limit_before_emitting(load_steps, monkeypatch):
@@ -663,7 +663,7 @@ def test_normal_streaming_retries_rate_limit_before_emitting(load_steps, monkeyp
     provider = _prepare_provider(
         steps,
         monkeypatch,
-        [RuntimeError("rate limit"), ["Recovered answer."]],
+        [RuntimeError("rate limit"), ["Recovered answer. [SRC:D77P4]"]],
     )
     metrics = {}
 
@@ -671,7 +671,7 @@ def test_normal_streaming_retries_rate_limit_before_emitting(load_steps, monkeyp
         steps.generate_answer(_plan(steps, provider=provider), metrics=metrics)
     )
 
-    assert answer == ["Recovered answer."]
+    assert answer == ["Recovered answer. [SRC:D77P4]"]
     assert metrics["provider_retries"] == 1
 
 
@@ -688,7 +688,7 @@ def test_guarded_generation_retries_split_provider_error_text(load_steps, monkey
                 "overloaded. Please try again later.",
             ],
             ["[Error] Error code: 5", "03 Service Unavailable"],
-            ["Recovered answer."],
+            ["Recovered answer. [SRC:D77P4]"],
         ],
     )
     metrics = {}
@@ -700,7 +700,7 @@ def test_guarded_generation_retries_split_provider_error_text(load_steps, monkey
         )
     )
 
-    assert answer == "Recovered answer."
+    assert answer == "Recovered answer. [SRC:D77P4]"
     assert metrics["provider_retries"] == 2
 
 
@@ -731,12 +731,12 @@ def test_normal_streaming_allows_valid_error_document_text(load_steps, monkeypat
     provider = _prepare_provider(
         steps,
         monkeypatch,
-        [["[Error] là tiền tố được mô tả trong tài liệu vận hành."]],
+        [["[Error] là tiền tố được mô tả trong tài liệu vận hành. [SRC:D77P4]"]],
     )
 
     answer = "".join(steps.generate_answer(_plan(steps, provider=provider)))
 
-    assert answer == "[Error] là tiền tố được mô tả trong tài liệu vận hành."
+    assert answer == "[Error] là tiền tố được mô tả trong tài liệu vận hành. [SRC:D77P4]"
 
 
 def test_normal_streaming_does_not_retry_non_retryable_provider_failure(
@@ -841,7 +841,7 @@ def test_evaluation_draft_override_is_request_local(load_steps, monkeypatch):
 
     steps = load_steps()
     provider = _prepare_provider(steps, monkeypatch, [["ignored provider draft"]])
-    controlled_draft = "Quy định yêu cầu nhân viên nộp đề nghị."
+    controlled_draft = "Quy định yêu cầu nhân viên nộp đề nghị. [SRC:D77P4]"
     plan = _plan(
         steps,
         provider=provider,

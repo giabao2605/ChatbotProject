@@ -278,9 +278,12 @@ def has_valid_source_citation(answer, documents, require_version=True, *, depend
             if source_id and (not require_version or version > 0):
                 pages.setdefault(source_id,set()).add(version)
         return all(source in pages and len(pages[source]) == 1 for source in page_ids)
-    if not has_required_source_citation(answer, require_version=require_version):
+    if require_version and not has_required_source_citation(answer, require_version=True):
         return False
     cited = extract_source_ids(answer)
+    if any(token.strip().upper() not in cited for token in re.findall(
+            r'\[SRC:\s*([^\]]+)\]', str(answer), flags=re.IGNORECASE)):
+        return False
     expected = set()
     for document in documents or []:
         metadata = getattr(document, "metadata", {}) or {}

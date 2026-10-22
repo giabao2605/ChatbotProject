@@ -575,21 +575,36 @@ def _assemble_context(retrieved_docs, user_question):
     structured_context = build_structured_attributes_context(retrieved_docs)
     if structured_context:
         context_text = structured_context + "\n\n" + context_text
-    # P3-4: chen Golden Answer (cau tra loi da duyet) lam context uu tien cao nhat
+    # Legacy approved answers are usable only as excerpts of the selected current source.
     try:
         from mech_chatbot.db.repositories.feedback import find_golden_answer
-        _golden = find_golden_answer(user_question)
+        _golden = find_golden_answer(
+            user_question,
+            admitted_doc_ids=list(dict.fromkeys(
+                doc.metadata.get("doc_id") for doc in retrieved_docs
+                if doc.metadata.get("doc_id") is not None
+            )),
+        )
     except Exception as _e:
         logger.error(f"Loi tra cuu Golden Answer: {_e}")
         _golden = None
     if _golden and _golden.get("answer"):
+        # Legacy GoldenAnswer has no version binding; only admit a current-source excerpt.
+        excerpt = " ".join(str(_golden["answer"]).split())
+        matched = next((doc for doc in retrieved_docs
+                        if doc.metadata.get("doc_id") == _golden.get("source_doc_id")
+                        and excerpt in " ".join(str(doc.metadata.get("noi_dung_goc")
+                                                    or doc.page_content or "").split())), None)
+        if matched is None:
+            _golden = None
+    if _golden and _golden.get("answer"):
         _g_src = _golden.get("source_doc_id")
-        _gp = ["[GOLDEN ANSWER - CHUYEN GIA DA DUYET - UU TIEN CAO NHAT]", str(_golden.get("answer")).strip()]
+        _gp = ["[REVIEWED SOURCE EXCERPT]", str(_golden.get("answer")).strip()]
         if _g_src:
-            _gp.append("(Nguon da duyet: DocID %s)" % _g_src)
-        _gp.append("[HET GOLDEN ANSWER]")
+            _gp.append(f"SOURCE_ID: D{_g_src}P{matched.metadata.get('trang_so')}")
+        _gp.append("[END REVIEWED SOURCE EXCERPT]")
         context_text = chr(10).join(_gp) + chr(10) + chr(10) + context_text
-        logger.info("Da chen Golden Answer vao context (uu tien cao nhat).")
+        logger.info("Da chen trich doan da duyet co trong nguon hien hanh.")
     logger.info(f"Da tim thay {len(retrieved_docs)} tai lieu lien quan. Dang phan tich...")
     return context_text
 
@@ -847,6 +862,9 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     if _claim_repair_enabled:
         # Repair requires full-answer holdback; never release a violating draft.
         _strict_realtime = False
+    if retrieved_docs:
+        # Attribution must pass before any factual answer reaches the client.
+        _strict_realtime = False
 
     def _raise_if_cancelled():
         if cancel_event is not None and cancel_event.is_set():
@@ -872,7 +890,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         int(getattr(retrieval_runtime, "strict_streaming_holdback_chars", 160)),
     )
 
-    if (strict_answer_mode or is_high_risk_question(user_question) or dependency_sources) and not _strict_realtime:
+    if (strict_answer_mode or retrieved_docs or is_high_risk_question(user_question) or dependency_sources) and not _strict_realtime:
         # LOP PHONG THU 3: Post-check so lieu. Voi cau hoi rui ro, tam hoan streaming de kiem tra
         # LLM co tu tao so lieu moi (vd 24 gio) khong co trong context/user question hay khong.
         def guarded_stream():
@@ -1050,19 +1068,11 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason=refusal_reason, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                 elif (
-                    strict_answer_mode
-                    and requires_source_citation(user_question)
-                    # The API always attaches source cards from retrieved_docs.
-                    # Do not reject a grounded answer just because it does not
-                    # repeat the card's file/page/version syntax in prose.
-                    and not bool(
-                        getattr(
-                            retrieval_runtime,
-                            "auto_source_cards",
-                            True,
-                        )
+                    retrieved_docs
+                    and not has_valid_source_citation(
+                        answer, retrieved_docs, require_version=False,
+                        dependency_sources=dependency_sources,
                     )
-                    and not has_valid_source_citation(answer, retrieved_docs, require_version=True)
                 ):
                     outcome.refusal_reason = "missing_source_page_version"
                     ans = make_insufficient_evidence_message(

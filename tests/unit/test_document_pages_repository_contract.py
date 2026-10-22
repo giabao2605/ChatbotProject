@@ -252,27 +252,31 @@ def test_verify_technical_attribute_supports_confirmation_and_correction(monkeyp
         assert len(params["val"]) == 500
 
 
-def test_get_technical_attributes_for_rag_returns_best_value_per_type(monkeypatch):
+def test_get_technical_attributes_for_rag_requires_exact_document_pages_and_verification(monkeypatch):
     engine = _install(
         monkeypatch,
         _Result(rows=[("material", "steel", None, 1, "manual"), ("length", "20", "mm", 0, "vision")]),
     )
 
-    assert document_pages.get_technical_attributes_for_rag("drawing.pdf") == {
+    assert document_pages.get_technical_attributes_for_rag(7, page_numbers=[3]) == {
         "material": {
             "value": "steel",
             "unit": None,
             "human_verified": True,
             "extracted_by": "manual",
         },
-        "length": {
-            "value": "20",
-            "unit": "mm",
-            "human_verified": False,
-            "extracted_by": "vision",
-        },
     }
-    assert engine.calls[0][1] == {"f": "drawing.pdf"}
+    query, params = engine.calls[0]
+    assert params == {"doc_id": 7, "pages": [3]}
+    assert "DocID = :doc_id" in query and "PageNo IN" in query
+    assert "HumanVerified = 1" in query and "FileName =" not in query
+
+
+@pytest.mark.parametrize("doc_id,pages", [(None, [3]), (7, []), (7, [None]), ("drawing.pdf", [3]), (7.5, [3]), (True, [3]), (7, [True]), (7, [3.5])])
+def test_technical_attributes_without_source_identity_do_not_query(monkeypatch, doc_id, pages):
+    engine = _install(monkeypatch)
+    assert document_pages.get_technical_attributes_for_rag(doc_id, page_numbers=pages) == {}
+    assert engine.calls == []
 
 
 def test_save_page_metadata_uses_existing_doc_and_prepared_params(monkeypatch):

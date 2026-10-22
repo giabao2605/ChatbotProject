@@ -563,7 +563,7 @@ def test_generation_retries_a_rate_limited_provider_before_releasing_answer(
     steps,
     monkeypatch,
 ):
-    chain = _FakeChain([RuntimeError("rate limited"), ["Approved answer."]])
+    chain = _FakeChain([RuntimeError("rate limited"), ["Approved answer. [SRC:D77P4]"]])
     _prepare_generation(steps, monkeypatch, chain)
     monkeypatch.setattr(steps, "_is_gpt_rate_limit", lambda error: "rate" in str(error))
     monkeypatch.setattr(steps.time, "sleep", lambda _seconds: None)
@@ -571,7 +571,7 @@ def test_generation_retries_a_rate_limited_provider_before_releasing_answer(
 
     answer = "".join(steps.generate_answer(_generation_plan(steps), metrics=metrics))
 
-    assert answer == "Approved answer."
+    assert answer == "Approved answer. [SRC:D77P4]"
     assert metrics["provider_retries"] == 1
     assert metrics["output_tokens"] > 0
 
@@ -580,7 +580,7 @@ def test_generation_records_final_usage_without_double_charging_context(
     steps,
     monkeypatch,
 ):
-    chain = _FakeChain([["Approved answer."]])
+    chain = _FakeChain([["Approved answer. [SRC:D77P4]"]])
     _prepare_generation(steps, monkeypatch, chain)
     usage = {
         "schema": "rag-decomposition-usage-v1",
@@ -612,7 +612,7 @@ def test_generation_records_final_usage_without_double_charging_context(
 
     assert "".join(
         steps.generate_answer(_generation_plan(steps), metrics=metrics)
-    ) == "Approved answer."
+    ) == "Approved answer. [SRC:D77P4]"
 
     updated_usage = metrics["decomposition_usage"]
     assert updated_usage is not usage
@@ -648,7 +648,7 @@ def test_generation_audits_openrouter_endpoint(steps, monkeypatch, execution_con
     from contextlib import contextmanager
     from dataclasses import replace
     from mech_chatbot.config.settings import ExternalAiSettings
-    chain = _FakeChain([["Approved answer."]])
+    chain = _FakeChain([["Approved answer. [SRC:D77P4]"]])
     _prepare_generation(steps, monkeypatch, chain)
     monkeypatch.setattr(steps, "get_llm_endpoint", lambda _adapter: "https://openrouter.ai/api/v1")
     calls = []
@@ -661,6 +661,6 @@ def test_generation_audits_openrouter_endpoint(steps, monkeypatch, execution_con
     external_settings = ExternalAiSettings('development', False, 'all_external', execution_context)
     provider = SimpleNamespace(**vars(plan.runtime.provider_adapter), external_ai_settings=external_settings)
     plan = replace(plan, runtime=SimpleNamespace(retrieval_adapter=plan.runtime.retrieval_adapter, provider_adapter=provider))
-    assert "".join(steps.generate_answer(plan, metrics={})) == "Approved answer."
+    assert "".join(steps.generate_answer(plan, metrics={})) == "Approved answer. [SRC:D77P4]"
     assert calls and all(call["provider"] == "openrouter" for call in calls)
     assert all(call['settings'] is external_settings for call in calls)

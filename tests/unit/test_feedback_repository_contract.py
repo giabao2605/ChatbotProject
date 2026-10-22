@@ -147,10 +147,10 @@ def test_golden_answer_public_contract_handles_validation_success_empty_and_db_f
     assert feedback.upsert_golden_answer("Question", "Answer") is None
 
     fake_db(_Result(row=None))
-    assert feedback.find_golden_answer("missing") is None
+    assert feedback.find_golden_answer("missing", admitted_doc_ids=[4]) is None
 
-    fake_db(_Result(row=(9, "Question", "Answer", 4, "Technical", "HQ")))
-    assert feedback.find_golden_answer("Question") == {
+    conn = fake_db(_Result(row=(9, "Question", "Answer", 4, "Technical", "HQ")))
+    assert feedback.find_golden_answer("Question", admitted_doc_ids=[4]) == {
         "golden_id": 9,
         "question": "Question",
         "answer": "Answer",
@@ -158,9 +158,18 @@ def test_golden_answer_public_contract_handles_validation_success_empty_and_db_f
         "department": "Technical",
         "site": "HQ",
     }
+    assert "SourceDocID IN" in conn.calls[0][0]
+    assert conn.calls[0][1]["doc_ids"] == [4]
 
     fake_db(RuntimeError("read failed"))
-    assert feedback.find_golden_answer("Question") is None
+    assert feedback.find_golden_answer("Question", admitted_doc_ids=[4]) is None
+
+
+def test_golden_answer_requires_an_admitted_source_and_defends_against_wrong_row(fake_db):
+    conn = fake_db(_Result(row=(9, "Question", "Secret answer", 99, "HR", "HQ")))
+    assert feedback.find_golden_answer("Question", admitted_doc_ids=[]) is None
+    assert conn.calls == []
+    assert feedback.find_golden_answer("Question", admitted_doc_ids=[4]) is None
 
 
 def test_regression_question_and_run_crud_use_public_shapes(fake_db):

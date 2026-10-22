@@ -275,7 +275,7 @@ def test_cancelled_stream_raises_before_any_provider_chunk_is_emitted(monkeypatc
 def test_normal_policy_question_does_not_apply_global_numeric_holdback(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     seen_strict_values = []
-    runtime = _prepare(module, monkeypatch, _FakeChain(["Quy định là 20."]))
+    runtime = _prepare(module, monkeypatch, _FakeChain(["Quy định là 20. [SRC:D7P3]"]))
     monkeypatch.setattr(
         module,
         "has_unsupported_numbers",
@@ -286,10 +286,39 @@ def test_normal_policy_question_does_not_apply_global_numeric_holdback(monkeypat
         _run_generation(
             module,
             question="Quy định hiện hành là gì?",
+            docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3})],
             runtime=runtime,
         )
-    ) == ["Quy định là 20."]
+    ) == ["Quy định là 20. [SRC:D7P3]"]
     assert seen_strict_values == [False]
+
+
+@pytest.mark.parametrize("suffix, accepted", [("", False), (" [SRC:D999P1]", False),
+    (" [SRC:D7P3] [SRC:FAKE]", False), (" [SRC:D7P3]", True)])
+def test_source_cards_require_valid_attribution_before_emitting_answer(monkeypatch, suffix, accepted):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    answer = "The approved policy requires review." + suffix
+    runtime = _prepare(module, monkeypatch, _FakeChain([answer]))
+    monkeypatch.setattr(module, "has_unsupported_numbers", lambda *_a, **_k: False)
+    docs = [SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3, "version_no": 1})]
+    result = list(_run_generation(module, question="What is the approved policy?", docs=docs, runtime=runtime))
+    assert result == ([answer] if accepted else ["REFUSAL"])
+
+
+def test_golden_answer_must_be_supported_by_its_selected_source(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    from mech_chatbot.db.repositories import feedback
+    monkeypatch.setattr(module, "build_common_metadata_context", lambda _docs: "")
+    monkeypatch.setattr(module, "build_structured_attributes_context", lambda _docs: "")
+    calls = []
+    def golden(_question, *, admitted_doc_ids):
+        calls.append(admitted_doc_ids)
+        return {"answer": "OUTDATED_UNSUPPORTED_ANSWER", "source_doc_id": 7}
+    monkeypatch.setattr(feedback, "find_golden_answer", golden)
+    docs = [SimpleNamespace(page_content="Current approved evidence", metadata={"doc_id": 7, "trang_so": 3})]
+    rendered = module._assemble_context(docs, "What is approved?")
+    assert calls == [[7]]
+    assert "OUTDATED_UNSUPPORTED_ANSWER" not in rendered
 
 
 def test_explicit_negative_evidence_skips_provider_and_claim_repair(monkeypatch):
@@ -647,7 +676,7 @@ def test_grounded_math_disabled_uses_normal_generation_path(monkeypatch):
     runtime = _prepare(
         module,
         monkeypatch,
-        _FakeChain(["Normal generation path."]),
+        _FakeChain(["Normal generation path. [SRC:D41P3]"]),
         grounded_math_enabled=False,
     )
     monkeypatch.setattr(
@@ -675,7 +704,7 @@ def test_grounded_math_disabled_uses_normal_generation_path(monkeypatch):
         runtime=runtime,
     ))
 
-    assert emitted == ["Normal generation path."]
+    assert emitted == ["Normal generation path. [SRC:D41P3]"]
 
 
 def test_vision_retries_share_the_request_wide_provider_budget(monkeypatch):

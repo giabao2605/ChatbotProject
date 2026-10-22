@@ -352,7 +352,8 @@ def _pipeline_environment(settings):
     return MappingProxyType(
         {
             name: serialize(getattr(settings, name))
-            for name in (*FEATURE_FLAGS, *VERSION_FIELDS)
+            for name in (*FEATURE_FLAGS, *VERSION_FIELDS, "GPT_MODEL_NAME", "LLM_BASE_URL",
+                         "GPT_TEMPERATURE", "GPT_MAX_OUTPUT_TOKENS")
         }
     )
 

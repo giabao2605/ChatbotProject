@@ -30,6 +30,7 @@ def _metadata(**overrides):
         "is_current": True,
         "serving_epoch": 18,
         "publication_version": 4,
+        "version_no": 1,
     }
     metadata.update(overrides)
     return metadata
@@ -40,6 +41,7 @@ def _metadata(**overrides):
     [
         ("staging", {"servable": False, "publication_state": "qdrant_synced"}),
         ("old_version", {"is_current": False, "serving_epoch": 17, "publication_version": 3}),
+        ("wrong_source_version", {"version_no": 2}),
         ("wrong_site", {"site": "DN"}),
         ("wrong_department", {"phong_ban_quyen": ["HR", "CHUNG"]}),
         ("wrong_clearance", {"required_clearance": "confidential"}),
@@ -106,6 +108,10 @@ def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(
     assert conditions["metadata.phong_ban_quyen"].any == ["Technical", "CHUNG"]
     assert conditions["metadata.serving_epoch"].value == 18
     assert conditions["metadata.publication_version"].value == 4
+    assert conditions["metadata.version_no"].value == 1
+    bounds = next(condition.range for condition in client.calls[0]["scroll_filter"].must
+                  if condition.key == "metadata.chunk_index")
+    assert (bounds.gte, bounds.lte) == (0, 7)
     assert conditions["metadata.required_clearance"].value == "internal"
 
 
@@ -161,11 +167,11 @@ def test_parent_hydration_loads_unique_sections_concurrently_and_preserves_order
         max_workers=3,
     )
 
-    assert [doc.metadata["doc_id"] for doc in hydrated] == [74, 75, 76]
+    assert hydrated[:3] == selected
+    assert [doc.metadata["doc_id"] for doc in hydrated[3:]] == [74, 74, 75, 75, 76, 76]
     assert [doc.page_content for doc in hydrated] == [
-        "first\n\nsecond",
-        "first\n\nsecond",
-        "first\n\nsecond",
+        "selected 1", "selected 2", "selected 3",
+        "first", "second", "first", "second", "first", "second",
     ]
 
 
@@ -195,5 +201,39 @@ def test_parent_hydration_worker_one_is_sequential_rollback(monkeypatch):
 
     monkeypatch.setattr(context_builders, "_load_parent_section_chunks", _loader)
 
-    assert context_builders.hydrate_parent_context(selected, max_workers=1) == selected
+    hydrated = context_builders.hydrate_parent_context(selected, max_workers=1)
+    assert hydrated[:2] == selected
+    assert [doc.page_content for doc in hydrated[2:]] == ["only", "only"]
     assert max_active == 1
+
+
+def test_parent_expansion_keeps_all_anchors_and_neighbor_page_provenance(monkeypatch):
+    anchors = [
+        SimpleNamespace(page_content=f"answer {index}", metadata=_metadata(
+            doc_id=index, parent_section=f"S{index}", trang_so=9, chunk_index=20,
+        ))
+        for index in range(1, 10)
+    ]
+    same_parent = SimpleNamespace(
+        page_content="second answer in first section", metadata={**anchors[0].metadata, "chunk_index": 30},
+    )
+    anchors.append(same_parent)
+    neighbor = SimpleNamespace(
+        page_content="neighbor page evidence", metadata={**anchors[0].metadata, "trang_so": 8, "chunk_index": 19},
+    )
+    calls = []
+
+    def load(key, limit, metadata):
+        calls.append(key)
+        return [neighbor, anchors[0]] if key[0] == 1 else []
+
+    monkeypatch.setattr(context_builders, "_load_parent_section_chunks", load)
+    hydrated = context_builders.hydrate_parent_context(
+        anchors, max_sections=8, max_chunks_per_section=2, max_workers=1,
+    )
+
+    assert hydrated[:len(anchors)] == anchors
+    assert hydrated[len(anchors):] == [neighbor]
+    assert hydrated[-1].metadata["trang_so"] == 8
+    assert hydrated[0].metadata["trang_so"] == 9
+    assert len(calls) == 8

@@ -42,18 +42,27 @@ def build_structured_attributes_context(docs):
             get_technical_attributes_for_rag,
         )
         import json
-        source_files = sorted(set(
-            d.metadata.get("file_goc")
-            for d in docs
-            if d.metadata.get("file_goc")
-        ))
+        sources = {}
+        for doc in docs:
+            metadata = getattr(doc, "metadata", {}) or {}
+            try:
+                doc_id, page = int(metadata.get("doc_id")), int(metadata.get("trang_so"))
+            except (TypeError, ValueError):
+                continue
+            if doc_id > 0 and page > 0:
+                sources[(doc_id, page)] = metadata
         blocks = []
-        for file_name in source_files:
-            attrs = get_technical_attributes_for_rag(file_name)
+        for (doc_id, page), metadata in sorted(sources.items()):
+            attrs = get_technical_attributes_for_rag(doc_id, page_numbers=(page,))
+            attrs = {
+                key: value for key, value in (attrs or {}).items()
+                if isinstance(value, dict) and value.get("human_verified") is True
+            }
             if attrs:
                 blocks.append(
-                    "[STRUCTURED DATA - HUMAN VERIFIED PRIORITY]\n"
-                    f"File: {file_name}\n"
+                    "[STRUCTURED DATA - HUMAN VERIFIED]\n"
+                    f"File: {metadata.get('file_goc') or doc_id} (Trang {page}) | "
+                    f"SOURCE_ID: D{doc_id}P{page} | Version: {metadata.get('version_no') or '?'}\n"
                     f"{json.dumps(attrs, ensure_ascii=False, indent=2)}"
                 )
         return "\n\n".join(blocks)
@@ -242,6 +251,8 @@ def _parent_access_scope(metadata):
         "serving_epoch_value": _metadata_raw_value(metadata.get("serving_epoch")),
         "publication_version": _metadata_version(metadata.get("publication_version")),
         "publication_version_value": _metadata_raw_value(metadata.get("publication_version")),
+        "version_no": _metadata_version(metadata.get("version_no")),
+        "version_no_value": _metadata_raw_value(metadata.get("version_no")),
         "clearance": clearance,
         "clearance_values": clearance_values,
     }
@@ -260,7 +271,7 @@ def _parent_chunk_matches_access_scope(metadata, selected_scope):
         return False
     if candidate_scope["clearance"] != selected_scope["clearance"]:
         return False
-    for field in ("serving_epoch", "publication_version"):
+    for field in ("serving_epoch", "publication_version", "version_no"):
         expected = selected_scope.get(field)
         if expected is not None and candidate_scope.get(field) != expected:
             return False
@@ -363,7 +374,7 @@ def _load_parent_section_chunks(
                 match=models.MatchAny(any=list(selected_scope["department_values"])),
             ),
         ]
-        for field in ("serving_epoch", "publication_version"):
+        for field in ("serving_epoch", "publication_version", "version_no"):
             value = selected_scope.get(f"{field}_value")
             if value is not None:
                 must.append(
@@ -383,6 +394,19 @@ def _load_parent_section_chunks(
                 key=field_name, match=models.MatchValue(value=parent_value)
             )
         )
+        page = selected_metadata.get("trang_so") or selected_metadata.get("parent_page")
+        if page is not None:
+            must.append(models.FieldCondition(
+                key="metadata.parent_page", match=models.MatchValue(value=int(page)),
+            ))
+        chunk_index = selected_metadata.get("chunk_index")
+        if chunk_index is not None:
+            chunk_index = int(chunk_index)
+            radius = max(1, int(limit) // 2)
+            must.append(models.FieldCondition(
+                key="metadata.chunk_index",
+                range=models.Range(gte=max(0, chunk_index - radius), lte=chunk_index + radius),
+            ))
         points, _ = client.scroll(
             collection_name=collection_name,
             scroll_filter=models.Filter(must=must),
@@ -420,27 +444,15 @@ def parent_context_max_workers(value=4):
         return 4
 
 
-def _render_parent_context(selected, children):
-    if len(children) <= 1:
-        return selected
-    try:
-        from langchain_core.documents import Document
-
-        parent_text = "\n\n".join(
-            str(
-                (child.metadata or {}).get("noi_dung_goc")
-                or child.page_content
-                or ""
-            ).strip()
-            for child in children
-        ).strip()
-        parent_metadata = dict(getattr(selected, "metadata", {}) or {})
-        parent_metadata["noi_dung_goc"] = parent_text
-        parent_metadata["parent_context_hydrated"] = True
-        parent_metadata["parent_context_chunk_count"] = len(children)
-        return Document(page_content=parent_text, metadata=parent_metadata)
-    except Exception:
-        return selected
+def _context_chunk_identity(doc):
+    metadata = getattr(doc, "metadata", {}) or {}
+    return (
+        *(str(metadata.get(key) or "") for key in (
+            "doc_id", "file_goc", "version_no", "publication_version", "serving_epoch",
+            "trang_so", "parent_page", "chunk_index",
+        )),
+        str(metadata.get("noi_dung_goc") or getattr(doc, "page_content", "") or "").strip(),
+    )
 
 
 def hydrate_parent_context(
@@ -452,12 +464,7 @@ def hydrate_parent_context(
     client=None,
     collection_name=None,
 ):
-    """Replace selected child chunks with bounded parent section/page context.
-
-    Retrieval remains chunk-level for precision.  Only after reranking do we
-    expand the best chunks into their own section/page, which gives generation
-    enough neighboring evidence without sending an entire document to the LLM.
-    """
+    """Keep every selected anchor and add bounded neighbors with their own provenance."""
     docs = list(documents or [])
     if not docs or not enabled:
         return docs
@@ -467,22 +474,21 @@ def hydrate_parent_context(
         int(max_chunks_per_section or 6),
     )
     max_workers = parent_context_max_workers(max_workers)
-    selected_parents = []
+    loadable = []
     seen = set()
     for selected in docs:
         metadata = getattr(selected, "metadata", {}) or {}
         if metadata.get("parent_context_enabled") is False:
-            selected_parents.append((selected, None, metadata))
             continue
         parent_key = _parent_context_key(selected)
-        if parent_key is None or parent_key in seen or len(seen) >= max_sections:
-            if parent_key is None:
-                selected_parents.append((selected, None, metadata))
+        expansion_key = (parent_key, *(str(metadata.get(key) or "") for key in (
+            "version_no", "publication_version", "serving_epoch",
+        )))
+        if parent_key is None or expansion_key in seen or len(seen) >= max_sections:
             continue
-        seen.add(parent_key)
-        selected_parents.append((selected, parent_key, metadata))
+        seen.add(expansion_key)
+        loadable.append((expansion_key, parent_key, metadata))
 
-    loadable = [item for item in selected_parents if item[1] is not None]
     loaded_by_key = {}
     qdrant_kwargs = (
         {"client": client, "collection_name": collection_name}
@@ -491,8 +497,8 @@ def hydrate_parent_context(
     )
     if loadable:
         if max_workers == 1 or len(loadable) == 1:
-            for _selected, parent_key, metadata in loadable:
-                loaded_by_key[parent_key] = _load_parent_section_chunks(
+            for expansion_key, parent_key, metadata in loadable:
+                loaded_by_key[expansion_key] = _load_parent_section_chunks(
                     parent_key,
                     max_chunks_per_section,
                     metadata,
@@ -504,25 +510,27 @@ def hydrate_parent_context(
                 thread_name_prefix="parent-context",
             ) as executor:
                 futures = {
-                    parent_key: executor.submit(
+                    expansion_key: executor.submit(
                         _load_parent_section_chunks,
                         parent_key,
                         max_chunks_per_section,
                         metadata,
                         **qdrant_kwargs,
                     )
-                    for _selected, parent_key, metadata in loadable
+                    for expansion_key, parent_key, metadata in loadable
                 }
                 for parent_key, future in futures.items():
                     loaded_by_key[parent_key] = future.result()
 
-    hydrated = [
-        selected
-        if parent_key is None
-        else _render_parent_context(selected, loaded_by_key.get(parent_key) or [])
-        for selected, parent_key, _metadata in selected_parents
-    ]
-    return hydrated or docs
+    hydrated = list(docs)
+    seen_chunks = {_context_chunk_identity(doc) for doc in docs}
+    for expansion_key, _parent_key, _metadata in loadable:
+        for child in (loaded_by_key.get(expansion_key) or [])[:max_chunks_per_section]:
+            identity = _context_chunk_identity(child)
+            if identity not in seen_chunks:
+                seen_chunks.add(identity)
+                hydrated.append(child)
+    return hydrated
 
 
 def format_docs(docs):

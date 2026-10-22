@@ -118,9 +118,9 @@ def offline_pipeline(monkeypatch):
     monkeypatch.setattr(glossary, "get_active_glossary", lambda *_args: [])
     monkeypatch.setattr(doc_metadata, "get_common_metadata_for_rag", lambda *_args: {})
     monkeypatch.setattr(
-        document_pages, "get_technical_attributes_for_rag", lambda *_args: []
+        document_pages, "get_technical_attributes_for_rag", lambda *_args, **_kwargs: []
     )
-    monkeypatch.setattr(feedback, "find_golden_answer", lambda *_args: None)
+    monkeypatch.setattr(feedback, "find_golden_answer", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(semantic_cache, "sc_get_exact", lambda *_args: None)
 
     executor, runtime = _offline_executor(documents, qdrant_calls)
@@ -391,6 +391,13 @@ def test_exact_cache_hit_returns_attributed_answer_without_retrieval(
     monkeypatch, offline_pipeline
 ):
     from mech_chatbot.db.repositories import semantic_cache
+    from mech_chatbot.adapters.protected_files import SqlProtectedFileStore
+    from mech_chatbot.application.protected_files import DocumentAccessRecord
+
+    monkeypatch.setattr(SqlProtectedFileStore, "load_document", lambda *_: DocumentAccessRecord(
+        doc_id=17, ten_file="hr-policy.pdf", file_path=None, thu_muc=None,
+        security_level="internal", site="HCM", lifecycle_status="published",
+        review_status="approved", departments=("HR",), version_no=3))
 
     _documents, qdrant_calls, executor, runtime = offline_pipeline
     cache_reads = []

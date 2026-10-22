@@ -11,6 +11,7 @@ from mech_chatbot.rag.answer_policy import (
     AnswerOutcome,
 )
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+from mech_chatbot.rag.execution import AccessScope
 from mech_chatbot.rag.phases.evidence import EvidenceOutcome
 from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.preparation import PreparedRequest
@@ -231,6 +232,7 @@ def test_diagnostic_builders_tolerate_invalid_identifiers_and_namespace_failure(
 class _RoutingState:
     def __init__(self):
         self.refusal_reason = None
+        self.request = SimpleNamespace(access=AccessScope())
         self.retrieval_adapter = SimpleNamespace(
             semantic_cache_enabled=True,
             semantic_cache_ttl_hours=24.0,

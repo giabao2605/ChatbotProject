@@ -111,8 +111,6 @@ def create_rbac_filter(
         )
 
     allowed = list(allowed_departments) if allowed_departments else []
-    if user_department and user_department not in allowed:
-        allowed.append(user_department)
     if SHARE_ALL_DEPARTMENT not in allowed:
         allowed.append(SHARE_ALL_DEPARTMENT)
 
@@ -183,8 +181,6 @@ def document_matches_access_scope(
         for item in (allowed_departments or [])
         if str(item).strip()
     }
-    if user_department and str(user_department).strip():
-        departments.add(str(user_department).strip())
     departments.add(SHARE_ALL_DEPARTMENT)
     return bool(document_departments & departments)
 

@@ -179,6 +179,7 @@ def _lookup_semantic_cache(
                         "semantic_cache_environment",
                         None,
                     ),
+                    response_language=prepared.response_language,
                 )
             hit = semantic_cache.lookup(
                 prepared.user_question,
@@ -190,6 +191,7 @@ def _lookup_semantic_cache(
                     "semantic_cache_sim_threshold",
                     0.93,
                 ),
+                actor=state.request.access,
             )
             if hit:
                 terminal = _semantic_cache_terminal(prepared, hit, lookup_started)

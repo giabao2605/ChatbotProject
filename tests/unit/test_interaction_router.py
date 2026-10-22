@@ -275,6 +275,11 @@ def test_meta_response_capability_has_scope():
     assert "Co khi" in txt and "QA" in txt and txt.strip()
 
 
+def test_meta_response_does_not_claim_display_department_as_access():
+    txt = route_responses.build_meta_response(router.ROUTE_CAPABILITY, "en", "Technical", ["QA"])
+    assert "QA" in txt and "Technical" not in txt
+
+
 def test_meta_response_out_of_scope_en():
     txt = route_responses.build_meta_response(router.ROUTE_OUT_OF_SCOPE, "en")
     assert "scope" in txt.lower()

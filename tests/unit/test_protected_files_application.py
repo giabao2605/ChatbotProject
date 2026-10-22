@@ -132,6 +132,17 @@ def test_denied_document_never_resolves_storage() -> None:
     assert raised.value.detail == "security_denied"
 
 
+def test_display_department_does_not_restore_revoked_file_grant() -> None:
+    resolver = _resolver(Store(record=_record()), Storage())
+    with pytest.raises(ProtectedFileError) as raised:
+        resolver.resolve(
+            ProtectedFileReference.original(42),
+            _actor(allowed_departments=frozenset({"CHUNG"})),
+        )
+    assert raised.value.detail == "department_denied"
+
+
+
 def test_missing_page_image_returns_placeholder_after_confidential_audit() -> None:
     audit = Audit()
     resolver = _resolver(

@@ -193,9 +193,7 @@ def evaluate_document_access(
     if not document_departments:
         return AccessDecision(False, "document_has_no_department_grants", security_level)
 
-    allowed_departments = actor.allowed_departments | frozenset(
-        value for value in (actor.department, SHARE_ALL_DEPARTMENT) if value
-    )
+    allowed_departments = actor.allowed_departments | frozenset({SHARE_ALL_DEPARTMENT})
     if (
         SHARE_ALL_DEPARTMENT not in document_departments
         and document_departments.isdisjoint(allowed_departments)

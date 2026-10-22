@@ -115,8 +115,6 @@ def probe_restricted_access(query_text, user_department=None, allowed_department
 
         user_order = LEVEL_ORDER.get((max_security_level or "public"), 0)
         allowed = list(allowed_departments) if allowed_departments else []
-        if user_department and user_department not in allowed:
-            allowed.append(user_department)
         from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT as _SHARE
         if _SHARE not in allowed:
             allowed.append(_SHARE)

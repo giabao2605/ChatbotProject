@@ -7,6 +7,11 @@ import pytest
 
 from mech_chatbot.db.repositories import semantic_cache as cache_repository_module
 from mech_chatbot.rag import semantic_cache
+from mech_chatbot.rag.execution import AccessScope
+from mech_chatbot.application.protected_files import DocumentAccessRecord
+
+ACTOR = AccessScope(roles=frozenset({"viewer"}), allowed_departments=frozenset({"Technical"}),
+    allowed_sites=frozenset({"HQ"}), max_security_level="internal")
 
 
 pytestmark = pytest.mark.unit
@@ -14,6 +19,11 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def cache_repository(monkeypatch: pytest.MonkeyPatch):
+    from mech_chatbot.adapters.protected_files import SqlProtectedFileStore
+    monkeypatch.setattr(SqlProtectedFileStore, "load_document", lambda *_: DocumentAccessRecord(
+        doc_id=41, ten_file="manual.pdf", file_path=None, thu_muc=None,
+        security_level="internal", site="HQ", lifecycle_status="published",
+        review_status="approved", departments=("Technical",)))
     boundary = SimpleNamespace(
         sc_delete=Mock(),
         sc_docs_all_current=Mock(return_value=True),
@@ -64,7 +74,7 @@ def _store(cache_repository, **overrides):
 
 
 def test_exact_lookup_miss_returns_none(cache_repository):
-    assert semantic_cache.lookup_exact("missing", "scope") is None
+    assert semantic_cache.lookup_exact("missing", "scope", actor=ACTOR) is None
 
 
 def test_exact_lookup_skips_document_specific_questions(cache_repository):
@@ -72,7 +82,7 @@ def test_exact_lookup_skips_document_specific_questions(cache_repository):
 
     assert (
         semantic_cache.lookup_exact(
-            "Tóm tắt bản vẽ 9.3.03843.", "scope"
+            "Tóm tắt bản vẽ 9.3.03843.", "scope", actor=ACTOR
         )
         is None
     )
@@ -82,7 +92,7 @@ def test_exact_lookup_skips_document_specific_questions(cache_repository):
 def test_exact_lookup_returns_authorized_snapshot(cache_repository):
     cache_repository.sc_get_exact.return_value = _cache_row()
 
-    result = semantic_cache.lookup_exact("  MAX PRESSURE?  ", "scope")
+    result = semantic_cache.lookup_exact("  MAX PRESSURE?  ", "scope", actor=ACTOR)
 
     assert result == {
         "answer": "Pressure is 12 bar.",
@@ -112,7 +122,7 @@ def test_exact_lookup_rejects_unverifiable_payload(
     cache_repository.sc_get_exact.return_value = _cache_row(**row_change)
     cache_repository.sc_docs_all_current.return_value = documents_are_current
 
-    result = semantic_cache.lookup_exact("pressure", "scope")
+    result = semantic_cache.lookup_exact("pressure", "scope", actor=ACTOR)
 
     assert (
         result,
@@ -124,7 +134,7 @@ def test_exact_lookup_rejects_unverifiable_payload(
 def test_exact_lookup_degrades_malformed_image_references_to_empty(cache_repository):
     cache_repository.sc_get_exact.return_value = _cache_row(ref_images="not-json")
 
-    result = semantic_cache.lookup_exact("pressure", "scope")
+    result = semantic_cache.lookup_exact("pressure", "scope", actor=ACTOR)
 
     assert result["ref_images"] == []
 
@@ -138,7 +148,7 @@ def test_semantic_lookup_ignores_invalid_embeddings_and_returns_best_authorized_
         _cache_row(cache_id=3, embedding="[1.0, 0.0]"),
     ]
 
-    result = semantic_cache.lookup("pressure", [1.0, 0.0], "scope")
+    result = semantic_cache.lookup("pressure", [1.0, 0.0], "scope", actor=ACTOR)
 
     assert result == {
         "answer": "Pressure is 12 bar.",
@@ -154,14 +164,14 @@ def test_semantic_lookup_miss_survives_repository_failures(cache_repository):
     cache_repository.sc_get_candidates.side_effect = RuntimeError("database unavailable")
     cache_repository.sc_record_lookup.side_effect = RuntimeError("metrics unavailable")
 
-    assert semantic_cache.lookup("pressure", [1.0, 0.0], "scope") is None
+    assert semantic_cache.lookup("pressure", [1.0, 0.0], "scope", actor=ACTOR) is None
 
 
 def test_semantic_lookup_fails_closed_when_document_recheck_errors(cache_repository):
     cache_repository.sc_get_candidates.return_value = [_cache_row()]
     cache_repository.sc_docs_all_current.side_effect = RuntimeError("recheck unavailable")
 
-    result = semantic_cache.lookup("pressure", [1.0, 0.0], "scope")
+    result = semantic_cache.lookup("pressure", [1.0, 0.0], "scope", actor=ACTOR)
 
     assert (
         result,
@@ -178,7 +188,7 @@ def test_semantic_lookup_hit_survives_bad_optional_fields_and_metric_failures(
     cache_repository.sc_record_hit.side_effect = RuntimeError("hit metric unavailable")
     cache_repository.sc_record_lookup.side_effect = RuntimeError("lookup metric unavailable")
 
-    result = semantic_cache.lookup("pressure", [1.0, 0.0], "scope")
+    result = semantic_cache.lookup("pressure", [1.0, 0.0], "scope", actor=ACTOR)
 
     assert (result["score"], result["ref_images"]) == (1.0, [])
 

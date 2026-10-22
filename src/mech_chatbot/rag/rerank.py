@@ -351,12 +351,15 @@ def diversify_candidates(documents, max_per_document=4, max_per_section=1, cap=4
     seen_content = set()
     for doc in docs:
         metadata = getattr(doc, "metadata", {}) or {}
-        document_key = (
+        source_key = (
             metadata.get("doc_id")
             or metadata.get("file_goc")
             or metadata.get("source")
             or "unknown"
         )
+        document_key = (source_key, *(str(metadata.get(key) or "") for key in (
+            "version_no", "publication_version", "serving_epoch",
+        )))
         parent_section = str(metadata.get("parent_section") or "").strip()
         parent_page = metadata.get("parent_page") or metadata.get("trang_so")
         # A chunk with no section/page provenance is not known to share a
@@ -371,7 +374,11 @@ def diversify_candidates(documents, max_per_document=4, max_per_section=1, cap=4
         text_value = str(
             metadata.get("noi_dung_goc") or getattr(doc, "page_content", "") or ""
         ).strip()
-        content_key = hashlib.sha1(text_value.encode("utf-8")).hexdigest()
+        content_key = (
+            document_key,
+            str(metadata.get("trang_so") or metadata.get("parent_page") or ""),
+            hashlib.sha1(text_value.encode("utf-8")).hexdigest(),
+        )
         if content_key in seen_content:
             continue
         count = per_document.get(document_key, 0)

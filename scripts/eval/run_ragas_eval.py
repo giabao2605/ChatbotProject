@@ -65,9 +65,23 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
 
+    from mech_chatbot.composition.maintenance_runtime import configured_repository_runtime
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+    from mech_chatbot.config.settings import load_settings
+    settings = load_settings(os.path.join(_ROOT, ".env")).model_copy(
+        update={"RAG_EXECUTION_CONTEXT": "evaluation"})
+    with configured_repository_runtime(settings, include_qdrant=False):
+        runtime = build_rag_runtime(settings, trace_persist=lambda *_a: None)
+        try:
+            return run_evaluation(args, runtime)
+        finally:
+            runtime.close()
+
+
+def run_evaluation(args, runtime):
+
     from mech_chatbot.rag.execution import (
         AccessScope,
-        DefaultRagExecutor,
         RagInvocation,
         RagRequest,
         collect_rag_events,
@@ -86,7 +100,7 @@ def main():
         maxlv = case.get("max_security_level", "confidential")
         try:
             execution = collect_rag_events(
-                DefaultRagExecutor().run(
+                runtime.executor.run(
                     RagRequest(
                         question=q,
                         access=AccessScope(
@@ -94,6 +108,7 @@ def main():
                             roles=frozenset(roles),
                             allowed_departments=frozenset(allowed or []),
                             max_security_level=maxlv,
+                            allowed_sites=frozenset(case.get("allowed_sites") or []),
                         ),
                     ),
                     RagInvocation(trace_id="", mode="evaluation"),
@@ -102,11 +117,23 @@ def main():
             answer = execution.answer
             dbg = dict(execution.diagnostics)
             contexts = [d.get("text") for d in (dbg.get("retrieved_docs") or []) if d.get("text")]
-            metrics = rm.evaluate_case(q, answer, contexts, gt)
+            from langchain_core.messages import HumanMessage
+            evidence = dbg.get("retrieved_docs") or []
+            def judge(prompt):
+                return runtime.provider.invoke(
+                    [HumanMessage(content=prompt)], surface="evidence_verification",
+                    doc_ids=[d.get("doc_id") for d in evidence],
+                    security_levels=[d.get("security_level") for d in evidence],
+                    policies=[d.get("external_processing_policy") or "internal_only" for d in evidence],
+                ).content
+            metrics = rm.evaluate_case(q, answer, contexts, gt, llm=judge)
         except Exception as e:
             print("  [" + str(i + 1) + "] LOI: " + str(e))
             metrics = {m: None for m in rm.METRIC_NAMES}
-        results.append({"id": case.get("id", "case_" + str(i + 1)), "domain": dom, "metrics": metrics})
+        required = case.get("required_metrics") or [name for name in rm.METRIC_NAMES
+                                                   if name != "context_recall" or gt]
+        results.append({"id": case.get("id", "case_" + str(i + 1)), "domain": dom,
+                        "metrics": metrics, "required_metrics": required})
         print("  [" + str(i + 1) + "/" + str(len(cases)) + "] " + str(dom) + " " + json.dumps(metrics, ensure_ascii=False))
 
     agg = rm.aggregate(results)
@@ -131,6 +158,9 @@ def main():
     print(md)
 
     if args.set_baseline:
+        if not agg.get("valid"):
+            print("CI GATE: invalid evaluation; baseline not written")
+            return 2
         json.dump(agg, open(BASELINE_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
         print("Da luu baseline vao " + BASELINE_FILE)
         return 0
