@@ -399,14 +399,6 @@ def _load_parent_section_chunks(
             must.append(models.FieldCondition(
                 key="metadata.parent_page", match=models.MatchValue(value=int(page)),
             ))
-        chunk_index = selected_metadata.get("chunk_index")
-        if chunk_index is not None:
-            chunk_index = int(chunk_index)
-            radius = max(1, int(limit) // 2)
-            must.append(models.FieldCondition(
-                key="metadata.chunk_index",
-                range=models.Range(gte=max(0, chunk_index - radius), lte=chunk_index + radius),
-            ))
         points, _ = client.scroll(
             collection_name=collection_name,
             scroll_filter=models.Filter(must=must),

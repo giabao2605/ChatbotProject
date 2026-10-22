@@ -109,9 +109,8 @@ def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(
     assert conditions["metadata.serving_epoch"].value == 18
     assert conditions["metadata.publication_version"].value == 4
     assert conditions["metadata.version_no"].value == 1
-    bounds = next(condition.range for condition in client.calls[0]["scroll_filter"].must
-                  if condition.key == "metadata.chunk_index")
-    assert (bounds.gte, bounds.lte) == (0, 7)
+    assert "metadata.chunk_index" not in conditions
+    assert conditions["metadata.parent_page"].value == 3
     assert conditions["metadata.required_clearance"].value == "internal"
 
 
