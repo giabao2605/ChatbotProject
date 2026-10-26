@@ -16,8 +16,6 @@ from mech_chatbot.rag.answer_checks import _safe_json_loads
 from mech_chatbot.rag.answer_policy import (
     PolicyEvidence,
     decide_answer_policy,
-    explicit_negative_evidence_quote,
-    has_explicit_negative_evidence,
 )
 from mech_chatbot.rag.corrective import (
     merge_corrected_documents,
@@ -275,6 +273,10 @@ def _branch_answer_policy(
         branch_context,
         docs=documents,
         trace_id=context.trace_id,
+        strict_answer_mode=bool(getattr(context.runtime, "strict_answer_mode", True)),
+        crag_enabled=bool(getattr(context.runtime, "crag_enabled", False)),
+        verifier_enabled=bool(getattr(context.runtime, "evidence_verifier_enabled", False))
+        and not any(dependency.depends_on for dependency in context.dependencies),
     )
     policy = decide_answer_policy(
         subquery,
@@ -282,10 +284,6 @@ def _branch_answer_policy(
             decision=decision,
             has_retrieved_evidence=bool(documents),
             retrieval_can_improve=retrieval_can_improve,
-            negative_evidence=has_explicit_negative_evidence(subquery, branch_context),
-            negative_evidence_quote=explicit_negative_evidence_quote(
-                subquery, branch_context
-            ),
         ),
         {} if access_denied is None else {"access_denied": access_denied},
     )
@@ -566,7 +564,7 @@ def _branch_diagnostics(
             "subquery": subquery,
             "outcome": policy.outcome.value,
             "evaluator_state": policy.evidence_state.value,
-            "grounded_negative": policy.reason == "explicit_negative_evidence",
+            "grounded_negative": False,
             "bom_lookup": is_bom_lookup(subquery),
             "citations": (
                 make_source_snapshot(branch_documents)

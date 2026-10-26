@@ -164,7 +164,6 @@ class GenerationPlan:
     turn: GenerationTurn
     evidence: GenerationEvidence
     control: GenerationControl
-    explicit_negative_answer: str = ""
     runtime: Any = None
 
 
@@ -659,7 +658,6 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     intent_data = plan.evidence.intent_data
     base_k = plan.evidence.base_k
     retrieval_mode = plan.evidence.retrieval_mode
-    explicit_negative_answer = plan.explicit_negative_answer
     outcome = plan.control.outcome
     budget = plan.control.budget
     request_runtime = plan.runtime
@@ -677,33 +675,6 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     metrics.setdefault("estimated_cost", 0.0)
     metrics.setdefault("provider_retries", 0)
     metrics.setdefault("repair_count", 0)
-    if explicit_negative_answer:
-        answer = explicit_negative_answer
-        metrics["output_tokens"] += len(answer) // 4
-        metrics["repair_count"] = 0
-
-        def explicit_negative_stream():
-            if cancel_event is not None and cancel_event.is_set():
-                raise ExternalAICallCancelled("RAG stream da bi client huy")
-            yield answer
-            log_trace(
-                "deterministic_generation",
-                trace_id,
-                latency_ms=0,
-                reason="explicit_negative_evidence",
-                claim_repair_skipped_reason="explicit_negative_evidence",
-                output_tokens=len(answer) // 4,
-            )
-            log_trace(
-                "rag_end",
-                trace_id,
-                final_latency_ms=int((time.time() - t_start) * 1000),
-                refusal=False,
-                docs_count=len(retrieved_docs),
-                doc_ids=[document.metadata.get("doc_id") for document in retrieved_docs],
-            )
-
-        return explicit_negative_stream()
     calculation_docs = [
         document for document in retrieved_docs
         if isinstance((getattr(document, "metadata", {}) or {}).get("calculation_provenance"), dict)

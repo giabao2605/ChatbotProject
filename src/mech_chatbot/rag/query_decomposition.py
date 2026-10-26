@@ -497,8 +497,23 @@ def _fold(value: str) -> str:
     ).replace("đ", "d")
 
 
+_DOCUMENT_SCOPE_PREFIX = re.compile(
+    r"^(?P<scope>(?:theo|according\s+to)\s+[^,;\n?!]+,\s*)(?P<body>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_INDEPENDENT_REQUEST = re.compile(
+    r"(?:^(?:nêu|neu|tìm|tim|liệt kê|liet ke|cho biết|cho biet|check|list|find)\b"
+    r"|\b(?:bao lâu|bao lau|bao nhiêu|bao nhieu|thế nào|the nao|gì|gi|ai|what|when|how|who)\b)",
+    re.IGNORECASE,
+)
+
+
 def split_query_intents(question: str) -> tuple[tuple[str, ...], bool]:
     original = str(question or "").strip()
+    scoped = _DOCUMENT_SCOPE_PREFIX.match(original)
+    scope = scoped.group("scope") if scoped else ""
+    if scoped:
+        original = scoped.group("body")
     operands = _COMPARISON_OPERANDS.match(original)
     parts, start = [], 0
     for separator in _INTENT_SEPARATOR.finditer(original):
@@ -508,10 +523,18 @@ def split_query_intents(question: str) -> tuple[tuple[str, ...], bool]:
         start = separator.end()
     parts.append(original[start:].strip(" ,;?\t\r\n"))
     parts = [part for part in parts if part]
-    return tuple(parts or ([original] if original else [])), len(parts) > 3
+    if scope and 1 < len(parts) <= 3 and not re.search(r"[;\n?]", original.rstrip("?")):
+        # A shared predicate must stay with its subjects, rather than becoming an incomplete branch.
+        if not any(_INDEPENDENT_REQUEST.search(part) for part in parts[:-1]):
+            parts = [original.strip(" ,;?\t\r\n")]
+    parts = [scope + part for part in parts]
+    return tuple(parts or ([scope + original] if original else [])), len(parts) > 3
 
 
 def _intent_tokens(value: str) -> set[str]:
+    scoped = _DOCUMENT_SCOPE_PREFIX.match(str(value or ""))
+    if scoped:
+        value = scoped.group("body")
     codes = {code.casefold() for code in _CODE_RE.findall(str(value or ""))}
     tokens = set(re.findall(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", _fold(value)))
     return tokens - codes - _INTENT_STOP_WORDS
@@ -579,6 +602,9 @@ def compile_query_plan(
         query_codes = {code.upper() for code in _CODE_RE.findall(query)}
         if not query_codes.issubset(allowed_codes):
             continue
+        scoped = _DOCUMENT_SCOPE_PREFIX.match(original)
+        if scoped and not query.casefold().startswith(scoped.group("scope").casefold()):
+            query = scoped.group("scope") + query
         normalized = query.casefold()
         if normalized in seen:
             continue

@@ -16,8 +16,6 @@ from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.answer_policy import (
     PolicyEvidence,
     decide_answer_policy,
-    explicit_negative_evidence_quote,
-    has_explicit_negative_evidence,
 )
 from mech_chatbot.rag.context_builders import _context_is_mechanical
 from mech_chatbot.rag.corrective import (
@@ -634,12 +632,6 @@ def _coverage_policy(
         PolicyEvidence(
             decision=decision, has_retrieved_evidence=bool(documents),
             retrieval_can_improve=True,
-            negative_evidence=has_explicit_negative_evidence(
-                context.user_question, preliminary_context
-            ),
-            negative_evidence_quote=explicit_negative_evidence_quote(
-                context.user_question, preliminary_context
-            ),
         ),
         {},
     )

@@ -17,7 +17,7 @@ from mech_chatbot.rag.entity_resolver import has_explicit_code
 
 
 _REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
-_ANSWER_CONTRACT = "grounded-answer-v2"
+_ANSWER_CONTRACT = "grounded-answer-v3"
 _PROMPT_SHA256 = hashlib.sha256(Path(__file__).with_name("prompt.py").read_bytes()).hexdigest()
 _FILE_REFERENCE = re.compile(
     rf"(?<=[^\s\"'“”‘’])(?:{'|'.join(sorted(map(re.escape, SUPPORTED_LEARNING_EXTENSIONS), key=len, reverse=True))})(?!\w)",
@@ -319,13 +319,14 @@ def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93, actor=No
 
 
 _REFUSAL_MARKERS = ["khong ghi thong tin", "khong tu uoc luong", "tai lieu hien tai",
-                    "khong du", "insufficient", "do not contain", "cannot answer"]
+                    "khong du", "insufficient", "do not contain", "cannot answer",
+                    "chua tim thay du bang chung", "could not find enough evidence"]
 
 
 def _looks_like_refusal(answer):
     try:
         from unicodedata import normalize, category
-        a = "".join(ch for ch in normalize("NFD", str(answer or "").lower()) if category(ch) != "Mn")
+        a = "".join(ch for ch in normalize("NFD", str(answer or "").lower()) if category(ch) != "Mn").replace("đ", "d")
         return any(m in a for m in _REFUSAL_MARKERS)
     except Exception:
         return False

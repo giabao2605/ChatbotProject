@@ -154,7 +154,6 @@ def _run_generation(
                 budget=plan_fields.get("budget"),
                 outcome=plan_fields.get("outcome", module.GenerationOutcome()),
             ),
-            explicit_negative_answer=plan_fields.get("explicit_negative_answer", ""),
             runtime=plan_fields["runtime"],
         ),
         cancel_event=cancel_event,
@@ -319,46 +318,6 @@ def test_golden_answer_must_be_supported_by_its_selected_source(monkeypatch):
     rendered = module._assemble_context(docs, "What is approved?")
     assert calls == [[7]]
     assert "OUTDATED_UNSUPPORTED_ANSWER" not in rendered
-
-
-def test_explicit_negative_evidence_skips_provider_and_claim_repair(monkeypatch):
-    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
-    monkeypatch.setattr(
-        module,
-        "_build_prompt_template",
-        lambda *_args, **_kwargs: pytest.fail("provider chain must not be built"),
-    )
-    trace_events = []
-    monkeypatch.setattr(
-        module,
-        "log_trace",
-        lambda event, _trace_id, **fields: trace_events.append((event, fields)),
-    )
-    docs = [
-        SimpleNamespace(
-            metadata={"doc_id": 73, "trang_so": 3, "security_level": "internal"}
-        )
-    ]
-
-    events = _run_through_executor(
-        monkeypatch,
-        module,
-        question="Đơn giá là bao nhiêu?",
-        docs=docs,
-        explicit_negative_answer=(
-            "Theo tài liệu, thông tin được nêu rõ: “Không có trường đơn giá "
-            "trong BOM này.” [SRC:D73P3]"
-        ),
-    )
-    emitted = [event.text for event in events if isinstance(event, RagToken)]
-
-    assert emitted == [
-        "Theo tài liệu, thông tin được nêu rõ: “Không có trường đơn giá "
-        "trong BOM này.” [SRC:D73P3]"
-    ]
-    deterministic = dict(trace_events)["deterministic_generation"]
-    assert deterministic["claim_repair_skipped_reason"] == "explicit_negative_evidence"
-    assert events[-1].outcome == "answered"
 
 
 @pytest.mark.parametrize("policy", ["internal_only", None])

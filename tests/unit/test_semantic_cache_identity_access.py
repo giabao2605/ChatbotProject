@@ -57,3 +57,12 @@ def test_cache_rechecks_current_permissions_and_version(monkeypatch, semantic, f
     hit = (semantic_cache.lookup("pressure", [1.0], "scope", actor=actor) if semantic
         else semantic_cache.lookup_exact("pressure", "scope", actor=actor))
     assert bool(hit) is (failure is None)
+
+
+@pytest.mark.parametrize("answer", [
+    "Mình chưa tìm thấy đủ bằng chứng trong tài liệu được phép xem để trả lời phần này.",
+    "I could not find enough evidence in the documents you can access to answer this part.",
+])
+def test_current_refusals_are_not_cacheable(answer):
+    from mech_chatbot.rag.semantic_cache import _looks_like_refusal
+    assert _looks_like_refusal(answer)

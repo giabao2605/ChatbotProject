@@ -22,6 +22,49 @@ from langchain_core.documents import Document
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("question, expected", [
+    ("Theo POLICY-HR-41 và POLICY-IT-72, HR gửi yêu cầu trước bao lâu và IT cấp quyền trong bao lâu?",
+     ("Theo POLICY-HR-41 và POLICY-IT-72, HR gửi yêu cầu trước bao lâu",
+      "Theo POLICY-HR-41 và POLICY-IT-72, IT cấp quyền trong bao lâu")),
+    ("Theo POLICY-HR-41 và POLICY-ACC-25, hồ sơ thiếu giấy tờ và chứng từ thiếu hóa đơn phải ở trạng thái gì?",
+     ("Theo POLICY-HR-41 và POLICY-ACC-25, hồ sơ thiếu giấy tờ và chứng từ thiếu hóa đơn phải ở trạng thái gì",)),
+    ("Theo STOCK-WH-15, nêu mã vị trí, tồn tham chiếu và cách xử lý sai lệch.",
+     ("Theo STOCK-WH-15, nêu mã vị trí", "Theo STOCK-WH-15, tồn tham chiếu",
+      "Theo STOCK-WH-15, cách xử lý sai lệch.")),
+    ("According to POLICY-A-41 and POLICY-B-72, what is the deadline? Also check the owner?",
+     ("According to POLICY-A-41 and POLICY-B-72, what is the deadline",
+      "According to POLICY-A-41 and POLICY-B-72, check the owner")),
+])
+def test_document_scope_is_shared_without_becoming_an_intent(question, expected):
+    assert split_query_intents(question) == (expected, False)
+    plan = compile_query_plan(question, {})
+    assert plan.intent_overflow is False
+    assert plan.original_query == question
+
+
+def test_shared_document_scope_does_not_hide_four_real_requests():
+    question = "Theo MANUAL-A-41 và MANUAL-B-72, tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn"
+    calls = []
+    plan = compile_query_plan(question, {}, planner=lambda _: calls.append("planner"))
+    assert plan.intent_overflow is True
+    assert len(plan.intents) == 4
+    assert all("MANUAL-A-41 và MANUAL-B-72" in intent for intent in plan.intents)
+    assert execute_plan(plan, lambda *_: calls.append("retrieval"), {}) == []
+    assert calls == []
+
+
+def test_planner_subqueries_cannot_drop_shared_document_scope():
+    question = "Theo POLICY-A-41 và POLICY-B-72, thời hạn là bao lâu và ai chịu trách nhiệm?"
+    plan = compile_query_plan(question, {}, planner=lambda _: {
+        "subqueries": ["thời hạn là bao lâu", "ai chịu trách nhiệm"]})
+    assert plan.used_fallback is False
+    assert plan.subqueries == (
+        "Theo POLICY-A-41 và POLICY-B-72, thời hạn là bao lâu",
+        "Theo POLICY-A-41 và POLICY-B-72, ai chịu trách nhiệm",
+    )
+    assert plan.intent_coverage == (True, True)
+
+
 @pytest.mark.parametrize('question, expected', [
     ('So sánh tổng doanh thu kỳ A và kỳ B, chênh lệch B trừ A và tỷ lệ thay đổi so với kỳ A.',
         ('So sánh tổng doanh thu kỳ A và kỳ B', 'chênh lệch B trừ A', 'tỷ lệ thay đổi so với kỳ A.')),
@@ -453,3 +496,16 @@ def test_grounded_calculation_reconciles_one_bom_branch_without_mutation():
     }
     assert reconciled[1] == branches[1]
     assert branches[0]["outcome"] == "insufficient_evidence"
+
+
+def test_shared_prefix_is_not_evidence_that_planner_covered_both_requests():
+    question = "Theo POLICY-A-41 và POLICY-B-72, thời hạn bao lâu và ai phê duyệt?"
+    plan = compile_query_plan(question, {}, planner=lambda _: {
+        "subqueries": ["thời hạn bao lâu", "hồ sơ lưu trữ"]})
+    assert plan.used_fallback is True
+    assert all("ai phê duyệt" in query for query in plan.subqueries[-1:])
+
+
+def test_shared_scope_does_not_merge_four_short_commands():
+    question = "Theo MANUAL-A-41, xem BOM và kiểm vật liệu và xem dung sai và kiểm mối hàn"
+    assert split_query_intents(question)[1] is True

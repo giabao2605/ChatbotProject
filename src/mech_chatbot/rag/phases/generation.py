@@ -148,7 +148,6 @@ def _generation_plan(
             budget=state.budget,
             outcome=outcome,
         ),
-        explicit_negative_answer=evidence.explicit_negative_answer,
         runtime=state,
     )
 

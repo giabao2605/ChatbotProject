@@ -517,3 +517,12 @@ def test_usage_summary_reconciles_priced_stages_without_double_counting_context(
     assert summary["legacy_total_estimated_cost"] == pytest.approx(0.7)
     assert summary["attributed_estimated_cost"] == pytest.approx(0.7)
     assert summary["cost_reconciled"] is True
+
+
+@pytest.mark.parametrize("message", [
+    "Mình chưa tìm thấy đủ bằng chứng trong tài liệu được phép xem để trả lời phần này.",
+    "I could not find enough evidence in the documents you can access to answer this part.",
+])
+def test_current_refusal_template_is_a_terminal_notice(message):
+    from mech_chatbot.evaluation.decomposition import TERMINAL_POLICY_NOTICE_PATTERNS
+    assert any(pattern.fullmatch(message) for pattern in TERMINAL_POLICY_NOTICE_PATTERNS)

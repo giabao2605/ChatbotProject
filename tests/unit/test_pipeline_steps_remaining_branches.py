@@ -134,7 +134,6 @@ def _plan(
     steps,
     *,
     docs=None,
-    answer="",
     outcome=None,
     budget=None,
     provider=None,
@@ -177,7 +176,6 @@ def _plan(
             outcome=outcome or steps.GenerationOutcome(),
             budget=budget,
         ),
-        explicit_negative_answer=answer,
         runtime=SimpleNamespace(
             invocation=invocation or SimpleNamespace(
                 evaluation_draft_override=None,
@@ -642,7 +640,7 @@ def test_grounded_math_malformed_provenance_fails_closed_without_provider(
         )
     )
 
-    assert "thông tin đủ để trả lời" in answer.lower()
+    assert "đủ bằng chứng" in answer.lower()
     assert outcome.refusal_reason == "grounded_math_post_check"
 
 

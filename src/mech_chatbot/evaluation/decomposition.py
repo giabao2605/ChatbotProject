@@ -29,6 +29,8 @@ BRANCH_OUTCOMES = {"full_answer", "partial_answer", "insufficient_evidence", "ac
 TERMINAL_OUTCOMES = {"insufficient_evidence", "access_denied"}
 CITATION_MARKER_PATTERN = re.compile(r"\[(?:Nguồn|Source)\s*:", re.IGNORECASE)
 TERMINAL_POLICY_NOTICE_PATTERNS = (
+    re.compile(r"^mình chưa tìm thấy đủ bằng chứng trong tài liệu được phép xem để trả lời phần này\.?$", re.IGNORECASE),
+    re.compile(r"^i could not find enough evidence in the documents you can access to answer this part\.?$", re.IGNORECASE),
     re.compile(
         r"^tài liệu hiện tại không ghi thông tin đủ để trả lời câu hỏi này "
         r"\([^)]+\)\.?$",

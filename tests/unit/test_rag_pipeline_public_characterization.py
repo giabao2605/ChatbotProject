@@ -124,6 +124,11 @@ def offline_pipeline(monkeypatch):
     monkeypatch.setattr(semantic_cache, "sc_get_exact", lambda *_args: None)
 
     executor, runtime = _offline_executor(documents, qdrant_calls)
+    from langchain_core.runnables import RunnableLambda
+    from contextlib import nullcontext
+    executor._provider_adapter.settings = SimpleNamespace(model_name="offline", base_url="https://example.invalid")
+    executor._provider_adapter.client = RunnableLambda(lambda _: "Tài liệu không ghi chi phí. [SRC:D17P2]")
+    monkeypatch.setattr("mech_chatbot.rag.pipeline_steps.audited_external_call", lambda **_: nullcontext())
     return documents, qdrant_calls, executor, runtime
 
 
@@ -490,22 +495,35 @@ def test_retrieved_but_irrelevant_evidence_refuses_a_cost_answer(offline_pipelin
     assert events[-1].outcome == "refused"
     assert events[-1].refusal_reason == "evidence_gate"
     assert events[-1].diagnostics.evidence.state == "INSUFFICIENT"
-    assert "không tự ước lượng" in _answer(events)
+    assert "đủ bằng chứng" in _answer(events)
 
 
-def test_direct_negative_evidence_returns_a_cited_answer_without_generation(
-    offline_pipeline,
+@pytest.mark.parametrize(("question", "text", "answer"), [
+    ("Chi phí của quy trình nghỉ phép là bao nhiêu?",
+     "Tài liệu không ghi chi phí. Không ghi mật khẩu vào yêu cầu.",
+     "Tài liệu không ghi chi phí. [SRC:D17P2]"),
+    ("Có thể vào sản xuất trước đào tạo an toàn không?",
+     "Đào tạo an toàn bắt buộc trước khi vào sản xuất. Không có lịch HSE: không bố trí vào sản xuất.",
+     "Không, phải đào tạo an toàn trước khi vào sản xuất. [SRC:D17P2]"),
+])
+def test_negative_source_text_uses_normal_grounded_generation(
+    offline_pipeline, monkeypatch, question, text, answer,
 ):
+    from contextlib import nullcontext
+    from langchain_core.runnables import RunnableLambda
+    from mech_chatbot.rag import pipeline_steps
+
     documents, _qdrant_calls, executor, _runtime = offline_pipeline
-    documents.append(
-        _document(
-            "Quy trình này áp dụng cho nhân viên chính thức. "
-            "Tài liệu không ghi chi phí của quy trình nghỉ phép."
-        )
+    documents.append(_document(text))
+    calls = []
+    executor._provider_adapter.settings = SimpleNamespace(model_name="offline", base_url="https://example.invalid")
+    executor._provider_adapter.client = RunnableLambda(
+        lambda prompt: calls.append(prompt) or answer
     )
+    monkeypatch.setattr(pipeline_steps, "audited_external_call", lambda **_: nullcontext())
 
     events = _run(
-        "Chi phí của quy trình nghỉ phép là bao nhiêu?",
+        question,
         trace_id="pipeline-explicit-negative",
         executor=executor,
     )
@@ -513,5 +531,6 @@ def test_direct_negative_evidence_returns_a_cited_answer_without_generation(
     assert isinstance(events[-1], RagCompleted)
     assert events[-1].outcome == "answered"
     assert events[-1].refusal_reason is None
-    assert events[-1].diagnostics.evidence.outcome == "insufficient_evidence"
-    assert "[SRC:D17P2]" in _answer(events)
+    assert len(calls) == 1
+    assert _answer(events) == answer
+    assert events[-1].diagnostics["final_generation_count"] == 1

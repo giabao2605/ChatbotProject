@@ -637,32 +637,6 @@ def test_grounded_calculation_supersedes_only_the_missing_bom_total_notice(
     assert outcome.answer_policy.reason == "all_branches_sufficient"
 
 
-def test_grounded_calculation_keeps_an_unrelated_cost_denial():
-    from mech_chatbot.rag.phases.evidence import _relevant_negative_quote
-
-    document = Document(
-        page_content="calculation",
-        metadata={
-            "calculation_provenance": {
-                "status": "valid",
-                "operation": "sum",
-            },
-        },
-    )
-    invalid = Document(
-        page_content="invalid calculation metadata",
-        metadata={"calculation_provenance": None},
-    )
-
-    quote = _relevant_negative_quote(
-        "Tổng BOM là bao nhiêu và chi phí là bao nhiêu?",
-        "Tài liệu không công bố chi phí hoặc đơn giá.",
-        [invalid, document],
-    )
-
-    assert "chi phí" in quote
-
-
 def test_reconcile_grounded_math_ignores_null_provenance():
     from mech_chatbot.rag.pipeline import _reconcile_grounded_math
 
@@ -1081,7 +1055,6 @@ def test_generation_updates_context_and_wraps_semantic_cache(monkeypatch):
         answer_policy=answer_policy,
         evidence_decision=EvidenceDecision(EvidenceState.SUFFICIENT, reason="covered"),
         evidence_quotes=(),
-        explicit_negative_answer="",
     )
     cache_calls = []
     monkeypatch.setattr(generation, "generate_answer", lambda *_args, **_kwargs: iter(("answer [SRC:D7P2]",)))

@@ -149,16 +149,8 @@ def heuristic_missing_evidence_reason(question, context_text):
 
 def make_insufficient_evidence_message(question, reason, lang="vi"):
     if _normalize_lang(lang) == "en":
-        return (
-            f"The current documents do not contain enough information to answer this question ({reason}).\n\n"
-            "I will not estimate or fabricate data. To get an answer, please load documents with directly relevant data, "
-            "such as machining time per product, hourly/shift productivity, production norms, costs or applicable inspection standards."
-        )
-    return (
-        f"Tài liệu hiện tại không ghi thông tin đủ để trả lời câu hỏi này ({reason}).\n\n"
-        "Mình sẽ không tự ước lượng hoặc tự bịa số liệu. Để trả lời được, bạn cần bổ sung tài liệu có dữ kiện trực tiếp liên quan, "
-        "ví dụ thời gian gia công cho 1 sản phẩm, năng suất theo giờ/ca, định mức sản xuất, chi phí hoặc tiêu chuẩn kiểm tra tương ứng."
-    )
+        return "I could not find enough evidence in the documents you can access to answer this part."
+    return "Mình chưa tìm thấy đủ bằng chứng trong tài liệu được phép xem để trả lời phần này."
 
 
 def evaluate_answerability(
@@ -231,22 +223,18 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
         ).content
         data = _safe_json_loads(response)
         if not isinstance(data, dict):
-            logger.warning("Evidence gate khong parse duoc JSON, fallback cho phep final answer nhung van dung prompt nghiem ngat.")
-            return EvidenceDecision(
-                EvidenceState.SUFFICIENT,
-                stage="verifier",
-                telemetry_status="verifier_fail_open",
-            )
-        raw_state = str(data.get("state") or "").strip().upper()
-        if raw_state in EvidenceState.__members__:
-            state = EvidenceState[raw_state]
+            raise ValueError("Invalid verifier JSON")
+        raw_state = data.get("state")
+        if raw_state is not None:
+            state = EvidenceState(str(raw_state).strip().upper())
+        elif type(data.get("answerable")) is bool:
+            state = EvidenceState.SUFFICIENT if data["answerable"] else EvidenceState.INSUFFICIENT
         else:
-            state = EvidenceState.SUFFICIENT if bool(data.get("answerable")) else EvidenceState.INSUFFICIENT
+            raise ValueError("Invalid verifier decision")
         reason = str(data.get("reason") or "tai lieu khong co bang chung truc tiep")
-        quotes = data.get("evidence_quotes") or []
-        # if answerable and not quotes:
-        #     # Cau hoi rui ro ma verifier khong dua duoc quote -> khong cho qua.
-        #     return False, "khong tim thay trich dan bang chung truc tiep trong tai lieu", []
+        quotes = data.get("evidence_quotes", [])
+        if not isinstance(quotes, list) or any(not isinstance(quote, str) for quote in quotes):
+            raise ValueError("Invalid verifier evidence quotes")
         return EvidenceDecision(
             state,
             reason=reason,
@@ -257,11 +245,12 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
     except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise
     except Exception as e:
-        logger.warning(f"Evidence gate loi ({e}). Fallback sang heuristic/prompt nghiem ngat.")
+        logger.warning("Evidence verification unavailable: %s", type(e).__name__)
         return EvidenceDecision(
-            EvidenceState.SUFFICIENT,
+            EvidenceState.INSUFFICIENT,
+            reason="verifier_unavailable",
             stage="verifier",
-            telemetry_status="verifier_fail_open",
+            telemetry_status="verifier_unavailable",
         )
 
 
