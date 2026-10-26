@@ -60,6 +60,8 @@ def _runtime(executor=None, *, rewrite_enabled=True):
         ("xem bản cũ v1", "include_archived", [1]),
         ("mở version 7", "specific_version", [7]),
         ("quy trình hiện hành", None, []),
+        ("So sánh hai phiên bản giúp mình.", "compare_versions", []),
+        ("Compare the two versions, please.", "compare_versions", []),
     ],
 )
 def test_version_intent_is_deterministic(question, expected_policy, expected_versions):
@@ -376,3 +378,11 @@ def test_runtime_factory_owns_executor_lifecycle(monkeypatch):
     assert runtime.context_timeout == 2.5
     assert runtime.query_rewrite_enabled is False
     assert runtime.executor.closed == (False, True)
+
+
+def test_version_comparison_does_not_accept_unstated_model_versions(monkeypatch):
+    monkeypatch.setattr(intent, "cohere_invoke", lambda *a, **k: SimpleNamespace(content=
+        '{"base_codes":[],"detected_versions":[1,2],"version_policy":"compare_versions"}'))
+    *_, data = intent.extract_search_intent("Compare two versions, please.", runtime=_runtime())
+    assert data["version_policy"] == "compare_versions"
+    assert data["detected_versions"] == []

@@ -270,7 +270,7 @@ def _version_policy(prepared: PreparedRequest):
 
 def _missing_version_terminal(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
     clarification_text = (
-        "Bạn muốn so sánh tài liệu này với phiên bản nào? (Ví dụ: v1 và v2, "
+        "Bạn muốn so sánh tài liệu nào và với phiên bản nào? (Ví dụ: v1 và v2, "
         "hoặc bản đang lưu hành và bản bị lưu trữ gần nhất). Vui lòng chỉ "
         "định rõ phiên bản để mình đối chiếu số liệu chính xác nhé."
     )

@@ -534,3 +534,14 @@ def test_negative_source_text_uses_normal_grounded_generation(
     assert len(calls) == 1
     assert _answer(events) == answer
     assert events[-1].diagnostics["final_generation_count"] == 1
+
+
+def test_unspecified_version_comparison_clarifies_before_search(offline_pipeline, monkeypatch):
+    documents, calls, executor, runtime = offline_pipeline
+    documents.append(_document("An unrelated document with one current version."))
+    events = _run("So sánh hai phiên bản giúp mình.", trace_id="missing-versions", executor=executor)
+    assert isinstance(events[-1], RagCompleted)
+    assert events[-1].refusal_reason == "clarification_required"
+    assert "phiên bản nào" in _answer(events)
+    assert calls == []
+    assert "D17" not in _answer(events)

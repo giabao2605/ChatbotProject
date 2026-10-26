@@ -125,7 +125,9 @@ def deterministic_version_intent(question):
 
     q_norm = q
 
-    if any(k in q_norm for k in compare_keywords) and len(versions) >= 2:
+    if any(k in q_norm for k in compare_keywords) and (
+        len(versions) >= 2 or re.search(r"\b(?:phiên bản|versions?)\b", q_norm)
+    ):
         return "compare_versions", versions
 
     if any(k in q_norm for k in history_keywords):
@@ -354,7 +356,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     intent_data["document_type_hints"] = business_intent["document_types"]
     intent_data["document_references"] = business_intent["document_references"]
 
-    if det_versions:
+    if det_versions or det_policy == "compare_versions":
         intent_data["detected_versions"] = det_versions
 
     if det_policy:
