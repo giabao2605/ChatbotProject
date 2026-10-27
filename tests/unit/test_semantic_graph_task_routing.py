@@ -305,7 +305,14 @@ def test_cancellation_during_actual_graph_read_prevents_later_bom(bom_store):
     assert planner.calls[0][1]['retry_counter'].calculations == 0
 
 
-@pytest.mark.parametrize('mode', ['production', 'pilot_replay'])
-def test_new_contract_cannot_be_activated_by_runtime_invocation(mode):
-    with pytest.raises(ValueError, match='exact draft contract'):
-        RagInvocation('no-activation', mode=mode, task_routing_contract=VERSION)
+def test_production_graph_contract_requires_source_authority_before_provider(store):
+    invocation = RagInvocation('no-authority', mode='production', task_routing_contract=VERSION)
+    planner = Planner(lambda *_a, **_k: pytest.fail('No provider without source authority'))
+    with bind_repository_runtime(db_engine=store), pytest.raises(ValueError, match='source authority'):
+        collect_rag_events(DefaultRagExecutor(provider_adapter=planner).run(graph_request(), invocation))
+    assert planner.calls == []
+
+
+def test_pilot_replay_rejects_graph_contract_at_invocation_boundary():
+    with pytest.raises(ValueError, match='exact supported contract'):
+        RagInvocation('no-activation', mode='pilot_replay', task_routing_contract=VERSION)

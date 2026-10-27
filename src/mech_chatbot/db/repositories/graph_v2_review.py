@@ -139,6 +139,9 @@ def _proof(conn, kind, values, params):
           SELECT 1 FROM dbo.ReviewedAssemblyBindings binding
           JOIN EligibleDocuments child ON child.DocID=binding.DocID AND child.VersionNo=binding.VersionNo
           JOIN EligibleDocuments source ON source.DocID=binding.SourceDocID AND source.VersionNo=binding.SourceVersion
+          JOIN dbo.StructuredSourceSnapshot binding_pin ON binding_pin.DocID=binding.SourceDocID
+            AND binding_pin.VersionNo=binding.SourceVersion AND binding_pin.SourceHash=binding.SourceHash
+            AND binding_pin.SnapshotID=binding.SnapshotID AND binding_pin.CurrentSnapshot=1
           WHERE binding.BindingID=:child_binding_id AND binding.ReviewStatus='approved'
             AND binding.ReviewedBy IS NOT NULL AND binding.ReviewedAt IS NOT NULL
             AND binding.PartKey=:part_key AND binding.ProductScope=:product_scope AND binding.Site=:site
@@ -243,6 +246,50 @@ def propose_graph_v2_record(kind, payload, *, actor_id, access_context, product_
         _audit(conn, actor, kind, row["record_id"], "propose", None,
                {**values, "review_status": "pending"}, note)
     return {"ok": True, "record_id": row["record_id"], "status": "pending"}
+
+
+def revise_graph_v2_occurrence_binding(record_id, child_binding_id, *, reviewer_id,
+                                     access_context, product_scope, site, note):
+    """Attach a reviewed child to a non-leaf row, then require review again."""
+    _positive(reviewer_id)
+    _positive(child_binding_id)
+    note = _note(note)
+    if not isinstance(record_id, str) or not record_id.strip() or len(record_id) > 200:
+        raise ValueError("occurrence id required")
+    params = {**_params(access_context, product_scope, site), "record_id": record_id,
+              "child_binding_id": child_binding_id}
+    _ensure_engine()
+    with engine.begin() as conn:
+        lock = ' WITH (UPDLOCK, ROWLOCK)' if conn.dialect.name != 'sqlite' else ''
+        row = conn.execute(text(f"SELECT * FROM dbo.ReviewedGraphOccurrences{lock} "
+            "WHERE OccurrenceID=:record_id AND ProductScope=:product_scope AND Site=:site"), params).mappings().first()
+        if not row:
+            return {"ok": False, "reason": "not_found"}
+        values = {key: row[column] for key, column in _spec('occurrence')[2].items()}
+        actor = _actor(conn, reviewer_id, 'occurrence', values)
+        if (row['ReviewStatus'] != 'approved' or row['ReviewedBy'] is None or row['ReviewedAt'] is None
+                or row['ChildBindingID'] is not None or row['IsLeaf']):
+            return {"ok": False, "reason": "revision_state_conflict"}
+        binding = conn.execute(text(f"SELECT * FROM dbo.ReviewedAssemblyBindings{lock} "
+            "WHERE BindingID=:child_binding_id AND ProductScope=:product_scope AND Site=:site"), params).mappings().first()
+        if (not binding or binding['ReviewStatus'] != 'approved' or binding['ReviewedBy'] is None
+                or binding['ReviewedAt'] is None or binding['PartKey'] != row['PartKey']):
+            return {"ok": False, "reason": "invalid_provenance"}
+        proof = {key: binding[column] for key, column in _spec('binding')[2].items()}
+        proof = {**proof, 'source_hash': binding['SourceHash'], 'snapshot_id': binding['SnapshotID']}
+        values = {**values, 'child_binding_id': child_binding_id}
+        if not _proof(conn, 'binding', proof, params) or not _proof(conn, 'occurrence', values, params):
+            return {"ok": False, "reason": "invalid_provenance"}
+        updated = conn.execute(text("UPDATE dbo.ReviewedGraphOccurrences SET ChildBindingID=:child_binding_id,"
+            "ReviewStatus='pending',ReviewedBy=NULL,ReviewedAt=NULL "
+            "WHERE OccurrenceID=:record_id AND ProductScope=:product_scope AND Site=:site "
+            "AND ReviewStatus='approved' AND ChildBindingID IS NULL AND IsLeaf=0"), params)
+        if updated.rowcount != 1:
+            raise RuntimeError("Occurrence changed during binding revision")
+        _audit(conn, actor, 'occurrence', record_id, 'revise_binding', dict(row),
+               {**dict(row), 'ChildBindingID': child_binding_id, 'ReviewStatus': 'pending',
+                'ReviewedBy': None, 'ReviewedAt': None}, note)
+    return {"ok": True, "record_id": record_id, "status": "pending"}
 
 
 def list_graph_v2_records(kind, status="pending", limit=100, *, access_context, product_scope, site,

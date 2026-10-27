@@ -291,10 +291,17 @@ def test_unsupported_graph_text_or_unselected_requests_do_not_call_provider(stor
     assert result.citations == () and result.diagnostics.budget.calculations == 0
 
 
-@pytest.mark.parametrize('mode', ['production', 'pilot_replay'])
-def test_draft_opt_in_rejects_production_at_the_invocation_boundary(mode):
-    with pytest.raises(ValueError, match='Task routing'):
-        RagInvocation('invalid', mode=mode, task_routing_contract=VERSION)
+def test_production_contract_still_requires_source_authority_before_provider(store):
+    invocation = RagInvocation('no-authority', mode='production', task_routing_contract=VERSION)
+    planner = Planner(lambda *_a, **_k: pytest.fail('No provider without source authority'))
+    with bind_repository_runtime(db_engine=store), pytest.raises(ValueError, match='source authority'):
+        collect_rag_events(DefaultRagExecutor(provider_adapter=planner).run(request(), invocation))
+    assert planner.calls == []
+
+
+def test_pilot_replay_rejects_task_routing_at_the_invocation_boundary():
+    with pytest.raises(ValueError, match='exact supported contract'):
+        RagInvocation('invalid', mode='pilot_replay', task_routing_contract=VERSION)
 
 
 @pytest.mark.parametrize('value', [True, 2, '', 'semantic-fixed-task-routing-v2'])

@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+import json
 import re
 from types import SimpleNamespace
 
@@ -102,6 +103,82 @@ def test_public_binding_proposal_captures_server_pin_and_preserves_audit(review_
     records = review.list_graph_v2_records('binding', status='approved', **{key:value for key,value in options.items() if key != 'note'})
     assert records[0]['SourceHash'] == 'a'*64 and records[0]['SnapshotID'] == 'snapshot'
     assert records[0]['ReviewedBy'] == 7
+
+
+def approved_binding_for_revision(conn):
+    options = {'access_context': context(), 'product_scope': 'product',
+               'site': 'factory', 'note': 'checked child source'}
+    proposed = review.propose_graph_v2_record('binding', binding(), actor_id=7, **options)
+    review.review_graph_v2_record('binding', proposed['record_id'], 'approve', reviewer_id=7, **options)
+    conn.conn.execute(text('UPDATE ReviewedGraphOccurrences SET IsLeaf=0'))
+    return proposed['record_id'], options
+
+
+def test_existing_occurrence_binding_requires_pending_revision_and_explicit_review(review_database):
+    conn = review_database
+    binding_id, options = approved_binding_for_revision(conn)
+    before = dict(conn.conn.execute(text('SELECT * FROM ReviewedGraphOccurrences')).mappings().one())
+
+    result = review.revise_graph_v2_occurrence_binding('1:row-1:1', binding_id, reviewer_id=7, **options)
+
+    assert result == {'ok': True, 'record_id': '1:row-1:1', 'status': 'pending'}
+    pending = dict(conn.conn.execute(text('SELECT * FROM ReviewedGraphOccurrences')).mappings().one())
+    assert pending == {**before, 'ChildBindingID': binding_id, 'ReviewStatus': 'pending',
+                       'ReviewedBy': None, 'ReviewedAt': None}
+    audit = conn.conn.execute(text("SELECT Details FROM AuditLog WHERE Action='graph_v2_occurrence_revise_binding'")).scalar_one()
+    assert json.loads(audit)['before'] == before
+    assert json.loads(audit)['after'] == pending
+    assert review.review_graph_v2_record('occurrence', '1:row-1:1', 'approve', reviewer_id=7, **options)['status'] == 'approved'
+    assert conn.conn.execute(text('SELECT COUNT(*) FROM ReviewedGraphOccurrences')).scalar_one() == 1
+
+
+@pytest.mark.parametrize('change', [
+    "UPDATE StructuredSourceSnapshot SET CurrentSnapshot=0 WHERE DocID=2",
+    "UPDATE ReviewedAssemblyBindings SET PartKey='part:other'",
+    "UPDATE ReviewedAssemblyBindings SET SourceHash='changed'",
+    "UPDATE TaiLieu SET IsCurrent=0 WHERE DocID=1",
+    "UPDATE ReviewedAssemblyBindings SET ReviewStatus='pending'",
+    "UPDATE ReviewedGraphOccurrences SET ReviewStatus='pending'",
+    "UPDATE ReviewedGraphOccurrences SET IsLeaf=1",
+])
+def test_binding_revision_rejects_stale_or_conflicting_state(review_database, change):
+    conn = review_database
+    binding_id, options = approved_binding_for_revision(conn)
+    conn.conn.execute(text(change))
+    before = dict(conn.conn.execute(text('SELECT * FROM ReviewedGraphOccurrences')).mappings().one())
+
+    result = review.revise_graph_v2_occurrence_binding('1:row-1:1', binding_id, reviewer_id=7, **options)
+
+    assert result['ok'] is False
+    assert dict(conn.conn.execute(text('SELECT * FROM ReviewedGraphOccurrences')).mappings().one()) == before
+    assert conn.conn.execute(text("SELECT COUNT(*) FROM AuditLog WHERE Action='graph_v2_occurrence_revise_binding'")).scalar_one() == 0
+
+
+def test_binding_revision_requires_assigned_active_reviewer_and_source_access(review_database):
+    conn = review_database
+    binding_id, options = approved_binding_for_revision(conn)
+    denied = review.revise_graph_v2_occurrence_binding('1:row-1:1', binding_id, reviewer_id=7,
+        **{**options, 'access_context': {**context(), 'allowed_departments': ['finance']}})
+    assert denied['ok'] is False
+    conn.conn.execute(text("INSERT INTO Users VALUES (8,'another reviewer',1)"))
+    conn.conn.execute(text('INSERT INTO UserRoles VALUES (8,1)'))
+    with pytest.raises(PermissionError, match='Assigned'):
+        review.revise_graph_v2_occurrence_binding('1:row-1:1', binding_id, reviewer_id=8, **options)
+    conn.conn.execute(text('UPDATE Users SET IsActive=0 WHERE UserID=7'))
+    with pytest.raises(PermissionError):
+        review.revise_graph_v2_occurrence_binding('1:row-1:1', binding_id, reviewer_id=7, **options)
+
+
+def test_revised_occurrence_cannot_approve_a_binding_with_a_changed_source_pin(review_database):
+    conn = review_database
+    binding_id, options = approved_binding_for_revision(conn)
+    review.revise_graph_v2_occurrence_binding('1:row-1:1', binding_id, reviewer_id=7, **options)
+    conn.conn.execute(text('UPDATE StructuredSourceSnapshot SET CurrentSnapshot=0 WHERE DocID=2'))
+
+    result = review.review_graph_v2_record('occurrence', '1:row-1:1', 'approve', reviewer_id=7, **options)
+
+    assert result == {'ok': False, 'reason': 'invalid_provenance'}
+    assert conn.conn.execute(text('SELECT ReviewStatus FROM ReviewedGraphOccurrences')).scalar_one() == 'pending'
 
 
 def test_review_source_proof_actual_sql_all_three_record_kinds(connection):
