@@ -14,6 +14,19 @@ def test_claim_repair_rollback_flag_disables_runtime():
     assert claim_repair_enabled(False) is False
 
 
+def test_claim_repair_does_not_treat_question_numbers_as_supported_values():
+    calls = []
+    result = repair_grounded_answer(
+        "Có 999 nhân viên.", context_text="Có 120 nhân viên.",
+        question="Có phải 999 nhân viên không?", documents=[_doc()],
+        invoke=lambda prompt: calls.append(prompt) or "Không phải 999, đúng là 120 nhân viên.",
+        require_citation=False, enabled=True,
+    )
+    assert result.accepted is True
+    assert "ALLOWED_NUMBERS: ['120']" in calls[0]
+    assert "UNSUPPORTED_NUMBERS: ['999']" in calls[0]
+
+
 def test_claim_repair_accepts_one_grounded_rewrite():
     calls = []
 

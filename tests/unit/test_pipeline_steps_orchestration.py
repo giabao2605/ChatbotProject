@@ -239,6 +239,50 @@ def test_bom_retrieval_merges_strict_and_broad_results_without_duplicate_content
     assert active_filter == "broad-filter"
 
 
+@pytest.mark.parametrize("missing_available", [True, False, "expired", "saturated"])
+def test_multi_code_retrieval_targets_only_missing_source_with_original_permissions(
+    steps, monkeypatch, missing_available,
+):
+    from qdrant_client import models
+    from mech_chatbot.rag.rbac import compose_retrieval_filters
+    from mech_chatbot.rag.retrieval import current_published_filter
+
+    acl = models.FieldCondition(key="metadata.site", match=models.MatchValue(value="HQ"))
+    common = list(current_published_filter().must) + [acl]
+    strict, broad = compose_retrieval_filters(common, ["POLICY-HR-042", "POLICY-FIN-042"])
+    first = _doc("HR evidence", doc_id=41, doc_number="POLICY-HR-042",
+                 ma_doi_tuong=["POLICY-FIN-042"] if missing_available is True else [])
+    second = _doc("Finance evidence", doc_id=42, doc_number="POLICY-FIN-042",
+                  effective_status="expired" if missing_available == "expired" else "active")
+    initial = [first] + ([_doc(f"HR detail {n}", doc_id=41, doc_number="POLICY-HR-042")
+                          for n in range(29)] if missing_available == "saturated" else [])
+    requests = []
+
+    def retrieve(_query, payload_filter, **kwargs):
+        requests.append((payload_filter, kwargs))
+        if len(requests) == 1:
+            return initial, "fake_rrf"
+        assert payload_filter.must[:-1] == [strict]
+        matches = {value for condition in payload_filter.must[-1].should for value in condition.match.any}
+        assert "POLICY-FIN-042" in matches and "POLICY-HR-042" not in matches
+        assert kwargs["result_cap"] <= 29
+        assert kwargs["dense_top_k"] <= 5 and kwargs["sparse_top_k"] <= 5
+        return ([second] if missing_available else []), "fake_rrf"
+
+    monkeypatch.setattr(steps, "_explicit_hybrid_rrf", retrieve)
+    docs, top_k, _mode, _started, active = steps._retrieve(
+        new_part_ids=["POLICY-HR-042", "POLICY-FIN-042"], strict_filter=strict,
+        broad_filter=broad, is_bom_query=False, query_to_search="Compare both policies",
+        rbac_filter=None, vectorstore=object(), client=object(), collection_name="test",
+        dense_top_k=5, sparse_top_k=5,
+    )
+    if missing_available == "saturated":
+        assert len(docs) == 30 and first in docs and second in docs
+    else:
+        assert docs == ([first, second] if missing_available is True else [first])
+    assert len(requests) == 2 and top_k == 30 and active is strict
+
+
 def test_retrieval_falls_back_to_broad_results_when_exact_search_is_unavailable(
     steps,
     monkeypatch,
@@ -267,6 +311,76 @@ def test_retrieval_falls_back_to_broad_results_when_exact_search_is_unavailable(
     assert docs == [broad]
     assert mode == "broad_fallback:fake_rrf"
     assert active_filter == "broad-filter"
+
+
+@pytest.mark.parametrize("budget_exhausted", [False, True])
+def test_missing_source_search_preserves_partial_evidence_but_propagates_budget(
+    steps, monkeypatch, budget_exhausted,
+):
+    from mech_chatbot.rag.rbac import compose_retrieval_filters
+    from mech_chatbot.rag.execution import RequestBudgetExceeded
+
+    first = _doc("Approved HR evidence", doc_id=41, doc_number="POLICY-HR-042")
+    strict, broad = compose_retrieval_filters([], ["POLICY-HR-042", "POLICY-FIN-042"])
+    error = RequestBudgetExceeded("deadline") if budget_exhausted else RuntimeError("offline")
+
+    def retrieve(_query, _filter, **kwargs):
+        if kwargs["phase"] == "strict_exact":
+            return [first], "fake_rrf"
+        raise error
+
+    monkeypatch.setattr(steps, "_explicit_hybrid_rrf", retrieve)
+    kwargs = dict(new_part_ids=["POLICY-HR-042", "POLICY-FIN-042"], strict_filter=strict,
+                  broad_filter=broad, is_bom_query=False, query_to_search="Compare both policies",
+                  rbac_filter=None, vectorstore=object(), client=object(), collection_name="test")
+    if budget_exhausted:
+        with pytest.raises(RequestBudgetExceeded):
+            steps._retrieve(**kwargs)
+    else:
+        assert steps._retrieve(**kwargs)[0] == [first]
+
+
+def test_missing_source_search_preserves_top_level_document_and_version_exclusions(steps, monkeypatch):
+    from qdrant_client import QdrantClient, models
+    from mech_chatbot.rag.rbac import compose_retrieval_filters
+
+    client = QdrantClient(":memory:")
+    client.create_collection("coverage", vectors_config=models.VectorParams(size=1, distance=models.Distance.DOT))
+    points = [
+        models.PointStruct(id=index, vector=[1.0], payload={"metadata": {
+            "doc_id": doc_id, "version_no": version, "doc_number": code,
+            "site": "HQ", "security_level": "internal",
+        }})
+        for index, doc_id, version, code in [(1, 41, 1, "POLICY-HR-042"),
+                                            (2, 42, 1, "POLICY-FIN-042"),
+                                            (3, 43, 2, "POLICY-FIN-042")]
+    ]
+    client.upsert("coverage", points)
+    strict, broad = compose_retrieval_filters([], ["POLICY-HR-042", "POLICY-FIN-042"])
+    strict = strict.model_copy(update={
+        "must_not": [models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=42)),
+                     models.FieldCondition(key="metadata.version_no", match=models.MatchValue(value=2))],
+        "should": [models.FieldCondition(key="metadata.site", match=models.MatchValue(value="HQ"))],
+        "min_should": models.MinShould(conditions=[models.FieldCondition(
+            key="metadata.security_level", match=models.MatchValue(value="internal"))], min_count=1),
+    })
+    calls = []
+
+    def retrieve(_query, payload_filter, **_kwargs):
+        found, _ = client.scroll("coverage", scroll_filter=payload_filter)
+        calls.append([point.payload["metadata"]["doc_id"] for point in found])
+        return [_doc("Approved source", **point.payload["metadata"]) for point in found], "local_qdrant"
+
+    monkeypatch.setattr(steps, "_explicit_hybrid_rrf", retrieve)
+    try:
+        docs = steps._retrieve(new_part_ids=["POLICY-HR-042", "POLICY-FIN-042"],
+            strict_filter=strict, broad_filter=broad, is_bom_query=False,
+            query_to_search="Compare both policies", rbac_filter=None, vectorstore=object(),
+            client=client, collection_name="coverage")[0]
+        assert calls == [[41], []]
+        assert [doc.metadata["doc_id"] for doc in docs] == [41]
+    finally:
+        client.close()
 
 
 def test_retrieval_rechecks_serving_state_before_exposing_documents(
@@ -621,10 +735,9 @@ def test_generation_records_final_usage_without_double_charging_context(
     assert final["calls"] == 1
     assert final["input_tokens"] > 0
     assert final["output_tokens"] > 0
-    assert final["estimated_cost"] > 0
-    assert metrics["estimated_cost"] == pytest.approx(
-        usage["planner"]["estimated_cost"] + final["estimated_cost"]
-    )
+    assert final["estimated_cost"] is None
+    assert metrics["estimated_cost"] is None
+    assert metrics["reported_cost_usd"] is None
     assert usage["final_context"]["included_in_final_generation"] is True
 
 

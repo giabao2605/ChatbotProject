@@ -327,4 +327,15 @@ def test_graph_pilot_evidence_keeps_runtime_identity_and_bad_metrics_safe(
     assert evidence[0]["runtime_identity_sha256"] == "a" * 64
     assert evidence[0]["graph_result_status"] == "invalid"
     assert evidence[0]["graph_max_hops"] == 0
-    assert evidence[0]["estimated_cost"] == 0.0
+    assert evidence[0]["estimated_cost"] is None
+
+
+@pytest.mark.parametrize("calls,expected", [(1, None), (0, 0.0)])
+def test_graph_pilot_keeps_missing_generation_cost_unknown(monkeypatch, calls, expected):
+    def pipeline(state):
+        state.budget.record("final_generations", calls)
+        return state.prepared((iter(["Answer [SRC:D17P3]"]), "", [], [],
+                               _graph_diagnostics(generation_metrics={"estimated_cost": None})))
+
+    _, evidence = _run_graph(monkeypatch, pipeline, trace_id="graph-unknown-cost")
+    assert evidence[0]["estimated_cost"] == expected

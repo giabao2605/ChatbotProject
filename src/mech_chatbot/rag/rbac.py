@@ -17,11 +17,13 @@ LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
 # strict = chi match ma chinh; broad = mo rong sang ma lien quan/btp/vat tu.
 PART_ID_KEYS_STRICT = [
     "metadata.base_code",
+    "metadata.doc_number",
     "metadata.ma_chinh",
     "metadata.ma_doi_tuong",
 ]
 PART_ID_KEYS_BROAD = [
     "metadata.base_code",
+    "metadata.doc_number",
     "metadata.ma_chinh",
     "metadata.ma_btp",
     "metadata.ma_vat_tu",

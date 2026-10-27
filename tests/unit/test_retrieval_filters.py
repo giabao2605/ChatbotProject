@@ -89,6 +89,17 @@ class TestStrictBroadKeepRbac:
 
 
 class TestComposeReturnsTwoFilters:
+    def test_document_number_is_an_exact_identifier_in_both_branches(self):
+        strict, broad = svc.compose_retrieval_filters(
+            _make_must_conditions(None), ["POLICY-FIN-042"]
+        )
+        for flt in (strict, broad):
+            assert any(
+                condition.key == "metadata.doc_number"
+                and "POLICY-FIN-042" in condition.match.any
+                for condition in flt.must[-1].should
+            )
+
     def test_returns_two_filter_objects(self):
         mc = _make_must_conditions(None)
         strict, broad = svc.compose_retrieval_filters(mc, new_part_ids=["P1"])

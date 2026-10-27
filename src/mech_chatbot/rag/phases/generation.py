@@ -403,6 +403,10 @@ def _wrap_semantic_cache(
     state: Any,
 ) -> Any:
     request = decision.request
+    def reported_cost():
+        records = getattr(getattr(state, "budget", None), "provider_usage", ())
+        costs = [record.get("cost_usd") for record in records]
+        return sum(costs) if costs and all(cost is not None for cost in costs) else None
     try:
         import mech_chatbot.rag.semantic_cache as semantic_cache
 
@@ -435,6 +439,7 @@ def _wrap_semantic_cache(
                 source_doc_ids=source_doc_ids,
                 model=get_llm_model_name(state.provider_adapter),
                 input_char_len=input_length,
+                reported_cost=reported_cost,
                 citation_snapshot=citation_snapshot,
                 evidence_snapshot=evidence_snapshot,
                 cache_enabled=bool(

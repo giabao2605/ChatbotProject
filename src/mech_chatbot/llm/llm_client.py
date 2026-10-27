@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+import math
 from time import monotonic
 from typing import Any
 
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI as _ChatOpenAI
+from langchain_core.callbacks import BaseCallbackHandler
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from mech_chatbot.config.logging import log_trace
@@ -23,6 +25,77 @@ from mech_chatbot.llm.external_ai import (
 
 _MISSING_PROVIDER_KEY = "provider API key is not configured"
 _DEFAULT_PROVIDER_ENDPOINT = "https://api.proxyllm.eu/v1"
+
+
+class ChatOpenAI(_ChatOpenAI):
+    def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+        generation = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+        if generation is None or not isinstance(chunk.get("usage"), dict):
+            return generation
+        # The installed SDK keeps token counts but drops provider-specific streaming cost.
+        metadata = {**generation.message.response_metadata, "token_usage": chunk["usage"]}
+        return generation.model_copy(update={"message": generation.message.model_copy(update={"response_metadata": metadata})})
+
+
+def provider_usage(response):
+    """Read reported usage only; missing provider fields remain unknown."""
+    metadata = getattr(response, "response_metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    raw = metadata.get("token_usage") or metadata.get("usage") or {}
+    usage = getattr(response, "usage_metadata", None)
+    usage = usage if isinstance(usage, dict) else {}
+    generations = getattr(response, "generations", None)
+    if isinstance(generations, (list, tuple)):
+        output = getattr(response, "llm_output", None)
+        output = output if isinstance(output, dict) else {}
+        raw = output.get("token_usage") or output.get("usage") or raw
+        if generations and isinstance(generations[0], (list, tuple)) and generations[0]:
+            message = getattr(generations[0][0], "message", None)
+            usage = getattr(message, "usage_metadata", None) or usage
+            message_metadata = getattr(message, "response_metadata", None)
+            message_metadata = message_metadata if isinstance(message_metadata, dict) else {}
+            raw = raw or message_metadata.get("token_usage") or {}
+    raw = raw if isinstance(raw, dict) else {}
+    usage = usage if isinstance(usage, dict) else {}
+    def valid(value, *, token=False):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if not math.isfinite(value) or value < 0 or (token and int(value) != value):
+            return None
+        return int(value) if token else float(value)
+    return {
+        "input_tokens": valid(usage.get("input_tokens", raw.get("prompt_tokens")), token=True),
+        "output_tokens": valid(usage.get("output_tokens", raw.get("completion_tokens")), token=True),
+        "total_tokens": valid(usage.get("total_tokens", raw.get("total_tokens")), token=True),
+        "cost_usd": valid(raw.get("cost")),
+    }
+
+
+def record_provider_usage(response, *, model, trace_id, surface, sink=None):
+    record = {"model": model, "surface": surface, **provider_usage(response)}
+    from mech_chatbot.rag.execution import current_request_budget
+    budget = current_request_budget()
+    if budget is not None:
+        budget.record_provider_usage(record)
+    if sink is not None:
+        sink(record)
+    log_trace("provider_usage", trace_id, **record)
+    return record
+
+
+class ProviderUsageCallback(BaseCallbackHandler):
+    run_inline = True
+
+    def __init__(self, model, trace_id, surface, sink=None):
+        self.model, self.trace_id, self.surface, self.sink = model, trace_id, surface, sink
+
+    def on_llm_end(self, response, **kwargs):
+        record_provider_usage(response, model=self.model, trace_id=self.trace_id,
+                              surface=self.surface, sink=self.sink)
+
+    def on_llm_error(self, error, **kwargs):
+        record_provider_usage(None, model=self.model, trace_id=self.trace_id,
+                              surface=self.surface, sink=self.sink)
 
 
 class ProviderCompletionError(RuntimeError):
@@ -66,6 +139,7 @@ def _make_llm(settings: LlmSettings, max_tokens: int | None = None) -> ChatOpenA
         ),
         timeout=snapshot.timeout_seconds,
         max_retries=0,
+        stream_usage=True,
     )
 
 
@@ -261,7 +335,12 @@ def gpt_invoke(
             options = {**options, 'response_format': deepcopy(response_format)}
             if compatible_provider_name(endpoint) == 'openrouter':
                 options = {**options, 'extra_body': {'provider': {'require_parameters': True}}}
-        response = client.invoke(messages, **options)
+        try:
+            response = client.invoke(messages, **options)
+        except Exception:
+            record_provider_usage(None, model=model, trace_id=trace_id, surface=surface)
+            raise
+        record_provider_usage(response, model=model, trace_id=trace_id, surface=surface)
         metadata = getattr(response, 'response_metadata', None)
         if isinstance(metadata, dict) and metadata.get('finish_reason') == 'error':
             raise ProviderCompletionError('provider reported a completion error')

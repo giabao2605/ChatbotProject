@@ -317,6 +317,13 @@ def _update_trace_accumulator(event_name, trace_id, execution_context, kwargs):
             acc[_STEP_COL[event_name]] = kwargs.get("latency_ms")
         if event_name == "llm_generation":
             _record_llm_summary(acc, kwargs)
+        if event_name == "provider_usage":
+            records = [*acc.get("provider_usage", []), dict(kwargs)]
+            acc["provider_usage"] = records
+            for field, target in (("input_tokens", "tokens_in"), ("output_tokens", "tokens_out"), ("cost_usd", "cost")):
+                values = [record.get(field) for record in records]
+                acc[target] = sum(values) if all(value is not None for value in values) else None
+            acc["cost_source"] = "provider_reported_or_unknown"
         if event_name == "rag_end":
             _complete_trace(trace_id, acc, kwargs)
             state.accumulators.pop(trace_id, None)
@@ -325,6 +332,8 @@ def _update_trace_accumulator(event_name, trace_id, execution_context, kwargs):
 
 
 def _record_llm_summary(acc, kwargs):
+    if acc.get("provider_usage"):
+        return
     if kwargs.get("input_tokens") is not None:
         acc["tokens_in"] = kwargs.get("input_tokens")
     if kwargs.get("output_tokens") is not None:

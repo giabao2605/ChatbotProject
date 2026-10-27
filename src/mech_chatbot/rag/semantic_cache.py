@@ -17,7 +17,7 @@ from mech_chatbot.rag.entity_resolver import has_explicit_code
 
 
 _REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
-_ANSWER_CONTRACT = "grounded-answer-v3"
+_ANSWER_CONTRACT = "grounded-answer-v4"
 _PROMPT_SHA256 = hashlib.sha256(Path(__file__).with_name("prompt.py").read_bytes()).hexdigest()
 _FILE_REFERENCE = re.compile(
     rf"(?<=[^\s\"'“”‘’])(?:{'|'.join(sorted(map(re.escape, SUPPORTED_LEARNING_EXTENSIONS), key=len, reverse=True))})(?!\w)",
@@ -28,6 +28,20 @@ _FILE_REFERENCE = re.compile(
 def _document_specific(question):
     text = str(question or "")
     return bool(_FILE_REFERENCE.search(text) or has_explicit_code(text))
+
+
+def _requires_exact_question(question):
+    from mech_chatbot.rag.text_utils import remove_accents
+
+    text = remove_accents(str(question or "").lower()).replace("’", "'")
+    # shortcut: lexical constraints are conservative; expand only for observed cache collisions.
+    return bool(re.search(
+        r"\d|\b(?:khong|chua|chang|chua\s*tung|thang|quy|nam|ngay|tuan|hom|"
+        r"phien\s*ban|hien\s*tai|hien\s*nay|moi\s*nhat|ky|truoc|sau|not|no|never|without|cannot|can't|"
+        r"isn't|aren't|don't|doesn't|didn't|wasn't|weren't|won't|hasn't|haven't|"
+        r"version|revision|today|yesterday|tomorrow|current|previous|next|"
+        r"before|after|latest|last|until|period|date|month|quarter|year|week|day)\b", text,
+    ))
 
 
 @contextmanager
@@ -255,7 +269,7 @@ def select_best(candidates, embedding, threshold):
 
 
 def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93, actor=None):
-    if _document_specific(question):
+    if _document_specific(question) or _requires_exact_question(question):
         return None
     from mech_chatbot.db.repositories.semantic_cache import (
         sc_get_candidates, sc_docs_all_current, sc_record_lookup, sc_record_hit, sc_delete,
@@ -268,7 +282,8 @@ def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93, actor=No
     for c in cands:
         try:
             candidate_question = str(c.get("question") or "").strip()
-            if not candidate_question or _document_specific(candidate_question):
+            if (not candidate_question or _document_specific(candidate_question)
+                    or _requires_exact_question(candidate_question)):
                 continue
             emb = c.get("embedding")
             c["embedding"] = json.loads(emb) if isinstance(emb, str) else emb
@@ -350,7 +365,7 @@ def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, sco
             answer=answer, ref_text=ref_text or "",
             ref_images=json.dumps(ref_images or []),
             source_doc_ids=json.dumps([int(x) for x in (source_doc_ids or []) if x is not None]),
-            scope_sig=scope_sig, model=model, est_cost=float(est_cost or 0.0),
+            scope_sig=scope_sig, model=model, est_cost=float(est_cost) if est_cost is not None else None,
             question_hash=question_hash(question),
             citation_snapshot=json.dumps(citation_snapshot, ensure_ascii=False),
             evidence_snapshot=json.dumps(evidence_snapshot, ensure_ascii=False),
@@ -362,7 +377,7 @@ def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, sco
 def teeing_store_stream(inner, question, embedding, scope_sig, ref_text, ref_images,
                         source_doc_ids, model, input_char_len=0,
                         citation_snapshot=None, evidence_snapshot=None,
-                        cache_enabled=True):
+                        cache_enabled=True, reported_cost=None):
     chunks = []
     completed = False
     try:
@@ -374,9 +389,8 @@ def teeing_store_stream(inner, question, embedding, scope_sig, ref_text, ref_ima
         if completed:
             try:
                 answer = "".join(str(c) for c in chunks)
-                out_tok = len(answer) // 4
-                in_tok = int(input_char_len) // 4
-                est = (in_tok * 2.5 + out_tok * 15) / 1000000.0
+                # Unknown savings are not manufactured from a model-independent tariff.
+                est = reported_cost() if callable(reported_cost) else reported_cost
                 store(
                     question,
                     embedding,

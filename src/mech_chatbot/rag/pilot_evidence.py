@@ -52,12 +52,12 @@ def _positive_int(value: object) -> int | None:
     return normalized if normalized > 0 else None
 
 
-def _nonnegative_float(value: object) -> float:
+def _nonnegative_float(value: object) -> float | None:
     try:
         normalized = float(value)
     except (TypeError, ValueError):
-        return 0.0
-    return normalized if normalized >= 0 else 0.0
+        return None
+    return normalized if normalized >= 0 else None
 
 
 def _confidence(value: object) -> float | None:
@@ -242,7 +242,11 @@ def _budget_fields(payload: Mapping[str, Any], budget: Any, latency: int):
         "request_deadline_ms": max(
             0, int(budget.limits.deadline_seconds * 1000)
         ),
-        "estimated_cost": _nonnegative_float(metrics.get("estimated_cost")),
+        "estimated_cost": (
+            0.0 if metrics.get("estimated_cost") is None and not budget.final_generations
+            and not getattr(budget, "provider_usage", ())
+            else _nonnegative_float(metrics.get("estimated_cost"))
+        ),
         "provider_retries": budget.provider_retries,
         "final_generations": budget.final_generations,
     }

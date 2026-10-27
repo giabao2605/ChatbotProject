@@ -260,12 +260,42 @@ def verify_answerability(question, context_text, docs=None, trace_id=None):
     return decision.answerable, decision.reason, list(decision.evidence_quotes)
 
 
+_CORRECTION_UNIT = r"[^\W\d_]+(?:\s+[^\W\d_]+){0,2}"
+_REJECTED_NUMBER = (
+    rf"[*_]{{0,2}}(?P<rejected>{_NUMBER_PATTERN.pattern})"
+    rf"(?:\s+(?P<rejected_unit>{_CORRECTION_UNIT}))?[*_]{{0,2}}"
+)
+_CORRECTED_NUMBER = (
+    rf"[*_]{{0,2}}(?P<corrected>{_NUMBER_PATTERN.pattern})"
+    rf"(?:\s+(?P<corrected_unit>{_CORRECTION_UNIT}))?[*_]{{0,2}}"
+)
+_DIRECT_NUMBER_CORRECTIONS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        rf"(?<!\w)(?:không\s+phải|khong\s+phai|not)\s+{_REJECTED_NUMBER}\s*[,;]?\s*"
+        rf"(?:đúng\s+là|dung\s+la|mà\s+là|ma\s+la|but|the\s+correct\s+(?:number|value)\s+is)\s+{_CORRECTED_NUMBER}",
+        rf"{_CORRECTED_NUMBER}\s*,\s*(?:không\s+phải|khong\s+phai|not)\s+{_REJECTED_NUMBER}",
+    )
+)
+
+
 def find_unsupported_numbers(answer, context_text, question, strict_mode=False):
     """Return positioned number violations after formatting normalization."""
     if not strict_mode and not is_high_risk_question(question):
         return []
-    allowed = normalized_number_values(context_text) | normalized_number_values(question)
+    allowed = normalized_number_values(context_text)
     answer_text = str(answer or "")
+    question_numbers = normalized_number_values(question)
+    # shortcut: only explicit paired corrections are recognized; ambiguous wording stays blocked.
+    rejected_spans = {
+        match.span("rejected")
+        for pattern in _DIRECT_NUMBER_CORRECTIONS
+        for match in pattern.finditer(answer_text)
+        if _normalize_number_token(match.group("rejected")) in question_numbers
+        and _normalize_number_token(match.group("corrected")) in allowed
+        and (not match.group("rejected_unit") or not match.group("corrected_unit")
+             or _norm(match.group("rejected_unit")) == _norm(match.group("corrected_unit")))
+    }
     citation_spans = [
         match.span()
         for match in re.finditer(r"\[(?:Nguồn|Source):[^\]]+\]", answer_text, flags=re.IGNORECASE)
@@ -275,7 +305,7 @@ def find_unsupported_numbers(answer, context_text, question, strict_mode=False):
         if any(start <= match.start() and match.end() <= end for start, end in citation_spans):
             continue
         normalized = _normalize_number_token(match.group(0))
-        if normalized in allowed:
+        if normalized in allowed or match.span() in rejected_spans:
             continue
         violations.append(
             NumberViolation(match.group(0), normalized, match.start(), match.end())

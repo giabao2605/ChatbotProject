@@ -41,7 +41,7 @@ class BudgetDiagnostics:
 class GenerationDiagnostics:
     input_tokens: int = 0
     output_tokens: int = 0
-    estimated_cost: float = 0.0
+    estimated_cost: float | None = 0.0
     repair_count: int = 0
     provider_retries: int = 0
 
@@ -158,7 +158,8 @@ class RagDiagnostics(MappingABC[str, Any]):
             generation=GenerationDiagnostics(
                 input_tokens=_as_int(generation_raw.get("input_tokens")),
                 output_tokens=_as_int(generation_raw.get("output_tokens")),
-                estimated_cost=_as_float(generation_raw.get("estimated_cost")),
+                estimated_cost=(None if "estimated_cost" in generation_raw and generation_raw["estimated_cost"] is None
+                                else _as_float(generation_raw.get("estimated_cost"))),
                 repair_count=_as_int(generation_raw.get("repair_count")),
                 provider_retries=_as_int(generation_raw.get("provider_retries")),
             ),

@@ -10,6 +10,42 @@ from mech_chatbot.rag.evidence_gate import (
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("answer,expected", [
+    ("Có 999 nhân viên.", ["999"]),
+    ("Không phải 999, đúng là 120 nhân viên.", []),
+    ("Không phải 999 piece, đúng là 120 piece.", []),
+    ("Ngưỡng là 120 piece, không phải 999 piece.", []),
+    ("Không. Theo **DEMO-WH-001**, ngưỡng tồn tối thiểu là **120 piece**, không phải **999 piece**.  \n[Nguồn: warehouse_demo_process_v1.md, Trang 1, Version 1, SourceID D20P1]", []),
+    ("Không phải 999 USD, đúng là 120 piece.", ["999"]),
+    ("Có 120 piece. Bộ phận khác không phải 999 piece.", ["999"]),
+    ("Không phải 999, đúng là 120. [Nguồn: D41P4, Version 2]", []),
+    ("Not 999, but 120 employees.", []),
+    ("Không có tài liệu khác. Có 999 nhân viên.", ["999"]),
+    ("Không phải 999, đúng là 888 nhân viên.", ["999", "888"]),
+    ("Không phải 999. Có 120 nhân viên.", ["999"]),
+    ("Không phải 999, đúng là 120. Bộ phận khác có 999.", ["999"]),
+])
+def test_question_numbers_are_only_allowed_in_a_direct_supported_correction(answer, expected):
+    violations = find_unsupported_numbers(
+        answer, "Số nhân viên là 120. Version 1.", "Có phải 999 nhân viên không?", strict_mode=True,
+    )
+    assert [item.normalized for item in violations] == expected
+
+
+def test_direct_correction_cannot_introduce_a_new_rejected_value():
+    violations = find_unsupported_numbers(
+        "Không phải 555, đúng là 120.", "Có 120 nhân viên.", "Có bao nhiêu người?", strict_mode=True,
+    )
+    assert [item.normalized for item in violations] == ["555"]
+
+
+def test_citations_and_verified_computation_values_remain_allowed():
+    assert find_unsupported_numbers(
+        "Tổng là 5. [Nguồn: D41P4, Version 2]", "<verified_computation>5</verified_computation>",
+        "", strict_mode=True,
+    ) == []
+
+
 @pytest.mark.parametrize("source,answer", [("1,500", "1500"), ("1.500", "1500"), ("12,50", "12.5")])
 def test_number_grounding_accepts_equivalent_formatting(source, answer):
     assert find_unsupported_numbers(answer, source, "Chi phí bao nhiêu?", strict_mode=True) == []

@@ -22,7 +22,7 @@ from mech_chatbot.rag.context_builders import (
 
 
 from langchain_core.output_parsers import StrOutputParser
-from mech_chatbot.llm.llm_client import get_llm_endpoint, get_llm_model_name
+from mech_chatbot.llm.llm_client import get_llm_endpoint, get_llm_model_name, ProviderUsageCallback
 from mech_chatbot.llm.external_ai import audited_external_call, ExternalAICallCancelled, compatible_provider_name, DEFAULT_EXTERNAL_AI_SETTINGS
 from mech_chatbot.rag.answer_checks import (
     has_unsupported_units_symbols,
@@ -613,13 +613,16 @@ def _record_final_generation_usage(
     *,
     input_tokens: int,
     output_tokens: int,
-    estimated_cost: float,
+    estimated_cost: float | None,
 ) -> None:
     """Update the request-local accumulator without mutating aliased usage data."""
 
     metrics["input_tokens"] += input_tokens
     metrics["output_tokens"] += output_tokens
-    metrics["estimated_cost"] += estimated_cost
+    metrics["estimated_cost"] = (
+        metrics["estimated_cost"] + estimated_cost
+        if metrics["estimated_cost"] is not None and estimated_cost is not None else None
+    )
     usage = metrics.get("decomposition_usage")
     if not isinstance(usage, dict):
         return
@@ -632,6 +635,7 @@ def _record_final_generation_usage(
             "output_tokens": int(current.get("output_tokens") or 0) + output_tokens,
             "estimated_cost": (
                 float(current.get("estimated_cost") or 0.0) + estimated_cost
+                if current.get("estimated_cost", 0.0) is not None and estimated_cost is not None else None
             ),
         },
     }
@@ -675,6 +679,15 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     metrics.setdefault("estimated_cost", 0.0)
     metrics.setdefault("provider_retries", 0)
     metrics.setdefault("repair_count", 0)
+    metrics.setdefault("provider_usage", [])
+    metrics.setdefault("reported_cost_usd", None)
+    metrics["token_count_source"] = "estimated_unless_provider_reported"
+
+    def capture_usage(record):
+        records = [*metrics["provider_usage"], record]
+        metrics["provider_usage"] = records
+        costs = [item.get("cost_usd") for item in records]
+        metrics["reported_cost_usd"] = sum(costs) if all(cost is not None for cost in costs) else None
     calculation_docs = [
         document for document in retrieved_docs
         if isinstance((getattr(document, "metadata", {}) or {}).get("calculation_provenance"), dict)
@@ -775,6 +788,10 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     _ctx_domain = _context_domain(retrieved_docs, new_part_ids)
     if provider_model is None:
         raise RuntimeError("RAG generation provider is not configured")
+    if callable(getattr(provider_model, "with_config", None)):
+        provider_model = provider_model.with_config(callbacks=[ProviderUsageCallback(
+            get_llm_model_name(provider_adapter), trace_id, "generation", capture_usage,
+        )])
     chain = (
         _build_prompt_template(_ctx_domain, response_language)
         | provider_model
@@ -928,7 +945,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 
                 input_tokens = len(context_text + user_question + chat_history_str) // 4
                 output_tokens = len(answer) // 4
-                estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1000000
+                estimated_cost = metrics["reported_cost_usd"]
                 _record_final_generation_usage(
                     metrics,
                     input_tokens=input_tokens,
@@ -1005,7 +1022,8 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         estimated_cost=repair_result.estimated_cost,
                     )
                     metrics["repair_count"] = int(repair_result.attempted)
-                    metrics["estimated_cost"] += repair_result.estimated_cost
+                    if metrics["estimated_cost"] is not None:
+                        metrics["estimated_cost"] += repair_result.estimated_cost
                     if repair_result.accepted:
                         answer = _with_grounded_prefix(repair_result.answer)
                         yield answer
@@ -1148,7 +1166,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     answer = "".join(chunks)
                     input_tokens = len(context_text + user_question + chat_history_str) // 4
                     output_tokens = len(answer) // 4
-                    estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1000000
+                    estimated_cost = metrics["reported_cost_usd"]
                     _record_final_generation_usage(
                         metrics,
                         input_tokens=input_tokens,
@@ -1253,6 +1271,68 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
         if strict_docs and not is_bom_query:
             logger.info("Tim thay ket qua strict, khong lay them du lieu rong de tranh nhieu.")
             retrieved_docs = strict_docs
+            if len(new_part_ids) > 1:
+                from mech_chatbot.domain.part_ids import canonical_part_id
+                from mech_chatbot.domain.serving_state import filter_currently_servable
+                from mech_chatbot.rag.rbac import PART_ID_KEYS_STRICT, compose_retrieval_filters
+
+                def identifiers(doc):
+                    result = set()
+                    for key in PART_ID_KEYS_STRICT:
+                        if key == "metadata.ma_doi_tuong":
+                            continue  # Related identifiers do not prove coverage of their own source.
+                        values = doc.metadata.get(key.removeprefix("metadata.")) or []
+                        values = [values] if isinstance(values, str) else values
+                        if isinstance(values, (list, tuple)):
+                            result.update(canonical_part_id(value) for value in values if isinstance(value, str))
+                    return result
+
+                retrieved_docs = filter_currently_servable(strict_docs)
+                covered = set().union(*(identifiers(doc) for doc in retrieved_docs))
+                for code in new_part_ids:
+                    if canonical_part_id(code) in covered:
+                        continue
+                    # Keep every original condition; the extra identifier only narrows access.
+                    targeted, _ = compose_retrieval_filters([strict_filter], [code])
+                    primary_match = targeted.must[-1].model_copy(update={
+                        "should": [c for c in targeted.must[-1].should
+                                   if c.key != "metadata.ma_doi_tuong"]
+                    })
+                    targeted = targeted.model_copy(update={"must": [*targeted.must[:-1], primary_match]})
+                    try:
+                        extra, _ = _explicit_hybrid_rrf(
+                            query_to_search, targeted,
+                            dense_top_k=min(dense_top_k or 15, 15),
+                            sparse_top_k=min(sparse_top_k or 15, 15),
+                            result_cap=15, trace_id=trace_id,
+                            phase="missing_identifier", checkpoint=checkpoint,
+                            vectorstore=vectorstore, client=client, collection_name=collection_name,
+                        )
+                        identities = {
+                            (d.metadata.get("doc_id"), d.metadata.get("version_no"),
+                             d.metadata.get("trang_so"), d.page_content)
+                            for d in retrieved_docs
+                        }
+                        for doc in filter_currently_servable(extra):
+                            identity = (doc.metadata.get("doc_id"), doc.metadata.get("version_no"),
+                                        doc.metadata.get("trang_so"), doc.page_content)
+                            if identity not in identities:
+                                retrieved_docs = [*retrieved_docs, doc]
+                                identities.add(identity)
+                        # Reserve one candidate per requested identifier inside the original cap.
+                        representatives = []
+                        for requested in new_part_ids:
+                            found = next((d for d in retrieved_docs
+                                          if canonical_part_id(requested) in identifiers(d)), None)
+                            if found is not None and found not in representatives:
+                                representatives.append(found)
+                        retrieved_docs = (representatives + [d for d in retrieved_docs
+                                          if d not in representatives])[:base_k]
+                        covered = set().union(*(identifiers(doc) for doc in retrieved_docs))
+                    except (ExternalAICallCancelled, RequestBudgetExceeded):
+                        raise
+                    except Exception as exc:
+                        logger.warning("Missing identifier retrieval failed: %s", type(exc).__name__)
         else:
             logger.info(f"Khong co ket qua strict hoac hoi BOM, mo rong truy xuat (broad) cho cac ma: {new_part_ids}...")
             retrieval_mode = "broad_fallback"

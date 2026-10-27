@@ -519,6 +519,22 @@ def test_usage_summary_reconciles_priced_stages_without_double_counting_context(
     assert summary["cost_reconciled"] is True
 
 
+@pytest.mark.parametrize("calls,expected_cost,reconciled", [(1, None, False), (0, 0.0, True)])
+def test_usage_summary_preserves_unknown_generation_cost(calls, expected_cost, reconciled):
+    summary = summarize_decomposition_usage([{
+        "estimated_cost": None if calls else 0.0,
+        "decomposition_usage": {
+            "schema": "rag-decomposition-usage-v1",
+            "final_generation": {"calls": calls, "estimated_cost": None},
+        },
+    }])
+
+    assert summary["final_generation"]["estimated_cost"] == expected_cost
+    assert summary["attributed_estimated_cost"] == expected_cost
+    assert summary["legacy_total_estimated_cost"] == expected_cost
+    assert summary["cost_reconciled"] is reconciled
+
+
 @pytest.mark.parametrize("message", [
     "Mình chưa tìm thấy đủ bằng chứng trong tài liệu được phép xem để trả lời phần này.",
     "I could not find enough evidence in the documents you can access to answer this part.",

@@ -284,6 +284,7 @@ class RequestBudgetLedger:
     provider_retries: int = 0
     final_generations: int = 0
     deadline_exceeded: bool = False
+    provider_usage: tuple[dict[str, Any], ...] = ()
     _lock: threading.Lock = field(
         default_factory=threading.Lock,
         repr=False,
@@ -312,6 +313,10 @@ class RequestBudgetLedger:
 
     def consume_provider_retry(self) -> None:
         self.record("provider_retries", 1, cumulative=True)
+
+    def record_provider_usage(self, record: Mapping[str, Any]) -> None:
+        with self._lock:
+            self.provider_usage = (*self.provider_usage, dict(record))
 
 
 @dataclass(slots=True)
@@ -464,6 +469,17 @@ class _ExecutionState:
         )
 
     def capture_budget(self, diagnostics: Mapping[str, Any]) -> None:
+        if isinstance(diagnostics, dict):
+            records = [dict(record) for record in self.budget.provider_usage]
+            diagnostics["provider_usage"] = records
+            costs = [record.get("cost_usd") for record in records]
+            diagnostics["provider_cost_usd"] = (
+                sum(costs) if costs and all(cost is not None for cost in costs) else None
+            )
+            diagnostics["provider_usage_complete"] = bool(records) and all(
+                all(record.get(key) is not None for key in ("input_tokens", "output_tokens", "cost_usd"))
+                for record in records
+            )
         metrics = dict(diagnostics.get("generation_metrics") or {})
         self.budget.record("repairs", int(metrics.get("repair_count") or 0))
         self.budget.record("calculations", int(metrics.get("calculation_count") or 0))
@@ -739,6 +755,7 @@ def _failed_rag_event(
     state: _ExecutionState,
 ) -> RagFailed:
     failure_diagnostics = dict(diagnostics or {})
+    state.capture_budget(failure_diagnostics)
     generation_metrics = failure_diagnostics.get("generation_metrics")
     if isinstance(generation_metrics, dict):
         generation_metrics["provider_retries"] = state.budget.provider_retries

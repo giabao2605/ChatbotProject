@@ -4,6 +4,8 @@
 import hashlib
 import unicodedata
 from dataclasses import dataclass
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import requests
 from functools import lru_cache
@@ -17,6 +19,17 @@ from mech_chatbot.llm.external_ai import (
 
 _VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
 _JINA_RERANK_URL = "https://api.jina.ai/v1/rerank"
+
+
+@contextmanager
+def _reported_rerank_usage(model, trace_id):
+    payload = {}
+    try:
+        yield payload
+    finally:
+        from mech_chatbot.llm.llm_client import record_provider_usage
+        record_provider_usage(SimpleNamespace(response_metadata={"usage": payload.get("usage")}),
+                              model=model, trace_id=trace_id, surface="reranking")
 
 
 def _rerank_failure_metadata(exc, provider):
@@ -149,7 +162,7 @@ def voyage_rerank_documents(
         input_bytes=len(str(query or "").encode("utf-8")) + sum(len(value.encode("utf-8")) for value in texts),
         profile=getattr(runtime, "profile", None),
         settings=_runtime_external_settings(runtime),
-    ):
+    ), _reported_rerank_usage(model, trace_id) as usage_payload:
         response = requests.post(
             rerank_url,
             headers={
@@ -168,6 +181,7 @@ def voyage_rerank_documents(
         )
         response.raise_for_status()
         payload = response.json()
+        usage_payload["usage"] = payload.get("usage")
     results = normalize_rerank_result(
         payload,
         provider="voyage",
@@ -249,7 +263,7 @@ def jina_rerank_documents(
         + sum(len(value.encode("utf-8")) for value in texts),
         profile=getattr(runtime, "profile", None),
         settings=_runtime_external_settings(runtime),
-    ):
+    ), _reported_rerank_usage(model, trace_id) as usage_payload:
         response = requests.post(
             _jina_rerank_url(runtime.endpoint),
             headers={
@@ -267,6 +281,7 @@ def jina_rerank_documents(
         )
         response.raise_for_status()
         payload = response.json()
+        usage_payload["usage"] = payload.get("usage")
 
     results = normalize_rerank_result(
         payload,

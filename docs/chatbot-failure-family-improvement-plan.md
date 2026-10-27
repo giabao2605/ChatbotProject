@@ -1,5 +1,27 @@
 # Kế hoạch cải thiện chatbot theo họ lỗi
 
+## Trạng thái hiện hành — đợt khắc phục 26/10/2026
+
+Mốc bắt đầu đợt này là `200a703`. Các checkpoint bên dưới giữ nguyên để truy vết lịch sử; các ghi chú cũ về Query/Graph chưa bật, grant QA hết hạn hoặc thiếu filename không mô tả trạng thái hiện hành. Query/Graph/Math đã có quyền phục vụ nguồn được duyệt; vẫn kiểm quyền, phiên bản và độ đầy đủ trên từng yêu cầu. Nghiệm thu nghiệp vụ là một bước riêng.
+
+| Hạng mục | Trạng thái và điều kiện đóng |
+| --- | --- |
+| G02-3 thiếu nguồn kế toán | Đã xác nhận filter thiếu doc_number bằng Qdrant chỉ đọc; bổ sung exact field và giữ đại diện từng mã trong giới hạn cũ. Giữ toàn bộ filter gốc; kết quả đáp án thật ghi ở báo cáo đợt này. |
+| Semantic cache khác số/kỳ/phủ định | Đã chặn semantic hit ở cả hai câu có ràng buộc nhạy cảm; exact cache giữ kiểm quyền/nguồn. Hợp đồng v4, không đổi threshold hoặc xóa cache. |
+| Số do người dùng gợi ý | Đã bỏ whitelist số trong câu hỏi; chỉ cho phản bác trực tiếp với giá trị thay thế có nguồn và đơn vị tương thích. Kiểm tra số chưa chứng minh đúng chủ thể/ngữ nghĩa. |
+| Usage và chi phí | Đã nối usage LLM/rerank vào diagnostics; trường thiếu giữ NULL, cả request lỗi và cache. Bỏ biểu giá generation/cache cố định. Tổng tiết kiệm lịch sử vẫn là ước tính, không phải hóa đơn. |
+| NAV-HISTORY-02 | Đã tái hiện và sửa restore dùng chung/abort/revision; browser fixture Back/Forward sau F5 đạt. Đăng xuất đang chờ cũng không mở restore mới. |
+| Thư viện | Frontend audit production 4 high → 0 trong candidate. Ba bản vá mạng Python qua kiểm tra tách biệt; trạng thái runtime ghi riêng sau rollout. Các thư viện còn lại có lý do/giảm rủi ro trong dependency-review.md; Pillow vẫn mở do xung đột bản lớn. |
+| OCR/bảng/section/context | Kiểm tra mẫu PDF nhiều phần, CSV và scan tại boundary cô lập. OCR fixture không phải bằng chứng chất lượng OCR provider thật; chưa có căn cứ reindex toàn kho. |
+| Nội dung claim/citation, multi-turn | Đo theo oracle và đoạn nguồn cùng câu trả lời; source ID đúng không tự chứng minh claim đúng. |
+| Graph/BOM | Chờ xác nhận vật liệu 201/304, số lượng thiếu, leaf/child bindings và độ đầy đủ theo nguồn hiện hành. Không đoán số hoặc xuất tổng toàn cây chưa đủ nguồn. |
+| Qdrant/tải | Một lượt có trace ở đường thiếu và mức 1/3/5 request; không đổi timeout/retry hoặc suy thành SLA. |
+| UI/admin | Kiểm tra giao diện thật và fixture cô lập; không tạo trạng thái admin/quota nguy hiểm trên production. |
+| Nghiệm thu 14 phòng | Người dùng bao.nguyen xác nhận sẽ là người duyệt câu trả lời nghiệp vụ từng phòng. Chuẩn bị câu hỏi/đáp án/nguồn, chỉ ghi đạt khi người dùng xác nhận. |
+| Reboot | Chờ người dùng chọn thời điểm. Không tự reboot hoặc coi service Running là bằng chứng khởi động sau reboot. |
+
+Bằng chứng mới lưu ở `reports/rag-backlog-20261026/`. Dùng lại manifest/oracle 36 ca và ngân sách tổng 10 USD của các đợt trước; giữ các reservation chưa giải quyết. Không thay nguồn, quyền, oracle hoặc điều kiện an toàn để làm điểm tăng.
+
 ## 1. Mục tiêu và phạm vi
 
 Tài liệu này chuyển các lỗi quan sát được trong controlled demo thành các họ lỗi có thể tái tạo, đo lường và sửa ở một seam chung. Mục tiêu không phải sửa riêng từng câu hỏi hoặc xóa một tính năng sau một lần benchmark chưa đạt, mà là làm cho cùng một bản sửa bảo vệ được nhiều biến thể phổ biến trong tương lai.

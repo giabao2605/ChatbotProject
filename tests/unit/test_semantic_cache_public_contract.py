@@ -160,6 +160,32 @@ def test_semantic_lookup_ignores_invalid_embeddings_and_returns_best_authorized_
     }
 
 
+@pytest.mark.parametrize("question,cached", [
+    ("Nhân viên đã đào tạo an toàn được vào xưởng?", "Nhân viên chưa đào tạo an toàn được vào xưởng?"),
+    ("Nhân viên chưa đào tạo an toàn được vào xưởng?", "Nhân viên đã đào tạo an toàn được vào xưởng?"),
+    ("How many staff are trained?", "Are 120 staff trained?"),
+    ("Are 999 staff trained?", "How many staff are trained?"),
+    ("Quy trình tháng trước thế nào?", "Quy trình làm việc thế nào?"),
+    ("Quy trình làm việc thế nào?", "Quy trình phiên bản cũ thế nào?"),
+    ("Can staff enter the workshop?", "Can staff enter without training?"),
+    ("What is the latest procedure?", "What is the procedure?"),
+    ("What is the procedure?", "What applied before training?"),
+    ("Quy trình mới nhất thế nào?", "Quy trình làm việc thế nào?"),
+    ("Quy trình làm việc thế nào?", "Quy trình hiện nay thế nào?"),
+    ("Staff aren’t trained; can they enter?", "Can staff enter?"),
+])
+def test_semantic_lookup_rejects_sensitive_constraints_on_either_side(cache_repository, question, cached):
+    cache_repository.sc_get_candidates.return_value = [_cache_row(question=cached)]
+    assert semantic_cache.lookup(question, [1.0, 0.0], "scope", actor=ACTOR) is None
+    cache_repository.sc_record_hit.assert_not_called()
+
+
+def test_sensitive_question_can_still_use_exact_cache(cache_repository):
+    question = "Nhân viên chưa đào tạo có được vào xưởng không?"
+    cache_repository.sc_get_exact.return_value = _cache_row(question=question)
+    assert semantic_cache.lookup_exact(question, "scope", actor=ACTOR)["score"] == 1.0
+
+
 def test_semantic_lookup_miss_survives_repository_failures(cache_repository):
     cache_repository.sc_get_candidates.side_effect = RuntimeError("database unavailable")
     cache_repository.sc_record_lookup.side_effect = RuntimeError("metrics unavailable")
@@ -266,7 +292,13 @@ def test_completed_stream_is_replayed_and_stored(cache_repository):
         result,
         cache_repository.sc_put.call_args.kwargs["answer"],
         cache_repository.sc_put.call_args.kwargs["est_cost"],
-    ) == (["abcd", "efgh"], "abcdefgh", 0.000035)
+    ) == (["abcd", "efgh"], "abcdefgh", None)
+
+
+def test_completed_stream_preserves_reported_cost(cache_repository):
+    list(semantic_cache.teeing_store_stream(iter(["answer"]), "q", [1.0], "scope", "", [], [41],
+        "model", citation_snapshot=[{"doc_id":41}], evidence_snapshot=[{"doc_id":41}], reported_cost=lambda: .004))
+    assert cache_repository.sc_put.call_args.kwargs["est_cost"] == .004
 
 
 def test_failed_stream_propagates_error_without_storing(cache_repository):

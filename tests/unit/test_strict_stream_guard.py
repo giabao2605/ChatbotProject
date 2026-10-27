@@ -219,6 +219,22 @@ def _prepare(module, monkeypatch, chain, **retrieval_overrides):
     return _runtime(client=chain, **retrieval_overrides)
 
 
+@pytest.mark.parametrize("realtime", [False, True])
+def test_question_supplied_false_number_is_not_streamed(monkeypatch, realtime):
+    from mech_chatbot.rag.evidence_gate import has_unsupported_numbers
+
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    chain = _FakeChain(["Có ", "999 nhân viên."])
+    runtime = _prepare(module, monkeypatch, chain, strict_realtime_streaming=realtime)
+    monkeypatch.setattr(module, "has_unsupported_numbers", has_unsupported_numbers)
+    chunks = list(_run_generation(
+        module, question="Có phải 999 nhân viên không?",
+        context_text="Có 120 nhân viên.", runtime=runtime,
+    ))
+    assert "999" not in "".join(chunks)
+    assert "REFUSAL" in "".join(chunks)
+
+
 def test_strict_buffered_stream_never_yields_unsupported_factual_token(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     runtime = _prepare(module, monkeypatch, _FakeChain(["Gia tri la 999."]))
