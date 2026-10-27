@@ -213,6 +213,48 @@ def test_branch_code_extraction_is_normalized_and_does_not_inherit_other_codes()
     assert codes_in_query("BOM MA-100") == ("ma-100",)
 
 
+def test_numeric_drawing_codes_keep_the_branch_source_filter():
+    from types import SimpleNamespace
+    from qdrant_client import models
+    from mech_chatbot.rag.phases.retrieval import _branch_filters
+    from mech_chatbot.rag.rbac import compose_retrieval_filters
+
+    question = "Theo 7.3.04218(867-234)-ver02-Model5.pdf, dung sai?"
+    codes = ["7.3.04218", "867-234"]
+    access = models.FieldCondition(key="metadata.site", match=models.MatchValue(value="QA"))
+    strict, _ = compose_retrieval_filters([access], codes)
+    context = SimpleNamespace(new_part_ids=tuple(codes), decision=SimpleNamespace(strict_filter=strict))
+
+    assert set(codes_in_query(question)) == set(codes)
+    branch_ids, branch_strict, branch_broad = _branch_filters(context, question)
+    assert branch_ids == codes
+    for branch_filter in (branch_strict, branch_broad):
+        assert access in branch_filter.must
+        assert any(getattr(condition, "should", None) for condition in branch_filter.must)
+
+
+def test_planner_cannot_drop_or_invent_numeric_drawing_scope():
+    from mech_chatbot.rag.query_decomposition import _query_covers_intent
+
+    assert not _query_covers_intent("dung sai", "dung sai 7.3.04218")
+    assert not _query_covers_intent("dung sai 7.3.99999", "dung sai 7.3.04218")
+    assert _query_covers_intent("dung sai 7.3.04218", "dung sai 7.3.04218")
+
+
+def test_explicit_filename_scope_keeps_multiple_named_sources_before_branch_selection():
+    from mech_chatbot.rag.phases.retrieval import _documents_in_question
+
+    docs = [Document(page_content="source", metadata={"file_goc": filename}) for filename in (
+        "7.3.04218-ver02-Model4.pdf", "7.3.04218-ver02-Model5.pdf", "instructions.docx",
+    )]
+    assert _documents_in_question(docs, "Theo 7.3.04218-ver02-Model5.pdf, dung sai?") == [docs[1]]
+    assert _documents_in_question(docs, "Compare 7.3.04218-ver02-model5.PDF and instructions.docx") == docs[1:]
+    assert _documents_in_question(docs, "Dung sai cac ban ve?") == docs
+    suffix_docs = [Document(page_content="source", metadata={"file_goc": filename})
+                   for filename in ("a.pdf", "ba.pdf")]
+    assert _documents_in_question(suffix_docs, "Theo ba.pdf, dung sai?") == suffix_docs[1:]
+
+
 def test_simple_query_does_not_call_planner():
     calls = []
     plan = build_plan("Quy trình bảo trì là gì?", planner=lambda _: calls.append(True))

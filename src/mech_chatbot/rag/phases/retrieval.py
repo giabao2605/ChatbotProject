@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -237,6 +238,15 @@ def _is_part_id_filter(condition: Any) -> bool:
     return bool(keys) and keys.issubset(set(PART_ID_KEYS_BROAD))
 
 
+def _documents_in_question(documents, question):
+    """Keep explicitly named files among candidates that already passed access checks."""
+    text = str(question or "").casefold()
+    named = [document for document in documents if (
+        filename := str(document.metadata.get("file_goc") or "").strip().casefold()
+    ) and re.search(rf"(?<![\w.-]){re.escape(filename)}(?![\w.-])", text)]
+    return named or list(documents)
+
+
 def _deadline_exceeded(deadline_monotonic: float | None) -> bool:
     return bool(
         deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
@@ -413,6 +423,7 @@ def _retrieve_branch(
         trace_id=context.trace_id,
     )
     raw_documents = tuple(result[0])
+    result = (_documents_in_question(result[0], subquery), *result[1:])
     state.checkpoint("branch_retrieval")
     retrieval_latency_ms = max(
         0,
@@ -765,7 +776,8 @@ def _retrieve_direct(context: _RetrievalContext, state: Any) -> _RetrievalBatch:
         trace_id=context.trace_id,
     )
     return _RetrievalBatch(
-        tuple(documents), base_k, mode, started_at, active_filter
+        tuple(_documents_in_question(documents, context.effective_question)),
+        base_k, mode, started_at, active_filter
     )
 
 

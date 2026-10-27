@@ -90,6 +90,29 @@ def test_cost_heuristic_still_requires_direct_cost_evidence():
     ) == "tai lieu khong ghi chi phi/don gia/gia thanh"
 
 
+@pytest.mark.parametrize("question,context", [
+    ("Đánh giá thử việc thực hiện trước ngày nào?", "Đánh giá thử việc trước ngày thứ 55."),
+    ("Nhà cung cấp được đánh giá lại bao lâu một lần?", "Đánh giá lại mỗi 12 tháng."),
+    ("Đánh giá nội bộ được thực hiện bao lâu một lần?", "Đánh giá nội bộ mỗi 6 tháng."),
+    ("Chu kỳ đánh giá là bao lâu?", "Chu kỳ đánh giá mỗi năm."),
+    ("Thời gian tham gia đào tạo là bao lâu?", "Đào tạo trong 2 tuần."),
+    ("Thời gian gia công là bao lâu?", "Gia công trong 35 giây."),
+    ("Kiểm tra định kỳ bao lâu một lần?", "Kiểm tra mỗi quý."),
+    ("Kiểm tra định kỳ bao lâu một lần?", "Kiểm tra vào thứ sáu hằng tuần."),
+])
+def test_non_cost_evaluation_and_calendar_questions_accept_direct_evidence(question, context):
+    assert heuristic_missing_evidence_reason(question, context) is None
+
+
+@pytest.mark.parametrize("question,context,reason", [
+    ("Chi phí đánh giá là bao nhiêu?", "Đánh giá mỗi 6 tháng.", "chi phi/don gia/gia thanh"),
+    ("Giá bán của dịch vụ đánh giá là bao nhiêu?", "Đánh giá mỗi 6 tháng.", "chi phi/don gia/gia thanh"),
+    ("Đánh giá nội bộ bao lâu một lần?", "Tài liệu chỉ nêu người phụ trách.", "thoi gian gia cong/nang suat/dinh muc san xuat"),
+])
+def test_evaluation_terms_do_not_exempt_missing_cost_or_time_evidence(question, context, reason):
+    assert heuristic_missing_evidence_reason(question, context) == "tai lieu khong ghi " + reason
+
+
 def test_document_supersedes_question_is_not_treated_as_material_substitution():
     assert heuristic_missing_evidence_reason(
         "GRAPH-EVAL-ASM-001 phiên bản 2 thay thế tài liệu nào?",

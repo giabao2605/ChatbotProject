@@ -72,7 +72,9 @@ RISKY_QUESTION_KEYWORDS = [
 TIME_EVIDENCE_PATTERNS = [
     r"thoi\s*gian\s*(?:gia\s*cong|san\s*xuat|che\s*tao|lap\s*rap|xu\s*ly)",
     r"(?:gia\s*cong|san\s*xuat|che\s*tao|lap\s*rap).{0,40}(?:gio|phut|ngay|ca)",
-    r"(?:\d+(?:[\.,]\d+)?\s*)(?:gio|h|phut|p|ngay|ca)\b",
+    r"(?:\d+(?:[\.,]\d+)?\s*)(?:giay|gio|h|phut|p|ngay|ca|tuan|thang|quy|nam)\b",
+    r"\b(?:moi|hang)\s+(?:ngay|tuan|thang|quy|nam)\b",
+    r"\b(?:thu\s+(?:hai|ba|tu|nam|sau|bay)|chu\s+nhat)\b",
     r"nang\s*suat|dinh\s*muc|cycle\s*time|lead\s*time|takt\s*time",
 ]
 
@@ -120,10 +122,12 @@ def heuristic_missing_evidence_reason(question, context_text):
     if asks_time and not _has_any_pattern(ctx, TIME_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi thoi gian gia cong/nang suat/dinh muc san xuat"
 
+    # These phrases use "gia" as evaluation, value, processing or participation, not price.
+    price_question = re.sub(r"\b(?:danh\s+gia|gia\s+(?:tri|cong)|tham\s+gia)\b", " ", q)
     asks_cost = any(
         _contains_phrase(q, keyword)
         for keyword in ["chi phi", "bao nhieu tien", "don gia"]
-    ) or (_contains_phrase(q, "gia") and not _contains_phrase(q, "gia tri"))
+    ) or _contains_phrase(price_question, "gia")
     if asks_cost and not _has_any_pattern(ctx, COST_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi chi phi/don gia/gia thanh"
 

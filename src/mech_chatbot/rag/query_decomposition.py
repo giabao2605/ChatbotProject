@@ -535,14 +535,14 @@ def _intent_tokens(value: str) -> set[str]:
     scoped = _DOCUMENT_SCOPE_PREFIX.match(str(value or ""))
     if scoped:
         value = scoped.group("body")
-    codes = {code.casefold() for code in _CODE_RE.findall(str(value or ""))}
+    codes = set(codes_in_query(value))
     tokens = set(re.findall(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", _fold(value)))
     return tokens - codes - _INTENT_STOP_WORDS
 
 
 def _query_covers_intent(query: str, intent: str) -> bool:
-    expected_codes = {code.casefold() for code in _CODE_RE.findall(intent)}
-    actual_codes = {code.casefold() for code in _CODE_RE.findall(query)}
+    expected_codes = set(codes_in_query(intent))
+    actual_codes = set(codes_in_query(query))
     if not expected_codes.issubset(actual_codes):
         return False
     expected_tokens = _intent_tokens(intent)
@@ -559,7 +559,12 @@ def _coverage(intents: tuple[str, ...], queries: tuple[str, ...]) -> tuple[bool,
 
 
 def codes_in_query(question: str) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(code.lower() for code in _CODE_RE.findall(str(question or ""))))
+    from mech_chatbot.rag.entity_resolver import extract_explicit_codes
+
+    text = str(question or "")
+    return tuple(dict.fromkeys(code.lower() for code in (
+        *_CODE_RE.findall(text), *extract_explicit_codes(text),
+    )))
 
 
 def compile_query_plan(
@@ -590,7 +595,7 @@ def compile_query_plan(
     proposed = payload.get("subqueries", ()) if isinstance(payload, dict) else ()
     if not isinstance(proposed, (list, tuple)):
         proposed = ()
-    allowed_codes = {code.upper() for code in _CODE_RE.findall(original)}
+    allowed_codes = set(codes_in_query(original))
     accepted = []
     seen = set()
     for item in proposed:
@@ -599,7 +604,7 @@ def compile_query_plan(
         query = item.strip()
         if not query:
             continue
-        query_codes = {code.upper() for code in _CODE_RE.findall(query)}
+        query_codes = set(codes_in_query(query))
         if not query_codes.issubset(allowed_codes):
             continue
         scoped = _DOCUMENT_SCOPE_PREFIX.match(original)
