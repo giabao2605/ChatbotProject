@@ -720,6 +720,10 @@ def list_users_basic():
 
 def update_user_active_and_roles(user_id, is_active, add_roles, del_roles):
 	with engine.begin() as conn:
+		_lock_user_administration(conn)
+		removes_admin = not is_active or any(str(role).strip().lower() == 'admin' for role in del_roles)
+		if removes_admin and _user_is_admin(conn, user_id) and _other_active_admin_count(conn, user_id) <= 0:
+			return False
 		conn.execute(
 			text("UPDATE Users SET IsActive = :active WHERE UserID = :uid"),
 			{"active": 1 if is_active else 0, "uid": user_id},
@@ -740,6 +744,21 @@ def update_user_active_and_roles(user_id, is_active, add_roles, del_roles):
                                 WHERE ur.UserID = :uid AND r.RoleName = :role
 			"""), {"uid": user_id, "role": _role})
 	return True
+
+
+def _lock_user_administration(conn):
+	if getattr(getattr(conn, 'dialect', None), 'name', None) != 'mssql':
+		return
+	# One transaction lock covers disabling, deleting and removing admin roles together.
+	row = conn.execute(text("""
+		DECLARE @result INT;
+		EXEC @result = sys.sp_getapplock
+			@Resource = 'MechChatbot.ActiveAdminMutation', @LockMode = 'Exclusive',
+			@LockOwner = 'Transaction', @LockTimeout = 5000;
+		SELECT @result;
+	""")).fetchone()
+	if not row or int(row[0]) < 0:
+		raise RuntimeError('Tạm thời chưa thể cập nhật tài khoản. Vui lòng thử lại.')
 
 
 def _user_is_admin(conn, user_id):
@@ -768,6 +787,7 @@ def _other_active_admin_count(conn, user_id):
 
 def set_user_active_status(user_id, is_active, actor_username=None, actor_id=None):
 	with engine.begin() as conn:
+		_lock_user_administration(conn)
 		target = conn.execute(text("""
 			SELECT UserID, Username, DisplayName, IsActive
 			FROM Users
@@ -800,6 +820,7 @@ def set_user_active_status(user_id, is_active, actor_username=None, actor_id=Non
 
 def delete_user_account(user_id, actor_username=None, actor_id=None):
 	with engine.begin() as conn:
+		_lock_user_administration(conn)
 		target = conn.execute(text("""
 			SELECT UserID, Username, DisplayName, IsActive
 			FROM Users

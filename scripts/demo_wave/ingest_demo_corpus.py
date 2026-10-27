@@ -23,6 +23,7 @@ from scripts.demo_wave.generate_demo_assets import (
     generate_corpus,
 )
 from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime
+from mech_chatbot.adapters.document_runtime import LocalUploadStorage
 from mech_chatbot.db.engine import _ensure_engine, engine
 from mech_chatbot.db.repositories.jobs import create_ingestion_job, update_ingestion_job
 from mech_chatbot.db.repositories.publication import publish_document
@@ -340,8 +341,14 @@ def ingest_corpus(
                 raise RuntimeError(f"Cannot repair partial demo document {existing[0]}")
         if not governance or not governance["KnowledgeOwnerUserID"] or not governance["KnowledgeApproverUserID"]:
             raise RuntimeError(f"Missing demo governance principals for {record['department']}")
-        file_path = output / record["path"]
-        file_name = file_path.name
+        source_path = output / record["path"]
+        file_name = source_path.name
+        stored = LocalUploadStorage(raw_root=lambda: ROOT / "data" / "raw").store(
+            file_name=file_name,
+            content=source_path.read_bytes(),
+            owner_department=record["department"],
+        )
+        file_path = Path(stored.stored_path)
         upload_meta = {
             "title": record["title"], "summary": f"Fixture {batch}", "tags": f"demo,{record['department']}",
             "doc_number": record["doc_number"], "effective_date": record["effective_date"], "expiry_date": record["expiry_date"],

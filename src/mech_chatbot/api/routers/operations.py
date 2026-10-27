@@ -190,7 +190,8 @@ def user_create(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_pro
 @router.patch("/users/{user_id}/active")
 def user_active(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "security_admin")
-    return {"ok": bool(ui_query_service.set_user_active_status(user_id, bool(body.get("is_active")), actor_username=profile.get("username"), actor_id=profile.get("user_id")))}
+    result = ui_query_service.set_user_active_status(user_id, bool(body.get("is_active")), actor_username=profile.get("username"), actor_id=profile.get("user_id"))
+    return {"ok": bool(result.get("ok")) if isinstance(result, dict) else bool(result)}
 
 
 @router.patch("/users/{user_id}/roles")
@@ -230,7 +231,8 @@ def user_password(user_id: int, body: dict[str, Any], profile: dict[str, Any] = 
 @router.delete("/users/{user_id}")
 def user_delete(user_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "security_admin")
-    return {"ok": bool(ui_query_service.delete_user_account(user_id, actor_username=profile.get("username"), actor_id=profile.get("user_id")))}
+    result = ui_query_service.delete_user_account(user_id, actor_username=profile.get("username"), actor_id=profile.get("user_id"))
+    return {"ok": bool(result.get("ok")) if isinstance(result, dict) else bool(result)}
 
 
 @router.get("/catalog/departments")

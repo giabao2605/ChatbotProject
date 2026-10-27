@@ -16,7 +16,9 @@ from mech_chatbot.domain.graph_query import bom_rollup_payload
 from mech_chatbot.domain.query_plan import query_plan_snapshot
 
 from mech_chatbot.rag.answer_checks import extract_source_ids
-from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.llm.external_ai import (
+    ExternalAICallCancelled, ExternalAIComplianceAuditUnavailable, ExternalProcessingDenied,
+)
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 
 
@@ -317,6 +319,25 @@ def _observe_fixed_tasks(state, origin, disposition, slots=(), tasks=()):
 
 
 def fixed_task_guard(state):
+    """Keep policy and audit refusals inside the shared routing response contract."""
+    try:
+        return _fixed_task_guard(state)
+    except ExternalProcessingDenied as exc:
+        audit_unavailable = isinstance(exc, ExternalAIComplianceAuditUnavailable)
+        reason = 'external_ai_audit_unavailable' if audit_unavailable else 'external_processing_denied'
+        english = state.request.response_language.lower().startswith('en')
+        if audit_unavailable:
+            notice = ('The audit log is temporarily unavailable. Please try again later.' if english else
+                      'Hệ thống nhật ký kiểm soát tạm thời không khả dụng. Vui lòng thử lại sau.')
+        else:
+            notice = ('This request requires external processing, but the current policy does not allow it.' if english else
+                      'Yêu cầu này cần xử lý bên ngoài nhưng chính sách hiện tại chưa cho phép.')
+        state.refuse(reason)
+        return state.prepared((iter((notice,)), '', (), (),
+            {'answer_outcome': 'refused', 'task_routing_blocked_reason': reason}))
+
+
+def _fixed_task_guard(state):
     """Shared opt-in and legacy guard; return a terminal before any evidence read."""
     if state.invocation.task_routing_contract in ('semantic-candidate-task-routing-v4-draft',
                                                 'semantic-mixed-candidate-task-routing-v5-draft'):
