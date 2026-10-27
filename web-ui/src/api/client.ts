@@ -104,8 +104,9 @@ export async function login(username: string, password: string) {
   return data.user;
 }
 
-export async function loadMe() {
-  const data = await apiFetch<{ user: UserProfile }>("/api/auth/me");
+export async function loadMe(signal?: AbortSignal) {
+  const data = await apiFetch<{ user: UserProfile }>("/api/auth/me", { signal });
+  signal?.throwIfAborted();
   setCsrfToken(data.user.csrf_token);
   return data.user;
 }

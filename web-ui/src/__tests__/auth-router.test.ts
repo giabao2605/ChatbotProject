@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory } from "vue-router";
+import { flushPromises } from "@vue/test-utils";
 import * as api from "@/api/client";
 import { createAppRouter } from "@/router";
 import { useAuthStore } from "@/stores/auth";
@@ -50,6 +51,71 @@ describe("auth store", () => {
     const auth = useAuthStore();
 
     await expect(auth.refresh()).resolves.toBe(false);
+  });
+
+  it("shares session restoration while navigation is pending", async () => {
+    let finish!: (value: UserProfile) => void;
+    vi.mocked(api.loadMe).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const auth = useAuthStore();
+    const first = auth.loadMe();
+    const second = auth.loadMe();
+
+    expect(api.loadMe).toHaveBeenCalledTimes(1);
+    finish(user);
+    await Promise.all([first, second]);
+    expect(auth.user?.username).toBe("alice");
+    expect(auth.ready).toBe(true);
+  });
+
+  it("does not restore a user after logout finishes", async () => {
+    let finish!: (value: UserProfile) => void;
+    vi.mocked(api.loadMe).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    vi.mocked(api.logout).mockResolvedValue(undefined);
+    const auth = useAuthStore();
+    const restore = auth.loadMe();
+    const signal = vi.mocked(api.loadMe).mock.calls[0][0];
+
+    await auth.logout();
+    expect(signal?.aborted).toBe(true);
+    finish(user);
+    await restore;
+
+    expect(auth.user).toBeNull();
+    expect(auth.ready).toBe(true);
+  });
+
+  it("does not start a new restoration while logout is pending", async () => {
+    const restores: Array<(value: UserProfile) => void> = [];
+    let finishLogout!: () => void;
+    vi.mocked(api.loadMe).mockImplementation(() => new Promise(resolve => { restores.push(resolve); }));
+    vi.mocked(api.logout).mockImplementation(() => new Promise(resolve => { finishLogout = resolve; }));
+    const auth = useAuthStore();
+    const initialRestore = auth.loadMe();
+    const logout = auth.logout();
+    const router = createAppRouter(createMemoryHistory());
+    const navigation = router.push("/documents");
+    await flushPromises();
+    finishLogout();
+    await logout;
+    restores.forEach(resolve => resolve(user));
+    await Promise.all([initialRestore, navigation]);
+    expect(api.loadMe).toHaveBeenCalledTimes(1);
+    expect(auth.user).toBeNull();
+    expect(router.currentRoute.value.name).toBe("login");
+  });
+
+  it("does not replace a newly logged in user with an old restore response", async () => {
+    let finish!: (value: UserProfile) => void;
+    vi.mocked(api.loadMe).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    vi.mocked(api.login).mockResolvedValue({ ...user, username: "bob" });
+    const auth = useAuthStore();
+    const restore = auth.loadMe();
+
+    await auth.login("bob", "password");
+    finish(user);
+    await restore;
+
+    expect(auth.user?.username).toBe("bob");
   });
 });
 
@@ -114,5 +180,37 @@ describe("route guards", () => {
 
     expect(router.currentRoute.value.path).toBe("/documents");
     expect(router.currentRoute.value.query.tab).toBe("expired");
+  });
+
+  it("keeps the latest destination when auth restoration delays navigation", async () => {
+    let finish!: (value: UserProfile) => void;
+    vi.mocked(api.loadMe).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const router = createAppRouter(createMemoryHistory());
+    const first = router.push("/dashboard");
+    await vi.waitFor(() => expect(api.loadMe).toHaveBeenCalled());
+    const latest = router.push("/documents?tab=expired");
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(api.loadMe).toHaveBeenCalledTimes(1);
+    finish(user);
+    await Promise.all([first, latest]);
+
+    expect(router.currentRoute.value.fullPath).toBe("/documents?tab=expired");
+  });
+
+  it("preserves the latest destination when a delayed session has expired", async () => {
+    let finish!: (reason: Error) => void;
+    vi.mocked(api.loadMe).mockImplementation(() => new Promise((_resolve, reject) => { finish = reject; }));
+    const router = createAppRouter(createMemoryHistory());
+    const first = router.push("/dashboard");
+    await vi.waitFor(() => expect(api.loadMe).toHaveBeenCalled());
+    const latest = router.push("/documents?tab=expired");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    finish(new Error("401"));
+    await Promise.all([first, latest]);
+
+    expect(api.loadMe).toHaveBeenCalledTimes(1);
+    expect(router.currentRoute.value.name).toBe("login");
+    expect(router.currentRoute.value.query.next).toBe("/documents?tab=expired");
   });
 });
