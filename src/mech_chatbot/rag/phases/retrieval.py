@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -240,11 +239,9 @@ def _is_part_id_filter(condition: Any) -> bool:
 
 def _documents_in_question(documents, question):
     """Keep explicitly named files among candidates that already passed access checks."""
-    text = str(question or "").casefold()
-    named = [document for document in documents if (
-        filename := str(document.metadata.get("file_goc") or "").strip().casefold()
-    ) and re.search(rf"(?<![\w.-]){re.escape(filename)}(?![\w.-])", text)]
-    return named or list(documents)
+    from mech_chatbot.rag.entity_resolver import named_file_documents
+
+    return named_file_documents(documents, question) or list(documents)
 
 
 def _deadline_exceeded(deadline_monotonic: float | None) -> bool:

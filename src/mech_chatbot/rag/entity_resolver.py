@@ -17,6 +17,14 @@ import re
 import unicodedata
 
 
+def named_file_documents(documents, question):
+    """Select full filenames only within the already authorized candidates."""
+    text = str(question or "").casefold()
+    return [document for document in documents if (
+        filename := str(document.metadata.get("file_goc") or "").strip().casefold()
+    ) and re.search(rf"(?<![\w.-]){re.escape(filename)}(?![\w.-])", text)]
+
+
 # ---------------------------------------------------------------------------
 # Helpers chuan hoa
 # ---------------------------------------------------------------------------

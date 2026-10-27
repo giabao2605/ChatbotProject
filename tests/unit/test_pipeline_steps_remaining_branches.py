@@ -601,6 +601,33 @@ def test_disambiguation_requests_more_detail_when_no_candidate_is_confident(load
     assert returned == docs
 
 
+def test_exact_filename_survives_enrichment_and_generic_request_words(load_steps):
+    steps = load_steps()
+    selected = _doc("Material tolerance 0.2 mm", doc_id=901, file_goc="FRAME-72-Model3.pdf",
+                    domain="mechanical", base_code="FRAME-72", variant_code="painted")
+    other = _doc("Assembly BOM", doc_id=902, file_goc="FRAME-72-Model4.pdf",
+                 domain="mechanical", base_code="FRAME-72", variant_code="assembled")
+
+    lifecycle, terminal, returned = _disambiguate(
+        steps, [selected, other],
+        "Trong bản vẽ FRAME-72-Model3.pdf, hãy nêu riêng dung sai vật liệu.",
+    )
+
+    assert terminal is None and lifecycle.refusal_reason is None
+    assert returned == [selected]
+
+
+def test_duplicate_filename_does_not_choose_between_two_documents(load_steps):
+    steps = load_steps()
+    docs = [_doc("Different drawing", doc_id=doc_id, file_goc="FRAME-72.pdf",
+                 domain="mechanical", base_code="FRAME-72", variant_code=variant)
+            for doc_id, variant in [(901, "painted"), (902, "assembled")]]
+
+    _, terminal, returned = _disambiguate(steps, docs, "Trong FRAME-72.pdf, hãy nêu dung sai.")
+
+    assert terminal is not None and returned == docs
+
+
 def test_administrative_pages_are_not_misclassified_as_selectable_variants(load_steps):
     steps = load_steps()
     docs = [

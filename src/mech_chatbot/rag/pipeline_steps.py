@@ -1695,6 +1695,14 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
     )
 
     if retrieved_docs and not _wants_all:
+        from mech_chatbot.rag.entity_resolver import named_file_documents
+
+        named = named_file_documents(retrieved_docs, user_question)
+        if named and all(doc.metadata.get("doc_id") is not None for doc in named) and len({
+            str(doc.metadata["doc_id"]) for doc in named
+        }) == 1:
+            # Enrichment can reintroduce sibling models after the explicit file was selected.
+            return None, named
         # Tap hop cac "ho" tai lieu khac nhau (base_code + variant_code)
         distinct_families = set()
         unique_variants = set()
