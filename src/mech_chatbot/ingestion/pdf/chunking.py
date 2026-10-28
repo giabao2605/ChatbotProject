@@ -17,6 +17,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from functools import lru_cache, partial
 
 from mech_chatbot.config.logging import logger
+from mech_chatbot.rag.text_utils import tokenize_vietnamese_text
 
 # cross-module (owned) imports
 from mech_chatbot.ingestion.pdf.config import (
@@ -68,9 +69,7 @@ def _build_chunk_context_prefix(md):
 
 @lru_cache(maxsize=4096)
 def tokenize_cached(text):
-    # LAZY: chi import underthesea khi thuc su tach tu (tranh nap native o cap module).
-    import underthesea
-    return underthesea.word_tokenize(text, format="text")
+    return tokenize_vietnamese_text(text)
 
 
 # --- Tokenizer (transformers) LAZY-INIT ------------------------------------

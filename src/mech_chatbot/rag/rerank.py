@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import requests
 from functools import lru_cache
+from mech_chatbot.rag.text_utils import tokenize_vietnamese_text
 from mech_chatbot.llm.external_ai import (
     DEFAULT_EXTERNAL_AI_SETTINGS,
     audited_external_call,
@@ -121,9 +122,7 @@ class RerankPolicy:
 
 @lru_cache(maxsize=4096)
 def tokenize_cached(text):
-    from underthesea import word_tokenize
-
-    return word_tokenize(text, format="text")
+    return tokenize_vietnamese_text(text)
 
 
 def voyage_rerank_documents(
