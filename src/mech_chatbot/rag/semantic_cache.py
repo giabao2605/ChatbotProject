@@ -17,7 +17,7 @@ from mech_chatbot.rag.entity_resolver import has_explicit_code
 
 
 _REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
-_ANSWER_CONTRACT = "grounded-answer-v6"
+_ANSWER_CONTRACT = "grounded-answer-v7"
 _PROMPT_SHA256 = hashlib.sha256(Path(__file__).with_name("prompt.py").read_bytes()).hexdigest()
 _FILE_REFERENCE = re.compile(
     rf"(?<=[^\s\"'“”‘’])(?:{'|'.join(sorted(map(re.escape, SUPPORTED_LEARNING_EXTENSIONS), key=len, reverse=True))})(?!\w)",

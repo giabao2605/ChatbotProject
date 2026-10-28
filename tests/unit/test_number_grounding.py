@@ -127,6 +127,20 @@ def test_material_substitution_still_requires_direct_evidence():
     ) == "tai lieu khong ghi thong tin vat lieu thay the/tuong duong"
 
 
+@pytest.mark.parametrize("question,context", [
+    ("Thời gian thử việc đã được xác định chưa?", "- Thời gian thử việc theo vị trí: **CHƯA XÁC NHẬN**."),
+    ("Thời gian xử lý hồ sơ cụ thể đã có chưa?", "- Thời gian xử lý hồ sơ: CHƯA XÁC NHẬN."),
+])
+def test_explicit_unknown_duration_is_evidence_for_an_unknown_answer(question, context):
+    assert heuristic_missing_evidence_reason(question, context) is None
+
+
+def test_unknown_owner_is_not_duration_evidence():
+    assert heuristic_missing_evidence_reason(
+        "Thời gian thử việc đã được xác định chưa?", "- Người duyệt: CHƯA XÁC NHẬN."
+    ) == "tai lieu khong ghi thoi gian gia cong/nang suat/dinh muc san xuat"
+
+
 @pytest.mark.parametrize("question", [
     "Nhóm tài liệu nào thay thế bản cũ?",
     "Động cơ nào thay thế phiên bản cũ?",

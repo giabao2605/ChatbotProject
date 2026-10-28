@@ -70,6 +70,7 @@ RISKY_QUESTION_KEYWORDS = [
 
 
 TIME_EVIDENCE_PATTERNS = [
+    r"(?:thoi\s*gian|thoi\s*han|chu\s*ky)[^:\n]{0,100}:\s*[*_ ]*chua\s*xac\s*nhan",
     r"thoi\s*gian\s*(?:gia\s*cong|san\s*xuat|che\s*tao|lap\s*rap|xu\s*ly)",
     r"(?:gia\s*cong|san\s*xuat|che\s*tao|lap\s*rap).{0,40}(?:gio|phut|ngay|ca)",
     r"(?:\d+(?:[\.,]\d+)?\s*)(?:giay|gio|h|phut|p|ngay|ca|tuan|thang|quy|nam)\b",

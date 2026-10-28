@@ -53,6 +53,28 @@ def test_shared_document_scope_does_not_hide_four_real_requests():
     assert calls == []
 
 
+@pytest.mark.parametrize("body", [
+    "thông số nhiệt, áp và thời gian cụ thể theo mã sản phẩm và máy đã được xác định chưa?",
+    "giấy tờ, chứng từ và thông tin theo đơn hàng và nhà cung cấp đã được xác nhận chưa?",
+])
+def test_long_subject_list_with_one_shared_predicate_is_one_request(body):
+    question = "Theo tài liệu MANUAL-QA-82, " + body
+    assert split_query_intents(question) == ((question.rstrip('?'),), False)
+
+
+def test_comma_separated_independent_requests_keep_the_limit():
+    question = "Theo MANUAL-QA-82, tìm BOM, nêu vật liệu, tìm dung sai và liệt kê hướng dẫn hàn"
+    assert split_query_intents(question)[1] is True
+
+
+@pytest.mark.parametrize("body", [
+    "tóm tắt BOM, so sánh vật liệu, giải thích dung sai và đánh giá hướng dẫn hàn",
+    "tóm tắt BOM, so sánh vật liệu, giải thích dung sai và kiểm tra hồ sơ đã được xác nhận chưa?",
+])
+def test_long_independent_commands_are_not_a_shared_subject_list(body):
+    assert split_query_intents("Theo MANUAL-QA-82, " + body)[1] is True
+
+
 def test_planner_subqueries_cannot_drop_shared_document_scope():
     question = "Theo POLICY-A-41 và POLICY-B-72, thời hạn là bao lâu và ai chịu trách nhiệm?"
     plan = compile_query_plan(question, {}, planner=lambda _: {

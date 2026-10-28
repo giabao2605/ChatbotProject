@@ -523,9 +523,14 @@ _DOCUMENT_SCOPE_PREFIX = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _INDEPENDENT_REQUEST = re.compile(
-    r"(?:^(?:nêu|neu|tìm|tim|liệt kê|liet ke|cho biết|cho biet|check|list|find)\b"
+    r"(?:^(?:nêu|neu|tìm|tim|liệt kê|liet ke|cho biết|cho biet|xem|kiểm|kiem|check|list|find)\b"
+    r"|^(?:tóm tắt|tom tat|so sánh|so sanh|giải thích|giai thich|đánh giá|danh gia)\b"
     r"|\b(?:bao lâu|bao lau|bao nhiêu|bao nhieu|thế nào|the nao|gì|gi|ai|what|when|how|who)\b)",
     re.IGNORECASE,
+)
+_SHARED_CONFIRMATION = re.compile(
+    r"\b(?:đã|da)\s+(?:(?:được|duoc)\s+)?(?:xác\s+(?:định|nhận)|xac\s+(?:dinh|nhan))"
+    r"[^;\n?!]*\b(?:chưa|chua)\s*\??$", re.IGNORECASE,
 )
 
 
@@ -544,7 +549,8 @@ def split_query_intents(question: str) -> tuple[tuple[str, ...], bool]:
         start = separator.end()
     parts.append(original[start:].strip(" ,;?\t\r\n"))
     parts = [part for part in parts if part]
-    if scope and 1 < len(parts) <= 3 and not re.search(r"[;\n?]", original.rstrip("?")):
+    if (scope and len(parts) > 1 and (len(parts) <= 3 or _SHARED_CONFIRMATION.search(original))
+            and not re.search(r"[;\n?]", original.rstrip("?"))):
         # A shared predicate must stay with its subjects, rather than becoming an incomplete branch.
         if not any(_INDEPENDENT_REQUEST.search(part) for part in parts[:-1]):
             parts = [original.strip(" ,;?\t\r\n")]
