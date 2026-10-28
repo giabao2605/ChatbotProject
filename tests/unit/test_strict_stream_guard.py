@@ -248,6 +248,41 @@ def test_strict_buffered_stream_never_yields_unsupported_factual_token(monkeypat
     assert events[-1].refusal_reason == "post_check_numbers"
 
 
+@pytest.mark.parametrize("citation, reason, recognized_ids", [
+    ("", "missing_id", []),
+    ("SourceID D999P1", "invalid_binding", ["D999P1"]),
+    ("SourceID D7P1 [SRC:bad]", "malformed_src", ["D7P1"]),
+])
+def test_citation_refusal_explains_the_guard_without_exposing_draft(
+    monkeypatch, citation, reason, recognized_ids,
+):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    draft = "Ghi nhận chênh lệch. " + citation
+    runtime = _prepare(module, monkeypatch, _FakeChain([draft]))
+    monkeypatch.setattr(module, "has_unsupported_numbers", lambda *_args, **_kwargs: False)
+    traces = []
+    monkeypatch.setattr(module, "log_trace", lambda event, trace_id, **fields: traces.append((event, fields)))
+    metrics = {}
+    outcome = module.GenerationOutcome()
+    chunks = list(_run_generation(
+        module, question="Ghi nhận chênh lệch thế nào?", runtime=runtime,
+        docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 1, "security_level": "internal"})],
+        metrics=metrics, outcome=outcome,
+    ))
+
+    assert chunks == ["REFUSAL"]
+    assert metrics["citation_validation"] == {
+        "reason": reason,
+        "recognized_source_ids": recognized_ids,
+        "evidence_source_ids": ["D7P1"],
+    }
+    assert metrics["final_refusal_reason"] == outcome.refusal_reason == "citation_" + reason
+    assert traces[-1][0] == "rag_end"
+    assert traces[-1][1]["refusal"] is True
+    assert traces[-1][1]["refusal_reason"] == "citation_" + reason
+    assert draft not in json.dumps({"metrics": metrics, "traces": traces}, ensure_ascii=False)
+
+
 def test_claim_repair_removes_unsupported_code_before_serving(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     repair_calls = []

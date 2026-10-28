@@ -818,7 +818,7 @@ def test_guarded_generation_requires_inline_citation_when_source_cards_are_disab
     )
 
     assert answer != "Nhân viên nộp đề nghị."
-    assert outcome.refusal_reason == "missing_source_page_version"
+    assert outcome.refusal_reason == "citation_missing_id"
 
 
 def test_claim_repair_releases_only_the_grounded_rewrite(load_steps, monkeypatch):

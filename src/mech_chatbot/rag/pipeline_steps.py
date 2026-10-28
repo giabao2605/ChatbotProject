@@ -30,6 +30,8 @@ from mech_chatbot.rag.answer_checks import (
     has_unsupported_codes,
     requires_source_citation,
     has_valid_source_citation,
+    extract_source_ids,
+    _canonical_source_id,
 )
 from mech_chatbot.rag.evidence_gate import (
     is_high_risk_question,
@@ -1063,10 +1065,28 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         dependency_sources=dependency_sources,
                     )
                 ):
-                    outcome.refusal_reason = "missing_source_page_version"
+                    cited_ids = extract_source_ids(answer)
+                    malformed_src = any(
+                        token.strip().upper() not in cited_ids
+                        for token in re.findall(r'\[SRC:\s*([^\]]+)\]', answer, flags=re.IGNORECASE)
+                    )
+                    citation_reason = (
+                        "malformed_src" if malformed_src else
+                        "missing_id" if not cited_ids else "invalid_binding"
+                    )
+                    metrics["citation_validation"] = {
+                        "reason": citation_reason,
+                        "recognized_source_ids": sorted(cited_ids),
+                        "evidence_source_ids": sorted({
+                            source_id for document in retrieved_docs
+                            if (source_id := _canonical_source_id(getattr(document, "metadata", {})))
+                        }),
+                    }
+                    outcome.refusal_reason = "citation_" + citation_reason
+                    metrics["final_refusal_reason"] = outcome.refusal_reason
                     ans = make_insufficient_evidence_message(
                         user_question,
-                        "câu trả lời không có đủ nguồn file/trang/version rõ ràng",
+                        "câu trả lời chưa gắn đúng mã nguồn được phép",
                         lang=response_language,
                     )
                     yield _with_grounded_prefix(ans)
@@ -1075,7 +1095,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         trace_id,
                         final_latency_ms=int((time.time() - t_start) * 1000),
                         refusal=True,
-                        refusal_reason="missing_source_page_version"
+                        refusal_reason=outcome.refusal_reason,
                     )
                     return
                 else:
