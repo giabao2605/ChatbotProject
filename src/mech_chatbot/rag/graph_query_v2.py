@@ -89,6 +89,13 @@ def _read_graph(state):
                          f'Đang hiển thị {shown}/{total} quan hệ; phạm vi nguồn đã xác nhận đầy đủ.')
         else:
             lines.append('Coverage is not confirmed complete.' if english else 'Chưa xác nhận được đầy đủ phạm vi quan hệ.')
+            if (cards and value['status']=='partial' and query.direction=='contains'
+                    and any(edge.get('relation_type')=='CONTAINS_PART' and edge.get('quantity_path')
+                            and edge.get('quantity_basis')=='per_parent' for edge in value.get('edges',()))):
+                lines.append('The displayed quantities are reviewed quantities per parent assembly, not a whole-tree BOM total. '
+                             'Unverified branches are not treated as zero.' if english else
+                             'Số lượng đang hiển thị là số lượng đã xác nhận cho mỗi cụm cha, chưa phải tổng toàn bộ cây BOM. '
+                             'Nhánh chưa xác minh không được tính là 0.')
     elif not value.get('edges') and cards:
         lines.append(('The reviewed assembly has no contained-part relations.' if english else 'Cụm đã duyệt không có quan hệ chứa chi tiết.')+
                      ' '+' '.join(f"[SRC:{card['source_id']}]" for card in cards))

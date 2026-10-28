@@ -52,6 +52,25 @@ def test_graph_answer_shows_reviewed_quantity_at_its_occurrence(connection,monke
 
 
 @pytest.mark.parametrize('language',['vi','en'])
+def test_partial_contains_answer_keeps_quantities_without_claiming_whole_tree_total(connection,monkeypatch,language):
+    from sqlalchemy import text
+    connection.conn.execute(text('UPDATE ReviewedGraphOccurrences SET IsLeaf=0'))
+    monkeypatch.setattr(graph_v2,'engine',SimpleNamespace(connect=lambda:nullcontext(connection)))
+    monkeypatch.setattr(graph_v2,'_ensure_engine',lambda:None)
+    result=collect_rag_events(DefaultRagExecutor().run(replace(request(),response_language=language),
+        RagInvocation('partial-quantities',mode='test')))
+    notice=('Số lượng đang hiển thị là số lượng đã xác nhận cho mỗi cụm cha, chưa phải tổng toàn bộ cây BOM. '
+            'Nhánh chưa xác minh không được tính là 0.' if language=='vi' else
+            'The displayed quantities are reviewed quantities per parent assembly, not a whole-tree BOM total. '
+            'Unverified branches are not treated as zero.')
+    assert result.outcome=='answered' and result.diagnostics['answer_outcome']=='partial_answer'
+    assert result.diagnostics['graph_v2']['source_status']=='partial'
+    assert '2 piece' in result.answer and result.citations
+    assert notice in result.answer
+    assert result.diagnostics.budget.calculations==0
+
+
+@pytest.mark.parametrize('language',['vi','en'])
 def test_graph_answer_distinguishes_complete_source_from_50_displayed_relations(bom_store,language):
     fixture_store,engine=bom_store
     expand_bom(fixture_store,count=60)
@@ -65,6 +84,7 @@ def test_graph_answer_distinguishes_complete_source_from_50_displayed_relations(
     assert '50/60' in result.answer
     assert ('nguồn' if language=='vi' else 'source') in result.answer.lower()
     assert ('đầy đủ' if language=='vi' else 'complete') in result.answer.lower()
+    assert ('chưa phải tổng toàn bộ cây BOM' if language=='vi' else 'not a whole-tree BOM total') not in result.answer
     assert result.diagnostics.budget.calculations==0
 
 
@@ -197,6 +217,7 @@ def test_where_used_marks_unproven_corpus_coverage_as_partial(connection,monkeyp
     result=collect_rag_events(DefaultRagExecutor().run(query,RagInvocation('where',mode='test')))
     assert result.outcome=='answered' and result.diagnostics['graph_v2']['status']=='partial'
     assert result.diagnostics['answer_outcome']=='partial_answer'
+    assert 'chưa phải tổng toàn bộ cây BOM' not in result.answer
 
 
 def test_reviewed_empty_assembly_is_answered_with_its_declaration_source(connection,monkeypatch):

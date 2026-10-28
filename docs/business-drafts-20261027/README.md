@@ -1,8 +1,8 @@
-# Bộ dự thảo nghiệp vụ cho 13 phòng
+# Bộ tài liệu nghiệp vụ cho 13 phòng — nội dung đã được duyệt
 
-Được soạn theo yêu cầu của bao.nguyen ngày27/10/2026. Đây là nội dung đề xuất doAI soạn, chưa phải tài liệu nghiệp vụ thật được công ty phê duyệt. Không tự dùng để đóng nghiệm thu13phòng.
+bao.nguyen đã đọc và duyệt toàn bộ 13 bản ngày **28/10/2026**, qua chỉ thị trực tiếp trong chat. Bằng chứng và hash của từng bản được lưu trong [approval.json](approval.json). Không cần duyệt lại phần nội dung đã được chấp thuận.
 
-Các tài liệu đã có luồng công việc, đầu vào, đầu ra và câu hỏi rà soát. Những dữ liệu chỉ công ty xác định được đều ghi CHƯA XÁC NHẬN. Không đưa ra định mức pháp luật, tiền lương, hạn mức tiền, SLA hoặc thông số máy tự đặt.
+Các ô **CHƯA XÁC NHẬN** vẫn được giữ nguyên; việc duyệt không tạo ra số tiền, thời hạn, thông số hay cấp duyệt cụ thể cho các ô đó. Bộ tài liệu chưa được nạp vào chatbot và chưa có kết quả kiểm tra câu trả lời trên bộ nguồn này.
 
 | Phòng | Tài liệu |
 | --- | --- |
@@ -20,4 +20,4 @@ Các tài liệu đã có luồng công việc, đầu vào, đầu ra và câu 
 | An toàn và 5S | [Kiểm tra điều kiện an toàn, ghi nhận sự cố và theo dõi 5S](HSE_5S.md) |
 | CNTT | [Tiếp nhận yêu cầu hỗ trợ và quản lý thay đổi truy cập](IT.md) |
 
-Để chuyển thành nguồn chính thức: xác nhận người sở hữu/người duyệt, các mục CHƯA XÁC NHẬN, phạm vi áp dụng, ngày hiệu lực; sau đó sử dụng luồng nạp và duyệt tài liệu hiện có. Không cần tạo thêm hệ thống quản lý.
+Khi đưa vào sử dụng, dùng luồng nạp/duyệt hiện có, xác định người sở hữu, ngày hiệu lực và phạm vi truy cập. Không tự mở rộng quyền đọc hoặc thay nguồn đang có hiệu lực.

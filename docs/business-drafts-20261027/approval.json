@@ -1,0 +1,90 @@
+{
+  "approved_by": "bao.nguyen",
+  "approval_date": "2026-10-28",
+  "source": "Direct user approval in this chat",
+  "user_instruction": "mục 2 mục đọc qua rồi, duyệt nhé",
+  "scope": "Approve the content of all13documents as written; CHƯA XÁC NHẬN fields remain unknown. Not an instruction to invent their values.",
+  "publication_state": "not_ingested",
+  "answer_acceptance": "Not a completed live answer evaluation for13departments",
+  "documents": [
+    {
+      "path": "Accountant.md",
+      "reviewed_content_sha256": "ebf84ee3f54b515ea8d32321405bde91b4d933adc21db143242e27a5e42a2d0e",
+      "approved_file_sha256": "9d86fd7a6fb7d52d547c58d1b9a4bf0b03163b60026bc1f8c52430a1f2a58256",
+      "normalized_utf8_sha256": "7aaf5732efcf78b0075e63482d654f5efe5b8e5b3e77ffe013bbf44ba5c32a34"
+    },
+    {
+      "path": "HR.md",
+      "reviewed_content_sha256": "bd6d3875f0fc4d582e8c479a728d2ab4fbefcf093b4c62fc9ff96783538de098",
+      "approved_file_sha256": "bf963c6face16d83c9b9eb66e7fdf0bc8afdad7565f07bc0a536d6b7b798d50a",
+      "normalized_utf8_sha256": "1c740e31381b97fd9c4bd0a31a19487991c5f44cc8d4c019e486badab1e67f1f"
+    },
+    {
+      "path": "HSE_5S.md",
+      "reviewed_content_sha256": "65a0efa9f5ef3740efaec970978301972dd442df65d4c58a008f11b43467b62a",
+      "approved_file_sha256": "c6e8bf1cd23fe5adcda1fcdfeeb16d9a82e9dde7ac0276bfd1ea5acf0a858a78",
+      "normalized_utf8_sha256": "876c775a71c95ac32d31144ed2dd67ec015ff8e0e96a44b294716380cba2b981"
+    },
+    {
+      "path": "ISO.md",
+      "reviewed_content_sha256": "c42e057a9cc4e593004d61b0d6a0ce71f36b9bdfe434ff2957465bd6cbb64d9c",
+      "approved_file_sha256": "518e49877ee5ed99bd448c6a0a89b8d8eb5314e109ac4b9203d377c70cc52de0",
+      "normalized_utf8_sha256": "b58402d2325ade740f01503f8ea3c0d2e2046feac87079a155bcc7aded59b323"
+    },
+    {
+      "path": "IT.md",
+      "reviewed_content_sha256": "9ea9e959dd3f529128ecfe0b623a0268ad11965537736a87467d4b4864f38c3f",
+      "approved_file_sha256": "82116d78438455a28d8face9b652c243e0476eb2e2fb9a264cb4decc902ed537",
+      "normalized_utf8_sha256": "d91bc06330bf4fef70171d14e7d7a643a2ff2758dbfcfc72a5ad32fc9c9fd819"
+    },
+    {
+      "path": "Maintenance.md",
+      "reviewed_content_sha256": "bc72461859d2b1f9978c8cb4bb39e6ba3476dacce3b28954ebf59e4d0fad131c",
+      "approved_file_sha256": "15dd5c134de11b0c426f73229bdf69e570f361f428bc2128e0499042ddc321af",
+      "normalized_utf8_sha256": "0213343409c76e40fc33238ed54b71e3b75329a4448df6f98b74f5c02ca2d259"
+    },
+    {
+      "path": "Molding.md",
+      "reviewed_content_sha256": "2f06f309248df67fa567fe9273ed466a3e75a640d826f9607a3fbc72ebd30e12",
+      "approved_file_sha256": "16aace3c0c224d8f2cd6f70d8632c3082e8d19bbab2224353f243434af9c4662",
+      "normalized_utf8_sha256": "bbfe8603de53c0c67b5ca22d3f0b1a95963786d622a98fddfb36c16ca9509c52"
+    },
+    {
+      "path": "Planning.md",
+      "reviewed_content_sha256": "0f2a9be27aa71b7b5090f1d0fd99423a5d09d5155cdfd62f1eb9605e7b170967",
+      "approved_file_sha256": "be1db0f36f6d33a09a4d44cdda8c146dd5d1653ad2a37f53ebd7afbdf4d4b072",
+      "normalized_utf8_sha256": "cbf6b026a2ffc312ed16816f45af976596ff78b02d6151934821ddb97ccc109b"
+    },
+    {
+      "path": "Production.md",
+      "reviewed_content_sha256": "2da36da875dea66ce364a57bd047f44a8fb89c43a21abb1c97bb58e76b3fc1a2",
+      "approved_file_sha256": "581cfee537a55f56d7969be15597bf22631978b40b27b35bffb448c87a62760d",
+      "normalized_utf8_sha256": "3df498a6d5f136319a2c7516716731d71384836cbc9a1eab56e39c1b6b25f78c"
+    },
+    {
+      "path": "Purchasing.md",
+      "reviewed_content_sha256": "a8aee552cf6ac59b0d176fbb30e6efd92b36f0e60d475750e2cc7aa17f30fc85",
+      "approved_file_sha256": "73dc351068e588a2799a029f26ff2fb26524e59ba7e70b0765aa951c8f7a384a",
+      "normalized_utf8_sha256": "4643bced900a634a46ae27d47f0002e9d39c8758c664c6eb79195e7f3fb1e804"
+    },
+    {
+      "path": "QualityControl.md",
+      "reviewed_content_sha256": "754aa8f4b4f05b4d2b428cb1006c130b79db634d01d6420deb6c0bc28d759971",
+      "approved_file_sha256": "25ebbd98547beb137b14168a356c3c05e3ddb4651643dc1d16057911fe43ab2d",
+      "normalized_utf8_sha256": "edb6b84495b587a1e7df8f6065f6a7dd00f00f05643787c8f3c1d76965cc09b1"
+    },
+    {
+      "path": "Sales.md",
+      "reviewed_content_sha256": "bd295ae5de59810fb800f4a1cc1432996f7a6c74eb9fc36f7022cb50f98e1d90",
+      "approved_file_sha256": "09b6e3a19bb5d531d4f36fb316d15b6f3f124e7df4d27ddbd8655dfce54ee902",
+      "normalized_utf8_sha256": "6ffc394883645fde9eb20e0f86f10e2fb390697ff07267234dc9fc6669a84ec4"
+    },
+    {
+      "path": "Warehouse.md",
+      "reviewed_content_sha256": "3dfccbfedc1d5daf11168c27935684c31f1b37471a3ff4b718d9f7498c86c765",
+      "approved_file_sha256": "f546205746bec0bac4dad1b512e063448619a9546f7292fa5ffc535ec6a2cbc2",
+      "normalized_utf8_sha256": "269268293fb6a74392cf73551772ccbbafb0f3b2ad366cff0b29f62162c0506c"
+    }
+  ],
+  "hash_format_note": "Byte hashes refer to the reviewed working files; normalized_utf8_sha256 ignores CRLF/LF conversion during Git checkout."
+}

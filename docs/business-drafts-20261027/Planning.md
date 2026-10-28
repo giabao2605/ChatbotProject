@@ -2,12 +2,13 @@
 
 - Mã dự thảo: DRAFT-PLANNING-001
 - Phiên bản: 0.1 — ngày 27/10/2026
-- Trạng thái: DRAFT / CHƯA ĐƯỢC CÔNG TY PHÊ DUYỆT
+- Trạng thái: NỘI DUNG ĐÃ ĐƯỢC BAO.NGUYEN DUYỆT ngày 28/10/2026; chưa phát hành trên chatbot
 - Phòng dự kiến sở hữu: Kế hoạch
 - Người soạn: Codex theo yêu cầu của bao.nguyen
-- Người sở hữu, người duyệt và ngày hiệu lực: CHƯA XÁC NHẬN
+- Người duyệt nội dung: bao.nguyen — ngày 28/10/2026
+- Người sở hữu và ngày hiệu lực nghiệp vụ: CHƯA XÁC NHẬN
 
-Đây là đề xuất quy trình để rà soát, không phải mô tả chính sách công ty đang áp dụng. Không dùng làm căn cứ chính thức để quyết định nghiệp vụ hoặc trả lời thay quy định đã được duyệt.
+Nội dung quy trình đã được bao.nguyen đọc và duyệt. Các mục CHƯA XÁC NHẬN vẫn chưa có giá trị cụ thể; không tự điền hoặc dùng thay quy định khác đang có hiệu lực.
 
 ## Mục đích và phạm vi
 Chuẩn hóa việc ghi nhận, thực hiện và lưu hồ sơ cho hoạt động: lập và điều chỉnh kế hoạch sản xuất. Các bước dưới đây là đề xuất, cần đối chiếu cách làm thực tế.
@@ -47,4 +48,4 @@ Ghi rõ thông tin còn thiếu, chuyển đầu mối xác nhận và giữ vi�
 3. Hồ sơ nào chứng minh quy trình này được chấp thuận và có hiệu lực?
 
 ## Điều kiện phát hành
-Chỉ phát hành sau khi có người có thẩm quyền xác nhận nội dung, thông số, phân quyền và phiên bản; lưu bằng chứng phê duyệt. Bản này chưa được nạp vào kho nguồn chính thức của chatbot.
+Nội dung đã được bao.nguyen duyệt; bằng chứng lưu trong approval.json cùng thư mục. Phát hành qua luồng nạp và duyệt hiện có, với phân quyền và ngày hiệu lực được xác định. Bản này chưa được nạp vào kho nguồn của chatbot.
