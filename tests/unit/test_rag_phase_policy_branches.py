@@ -1182,3 +1182,52 @@ def test_grounded_generation_drops_compare_verb_after_math_is_done():
         primary,
         documents,
     ) == "định mức P-1 và quy trình lắp P-3"
+
+
+@pytest.mark.parametrize("stop_kind", ["cancelled", "deadline"])
+@pytest.mark.parametrize("stop_after", ["before_first", "jina", "voyage"])
+def test_rerank_fallback_stops_at_request_checkpoint(monkeypatch, stop_kind, stop_after):
+    import threading
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    from mech_chatbot.rag import execution
+    from mech_chatbot.rag.phases import retrieval_rerank
+
+    now = [0.0]
+    cancelled = threading.Event()
+    monkeypatch.setattr(execution.time, "monotonic", lambda: now[0])
+    state = execution._ExecutionState.create(
+        execution.RagRequest("question", AccessScope()),
+        execution.RagInvocation("rerank-stop", mode="test"),
+        cancelled, "rerank-stop",
+        budget_limits=execution.RequestBudgetLimits(deadline_seconds=1),
+    )
+    calls = []
+
+    def stop():
+        if stop_kind == "cancelled":
+            cancelled.set()
+        else:
+            now[0] = 2.0
+
+    def attempt(*args):
+        provider = args[-2]
+        calls.append(provider)
+        if stop_after == provider:
+            stop()
+        raise TimeoutError("provider response timeout")
+
+    if stop_after == "before_first":
+        stop()
+    runtime = SimpleNamespace(voyage_enabled=True, voyage_runtime=SimpleNamespace(api_key="fixture"))
+    monkeypatch.setattr(retrieval_rerank, "_attempt_provider_rerank", attempt)
+    monkeypatch.setattr(retrieval_rerank, "log_trace", lambda *_a, **_k: None)
+    monkeypatch.setattr(retrieval_rerank, "rerank_docs", lambda docs: calls.append("local") or docs)
+    token = execution._REQUEST_CHECKPOINT.set(state.checkpoint)
+    try:
+        error = ExternalAICallCancelled if stop_kind == "cancelled" else TimeoutError
+        with pytest.raises(error):
+            retrieval_rerank._provider_rerank([object()], "question", "question", "rerank-stop", [], 1, runtime, "jina")
+    finally:
+        execution._REQUEST_CHECKPOINT.reset(token)
+    expected = {"before_first": [], "jina": ["jina"], "voyage": ["jina", "voyage"]}
+    assert calls == expected[stop_after]

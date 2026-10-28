@@ -2,6 +2,7 @@
 """Reranking qua Voyage API va cac helper sap xep context."""
 
 import hashlib
+import time
 import unicodedata
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -30,6 +31,22 @@ def _reported_rerank_usage(model, trace_id):
         from mech_chatbot.llm.llm_client import record_provider_usage
         record_provider_usage(SimpleNamespace(response_metadata={"usage": payload.get("usage")}),
                               model=model, trace_id=trace_id, surface="reranking")
+
+
+def _rerank_request_timeout(configured_timeout):
+    from mech_chatbot.rag.execution import current_request_budget, current_request_checkpoint
+
+    checkpoint = current_request_checkpoint()
+    if checkpoint:
+        checkpoint("rerank_provider")
+    budget = current_request_budget()
+    if budget is None:
+        return configured_timeout
+    remaining = budget.deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        budget.deadline_exceeded = True
+        raise TimeoutError("RAG request deadline exceeded before reranking")
+    return min(configured_timeout, remaining)
 
 
 def _rerank_failure_metadata(exc, provider):
@@ -177,7 +194,7 @@ def voyage_rerank_documents(
                 "return_documents": False,
                 "truncation": True,
             },
-            timeout=timeout_seconds,
+            timeout=_rerank_request_timeout(timeout_seconds),
         )
         response.raise_for_status()
         payload = response.json()
@@ -277,7 +294,7 @@ def jina_rerank_documents(
                 "top_n": top_n,
                 "return_documents": False,
             },
-            timeout=timeout_seconds,
+            timeout=_rerank_request_timeout(timeout_seconds),
         )
         response.raise_for_status()
         payload = response.json()

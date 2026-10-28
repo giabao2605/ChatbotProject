@@ -98,6 +98,7 @@ class RagRetrievalRuntime:
     llm_router_min_confidence: float = 0.5
     llm_router_enabled: bool = True
     semantic_router_enabled: bool = True
+    semantic_router: Any = field(default=None, repr=False)
     semantic_router_threshold: float = 0.62
     semantic_router_margin: float = 0.04
     safety_block_enabled: bool = True
@@ -475,6 +476,7 @@ def _build_default_adapters(
     jina_runtime_builder: Callable[..., Any] | None = None,
 ) -> tuple[RagRetrievalRuntime, RagProviderAdapter]:
     """Construct external adapters only when the composition root is called."""
+    from mech_chatbot.rag.interaction_router import SemanticRouter
     process = RagProcessSettings.from_settings(settings)
     vector_runtime, provider, vision_model = _build_external_stack(
         settings, qdrant_builder, llm_builder, vision_builder
@@ -498,6 +500,11 @@ def _build_default_adapters(
             retrieve_function=composed_retrieve,
             client=vector_runtime.qdrant_client,
             vectorstore=vector_runtime.vector_store,
+            semantic_router=SemanticRouter(
+                lambda text: vector_runtime.vector_store.embeddings.embed_query(text),
+                threshold=process.semantic_router_threshold,
+                margin=process.semantic_router_margin,
+            ) if process.semantic_router_enabled else None,
             vision_model=vision_model,
             collection_name=vector_runtime.collection_name,
             late_interaction_config=late_config,

@@ -62,6 +62,7 @@ def test_voyage_rerank_preserves_documents_and_order(monkeypatch):
     assert result == [docs[2], docs[0]]
     assert docs[2].metadata["relevance_score"] == 0.91
     assert posted["url"] == "https://api.voyageai.com/v1/rerank"
+    assert posted["timeout"] == 15.0
     assert posted["headers"]["Authorization"] == "Bearer test-key"
     assert posted["json"] == {
         "query": "cau hoi",

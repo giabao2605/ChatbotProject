@@ -10,7 +10,7 @@ from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.context_builders import hydrate_parent_context, parent_context_max_workers
 from mech_chatbot.rag.corrective import merge_corrected_documents
-from mech_chatbot.rag.execution import RequestBudgetExceeded
+from mech_chatbot.rag.execution import RequestBudgetExceeded, current_request_checkpoint
 from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.diagnostics import make_terminal_debug as _make_terminal_debug
 from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
@@ -228,9 +228,12 @@ def _provider_rerank(
         and getattr(getattr(runtime, "voyage_runtime", None), "api_key", None)
     ):
         providers.append("voyage")
+    checkpoint = current_request_checkpoint()
     for index, current_provider in enumerate(providers):
+        if checkpoint:
+            checkpoint("rerank_provider")
         try:
-            return _attempt_provider_rerank(
+            result = _attempt_provider_rerank(
                 real_docs,
                 effective_question,
                 trace_id,
@@ -242,6 +245,8 @@ def _provider_rerank(
         except (ExternalAICallCancelled, RequestBudgetExceeded):
             raise
         except Exception as exc:
+            if checkpoint:
+                checkpoint("rerank_fallback")
             logger.error("Loi khi su dung %s rerank: %s.", current_provider, exc)
             fallback_backend = (
                 providers[index + 1]
@@ -258,6 +263,10 @@ def _provider_rerank(
                 trace_id,
                 **{**failure_metadata, "fallback_backend": fallback_backend},
             )
+        else:
+            if checkpoint:
+                checkpoint("rerank_provider")
+            return result
     return rerank_docs(real_docs)
 
 

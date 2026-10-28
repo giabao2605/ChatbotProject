@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import re
+from threading import RLock
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence, Tuple
 
@@ -233,10 +234,11 @@ class SemanticRouter:
         self._threshold = threshold
         self._margin = margin
         self._proto_vecs = None
+        self._prototype_lock = RLock()
 
-    def _safe_embed(self, text):
+    def _safe_embed(self, text, embedder=None):
         try:
-            v = self._embedder(text)
+            v = (self._embedder if embedder is None else embedder)(text)
         except Exception:
             return None
         if v is None:
@@ -246,29 +248,35 @@ class SemanticRouter:
         except Exception:
             return None
 
-    def _ensure_prototypes(self) -> None:
-        if self._proto_vecs is not None:
-            return
-        vecs = {}
-        for route, samples in self._prototypes.items():
-            rv = []
-            for s in samples:
-                v = self._safe_embed(s)
-                if v:
-                    rv.append(v)
-            if rv:
-                vecs[route] = rv
-        self._proto_vecs = vecs
+    def _ensure_prototypes(self):
+        with self._prototype_lock:
+            if self._proto_vecs is not None:
+                return self._proto_vecs
+            vecs = {}
+            complete = True
+            for route, samples in self._prototypes.items():
+                rv = []
+                for s in samples:
+                    v = self._safe_embed(s)
+                    if v:
+                        rv.append(v)
+                    else:
+                        complete = False
+                if rv:
+                    vecs[route] = rv
+            # A temporary model failure must not poison the process-owned cache.
+            if complete:
+                self._proto_vecs = vecs
+            return vecs
 
-    def route_scores(self, text) -> List[Tuple[str, float]]:
+    def route_scores(self, text, *, query_embedder=None) -> List[Tuple[str, float]]:
         if not text or not str(text).strip():
             return []
-        q = self._safe_embed(text)
+        q = self._safe_embed(text, query_embedder)
         if not q:
             return []
-        self._ensure_prototypes()
         scores = []
-        for route, rv in self._proto_vecs.items():
+        for route, rv in self._ensure_prototypes().items():
             best = 0.0
             for v in rv:
                 s = _cosine(q, v)
@@ -278,8 +286,8 @@ class SemanticRouter:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores
 
-    def classify(self, text) -> Tuple[Optional[str], float, float]:
-        scores = self.route_scores(text)
+    def classify(self, text, *, query_embedder=None) -> Tuple[Optional[str], float, float]:
+        scores = self.route_scores(text, query_embedder=query_embedder)
         if not scores:
             return (None, 0.0, 0.0)
         top_route, top_score = scores[0]
@@ -329,6 +337,7 @@ def classify(
     safety_extra_injection=(),
     safety_extra_abuse=(),
     semantic_enabled=True,
+    semantic_router=None,
     semantic_threshold=0.62,
     semantic_margin=0.04,
     crag_fast_routes_enabled=False,
@@ -362,7 +371,7 @@ def classify(
     # L1: semantic router (neu bat + co embedder).
     if semantic_enabled:
         router = (
-            SemanticRouter(
+            semantic_router or SemanticRouter(
                 embedder,
                 threshold=semantic_threshold,
                 margin=semantic_margin,
@@ -371,7 +380,7 @@ def classify(
             else None
         )
         if router is not None:
-            route, score, _second = router.classify(text)
+            route, score, _second = router.classify(text, query_embedder=embedder)
             if route in ALL_ROUTES:
                 return RouteResult(route, LAYER_SEMANTIC, confidence=float(score))
 

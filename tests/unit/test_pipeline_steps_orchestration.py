@@ -98,6 +98,28 @@ def _route(steps, question, lifecycle, *, runtime=None):
     )
 
 
+def test_routes_reuse_only_runtime_owned_prototype_embeddings(steps):
+    from collections import Counter
+    from mech_chatbot.rag import interaction_router, route_config
+
+    calls = Counter()
+
+    def embed(text):
+        calls[text] += 1
+        return [1.0, 0.0]
+
+    runtime = _route_runtime(embed_query=embed)
+    runtime.semantic_router_enabled = True
+    runtime.semantic_router = interaction_router.SemanticRouter(embed)
+    questions = ("ambiguous request alpha", "ambiguous request beta")
+    for question in questions:
+        _route(steps, question, _Lifecycle(), runtime=runtime)
+
+    prototypes = {text for samples in route_config.ROUTE_PROTOTYPES.values() for text in samples}
+    assert all(calls[text] == 1 for text in prototypes)
+    assert all(calls[text] == 1 for text in questions)
+
+
 def test_history_window_keeps_recent_turns_within_the_configured_budget(
     steps,
     monkeypatch,

@@ -1491,6 +1491,7 @@ def _route(*, user_question, conversation_context, response_language,
         semantic_enabled=bool(
             getattr(runtime, "semantic_router_enabled", True)
         ),
+        semantic_router=getattr(runtime, "semantic_router", None),
         semantic_threshold=float(
             getattr(runtime, "semantic_router_threshold", 0.62)
         ),
