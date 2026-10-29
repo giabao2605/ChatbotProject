@@ -324,6 +324,7 @@ def test_text_citation_has_download_without_preview(monkeypatch):
             "file_goc": "policy.docx",
             "score": 0.88,
             "source_id": "D9P1",
+            "version_no": 3,
         }
     ])
     assert citations == [{
@@ -334,8 +335,39 @@ def test_text_citation_has_download_without_preview(monkeypatch):
         "source_id": "D9P1",
         "has_vision": False,
         "page_url": None,
-        "original_url": "/api/files/documents/9/original",
+        "original_url": "/api/files/documents/9/original?citation_version=3",
+        "version_no": 3,
     }]
+
+
+@pytest.mark.parametrize('version', [None, '', 0, -1, 'bad', 1.5, True])
+def test_ordinary_citation_without_a_valid_version_never_links_to_latest(monkeypatch, version):
+    monkeypatch.setattr(chat_routes, 'page_has_vision', lambda *_: True)
+    assert chat_routes._citation_list([
+        {'doc_id': 9, 'trang': 1, 'file_goc': 'manual.pdf', 'version_no': version}
+    ]) == []
+
+
+def test_ordinary_pdf_citation_keeps_revision_on_both_urls(monkeypatch):
+    monkeypatch.setattr(chat_routes, 'page_has_vision', lambda *_: True)
+    card = chat_routes._citation_list([
+        {'doc_id': 9, 'trang': 1, 'file_goc': 'manual.pdf', 'version_no': 3}
+    ])[0]
+    assert card['page_url'] == '/api/files/documents/9/pages/1?citation_version=3'
+    assert card['original_url'] == '/api/files/documents/9/original?citation_version=3'
+
+
+@pytest.mark.parametrize('version', [3, None])
+def test_streamed_citation_fallback_rebuilds_revision_links(monkeypatch, version):
+    from mech_chatbot.application.chat_citations import resolve_chat_citations
+    candidates = [{'doc_id': 9, 'page_no': 1, 'file_name': 'manual.pdf', 'version_no': version,
+                   'source_id': 'D9P1', 'original_url': '/api/files/documents/9/original'}]
+    cards, _ = resolve_chat_citations([], candidates, 'Answer [SRC:D9P1]', page_has_vision=lambda *_: True)
+    if version is None:
+        assert cards == ()
+    else:
+        assert cards[0]['original_url'] == '/api/files/documents/9/original?citation_version=3'
+        assert cards[0]['page_url'] == '/api/files/documents/9/pages/1?citation_version=3'
 
 
 def test_live_citation_filter_requires_exact_source_id():
@@ -446,7 +478,7 @@ def test_structured_citations_keep_sheet_cell_row_and_never_invent_a_pdf_page():
     assert len(cards) == 2 and len({c['source_id'] for c in cards}) == 2
     assert all(c['page_no'] is None and c['page_url'] is None and not c['has_vision'] for c in cards)
     assert cards[0]['locator']['cell'] == 'B2' and cards[1]['locator']['row_key'] == 'Ledger:row-3'
-    assert cards[0]['original_url'] == '/api/files/documents/17/original'
+    assert cards[0]['original_url'] == '/api/files/documents/17/original?citation_version=3'
     answer = f"Tổng A = 25 [SRC:{cards[0]['source_id']}]"
     assert filter_citations_by_answer(cards, answer) == [cards[0]]
     assert attributed_citations({'citation_docs':records}, answer) == (cards[0],)

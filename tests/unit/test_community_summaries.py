@@ -519,6 +519,30 @@ def test_community_context_fails_closed_on_stale_qdrant_source_version():
     assert result.reason == "summary_sources_not_hydrated"
 
 
+@pytest.mark.parametrize('explicit_demo', [False, True])
+def test_community_scope_checks_all_sources_before_document_cap(monkeypatch, explicit_demo):
+    from langchain_core.documents import Document
+    official = Document(page_content='Whole mixed summary', metadata={
+        'doc_id': 1, 'community_summary_id': 7})
+    demo = Document(page_content='Whole mixed summary', metadata={
+        'doc_id': 6, 'community_summary_id': 7, 'tags': 'demo', 'file_goc': 'it_demo_process_v1.md'})
+    monkeypatch.setattr(legacy_community_summaries, '_hydrate_summary_documents', lambda *args: [official, demo])
+    raw_question = 'Tổng hợp xu hướng giữa tất cả tài liệu' + (' theo it_demo_process_v1.md' if explicit_demo else '')
+    result = load_community_context('Tổng hợp xu hướng giữa tất cả tài liệu theo it_demo_process_v1.md',
+        graph_enabled=True, community_enabled=True, access_context={}, seed_keys=[],
+        serving_epoch='community-v1', graph_fingerprint='graph-sha-1',
+        client=object(), collection_name='test', loader=lambda **kwargs: [{'summary_id': 7}], max_documents=1,
+        source_question=raw_question)
+    assert result.used is explicit_demo
+    if explicit_demo:
+        from mech_chatbot.rag.demo_sources import DEMO_NOTICE, filter_applicable_sources, mark_demo_stream
+        assert len(result.documents) == 1
+        assert ''.join(mark_demo_stream(iter(['summary']), result.documents)).startswith(DEMO_NOTICE)
+        assert filter_applicable_sources(result.documents, 'Quy định công ty?') == []
+    else:
+        assert result.documents == ()
+
+
 def test_community_flag_and_epoch_isolate_semantic_cache(monkeypatch):
     from mech_chatbot.rag.semantic_cache import pipeline_namespace
 

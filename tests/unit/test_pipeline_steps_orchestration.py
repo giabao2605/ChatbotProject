@@ -482,6 +482,18 @@ def test_technical_route_exposes_one_request_local_embedding_cache(
     assert calls == ["same query"]
 
 
+def test_unresolved_reference_stops_before_search_intent(steps, monkeypatch):
+    monkeypatch.setattr(steps, 'extract_search_intent', lambda *_a, **_kw: pytest.fail('No search for unresolved reference'))
+    result = steps._rewrite_and_anchor(
+        user_question='Quy trình đó thế nào?', chat_history=[], current_part_ids=[],
+        conversation_context=None, user_department='HR', user_roles=['viewer'],
+        allowed_departments=['HR'], max_security_level='internal', allowed_sites=[],
+        trace_id='missing-context', t_intent=time.time(),
+        runtime=SimpleNamespace(conversation_state_enabled=False, strict_site_filter=True, intent_runtime=None))
+    assert result[0] == 'Quy trình đó thế nào?'
+    assert result[4] == {'clarification_required': True}
+
+
 def test_rewrite_switches_topic_and_drops_the_previous_document_anchor(
     steps,
     monkeypatch,
@@ -524,14 +536,20 @@ def test_rewrite_resolves_a_pending_candidate_selection_without_an_llm_call(
     steps,
     monkeypatch,
 ):
-    monkeypatch.setattr(
-        steps,
-        "analyze_context",
-        lambda *_args, **_kwargs: {
+    context_calls = []
+
+    def analyze(*_args, **kwargs):
+        context_calls.append(kwargs)
+        return {
             "context_action": "continue",
             "standalone_question": None,
             "llm_resolved": False,
-        },
+        }
+
+    monkeypatch.setattr(
+        steps,
+        "analyze_context",
+        analyze,
     )
     pending = [
         {"index": 1, "base_code": "PART-A", "key": "PART-A"},
@@ -559,6 +577,7 @@ def test_rewrite_resolves_a_pending_candidate_selection_without_an_llm_call(
 
     assert result[1] == ["PART-B"]
     assert result[-1] is True
+    assert context_calls[0]['pending_candidates'] == pending
 
 
 def test_disambiguation_returns_a_choice_table_for_multiple_variants(steps):

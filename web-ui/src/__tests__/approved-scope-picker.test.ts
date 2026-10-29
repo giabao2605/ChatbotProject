@@ -4,7 +4,7 @@ import * as api from '@/api/client';
 import ApprovedScopePicker from '@/components/ApprovedScopePicker.vue';
 
 vi.mock('@/api/client', () => ({apiGet:vi.fn()}));
-const documents = [{DocID:1,TenFile:'Bảng kê.xlsx'}, {DocID:2,TenFile:'Kỳ sau.csv'}];
+const documents = [{DocID:1,OriginalFileName:'Bảng kê.xlsx'}, {DocID:2,OriginalFileName:'Kỳ sau.csv'}];
 const first = {scope_id:'a',definition:'Doanh thu',period:'Tháng 6',unit:'VND',currency:'VND'};
 beforeEach(()=>vi.clearAllMocks());
 
@@ -50,4 +50,16 @@ it('loads scopes for the selected template and clears the old selection on a tem
   expect(api.apiGet).toHaveBeenLastCalledWith('/api/rag-evidence/documents/1/approved-scopes',
     {offset:0,limit:50,template:'scope_comparison'});
   expect(wrapper.emitted('update:modelValue')!.at(-1)).toEqual(['']);
+});
+
+
+it('shows API document names and provenance with an id fallback only for missing names',()=>{
+  const wrapper=mount(ApprovedScopePicker,{props:{label:'Phạm vi A',modelValue:'',documents:[
+    {DocID:1,OriginalFileName:'Bảng kê.xlsx',DocNumber:'FIN-01',VersionNo:3},
+    {DocID:2,OriginalFileName:null},
+  ]}});
+  expect(wrapper.get('select[aria-label="Tài liệu Phạm vi A"]').findAll('option').slice(1)
+    .map(option=>[option.element.value,option.text()])).toEqual([
+      ['1','Bảng kê.xlsx · FIN-01 · v3'],['2','DocID 2'],
+    ]);
 });

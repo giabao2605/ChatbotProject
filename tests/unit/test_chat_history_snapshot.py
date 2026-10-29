@@ -91,7 +91,7 @@ def test_http_history_keeps_source_version_and_title_in_the_authorization_snapsh
 
 
 @pytest.mark.parametrize('kind',['ordinary','text_query','query'])
-def test_http_history_revision_links_apply_only_to_new_branch_records(history_store,monkeypatch,tmp_path,kind):
+def test_http_history_revision_links_apply_to_ordinary_and_branch_records(history_store,monkeypatch,tmp_path,kind):
     from sqlalchemy.pool import StaticPool
     from mech_chatbot.api import file_access
     from mech_chatbot.adapters.protected_files import SqlProtectedFileStore, FilesystemProtectedFileStorage
@@ -125,7 +125,7 @@ def test_http_history_revision_links_apply_only_to_new_branch_records(history_st
         assert response.status_code==200
         answer=response.json()['messages'][-1]
         card=answer['citations'][0]
-        suffix='' if kind=='ordinary' else '?citation_version=2'
+        suffix='?citation_version=2'
         assert card['original_url']=='/api/files/documents/1/original'+suffix
         assert card['page_url']=='/api/files/documents/1/pages/1'+suffix
         assert ('advanced_rag' in answer)==(kind!='ordinary')

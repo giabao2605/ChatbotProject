@@ -20,6 +20,8 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def cache_repository(monkeypatch: pytest.MonkeyPatch):
     from mech_chatbot.adapters.protected_files import SqlProtectedFileStore
+    from mech_chatbot.db.repositories import doc_metadata
+    monkeypatch.setattr(doc_metadata, 'get_common_metadata_for_rag', lambda ids: {int(i): {'tags': None} for i in ids})
     monkeypatch.setattr(SqlProtectedFileStore, "load_document", lambda *_: DocumentAccessRecord(
         doc_id=41, ten_file="manual.pdf", file_path=None, thu_muc=None,
         security_level="internal", site="HQ", lifecycle_status="published",

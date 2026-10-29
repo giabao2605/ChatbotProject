@@ -403,12 +403,11 @@ def test_history_exposes_only_sources_attributed_by_each_answer(
             "score": 0.91,
             "source_id": "D42P7",
             "has_vision": True,
-            "page_url": "/api/files/documents/42/pages/7",
-            "original_url": "/api/files/documents/42/original",
+            "page_url": "/api/files/documents/42/pages/7?citation_version=3",
+            "original_url": "/api/files/documents/42/original?citation_version=3",
         }
     ]
-    assert messages[1]["citations"][0]["source_id"] == "D43P2"
-    assert messages[1]["citations"][0]["page_url"] is None
+    assert messages[1]["citations"] == []
     assert messages[2]["citations"] == []
     assert "Nguồn tham chiếu" in messages[0]["ref_text"]
     assert "citations" not in messages[3]

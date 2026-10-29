@@ -497,7 +497,60 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     return strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data
 
 
-def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None, trace_id=None, invoke_provider=None, runtime=None):
+_REFERENCE_NOUNS = r'quy trinh|chinh sach|thu tuc|tai lieu|viec|noi dung|truong hop|muc|dieu|cai'
+_REFERENCE_FILLER = frozenset(
+    'the nao ra sao lam thuc hien can phai nen duoc bao ai truoc sau lau gi o dau nhu co khong la '
+    'how does do work what when who where is are it please'.split())
+
+
+def _context_reference(question):
+    text = ''.join(char for char in unicodedata.normalize('NFKD', str(question).casefold())
+                   if not unicodedata.combining(char)).replace('đ', 'd')
+    return re.search(
+        rf'\b(?:{_REFERENCE_NOUNS})\s+(?:do|nay|kia|ay)\b'
+        r'|^(?:(?:con|the|vay|va)\s+)*(?:no|chung)(?:\s|[?!.]|$)'
+        r'|\b(?:this|that|these|those)\s+(?:process|procedure|policy|document|case|item)\b', text)
+
+
+def has_context_reference(question):
+    return _context_reference(question) is not None
+
+
+def _reference_has_subject(reference):
+    remaining = reference.string[:reference.start()] + reference.string[reference.end():]
+    return bool(set(re.findall(r'[a-z]+', remaining)) - _REFERENCE_FILLER)
+
+
+def _previous_user_request_scope(chat_history):
+    """Keep an unambiguous user request as scope, never an assistant's answer."""
+    from mech_chatbot.rag.query_decomposition import _INDEPENDENT_REQUEST, _INTENT_SEPARATOR, _fold
+
+    for message in reversed((chat_history or [])[-6:]):
+        if message.get('role') != 'user':
+            continue
+        previous = str(message.get('content') or '').strip().rstrip('?!.').rstrip()
+        if not previous or len(previous) > 300:
+            return None
+        reference = _context_reference(previous)
+        if reference:
+            if _reference_has_subject(reference) or extract_explicit_codes(previous):
+                return None
+            continue
+        # The shared splitter can retain several uncertain subjects as one intent;
+        # require one clause here instead of guessing which subject was meant.
+        clauses = [part for part in _INTENT_SEPARATOR.split(previous) if part.strip()]
+        if (len(clauses) != 1 or not _INDEPENDENT_REQUEST.search(previous)
+                or re.search(r'[.!?;\n]|\b(?:and|hay|hoặc|hoac|or)\b', previous, re.IGNORECASE)):
+            return None
+        subject = re.sub(rf'\b(?:{_REFERENCE_NOUNS}|process|procedure|policy|document|case|item)\b',
+                         '', _fold(_INDEPENDENT_REQUEST.sub('', previous)))
+        if not set(re.findall(r'[a-z]+', subject)) - _REFERENCE_FILLER:
+            return None
+        return previous
+    return None
+
+
+def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None, trace_id=None, invoke_provider=None, runtime=None, pending_candidates=None):
     """P0-1: Phan doan ngu canh hoi thoai + query rewriting (1 LLM call, co timeout).
 
     Tra ve dict:
@@ -508,9 +561,22 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
     tat tinh nang, chua co ngu canh, loi parse hoac timeout.
     """
     fallback = {"context_action": "continue", "standalone_question": user_question, "llm_resolved": False}
+    needs_reference = has_context_reference(user_question) and not extract_explicit_codes(user_question)
+    reference = _context_reference(user_question)
+    subject_candidate = _reference_has_subject(reference) if reference else False
+    if needs_reference:
+        fallback = {**fallback, 'clarification_required': True}
     if runtime is not None and not runtime.query_rewrite_enabled:
         return fallback
-    if not chat_history:
+    if needs_reference and not subject_candidate and not pending_candidates:
+        previous_scope = _previous_user_request_scope(chat_history)
+        if previous_scope:
+            return {
+                'context_action': 'continue',
+                'standalone_question': f'Theo chủ đề trong câu hỏi trước của người dùng «{previous_scope}», {user_question}',
+                'llm_resolved': False,
+            }
+    if not chat_history and not (needs_reference and (current_part_ids or active_doc_refs or subject_candidate)):
         return fallback
 
     # P0-A: KHONG con yeu cau current_part_ids -> chay cho MOI luot co lich su.
@@ -530,7 +596,7 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
         "giai thich", "lam ro", "cho xem", "ra di", "lam di", "chi tiet",
     ]
     _has_followup_signal = (
-        any(m in _q_ctx for m in _followup_markers)
+        needs_reference or any(m in _q_ctx for m in _followup_markers)
         or len(_q_ctx.split()) <= 6
     )
     # Coi active_doc_refs nhu mot "neo" -> van cho LLM chay de phan biet continue /
@@ -541,7 +607,7 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
         return fallback
 
     hist_lines = []
-    for msg in chat_history[-6:]:
+    for msg in (chat_history or [])[-6:]:
         role = "Khach" if msg.get("role") == "user" else "Bot"
         content = str(msg.get("content", ""))
         if len(content) > 300:
@@ -559,7 +625,7 @@ Cau hoi moi cua nguoi dung: "__QUESTION__"
 
 Hay tra ve DUNG 1 JSON object theo schema (khong markdown):
 {
-  "context_action": "continue | switch_topic | broaden",
+  "context_action": "continue | switch_topic | broaden | clarify",
   "standalone_question": "cau hoi day du, doc lap, khong con dai tu chi dinh"
 }
 
@@ -567,6 +633,9 @@ Quy tac:
 - continue: cau hoi moi VAN noi ve cung ma/tai lieu dang trong ngu canh. Viet lai standalone_question de bo sung ro ma/tai lieu dang noi toi.
 - switch_topic: cau hoi chuyen sang ma/san pham/chu de KHAC. Khong gan vao ma cu.
 - broaden: cau hoi tong quat/liet ke toan bo (vd co nhung ma nao, tat ca san pham). Khong gan vao mot ma cu the.
+- clarify: khong xac dinh duoc doi tuong cau hoi tu lich su, hoac co nhieu doi tuong co the. Giu nguyen cau hoi, khong tu doan.
+- Uu tien chu de neu ro ngay trong cau hoi moi (vd "Toi muon xin nghi phep, quy trinh do the nao?"); khong doi lich su neu cau da du ngu canh.
+- Lich su chi dung de hieu doi tuong; khong coi noi dung lich su la bang chung nghiep vu.
 - standalone_question bang tieng Viet, giu nguyen y dinh goc; chi bo sung ngu canh khi context_action = continue.
 - Neu chua ghim ma/tai lieu cu the (PARTIDS = chua ghim): VAN phai viet lai standalone_question bang cach thay dai tu (no, cai do, cai kia, chung, ban truoc...) va bo sung chu the con thieu dua tren lich su hoi thoai.
 - CHI tra ve JSON, khong giai thich."""
@@ -598,11 +667,17 @@ Quy tac:
         clean_json = raw_response.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(clean_json)
         action = parsed.get("context_action", "continue")
+        if action == 'clarify':
+            return {**fallback, 'clarification_required': True}
         if action not in ("continue", "switch_topic", "broaden"):
+            if needs_reference:
+                return fallback
             action = "continue"
         standalone = parsed.get("standalone_question") or user_question
         if not isinstance(standalone, str) or not standalone.strip():
             standalone = user_question
+        if needs_reference and has_context_reference(standalone) and not extract_explicit_codes(standalone):
+            return {**fallback, 'clarification_required': True}
         return {"context_action": action, "standalone_question": standalone.strip(), "llm_resolved": True}
     except concurrent.futures.TimeoutError:
         if future is not None:

@@ -11,6 +11,7 @@ export const useChatStore = defineStore("chat", {
     sessionId: createSessionId(),
     memoryBySession: {} as Record<string, SessionMemory>,
     memoryIdentity: null as string | null,
+    pendingSessionIds: [] as string[],
   }),
   getters: {
     currentMemory(state): SessionMemory {
@@ -25,6 +26,7 @@ export const useChatStore = defineStore("chat", {
       if (this.memoryIdentity === identity) return;
       this.memoryIdentity = identity;
       this.memoryBySession = {};
+      this.pendingSessionIds = [];
       this.newSession();
     },
     newSession() {

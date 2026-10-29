@@ -25,7 +25,7 @@ from mech_chatbot.domain.document_types import (
 
 
 BASE_DIR = str(Path(__file__).resolve().parents[3])
-IMAGE_DIR = str(Path(BASE_DIR) / "data" / "processed")
+IMAGE_DIR = str(Path(__file__).resolve().parents[4] / "data" / "processed")
 DEFAULT_VISION_CACHE_DIR = str(Path(BASE_DIR) / "data" / "cache" / "vision")
 
 EMBEDDING_CHUNK_SIZE = 220

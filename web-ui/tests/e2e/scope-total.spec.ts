@@ -39,7 +39,7 @@ test(`selected scope total renders its exact step and source (${profile})`, asyn
       accepted:false,offline_only:false,max_branches:1,actions:['scope_total'],text_query:false
     } : { schema: 'advanced-rag-v2-evaluation', accepted: false,
       offline_only: true, max_branches: 3, actions: ['contains', 'where_used', 'bom_rollup', 'scope_comparison', 'scope_total'] };
-    else if (url.pathname === '/api/documents') data = { documents: [{ DocID: 17, TenFile: 'synthetic-ledger.csv' }] };
+    else if (url.pathname === '/api/documents') data = { documents: [{ DocID: 17, OriginalFileName: 'synthetic-ledger.csv' }] };
     else if (url.pathname.endsWith('/approved-scopes')) {
       if (paired) expect(['scope_comparison','scope_total']).toContain(url.searchParams.get('template'));
       data = { items: [{ scope_id: 'ledger', definition: 'Whole reviewed export', unit: 'VND' },
@@ -112,7 +112,7 @@ test('two explicit scope totals stay separate and the UI refuses a fourth branch
     else if (url.pathname.endsWith('/evaluation-capabilities')) data = { schema: 'advanced-rag-v2-evaluation', accepted: false,
       offline_only: true, max_branches: 3, scope_total_query: true,
       actions: ['contains', 'where_used', 'bom_rollup', 'scope_comparison', 'scope_total'] };
-    else if (url.pathname === '/api/documents') data = { documents: [{ DocID: 17, TenFile: 'synthetic-ledger.csv' }] };
+    else if (url.pathname === '/api/documents') data = { documents: [{ DocID: 17, OriginalFileName: 'synthetic-ledger.csv' }] };
     else if (url.pathname.endsWith('/approved-scopes')) data = { items: cards.map(card => ({
       scope_id: card.scope_id, definition: card.scope_id, unit: 'VND' })), offset: 0, has_more: false };
     else if (url.pathname === '/api/chat/sessions') data = { sessions: [] };

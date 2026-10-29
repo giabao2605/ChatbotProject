@@ -166,6 +166,119 @@ afterEach(() => {
 });
 
 describe("ChatView public behavior", () => {
+  it('opens Markdown originals without misleading previews and preserves pinned PDF originals on image failure',async()=>{
+    const mdOriginal='/api/files/documents/1/original?citation_version=2&source_hash=abc';
+    const pdfOriginal='/api/files/documents/2/original?citation_version=3&source_hash=def';
+    vi.mocked(api.listSessions).mockResolvedValue([{session_id:'citations',cau_hoi:'Sources'}]);
+    vi.mocked(api.loadHistory).mockResolvedValueOnce([{role:'assistant',content:'Answer',citations:[
+      {doc_id:1,page_no:1,file_name:'POLICY.MARKDOWN',has_vision:true,page_url:'/markdown-image',original_url:mdOriginal},
+      {doc_id:2,page_no:4,file_name:'manual.pdf',has_vision:true,page_url:'/pdf-image',original_url:pdfOriginal},
+    ]}]);
+    const {wrapper}=mountWithPinia(ChatView);await flushPromises();
+    await button(wrapper,'Lịch sử').trigger('click');await wrapper.get('.history-title').trigger('click');await flushPromises();
+    expect(wrapper.find('img[src="/markdown-image"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('Tài liệu văn bản không có ảnh trang. Mở bản gốc để đối chiếu.');
+    const pdf=wrapper.get('img[src="/pdf-image"]');await pdf.trigger('error');
+    expect(wrapper.find('img[src="/pdf-image"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('Không tải được ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.');
+    expect(wrapper.findAll('.citation-download').map(link=>link.attributes('href'))).toEqual([mdOriginal,pdfOriginal]);
+    wrapper.unmount();
+  });
+
+  it('restores the active conversation on remount before sending with its history and memory',async()=>{
+    const history:ChatMessage[]=[{role:'user',content:'Quy trình IT'},{role:'assistant',content:'Các bước IT',chat_id:1}];
+    vi.mocked(api.listSessions).mockResolvedValue([{session_id:'a',cau_hoi:'Quy trình IT'}]);
+    vi.mocked(api.loadHistory).mockResolvedValueOnce(history);
+    const {wrapper,pinia}=mountWithPinia(ChatView);await flushPromises();
+    await button(wrapper,'Lịch sử').trigger('click');await wrapper.get('.history-title').trigger('click');await flushPromises();
+    const chat=useChatStore(pinia);
+    chat.updateMemory('a',{chatId:1,currentPartIds:['IT-1'],conversationContext:{topic:'IT'}});
+    wrapper.unmount();
+    let finish!:(value:ChatMessage[])=>void;
+    vi.mocked(api.loadHistory).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+    const restored=mount(ChatView,{global:{...global,plugins:[pinia]}});await flushPromises();
+    expect(api.loadHistory).toHaveBeenLastCalledWith('a');
+    expect(restored.text()).toContain('Đang tải lịch sử');
+    expect(restored.text()).not.toContain('Xin chào');
+    await restored.get('textarea').setValue('Ai duyệt?');
+    expect(button(restored,'Gửi').attributes('disabled')).toBeDefined();
+    await restored.get('textarea').trigger('keydown',{key:'Enter'});
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    finish(history);await flushPromises();
+    expect(restored.text()).toContain('Các bước IT');
+    vi.mocked(api.sendChatMessage).mockResolvedValueOnce(undefined);
+    await button(restored,'Gửi').trigger('click');await flushPromises();
+    expect(api.sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      session_id:'a',chat_history:history.map(({role,content})=>({role,content})),current_part_ids:['IT-1'],conversation_context:{topic:'IT'},
+    }),expect.anything());
+    restored.unmount();
+  });
+
+  it.each([null,99])('discards memory from a turn absent from restored nonempty history (chat id %s)',async chatId=>{
+    const saved:ChatMessage[]=[{role:'user',content:'Old topic'}, {role:'assistant',content:'Saved old answer',chat_id:10}];
+    vi.mocked(api.listSessions).mockResolvedValue([{session_id:'a',cau_hoi:'Old topic'}]);
+    vi.mocked(api.loadHistory).mockResolvedValue(saved);
+    vi.mocked(api.sendChatMessage).mockImplementationOnce(async(_payload,callbacks)=>{
+      callbacks.onDelta('New unsaved topic');
+      callbacks.onDone({chat_id:chatId,new_part_ids:['UNSAVED'],conversation_context:{topic:'unsaved'}});
+    });
+    const {wrapper,pinia}=mountWithPinia(ChatView);await flushPromises();
+    await button(wrapper,'Lịch sử').trigger('click');await wrapper.get('.history-title').trigger('click');await flushPromises();
+    await wrapper.get('textarea').setValue('Switch topic');await button(wrapper,'Gửi').trigger('click');await flushPromises();
+    wrapper.unmount();
+    const restored=mount(ChatView,{global:{...global,plugins:[pinia]}});await flushPromises();
+    expect(restored.text()).toContain('Saved old answer');expect(restored.text()).not.toContain('New unsaved topic');
+    expect(useChatStore(pinia).currentMemory).toEqual({currentPartIds:[],conversationContext:null});
+    restored.unmount();
+  });
+
+  it('clears hidden anchors when the restored session has no saved messages',async()=>{
+    const {wrapper,pinia}=mountWithPinia(ChatView);await flushPromises();
+    const chat=useChatStore(pinia);chat.updateMemory(chat.sessionId,{currentPartIds:['old'],conversationContext:{topic:'hidden'}});
+    wrapper.unmount();
+    vi.mocked(api.loadHistory).mockResolvedValueOnce([]);
+    const restored=mount(ChatView,{global:{...global,plugins:[pinia]}});await flushPromises();
+    expect(chat.currentMemory).toEqual({currentPartIds:[],conversationContext:null});
+    expect(restored.text()).toContain('Xin chào');restored.unmount();
+  });
+
+  it('keeps sending blocked after history failure until retry succeeds',async()=>{
+    vi.mocked(api.listSessions).mockResolvedValue([{session_id:'a',cau_hoi:'A'}]);
+    vi.mocked(api.loadHistory).mockRejectedValueOnce(new Error('private detail'))
+      .mockResolvedValueOnce([{role:'assistant',content:'Restored answer'}]);
+    const {wrapper}=mountWithPinia(ChatView);await flushPromises();
+    await button(wrapper,'Lịch sử').trigger('click');await wrapper.get('.history-title').trigger('click');await flushPromises();
+    await wrapper.get('textarea').setValue('Next question');
+    expect(button(wrapper,'Gửi').attributes('disabled')).toBeDefined();
+    await wrapper.get('textarea').trigger('keydown',{key:'Enter'});
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    await button(wrapper,'Thử lại hội thoại').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('Restored answer');
+    expect(button(wrapper,'Gửi').attributes('disabled')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('waits for an in-flight conversation before restoring after remount and ignores detached UI callbacks',async()=>{
+    let handlers!:Parameters<typeof api.sendChatMessage>[1];let finish!:()=>void;
+    vi.mocked(api.sendChatMessage).mockImplementation((_payload,callbacks)=>{
+      handlers=callbacks;return new Promise(resolve=>{finish=resolve;});
+    });
+    const {wrapper,pinia}=mountWithPinia(ChatView);await flushPromises();
+    await wrapper.get('textarea').setValue('Question still processing');await button(wrapper,'Gửi').trigger('click');await flushPromises();
+    const id=useChatStore(pinia).sessionId;wrapper.unmount();
+    const restored=mount(ChatView,{global:{...global,plugins:[pinia]}});await flushPromises();
+    expect(api.loadHistory).not.toHaveBeenCalled();
+    await restored.get('textarea').setValue('Follow-up');
+    expect(button(restored,'Gửi').attributes('disabled')).toBeDefined();
+    vi.mocked(api.loadHistory).mockResolvedValueOnce([{role:'user',content:'Question still processing'},{role:'assistant',content:'Saved answer',chat_id:2}]);
+    handlers.onDelta('Detached answer');handlers.onDone({chat_id:2,new_part_ids:['NEW'],conversation_context:{topic:'current'}});
+    finish();await flushPromises();
+    expect(api.loadHistory).toHaveBeenLastCalledWith(id);
+    expect(restored.text()).toContain('Saved answer');expect(restored.text()).not.toContain('Detached answer');
+    expect(useChatStore(pinia).currentMemory.currentPartIds).toEqual(['NEW']);
+    restored.unmount();
+  });
+
   it.each(['contains','scope_comparison'])('sends %s with the shared Math and Graph grant as a standalone action',async action=>{
     vi.mocked(api.apiGet).mockImplementation(async path=>{
       if(path.endsWith('evaluation-capabilities'))return {schema:'advanced-rag-v2-controlled-demo',
@@ -174,7 +287,7 @@ describe("ChatView public behavior", () => {
       if(path.endsWith('/graph-scopes'))return {items:[{product_scope:'assembly-A',site:'factory'}],offset:0,has_more:false} as never;
       if(path.endsWith('/approved-scopes'))return {items:[{scope_id:'a',definition:'Quantity',period:'A',unit:'piece'},
         {scope_id:'b',definition:'Quantity',period:'B',unit:'piece'}],offset:0,has_more:false} as never;
-      return {documents:[{DocID:1,TenFile:'Source.csv'}]} as never;
+      return {documents:[{DocID:1,OriginalFileName:'Source.csv'}]} as never;
     });
     vi.mocked(api.sendChatMessage).mockImplementation(async(_payload,callbacks)=>{callbacks.onDelta('Kết quả có nguồn');callbacks.onDone({});});
     const {wrapper,pinia}=mountWithPinia(ChatView);
@@ -208,7 +321,7 @@ describe("ChatView public behavior", () => {
         contract:'graph-v2-reviewed-query-controlled-demo-v1',accepted:false,offline_only:false,
         max_branches:1,actions:['contains','where_used'],text_query:false} as never;
       if(path.endsWith('/graph-scopes')) return {items:[{product_scope:'assembly-A',site:'factory'}],offset:0,has_more:false} as never;
-      return {documents:[{DocID:1,TenFile:'Assembly.pdf'}]} as never;
+      return {documents:[{DocID:1,OriginalFileName:'Assembly.pdf'}]} as never;
     });
     vi.mocked(api.sendChatMessage).mockImplementation(async(_payload,callbacks)=>{callbacks.onDelta('Quan hệ có nguồn');callbacks.onDone({});});
     const {wrapper,pinia}=mountWithPinia(ChatView);
@@ -233,7 +346,7 @@ describe("ChatView public behavior", () => {
       if (path.endsWith('/approved-scopes')) return {items:[
         {scope_id:'a',definition:'Doanh thu',period:'Kỳ A',unit:'VND'},
         {scope_id:'b',definition:'Doanh thu',period:'Kỳ B',unit:'VND'}],offset:0,has_more:false} as never;
-      return {documents:[{DocID:1,TenFile:'Doanh thu.xlsx'}]} as never;
+      return {documents:[{DocID:1,OriginalFileName:'Doanh thu.xlsx'}]} as never;
     });
     vi.mocked(api.sendChatMessage).mockImplementation(async (_payload,callbacks)=>{
       callbacks.onDelta('Kết quả so sánh có căn cứ'); callbacks.onDone({});
@@ -281,7 +394,7 @@ describe("ChatView public behavior", () => {
       if (path.endsWith('evaluation-capabilities')) return {schema:'advanced-rag-v2-evaluation',accepted:false,
         offline_only:true,max_branches:3,actions:['contains','where_used','bom_rollup','scope_comparison']} as never;
       if (path.endsWith('/graph-scopes')) return {items:[{product_scope:'assembly-A',site:'HCM'}],offset:0,has_more:false} as never;
-      return {documents:[{DocID:1,TenFile:'Cụm A.pdf'}]} as never;
+      return {documents:[{DocID:1,OriginalFileName:'Cụm A.pdf'}]} as never;
     });
     vi.mocked(api.sendChatMessage).mockImplementation(async (_payload,callbacks)=>{
       callbacks.onDelta('Kết quả theo từng ý');
@@ -582,6 +695,7 @@ describe("ChatView public behavior", () => {
     expect(wrapper.text()).toContain("version 2");
     expect(wrapper.find('a[href="/api/document/10"]').exists()).toBe(true);
     expect(chat.currentMemory).toEqual({
+      chatId: 42,
       currentPartIds: ["P-101"],
       conversationContext: { active: "manual" },
     });

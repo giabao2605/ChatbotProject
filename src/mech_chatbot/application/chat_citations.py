@@ -91,6 +91,10 @@ def structured_citation(item: Mapping[str, Any], *, page_has_vision: Callable[[i
         card={**card,'graph_context':dict(graph_context),'graph_hash':graph_hash,
               'original_url':card['original_url']+'?'+query,'has_vision':bool(vision and image_hash),
               'page_url':card['page_url']+'?'+query+'&image_hash='+image_hash if vision and image_hash else None}
+    if not (scope_id and scope_hash) and graph_context is None:
+        suffix = f'?citation_version={version}'
+        card = {**card, 'original_url': card['original_url'] + suffix,
+                'page_url': card['page_url'] + suffix if card['page_url'] else None}
     return card
 
 
@@ -111,8 +115,10 @@ def build_citation_list(
                 citations.append(citation)
             continue
         doc_id = _safe_int(item.get("doc_id"))
-        page_no = _safe_int(item.get("trang") or item.get("trang_so"))
-        if doc_id is None or page_no is None:
+        page_no = _safe_int(item.get("trang") or item.get("trang_so") or item.get("page_no"))
+        raw_version = item.get("version_no") if item.get("version_no") is not None else item.get("version")
+        version = _safe_int(raw_version) if type(raw_version) in (int, str) else None
+        if doc_id is None or page_no is None or version is None or version < 1:
             continue
         key = (doc_id, page_no)
         if key in seen:
@@ -122,22 +128,18 @@ def build_citation_list(
         citation = {
             "doc_id": doc_id,
             "page_no": page_no,
-            "file_name": item.get("file_goc"),
+            "file_name": item.get("file_goc") or item.get("file_name"),
             "score": item.get("score"),
             "source_id": item.get("source_id") or f"D{doc_id}P{page_no}",
             "has_vision": has_vision,
             "page_url": (
-                f"/api/files/documents/{doc_id}/pages/{page_no}"
+                f"/api/files/documents/{doc_id}/pages/{page_no}?citation_version={version}"
                 if has_vision
                 else None
             ),
-            "original_url": f"/api/files/documents/{doc_id}/original",
+            "original_url": f"/api/files/documents/{doc_id}/original?citation_version={version}",
+            "version_no": version,
         }
-        version_no = item.get("version_no")
-        if version_no is None:
-            version_no = item.get("version")
-        if version_no not in (None, ""):
-            citation["version_no"] = version_no
         citations.append(citation)
     return citations
 
@@ -214,7 +216,7 @@ def resolve_chat_citations(
     citations = build_citation_list(
         citation_docs,
         page_has_vision=page_has_vision,
-    ) or [dict(item) for item in streamed_candidates]
+    ) or build_citation_list(streamed_candidates, page_has_vision=page_has_vision)
     citations = filter_citations_by_answer(citations, answer)
     return tuple(citations), citation_ref_text(citations)
 

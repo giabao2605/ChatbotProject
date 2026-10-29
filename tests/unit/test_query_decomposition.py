@@ -22,6 +22,90 @@ from langchain_core.documents import Document
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize('question', [
+    'Mình mới vào công ty, muốn xin nghỉ phép thì làm thế nào, cần báo ai và trước bao lâu?',
+    'Nếu tài khoản bị khóa, cần báo ai, gửi thông tin gì và kiểm tra ở đâu?',
+    'Giấy tờ, chứng từ, hóa đơn và thông tin nhà cung cấp đã được xác nhận chưa?',
+])
+def test_context_and_subject_lists_are_not_independent_requests(question):
+    calls = []
+    plan = compile_query_plan(question, {}, planner=lambda q: calls.append(q) or {})
+    assert not plan.intent_overflow
+    assert plan.subqueries == (question,)
+    assert calls == [question]
+
+
+def test_semantic_split_retains_leave_topic_and_uses_existing_planner_once():
+    question = 'Mình mới vào công ty, muốn xin nghỉ phép thì làm thế nào, cần báo ai và trước bao lâu?'
+    queries = ['Xin nghỉ phép thì làm thế nào?', 'Xin nghỉ phép cần báo ai?', 'Xin nghỉ phép cần báo trước bao lâu?']
+    calls = []
+    plan = compile_query_plan(question, {}, planner=lambda q: calls.append(q) or {'subqueries': queries})
+    assert calls == [question]
+    assert plan.subqueries == tuple(queries)
+    assert not plan.used_fallback and not plan.intent_overflow
+
+
+def test_semantic_split_cannot_silently_truncate_more_than_three_requests():
+    question = 'Mình cần hỗ trợ, tìm BOM, nêu vật liệu, kiểm tra dung sai và liệt kê bước hàn'
+    queries = ['tìm BOM', 'nêu vật liệu', 'kiểm tra dung sai', 'liệt kê bước hàn']
+    plan = compile_query_plan(question, {}, planner=lambda _: {'subqueries': queries})
+    assert plan.intent_overflow and plan.subqueries == ()
+    assert len(plan.intents) == 4
+    assert all(actual.endswith(expected) for actual, expected in zip(plan.intents, queries))
+
+
+def test_dependent_questions_without_introduction_keep_their_shared_topic():
+    question = 'Xin nghỉ phép thế nào, cần báo ai và trước bao lâu?'
+    calls = []
+    plan = compile_query_plan(question, {}, planner=lambda q: calls.append(q) or {
+        'subqueries': ['Xin nghỉ phép thế nào?']})
+    assert calls == [question]
+    assert plan.used_fallback and plan.subqueries == (question,)
+
+
+@pytest.mark.parametrize('prefix', ['', 'Theo nội quy công ty, '])
+def test_semantic_branches_cannot_lose_shared_topic(prefix):
+    question = prefix + 'Xin nghỉ phép thế nào, cần báo ai và trước bao lâu?'
+    plan = compile_query_plan(question, {}, planner=lambda _: {
+        'subqueries': ['Xin nghỉ phép thế nào?', 'Cần báo ai?', 'Trước bao lâu?']})
+    assert plan.used_fallback and plan.subqueries == (question,)
+
+
+@pytest.mark.parametrize('question', [
+    'Xin nghỉ phép thế nào; cần báo ai; trước bao lâu?',
+    'Xin nghỉ phép thế nào? Cần báo ai? Trước bao lâu?',
+    'Theo nội quy công ty, xin nghỉ phép thế nào, cần báo ai và trước bao lâu?',
+])
+def test_dependent_questions_keep_topic_across_punctuation_and_scope(question):
+    plan = compile_query_plan(question, {})
+    assert plan.subqueries == (question,)
+    assert not plan.intent_overflow
+
+
+def test_intro_does_not_hide_four_clear_requests_when_planner_unavailable():
+    question = 'Mình cần hỗ trợ, tìm BOM, nêu vật liệu, kiểm tra dung sai và liệt kê bước hàn'
+    plan = compile_query_plan(question, {})
+    assert plan.intent_overflow and not plan.subqueries and len(plan.intents) == 4
+
+
+@pytest.mark.parametrize('planner', [None, lambda _: {}, lambda q: {'subqueries': [q]},
+    lambda q: {'subqueries': ['Hãy cho biết ' + q]},
+    lambda q: {'subqueries': [', '.join(q.split(', ')[:2]), ', '.join(q.split(', ')[2:])]}])
+def test_unresolved_multi_subject_request_cannot_bypass_limit_as_one_query(planner):
+    question = 'Nghỉ phép được bao lâu, mua hàng thực hiện thế nào, bảo trì do ai phụ trách, hỗ trợ hệ thống gửi ở đâu?'
+    plan = compile_query_plan(question, {}, planner=planner)
+    assert plan.clarification_required and not plan.intent_overflow
+    assert not plan.subqueries
+    assert execute_plan(plan, lambda *_: pytest.fail('Unresolved requests must not retrieve'), {}) == []
+
+
+def test_unbounded_planner_output_cannot_bypass_intent_limit():
+    question = 'Mình cần hỗ trợ, tìm hồ sơ và báo ai?'
+    plan = compile_query_plan(question, {}, planner=lambda _: {
+        'subqueries': [f'tìm hồ sơ {i}' for i in range(9)]})
+    assert plan.intent_overflow and not plan.subqueries
+
+
 @pytest.mark.parametrize("question, expected", [
     ("Theo POLICY-HR-41 và POLICY-IT-72, HR gửi yêu cầu trước bao lâu và IT cấp quyền trong bao lâu?",
      ("Theo POLICY-HR-41 và POLICY-IT-72, HR gửi yêu cầu trước bao lâu",

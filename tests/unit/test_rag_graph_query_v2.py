@@ -260,7 +260,7 @@ def test_graph_request_honors_cancellation_and_intent_overflow(connection,monkey
     assert any(isinstance(e,RagCancelled) for e in events) and not any(isinstance(e,RagToken) for e in events)
     query=replace(request(),question='Cụm chứa gì; dùng ở đâu; vật liệu; thời gian giao')
     result=collect_rag_events(DefaultRagExecutor().run(query,RagInvocation('overflow',mode='evaluation')))
-    assert result.outcome=='refused' and result.answer==QUERY_INTENT_OVERFLOW_NOTICE
+    assert result.outcome=='refused' and result.answer.startswith(QUERY_INTENT_OVERFLOW_NOTICE + '\n1. ')
     assert result.diagnostics.budget.graph_edges==0
 
 @pytest.mark.parametrize('change',[None,'relation','revision','rights','snapshot'])

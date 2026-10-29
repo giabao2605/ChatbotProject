@@ -266,6 +266,34 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
     )
 
 
+@pytest.mark.parametrize('provider_result', ['{}', 'invalid JSON', 'timeout', 'overflow'])
+def test_unresolved_intents_stop_after_one_planner_without_retrieval_or_enrichment(monkeypatch, provider_result):
+    from mech_chatbot.rag import pipeline
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase, retrieval_enrichment
+    from mech_chatbot.rag.phases.contracts import PhaseTerminal
+
+    question = 'Nghỉ phép được bao lâu, mua hàng thực hiện thế nào, bảo trì do ai phụ trách, hỗ trợ hệ thống gửi ở đâu?'
+    decision = replace(_route_decision(_prepared_request(question=question)), hyde_eligible=True)
+    calls = []
+    def invoke(*_args, **kwargs):
+        calls.append(kwargs['surface'])
+        if provider_result == 'timeout':
+            raise TimeoutError('planner unavailable')
+        content = json.dumps({'subqueries': question.rstrip('?').split(', ')}) if provider_result == 'overflow' else provider_result
+        return SimpleNamespace(content=content)
+    monkeypatch.setattr(retrieval_phase, '_apply_hyde', lambda *_: pytest.fail('No HyDE'))
+    monkeypatch.setattr(retrieval_enrichment, 'enrich_retrieval', lambda *_: pytest.fail('No enrichment'))
+    outcome = _run_phase(lambda state: pipeline._run_retrieval(decision, state),
+        retrieval=_retrieval_adapter(retrieve=lambda **_: pytest.fail('No retrieval'), query_decomposition_enabled=True),
+        provider=SimpleNamespace(invoke=invoke))
+    assert calls == ['query_decomposition']
+    assert isinstance(outcome, PhaseTerminal) and outcome.reason_code == 'clarification_required'
+    answer = ''.join(outcome.prepared.stream)
+    assert '1. ' in answer and 'tối đa ba ý' in answer
+    assert ('chưa xác định rõ' in answer) is (provider_result != 'overflow')
+    assert outcome.prepared.diagnostics['decomposition_intent_overflow'] is (provider_result == 'overflow')
+
+
 def test_query_overflow_has_no_planner_retrieval_hyde_or_fictitious_branches():
     from mech_chatbot.rag.phases import retrieval as retrieval_phase
 

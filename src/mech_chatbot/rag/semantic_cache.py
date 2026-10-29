@@ -17,7 +17,7 @@ from mech_chatbot.rag.entity_resolver import has_explicit_code
 
 
 _REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
-_ANSWER_CONTRACT = "grounded-answer-v7"
+_ANSWER_CONTRACT = "grounded-answer-v8-source-scope"
 _PROMPT_SHA256 = hashlib.sha256(Path(__file__).with_name("prompt.py").read_bytes()).hexdigest()
 _FILE_REFERENCE = re.compile(
     rf"(?<=[^\s\"'“”‘’])(?:{'|'.join(sorted(map(re.escape, SUPPORTED_LEARNING_EXTENSIONS), key=len, reverse=True))})(?!\w)",
@@ -195,6 +195,12 @@ def _validated_cache_payload(best, actor):
         return None
     try:
         source_ids = {int(doc_id) for doc_id in doc_ids}
+        from mech_chatbot.db.repositories.doc_metadata import get_common_metadata_for_rag
+        from mech_chatbot.rag.demo_sources import is_demo_source
+        current_metadata = get_common_metadata_for_rag(source_ids)
+        if any(doc_id not in current_metadata or is_demo_source(current_metadata[doc_id])
+               for doc_id in source_ids) or any(is_demo_source(item) for item in evidence):
+            return None
         if source_ids != {int(item["doc_id"]) for item in evidence}:
             return None
         if not {int(item["doc_id"]) for item in citations}.issubset(source_ids):

@@ -43,7 +43,7 @@ export type ChatMessage = {
   advanced_rag?: AdvancedRagMetadata;
 };
 
-export type EvidenceDocument = {DocID:number; TenFile:string; Site?:string};
+export type EvidenceDocument = {DocID:number; OriginalFileName:string|null; DocNumber?:string|null; VersionNo?:number|null; Site?:string};
 export type ApprovedScopeChoice = {scope_id:string; definition:string; period:string; unit:string; currency:string};
 export type GraphAction = {root_key:string; product_scope:string; site:string; direction:'contains'|'where_used'};
 export type BomQuantity = {order_quantity:string;quantity_scope?:never}|{quantity_scope:string;order_quantity?:never};
@@ -65,6 +65,7 @@ export type SessionItem = {
 };
 
 export type SessionMemory = {
+  chatId?: number;
   currentPartIds: string[];
   conversationContext: Record<string, unknown> | null;
 };

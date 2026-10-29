@@ -429,7 +429,7 @@ def test_comparison_does_not_silently_discard_four_question_intents(store):
     with bind_repository_runtime(db_engine=store):
         result = collect_rag_events(DefaultRagExecutor().run(query, RagInvocation('overflow', mode='evaluation')))
     assert result.outcome == 'refused' and result.refusal_reason == 'intent_overflow'
-    assert result.answer == QUERY_INTENT_OVERFLOW_NOTICE
+    assert result.answer.startswith(QUERY_INTENT_OVERFLOW_NOTICE + '\n1. ')
     assert result.citations == () and result.diagnostics.budget.calculations == 0
 
 

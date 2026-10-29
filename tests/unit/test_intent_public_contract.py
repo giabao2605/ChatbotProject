@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from mech_chatbot.rag import intent
+from mech_chatbot.llm.external_ai import ExternalProcessingDenied
 
 
 pytestmark = pytest.mark.unit
@@ -50,6 +51,107 @@ def _runtime(executor=None, *, rewrite_enabled=True):
         context_timeout=5.0,
         query_rewrite_enabled=rewrite_enabled,
     )
+
+
+@pytest.mark.parametrize('question', ['Quy trình đó thế nào?', 'Việc này cần báo ai?', 'How does that process work?'])
+def test_reference_without_history_requests_clarification_without_provider(question):
+    result = intent.analyze_context(question, runtime=_runtime())
+    assert result['clarification_required'] is True
+    assert result['standalone_question'] == question
+
+
+def test_reference_resolution_uses_existing_context_call_and_keeps_topic():
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(content='{"context_action":"continue","standalone_question":"Quy trình xin nghỉ phép thế nào?"}')
+    result = intent.analyze_context('Quy trình đó thế nào?',
+        chat_history=[{'role': 'user', 'content': 'Tôi muốn xin nghỉ phép'}],
+        invoke_provider=provider, runtime=_runtime())
+    assert len(calls) == 1 and not result.get('clarification_required', False)
+    assert 'xin nghỉ phép' in result['standalone_question']
+
+
+@pytest.mark.parametrize('question', [
+    'Tôi muốn xin nghỉ phép, quy trình đó thế nào?',
+    'Quy trình này về xin nghỉ phép thực hiện thế nào?',
+])
+def test_reference_can_resolve_subject_from_current_sentence(question):
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(content='{"context_action":"continue","standalone_question":"Quy trình xin nghỉ phép thế nào?"}')
+    result = intent.analyze_context(question, invoke_provider=provider, runtime=_runtime())
+    assert len(calls) == 1
+    assert not result.get('clarification_required', False)
+    assert result['standalone_question'] == 'Quy trình xin nghỉ phép thế nào?'
+
+
+def test_unresolved_reference_does_not_guess_after_context_failure():
+    result = intent.analyze_context('Quy trình đó thế nào?',
+        chat_history=[{'role': 'user', 'content': 'Xin chào'}],
+        runtime=_runtime(_ImmediateExecutor(error=ValueError('invalid JSON'))))
+    assert result['clarification_required'] is True
+
+
+@pytest.mark.parametrize('reference_chain', [False, True])
+def test_reference_uses_single_previous_user_request_without_external_processing(reference_chain):
+    from mech_chatbot.rag.query_decomposition import split_query_intents
+
+    previous = 'Công ty quy định thời gian xử lý yêu cầu cấp quyền hệ thống là bao lâu?'
+    question = 'Quy trình đó thực hiện như thế nào?'
+    history = [
+        {'role': 'user', 'content': previous},
+        {'role': 'assistant', 'content': 'SLA là 999 giờ. Một chủ đề khác là nghỉ phép.'},
+    ]
+    if reference_chain:
+        history += [
+            {'role': 'user', 'content': 'Quy trình đó cần báo ai?'},
+            {'role': 'assistant', 'content': 'Liên hệ người trong câu trả lời này.'},
+        ]
+    calls = []
+
+    def denied_provider(*args, **kwargs):
+        calls.append(kwargs)
+        raise ExternalProcessingDenied('internal_only')
+
+    result = intent.analyze_context(question, chat_history=history,
+        invoke_provider=denied_provider, runtime=_runtime())
+
+    assert calls == []
+    assert not result.get('clarification_required', False)
+    assert previous.rstrip('?') in result['standalone_question']
+    assert question in result['standalone_question']
+    assert '999' not in result['standalone_question']
+    assert 'nghỉ phép' not in result['standalone_question']
+    assert result['llm_resolved'] is False
+    requests, overflow = split_query_intents(result['standalone_question'])
+    assert len(requests) == 1 and overflow is False
+
+
+@pytest.mark.parametrize('previous', [
+    'Nghỉ phép được bao lâu, mua hàng thực hiện thế nào?',
+    'Quy trình này về mua hàng thực hiện thế nào?',
+])
+def test_local_reference_scope_stops_at_ambiguous_or_new_subject(previous):
+    result = intent.analyze_context('Quy trình đó thực hiện như thế nào?', chat_history=[
+        {'role': 'user', 'content': 'Thời gian xử lý yêu cầu cấp quyền là bao lâu?'},
+        {'role': 'user', 'content': previous},
+    ], runtime=_runtime(_ImmediateExecutor(error=ValueError('provider unavailable'))))
+    assert result['clarification_required'] is True
+
+
+def test_local_reference_scope_does_not_resolve_pending_candidate_choice():
+    result = intent.analyze_context('Quy trình đó thực hiện như thế nào?',
+        chat_history=[{'role': 'user', 'content': 'Thời gian xử lý yêu cầu cấp quyền là bao lâu?'}],
+        pending_candidates=[{'key': 'DOC-A'}, {'key': 'DOC-B'}],
+        runtime=_runtime(_ImmediateExecutor(error=ValueError('provider unavailable'))))
+    assert result['clarification_required'] is True
+
+
+@pytest.mark.parametrize('question', ['Nghỉ phép?', 'Quy trình xin nghỉ phép thế nào?', 'Doanh thu tháng này'])
+def test_short_clear_questions_do_not_need_reference_clarification(question):
+    assert not intent.analyze_context(question, runtime=_runtime()).get('clarification_required', False)
 
 
 @pytest.mark.parametrize(
@@ -266,6 +368,7 @@ def test_context_analysis_skips_llm_when_rewrite_is_disabled_or_unnecessary(
         "context_action": "continue",
         "standalone_question": question,
         "llm_resolved": False,
+        **({'clarification_required': True} if question == 'còn nó?' else {}),
     }
 
 
@@ -302,7 +405,7 @@ def test_context_analysis_returns_clean_standalone_question_and_trace(monkeypatc
 @pytest.mark.parametrize(
     ("payload", "expected_question"),
     [
-        ('{"context_action":"unsupported","standalone_question":"rewritten"}', "rewritten"),
+        ('{"context_action":"unsupported","standalone_question":"rewritten"}', "còn nó?"),
         ('{"context_action":"broaden","standalone_question":"   "}', "còn nó?"),
         ('{"context_action":"continue","standalone_question":42}', "còn nó?"),
     ],
@@ -321,6 +424,10 @@ def test_context_analysis_normalizes_invalid_provider_fields(monkeypatch, payloa
         runtime=_runtime(),
     )
 
+    if expected_question == 'còn nó?':
+        assert result == {'context_action': 'continue', 'standalone_question': expected_question,
+                          'llm_resolved': False, 'clarification_required': True}
+        return
     expected_action = "broaden" if '"broaden"' in payload else "continue"
     assert result == {
         "context_action": expected_action,
@@ -347,6 +454,7 @@ def test_context_analysis_provider_failure_returns_safe_fallback(monkeypatch, er
         "context_action": "continue",
         "standalone_question": "còn nó?",
         "llm_resolved": False,
+        "clarification_required": True,
     }
     if isinstance(error, concurrent.futures.TimeoutError):
         assert executor.future.cancelled is True

@@ -299,6 +299,7 @@ def test_routing_returns_semantic_cache_hit(monkeypatch):
     ("intent", "reason"),
     [
         ({"version_policy": "compare_versions", "detected_versions": []}, "missing_compare_versions"),
+        ({"clarification_required": True}, "missing_context"),
         ({"is_chitchat": True}, "chitchat"),
     ],
 )
@@ -320,8 +321,16 @@ def test_routing_returns_typed_intent_terminals(monkeypatch, intent, reason):
     outcome = routing.route(_request(), state)
 
     assert outcome.reason_code == reason
-    if reason == "missing_compare_versions":
+    if reason in {"missing_compare_versions", "missing_context"}:
         assert state.refusal_reason == "clarification_required"
+
+
+def test_reference_question_is_ineligible_for_both_answer_caches():
+    from mech_chatbot.rag.phases.preparation import _normalize_request
+    request = SimpleNamespace(question='Quy trình đó thế nào?', image_path=None, history=(),
+        current_part_ids=(), conversation_context=None, access=AccessScope(), response_language='vi')
+    context = _normalize_request(SimpleNamespace(request=request, trace_id='reference-test'))
+    assert context.cache_eligible is False
 
 
 def test_routing_adds_glossary_and_recovers_glossary_failure(monkeypatch):

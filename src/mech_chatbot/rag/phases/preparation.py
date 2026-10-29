@@ -84,6 +84,7 @@ def _empty_debug() -> dict[str, Any]:
 
 
 def _normalize_request(state: Any) -> _PreparationContext:
+    from mech_chatbot.rag.intent import has_context_reference
     request = state.request
     image_path = str(request.image_path) if request.image_path is not None else None
     chat_history = tuple(request.history)
@@ -108,7 +109,8 @@ def _normalize_request(state: Any) -> _PreparationContext:
         trace_id=state.trace_id,
         started_at=time.time(),
         cache_eligible=not any(
-            (image_path, chat_history, current_part_ids, bool(conversation_context))
+            (image_path, chat_history, current_part_ids, bool(conversation_context),
+             has_context_reference(request.question))
         ),
     )
 
@@ -237,7 +239,7 @@ def _intent_overflow_terminal(context: _PreparationContext, state: Any) -> Prepa
     if not query_decomposition_requested(state):
         return None
     from mech_chatbot.rag.query_decomposition import (
-        QUERY_INTENT_OVERFLOW_NOTICE, split_query_intents,
+        intent_overflow_notice, split_query_intents,
     )
 
     intents, overflow = split_query_intents(context.user_question)
@@ -261,7 +263,7 @@ def _intent_overflow_terminal(context: _PreparationContext, state: Any) -> Prepa
         refusal=True, refusal_reason="intent_overflow",
     )
     return PreparationOutcome(
-        terminal=(iter((QUERY_INTENT_OVERFLOW_NOTICE,)), "", (), context.current_part_ids, debug),
+        terminal=(iter((intent_overflow_notice(intents),)), "", (), context.current_part_ids, debug),
         reason_code="intent_overflow",
     )
 

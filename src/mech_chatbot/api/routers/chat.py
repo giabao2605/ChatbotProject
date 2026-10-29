@@ -134,7 +134,6 @@ def _chat_image_url_from_path(raw_path: Any) -> str | None:
 def _sources_for_chat_ids(
     chat_ids: list[int],
     runtime: Any,
-    revision_chat_ids: frozenset[int] = frozenset(),
 ) -> dict[int, list[dict[str, Any]]]:
     rows = runtime.app_support_queries.answer_sources_for_chat_ids(
         tuple(int(chat_id) for chat_id in chat_ids if chat_id)
@@ -144,12 +143,10 @@ def _sources_for_chat_ids(
         page_no = safe_int(chunk_ref)
         if doc_id is None or page_no is None:
             continue
-        revision_query = ''
-        if int(chat_id) in revision_chat_ids:
-            version = safe_int(version_no)
-            if version is None or version < 1:
-                continue
-            revision_query = f'?citation_version={version}'
+        version = safe_int(version_no) if type(version_no) in (int, str) else None
+        if version is None or version < 1:
+            continue
+        revision_query = f'?citation_version={version}'
         verified_vision = bool(has_vision) and page_has_vision(int(doc_id), page_no)
         out.setdefault(int(chat_id), []).append(
             {
@@ -176,9 +173,7 @@ def _decorate_history_messages(
     runtime: Any,
 ) -> list[dict[str, Any]]:
     chat_ids = [int(message["chat_id"]) for message in messages if message.get("chat_id") and not message.get('sources_redacted')]
-    revision_chat_ids = frozenset(int(message['chat_id']) for message in messages
-                                 if message.get('chat_id') and message.get('_advanced_rag_payload') is not None)
-    sources = _sources_for_chat_ids(chat_ids, runtime, revision_chat_ids)
+    sources = _sources_for_chat_ids(chat_ids, runtime)
     decorated: list[dict[str, Any]] = []
     for message in messages:
         rendered = {key: value for key, value in message.items() if key not in {"ref_images","structured_citations","_advanced_rag_payload"}}

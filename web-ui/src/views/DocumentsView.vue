@@ -16,6 +16,7 @@ const router = useRouter();
 const auth = useAuthStore();
 const canManage = computed(() => isRoleAllowed(auth.user?.roles, ["reviewer", "admin"]));
 const evidenceDialog = reactive({ visible: false, docId: 0 });
+const pagePreview = ref({ visible: false, pageUrl: '', originalUrl: '', name: '', failed: false });
 const requestedTab = computed<DocumentTab>(() => {
   const value = String(route.query.tab ?? "effective");
   return ["effective", "expired", "expiring-soon", "needs-review"].includes(value) ? value as DocumentTab : "effective";
@@ -136,17 +137,27 @@ function cancelEdit() {
   rejectEdit = null;
 }
 
+function sourceUrl(row: ApiRow, resource: string): string {
+  const version = num(row, 'VersionNo');
+  const suffix = Number.isInteger(version) && version > 0 ? `?citation_version=${version}` : '';
+  return `/api/files/documents/${num(row, 'DocID')}/${resource}${suffix}`;
+}
+
 const managementActions: RowAction[] = [
   {
     label: "Xem trang",
+    visible: (row) => !/\.(md|markdown)$/i.test(pickStr(row, ['OriginalFileName'])),
     run: async (row) => {
-      window.open(`/api/files/documents/${num(row, "DocID")}/pages/1`, "_blank");
+      pagePreview.value = {
+        visible: true, pageUrl: sourceUrl(row, 'pages/1'), originalUrl: sourceUrl(row, 'original'),
+        name: pickStr(row, ['OriginalFileName']) || `Doc ${num(row, 'DocID')}`, failed: false,
+      };
     },
   },
   {
     label: "Tải bản gốc",
     run: async (row) => {
-      window.open(`/api/files/documents/${num(row, "DocID")}/original`, "_blank");
+      window.open(sourceUrl(row, 'original'), "_blank", "noopener");
     },
   },
   {
@@ -254,6 +265,16 @@ const toolbar = computed<ToolbarAction[]>(() => canManage.value ? [
   />
   <LifecycleView v-else :key="activeTab" :group="lifecycleGroup" />
 
+  <Dialog v-model:visible="pagePreview.visible" header="Xem trang tài liệu" modal :style="{ width: 'min(1000px, 96vw)' }">
+    <template v-if="pagePreview.visible">
+      <p>{{ pagePreview.name }} · Trang 1</p>
+      <Message v-if="pagePreview.failed" severity="warn">Không tải được ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.</Message>
+      <img v-else :key="pagePreview.pageUrl" class="document-page-preview" :src="pagePreview.pageUrl"
+        :alt="`${pagePreview.name}, trang 1`" @error="pagePreview = { ...pagePreview, failed: true }" />
+      <p><a class="document-original-link" :href="pagePreview.originalUrl" target="_blank" rel="noopener">Mở bản gốc</a></p>
+    </template>
+  </Dialog>
+
   <Dialog v-model:visible="evidenceDialog.visible" header="Kiểm tra chứng cứ tài liệu" modal :style="{ width: 'min(1100px, 96vw)' }">
     <StructuredEvidenceReview v-if="evidenceDialog.visible && canManage && evidenceDialog.docId" :key="evidenceDialog.docId" :doc-id="evidenceDialog.docId" />
   </Dialog>
@@ -311,4 +332,5 @@ const toolbar = computed<ToolbarAction[]>(() => canManage.value ? [
 <style scoped>
 .document-tabs-shell { padding-bottom: 0; }
 .view-tabs { display: flex; flex-wrap: wrap; gap: .65rem; }
+.document-page-preview { display: block; max-width: 100%; height: auto; }
 </style>

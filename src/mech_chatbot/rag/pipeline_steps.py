@@ -1596,6 +1596,7 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
         trace_id=trace_id,
         invoke_provider=invoke_provider,
         runtime=getattr(runtime, "intent_runtime", None),
+        pending_candidates=_cc_in.get("pending_candidates"),
     )
     context_action = ctx_result["context_action"]
     _ctx_llm_resolved = bool(ctx_result.get("llm_resolved"))
@@ -1670,6 +1671,9 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
             getattr(runtime, "strict_site_filter", True)
         ),
     )
+    if ctx_result.get('clarification_required'):
+        return (user_question, [], False, False, {'clarification_required': True},
+                rbac_filter, rbac_filter, rbac_filter, False)
     strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data = extract_search_intent(
         effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel, trace_id=trace_id, invoke_provider=invoke_provider,
         runtime=getattr(runtime, "intent_runtime", None),

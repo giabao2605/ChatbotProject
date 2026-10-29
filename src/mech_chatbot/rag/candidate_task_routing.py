@@ -9,7 +9,7 @@ from mech_chatbot.domain.graph_query import bom_rollup_payload
 from mech_chatbot.domain.task_routing import CANDIDATE_TASK_ROUTING, MIXED_CANDIDATE_TASK_ROUTING
 from mech_chatbot.rag.graph_retrieval_v2 import MAX_RELATIONS, MAX_GENERATION_EDGES
 from mech_chatbot.rag.query_decomposition import (
-    GRAPH_TASK_ROUTING, TASK_CLARIFICATION, QUERY_INTENT_OVERFLOW_NOTICE,
+    GRAPH_TASK_ROUTING, TASK_CLARIFICATION, intent_overflow_notice, split_query_intents,
     TaskRoutingValidationError, _allowed_outputs, _exact_fields, _json_object,
     _reject_constant, _selection_template, _simple_fixed_tasks, _validate_task, _validate_spans,
     _request_key, _fold,
@@ -375,5 +375,5 @@ def candidate_task_guard(state):
         return None
     reason = 'intent_overflow' if disposition == 'overflow' else 'task_invalid_plan' if disposition == 'invalid' else 'task_clarification'
     state.refuse(reason)
-    notice = QUERY_INTENT_OVERFLOW_NOTICE if disposition == 'overflow' else TASK_CLARIFICATION
+    notice = intent_overflow_notice(split_query_intents(state.request.question)[0]) if disposition == 'overflow' else TASK_CLARIFICATION
     return state.prepared((iter((notice,)), '', (), (), {'answer_outcome': 'refused'}))

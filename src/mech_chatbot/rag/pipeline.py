@@ -88,6 +88,16 @@ def _run_retrieval(
     from mech_chatbot.rag.phases.retrieval import retrieve_primary
 
     primary = retrieve_primary(route_decision, state)
+    if primary.reason_code in {"intent_overflow", "intent_clarification"}:
+        state.refuse("intent_overflow" if primary.decomposition_intent_overflow else "clarification_required")
+        return PhaseTerminal(state.prepared((iter((primary.decomposition_notice,)), "", (),
+            route_decision.request.current_part_ids, {
+                "answer_outcome": "clarification_required", "decomposition_status": "clarification_required",
+                "decomposition_intent_count": len(primary.decomposition_intents),
+                "decomposition_intent_overflow": primary.decomposition_intent_overflow,
+                "decomposition_intent_coverage": list(primary.decomposition_intent_coverage),
+                "decomposition_branches": [],
+            })), reason_code="clarification_required")
     from mech_chatbot.rag.phases.retrieval_enrichment import enrich_retrieval
 
     enrichment = enrich_retrieval(route_decision, primary, state)

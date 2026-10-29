@@ -26,9 +26,16 @@ def test_cache_key_distinguishes_language_model_and_display_is_not_a_grant():
 
 
 @pytest.mark.parametrize("semantic", [False, True])
-@pytest.mark.parametrize("failure", [None, "missing_actor", "revoked", "version", "unavailable"])
+@pytest.mark.parametrize("failure", [None, "missing_actor", "revoked", "version", "unavailable", "demo", "scope_unavailable"])
 def test_cache_rechecks_current_permissions_and_version(monkeypatch, semantic, failure):
     from mech_chatbot.adapters.protected_files import SqlProtectedFileStore
+    from mech_chatbot.db.repositories import doc_metadata
+    current_metadata = {41: {'tags': None, 'title': 'Manual', 'doc_number': 'MANUAL-001'}}
+    if failure == 'demo':
+        current_metadata = {41: {'tags': None, 'title': 'Quy trình cấp quyền hệ thống giả lập', 'doc_number': 'DEMO-IT-001'}}
+    if failure == 'scope_unavailable':
+        current_metadata = {}
+    monkeypatch.setattr(doc_metadata, 'get_common_metadata_for_rag', lambda _: current_metadata)
 
     row = {"cache_id": 1, "question": "pressure", "embedding": "[1.0]",
         "answer": "12 bar [Source: D41P4]", "source_doc_ids": "[41]",

@@ -315,6 +315,30 @@ describe("thin operations views", () => {
 });
 
 describe("access and document operations", () => {
+  it('offers Markdown originals instead of nonexistent pages and pins the listed revision', async () => {
+    state.roles = ['viewer'];
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const wrapper = mountView(DocumentsView);
+    const actions = pages(wrapper)[0].rowActions!;
+    const markdown = { DocID: 1177, OriginalFileName: 'IT.MD', VersionNo: 2 };
+    const pdf = { DocID: 8, OriginalFileName: 'drawing.pdf', VersionNo: 3 };
+    const page = actions.find(action => action.label === 'Xem trang')!;
+    const original = actions.find(action => action.label === 'Tải bản gốc')!;
+    expect(page.visible?.(markdown)).toBe(false);
+    expect(page.visible?.(pdf)).toBe(true);
+    await original.run(markdown);
+    expect(open).toHaveBeenLastCalledWith('/api/files/documents/1177/original?citation_version=2', '_blank', 'noopener');
+    await page.run(pdf);
+    await nextTick();
+    const preview = wrapper.find('.document-page-preview');
+    expect(preview.attributes('src')).toBe('/api/files/documents/8/pages/1?citation_version=3');
+    await preview.trigger('error');
+    expect(wrapper.text()).toContain('Không tải được ảnh xem trước');
+    expect(wrapper.find('.document-original-link').attributes('href')).toBe('/api/files/documents/8/original?citation_version=3');
+    expect(wrapper.find('.document-page-preview').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("loads and executes access request and revocation contracts", async () => {
     const wrapper = mountView(AccessView);
     await flushPromises();
@@ -374,7 +398,7 @@ describe("access and document operations", () => {
     const actions = contract.rowActions ?? [];
     await actions[0].run({ DocID: 7 });
     await actions[1].run({ DocID: 7 });
-    expect(open).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenCalledTimes(1);
     const current = actions.find(action => action.label === 'Đặt hiện hành')!;
     expect(current.visible?.({ IsCurrentVersion: 0 })).toBe(true);
     expect(current.visible?.({ IsCurrentVersion: 1 })).toBe(false);

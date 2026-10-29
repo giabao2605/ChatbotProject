@@ -344,7 +344,8 @@ def _fixed_task_guard(state):
         from mech_chatbot.rag.candidate_task_routing import candidate_task_guard
         return candidate_task_guard(state)
     if not state.invocation.task_routing_contract:
-        reason = 'intent_overflow' if split_query_intents(state.request.question)[1] else None
+        plan = compile_query_plan(state.request.question, {})
+        reason = 'intent_overflow' if plan.intent_overflow else 'task_clarification' if plan.clarification_required else None
     else:
         reason = None
         origin, disposition, slots, tasks = 'prevalidation', 'invalid', (), ()
@@ -382,10 +383,12 @@ def _fixed_task_guard(state):
         _observe_fixed_tasks(state, origin, disposition, slots, tasks)
     if reason:
         state.refuse(reason)
-        notice = QUERY_INTENT_OVERFLOW_NOTICE if reason == 'intent_overflow' else TASK_CLARIFICATION
+        notice = intent_overflow_notice(split_query_intents(state.request.question)[0]) if reason == 'intent_overflow' else TASK_CLARIFICATION
+        if not state.invocation.task_routing_contract and reason == 'task_clarification':
+            notice = intent_overflow_notice(plan.intents, uncertain=True)
         diagnostics = {'answer_outcome': 'refused'}
         if not state.invocation.task_routing_contract and state.request.scope_comparison:
-            diagnostics['decomposition_intent_overflow'] = True
+            diagnostics['decomposition_intent_overflow'] = reason == 'intent_overflow'
         return state.prepared((iter((notice,)), '', (), (), diagnostics))
     return None
 
@@ -412,6 +415,7 @@ class BranchPlan:
     intent_coverage: tuple[bool, ...] = ()
     used_fallback: bool = False
     intent_overflow: bool = False
+    clarification_required: bool = False
 
 
 DecompositionPlan = BranchPlan
@@ -488,6 +492,7 @@ def is_complex_query(question: str) -> bool:
         cue_count > 0
         or normalized.count("?") > 1
         or bool(re.search(r"[;\n]", str(question or "")))
+        or ("," in normalized and split_query_intents(question)[0] == (str(question).strip(),))
         or split_query_intents(question)[1]
     )
 
@@ -532,6 +537,11 @@ _SHARED_CONFIRMATION = re.compile(
     r"\b(?:đã|da)\s+(?:(?:được|duoc)\s+)?(?:xác\s+(?:định|nhận)|xac\s+(?:dinh|nhan))"
     r"[^;\n?!]*\b(?:chưa|chua)\s*\??$", re.IGNORECASE,
 )
+_REQUEST_COMMAND = re.compile(
+    r'^(?:nêu|tìm|liệt kê|cho biết|xem|kiểm|tóm tắt|so sánh|giải thích|đánh giá|check|list|find)\b', re.IGNORECASE)
+_CONTEXT_PREFIX = re.compile(r'^(?:mình|tôi|em|chúng tôi|nếu|khi|để|if|when|i|we)\b', re.IGNORECASE)
+_DEPENDENT_CLAUSE = re.compile(
+    r'^(?:cần|phải|nên|trước|sau|báo|gửi|nộp|bao lâu|bao nhiêu|ở đâu|khi nào|làm thế nào|how long|how much)\b', re.IGNORECASE)
 
 
 def split_query_intents(question: str) -> tuple[tuple[str, ...], bool]:
@@ -549,6 +559,23 @@ def split_query_intents(question: str) -> tuple[tuple[str, ...], bool]:
         start = separator.end()
     parts.append(original[start:].strip(" ,;?\t\r\n"))
     parts = [part for part in parts if part]
+    if len(parts) > 1 and _CONTEXT_PREFIX.match(parts[0]) and not _INDEPENDENT_REQUEST.search(parts[0]) and all(_REQUEST_COMMAND.match(part) for part in parts[1:]):
+        requests = tuple(scope + parts[0] + ', ' + part for part in parts[1:])
+        return requests, len(requests) > 3
+    if any(_DEPENDENT_CLAUSE.match(part) for part in parts[1:]):
+        return (str(question).strip(),), False
+    if len(parts) > 1 and not scope:
+        contextual_prefix = _CONTEXT_PREFIX.match(parts[0])
+        shared_subjects = (_SHARED_CONFIRMATION.search(original)
+                           and not any(_INDEPENDENT_REQUEST.search(part) for part in parts[:-1]))
+        uncertain_overflow = (len(parts) > 3 and not re.search(r'[;\n?]', original.rstrip('?'))
+                              and not all(_INDEPENDENT_REQUEST.search(part) for part in parts))
+        dependent_questions = (not operands and not codes_in_query(original) and not re.search(r'[;\n?]', original.rstrip('?'))
+                               and re.search(r'\b(?:bao lâu|bao nhiêu|thế nào|gì|ai|ở đâu|what|when|how|who)\b', original, re.IGNORECASE)
+                               and not all(_REQUEST_COMMAND.match(part) for part in parts))
+        if contextual_prefix or shared_subjects or uncertain_overflow or dependent_questions:
+            # Keep context intact until the existing planner can identify independent requests.
+            return (original,), False
     if (scope and len(parts) > 1 and (len(parts) <= 3 or _SHARED_CONFIRMATION.search(original))
             and not re.search(r"[;\n?]", original.rstrip("?"))):
         # A shared predicate must stay with its subjects, rather than becoming an incomplete branch.
@@ -556,6 +583,39 @@ def split_query_intents(question: str) -> tuple[tuple[str, ...], bool]:
             parts = [original.strip(" ,;?\t\r\n")]
     parts = [scope + part for part in parts]
     return tuple(parts or ([scope + original] if original else [])), len(parts) > 3
+
+
+def intent_overflow_notice(intents=(), *, uncertain=False) -> str:
+    notice = ("Mình chưa xác định rõ các yêu cầu độc lập trong câu hỏi. "
+              "Vui lòng chọn tối đa ba ý hoặc làm rõ các ý dưới đây." if uncertain else QUERY_INTENT_OVERFLOW_NOTICE)
+    return notice + ("\n" + "\n".join(
+        f"{index}. {intent}" for index, intent in enumerate(intents, 1)) if intents else "")
+
+
+def _unresolved_intent_candidates(question):
+    scoped = _DOCUMENT_SCOPE_PREFIX.match(question)
+    body = scoped.group('body') if scoped else question
+    parts = tuple(part.strip() for part in _INTENT_SEPARATOR.split(body) if part.strip())
+    if parts and _CONTEXT_PREFIX.match(parts[0]) and not _INDEPENDENT_REQUEST.search(parts[0]):
+        parts = parts[1:]
+    if _SHARED_CONFIRMATION.search(body) and not any(_INDEPENDENT_REQUEST.search(part) for part in parts[:-1]):
+        return (question,)
+    return parts
+
+
+def _semantic_requirements_covered(question, queries):
+    scoped = _DOCUMENT_SCOPE_PREFIX.match(question)
+    body = scoped.group('body') if scoped else question
+    parts = [part.strip() for part in _INTENT_SEPARATOR.split(body) if part.strip()]
+    if parts and re.match(r'^(?:mình|tôi|em|chúng tôi|i|we)\b', parts[0], re.IGNORECASE) and not _INDEPENDENT_REQUEST.search(parts[0]):
+        parts = parts[1:]
+    # A conservative lexical check falls back to the full question on paraphrases, never drops an ask.
+    expected = _intent_tokens(' '.join(parts)) - {'muon', 'minh', 'toi', 'em', 'want', 'would', 'like'}
+    first = re.sub(r'^(?:muon|can)\s+', '', _fold(parts[0])) if parts else ''
+    topic = re.split(r'\b(?:thi|nhu the nao|the nao|ra sao|lam sao|can|bao lau|bao nhieu|o dau|ai)\b', first, maxsplit=1)[0]
+    shared = _intent_tokens(topic)
+    return (expected.issubset(_intent_tokens(' '.join(queries)))
+            and all(shared.issubset(_intent_tokens(query)) for query in queries))
 
 
 def _intent_tokens(value: str) -> set[str]:
@@ -642,16 +702,26 @@ def compile_query_plan(
             continue
         seen.add(normalized)
         accepted.append(query)
-        if len(accepted) > 3:
-            break
+        if len(accepted) > 8:
+            return BranchPlan(original, True, (), planner_version,
+                              (original,), (False,), False, True)
     proposed_queries = tuple(accepted)
+    if len(proposed_queries) > 3 and intents == (original,):
+        return BranchPlan(original, True, (), planner_version, proposed_queries,
+                          (False,) * len(proposed_queries), False, True)
     proposed_coverage = _coverage(intents, proposed_queries)
     planner_complete = bool(
         proposed_queries
         and len(proposed_queries) <= 3
         and len(proposed_queries) >= len(intents)
         and all(proposed_coverage)
+        and (intents != (original,) or _semantic_requirements_covered(original, proposed_queries))
     )
+    candidates = _unresolved_intent_candidates(original) if intents == (original,) else ()
+    proposed_count = sum(len(_unresolved_intent_candidates(query)) for query in proposed_queries)
+    if len(candidates) > 3 and (not planner_complete or proposed_count > 3):
+        return BranchPlan(original, True, (), planner_version, candidates,
+                          (False,) * len(candidates), True, False, clarification_required=True)
     final_queries = proposed_queries if planner_complete else intents
     final_coverage = _coverage(intents, final_queries)
     return BranchPlan(
@@ -687,7 +757,7 @@ def execute_plan(
     on_timeout=None,
     checkpoint=None,
 ):
-    if plan.intent_overflow:
+    if plan.intent_overflow or plan.clarification_required:
         return []
     queries = plan.subqueries if plan.is_complex else (plan.original_query,)
     queries = tuple(queries)

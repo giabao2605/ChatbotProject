@@ -23,6 +23,8 @@ const actionState = ref<QueryActionState>({active:false,valid:true});
 const busy = ref(false);
 const thinking = ref(false);
 const historyLoading = ref(false);
+const historyFailed = ref(false);
+const waitingSession = ref<string | null>(null);
 const uploadLoading = ref(false);
 const catalogLoading = ref(false);
 const catalogError = ref('');
@@ -31,6 +33,7 @@ const warning = ref("");
 const error = ref("");
 const selectedFile = ref<File | null>(null);
 const selectedPreview = ref("");
+const failedPreviews = ref<string[]>([]);
 const uploadToken = ref("");
 const scrollEl = ref<HTMLElement | null>(null);
 let contentSerial = 0;
@@ -41,6 +44,10 @@ const identity = computed(()=>JSON.stringify([authStore.user?.user_id,authStore.
 
 const sessionId = computed(() => chatStore.sessionId);
 const latestAssistant = computed(() => [...messages.value].reverse().find((message) => message.role === "assistant"));
+
+function isMarkdownSource(citation:Citation) {
+  return /\.(?:md|markdown)$/i.test(citation.file_name || '');
+}
 
 function sourceLocation(citation:Citation) {
   const locator = citation.locator;
@@ -82,8 +89,8 @@ async function newChat() {
 
 function resetView() {
   contentSerial++;
-  historyLoading.value=false;busy.value=false;thinking.value=false;
-  messages.value=[];warning.value='';error.value='';
+  historyLoading.value=false;historyFailed.value=false;waitingSession.value=null;busy.value=false;thinking.value=false;
+  messages.value=[];warning.value='';error.value='';failedPreviews.value=[];
   clearFile();
 }
 
@@ -94,13 +101,22 @@ async function openSession(id: string) {
   const request=contentSerial, actor=identity.value;
   const current=()=>request===contentSerial && actor===identity.value && sessionId.value===id;
   historyLoading.value=true;
+  if (chatStore.pendingSessionIds.includes(id)) {
+    waitingSession.value=id;
+    return;
+  }
   try {
     const loaded=await api.loadHistory(id);
     if (!current()) return;
     messages.value=loaded;historyOpen.value=false;
+    const lastChatId=[...loaded].reverse().find(message=>message.role==='assistant')?.chat_id;
+    if (lastChatId == null || chatStore.currentMemory.chatId !== lastChatId) chatStore.clearMemory(id);
     await scrollToBottom();
   } catch {
-    if (current()) error.value='Không tải được lịch sử. Hãy thử lại.';
+    if (current()) {
+      historyFailed.value=true;
+      error.value='Không tải được lịch sử. Hãy thử lại hội thoại trước khi gửi tiếp.';
+    }
   } finally {
     if (current()) historyLoading.value=false;
   }
@@ -152,7 +168,7 @@ async function onFileChange(event: Event) {
 
 async function send() {
   const question = input.value.trim();
-  if (!question || busy.value || historyLoading.value || uploadLoading.value || !actionState.value.valid) return;
+  if (!question || busy.value || historyLoading.value || historyFailed.value || uploadLoading.value || !actionState.value.valid) return;
   const request=++contentSerial, actor=identity.value;
   const current=()=>request===contentSerial && actor===identity.value && sessionId.value===currentSession;
   const actionPayload=actionState.value.active ? (actionState.value.text_query ? {text_query:true} :
@@ -177,18 +193,19 @@ async function send() {
     image_url: selectedPreview.value || null,
     image_name: selectedFile.value?.name || null,
   };
-  messages.value.push(userMessage, {
+  messages.value=[...messages.value,userMessage, {
     role: "assistant",
     content: "",
     progress: ["Đã nhận câu hỏi"],
     progressState: "running",
-  });
+  }];
   const imageToken = uploadToken.value || null;
   clearFile();
   await scrollToBottom();
 
   const memory = chatStore.currentMemory;
   if (!current()) return;
+  chatStore.pendingSessionIds=[...chatStore.pendingSessionIds,currentSession];
   try {
     await api.sendChatMessage(
       {
@@ -227,6 +244,14 @@ async function send() {
           if (last?.role === "assistant" && !last.content) last.content = `Lỗi: ${message}`;
         },
         onDone(data) {
+          if (chatStore.memoryIdentity === actor) {
+            if (data.chat_id == null) chatStore.clearMemory(currentSession);
+            else chatStore.updateMemory(currentSession, {
+              chatId: data.chat_id,
+              currentPartIds: data.new_part_ids ?? [],
+              conversationContext: data.conversation_context ?? null,
+            });
+          }
           if (!current()) return;
           thinking.value = false;
           setAssistantProgress("Hoàn tất", "done");
@@ -235,10 +260,6 @@ async function send() {
               ...message,chat_id:data.chat_id ?? null,ref_text:data.ref_text || '',
               citations:data.citations ?? [],advanced_rag:data.advanced_rag,
             } : message);
-          chatStore.updateMemory(currentSession, {
-            currentPartIds: data.new_part_ids ?? [],
-            conversationContext: data.conversation_context ?? null,
-          });
           refreshSessions();
         },
       },
@@ -248,6 +269,9 @@ async function send() {
     error.value = err instanceof Error ? err.message : "Gửi câu hỏi thất bại";
     setAssistantProgress("Có lỗi khi gửi câu hỏi", "error");
   } finally {
+    if (chatStore.memoryIdentity === actor) {
+      chatStore.pendingSessionIds=chatStore.pendingSessionIds.filter(id=>id!==currentSession);
+    }
     if (current()) {busy.value = false;thinking.value = false;}
   }
 }
@@ -258,10 +282,15 @@ async function rate(message: ChatMessage, rating: number) {
   message.feedback = rating;
 }
 
+watch(()=>chatStore.pendingSessionIds, pending=>{
+  if (waitingSession.value && !pending.includes(waitingSession.value)) openSession(waitingSession.value);
+});
 watch(identity,(value,previous)=>{
+  const restore=chatStore.memoryIdentity===value;
   catalogSerial++;sessions.value=[];input.value='';catalogError.value='';catalogLoading.value=false;
   chatStore.bindMemoryIdentity(value);
   resetView();
+  if (restore) openSession(sessionId.value);
   if (authStore.user || previous===undefined) refreshSessions();
 },{immediate:true});
 onBeforeUnmount(()=>{catalogSerial++;resetView();});
@@ -284,14 +313,15 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
             outlined
             @click="historyOpen = !historyOpen"
           />
-          <Tag :value="busy ? 'Đang xử lý' : 'Sẵn sàng'" :severity="busy ? 'warn' : 'success'" />
+          <Tag :value="busy ? 'Đang xử lý' : historyLoading ? 'Đang khôi phục hội thoại' : historyFailed ? 'Chưa tải được hội thoại' : 'Sẵn sàng'"
+            :severity="busy || historyLoading || historyFailed ? 'warn' : 'success'" />
         </div>
       </header>
 
       <div :class="['chat-body', { 'with-history': historyOpen }]">
         <div class="chat-column">
           <div ref="scrollEl" class="message-scroll">
-            <div v-if="messages.length === 0" class="empty-state">
+            <div v-if="messages.length === 0 && !historyLoading && !historyFailed" class="empty-state">
               <h2>Xin chào, tôi có thể giúp gì cho bạn?</h2>
               <p>Đặt câu hỏi về tài liệu, quy trình, chính sách hoặc dữ liệu nội bộ.</p>
               <div class="prompt-grid">
@@ -364,15 +394,19 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
                     :class="{ 'structured-citation':citation.citation_schema === 'source-locator-v2' }"
                   >
                     <a
-                      v-if="citation.has_vision && citation.page_url"
+                      v-if="!isMarkdownSource(citation) && citation.has_vision && citation.page_url && !failedPreviews.includes(citation.page_url)"
                       :href="citation.page_url"
                       target="_blank"
                       class="citation-preview-link"
                       :aria-label="`Mở ảnh nguồn ${citation.file_name || citation.doc_id}, trang ${citation.page_no}`"
                     >
-                      <img :src="citation.page_url" :alt="`Doc ${citation.doc_id} trang ${citation.page_no}`" />
+                      <img :src="citation.page_url" :alt="`Doc ${citation.doc_id} trang ${citation.page_no}`"
+                        @error="failedPreviews = [...failedPreviews, citation.page_url]" />
                     </a>
                     <div class="citation-card-body">
+                      <p v-if="isMarkdownSource(citation)">Tài liệu văn bản không có ảnh trang. Mở bản gốc để đối chiếu.</p>
+                      <p v-else-if="citation.page_url && failedPreviews.includes(citation.page_url)">Không tải được ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.</p>
+                      <p v-else-if="!citation.has_vision">Không có ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.</p>
                       <span>
                         {{ citation.file_name || `Doc ${citation.doc_id}` }} · {{ sourceLocation(citation) }}
                         <template v-if="citation.version_no !== undefined && citation.version_no !== null">
@@ -407,15 +441,16 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
             </article>
           </div>
 
-          <p v-if="historyLoading" role="status">Đang tải lịch sử…</p>
+          <p v-if="historyLoading" role="status">{{ waitingSession ? 'Đang chờ câu trả lời trước hoàn tất để khôi phục hội thoại…' : 'Đang tải lịch sử…' }}</p>
           <p v-if="uploadLoading" role="status">Đang tải ảnh…</p>
           <Message v-if="catalogError" severity="error">{{ catalogError }}</Message>
           <Button v-if="catalogError" label="Thử lại danh sách lịch sử" :disabled="catalogLoading" @click="refreshSessions" />
           <Message v-if="warning" severity="warn">{{ warning }}</Message>
           <Message v-if="error" severity="error">{{ error }}</Message>
+          <Button v-if="historyFailed" label="Thử lại hội thoại" @click="openSession(sessionId)" />
 
           <footer class="composer">
-            <AdvancedRagActions :key="sessionId" :disabled="busy || historyLoading" @change="actionState=$event" />
+            <AdvancedRagActions :key="sessionId" :disabled="busy || historyLoading || historyFailed" @change="actionState=$event" />
             <div v-if="selectedPreview" class="selected-file">
               <img :src="selectedPreview" alt="Ảnh đã chọn" />
               <span>{{ selectedFile?.name }}</span>
@@ -433,7 +468,7 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
                 placeholder="Hỏi bất cứ điều gì"
                 @keydown.enter.exact.prevent="send"
               />
-              <Button :label="busy ? 'Đang gửi' : 'Gửi'" :disabled="busy || historyLoading || uploadLoading || !input.trim() || !actionState.valid" @click="send" />
+              <Button :label="busy ? 'Đang gửi' : 'Gửi'" :disabled="busy || historyLoading || historyFailed || uploadLoading || !input.trim() || !actionState.valid" @click="send" />
             </div>
           </footer>
         </div>

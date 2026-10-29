@@ -30,8 +30,8 @@ test('three selected business actions reach chat and preserve each source and Ma
       allowed_departments:['Technical','Accountant'],allowed_sites:['factory'],max_security_level:'internal',csrf_token:'fixture-csrf'}};
     else if (url.pathname.endsWith('evaluation-capabilities')) data={schema:'advanced-rag-v2-evaluation',accepted:false,
       offline_only:true,max_branches:3,actions:['contains','where_used','bom_rollup','scope_comparison']};
-    else if (url.pathname==='/api/documents') data={documents:[{DocID:1,TenFile:'fixture-assembly.pdf'},
-      {DocID:17,TenFile:'fixture-ledger.xlsx'}, {DocID:99,TenFile:'fixture-policy.csv'}]};
+    else if (url.pathname==='/api/documents') data={documents:[{DocID:1,OriginalFileName:'fixture-assembly.pdf'},
+      {DocID:17,OriginalFileName:'fixture-ledger.xlsx'}, {DocID:99,OriginalFileName:'fixture-policy.csv'}]};
     else if (url.pathname.endsWith('/graph-scopes')) data={items:[{product_scope:'fixture-product',site:'factory'}],offset:0,has_more:false};
     else if (url.pathname.endsWith('/approved-scopes')) data={items:[{scope_id:'a',definition:'Kỳ A',period:'Tháng 6',unit:'VND'},
       {scope_id:'b',definition:'Kỳ B',period:'Tháng 7',unit:'VND'},

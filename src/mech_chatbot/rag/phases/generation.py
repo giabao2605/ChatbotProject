@@ -30,6 +30,7 @@ from mech_chatbot.rag.pipeline_steps import (
     generate_answer,
 )
 from mech_chatbot.rag.query_decomposition import audit_decomposition_stream
+from mech_chatbot.rag.demo_sources import is_demo_source, mark_demo_stream
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +250,7 @@ def _decorate_generated_stream(
     debug_info["citation_docs"] = citation_snapshot
     if decomposition_branches:
         stream = audit_decomposition_stream(stream, decomposition_branches)
+    stream = mark_demo_stream(stream, documents)
     _store_conversation_document_refs(
         debug_info,
         documents,
@@ -418,6 +420,7 @@ def _wrap_semantic_cache(
             )
             and decision.cache_query_embedding is not None
             and documents
+            and not any(is_demo_source(doc.metadata) for doc in documents)
         ):
             source_doc_ids = [
                 doc.metadata.get("doc_id")

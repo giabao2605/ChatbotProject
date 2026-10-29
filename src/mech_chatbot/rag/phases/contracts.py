@@ -26,9 +26,11 @@ RoutingReason: TypeAlias = Literal[
     "route_terminal",
     "semantic_cache_hit",
     "missing_compare_versions",
+    "missing_context",
     "chitchat",
 ]
 TerminalReason: TypeAlias = Literal[
+    "clarification_required",
     "access_denied",
     "no_docs_for_exact_code",
     "disambiguation_required",

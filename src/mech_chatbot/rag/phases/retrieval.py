@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
 
@@ -178,7 +178,10 @@ def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -
         state.budget.record("planners", 1, cumulative=True)
         state.checkpoint("planner")
         prompt = (
-            "Tach cau hoi noi bo phuc hop thanh toi da 3 truy van doc lap. "
+            "Tach cau hoi noi bo thanh cac yeu cau doc lap, toi da 8 de nhan dien vuot gioi han. "
+            "Khong dem loi gioi thieu, dieu kien hay danh sach cung mot vi ngu thanh yeu cau rieng. "
+            "Moi truy van phai giu chu de va dieu kien chung cua cau goc. Khong bo bat ky yeu cau nao; "
+            "neu khong tach chac chan, tra mot truy van giu nguyen toan bo cau hoi. "
             "Giu nguyen thu tu cac y trong cau hoi goc. "
             "Khong them ma tai lieu, phien ban, phong ban hay site khong co trong cau goc. "
             "Chi tra JSON theo schema {\"subqueries\":[\"...\"]}.\nCAU HOI:\n" + question
@@ -406,6 +409,7 @@ def _retrieve_branch(
     from mech_chatbot.rag.query_decomposition import served_branch_documents
 
     state.checkpoint("branch_retrieval")
+    from mech_chatbot.rag.demo_sources import refresh_applicable_sources
     if _deadline_exceeded(branch_deadline_monotonic):
         return _empty_deadline_branch()
     part_ids, strict_filter, broad_filter = _branch_filters(context, subquery)
@@ -420,7 +424,9 @@ def _retrieve_branch(
         trace_id=context.trace_id,
     )
     raw_documents = tuple(result[0])
-    result = (_documents_in_question(result[0], subquery), *result[1:])
+    result = (_documents_in_question(refresh_applicable_sources(result[0], context.decision.request.user_question), subquery), *result[1:])
+    if raw_documents and not result[0]:
+        result = (result[0], result[1], result[2] + '+source_scope_filtered', *result[3:])
     state.checkpoint("branch_retrieval")
     retrieval_latency_ms = max(
         0,
@@ -440,6 +446,9 @@ def _retrieve_branch(
         context, state, subquery, part_ids, strict_filter, broad_filter,
         result, decision, policy, correction_budget, deadline_exceeded,
     )
+    if correction.attempted:
+        correction = replace(correction, result=(
+            _documents_in_question(refresh_applicable_sources(correction.result[0], context.decision.request.user_question), subquery), *correction.result[1:]))
     access_denied = _probe_branch_access(
         context,
         subquery,
@@ -782,15 +791,16 @@ def _run_decomposition(context: _RetrievalContext, state: Any) -> _Decomposition
     access_context = _access_context(context)
     planner_result = _compile_plan(context, state, access_context)
     plan = planner_result.plan
-    if plan.intent_overflow:
-        from mech_chatbot.rag.query_decomposition import QUERY_INTENT_OVERFLOW_NOTICE
+    if plan.intent_overflow or plan.clarification_required:
+        from mech_chatbot.rag.query_decomposition import intent_overflow_notice
 
         return _DecompositionResult(
-            batch=_RetrievalBatch((), 0, "intent_overflow", time.time()),
-            notice=QUERY_INTENT_OVERFLOW_NOTICE,
+            batch=_RetrievalBatch((), 0, "intent_overflow" if plan.intent_overflow else "intent_clarification", time.time()),
+            notice=intent_overflow_notice(plan.intents, uncertain=plan.clarification_required),
             intents=plan.intents,
             intent_coverage=plan.intent_coverage,
-            intent_overflow=True,
+            intent_overflow=plan.intent_overflow,
+            used_fallback=plan.used_fallback,
             usage=_decomposition_usage(state, plan, planner_result, ()),
         )
     if plan.is_complex:
@@ -864,7 +874,8 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
     else:
         result = _DecompositionResult(batch=_retrieve_direct(context, state))
     state.checkpoint("retrieval")
-    batch = result.batch if result.intent_overflow else _apply_hyde(context, state, result.batch)
+    blocked = result.batch.mode in {"intent_overflow", "intent_clarification"}
+    batch = result.batch if blocked else _apply_hyde(context, state, result.batch)
     has_active_filter = batch.active_filter is not _RETRIEVE_UNSET
     return PrimaryRetrievalOutcome(
         documents=batch.documents,
@@ -886,7 +897,7 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
         correction_estimated_cost=result.correction_estimated_cost,
         lookup_documents=batch.lookup_documents or batch.documents,
         decomposition_usage=result.usage,
-        reason_code="intent_overflow" if result.intent_overflow else "retrieved",
+        reason_code=result.batch.mode if blocked else "retrieved",
     )
 
 

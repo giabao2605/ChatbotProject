@@ -197,7 +197,7 @@ onBeforeUnmount(()=>{capabilitySerial++;documentSerial++;});
           <label v-else>Bản vẽ
             <select :value="row.doc" :aria-label="`Bản vẽ ý ${index+1}`" @change="update(row.id,{doc:($event.target as HTMLSelectElement).value})">
               <option value="">Chọn bản vẽ</option>
-              <option v-for="item in documents" :key="item.DocID" :value="String(item.DocID)">{{ item.TenFile }}</option>
+              <option v-for="item in documents" :key="item.DocID" :value="String(item.DocID)">{{ [item.OriginalFileName?.trim() || `DocID ${item.DocID}`, item.DocNumber, item.VersionNo != null ? `v${item.VersionNo}` : ''].filter(Boolean).join(' · ') }}</option>
             </select>
           </label>
           <label v-if="row.action==='where_used'">Phạm vi sản phẩm

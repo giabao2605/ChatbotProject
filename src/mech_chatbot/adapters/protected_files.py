@@ -177,7 +177,9 @@ class FilesystemProtectedFileStorage:
         return self.resolve_under_root(stored_path, (self._raw_root,))
 
     def resolve_page_image(self, stored_path: str | None, *, allow_fallback: bool = True) -> Path | None:
-        resolved = self.resolve_under_root(stored_path, (self._processed_root,))
+        # Earlier ingestion wrote exact SQL image paths under src/data/processed.
+        legacy_root = self._project_root / "src" / "data" / "processed"
+        resolved = self.resolve_under_root(stored_path, (self._processed_root, legacy_root))
         if resolved is not None and resolved.exists() and resolved.is_file():
             return resolved
         if not allow_fallback:

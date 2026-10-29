@@ -113,10 +113,13 @@ def _normalized_folder(metadata: dict[str, Any]) -> Any:
 
 
 def _render_citation(metadata: dict[str, Any], folder: Any) -> str:
+    from mech_chatbot.rag.demo_sources import is_demo_source
     source = metadata.get("file_goc", "Khong ro")
     page = metadata.get("trang_so", "?")
     stage = metadata.get("cong_doan", "Khong ro")
     citation = f"**{source}** (Trang {page}) - {stage}"
+    if is_demo_source(metadata):
+        citation += " [DEMO — không phải quy định công ty]"
     tags: list[str] = []
     if folder:
         tags.append(str(folder))

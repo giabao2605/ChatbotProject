@@ -131,6 +131,30 @@ def test_filesystem_storage_allows_only_approved_roots_and_safe_image_names(tmp_
     assert storage.resolve_chat_image(".hidden") is None
 
 
+def test_page_storage_reads_exact_legacy_paths_without_widening_traversal_access(tmp_path):
+    processed = tmp_path / 'data' / 'processed'
+    legacy = tmp_path / 'src' / 'data' / 'processed'
+    legacy.mkdir(parents=True)
+    page = legacy / 'page.png'
+    page.write_bytes(b'legacy page')
+    outside = legacy.parent / 'private.png'
+    outside.write_bytes(b'private')
+    storage = FilesystemProtectedFileStorage(
+        project_root=tmp_path, raw_root=tmp_path / 'data' / 'raw', processed_root=processed)
+    assert storage.resolve_page_image(str(page), allow_fallback=False) == page.resolve()
+    assert storage.resolve_page_image('src/data/processed/page.png', allow_fallback=False) == page.resolve()
+    assert storage.resolve_page_image(str(legacy / '..' / 'private.png'), allow_fallback=False) is None
+    assert storage.resolve_page_image(str(tmp_path / 'unapproved' / 'page.png'), allow_fallback=False) is None
+    assert storage.resolve_original(str(page)) is None
+
+
+def test_ingestion_writes_pages_to_the_same_canonical_root_as_file_delivery():
+    from mech_chatbot.api.file_access import data_processed_root
+    from mech_chatbot.ingestion.pdf.config import PdfIngestionConfig, default_pdf_ingestion_config
+    assert PdfIngestionConfig().image_dir == data_processed_root()
+    assert default_pdf_ingestion_config().image_dir == data_processed_root()
+
+
 def test_audit_adapter_preserves_repository_call_shape() -> None:
     calls = []
     sink = RepositoryProtectedFileAuditSink(

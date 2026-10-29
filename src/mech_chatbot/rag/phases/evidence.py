@@ -34,6 +34,7 @@ from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
 from mech_chatbot.rag.phases.retrieval_rerank import RerankOutcome
 from mech_chatbot.rag.phases.routing import RouteDecision
 from mech_chatbot.rag.pipeline_steps import _assemble_context
+from mech_chatbot.rag.demo_sources import DEMO_MISSING_NOTICE, demo_scope_context, filter_applicable_sources
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,7 +267,11 @@ def evaluate_evidence(
     request = decision.request
     documents = list(reranked.documents)
     decomposition_branches = list(primary.decomposition_branches)
+    if len(filter_applicable_sources(documents, request.user_question)) != len(documents):
+        from mech_chatbot.rag.phases.retrieval_rerank import _empty_context_terminal
+        return _empty_context_terminal(decision, enrichment, state, list(enrichment.new_part_ids), DEMO_MISSING_NOTICE)
     context_text = _assemble_context(documents, request.user_question) + primary.decomposition_notice
+    context_text = demo_scope_context(documents) + context_text
     from mech_chatbot.rag.query_dependencies import dependency_context
     dependencies = getattr(state, 'text_dependencies', ())
     if dependencies:

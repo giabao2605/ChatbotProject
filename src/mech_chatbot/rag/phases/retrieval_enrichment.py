@@ -286,6 +286,7 @@ def _enrich_community(
     )
     result = load_community_context(
         context.decision.effective_question,
+        source_question=context.user_question,
         graph_enabled=graph.graph_enabled,
         community_enabled=graph.community_enabled,
         access_context=graph.access,
@@ -569,12 +570,13 @@ def _empty_documents_terminal(
     context: _EnrichmentContext,
     state: Any,
     part_ids: Sequence[str],
+    notice: str | None = None,
 ) -> PhaseTerminal:
     logger.warning("BLOCKER: Khong tim thay tai lieu nao, chan LLM de tranh hallucination.")
     blocked, reason = _probe_exact_code_access(context, part_ids)
     if blocked and reason:
         return _access_denied_terminal(context, state, reason)
-    message = _t_rag(
+    message = notice or _t_rag(
         "Tài liệu hiện tại chưa có dữ liệu liên quan đến câu hỏi của bạn. "
         "Mình không thể trả lời dựa trên suy đoán. "
         "Vui lòng nạp tài liệu vào hệ thống trước, hoặc hỏi nội dung đã có trong dữ liệu.",
@@ -853,9 +855,13 @@ def enrich_retrieval(
     )
     if code_result.terminal is not None:
         return code_result.terminal
+    from mech_chatbot.rag.demo_sources import DEMO_MISSING_NOTICE, refresh_applicable_sources
+    applicable = refresh_applicable_sources(code_result.documents, context.user_question)
+    if code_result.documents and not applicable:
+        return _empty_documents_terminal(context, state, code_result.part_ids, DEMO_MISSING_NOTICE)
     state.transition("retrieval")
     documents, terminal = _disambiguate_documents(
-        context, state, code_result.documents, code_result.part_ids, primary,
+        context, state, applicable, code_result.part_ids, primary,
         code_result.retrieval_mode,
     )
     if terminal is not None:
@@ -866,7 +872,9 @@ def enrich_retrieval(
     )
     documents = _prepend_image(documents, decision.request.image_analysis)
     if not documents:
-        return _empty_documents_terminal(context, state, code_result.part_ids)
+        from mech_chatbot.rag.demo_sources import DEMO_MISSING_NOTICE
+        return _empty_documents_terminal(context, state, code_result.part_ids,
+            DEMO_MISSING_NOTICE if 'source_scope_filtered' in primary.retrieval_mode else None)
     correction = _apply_crag(context, state, documents, code_result.part_ids)
     return EnrichmentOutcome(
         documents=correction.documents, new_part_ids=code_result.part_ids,

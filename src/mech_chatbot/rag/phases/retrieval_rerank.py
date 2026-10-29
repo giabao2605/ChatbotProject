@@ -10,6 +10,7 @@ from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.rag.context_builders import hydrate_parent_context, parent_context_max_workers
 from mech_chatbot.rag.corrective import merge_corrected_documents
+from mech_chatbot.rag.demo_sources import DEMO_MISSING_NOTICE, filter_applicable_sources, refresh_applicable_sources
 from mech_chatbot.rag.execution import RequestBudgetExceeded, current_request_checkpoint
 from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.diagnostics import make_terminal_debug as _make_terminal_debug
@@ -322,10 +323,11 @@ def _empty_context_terminal(
     enrichment: EnrichmentOutcome,
     state: Any,
     new_part_ids: list[Any],
+    notice: str | None = None,
 ) -> PhaseTerminal:
     request = decision.request
     logger.warning("BLOCKER: Context rong, chan goi LLM de tranh Hallucination.")
-    empty_msg = _t_rag(
+    empty_msg = notice or _t_rag(
         "Tài liệu hiện tại không ghi chú thông tin về câu hỏi của bạn. "
         "Vui lòng kiểm tra lại hoặc cung cấp thêm bản vẽ.",
         request.response_language,
@@ -427,6 +429,12 @@ def rerank_retrieval(
     served_graph_docs = list(enrichment.served_graph_documents)
     community_docs = list(enrichment.community_documents)
     runtime = state.retrieval_adapter
+    applicable = refresh_applicable_sources(retrieved_docs, user_question)
+    if retrieved_docs and not applicable:
+        return _empty_context_terminal(decision, enrichment, state, new_part_ids, DEMO_MISSING_NOTICE)
+    retrieved_docs = applicable
+    graph_docs = refresh_applicable_sources(graph_docs, user_question)
+    community_docs = refresh_applicable_sources(community_docs, user_question)
 
     if retrieved_docs:
         fake_docs, real_docs = _prepare_candidates(
@@ -487,6 +495,10 @@ def rerank_retrieval(
             runtime,
         )
         retrieved_docs = fake_docs + real_docs
+        retrieved_docs = refresh_applicable_sources(retrieved_docs, user_question)
+        if not retrieved_docs:
+            return _empty_context_terminal(decision, enrichment, state, new_part_ids, DEMO_MISSING_NOTICE)
+        served_graph_docs = filter_applicable_sources(served_graph_docs, user_question)
         retrieved_docs = long_context_reorder(retrieved_docs)
 
     return RerankOutcome(

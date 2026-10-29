@@ -12,7 +12,7 @@ it('selects reviewed BOM quantity without sending a stale literal and restores l
   vi.mocked(api.apiGet).mockImplementation(async path=>{
     if(path.endsWith('evaluation-capabilities')) return capabilities as never;
     if(path.endsWith('/graph-scopes')) return {items:[{product_scope:'assembly-A',site:'factory'}],offset:0,has_more:false} as never;
-    if(path==='/api/documents') return {documents:[{DocID:1,TenFile:'Cụm A.pdf'}]} as never;
+    if(path==='/api/documents') return {documents:[{DocID:1,OriginalFileName:'Cụm A.pdf'}]} as never;
     return {items:[{scope_id:'quantity',definition:'Đơn hàng',unit:'piece'},{scope_id:'policy',definition:'Quy tắc',unit:'piece'}],offset:0,has_more:false} as never;
   });
   const wrapper=create();await flushPromises();
@@ -47,7 +47,7 @@ beforeEach(()=>{
   vi.mocked(api.apiGet).mockImplementation(async path=>{
     if (path.endsWith('evaluation-capabilities')) return capabilities as never;
     if (path.endsWith('/graph-scopes')) return {items:[{product_scope:'assembly-A',site:'factory'}],offset:0,has_more:false} as never;
-    if (path==='/api/documents') return {documents:[{DocID:1,TenFile:'Cụm A.pdf'}]} as never;
+    if (path==='/api/documents') return {documents:[{DocID:1,OriginalFileName:'Cụm A.pdf'}]} as never;
     return {items:[],has_more:false,offset:0} as never;
   });
 });
@@ -80,7 +80,7 @@ it('offers three bounded live actions and text only for the exact full Query gra
 it('sends a single reviewed scope total independently and disables adding branches',async()=>{
   vi.mocked(api.apiGet).mockImplementation(async path=>{
     if(path.endsWith('evaluation-capabilities')) return {...capabilities,actions:[...capabilities.actions,'scope_total']} as never;
-    if(path==='/api/documents') return {documents:[{DocID:1,TenFile:'Chi phí.csv'}]} as never;
+    if(path==='/api/documents') return {documents:[{DocID:1,OriginalFileName:'Chi phí.csv'}]} as never;
     return {items:[{scope_id:'total-a',definition:'Chi phí',unit:'VND'}],offset:0,has_more:false} as never;
   });
   const wrapper=create();await flushPromises();
@@ -95,7 +95,7 @@ it('sends a single reviewed scope total independently and disables adding branch
 it('allows explicit total branches only when the server advertises that contract',async()=>{
   vi.mocked(api.apiGet).mockImplementation(async path=>{
     if(path.endsWith('evaluation-capabilities')) return {...capabilities,scope_total_query:true,actions:[...capabilities.actions,'scope_total']} as never;
-    if(path==='/api/documents') return {documents:[{DocID:1,TenFile:'Chi phí.csv'}]} as never;
+    if(path==='/api/documents') return {documents:[{DocID:1,OriginalFileName:'Chi phí.csv'}]} as never;
     return {items:[{scope_id:'total-a',definition:'Chi phí',unit:'VND'}],offset:0,has_more:false} as never;
   });
   const wrapper=create();await flushPromises();
@@ -117,7 +117,7 @@ it('offers only one scope total to a viewer with the exact live total contract',
     if(path.endsWith('evaluation-capabilities')) return {schema:'advanced-rag-v2-controlled-demo',
       contract:'grounded-math-scope-total-controlled-demo-v1',accepted:false,offline_only:false,
       max_branches:1,actions:['scope_total'],text_query:false} as never;
-    if(path==='/api/documents') return {documents:[{DocID:1,TenFile:'Chi phí.csv'}]} as never;
+    if(path==='/api/documents') return {documents:[{DocID:1,OriginalFileName:'Chi phí.csv'}]} as never;
     return {items:[{scope_id:'total-a',definition:'Chi phí',unit:'VND'}],offset:0,has_more:false} as never;
   });
   const wrapper=create();
@@ -137,7 +137,7 @@ it('switches between granted total and comparison without a stale scope or query
     if(path.endsWith('evaluation-capabilities')) return {schema:'advanced-rag-v2-controlled-demo',
       contract:'math-reviewed-templates-controlled-demo-v1',accepted:false,offline_only:false,
       max_branches:1,actions:['scope_comparison','scope_total'],text_query:false} as never;
-    if(path==='/api/documents') return {documents:[{DocID:1,TenFile:'Chi phí.csv'}]} as never;
+    if(path==='/api/documents') return {documents:[{DocID:1,OriginalFileName:'Chi phí.csv'}]} as never;
     return {items:[{scope_id:'a',definition:'Kỳ A',unit:'VND'},{scope_id:'b',definition:'Kỳ B',unit:'VND'}],offset:0,has_more:false} as never;
   });
   const wrapper=create();
@@ -207,7 +207,7 @@ it('combines comparison, BOM and reverse graph without cutting or merging a four
   vi.mocked(api.apiGet).mockImplementation(async path=>{
     if (path.endsWith('evaluation-capabilities')) return capabilities as never;
     if (path.endsWith('/graph-scopes')) return {items:[{product_scope:'assembly-A',site:'factory'}],offset:0,has_more:false} as never;
-    if (path==='/api/documents') return {documents:[{DocID:1,TenFile:'Cụm A.pdf'}]} as never;
+    if (path==='/api/documents') return {documents:[{DocID:1,OriginalFileName:'Cụm A.pdf'}]} as never;
     return {items:[{scope_id:'a',definition:'Kỳ A',period:'2026-06',unit:'VND'},
       {scope_id:'b',definition:'Kỳ B',period:'2026-07',unit:'VND'},
       {scope_id:'pieces',definition:'Số lượng',period:'',unit:'piece'}],has_more:false,offset:0} as never;
@@ -257,4 +257,22 @@ it('freezes source choices while a chat request is running and clears them on so
   await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises();
   expect(wrapper.text()).toContain('Không tải được danh sách');expect(wrapper.text()).not.toContain('secret scope');
   expect((wrapper.emitted('change')!.at(-1)![0] as QueryActionState).valid).toBe(false);
+});
+
+
+it('renders API document names, document codes and versions without changing selection ids',async()=>{
+  vi.mocked(api.apiGet).mockImplementation(async path=>{
+    if (path.endsWith('evaluation-capabilities')) return capabilities as never;
+    if (path==='/api/documents') return {documents:[
+      {DocID:1,OriginalFileName:'Cụm A.pdf',DocNumber:'DWG-A',VersionNo:2},
+      {DocID:2,OriginalFileName:'  ',DocNumber:null,VersionNo:null},
+    ]} as never;
+    return {items:[],has_more:false,offset:0} as never;
+  });
+  const wrapper=create();await flushPromises();
+  await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises();
+  const options=wrapper.get('select[aria-label="Bản vẽ ý 1"]').findAll('option').slice(1);
+  expect(options.map(option=>[option.element.value,option.text()])).toEqual([
+    ['1','Cụm A.pdf · DWG-A · v2'],['2','DocID 2'],
+  ]);
 });

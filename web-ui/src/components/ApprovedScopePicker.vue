@@ -45,7 +45,7 @@ onBeforeUnmount(()=>{serial++;});
     <label>Tài liệu {{ label }}
       <select v-model="doc" :aria-label="`Tài liệu ${label}`" :disabled="disabled">
         <option value="">Chọn tài liệu</option>
-        <option v-for="item in documents" :key="item.DocID" :value="String(item.DocID)">{{ item.TenFile }}</option>
+        <option v-for="item in documents" :key="item.DocID" :value="String(item.DocID)">{{ [item.OriginalFileName?.trim() || `DocID ${item.DocID}`, item.DocNumber, item.VersionNo != null ? `v${item.VersionNo}` : ''].filter(Boolean).join(' · ') }}</option>
       </select>
     </label>
     <label>{{ label }}
