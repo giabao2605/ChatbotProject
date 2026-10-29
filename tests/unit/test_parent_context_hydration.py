@@ -30,6 +30,7 @@ def _metadata(**overrides):
         "is_current": True,
         "serving_epoch": 18,
         "publication_version": 4,
+        "version_no": 1,
     }
     metadata.update(overrides)
     return metadata
@@ -40,6 +41,7 @@ def _metadata(**overrides):
     [
         ("staging", {"servable": False, "publication_state": "qdrant_synced"}),
         ("old_version", {"is_current": False, "serving_epoch": 17, "publication_version": 3}),
+        ("wrong_source_version", {"version_no": 2}),
         ("wrong_site", {"site": "DN"}),
         ("wrong_department", {"phong_ban_quyen": ["HR", "CHUNG"]}),
         ("wrong_clearance", {"required_clearance": "confidential"}),
@@ -106,6 +108,9 @@ def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(
     assert conditions["metadata.phong_ban_quyen"].any == ["Technical", "CHUNG"]
     assert conditions["metadata.serving_epoch"].value == 18
     assert conditions["metadata.publication_version"].value == 4
+    assert conditions["metadata.version_no"].value == 1
+    assert "metadata.chunk_index" not in conditions
+    assert conditions["metadata.parent_page"].value == 3
     assert conditions["metadata.required_clearance"].value == "internal"
 
 
@@ -164,11 +169,11 @@ def test_parent_hydration_loads_unique_sections_concurrently_and_preserves_order
         max_workers=3,
     )
 
-    assert [doc.metadata["doc_id"] for doc in hydrated] == [74, 75, 76]
+    assert hydrated[:3] == selected
+    assert [doc.metadata["doc_id"] for doc in hydrated[3:]] == [74, 74, 75, 75, 76, 76]
     assert [doc.page_content for doc in hydrated] == [
-        "first\n\nsecond",
-        "first\n\nsecond",
-        "first\n\nsecond",
+        "selected 1", "selected 2", "selected 3",
+        "first", "second", "first", "second", "first", "second",
     ]
 
 
@@ -218,11 +223,11 @@ def test_parent_hydration_batches_qdrant_reads_and_preserves_order():
         qdrant_timeout_seconds=9,
     )
 
-    assert [doc.metadata["doc_id"] for doc in hydrated] == [91, 92, 93]
+    assert hydrated[:3] == selected
+    assert [doc.metadata["doc_id"] for doc in hydrated[3:]] == [91, 91, 92, 92, 93, 93]
     assert [doc.page_content for doc in hydrated] == [
-        "parent 1.1\n\nparent 1.2",
-        "parent 2.1\n\nparent 2.2",
-        "parent 3.1\n\nparent 3.2",
+        "selected 1", "selected 2", "selected 3",
+        "parent 1.1", "parent 1.2", "parent 2.1", "parent 2.2", "parent 3.1", "parent 3.2",
     ]
     assert len(client.calls) == 1
     assert len(client.calls[0]["requests"]) == 3
@@ -299,7 +304,8 @@ def test_parent_hydration_keeps_legacy_path_when_batch_is_disabled():
         batch_enabled=False,
     )
 
-    assert [document.page_content for document in hydrated] == ["selected"]
+    assert hydrated[0] is selected
+    assert [document.page_content for document in hydrated] == ["selected", "legacy parent"]
     assert len(client.calls) == 1
 
 
@@ -356,5 +362,69 @@ def test_parent_hydration_worker_one_is_sequential_rollback(monkeypatch):
 
     monkeypatch.setattr(context_builders, "_load_parent_section_chunks", _loader)
 
-    assert context_builders.hydrate_parent_context(selected, max_workers=1) == selected
+    hydrated = context_builders.hydrate_parent_context(selected, max_workers=1)
+    assert hydrated[:2] == selected
+    assert [doc.page_content for doc in hydrated[2:]] == ["only", "only"]
     assert max_active == 1
+
+
+def test_parent_expansion_keeps_all_anchors_and_neighbor_page_provenance(monkeypatch):
+    anchors = [
+        SimpleNamespace(page_content=f"answer {index}", metadata=_metadata(
+            doc_id=index, parent_section=f"S{index}", trang_so=9, chunk_index=20,
+        ))
+        for index in range(1, 10)
+    ]
+    same_parent = SimpleNamespace(
+        page_content="second answer in first section", metadata={**anchors[0].metadata, "chunk_index": 30},
+    )
+    anchors.append(same_parent)
+    neighbor = SimpleNamespace(
+        page_content="neighbor page evidence", metadata={**anchors[0].metadata, "trang_so": 8, "chunk_index": 19},
+    )
+    calls = []
+
+    def load(key, limit, metadata, **_kwargs):
+        calls.append(key)
+        return [neighbor, anchors[0]] if key[0] == 1 else []
+
+    monkeypatch.setattr(context_builders, "_load_parent_section_chunks", load)
+    hydrated = context_builders.hydrate_parent_context(
+        anchors, max_sections=8, max_chunks_per_section=2, max_workers=1,
+    )
+
+    assert hydrated[:len(anchors)] == anchors
+    assert hydrated[len(anchors):] == [neighbor]
+    assert hydrated[-1].metadata["trang_so"] == 8
+    assert hydrated[0].metadata["trang_so"] == 9
+    assert len(calls) == 8
+
+
+def test_batch_hydration_keeps_distinct_source_versions_and_rejects_cross_version_points():
+    selected = [
+        SimpleNamespace(page_content=f"selected v{version}", metadata=_metadata(version_no=version))
+        for version in (1, 2)
+    ]
+
+    class VersionedBatch:
+        def query_batch_points(self, **kwargs):
+            versions = [
+                next(condition.match.value for condition in request.filter.must
+                     if condition.key == "metadata.version_no")
+                for request in kwargs["requests"]
+            ]
+            assert versions == [1, 2]
+            return [
+                SimpleNamespace(points=[
+                    _point(_metadata(version_no=version, chunk_index=2), f"neighbor v{version}"),
+                    _point(_metadata(version_no=3-version, chunk_index=3), "wrong version"),
+                ])
+                for version in versions
+            ]
+
+    hydrated = context_builders.hydrate_parent_context(
+        selected, client=VersionedBatch(), collection_name="test-knowledge", batch_enabled=True,
+    )
+    assert hydrated[:2] == selected
+    assert [document.page_content for document in hydrated[2:]] == ["neighbor v1", "neighbor v2"]
+    assert [document.metadata["version_no"] for document in hydrated] == [1, 2, 1, 2]

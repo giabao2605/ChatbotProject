@@ -237,6 +237,9 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
+from mech_chatbot.api.evidence_contracts import ScopeTotalRequest, ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, require_comparison_context
+
+
 class ChatRequest(BaseModel):
     user_id: Optional[int] = None
     username: Optional[str] = None
@@ -259,6 +262,12 @@ class ChatRequest(BaseModel):
     allowed_sites: List[str] = Field(default_factory=list)
     response_language: Optional[str] = "vi"
     conversation_context: Optional[Dict[str, Any]] = None
+    scope_total: ScopeTotalRequest | None = None
+    scope_comparison: ScopeComparisonRequest | None = None
+    graph_query: GraphQueryRequest | None = None
+    bom_rollup: BomRollupRequest | None = None
+    query_plan: QueryPlanRequest | None = None
+    text_query: bool = Field(False,strict=True)
 
 
 class ChatResponse(BaseModel):
@@ -266,6 +275,7 @@ class ChatResponse(BaseModel):
     response: str = ""
     ref_text: str = ""
     ref_images: List[str] = Field(default_factory=list)
+    citations: List[Dict[str, Any]] = Field(default_factory=list)
     new_part_ids: List[str] = Field(default_factory=list)
     debug_info: Dict[str, Any] = Field(default_factory=dict)
     elapsed_ms: int = 0
@@ -535,6 +545,7 @@ async def chat_endpoint(
         )
 
     user_profile = resolve_user_profile(req)
+    _scope_comparison_mode(req, user_profile, server_state.runtime, headers=request.headers)
     enforce_request_rate_limit(
         request,
         user_profile,
@@ -588,7 +599,7 @@ async def chat_endpoint(
         logger.error(f"RAG request failed after {elapsed_ms}ms: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"{type(e).__name__}: {str(e)[:500]}",
+            detail="RAG request failed. Please retry.",
         )
     finally:
         server_state.runtime.semaphore.release()
@@ -656,6 +667,7 @@ async def chat_stream_endpoint(
     replay = isinstance(x_rag_pilot_replay, str) and x_rag_pilot_replay.strip().lower() in {
         "1", "true", "yes", "on"
     }
+    _scope_comparison_mode(req, user_profile, server_state.runtime, replay=replay, headers=request.headers)
     if replay:
         if (
             not isinstance(x_rag_matched_pair_id, str)
@@ -867,7 +879,7 @@ async def chat_stream_endpoint(
                 emit(
                     "error",
                     {
-                        "message": f"{type(exc).__name__}: {str(exc)[:500]}",
+                        "message": "RAG request failed. Please retry.",
                         "elapsed_ms": int((time.time() - started) * 1000),
                     },
                 )
@@ -1056,6 +1068,35 @@ async def save_chat_feedback(req: FeedbackRequest):
     return {"ok": True}
 
 
+def _scope_comparison_mode(req, profile, runtime, *, replay=False, headers=None):
+    if req.scope_total is None and req.scope_comparison is None and req.graph_query is None and req.bom_rollup is None and req.query_plan is None and not req.text_query:
+        return 'pilot_replay' if replay else 'production'
+    if sum(value is not None for value in (req.scope_total,req.scope_comparison,req.graph_query,req.bom_rollup,req.query_plan))+int(req.text_query)>1:
+        raise HTTPException(422,detail='Select one v2 template')
+    mode = getattr(getattr(runtime, 'runtime_contract', None), 'execution_context', 'production')
+    if req.scope_total is not None:
+        from mech_chatbot.api.evidence_contracts import require_scope_total_context
+        authorizer = getattr(runtime, 'math_v2_authorizer', None)
+        selected = require_scope_total_context('pilot_replay' if replay else mode, profile, authorizer=authorizer)
+    elif req.graph_query is not None:
+        from mech_chatbot.api.evidence_contracts import require_graph_context
+        authorizer=getattr(runtime,'graph_v2_authorizer',None)
+        selected=require_graph_context('pilot_replay' if replay else mode,profile,authorizer=authorizer)
+    elif req.bom_rollup is not None or req.query_plan is not None or req.text_query:
+        from mech_chatbot.api.evidence_contracts import require_query_context
+        authorizer = getattr(runtime, 'math_v2_authorizer', None)
+        selected = require_query_context('pilot_replay' if replay else mode, profile, authorizer=authorizer)
+    else:
+        authorizer = getattr(runtime, 'math_v2_authorizer', None)
+        selected = require_comparison_context('pilot_replay' if replay else mode, profile,
+            comparison_only=req.scope_comparison is not None, authorizer=authorizer)
+    if selected == 'production' and headers is not None:
+        cap = authorizer()
+        if cap is None or headers.get('X-RAG-Activation-Bundle-SHA256') != cap.bundle_sha256:
+            raise HTTPException(409, detail='V2 activation bundle mismatch')
+    return selected
+
+
 def _open_rag_events(
     req: ChatRequest,
     user_profile: Dict[str, Any],
@@ -1072,6 +1113,8 @@ def _open_rag_events(
         RagRequest,
     )
 
+    if req.scope_total is not None or req.scope_comparison is not None or req.graph_query is not None or req.bom_rollup is not None or req.query_plan is not None or req.text_query:
+        mode = _scope_comparison_mode(req, user_profile, runtime, replay=mode == 'pilot_replay')
     request = RagRequest(
         question=req.user_question,
         image_path=req.image_path,
@@ -1086,10 +1129,22 @@ def _open_rag_events(
         ),
         response_language=req.response_language or "vi",
         conversation_context=req.conversation_context,
+        scope_total=req.scope_total.scope_id if req.scope_total is not None else None,
+        scope_comparison=((req.scope_comparison.scope_a, req.scope_comparison.scope_b)
+                          if req.scope_comparison is not None else None),
+        graph_query=req.graph_query.to_query() if req.graph_query is not None else None,
+        bom_rollup=req.bom_rollup.to_rollup() if req.bom_rollup is not None else None,
+        query_plan=req.query_plan.to_plan() if req.query_plan is not None else None,
+        text_query=req.text_query,
     )
+    routing_contract = None
+    if mode == 'production' and request.query_plan is not None and not any(
+            branch.text_query for branch in request.query_plan.branches):
+        from mech_chatbot.rag.query_decomposition import SCOPE_TOTAL_TASK_ROUTING
+        routing_contract = SCOPE_TOTAL_TASK_ROUTING
     return runtime.executor.run(
         request,
-        RagInvocation(trace_id=trace_id, mode=mode),
+        RagInvocation(trace_id=trace_id, mode=mode, task_routing_contract=routing_contract),
         cancellation=cancel_event or NEVER_CANCELLED,
     )
 
@@ -1144,11 +1199,8 @@ def _run_rag_sync(
 
     answer = "".join(chunks)
     if final_citations:
-        reference_lines = []
-        for item in final_citations:
-            file_name = item.get("file_name") or f"Doc {item.get('doc_id')}"
-            reference_lines.append(f"- **{file_name}** (Trang {item.get('page_no')})")
-        ref_text = "\n\n---\n**Nguồn tham chiếu:**\n" + "\n".join(reference_lines)
+        from mech_chatbot.application.chat_citations import citation_ref_text
+        ref_text = citation_ref_text(final_citations)
     else:
         ref_text = ""
         ref_images = []
@@ -1165,6 +1217,7 @@ def _run_rag_sync(
         response=answer,
         ref_text=ref_text or "",
         ref_images=ref_images or [],
+        citations=final_citations,
         new_part_ids=new_part_ids or [],
         debug_info=debug_info or {},
     )

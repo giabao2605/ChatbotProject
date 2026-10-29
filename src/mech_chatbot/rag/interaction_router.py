@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import re
+from threading import RLock
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Callable, List, Optional, Sequence, Tuple
@@ -246,6 +247,7 @@ class SemanticRouter:
         self._threshold = threshold
         self._margin = margin
         self._proto_vecs = None
+        self._prototype_lock = RLock()
 
     @staticmethod
     def _safe_vector(value):
@@ -260,19 +262,27 @@ class SemanticRouter:
         except Exception:
             return None
 
-    def _ensure_prototypes(self) -> None:
-        if self._proto_vecs is not None:
-            return
-        vecs = {}
-        for route, samples in self._prototypes.items():
-            rv = []
-            for s in samples:
-                v = self._safe_embed(s)
-                if v:
-                    rv.append(tuple(v))
-            if rv:
-                vecs[route] = tuple(rv)
-        self._proto_vecs = MappingProxyType(vecs)
+    def _ensure_prototypes(self):
+        with self._prototype_lock:
+            if self._proto_vecs is not None:
+                return self._proto_vecs
+            vecs = {}
+            complete = True
+            for route, samples in self._prototypes.items():
+                rv = []
+                for sample in samples:
+                    vector = self._safe_embed(sample)
+                    if vector:
+                        rv.append(tuple(vector))
+                    else:
+                        complete = False
+                if rv:
+                    vecs[route] = tuple(rv)
+            immutable_vectors = MappingProxyType(vecs)
+            # A temporary model failure must not poison the process-owned cache.
+            if complete:
+                self._proto_vecs = immutable_vectors
+            return immutable_vectors
 
     def prepare(self):
         """Build the immutable process-owned prototype index before serving."""
@@ -289,9 +299,8 @@ class SemanticRouter:
         )
         if not q:
             return []
-        self._ensure_prototypes()
         scores = []
-        for route, rv in self._proto_vecs.items():
+        for route, rv in self._ensure_prototypes().items():
             best = 0.0
             for v in rv:
                 s = _cosine(q, v)
@@ -352,10 +361,10 @@ def classify(
     safety_extra_injection=(),
     safety_extra_abuse=(),
     semantic_enabled=True,
+    semantic_router=None,
     semantic_threshold=0.62,
     semantic_margin=0.04,
     crag_fast_routes_enabled=False,
-    semantic_router=None,
 ) -> RouteResult:
     """L-1 safety -> L0 (luat) -> L1 (semantic) -> L2 (LLM fallback) -> fallback technical."""
     # L-1: safety guard chay TRUOC tien.

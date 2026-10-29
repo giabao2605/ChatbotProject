@@ -36,6 +36,7 @@ from mech_chatbot.api.routers import (
     documents_router,
     files_router,
     operations_router,
+    rag_evidence_router,
 )
 from mech_chatbot.api.routers import chat as _chat_routes
 from mech_chatbot.api.routers import documents as _document_routes
@@ -121,6 +122,7 @@ async def _lifespan(application: FastAPI):
             process,
             pilot_replays,
             post=application.state.post,
+            settings_snapshot=settings_snapshot,
             engine=database_runtime.engine,
             strict_site_filter=RepositoryPolicySettings.from_settings(
                 settings_snapshot
@@ -218,21 +220,34 @@ def _build_default_app_runtime(
     strict_site_filter: bool = True,
     qdrant_client: Any = None,
     collection_name: str | None = None,
+    settings_snapshot=None,
 ):
     from mech_chatbot.evaluation.crag_pilot import assign_pilot_route, load_pilot_config
+    from mech_chatbot.governance.math_v2_activation import math_v2_authorizer_for_settings
+    authorizer = math_v2_authorizer_for_settings(settings_snapshot) if settings_snapshot else None
+    from mech_chatbot.governance.graph_v2_activation import graph_v2_authorizer_for_settings
+    graph_authorizer = graph_v2_authorizer_for_settings(settings_snapshot) if settings_snapshot else None
+
+    def headers():
+        values = _rag_headers(process)
+        cap = (authorizer() if authorizer else None) or (graph_authorizer() if graph_authorizer else None)
+        return {**values, **({'X-RAG-Activation-Bundle-SHA256':cap.bundle_sha256} if cap else {})}
 
     return build_default_app_runtime(
         process,
         post=post,
         base_url=process.rag_base_url,
-        headers=_rag_headers(process),
+        headers=headers,
+        math_v2_authorizer=authorizer,
+        graph_v2_authorizer=graph_authorizer,
         timeout=(10, process.rag_chat_timeout_seconds),
         save_chat_history=lambda **kwargs: save_chat_history(
             **kwargs,
             db_engine=engine,
         ),
-        save_answer_evidence=lambda *args: save_answer_evidence(
+        save_answer_evidence=lambda *args, **kwargs: save_answer_evidence(
             *args,
+            **kwargs,
             db_engine=engine,
         ),
         save_answer_sources=lambda *args: save_answer_sources(
@@ -365,6 +380,7 @@ def _install_http_surface(application: FastAPI) -> None:
     application.include_router(files_router)
     application.include_router(documents_router)
     application.include_router(operations_router)
+    application.include_router(rag_evidence_router)
 
     static_dir = _project_root() / "web-ui" / "dist"
     if static_dir.exists():
@@ -428,6 +444,7 @@ def create_app(
                 + multipart_overhead
             ),
         },
+        prefix_limits={"/api/rag-evidence/": 2 * 1024 * 1024},
     )
     production = (
         settings_snapshot.APP_ENV.strip().lower() in {"prod", "production"}

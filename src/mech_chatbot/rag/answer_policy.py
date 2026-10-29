@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-import re
 from typing import Mapping
-import unicodedata
 
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
 
@@ -24,8 +22,6 @@ class PolicyEvidence:
     decision: EvidenceDecision
     has_retrieved_evidence: bool
     retrieval_can_improve: bool = False
-    negative_evidence: bool = False
-    negative_evidence_quote: str = ""
     clarification_required: bool = False
     sufficient_branch_count: int = 0
     total_branch_count: int = 0
@@ -41,93 +37,10 @@ class AnswerDecision:
 
     @property
     def allows_answer_generation(self) -> bool:
-        return self.reason == "explicit_negative_evidence" or self.outcome in {
+        return self.outcome in {
             AnswerOutcome.FULL_ANSWER,
             AnswerOutcome.PARTIAL_ANSWER,
         }
-
-
-def _fold(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
-    return "".join(
-        char for char in normalized if not unicodedata.combining(char)
-    ).replace("đ", "d")
-
-
-_NEGATIVE_STATEMENT = re.compile(
-    r"(?:khong|chua)\s+(?:co|ghi|neu|cung cap|cong bo|de cap|quy dinh)\b[^.!?;\n]{0,140}"
-    r"|\bdoes\s+not\s+(?:provide|state|publish|specify|contain)\b[^.!?;\n]{0,140}"
-    r"|\bno\s+(?:field|data|information)\b[^.!?;\n]{0,140}",
-    re.IGNORECASE,
-)
-_NEGATIVE_TOPIC_GROUPS = (
-    ("chi phi", "don gia", "cost", "price"),
-    ("thoi gian", "chu ky", "duration", "cycle", "time"),
-    ("vat lieu", "material"),
-)
-
-
-def has_explicit_negative_evidence(question: str, context_text: str) -> bool:
-    """Return true only for a direct, question-relevant negative source statement."""
-    return bool(explicit_negative_evidence_quote(question, context_text))
-
-
-def explicit_negative_evidence_quote(question: str, context_text: str) -> str:
-    """Return the relevant negative source clause, if one is present."""
-    question_folded = _fold(question)
-    sentences = re.split(r"(?<=[.!?;])\s+|\r?\n+", str(context_text or ""))
-    for original_sentence in sentences:
-        context_folded = _fold(original_sentence)
-        for match in _NEGATIVE_STATEMENT.finditer(context_folded):
-            matched_topics = [
-                group
-                for group in _NEGATIVE_TOPIC_GROUPS
-                if any(re.search(rf"\b{re.escape(topic)}\b", context_folded) for topic in group)
-            ]
-            if matched_topics and any(
-                re.search(rf"\b{re.escape(topic)}\b", question_folded)
-                for group in matched_topics
-                for topic in group
-            ):
-                return original_sentence.strip()
-            # Generic token overlap is not enough to establish topic relevance:
-            # words such as "quy"/"dinh" and document identifiers occur in
-            # unrelated questions and can turn a price denial into a false
-            # answer for a process or timing query.
-    return ""
-
-
-def render_explicit_negative_answer(
-    quote: str,
-    *,
-    source_id: str = "",
-    language: str = "vi",
-) -> str:
-    """Render direct negative evidence without another provider round trip."""
-    statement = str(quote or "").strip()[:500]
-    citation = f" [SRC:{source_id.strip().upper()}]" if source_id else ""
-    if str(language or "vi").strip().casefold().startswith("en"):
-        return f"The document states directly: “{statement}”{citation}"
-    return f"Theo tài liệu, thông tin được nêu rõ: “{statement}”{citation}"
-
-
-def render_cited_explicit_negative_answer(
-    quote: str,
-    documents,
-    *,
-    language: str = "vi",
-) -> str:
-    """Fail closed to normal generation when the evidence source is unresolved."""
-    from mech_chatbot.rag.answer_checks import source_id_for_evidence_quote
-
-    source_id = source_id_for_evidence_quote(quote, documents)
-    if not source_id:
-        return ""
-    return render_explicit_negative_answer(
-        quote,
-        source_id=source_id,
-        language=language,
-    )
 
 
 def decide_answer_policy(
@@ -160,15 +73,11 @@ def decide_answer_policy(
             evidence_quotes=quotes,
         )
 
-    if evidence.negative_evidence:
+    if source_decision.telemetry_status == "verifier_unavailable":
         return AnswerDecision(
             AnswerOutcome.INSUFFICIENT_EVIDENCE,
-            EvidenceState.SUFFICIENT,
-            reason="explicit_negative_evidence",
-            evidence_quotes=(
-                (evidence.negative_evidence_quote,)
-                if evidence.negative_evidence_quote else quotes
-            ),
+            EvidenceState.INSUFFICIENT,
+            reason=source_decision.reason,
         )
 
     total_branches = max(0, int(evidence.total_branch_count))
@@ -242,8 +151,4 @@ __all__ = [
     "PolicyEvidence",
     "decide_answer_policy",
     "decide_terminal_policy",
-    "has_explicit_negative_evidence",
-    "explicit_negative_evidence_quote",
-    "render_explicit_negative_answer",
-    "render_cited_explicit_negative_answer",
 ]

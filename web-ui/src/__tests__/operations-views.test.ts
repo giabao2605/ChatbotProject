@@ -8,6 +8,7 @@ import AnalyticsView from "@/views/AnalyticsView.vue";
 import AuditView from "@/views/AuditView.vue";
 import DictionaryView from "@/views/DictionaryView.vue";
 import DocumentsView from "@/views/DocumentsView.vue";
+import StructuredEvidenceReview from "@/components/StructuredEvidenceReview.vue";
 import FeedbackView from "@/views/FeedbackView.vue";
 import GlossaryView from "@/views/GlossaryView.vue";
 import HelpView from "@/views/HelpView.vue";
@@ -315,6 +316,30 @@ describe("thin operations views", () => {
 });
 
 describe("access and document operations", () => {
+  it('offers Markdown originals instead of nonexistent pages and pins the listed revision', async () => {
+    state.roles = ['viewer'];
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const wrapper = mountView(DocumentsView);
+    const actions = pages(wrapper)[0].rowActions!;
+    const markdown = { DocID: 1177, OriginalFileName: 'IT.MD', VersionNo: 2 };
+    const pdf = { DocID: 8, OriginalFileName: 'drawing.pdf', VersionNo: 3 };
+    const page = actions.find(action => action.label === 'Xem trang')!;
+    const original = actions.find(action => action.label === 'Tải bản gốc')!;
+    expect(page.visible?.(markdown)).toBe(false);
+    expect(page.visible?.(pdf)).toBe(true);
+    await original.run(markdown);
+    expect(open).toHaveBeenLastCalledWith('/api/files/documents/1177/original?citation_version=2', '_blank', 'noopener');
+    await page.run(pdf);
+    await nextTick();
+    const preview = wrapper.find('.document-page-preview');
+    expect(preview.attributes('src')).toBe('/api/files/documents/8/pages/1?citation_version=3');
+    await preview.trigger('error');
+    expect(wrapper.text()).toContain('Không tải được ảnh xem trước');
+    expect(wrapper.find('.document-original-link').attributes('href')).toBe('/api/files/documents/8/original?citation_version=3');
+    expect(wrapper.find('.document-page-preview').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("loads and executes access request and revocation contracts", async () => {
     const wrapper = mountView(AccessView);
     await flushPromises();
@@ -374,10 +399,11 @@ describe("access and document operations", () => {
     const actions = contract.rowActions ?? [];
     await actions[0].run({ DocID: 7 });
     await actions[1].run({ DocID: 7 });
-    expect(open).toHaveBeenCalledTimes(2);
-    expect(actions[3].visible?.({ IsCurrentVersion: 0 })).toBe(true);
-    expect(actions[3].visible?.({ IsCurrentVersion: 1 })).toBe(false);
-    for (const action of actions.slice(3)) await action.run({ DocID: 7 });
+    expect(open).toHaveBeenCalledTimes(1);
+    const current = actions.find(action => action.label === 'Đặt hiện hành')!;
+    expect(current.visible?.({ IsCurrentVersion: 0 })).toBe(true);
+    expect(current.visible?.({ IsCurrentVersion: 1 })).toBe(false);
+    for (const action of actions.filter(action => ['Đặt hiện hành', 'Đánh dấu hết hạn', 'Xoá'].includes(action.label))) await action.run({ DocID: 7 });
 
     const edit = actions[2].run({
       DocID: 7,
@@ -403,6 +429,19 @@ describe("access and document operations", () => {
 });
 
 describe("dictionary and quality resources", () => {
+  it('offers evidence review from effective documents only to managing roles', async () => {
+    const manager = mountView(DocumentsView);
+    const action = pages(manager)[0].rowActions?.find(item => item.label === 'Kiểm tra chứng cứ');
+    expect(action).toBeDefined();
+    await action!.run({ DocID: 17 }); await flushPromises();
+    expect(manager.getComponent(StructuredEvidenceReview).props('docId')).toBe(17);
+    manager.unmount();
+    state.roles = ['reader'];
+    const reader = mountView(DocumentsView);
+    expect(pages(reader)[0].rowActions?.some(item => item.label === 'Kiểm tra chứng cứ')).toBe(false);
+    expect(reader.findComponent(StructuredEvidenceReview).exists()).toBe(false);
+    reader.unmount();
+  });
   it("normalizes and mutates glossary entries", async () => {
     const wrapper = mountView(GlossaryView);
     const contract = pages(wrapper)[0];

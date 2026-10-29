@@ -2,7 +2,7 @@
 Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
 from . import document as _r_document
@@ -268,11 +268,21 @@ def verify_technical_attribute(attr_id, verified_by, correct_value=None):
     except Exception as e:
         logger.error(f"Loi verify_technical_attribute: {e}", exc_info=True)
 
-def get_technical_attributes_for_rag(file_name):
+def get_technical_attributes_for_rag(doc_id, *, page_numbers=None):
+    """Read verified attributes only from document pages admitted to context."""
+    try:
+        page_numbers = tuple(page_numbers or ())
+        if type(doc_id) not in (int, str) or any(type(page) not in (int, str) for page in page_numbers):
+            return {}
+        source_id = int(doc_id)
+        pages = sorted({int(page) for page in page_numbers})
+    except (TypeError, ValueError, OverflowError):
+        return {}
+    if source_id <= 0 or not pages or pages[0] <= 0:
+        return {}
     _ensure_engine()
     try:
         with engine.connect() as conn:
-            # Ưu tiên lấy dòng được human verified, sau đó mới đến confidence cao
             rows = conn.execute(
                 text("""
                     SELECT AttributeType, AttributeValue, Unit, HumanVerified, ExtractedBy
@@ -280,18 +290,20 @@ def get_technical_attributes_for_rag(file_name):
                         SELECT *,
                                ROW_NUMBER() OVER(
                                    PARTITION BY AttributeType 
-                                   ORDER BY HumanVerified DESC, Confidence DESC
+                                   ORDER BY Confidence DESC, AttributeID DESC
                                ) as rn
                         FROM dbo.TechnicalAttributes
-                        WHERE FileName = :f
+                        WHERE DocID = :doc_id AND PageNo IN :pages AND HumanVerified = 1
                     ) t
                     WHERE rn = 1
-                """),
-                {"f": file_name}
+                """).bindparams(bindparam("pages", expanding=True)),
+                {"doc_id": source_id, "pages": pages}
             ).fetchall()
             
             result = {}
             for r in rows:
+                if not r[3]:
+                    continue
                 result[r[0]] = {
                     "value": r[1],
                     "unit": r[2],
@@ -300,7 +312,7 @@ def get_technical_attributes_for_rag(file_name):
                 }
             return result
     except Exception as e:
-        logger.error(f"Loi get_technical_attributes_for_rag {file_name}: {e}", exc_info=True)
+        logger.error(f"Loi get_technical_attributes_for_rag {source_id}: {e}", exc_info=True)
         return {}
 
 def save_page_metadata(

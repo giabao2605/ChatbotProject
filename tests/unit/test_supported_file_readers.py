@@ -162,7 +162,11 @@ def test_csv_reader_propagates_last_decode_error(tmp_path, monkeypatch):
 
 
 def test_excel_reader_preserves_sheet_names_and_empty_sheet(tmp_path, monkeypatch):
-    path = _write(tmp_path, "parts.xlsx", b"placeholder", binary=True)
+    from zipfile import ZipFile
+
+    path = tmp_path / 'parts.xlsx'
+    with ZipFile(path, 'w') as archive:
+        archive.writestr('xl/workbook.xml', '<workbook/>')
     frames = {"BOM": _Frame("code qty\nA 1"), "Empty": _Frame("", empty=True)}
     monkeypatch.setattr(
         readers,
@@ -278,7 +282,7 @@ def test_image_reader_requires_model_and_formats_structured_vision(
     monkeypatch.setattr(readers, "parse_vision_json", lambda _text: {"materials": ["steel"]})
     monkeypatch.setattr(readers, "format_vision_data", lambda data: f"materials={data['materials'][0]}")
 
-    with pytest.raises(ValueError, match="API key"):
+    with pytest.raises(ValueError, match="API key.*Vision/OCR"):
         readers.extract_text_from_supported_file(str(path), path.name)
 
     assert readers.extract_text_from_supported_file(

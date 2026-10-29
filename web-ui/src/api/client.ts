@@ -1,4 +1,4 @@
-import type { Citation, ChatMessage, SessionItem, UserProfile } from "@/types";
+import type { AdvancedRagMetadata, Citation, ChatMessage, SessionItem, UserProfile } from "@/types";
 import { parseSseBuffer } from "@/api/sse";
 
 let csrfToken = "";
@@ -154,8 +154,9 @@ export async function login(username: string, password: string) {
   return data.user;
 }
 
-export async function loadMe() {
-  const data = await apiFetch<{ user: UserProfile }>("/api/auth/me");
+export async function loadMe(signal?: AbortSignal) {
+  const data = await apiFetch<{ user: UserProfile }>("/api/auth/me", { signal });
+  signal?.throwIfAborted();
   setCsrfToken(data.user.csrf_token);
   return data.user;
 }
@@ -220,6 +221,7 @@ export type ChatStreamCallbacks = {
     chat_id?: number | null;
     ref_text?: string;
     citations?: Citation[];
+    advanced_rag?: AdvancedRagMetadata;
     new_part_ids?: string[];
     conversation_context?: Record<string, unknown> | null;
   }) => void;

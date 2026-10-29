@@ -14,6 +14,8 @@ import json
 from sqlalchemy import text
 
 from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
+from mech_chatbot.config.constants import EVALUATION_SOURCE_COLLECTIONS
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime
 from mech_chatbot.config.settings import RepositoryPolicySettings
 from mech_chatbot.config.logging import logger
 from . import audit as _r_audit
@@ -1173,10 +1175,27 @@ def backfill_qdrant_servable(
     qdrant_client=None,
     collection_name=None,
 ):
-    """Copy authoritative SQL serving state to all Qdrant points."""
+    """Copy authoritative SQL serving state to points in this collection only."""
     selected_engine = resolve_engine(db_engine)
+    if qdrant_client is None or not str(collection_name or "").strip():
+        bound_client, bound_collection = current_qdrant_runtime()
+        qdrant_client = qdrant_client if qdrant_client is not None else bound_client
+        collection_name = collection_name or bound_collection
+    collection_name = str(collection_name or "").strip()
+    if not collection_name:
+        raise RuntimeError("Qdrant serving reconciliation requires a collection")
     limit_clause = ""
-    params = {}
+    source = next((source for source, collection in EVALUATION_SOURCE_COLLECTIONS.items()
+                   if collection == collection_name), None)
+    if source is not None:
+        ownership_filter = "SourceSystem = :serving_source"
+        params = {"serving_source": source}
+    else:
+        params = {f"foreign_source_{index}": source
+                  for index, source in enumerate(EVALUATION_SOURCE_COLLECTIONS)}
+        ownership_filter = "COALESCE(SourceSystem, '') NOT IN (" + ", ".join(
+            ":" + name for name in params
+        ) + ")"
     if limit is not None:
         limit = max(1, int(limit))
         limit_clause = f"TOP ({limit})"
@@ -1190,6 +1209,7 @@ def backfill_qdrant_servable(
                        ExternalProcessingPolicy
                 FROM dbo.TaiLieu
                 WHERE TrangThaiVector = 1 AND LifecycleStatus <> 'deleting'
+                  AND {ownership_filter}
                 ORDER BY DocID
                 """
             ),

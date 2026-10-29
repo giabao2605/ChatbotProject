@@ -693,7 +693,9 @@ def test_reconcile_serving_state_backfills_authoritative_metadata_and_audits(
         lambda *args: audits.append(args),
     )
 
-    result = publication.reconcile_serving_state(limit=2, worker_id="w" * 150)
+    result = publication.reconcile_serving_state(
+        limit=2, worker_id="w" * 150, collection_name="TaiLieuKyThuat_v2",
+    )
 
     assert result == {
         "total": 2,

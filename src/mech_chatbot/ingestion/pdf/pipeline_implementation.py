@@ -7,6 +7,9 @@ import re
 import time
 import json
 import inspect
+import hashlib
+import uuid
+from dataclasses import asdict
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Mapping
@@ -57,8 +60,17 @@ from mech_chatbot.ingestion.pdf.vision import _prewarm_vision_cache, call_vision
 from mech_chatbot.ingestion.pdf.quality import _normalize_phong_ban_quyen, calculate_quality_status
 from mech_chatbot.ingestion.pdf.bom import (
     extract_bom_records,
+    extract_drawing_table_sources,
     extract_bom_records_from_markdown,
+    bom_quantity_scope,
+    bom_text_facts,
+    assembly_text_facts,
+    extract_drawing_notes,
+    extract_assembly_steps,
+    reconcile_bom_records,
 )
+from mech_chatbot.ingestion.pdf.structured import extract_structured_table_file
+from mech_chatbot.domain.structured_evidence import SourceLocator
 from mech_chatbot.ingestion.pdf.readers import extract_text_from_supported_file
 from mech_chatbot.ingestion.pdf.metadata import extract_metadata_smart
 from mech_chatbot.domain.ingestion_progress import IngestionProgressEvent
@@ -219,6 +231,11 @@ def _initialize_report(
         "warnings": [],
         "time_taken": 0,
         "message": "",
+        "structured_scope_ids": [],
+        "structured_conflicts": [],
+        "assembly_steps": [],
+        "structured_text_fact_ids": [],
+        "source_page_hashes": {},
     }
     if site_missing:
         report["warnings"].append(
@@ -226,6 +243,81 @@ def _initialize_report(
         )
         report["missing_metadata"] = ["site"]
     return report
+
+
+def _prepare_structured_snapshot(report, file_path, doc_id, doc_info, persistence):
+    if not callable(persistence.register_source_snapshot):
+        report["warnings"].append("structured_evidence_unavailable:persistence_not_configured")
+        return None
+    try:
+        with open(file_path, "rb") as source:
+            source_hash = hashlib.file_digest(source, "sha256").hexdigest()
+        snapshot = {"doc_id": doc_id, "version": str(doc_info.get("version_no", 1)),
+                    "snapshot_id": uuid.uuid4().hex, "source_hash": source_hash, "status": "pending"}
+        report["structured_source_snapshot"] = snapshot
+        report['structured_source_path'] = str(file_path)
+        return snapshot
+    except Exception as error:
+        report["warnings"].append(f"structured_evidence_unavailable:source_hash:{type(error).__name__}")
+        return None
+
+
+def _save_candidate_scope(report, scope, persistence):
+    if not scope.facts and scope.empty_source_locator is None:
+        return
+    if not callable(persistence.save_structured_scope):
+        report["warnings"].append("structured_evidence_unavailable:scope_persistence_not_configured")
+        return
+    try:
+        scope_id = persistence.save_structured_scope(scope)
+        if not scope_id:
+            raise RuntimeError("Structured scope was not persisted")
+        report["structured_scope_ids"].append(scope_id)
+        report["structured_conflicts"].extend({"fact_id": fact.fact_id, "conflicts": list(fact.conflicts)}
+                                               for fact in scope.facts if fact.conflicts)
+    except Exception as error:
+        report["warnings"].append(f"structured_evidence_unavailable:scope_persistence:{type(error).__name__}")
+
+
+def _record_source_snapshot(report, persistence):
+    snapshot = report.get("structured_source_snapshot")
+    if snapshot is None or report["status"] != "success":
+        return
+    try:
+        with open(report['structured_source_path'],'rb') as source:
+            if hashlib.file_digest(source,'sha256').hexdigest()!=snapshot['source_hash']:
+                raise ValueError('Raw source changed during ingestion')
+        registered = persistence.register_source_snapshot(snapshot["doc_id"], snapshot["version"], snapshot["snapshot_id"], snapshot["source_hash"])
+        if not registered:
+            raise RuntimeError("Source snapshot was not registered")
+        snapshot["status"] = "registered"
+        if report.get('source_page_hashes'):
+            if not callable(persistence.save_source_page_images):
+                report['warnings'].append('source_page_images_unavailable:persistence_not_configured')
+            elif not persistence.save_source_page_images(snapshot['doc_id'],snapshot['version'],snapshot['snapshot_id'],
+                                                         snapshot['source_hash'],report['source_page_hashes']):
+                raise RuntimeError('Rendered pages were not bound')
+    except Exception as error:
+        snapshot["status"] = "unavailable"
+        report["warnings"].append(f"structured_evidence_unavailable:snapshot_persistence:{type(error).__name__}")
+
+
+def _save_candidate_text_facts(report, extract, persistence):
+    try:
+        facts = extract()
+        if not facts:
+            return
+        if not callable(persistence.save_structured_text):
+            report['warnings'].append('structured_evidence_unavailable:text_persistence_not_configured')
+            return
+        ids = persistence.save_structured_text(facts, snapshot_id=facts[0].snapshot_id)
+        if set(ids or ()) != {fact.fact_id for fact in facts}:
+            raise RuntimeError('Technical fields were not persisted')
+        report['structured_text_fact_ids'].extend(ids)
+        report['structured_conflicts'].extend({'fact_id': f.fact_id, 'conflicts': list(f.conflicts)}
+                                               for f in facts if f.conflicts)
+    except Exception as error:
+        report['warnings'].append(f'structured_evidence_unavailable:text_persistence:{type(error).__name__}')
 
 
 def _finalize_successful_persistence(
@@ -402,6 +494,7 @@ def _finalize_pipeline_transaction(
 
     if report["status"] == "success":
         try:
+            _record_source_snapshot(report, persistence)
             _finalize_successful_persistence(
                 report,
                 dependencies=dependencies,
@@ -556,6 +649,7 @@ def process_and_ingest_pdf(
         )
         doc_id = governed_document.doc_id
         doc_info = governed_document.info
+        structured_snapshot = _prepare_structured_snapshot(report, pdf_path, doc_id, doc_info, persistence)
         external_policy = governed_document.external_policy
         report["classification_failed"] = bool(doc_info.get("classification_failed"))
 
@@ -616,6 +710,9 @@ def process_and_ingest_pdf(
                     img_name = f"{base_name}_page{page_num+1}.png"
                 img_path = os.path.join(runtime_config.image_dir, img_name)
                 pix.save(img_path)
+                if structured_snapshot is not None:
+                    with open(img_path,'rb') as image_source:
+                        report['source_page_hashes'][page_num+1]=hashlib.file_digest(image_source,'sha256').hexdigest()
 
                 image_summary = ""
                 vision_metadata = {}
@@ -978,15 +1075,27 @@ def process_and_ingest_pdf(
 
                 # FIX hieu nang: dung pdf_table_reader DA mo san thay vi mo lai moi trang
                 markdown_tables = ""
+                caption_page = page
                 if pdf_table_reader is not None:
                     try:
                         page_plumber = pdf_table_reader.pages[page_num]
-                        tables = page_plumber.extract_tables()
+                        caption_page = page_plumber
+                        tables = extract_drawing_table_sources(page_plumber)
                         if tables:
                             report["pages_table_extracted"].append(page_num + 1)
-                        for table_idx, table in enumerate(tables):
+                        for table_idx, (table, row_cells) in enumerate(tables):
                             # Parse BOM records and save to SQL
-                            bom_records = extract_bom_records(table, table_idx=table_idx)
+                            bom_records = extract_bom_records(table, table_idx=table_idx, row_cells=row_cells)
+                            if bom_records and structured_snapshot is not None:
+                                bom_records = reconcile_bom_records(bom_records, (vision_data or {}).get("bom_rows") or ())
+                                _save_candidate_scope(report, bom_quantity_scope(bom_records, doc_id=doc_id,
+                                                      version=structured_snapshot["version"], page=page_num + 1,
+                                                      snapshot_id=structured_snapshot["snapshot_id"], source_hash=structured_snapshot["source_hash"],
+                                                      table_index=table_idx + 1), persistence)
+                                _save_candidate_text_facts(report, lambda: bom_text_facts(bom_records, doc_id=doc_id,
+                                    version=structured_snapshot['version'], page=page_num + 1,
+                                    snapshot_id=structured_snapshot['snapshot_id'], source_hash=structured_snapshot['source_hash'],
+                                    table_index=table_idx + 1), persistence)
                             if bom_records:
                                 persisted = persistence.save_bom_records(
                                     doc_id,
@@ -1000,7 +1109,7 @@ def process_and_ingest_pdf(
                                     )
 
                             for row in table:
-                                cleaned_row = [str(cell).replace("\n", " ").strip() if cell else "" for cell in row]
+                                cleaned_row = [str(cell).replace("\n", " ").strip() if cell is not None else "" for cell in row]
                                 markdown_tables += "| " + " | ".join(cleaned_row) + " |\n"
                             markdown_tables += "\n"
                     except Exception as e:
@@ -1023,6 +1132,16 @@ def process_and_ingest_pdf(
                     hdcv_chunks = splitter.split_text(hdcv_content)
                     for i, c in enumerate(hdcv_chunks):
                         all_chunks.append(Document(page_content=c, metadata={**metadata, "loai_du_lieu": "hdcv", "chunk_index": i}))
+
+                steps = extract_assembly_steps(text, SourceLocator(str(doc_id), str(doc_info.get("version_no", 1)), page=page_num + 1), page=caption_page)
+                report["assembly_steps"].extend(asdict(step) for step in steps)
+                if structured_snapshot is not None:
+                    _save_candidate_text_facts(report, lambda: assembly_text_facts(steps,
+                        snapshot_id=structured_snapshot['snapshot_id'], source_hash=structured_snapshot['source_hash']), persistence)
+                    _save_candidate_text_facts(report, lambda: extract_drawing_notes(text,
+                        SourceLocator(str(doc_id), str(doc_info.get("version_no", 1)), page=page_num + 1),
+                        page=caption_page, steps=steps, snapshot_id=structured_snapshot['snapshot_id'],
+                        source_hash=structured_snapshot['source_hash']), persistence)
 
                 # Luoi an toan: luu raw text de giu moi thong tin chi tiet
                 # (kich thuoc, goc, ban kinh, ghi chu) ma regex khong cover duoc
@@ -1197,6 +1316,19 @@ def process_and_ingest_file(
         text_content = text_content.strip()
         if not text_content:
             raise ValueError("Khong trich xuat duoc noi dung co the tim kiem tu file nay.")
+        structured_snapshot = _prepare_structured_snapshot(report, file_path, doc_id, doc_info, persistence)
+
+        if structured_snapshot is not None and ext in {".csv", ".tsv", ".xlsx", ".xlsm", ".xls"}:
+            try:
+                structured = extract_structured_table_file(file_path, doc_id=str(doc_id), version=structured_snapshot["version"],
+                                                           snapshot_id=structured_snapshot["snapshot_id"])
+                if structured.source_hash != structured_snapshot["source_hash"]:
+                    raise ValueError("Source changed during extraction")
+                for table in structured.tables:
+                    for scope in table.scopes:
+                        _save_candidate_scope(report, scope, persistence)
+            except Exception as error:
+                report["warnings"].append(f"structured_evidence_unavailable:table_extraction:{type(error).__name__}")
 
         warning_count_before_metadata = len(report["warnings"])
         _meta_limit = runtime_config.metadata_text_limit
@@ -1273,11 +1405,12 @@ def process_and_ingest_file(
                 extraction_status="success",
                 image_path=rendered_image_path,
             )
+            if structured_snapshot is not None and rendered_image_path:
+                with open(rendered_image_path, 'rb') as image_source:
+                    report['source_page_hashes'][1] = hashlib.file_digest(image_source, 'sha256').hexdigest()
         else:
             # Non-PDF readers expose one logical page/section to the quality
-            # gate.  Office/table readers used to create chunks without
-            # recording extraction coverage, which made a valid DOCX/XLSX
-            # appear as 0/1 pages and triggered rollback.
+            # gate. Office/table readers must record extraction coverage too.
             extracted_pages = (
                 report["pages_table_extracted"]
                 if data_type == "bang_du_lieu"

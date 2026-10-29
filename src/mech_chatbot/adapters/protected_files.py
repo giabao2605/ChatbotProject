@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
+from mech_chatbot.db.evidence_snapshot import evidence_read_connection
 
 from mech_chatbot.application.protected_files import (
     DocumentAccessRecord,
@@ -40,14 +41,14 @@ class SqlProtectedFileStore:
         engine = self._engine_provider()
         if engine is None:
             return None
-        with engine.connect() as connection:
+        with evidence_read_connection(engine) as connection:
             row = connection.execute(
                 text(
                     """
                     SELECT t.DocID, t.TenFile, t.FilePath, t.ThuMuc, t.SecurityLevel,
                            t.Site, t.LifecycleStatus, t.ReviewStatus, t.Servable,
                            t.PublicationState, t.IsCurrent, t.EffectiveStatus,
-                           t.EffectiveDate, t.ExpiryDate,
+                           t.EffectiveDate, t.ExpiryDate, t.VersionNo,
                            t.KnowledgeOwnerUserID, t.KnowledgeApproverUserID,
                            g.KnowledgeApproverUserID AS DepartmentKnowledgeApproverUserID
                     FROM dbo.TaiLieu AS t
@@ -88,16 +89,17 @@ class SqlProtectedFileStore:
             effective_status=row[11],
             effective_date=row[12],
             expiry_date=row[13],
-            knowledge_owner_user_id=_optional_user_id(row, 14),
-            knowledge_approver_user_id=_optional_user_id(row, 15),
-            department_knowledge_approver_user_id=_optional_user_id(row, 16),
+            version_no=row[14],
+            knowledge_owner_user_id=_optional_user_id(row, 15),
+            knowledge_approver_user_id=_optional_user_id(row, 16),
+            department_knowledge_approver_user_id=_optional_user_id(row, 17),
         )
 
     def load_page_image(self, doc_id: int, page_no: int) -> str | None:
         engine = self._engine_provider()
         if engine is None:
             return None
-        with engine.connect() as connection:
+        with evidence_read_connection(engine) as connection:
             row = connection.execute(
                 text(
                     """
@@ -115,7 +117,7 @@ class SqlProtectedFileStore:
         engine = self._engine_provider()
         if engine is None:
             return None
-        with engine.connect() as connection:
+        with evidence_read_connection(engine) as connection:
             row = connection.execute(
                 text(
                     """
@@ -196,10 +198,14 @@ class FilesystemProtectedFileStorage:
     def resolve_original(self, stored_path: str | None) -> Path | None:
         return self.resolve_under_root(stored_path, (self._raw_root,))
 
-    def resolve_page_image(self, stored_path: str | None) -> Path | None:
-        resolved = self.resolve_under_root(stored_path, (self._processed_root,))
+    def resolve_page_image(self, stored_path: str | None, *, allow_fallback: bool = True) -> Path | None:
+        # Earlier ingestion wrote exact SQL image paths under src/data/processed.
+        legacy_root = self._project_root / "src" / "data" / "processed"
+        resolved = self.resolve_under_root(stored_path, (self._processed_root, legacy_root))
         if resolved is not None and resolved.exists() and resolved.is_file():
             return resolved
+        if not allow_fallback:
+            return None
         try:
             basename = Path(str(stored_path or "").replace("\\", "/")).name
         except (OSError, ValueError):

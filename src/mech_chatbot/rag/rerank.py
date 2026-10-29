@@ -2,11 +2,15 @@
 """Reranking qua Voyage API va cac helper sap xep context."""
 
 import hashlib
+import time
 import unicodedata
 from dataclasses import dataclass
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import requests
 from functools import lru_cache
+from mech_chatbot.rag.text_utils import tokenize_vietnamese_text
 from mech_chatbot.llm.external_ai import (
     DEFAULT_EXTERNAL_AI_SETTINGS,
     audited_external_call,
@@ -18,6 +22,33 @@ from mech_chatbot.rag.execution import remaining_request_timeout
 
 _VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
 _JINA_RERANK_URL = "https://api.jina.ai/v1/rerank"
+
+
+@contextmanager
+def _reported_rerank_usage(model, trace_id):
+    payload = {}
+    try:
+        yield payload
+    finally:
+        from mech_chatbot.llm.llm_client import record_provider_usage
+        record_provider_usage(SimpleNamespace(response_metadata={"usage": payload.get("usage")}),
+                              model=model, trace_id=trace_id, surface="reranking")
+
+
+def _rerank_request_timeout(configured_timeout):
+    from mech_chatbot.rag.execution import current_request_budget, current_request_checkpoint
+
+    checkpoint = current_request_checkpoint()
+    if checkpoint:
+        checkpoint("rerank_provider")
+    budget = current_request_budget()
+    if budget is None:
+        return configured_timeout
+    remaining = budget.deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        budget.deadline_exceeded = True
+        raise TimeoutError("RAG request deadline exceeded before reranking")
+    return min(configured_timeout, remaining)
 
 
 def _rerank_failure_metadata(exc, provider):
@@ -92,9 +123,7 @@ class RerankPolicy:
 
 @lru_cache(maxsize=4096)
 def tokenize_cached(text):
-    from underthesea import word_tokenize
-
-    return word_tokenize(text, format="text")
+    return tokenize_vietnamese_text(text)
 
 
 def voyage_rerank_documents(
@@ -154,7 +183,7 @@ def voyage_rerank_documents(
         input_bytes=len(str(query or "").encode("utf-8")) + sum(len(value.encode("utf-8")) for value in texts),
         profile=getattr(runtime, "profile", None),
         settings=_runtime_external_settings(runtime),
-    ):
+    ), _reported_rerank_usage(model, trace_id) as usage_payload:
         response = requests.post(
             rerank_url,
             headers={
@@ -169,10 +198,11 @@ def voyage_rerank_documents(
                 "return_documents": False,
                 "truncation": True,
             },
-            timeout=timeout_seconds,
+            timeout=_rerank_request_timeout(timeout_seconds),
         )
         response.raise_for_status()
         payload = response.json()
+        usage_payload["usage"] = payload.get("usage")
     results = normalize_rerank_result(
         payload,
         provider="voyage",
@@ -258,7 +288,7 @@ def jina_rerank_documents(
         + sum(len(value.encode("utf-8")) for value in texts),
         profile=getattr(runtime, "profile", None),
         settings=_runtime_external_settings(runtime),
-    ):
+    ), _reported_rerank_usage(model, trace_id) as usage_payload:
         response = requests.post(
             _jina_rerank_url(runtime.endpoint),
             headers={
@@ -272,10 +302,11 @@ def jina_rerank_documents(
                 "top_n": top_n,
                 "return_documents": False,
             },
-            timeout=timeout_seconds,
+            timeout=_rerank_request_timeout(timeout_seconds),
         )
         response.raise_for_status()
         payload = response.json()
+        usage_payload["usage"] = payload.get("usage")
 
     results = normalize_rerank_result(
         payload,
@@ -360,12 +391,15 @@ def diversify_candidates(documents, max_per_document=4, max_per_section=1, cap=4
     seen_content = set()
     for doc in docs:
         metadata = getattr(doc, "metadata", {}) or {}
-        document_key = (
+        source_key = (
             metadata.get("doc_id")
             or metadata.get("file_goc")
             or metadata.get("source")
             or "unknown"
         )
+        document_key = (source_key, *(str(metadata.get(key) or "") for key in (
+            "version_no", "publication_version", "serving_epoch",
+        )))
         parent_section = str(metadata.get("parent_section") or "").strip()
         parent_page = metadata.get("parent_page") or metadata.get("trang_so")
         # A chunk with no section/page provenance is not known to share a
@@ -380,7 +414,11 @@ def diversify_candidates(documents, max_per_document=4, max_per_section=1, cap=4
         text_value = str(
             metadata.get("noi_dung_goc") or getattr(doc, "page_content", "") or ""
         ).strip()
-        content_key = hashlib.sha1(text_value.encode("utf-8")).hexdigest()
+        content_key = (
+            document_key,
+            str(metadata.get("trang_so") or metadata.get("parent_page") or ""),
+            hashlib.sha1(text_value.encode("utf-8")).hexdigest(),
+        )
         if content_key in seen_content:
             continue
         count = per_document.get(document_key, 0)

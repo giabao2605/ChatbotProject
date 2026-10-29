@@ -15,22 +15,38 @@ export const useAuthStore = defineStore("auth", {
     ready: false,
     loading: false,
     error: "",
+    sessionRevision: 0,
+    restoring: null as { controller: AbortController; promise: Promise<void> } | null,
   }),
   getters: {
     isAdmin: (state) => state.user?.roles.includes("admin") ?? false,
   },
   actions: {
     async loadMe() {
-      try {
-        this.user = await api.loadMe();
-        syncLocale(this.user);
-      } catch {
-        this.user = null;
-      } finally {
-        this.ready = true;
-      }
+      if (this.restoring) return this.restoring.promise;
+      const revision = this.sessionRevision;
+      const controller = new AbortController();
+      const promise = (async () => {
+        try {
+          const user = await api.loadMe(controller.signal);
+          if (revision === this.sessionRevision) {
+            this.user = user;
+            syncLocale(user);
+          }
+        } catch {
+          if (revision === this.sessionRevision) this.user = null;
+        } finally {
+          if (revision === this.sessionRevision) this.ready = true;
+          if (this.restoring?.controller === controller) this.restoring = null;
+        }
+      })();
+      this.restoring = { controller, promise };
+      return promise;
     },
     async login(username: string, password: string) {
+      this.sessionRevision += 1;
+      this.restoring?.controller.abort();
+      this.restoring = null;
       this.loading = true;
       this.error = "";
       try {
@@ -64,8 +80,14 @@ export const useAuthStore = defineStore("auth", {
       }
     },
     async logout() {
+      this.sessionRevision += 1;
+      this.restoring?.controller.abort();
+      this.restoring = null;
+      this.user = null;
+      this.ready = true;
       await api.logout();
       this.user = null;
+      this.ready = true;
     },
   },
 });

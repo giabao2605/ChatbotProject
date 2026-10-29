@@ -33,3 +33,12 @@ def test_diversify_deduplicates_and_caps_per_document():
 def test_diversify_respects_global_cap():
     docs = [_doc(index, f"text-{index}") for index in range(10)]
     assert len(diversify_candidates(docs, max_per_document=4, cap=3)) == 3
+
+
+def test_diversify_retains_identical_text_with_different_source_provenance():
+    docs = [_doc(1, "same"), _doc(2, "same"), _doc(1, "same")]
+    docs[0].metadata.update(version_no=1, trang_so=1, parent_section="same section")
+    docs[1].metadata.update(version_no=1, trang_so=1, parent_section="same section")
+    docs[2].metadata.update(version_no=2, trang_so=1, parent_section="same section")
+
+    assert diversify_candidates(docs, max_per_document=4, cap=4) == docs

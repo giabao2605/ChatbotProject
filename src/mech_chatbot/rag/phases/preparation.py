@@ -84,6 +84,7 @@ def _empty_debug() -> dict[str, Any]:
 
 
 def _normalize_request(state: Any) -> _PreparationContext:
+    from mech_chatbot.rag.intent import has_context_reference
     request = state.request
     image_path = str(request.image_path) if request.image_path is not None else None
     chat_history = tuple(request.history)
@@ -108,7 +109,8 @@ def _normalize_request(state: Any) -> _PreparationContext:
         trace_id=state.trace_id,
         started_at=time.time(),
         cache_eligible=not any(
-            (image_path, chat_history, current_part_ids, bool(conversation_context))
+            (image_path, chat_history, current_part_ids, bool(conversation_context),
+             has_context_reference(request.question))
         ),
     )
 
@@ -232,6 +234,40 @@ def _exact_cache_terminal(
     )
 
 
+def _intent_overflow_terminal(context: _PreparationContext, state: Any) -> PreparationOutcome | None:
+    from mech_chatbot.rag.query_decomposition import query_decomposition_requested
+    if not query_decomposition_requested(state):
+        return None
+    from mech_chatbot.rag.query_decomposition import (
+        intent_overflow_notice, split_query_intents,
+    )
+
+    intents, overflow = split_query_intents(context.user_question)
+    if not overflow:
+        return None
+    state.checkpoint("intent_overflow")
+    state.refuse("intent_overflow")
+    debug = {
+        **_empty_debug(),
+        "citation_docs": [],
+        "decomposition_schema": "rag-query-result-v1",
+        "decomposition_status": "clarification_required",
+        "decomposition_intent_overflow": True,
+        "decomposition_intent_count": len(intents),
+        "decomposition_intent_coverage": [False] * len(intents),
+        "decomposition_branches": [],
+    }
+    log_trace(
+        "rag_end", context.trace_id,
+        final_latency_ms=int((time.time() - context.started_at) * 1000),
+        refusal=True, refusal_reason="intent_overflow",
+    )
+    return PreparationOutcome(
+        terminal=(iter((intent_overflow_notice(intents),)), "", (), context.current_part_ids, debug),
+        reason_code="intent_overflow",
+    )
+
+
 def _lookup_exact_cache(
     context: _PreparationContext,
     state: Any,
@@ -258,11 +294,13 @@ def _lookup_exact_cache(
                         "semantic_cache_environment",
                         None,
                     ),
+                    response_language=context.response_language,
                 )
                 hit = semantic_cache.lookup_exact(
                     context.user_question,
                     cache_scope,
                     ttl=getattr(runtime, "semantic_cache_ttl_hours", 24.0),
+                    actor=state.request.access,
                 )
                 if hit:
                     return _CacheLookup(
@@ -354,6 +392,9 @@ def prepare(state: Any) -> PreparationOutcome:
     safety_terminal = _safety_terminal(context, state)
     if safety_terminal is not None:
         return safety_terminal
+    overflow_terminal = _intent_overflow_terminal(context, state)
+    if overflow_terminal is not None:
+        return overflow_terminal
     cache_lookup = _lookup_exact_cache(context, state)
     if cache_lookup.terminal is not None:
         return cache_lookup.terminal

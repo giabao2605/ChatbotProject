@@ -379,6 +379,59 @@ def test_query_decomposition_batches_shared_qdrant_reads(monkeypatch):
     )
 
 
+@pytest.mark.parametrize('provider_result', ['{}', 'invalid JSON', 'timeout', 'overflow'])
+def test_unresolved_intents_stop_after_one_planner_without_retrieval_or_enrichment(monkeypatch, provider_result):
+    from mech_chatbot.rag import pipeline
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase, retrieval_enrichment
+    from mech_chatbot.rag.phases.contracts import PhaseTerminal
+
+    question = 'Nghỉ phép được bao lâu, mua hàng thực hiện thế nào, bảo trì do ai phụ trách, hỗ trợ hệ thống gửi ở đâu?'
+    decision = replace(_route_decision(_prepared_request(question=question)), hyde_eligible=True)
+    calls = []
+    def invoke(*_args, **kwargs):
+        calls.append(kwargs['surface'])
+        if provider_result == 'timeout':
+            raise TimeoutError('planner unavailable')
+        content = json.dumps({'subqueries': question.rstrip('?').split(', ')}) if provider_result == 'overflow' else provider_result
+        return SimpleNamespace(content=content)
+    monkeypatch.setattr(retrieval_phase, '_apply_hyde', lambda *_: pytest.fail('No HyDE'))
+    monkeypatch.setattr(retrieval_enrichment, 'enrich_retrieval', lambda *_: pytest.fail('No enrichment'))
+    outcome = _run_phase(lambda state: pipeline._run_retrieval(decision, state),
+        retrieval=_retrieval_adapter(retrieve=lambda **_: pytest.fail('No retrieval'), query_decomposition_enabled=True),
+        provider=SimpleNamespace(invoke=invoke))
+    assert calls == ['query_decomposition']
+    assert isinstance(outcome, PhaseTerminal) and outcome.reason_code == 'clarification_required'
+    answer = ''.join(outcome.prepared.stream)
+    assert '1. ' in answer and 'tối đa ba ý' in answer
+    assert ('chưa xác định rõ' in answer) is (provider_result != 'overflow')
+    assert outcome.prepared.diagnostics['decomposition_intent_overflow'] is (provider_result == 'overflow')
+
+
+def test_query_overflow_has_no_planner_retrieval_hyde_or_fictitious_branches():
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+
+    request = _prepared_request(question="Tìm BOM; tìm vật liệu; tìm dung sai; tìm bước hàn")
+    decision = replace(_route_decision(request), hyde_eligible=True)
+    calls = []
+    outcome = _run_phase(
+        lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(
+            retrieve=lambda **_: calls.append("retrieve"),
+            query_decomposition_enabled=True,
+            hyde_enabled=True,
+        ),
+        provider=SimpleNamespace(invoke=lambda *_args, **_: calls.append("provider")),
+    )
+    assert calls == []
+    assert outcome.reason_code == "intent_overflow"
+    assert outcome.decomposition_intent_overflow is True
+    assert len(outcome.decomposition_intents) == 4
+    assert outcome.decomposition_branches == ()
+    assert outcome.documents == ()
+    assert outcome.lookup_documents == ()
+    assert "tối đa ba ý" in outcome.decomposition_notice
+
+
 def test_decomposition_scopes_only_router_validated_branch_codes(
     monkeypatch,
 ):
@@ -606,9 +659,9 @@ def test_decomposition_missing_branch_does_not_publish_citations(monkeypatch):
     monkeypatch.setattr(
         retrieval_phase,
         "evaluate_answerability",
-        lambda *_args, **_kwargs: EvidenceDecision(
-            EvidenceState.SUFFICIENT,
-            reason="covered",
+        lambda question, *_args, **_kwargs: EvidenceDecision(
+            EvidenceState.INSUFFICIENT if "chi phí" in question else EvidenceState.SUFFICIENT,
+            reason="missing price" if "chi phí" in question else "covered",
         ),
     )
 
@@ -1926,3 +1979,17 @@ def test_inherited_code_miss_falls_back_to_general_retrieval(monkeypatch):
     assert outcome.new_part_ids == ()
     assert outcome.documents == (fallback_document,)
     assert outcome.retrieval_mode == "general_after_inherit_miss"
+
+
+def test_shared_usage_preserves_unpriced_generation_and_batch_attribution():
+    from mech_chatbot.domain.decomposition_usage import normalize_decomposition_usage
+
+    usage = normalize_decomposition_usage({
+        "schema": "rag-decomposition-usage-v1",
+        "retrieval_batch": {"latency_ms": 12, "branch_count": 2, "shared": True},
+        "branches": [{"retrieval": {"latency_scope": "shared_batch"}}],
+        "final_generation": {"calls": 1, "estimated_cost": None},
+    })
+    assert usage["final_generation"]["estimated_cost"] is None
+    assert usage["retrieval_batch"] == {"latency_ms": 12, "branch_count": 2, "shared": True}
+    assert usage["branches"][0]["retrieval"]["latency_scope"] == "shared_batch"

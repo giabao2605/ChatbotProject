@@ -30,6 +30,8 @@ BRANCH_OUTCOMES = {"full_answer", "partial_answer", "insufficient_evidence", "ac
 TERMINAL_OUTCOMES = {"insufficient_evidence", "access_denied"}
 CITATION_MARKER_PATTERN = re.compile(r"\[(?:Nguồn|Source)\s*:", re.IGNORECASE)
 TERMINAL_POLICY_NOTICE_PATTERNS = (
+    re.compile(r"^mình chưa tìm thấy đủ bằng chứng trong tài liệu được phép xem để trả lời phần này\.?$", re.IGNORECASE),
+    re.compile(r"^i could not find enough evidence in the documents you can access to answer this part\.?$", re.IGNORECASE),
     re.compile(
         r"^tài liệu hiện tại không ghi thông tin đủ để trả lời câu hỏi này "
         r"\([^)]+\)\.?$",
@@ -462,6 +464,7 @@ def summarize_decomposition_usage(
             for item in usages
         ) if usages else True,
     }
+    generation_costs = [item["final_generation"]["estimated_cost"] for item in usages]
     final_generation = {
         "calls": sum(item["final_generation"]["calls"] for item in usages),
         "input_tokens": sum(
@@ -470,16 +473,15 @@ def summarize_decomposition_usage(
         "output_tokens": sum(
             item["final_generation"]["output_tokens"] for item in usages
         ),
-        "estimated_cost": sum(
-            item["final_generation"]["estimated_cost"] for item in usages
-        ),
+        "estimated_cost": sum(generation_costs) if all(cost is not None for cost in generation_costs) else None,
     }
-    legacy_total = sum(float(row.get("estimated_cost") or 0.0) for row in rows)
+    legacy_total = (sum(float(row.get("estimated_cost") or 0.0) for row in rows)
+                    if all(row.get("estimated_cost", 0.0) is not None for row in rows) else None)
     attributed = (
         planner["estimated_cost"]
         + branch_correction["estimated_cost"]
         + final_generation["estimated_cost"]
-    )
+    ) if final_generation["estimated_cost"] is not None else None
     return {
         "schema": "rag-decomposition-usage-summary-v1",
         "cases": len(usages),
@@ -490,7 +492,7 @@ def summarize_decomposition_usage(
         "final_generation": final_generation,
         "legacy_total_estimated_cost": legacy_total,
         "attributed_estimated_cost": attributed,
-        "cost_reconciled": math.isclose(
+        "cost_reconciled": legacy_total is not None and attributed is not None and math.isclose(
             legacy_total,
             attributed,
             rel_tol=1e-9,

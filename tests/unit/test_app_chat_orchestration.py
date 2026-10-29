@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from mech_chatbot.config.settings import Settings
 
 import pytest
 from fastapi.testclient import TestClient
@@ -54,6 +55,122 @@ def _events(body):
         if event:
             parsed.append((event, data))
     return parsed
+
+
+def test_browser_comparison_is_gated_before_starting_chat_runner(monkeypatch, client):
+    class NoRun:
+        def stream(self, *args):
+            pytest.fail('V2 must not enter runner outside its approved evaluation scope')
+    monkeypatch.setattr(app_server.app.state, 'runtime', SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot',
+                        Settings(RAG_EXECUTION_CONTEXT='production'))
+    body = {'session_id':'comparison-1', 'question':'Compare',
+            'scope_comparison':{'scope_a':'a','scope_b':'b'}}
+    assert client.post('/api/chat/message', json=body).status_code == 409
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot',
+                        Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message', json=body).status_code == 403
+
+
+def test_browser_scope_total_requires_evaluation_and_forwards_one_scope(monkeypatch, client):
+    captured = []
+    class Runner:
+        def stream(self, command, actor):
+            captured.append(command)
+            yield ChatDone(None, '', (), (), None, 1)
+    monkeypatch.setattr(app_server.app.state, 'runtime', SimpleNamespace(chat_turn_runner=Runner()))
+    body = {'session_id':'total', 'question':'Tổng phạm vi', 'scope_total':{'scope_id':'approved-a'}}
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot', Settings(RAG_EXECUTION_CONTEXT='production'))
+    assert client.post('/api/chat/message', json=body).status_code == 409
+    assert not captured
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot', Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message', json=body).status_code == 403
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile] = lambda: {**_profile(), 'roles':['reviewer']}
+    assert client.post('/api/chat/message', json=body).status_code == 200
+    assert captured[-1].scope_total == 'approved-a'
+    assert client.post('/api/chat/message', json={**body,'text_query':True}).status_code == 422
+    for selection in ({'scope_id':' '}, {'scope_id':'a','approved':True}):
+        assert client.post('/api/chat/message', json={**body,'scope_total':selection}).status_code == 422
+
+
+def test_browser_total_grant_forwards_one_action_and_blocks_comparison(monkeypatch, client):
+    from mech_chatbot.governance.scope_total_activation import ScopeTotalCapability, CONTRACT
+    captured = []
+    cap = ScopeTotalCapability(CONTRACT, 'sum_reviewed_scope', (('a','snapshot','a'*64),),
+        'candidate', 'b'*64, 'c'*64, '2099-01-01T00:00:00Z')
+    class Runner:
+        def stream(self, command, actor):
+            captured.append(command)
+            yield ChatDone(None, '', (), (), None, 1)
+    monkeypatch.setattr(app_server.app.state, 'runtime',
+        SimpleNamespace(chat_turn_runner=Runner(), math_v2_authorizer=lambda: cap))
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot', Settings(RAG_EXECUTION_CONTEXT='production'))
+    body = {'session_id':'total', 'question':'Tổng phạm vi', 'scope_total':{'scope_id':'a'}}
+    assert client.post('/api/chat/message', json=body).status_code == 200
+    assert captured[-1].scope_total == 'a'
+    comparison = {'session_id':'total', 'question':'Compare', 'scope_comparison':{'scope_a':'a','scope_b':'b'}}
+    assert client.post('/api/chat/message', json=comparison).status_code == 409
+    assert len(captured) == 1
+
+
+def test_browser_text_query_requires_evaluation_and_reviewer_before_runner(monkeypatch,client):
+    class NoRun:
+        def stream(self,*a):pytest.fail('must not enter runner')
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    body={'session_id':'text','question':'Tìm quy trình; tìm chính sách','text_query':True}
+    assert client.post('/api/chat/message',json=body).status_code==409
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message',json=body).status_code==403
+    assert client.post('/api/chat/message',json={**body,'text_query':'true'}).status_code==422
+
+
+def test_browser_graph_query_is_gated_before_entering_runner(monkeypatch,client):
+    class NoRun:
+        def stream(self,*a):pytest.fail('must not enter runner')
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    body={'session_id':'graph','question':'Contains what?',
+          'graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}}
+    assert client.post('/api/chat/message',json=body).status_code==409
+
+
+def test_browser_graph_grant_keeps_standalone_query_and_actor_for_runner(monkeypatch,client):
+    from datetime import datetime,timedelta,timezone
+    from mech_chatbot.governance.graph_v2_activation import CONTRACT,GraphV2Capability
+    captured=[]
+    class Runner:
+        def stream(self,command,actor):
+            captured.append((command,actor))
+            yield ChatDone(None,'',(),(),None,1,advanced_rag={'graph':{'offline_only':False}})
+    context={'root_key':'document:1','product_scope':'product','site':'HN','direction':'contains'}
+    cap=GraphV2Capability(CONTRACT,((json.dumps(context,sort_keys=True,separators=(',',':')),'a'*64),),
+        'b'*40,'c'*64,'d'*64,(datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat())
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=Runner(),graph_v2_authorizer=lambda:cap))
+    response=client.post('/api/chat/message',json={'session_id':'granted-graph','question':'Cụm này chứa gì?','graph_query':context})
+    assert response.status_code==200
+    assert captured[0][0].graph_query.root_key=='document:1' and captured[0][1].user_id==7
+    assert captured[0][0].query_plan is None and captured[0][0].scope_comparison is None
+    assert _events(response.text)[-1][1]['advanced_rag']=={'graph':{'offline_only':False}}
+
+
+def test_browser_comparison_keeps_selected_scopes_and_versioned_steps_in_done_event(monkeypatch, client):
+    captured = []
+    metadata = {'schema':'grounded-calculation-v2', 'accepted':False, 'offline_only':True,
+                'status':'partial', 'domain_step_count':4}
+    class Runner:
+        def stream(self, command, actor):
+            captured.append((command, actor))
+            yield ChatDone(None, '', (), (), None, 10, advanced_rag={'math':metadata})
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile] = lambda: {**_profile(), 'roles':['reviewer']}
+    monkeypatch.setattr(app_server.app.state, 'runtime', SimpleNamespace(chat_turn_runner=Runner()))
+    monkeypatch.setattr(app_server.app.state, 'settings_snapshot', Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    response = client.post('/api/chat/message', json={'session_id':'compare', 'question':'Compare',
+                           'scope_comparison':{'scope_a':'a','scope_b':'b'}})
+    assert response.status_code == 200
+    assert _events(response.text)[-1][1]['advanced_rag'] == {'math':metadata}
+    assert captured[0][0].scope_comparison == ('a','b') and captured[0][1].user_id == 7
 
 
 def test_ingestion_eta_returns_flat_queue_metrics(monkeypatch):
@@ -207,6 +324,7 @@ def test_text_citation_has_download_without_preview(monkeypatch):
             "file_goc": "policy.docx",
             "score": 0.88,
             "source_id": "D9P1",
+            "version_no": 3,
         }
     ])
     assert citations == [{
@@ -217,8 +335,39 @@ def test_text_citation_has_download_without_preview(monkeypatch):
         "source_id": "D9P1",
         "has_vision": False,
         "page_url": None,
-        "original_url": "/api/files/documents/9/original",
+        "original_url": "/api/files/documents/9/original?citation_version=3",
+        "version_no": 3,
     }]
+
+
+@pytest.mark.parametrize('version', [None, '', 0, -1, 'bad', 1.5, True])
+def test_ordinary_citation_without_a_valid_version_never_links_to_latest(monkeypatch, version):
+    monkeypatch.setattr(chat_routes, 'page_has_vision', lambda *_: True)
+    assert chat_routes._citation_list([
+        {'doc_id': 9, 'trang': 1, 'file_goc': 'manual.pdf', 'version_no': version}
+    ]) == []
+
+
+def test_ordinary_pdf_citation_keeps_revision_on_both_urls(monkeypatch):
+    monkeypatch.setattr(chat_routes, 'page_has_vision', lambda *_: True)
+    card = chat_routes._citation_list([
+        {'doc_id': 9, 'trang': 1, 'file_goc': 'manual.pdf', 'version_no': 3}
+    ])[0]
+    assert card['page_url'] == '/api/files/documents/9/pages/1?citation_version=3'
+    assert card['original_url'] == '/api/files/documents/9/original?citation_version=3'
+
+
+@pytest.mark.parametrize('version', [3, None])
+def test_streamed_citation_fallback_rebuilds_revision_links(monkeypatch, version):
+    from mech_chatbot.application.chat_citations import resolve_chat_citations
+    candidates = [{'doc_id': 9, 'page_no': 1, 'file_name': 'manual.pdf', 'version_no': version,
+                   'source_id': 'D9P1', 'original_url': '/api/files/documents/9/original'}]
+    cards, _ = resolve_chat_citations([], candidates, 'Answer [SRC:D9P1]', page_has_vision=lambda *_: True)
+    if version is None:
+        assert cards == ()
+    else:
+        assert cards[0]['original_url'] == '/api/files/documents/9/original?citation_version=3'
+        assert cards[0]['page_url'] == '/api/files/documents/9/pages/1?citation_version=3'
 
 
 def test_live_citation_filter_requires_exact_source_id():
@@ -314,3 +463,86 @@ def test_crag_pilot_replay_queue_is_bounded_and_drops_without_submitting(monkeyp
     assert events[0][2]["cohort_sha256"] == "cohort-v1"
     assert events[-1][2]["status"] == "dropped"
     assert events[-1][2]["fallback_reason"] == "replay_queue_full_or_stopped"
+
+
+def test_structured_citations_keep_sheet_cell_row_and_never_invent_a_pdf_page():
+    from mech_chatbot.application.chat_citations import build_citation_list, filter_citations_by_answer, citation_ref_text
+    from mech_chatbot.rag.execution import attributed_citations
+    records = [
+        {'doc_id':17,'file_goc':'ledger.xlsx','version_no':3,'snapshot_id':'s1','source_hash':'a'*64,
+         'locator':{'doc_id':'17','version':'3','sheet':'Ledger','cell':'B2','row_key':'Ledger:row-2'}},
+        {'doc_id':17,'file_goc':'ledger.xlsx','version_no':3,'snapshot_id':'s1','source_hash':'a'*64,
+         'locator':{'doc_id':'17','version':'3','sheet':'Ledger','cell':'B3','row_key':'Ledger:row-3'}},
+    ]
+    cards = build_citation_list(records,page_has_vision=lambda *a: pytest.fail('not a PDF page'))
+    assert len(cards) == 2 and len({c['source_id'] for c in cards}) == 2
+    assert all(c['page_no'] is None and c['page_url'] is None and not c['has_vision'] for c in cards)
+    assert cards[0]['locator']['cell'] == 'B2' and cards[1]['locator']['row_key'] == 'Ledger:row-3'
+    assert cards[0]['original_url'] == '/api/files/documents/17/original?citation_version=3'
+    answer = f"Tổng A = 25 [SRC:{cards[0]['source_id']}]"
+    assert filter_citations_by_answer(cards, answer) == [cards[0]]
+    assert attributed_citations({'citation_docs':records}, answer) == (cards[0],)
+    assert 'Sheet Ledger' in citation_ref_text([cards[0]]) and 'B2' in citation_ref_text([cards[0]])
+    assert 'Trang ?' not in citation_ref_text([cards[0]])
+
+def test_browser_graph_context_and_completeness_survive_done_event(monkeypatch,client):
+    from mech_chatbot.domain.graph_query import GraphQuery
+    captured=[]
+    metadata={'contract_version':'graph-v2','status':'partial','accepted':False,'offline_only':True}
+    class Runner:
+        def stream(self,command,actor):
+            captured.append(command)
+            yield ChatDone(None,'',(),(),None,10,advanced_rag={'graph':metadata})
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile]=lambda:{**_profile(),'roles':['reviewer']}
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=Runner()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    response=client.post('/api/chat/message',json={'session_id':'graph','question':'Contains what?',
+        'graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}})
+    assert response.status_code==200 and _events(response.text)[-1][1]['advanced_rag']=={'graph':metadata}
+    assert captured[0].graph_query==GraphQuery('document:1','product','factory')
+
+
+def test_browser_bom_selection_is_gated_and_preserves_math_metadata(monkeypatch,client):
+    class NoRun:
+        def stream(self,*args):pytest.fail('Must not execute production or unprivileged BOM')
+    body={'session_id':'bom','question':'BOM','bom_rollup':{'root_key':'document:1','product_scope':'product',
+        'site':'factory','order_quantity':'3','rounding_scope':'policy'}}
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    assert client.post('/api/chat/message',json=body).status_code==409
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message',json=body).status_code==403
+    captured=[]
+    math={'schema':'grounded-calculation-v2','template':'bom_rollup','status':'complete','steps':[],'accepted':False}
+    class Runner:
+        def stream(self,command,actor):
+            captured.append(command)
+            yield ChatDone(None,'',(),(),None,10,advanced_rag={'math':math})
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile]=lambda:{**_profile(),'roles':['reviewer']}
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=Runner()))
+    response=client.post('/api/chat/message',json=body)
+    assert response.status_code==200 and _events(response.text)[-1][1]['advanced_rag']=={'math':math}
+    assert captured[0].bom_rollup.order_quantity=='3' and captured[0].bom_rollup.rounding_scope=='policy'
+
+
+def test_browser_query_plan_preserves_branch_metadata_and_context_guard(monkeypatch,client):
+    branch={'branch_id':'graph','question':'Cụm chứa gì','graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}}
+    body={'session_id':'plan','question':'Cụm chứa gì','query_plan':{'branches':[branch]}}
+    class NoRun:
+        def stream(self,*args):pytest.fail('Must not enter unapproved Query v2')
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=NoRun()))
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='production'))
+    assert client.post('/api/chat/message',json=body).status_code==409
+    monkeypatch.setattr(app_server.app.state,'settings_snapshot',Settings(RAG_EXECUTION_CONTEXT='evaluation'))
+    assert client.post('/api/chat/message',json=body).status_code==403
+    captured=[]
+    metadata={'schema':'query-plan-v2','status':'partial','branches':[],'accepted':False}
+    class Runner:
+        def stream(self,command,actor):
+            captured.append(command)
+            yield ChatDone(None,'',(),(),None,10,advanced_rag={'query':metadata})
+    app_server.app.dependency_overrides[api_dependencies.csrf_profile]=lambda:{**_profile(),'roles':['reviewer']}
+    monkeypatch.setattr(app_server.app.state,'runtime',SimpleNamespace(chat_turn_runner=Runner()))
+    response=client.post('/api/chat/message',json=body)
+    assert response.status_code==200 and _events(response.text)[-1][1]['advanced_rag']=={'query':metadata}
+    assert captured[0].query_plan.branches[0].branch_id=='graph'

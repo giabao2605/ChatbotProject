@@ -26,6 +26,18 @@ def _blob(flt):
 
 
 class TestRbacFilter:
+    def test_display_department_does_not_restore_revoked_grants(self):
+        scope = dict(
+            user_department="Technical", user_roles=["viewer"],
+            allowed_departments=["CHUNG"], max_security_level="internal",
+            allowed_sites=["HQ"],
+        )
+        assert "Technical" not in _blob(svc.create_rbac_filter(**scope))
+        assert not svc.document_matches_access_scope(
+            {"phong_ban_quyen": ["Technical"], "security_level": "internal", "site": "HQ"},
+            **scope,
+        )
+
     def test_no_roles_denies_everything(self):
         # Khong co role -> phai DENY tat ca (an toan mac dinh)
         flt = svc.create_rbac_filter(

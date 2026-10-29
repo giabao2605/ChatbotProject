@@ -25,43 +25,49 @@ def _doc(content: str = "fallback content", **metadata) -> Document:
 def test_structured_attributes_are_deduplicated_sorted_and_rendered_as_json(monkeypatch):
     calls = []
 
-    def fake_attributes(file_name):
-        calls.append(file_name)
-        return {"material": "SUS304", "verified": True} if file_name == "a.pdf" else []
+    def fake_attributes(doc_id, *, page_numbers):
+        calls.append((doc_id, page_numbers))
+        return {
+            "material": {"value": "SUS304", "human_verified": True},
+            "unverified": {"value": "ignore this", "human_verified": False},
+        } if doc_id == 7 else {}
 
     monkeypatch.setattr(
         document_pages, "get_technical_attributes_for_rag", fake_attributes
     )
 
     rendered = build_structured_attributes_context(
-        [_doc(file_goc="b.pdf"), _doc(file_goc="a.pdf"), _doc(file_goc="a.pdf"), _doc()]
+        [_doc(doc_id=8, trang_so=4, file_goc="a.pdf"),
+         _doc(doc_id=7, trang_so=2, version_no=3, file_goc="a.pdf"),
+         _doc(doc_id=7, trang_so=2, version_no=3, file_goc="a.pdf"), _doc()]
     )
 
-    assert calls == ["a.pdf", "b.pdf"]
-    assert rendered.startswith("[STRUCTURED DATA - HUMAN VERIFIED PRIORITY]\nFile: a.pdf")
-    assert '"material": "SUS304"' in rendered
-    assert '"verified": true' in rendered
-    assert "b.pdf" not in rendered
+    assert calls == [(7, (2,)), (8, (4,))]
+    assert rendered.startswith("[STRUCTURED DATA - HUMAN VERIFIED]\nFile: a.pdf (Trang 2)")
+    assert "SOURCE_ID: D7P2 | Version: 3" in rendered
+    assert '"value": "SUS304"' in rendered
+    assert "unverified" not in rendered
+    assert "D8P4" not in rendered
 
 
 @pytest.mark.parametrize("attributes", [None, {}, []])
 def test_structured_attributes_omit_empty_repository_results(monkeypatch, attributes):
     monkeypatch.setattr(
-        document_pages, "get_technical_attributes_for_rag", lambda _name: attributes
+        document_pages, "get_technical_attributes_for_rag", lambda *_args, **_kwargs: attributes
     )
 
-    assert build_structured_attributes_context([_doc(file_goc="empty.pdf")]) == ""
+    assert build_structured_attributes_context([_doc(doc_id=7, trang_so=2, file_goc="empty.pdf")]) == ""
 
 
 def test_structured_attributes_fail_closed_when_repository_is_unavailable(monkeypatch):
-    def unavailable(_name):
+    def unavailable(*_args, **_kwargs):
         raise RuntimeError("database unavailable")
 
     monkeypatch.setattr(
         document_pages, "get_technical_attributes_for_rag", unavailable
     )
 
-    assert build_structured_attributes_context([_doc(file_goc="a.pdf")]) == ""
+    assert build_structured_attributes_context([_doc(doc_id=7, trang_so=2, file_goc="a.pdf")]) == ""
 
 
 def test_common_metadata_renders_all_supported_fields_and_expired_status_warning(monkeypatch):

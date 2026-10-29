@@ -25,8 +25,6 @@ def _scope_phrase(user_department, allowed_departments, en):
     for d in (allowed_departments or []):
         if d and str(d).strip():
             deps.append(str(d).strip())
-    if user_department and str(user_department).strip() and str(user_department).strip() not in deps:
-        deps.insert(0, str(user_department).strip())
     if not deps:
         return ""
     joined = ", ".join(deps)

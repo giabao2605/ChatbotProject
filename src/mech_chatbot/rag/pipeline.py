@@ -31,6 +31,18 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 
+def _text_branch_terminal(terminal, primary, state):
+    if not state.request.text_query:
+        return terminal
+    diagnostics={**terminal.prepared.diagnostics,
+        'decomposition_branches':list(primary.decomposition_branches),
+        'decomposition_intent_count':len(primary.decomposition_intents),
+        'decomposition_intent_coverage':list(primary.decomposition_intent_coverage),
+        'decomposition_used_fallback':primary.decomposition_used_fallback,
+        'decomposition_intent_overflow':primary.decomposition_intent_overflow}
+    return replace(terminal,prepared=replace(terminal.prepared,diagnostics=diagnostics))
+
+
 @dataclass(frozen=True, slots=True)
 class _RetrievalResult:
     primary: "PrimaryRetrievalOutcome"
@@ -76,11 +88,21 @@ def _run_retrieval(
     from mech_chatbot.rag.phases.retrieval import retrieve_primary
 
     primary = retrieve_primary(route_decision, state)
+    if primary.reason_code in {"intent_overflow", "intent_clarification"}:
+        state.refuse("intent_overflow" if primary.decomposition_intent_overflow else "clarification_required")
+        return PhaseTerminal(state.prepared((iter((primary.decomposition_notice,)), "", (),
+            route_decision.request.current_part_ids, {
+                "answer_outcome": "clarification_required", "decomposition_status": "clarification_required",
+                "decomposition_intent_count": len(primary.decomposition_intents),
+                "decomposition_intent_overflow": primary.decomposition_intent_overflow,
+                "decomposition_intent_coverage": list(primary.decomposition_intent_coverage),
+                "decomposition_branches": [],
+            })), reason_code="clarification_required")
     from mech_chatbot.rag.phases.retrieval_enrichment import enrich_retrieval
 
     enrichment = enrich_retrieval(route_decision, primary, state)
     if isinstance(enrichment, PhaseTerminal):
-        return enrichment
+        return _text_branch_terminal(enrichment,primary,state)
     primary = _reconcile_grounded_math(primary, enrichment)
     from mech_chatbot.rag.phases.retrieval_rerank import rerank_retrieval
 
@@ -94,7 +116,7 @@ def _run_retrieval(
         ),
     )
     if isinstance(reranked, PhaseTerminal):
-        return reranked
+        return _text_branch_terminal(reranked,primary,state)
     return _RetrievalResult(primary, enrichment, reranked)
 
 
@@ -134,7 +156,36 @@ def _reconcile_grounded_math(primary, enrichment):
 
 
 def execute_pipeline(state):
+    if state.request.scope_total is not None:
+        from mech_chatbot.rag.scope_total import execute_scope_total
+        return _run_traced_phase(state, 'evidence', lambda: execute_scope_total(state))
+    if state.request.candidate_selection_context is not None and state.invocation.task_routing_contract not in (
+            'semantic-candidate-task-routing-v4-draft', 'semantic-mixed-candidate-task-routing-v5-draft'):
+        raise ValueError('Candidate context requires the exact evaluation contract')
+    if state.invocation.task_routing_contract:
+        from mech_chatbot.rag.query_decomposition import fixed_task_guard
+        terminal = fixed_task_guard(state)
+        if terminal is not None:
+            return terminal
+    if state.request.text_query:
+        if state.invocation.mode not in {'test','evaluation'} and state.query_v2_capability is None:
+            raise ValueError('Text query contract requires evaluation context')
+        if state.query_v2_capability is None and not {role.lower() for role in state.request.access.roles}.intersection({'reviewer','knowledge_approver','admin'}):
+            raise PermissionError('Evaluation reviewer required')
+    if state.request.query_plan is not None:
+        from mech_chatbot.rag.query_plan import execute_query_plan
+        return _run_traced_phase(state,'evidence',lambda:execute_query_plan(state))
+    if state.request.bom_rollup is not None:
+        from mech_chatbot.rag.bom_rollup import execute_bom_rollup
+        return _run_traced_phase(state,'evidence',lambda:execute_bom_rollup(state))
+
+    if state.request.graph_query is not None:
+        from mech_chatbot.rag.graph_query_v2 import execute_graph_query
+        return _run_traced_phase(state,'evidence',lambda:execute_graph_query(state))
     """Execute all RAG stages through one request-owned execution state."""
+    if state.request.scope_comparison is not None:
+        from mech_chatbot.rag.scope_comparison import execute_scope_comparison
+        return _run_traced_phase(state, 'evidence', lambda: execute_scope_comparison(state))
     from mech_chatbot.rag.phases.preparation import prepare
 
     preparation = _run_traced_phase(
@@ -183,7 +234,7 @@ def execute_pipeline(state):
         ),
     )
     if isinstance(evidence, PhaseTerminal):
-        return evidence.prepared
+        return _text_branch_terminal(evidence,retrieval.primary,state).prepared
 
     from mech_chatbot.rag.phases.generation import generate
 

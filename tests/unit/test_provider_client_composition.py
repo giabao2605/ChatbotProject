@@ -141,6 +141,7 @@ def test_llm_adapter_uses_only_the_explicit_settings_snapshot(monkeypatch):
         max_tokens=321,
         timeout=17.0,
         max_retries=0,
+        stream_usage=True,
     )
     client.invoke.assert_called_once_with(["prompt"], timeout=17.0)
 

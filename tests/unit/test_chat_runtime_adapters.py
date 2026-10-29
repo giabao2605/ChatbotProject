@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -123,6 +124,38 @@ def test_http_adapter_maps_payload_and_sse_to_typed_events():
     assert events[-1].trace_id == "trace-1"
 
 
+def test_comparison_selection_crosses_http_adapter_without_client_approval_or_roles():
+    bodies = []
+    adapter = HttpRagStreamAdapter(post=lambda url, **kw: bodies.append(kw['json']) or Response(
+        events=(('done', {'trace_id':'comparison'}),)), base_url='http://rag')
+    selected = replace(command(), scope_comparison=('a','b'))
+    list(adapter.stream(RagStreamRequest(selected, actor()), None))
+    assert bodies[0]['scope_comparison'] == {'scope_a':'a','scope_b':'b'}
+    assert 'user_roles' not in bodies[0] and 'approved' not in bodies[0]['scope_comparison']
+
+
+def test_scope_total_selection_crosses_http_adapter_without_approval():
+    bodies = []
+    adapter = HttpRagStreamAdapter(post=lambda url, **kw: bodies.append(kw['json']) or Response(
+        events=(('done', {'trace_id':'total'}),)), base_url='http://rag')
+    list(adapter.stream(RagStreamRequest(replace(command(), scope_total='a'), actor()), None))
+    assert bodies[0]['scope_total'] == {'scope_id':'a'}
+    assert 'scope_comparison' not in bodies[0] and 'query_plan' not in bodies[0]
+
+
+def test_query_scope_total_branch_crosses_adapter_with_dependency():
+    from mech_chatbot.api.evidence_contracts import QueryPlanRequest
+    plan=QueryPlanRequest.model_validate({'branches':[
+        {'branch_id':'a','question':'Tổng A','scope_total':{'scope_id':'scope-a'}},
+        {'branch_id':'b','question':'Tổng B','scope_total':{'scope_id':'scope-b'},'depends_on':['a']}]}).to_plan()
+    bodies=[]
+    adapter=HttpRagStreamAdapter(post=lambda url,**kw:bodies.append(kw['json']) or Response(
+        events=(('done',{'trace_id':'query-total'}),)),base_url='http://rag')
+    list(adapter.stream(RagStreamRequest(replace(command(),query_plan=plan),actor()),None))
+    assert bodies[0]['query_plan']['branches'][1]['scope_total']=={'scope_id':'scope-b'}
+    assert bodies[0]['query_plan']['branches'][1]['depends_on']==('a',)
+
+
 def test_http_adapter_maps_busy_without_starting_persistence_contract():
     response = Response(status=503, text="busy")
     adapter = HttpRagStreamAdapter(
@@ -190,6 +223,57 @@ def test_repository_store_persists_turn_evidence_and_final_sources():
     assert calls[2][1][1][0]["source_id"] == "D1P3"
 
 
+def test_repository_store_keeps_structured_pins_and_reports_failed_evidence_write():
+    captured = []
+    citation = {'doc_id':17,'version_no':3,'page_no':None,'file_name':'book.xlsx',
+                'locator':{'doc_id':'17','version':'3','sheet':'Book','cell':'B2','row_key':'r2'},
+                'scope_id':'a','scope_hash':'b'*64,'snapshot_id':'s1','source_hash':'a'*64,
+                'citation_schema':'source-locator-v2','source_id':'D17L1234567890ABCDEF'}
+    record = ChatPersistence(command=replace(command(),scope_comparison=('a','b')),actor=actor(),answer='4',
+                             ref_text='',ref_images=(),evidence=(citation,),citations=(citation,))
+    store = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a:True,
+                                save_answer_sources=lambda cid,docs:captured.extend(docs) or True)
+    assert store.persist(record)==11
+    assert captured[0]['scope_hash']=='b'*64 and captured[0]['locator']['cell']=='B2'
+    failed = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a:False,
+                                 save_answer_sources=lambda *a:pytest.fail('must not save unverifiable sources'))
+    with pytest.raises(RuntimeError):
+        failed.persist(record)
+
+
+@pytest.mark.parametrize(('selection', 'metadata'), [
+    ({'text_query':True}, {'text_query':{'schema':'query-text-v2','accepted':False,'offline_only':True,'branches':[]}}),
+    ({'query_plan':object()}, {'query':{'schema':'query-plan-v2','accepted':False,'offline_only':True,'branches':[]}}),
+    ({'scope_total':'a'}, {'math':{'schema':'grounded-calculation-scope-total-v1','accepted':False,'offline_only':False}}),
+], ids=['text-query', 'query', 'scope-total'])
+def test_repository_store_passes_branch_result_with_final_citations_and_reports_missing_migration(selection, metadata):
+    captured = []
+    card = {'doc_id':1,'version_no':2,'source_id':'D1P1'}
+    record = ChatPersistence(command=replace(command(),**selection),actor=actor(),answer='Answer',
+        ref_text='',ref_images=(),evidence=(card,),citations=(card,),advanced_rag=metadata)
+    store = RepositoryChatStore(save_chat_history=lambda **kw:11,
+        save_answer_evidence=lambda *a,**kw:captured.append(kw) or True,save_answer_sources=lambda *a:True)
+    assert store.persist(record)==11
+    assert captured == [{'advanced_rag':metadata,'citation_cards':[card]}]
+    failed = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a,**kw:False,
+        save_answer_sources=lambda *a:pytest.fail('must not pretend the advanced history was saved'))
+    with pytest.raises(RuntimeError):failed.persist(record)
+
+
+@pytest.mark.parametrize('metadata', [
+    {'math':{'schema':'grounded-calculation-v2'}},
+    {'graph':{'schema':'graph-query-v2'}},
+], ids=['legacy-math', 'graph'])
+def test_repository_store_keeps_legacy_results_on_the_existing_evidence_api(metadata):
+    captured = []
+    store = RepositoryChatStore(save_chat_history=lambda **kw:11,
+        save_answer_evidence=lambda *a,**kw:captured.append(kw) or True,save_answer_sources=lambda *a:True)
+    record = ChatPersistence(command=command(),actor=actor(),answer='Answer',ref_text='',ref_images=(),
+                             evidence=(),citations=(),advanced_rag=metadata)
+    assert store.persist(record)==11
+    assert captured == [{}]
+
+
 def test_audit_adapter_preserves_typed_record_fields():
     calls = []
     sink = RepositoryAuditSink(
@@ -252,3 +336,48 @@ def test_pilot_adapter_assigns_and_schedules_from_server_actor():
     replay_payload = calls[1][1][1]
     assert replay_payload["username"] == "alice"
     assert replay_payload["response_language"] == "vi"
+
+def test_graph_selection_crosses_http_adapter_with_only_explicit_context():
+    from mech_chatbot.domain.graph_query import GraphQuery
+    bodies=[]
+    adapter=HttpRagStreamAdapter(post=lambda url,**kw:bodies.append(kw['json']) or Response(
+        events=(('done',{'trace_id':'graph'}),)),base_url='http://rag')
+    selected=replace(command(),graph_query=GraphQuery('document:1','product','factory'))
+    list(adapter.stream(RagStreamRequest(selected,actor()),None))
+    assert bodies[0]['graph_query']=={'root_key':'document:1','product_scope':'product','site':'factory','direction':'contains'}
+    assert 'user_roles' not in bodies[0] and 'approved' not in bodies[0]['graph_query']
+
+
+def test_bom_selection_crosses_http_adapter_without_float_or_approval():
+    from mech_chatbot.domain.graph_query import GraphQuery,BomRollupQuery
+    bodies=[]
+    adapter=HttpRagStreamAdapter(post=lambda url,**kw:bodies.append(kw['json']) or Response(
+        events=(('done',{'trace_id':'bom'}),)),base_url='http://rag')
+    selected=replace(command(),bom_rollup=BomRollupQuery(GraphQuery('document:1','product','factory'),'3.00','policy'))
+    list(adapter.stream(RagStreamRequest(selected,actor()),None))
+    assert bodies[0]['bom_rollup']=={'root_key':'document:1','product_scope':'product','site':'factory','direction':'contains',
+                                   'order_quantity':'3.00','rounding_scope':'policy'}
+    assert 'approved' not in bodies[0]['bom_rollup'] and 'user_roles' not in bodies[0]
+
+
+def test_query_plan_http_adapter_preserves_order_dependencies_and_decimal_inputs():
+    from mech_chatbot.domain.graph_query import GraphQuery,BomRollupQuery
+    from mech_chatbot.domain.query_plan import QueryBranch,QueryPlan
+    bodies=[]
+    graph=GraphQuery('document:1','product','factory')
+    plan=QueryPlan((QueryBranch('graph','Contains what?',graph_query=graph),
+                    QueryBranch('bom','Calculate BOM',bom_rollup=BomRollupQuery(graph,'3.00','policy'),depends_on=('graph',))))
+    adapter=HttpRagStreamAdapter(post=lambda url,**kw:bodies.append(kw['json']) or Response(events=(('done',{}),)),base_url='http://rag')
+    list(adapter.stream(RagStreamRequest(replace(command(),query_plan=plan),actor()),None))
+    branches=bodies[0]['query_plan']['branches']
+    assert [b['branch_id'] for b in branches]==['graph','bom']
+    assert branches[1]['depends_on']==('graph',) and branches[1]['bom_rollup']['order_quantity']=='3.00'
+    assert 'max_relations' not in branches[0]['graph_query'] and 'approved' not in bodies[0]['query_plan']
+
+
+def test_http_adapter_forwards_only_the_selected_text_query_flag():
+    bodies=[]
+    adapter=HttpRagStreamAdapter(post=lambda url,**kw:bodies.append(kw['json']) or Response(events=(('done',{}),)),base_url='http://rag')
+    list(adapter.stream(RagStreamRequest(replace(command(),text_query=True),actor()),None))
+    assert bodies[0]['text_query'] is True
+    assert 'approved' not in bodies[0] and 'query_plan' not in bodies[0]

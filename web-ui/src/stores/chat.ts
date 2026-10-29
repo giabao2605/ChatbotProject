@@ -10,6 +10,8 @@ export const useChatStore = defineStore("chat", {
   state: () => ({
     sessionId: createSessionId(),
     memoryBySession: {} as Record<string, SessionMemory>,
+    memoryIdentity: null as string | null,
+    pendingSessionIds: [] as string[],
   }),
   getters: {
     currentMemory(state): SessionMemory {
@@ -20,6 +22,13 @@ export const useChatStore = defineStore("chat", {
     },
   },
   actions: {
+    bindMemoryIdentity(identity: string) {
+      if (this.memoryIdentity === identity) return;
+      this.memoryIdentity = identity;
+      this.memoryBySession = {};
+      this.pendingSessionIds = [];
+      this.newSession();
+    },
     newSession() {
       this.sessionId = createSessionId();
     },

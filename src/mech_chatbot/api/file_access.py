@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, Iterable
+from mech_chatbot.db.evidence_snapshot import EvidenceSnapshotLost, evidence_snapshot_active
+from sqlalchemy.exc import SQLAlchemyError
 
 from mech_chatbot.adapters.protected_files import (
     FilesystemProtectedFileStorage,
@@ -121,7 +123,11 @@ def page_has_vision(doc_id: int, page_no: int) -> bool:
     try:
         metadata = _store().load_page_vision(doc_id, page_no)
         return bool(metadata and _storage().resolve_page_image(metadata[1]))
-    except Exception:
+    except (EvidenceSnapshotLost, TimeoutError):
+        raise
+    except Exception as error:
+        if isinstance(error, SQLAlchemyError) and evidence_snapshot_active():
+            raise
         return False
 
 

@@ -162,6 +162,24 @@ def test_graph_edge_requires_exact_qdrant_page_hydration():
     assert type(docs[0].metadata["graph_confidence"]) is float
 
 
+def test_graph_qdrant_scroll_records_failure_without_retry(monkeypatch):
+    from mech_chatbot.rag import graph_retrieval
+    events = []
+    calls = []
+    monkeypatch.setattr(graph_retrieval, "log_trace", lambda *args, **kw: events.append(kw), raising=False)
+    class Client:
+        def scroll(self, **kwargs):
+            calls.append(kwargs)
+            raise TimeoutError("provider timeout")
+    with pytest.raises(TimeoutError):
+        graph_retrieval.hydrate_graph_edges([edge(doc_id=7, page=3, version=2)], Client(), "shadow", trace_id="request-one")
+    assert len(calls) == 1
+    assert events[-1]["stage"] == "qdrant_scroll"
+    assert events[-1]["status"] == "failed"
+    assert events[-1]["latency_ms"] >= 0
+    assert "doc_id" not in events[-1]
+
+
 def test_graph_context_survives_when_regular_retrieval_already_has_same_page():
     from langchain_core.documents import Document
 

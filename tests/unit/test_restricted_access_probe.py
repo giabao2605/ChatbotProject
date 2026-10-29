@@ -119,3 +119,14 @@ def test_probe_propagates_request_deadline_without_failing_open(monkeypatch):
 
     with pytest.raises(TimeoutError, match="request deadline reached"):
         _probe(monkeypatch, {})
+
+
+def test_probe_display_department_does_not_restore_revoked_grant():
+    client = FakeQdrantClient([{
+        "phong_ban_quyen": ["Technical"], "security_level": "internal", "site": "HQ",
+    }])
+    assert probe_restricted_access(
+        "part", user_department="Technical", allowed_departments=["CHUNG"],
+        max_security_level="internal", allowed_sites=["HQ"], part_ids=["part"],
+        client=client, collection_name=QDRANT_COLLECTION,
+    ) == (True, "department_restricted")

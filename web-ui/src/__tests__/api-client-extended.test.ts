@@ -225,6 +225,21 @@ describe("extended API client behavior", () => {
     expect(getCsrfToken()).toBe("");
   });
 
+  it("does not restore CSRF from a cancelled current-user response", async () => {
+    const controller = new AbortController();
+    const response = jsonResponse({ user: profile("stale-token") });
+    vi.spyOn(response, "text").mockImplementation(async () => {
+      controller.abort();
+      return JSON.stringify({ user: profile("stale-token") });
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    setCsrfToken("current-token");
+
+    await expect(loadMe(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(getCsrfToken()).toBe("current-token");
+  });
+
   it("updates the preferred language with JSON and CSRF headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);

@@ -71,6 +71,7 @@ def _published_row(file_path):
         "effective",
         None,
         None,
+        None,  # Legacy fixture: the SELECT now includes nullable VersionNo.
     )
 
 

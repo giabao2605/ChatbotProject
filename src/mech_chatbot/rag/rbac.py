@@ -17,11 +17,13 @@ LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
 # strict = chi match ma chinh; broad = mo rong sang ma lien quan/btp/vat tu.
 PART_ID_KEYS_STRICT = [
     "metadata.base_code",
+    "metadata.doc_number",
     "metadata.ma_chinh",
     "metadata.ma_doi_tuong",
 ]
 PART_ID_KEYS_BROAD = [
     "metadata.base_code",
+    "metadata.doc_number",
     "metadata.ma_chinh",
     "metadata.ma_btp",
     "metadata.ma_vat_tu",
@@ -111,8 +113,6 @@ def create_rbac_filter(
         )
 
     allowed = list(allowed_departments) if allowed_departments else []
-    if user_department and user_department not in allowed:
-        allowed.append(user_department)
     if SHARE_ALL_DEPARTMENT not in allowed:
         allowed.append(SHARE_ALL_DEPARTMENT)
 
@@ -183,8 +183,6 @@ def document_matches_access_scope(
         for item in (allowed_departments or [])
         if str(item).strip()
     }
-    if user_department and str(user_department).strip():
-        departments.add(str(user_department).strip())
     departments.add(SHARE_ALL_DEPARTMENT)
     return bool(document_departments & departments)
 

@@ -138,6 +138,7 @@ def load_community_context(
     collection_name: str,
     loader: Callable | None = None,
     max_documents: int = 10,
+    source_question: str | None = None,
 ) -> CommunityContextResult:
     """Load reviewed global context while retaining exact source-page citations."""
     if not graph_enabled:
@@ -180,6 +181,15 @@ def load_community_context(
         )
         if not hydrated:
             continue
+        from mech_chatbot.rag.demo_sources import is_demo_source, refresh_applicable_sources
+        applicable = refresh_applicable_sources(hydrated, question if source_question is None else source_question)
+        if len(applicable) != len(hydrated):
+            continue
+        demo_sources = [{key: doc.metadata.get(key) for key in
+                         ('doc_id', 'file_goc', 'doc_number', 'title', 'tags', 'source_system', 'demo_batch_id')}
+                        for doc in applicable if is_demo_source(doc.metadata)]
+        hydrated = [doc.model_copy(update={'metadata': {**doc.metadata, 'community_demo_sources': demo_sources}})
+                    for doc in applicable] if demo_sources else applicable
         used_summaries += 1
         documents.extend(hydrated)
         if len(documents) >= max(1, int(max_documents)):

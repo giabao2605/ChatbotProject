@@ -106,6 +106,11 @@ def normalize_decomposition_usage(value: Any) -> dict[str, Any] | None:
                 },
             }
         )
+    generation_calls = _usage_int(final_generation.get("calls"), "final_generation.calls")
+    generation_cost = (
+        None if generation_calls and final_generation.get("estimated_cost") is None
+        else _usage_float(final_generation.get("estimated_cost"), "final_generation.estimated_cost")
+    )
     return {
         "schema": "rag-decomposition-usage-v1",
         "planner": {
@@ -146,9 +151,7 @@ def normalize_decomposition_usage(value: Any) -> dict[str, Any] | None:
             ),
         },
         "final_generation": {
-            "calls": _usage_int(
-                final_generation.get("calls"), "final_generation.calls"
-            ),
+            "calls": generation_calls,
             "input_tokens": _usage_int(
                 final_generation.get("input_tokens"),
                 "final_generation.input_tokens",
@@ -157,9 +160,6 @@ def normalize_decomposition_usage(value: Any) -> dict[str, Any] | None:
                 final_generation.get("output_tokens"),
                 "final_generation.output_tokens",
             ),
-            "estimated_cost": _usage_float(
-                final_generation.get("estimated_cost"),
-                "final_generation.estimated_cost",
-            ),
+            "estimated_cost": generation_cost,
         },
     }

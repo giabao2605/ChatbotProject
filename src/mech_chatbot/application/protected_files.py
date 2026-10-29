@@ -46,6 +46,7 @@ class DocumentAccessRecord:
     knowledge_owner_user_id: int | None = None
     knowledge_approver_user_id: int | None = None
     department_knowledge_approver_user_id: int | None = None
+    version_no: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,18 +107,19 @@ class ProtectedFileReference:
     doc_id: int | None = None
     page_no: int | None = None
     image_id: str | None = None
+    expected_version: int | None = None
 
     @classmethod
-    def original(cls, doc_id: int) -> "ProtectedFileReference":
-        return cls(kind="document_original", doc_id=int(doc_id))
+    def original(cls, doc_id: int, *, expected_version: int | None = None) -> "ProtectedFileReference":
+        return cls(kind="document_original", doc_id=int(doc_id), expected_version=expected_version)
 
     @classmethod
     def review_original(cls, doc_id: int) -> "ProtectedFileReference":
         return cls(kind="document_review_original", doc_id=int(doc_id))
 
     @classmethod
-    def page(cls, doc_id: int, page_no: int) -> "ProtectedFileReference":
-        return cls(kind="document_page", doc_id=int(doc_id), page_no=int(page_no))
+    def page(cls, doc_id: int, page_no: int, *, expected_version: int | None = None) -> "ProtectedFileReference":
+        return cls(kind="document_page", doc_id=int(doc_id), page_no=int(page_no), expected_version=expected_version)
 
     @classmethod
     def chat_image(cls, image_id: str) -> "ProtectedFileReference":
@@ -159,7 +161,7 @@ class ProtectedFileStore(Protocol):
 class ProtectedFileStorage(Protocol):
     def resolve_original(self, stored_path: str | None) -> Path | None: ...
 
-    def resolve_page_image(self, stored_path: str | None) -> Path | None: ...
+    def resolve_page_image(self, stored_path: str | None, *, allow_fallback: bool = True) -> Path | None: ...
 
     def resolve_chat_image(self, image_id: str) -> Path | None: ...
 
@@ -219,9 +221,7 @@ def evaluate_document_access(
     if not document_departments:
         return AccessDecision(False, "document_has_no_department_grants", security_level)
 
-    allowed_departments = actor.allowed_departments | frozenset(
-        value for value in (actor.department, SHARE_ALL_DEPARTMENT) if value
-    )
+    allowed_departments = actor.allowed_departments | frozenset({SHARE_ALL_DEPARTMENT})
     if (
         SHARE_ALL_DEPARTMENT not in document_departments
         and document_departments.isdisjoint(allowed_departments)
@@ -303,6 +303,11 @@ class ProtectedFileResolver:
         self._audit = audit
         self._strict_site_filter = bool(strict_site_filter)
 
+    @property
+    def storage(self) -> ProtectedFileStorage:
+        """Path boundary only; callers must separately authorize source access."""
+        return self._storage
+
     def resolve(
         self,
         reference: ProtectedFileReference,
@@ -331,13 +336,19 @@ class ProtectedFileResolver:
             strict_site_filter=self._strict_site_filter,
             allow_review_preview=reference.kind == "document_review_original",
         )
+        if reference.expected_version is not None and (
+            reference.expected_version < 1 or record is None or not decision.allowed
+            or str(record.version_no) != str(reference.expected_version)
+        ):
+            raise ProtectedFileError("not_found", "File not found")
         if not decision.allowed or record is None:
             raise ProtectedFileError("unauthorized", decision.reason)
 
         if reference.kind == "document_page":
             page_no = int(reference.page_no or 0)
             stored_path = self._store.load_page_image(doc_id, page_no)
-            path = self._storage.resolve_page_image(stored_path)
+            path = (self._storage.resolve_page_image(stored_path, allow_fallback=False)
+                    if reference.expected_version is not None else self._storage.resolve_page_image(stored_path))
             if "admin" in actor.roles or decision.security_level == "confidential":
                 self._record_audit(
                     actor,

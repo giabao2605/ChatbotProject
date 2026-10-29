@@ -2,12 +2,16 @@
 
 import re
 
+
 def extract_source_ids(value):
-    """Extract canonical source identifiers emitted by the RAG prompt."""
+    """Extract canonical page and structured-locator identifiers."""
     text = str(value or "")
-    matches = re.findall(
-        r"(?:source[_\s-]?id\s*[:#]?\s*|\[src:\s*)(D\d+P\d+)",
-        text,
-        flags=re.IGNORECASE,
+    source_ids = re.findall(
+        r"source[_\s-]?id\s*[:#]?\s*(D\d+(?:P\d+|L[a-f0-9]{16}))(?![a-z0-9])",
+        text, flags=re.IGNORECASE,
     )
-    return {match.upper() for match in matches}
+    source_ids += re.findall(
+        r"\[SRC:\s*(D\d+(?:P\d+|L[a-f0-9]{16}))(?![a-z0-9])\]",
+        text, flags=re.IGNORECASE,
+    )
+    return {value.upper() for value in source_ids}

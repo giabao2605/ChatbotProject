@@ -9,6 +9,7 @@ from mech_chatbot.config.logging import logger
 from mech_chatbot.llm.llm_client import _is_gpt_rate_limit
 from langchain_core.messages import HumanMessage
 import time
+import re
 from mech_chatbot.config.logging import log_trace
 from PIL import Image
 from tenacity import retry, retry_if_exception, wait_exponential, stop_after_attempt
@@ -21,8 +22,8 @@ from mech_chatbot.rag.context_builders import (
 
 
 from langchain_core.output_parsers import StrOutputParser
-from mech_chatbot.llm.llm_client import get_llm_endpoint, get_llm_model_name
-from mech_chatbot.llm.external_ai import audited_external_call, ExternalAICallCancelled, compatible_provider_name
+from mech_chatbot.llm.llm_client import get_llm_endpoint, get_llm_model_name, ProviderUsageCallback
+from mech_chatbot.llm.external_ai import audited_external_call, ExternalAICallCancelled, compatible_provider_name, DEFAULT_EXTERNAL_AI_SETTINGS
 from mech_chatbot.rag.answer_checks import (
     has_self_contradictory_missing_data_claim,
     has_unsupported_units_symbols,
@@ -30,6 +31,8 @@ from mech_chatbot.rag.answer_checks import (
     has_unsupported_codes,
     requires_source_citation,
     has_valid_source_citation,
+    extract_source_ids,
+    _canonical_source_id,
 )
 from mech_chatbot.rag.evidence_gate import (
     is_high_risk_question,
@@ -46,7 +49,7 @@ from mech_chatbot.rag.intent import serialize_qdrant_filter
 from mech_chatbot.rag.context_builders import _context_is_mechanical, _context_domain
 
 
-from mech_chatbot.rag.retrieval import current_published_filter
+from mech_chatbot.rag.retrieval import current_published_filter, run_retrieval_step, TracedRetrievalDependency
 
 # P0 slices #4/#5/#7: cac helper _route / _rewrite_and_anchor / _disambiguate
 from mech_chatbot.rag.prompt import _t_rag
@@ -63,6 +66,7 @@ from mech_chatbot.rag.execution import (
     current_execution_context,
     remaining_request_timeout,
     remaining_request_timeout_int,
+    current_request_checkpoint,
 )
 
 _RETRIEVE_UNSET = object()
@@ -145,6 +149,10 @@ class GenerationEvidence:
     retrieval_mode: str
     has_active_filter: bool = False
     active_filter: Any = None
+    dependency_sources: Sequence[Mapping[str, Any]] = ()
+    independent_numeric_source_ids: Sequence[str] = ()
+    dependency_source_attributes: Sequence[Mapping[str, Any]] = ()
+    dependency_recheck: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +171,6 @@ class GenerationPlan:
     turn: GenerationTurn
     evidence: GenerationEvidence
     control: GenerationControl
-    explicit_negative_answer: str = ""
     runtime: Any = None
 
 
@@ -350,6 +357,7 @@ def _explicit_hybrid_rrf_batch(
     if not requests:
         return ()
     batch_stage = "setup"
+    checkpoint = current_request_checkpoint()
     effective_timeout_seconds = None
     try:
         from qdrant_client import models
@@ -362,7 +370,13 @@ def _explicit_hybrid_rrf_batch(
         queries = [request.query for request in requests]
         batch_stage = "dense_embedding"
         dense_started = time.perf_counter()
-        dense_vectors = [dense_embedding.embed_query(query) for query in queries]
+        dense_vectors = [
+            run_retrieval_step(
+                lambda query=query: dense_embedding.embed_query(query),
+                trace_id=requests[0].trace_id, step="dense_embedding", phase="batch",
+                checkpoint=checkpoint,
+            ) for query in queries
+        ]
         if len(dense_vectors) != len(requests):
             raise RuntimeError("Qdrant batch embedding result count mismatch")
 
@@ -371,7 +385,7 @@ def _explicit_hybrid_rrf_batch(
             qdrant_timeout_seconds,
             deadline_monotonic,
         )
-        dense_responses = client.query_batch_points(
+        dense_responses = run_retrieval_step(lambda: client.query_batch_points(
             collection_name=collection_name,
             requests=[
                 models.QueryRequest(
@@ -385,7 +399,7 @@ def _explicit_hybrid_rrf_batch(
                 for request, vector in zip(requests, dense_vectors, strict=True)
             ],
             timeout=effective_timeout_seconds,
-        )
+        ), trace_id=requests[0].trace_id, step="dense_query", phase="batch", checkpoint=checkpoint)
         dense_ms = int((time.perf_counter() - dense_started) * 1000)
         if len(dense_responses) != len(requests):
             raise RuntimeError("Qdrant dense batch result count mismatch")
@@ -399,8 +413,11 @@ def _explicit_hybrid_rrf_batch(
         try:
             batch_stage = "sparse_embedding"
             sparse_vectors = [
-                sparse_embedding.embed_query(query)
-                for query in queries
+                run_retrieval_step(
+                    lambda query=query: sparse_embedding.embed_query(query),
+                    trace_id=requests[0].trace_id, step="sparse_embedding", phase="batch",
+                    checkpoint=checkpoint,
+                ) for query in queries
             ]
             if len(sparse_vectors) != len(requests):
                 raise RuntimeError("Qdrant sparse embedding result count mismatch")
@@ -409,7 +426,7 @@ def _explicit_hybrid_rrf_batch(
                 qdrant_timeout_seconds,
                 deadline_monotonic,
             )
-            sparse_responses = client.query_batch_points(
+            sparse_responses = run_retrieval_step(lambda: client.query_batch_points(
                 collection_name=collection_name,
                 requests=[
                     models.QueryRequest(
@@ -430,7 +447,7 @@ def _explicit_hybrid_rrf_batch(
                     )
                 ],
                 timeout=effective_timeout_seconds,
-            )
+            ), trace_id=requests[0].trace_id, step="sparse_query", phase="batch", checkpoint=checkpoint)
             if len(sparse_responses) != len(requests):
                 raise RuntimeError("Qdrant sparse batch result count mismatch")
             batch_stage = "sparse_decode"
@@ -513,6 +530,7 @@ def _explicit_hybrid_rrf(
     client,
     collection_name,
     qdrant_timeout_seconds=_QDRANT_SEARCH_TIMEOUT_SECONDS,
+    checkpoint=None,
 ):
     """Run dense and BM25 independently, then fuse their ranks explicitly.
 
@@ -528,14 +546,17 @@ def _explicit_hybrid_rrf(
         qdrant_timeout_seconds,
         stage=f"Qdrant {phase} dense retrieval",
     )
+    checkpoint = checkpoint or current_request_checkpoint()
     try:
         from langchain_qdrant import QdrantVectorStore, RetrievalMode
         dense_embedding = getattr(vectorstore, "embeddings", None)
         sparse_embedding = getattr(vectorstore, "sparse_embeddings", None)
         if dense_embedding is None or sparse_embedding is None:
             raise RuntimeError("Qdrant vectorstore khong expose dense/sparse embeddings")
+        dense_embedding = TracedRetrievalDependency(dense_embedding,'embed_query','dense_embedding',trace_id,phase,checkpoint)
+        sparse_embedding = TracedRetrievalDependency(sparse_embedding,'embed_query','sparse_embedding',trace_id,phase,checkpoint)
         dense_store = QdrantVectorStore(
-            client=client,
+            client=TracedRetrievalDependency(client,'query_points','dense_qdrant_query',trace_id,phase,checkpoint),
             collection_name=collection_name,
             embedding=dense_embedding,
             retrieval_mode=RetrievalMode.DENSE,
@@ -543,7 +564,7 @@ def _explicit_hybrid_rrf(
             validate_collection_config=False,
         )
         sparse_store = QdrantVectorStore(
-            client=client,
+            client=TracedRetrievalDependency(client,'query_points','sparse_qdrant_query',trace_id,phase,checkpoint),
             collection_name=collection_name,
             embedding=dense_embedding,
             sparse_embedding=sparse_embedding,
@@ -553,12 +574,12 @@ def _explicit_hybrid_rrf(
             validate_collection_config=False,
         )
         t_dense = time.perf_counter()
-        dense_docs = dense_store.similarity_search(
+        dense_docs = run_retrieval_step(lambda: dense_store.similarity_search(
             query,
             k=dense_top_k,
             filter=payload_filter,
             timeout=effective_timeout,
-        )
+        ), trace_id=trace_id, step="dense_search", phase=phase, checkpoint=checkpoint)
         dense_ms = int((time.perf_counter() - t_dense) * 1000)
         t_bm25 = time.perf_counter()
         sparse_error = None
@@ -567,15 +588,17 @@ def _explicit_hybrid_rrf(
                 qdrant_timeout_seconds,
                 stage=f"Qdrant {phase} sparse retrieval",
             )
-            sparse_docs = sparse_store.similarity_search(
+            sparse_docs = run_retrieval_step(lambda: sparse_store.similarity_search(
                 query,
                 k=sparse_top_k,
                 filter=payload_filter,
                 timeout=effective_timeout,
-            )
-        except RequestDeadlineExceeded:
+            ), trace_id=trace_id, step="sparse_search", phase=phase, checkpoint=checkpoint)
+        except (ExternalAICallCancelled, RequestBudgetExceeded, RequestDeadlineExceeded):
             raise
         except Exception as exc:
+            if checkpoint:
+                checkpoint("sparse_fallback")
             if current_execution_context() == "evaluation":
                 raise
             sparse_error = exc
@@ -632,9 +655,11 @@ def _explicit_hybrid_rrf(
             if sparse_error is not None
             else "explicit_dense_bm25_rrf"
         )
-    except RequestDeadlineExceeded:
+    except (ExternalAICallCancelled, RequestBudgetExceeded, RequestDeadlineExceeded):
         raise
     except Exception as exc:
+        if checkpoint:
+            checkpoint("hybrid_fallback")
         if current_execution_context() == "evaluation":
             logger.warning(
                 "Explicit dense+BM25 RRF failed closed in evaluation: %s",
@@ -644,7 +669,23 @@ def _explicit_hybrid_rrf(
         logger.warning("Explicit dense+BM25 RRF unavailable, fallback HYBRID: %s", exc)
         if trace_id:
             log_trace("hybrid_fallback", trace_id, phase=phase, error=type(exc).__name__)
-        fallback = vectorstore.as_retriever(
+        from copy import copy
+        from langchain_qdrant.qdrant import QdrantVectorStore as NativeQdrantVectorStore
+        fallback_store = vectorstore
+        if isinstance(vectorstore, NativeQdrantVectorStore):
+            # Copy SDK state to preserve custom configuration without changing the shared runtime.
+            fallback_store = copy(vectorstore)
+            # shortcut: SDK field names follow installed langchain-qdrant; recheck on adapter upgrades.
+            for name, method, step in (
+                ('_embeddings', 'embed_query', 'hybrid_dense_embedding'),
+                ('_sparse_embeddings', 'embed_query', 'hybrid_sparse_embedding'),
+                ('_client', 'query_points', 'hybrid_qdrant_query'),
+            ):
+                dependency = getattr(vectorstore, name)
+                if dependency is not None:
+                    setattr(fallback_store, name, TracedRetrievalDependency(
+                        dependency, method, step, trace_id, phase, checkpoint))
+        fallback = run_retrieval_step(lambda: fallback_store.as_retriever(
             search_type="similarity",
             search_kwargs={
                 "k": result_cap,
@@ -654,7 +695,7 @@ def _explicit_hybrid_rrf(
                     stage=f"Qdrant {phase} fallback retrieval",
                 ),
             },
-        ).invoke(query)
+        ).invoke(query),trace_id=trace_id,step='hybrid_fallback',phase=phase,checkpoint=checkpoint)
         return list(fallback or []), "hybrid_fallback"
 
 
@@ -733,7 +774,7 @@ def _prepare_history(
                         trace_id=trace_id,
                     ).content.strip()
                     _summary_covered_new = len(_ov)
-                except (ExternalAICallCancelled, RequestBudgetExceeded):
+                except (ExternalAICallCancelled, RequestBudgetExceeded, RequestDeadlineExceeded):
                     raise
                 except Exception as _e_sum:
                     logger.warning(f"[KH-3] Tom tat hoi thoai loi: {_e_sum}")
@@ -747,7 +788,7 @@ def _prepare_history(
                 _is_en = str(response_language or "").lower().startswith("en")
                 _summary_label = "=== EARLIER CONVERSATION SUMMARY ===" if _is_en else "=== TOM TAT HOI THOAI TRUOC DO ==="
                 chat_history_str = f"{_summary_label}\n{_eff_summary}\n\n{chat_history_str}"
-    except (ExternalAICallCancelled, RequestBudgetExceeded):
+    except (ExternalAICallCancelled, RequestBudgetExceeded, RequestDeadlineExceeded):
         raise
     except Exception as _e_sumwrap:
         logger.warning(f"[KH-3] Summary buffer loi: {_e_sumwrap}")
@@ -797,7 +838,7 @@ def _analyze_image(
                           latency_ms=int((time.time() - t_img_start)*1000),
                           success=True,
                           analysis_chars=len(image_analysis))
-            except (ExternalAICallCancelled, RequestBudgetExceeded):
+            except (ExternalAICallCancelled, RequestBudgetExceeded, RequestDeadlineExceeded):
                 raise
             except Exception as e:
                 logger.error(f"Loi khi doc anh bang vision model: {e}", exc_info=True)
@@ -827,21 +868,36 @@ def _assemble_context(retrieved_docs, user_question):
     structured_context = build_structured_attributes_context(retrieved_docs)
     if structured_context:
         context_text = structured_context + "\n\n" + context_text
-    # P3-4: chen Golden Answer (cau tra loi da duyet) lam context uu tien cao nhat
+    # Legacy approved answers are usable only as excerpts of the selected current source.
     try:
         from mech_chatbot.db.repositories.feedback import find_golden_answer
-        _golden = find_golden_answer(user_question)
+        _golden = find_golden_answer(
+            user_question,
+            admitted_doc_ids=list(dict.fromkeys(
+                doc.metadata.get("doc_id") for doc in retrieved_docs
+                if doc.metadata.get("doc_id") is not None
+            )),
+        )
     except Exception as _e:
         logger.error(f"Loi tra cuu Golden Answer: {_e}")
         _golden = None
     if _golden and _golden.get("answer"):
+        # Legacy GoldenAnswer has no version binding; only admit a current-source excerpt.
+        excerpt = " ".join(str(_golden["answer"]).split())
+        matched = next((doc for doc in retrieved_docs
+                        if doc.metadata.get("doc_id") == _golden.get("source_doc_id")
+                        and excerpt in " ".join(str(doc.metadata.get("noi_dung_goc")
+                                                    or doc.page_content or "").split())), None)
+        if matched is None:
+            _golden = None
+    if _golden and _golden.get("answer"):
         _g_src = _golden.get("source_doc_id")
-        _gp = ["[GOLDEN ANSWER - CHUYEN GIA DA DUYET - UU TIEN CAO NHAT]", str(_golden.get("answer")).strip()]
+        _gp = ["[REVIEWED SOURCE EXCERPT]", str(_golden.get("answer")).strip()]
         if _g_src:
-            _gp.append("(Nguon da duyet: DocID %s)" % _g_src)
-        _gp.append("[HET GOLDEN ANSWER]")
+            _gp.append(f"SOURCE_ID: D{_g_src}P{matched.metadata.get('trang_so')}")
+        _gp.append("[END REVIEWED SOURCE EXCERPT]")
         context_text = chr(10).join(_gp) + chr(10) + chr(10) + context_text
-        logger.info("Da chen Golden Answer vao context (uu tien cao nhat).")
+        logger.info("Da chen trich doan da duyet co trong nguon hien hanh.")
     logger.info(f"Da tim thay {len(retrieved_docs)} tai lieu lien quan. Dang phan tich...")
     return context_text
 
@@ -851,13 +907,16 @@ def _record_final_generation_usage(
     *,
     input_tokens: int,
     output_tokens: int,
-    estimated_cost: float,
+    estimated_cost: float | None,
 ) -> None:
     """Update the request-local accumulator without mutating aliased usage data."""
 
     metrics["input_tokens"] += input_tokens
     metrics["output_tokens"] += output_tokens
-    metrics["estimated_cost"] += estimated_cost
+    metrics["estimated_cost"] = (
+        metrics["estimated_cost"] + estimated_cost
+        if metrics["estimated_cost"] is not None and estimated_cost is not None else None
+    )
     usage = metrics.get("decomposition_usage")
     if not isinstance(usage, dict):
         return
@@ -870,6 +929,7 @@ def _record_final_generation_usage(
             "output_tokens": int(current.get("output_tokens") or 0) + output_tokens,
             "estimated_cost": (
                 float(current.get("estimated_cost") or 0.0) + estimated_cost
+                if current.get("estimated_cost", 0.0) is not None and estimated_cost is not None else None
             ),
         },
     }
@@ -882,6 +942,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     active_filter bind co dieu kien de bao toan ngu nghia locals() nhu ban goc.
     """
     context_text = plan.evidence.context_text
+    dependency_sources = plan.evidence.dependency_sources
     user_question = plan.turn.user_question
     chat_history_str = plan.turn.chat_history_str
     retrieved_docs = plan.evidence.retrieved_docs
@@ -895,7 +956,6 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     intent_data = plan.evidence.intent_data
     base_k = plan.evidence.base_k
     retrieval_mode = plan.evidence.retrieval_mode
-    explicit_negative_answer = plan.explicit_negative_answer
     outcome = plan.control.outcome
     budget = plan.control.budget
     request_runtime = plan.runtime
@@ -913,33 +973,15 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     metrics.setdefault("estimated_cost", 0.0)
     metrics.setdefault("provider_retries", 0)
     metrics.setdefault("repair_count", 0)
-    if explicit_negative_answer:
-        answer = explicit_negative_answer
-        metrics["output_tokens"] += len(answer) // 4
-        metrics["repair_count"] = 0
+    metrics.setdefault("provider_usage", [])
+    metrics.setdefault("reported_cost_usd", None)
+    metrics["token_count_source"] = "estimated_unless_provider_reported"
 
-        def explicit_negative_stream():
-            if cancel_event is not None and cancel_event.is_set():
-                raise ExternalAICallCancelled("RAG stream da bi client huy")
-            yield answer
-            log_trace(
-                "deterministic_generation",
-                trace_id,
-                latency_ms=0,
-                reason="explicit_negative_evidence",
-                claim_repair_skipped_reason="explicit_negative_evidence",
-                output_tokens=len(answer) // 4,
-            )
-            log_trace(
-                "rag_end",
-                trace_id,
-                final_latency_ms=int((time.time() - t_start) * 1000),
-                refusal=False,
-                docs_count=len(retrieved_docs),
-                doc_ids=[document.metadata.get("doc_id") for document in retrieved_docs],
-            )
-
-        return explicit_negative_stream()
+    def capture_usage(record):
+        records = [*metrics["provider_usage"], record]
+        metrics["provider_usage"] = records
+        costs = [item.get("cost_usd") for item in records]
+        metrics["reported_cost_usd"] = sum(costs) if all(cost is not None for cost in costs) else None
     calculation_docs = [
         document for document in retrieved_docs
         if isinstance((getattr(document, "metadata", {}) or {}).get("calculation_provenance"), dict)
@@ -1054,6 +1096,10 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 deadline_monotonic=plan.control.deadline_monotonic,
             )
         )
+    if callable(getattr(provider_model, "with_config", None)):
+        provider_model = provider_model.with_config(callbacks=[ProviderUsageCallback(
+            get_llm_model_name(provider_adapter), trace_id, "generation", capture_usage,
+        )])
     chain = (
         _build_prompt_template(_ctx_domain, response_language)
         | provider_model
@@ -1069,14 +1115,18 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         "chat_history_str": chat_history_str
     }
     _external_doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
+    _external_doc_ids += [attribute['doc_id'] for attribute in plan.evidence.dependency_source_attributes]
     _external_security = [d.metadata.get("security_level") for d in retrieved_docs]
+    _external_security += [attribute['security_level'] for attribute in plan.evidence.dependency_source_attributes]
     _external_policies = [
         d.metadata.get("external_processing_policy") or "internal_only"
         for d in retrieved_docs
     ]
+    _external_policies += [attribute['external_processing_policy'] for attribute in plan.evidence.dependency_source_attributes]
     _external_input_chars = len(context_text + user_question + chat_history_str)
     _external_input_bytes = len((context_text + user_question + chat_history_str).encode("utf-8"))
     _external_call_args = {
+        "settings": getattr(provider_adapter, "external_ai_settings", DEFAULT_EXTERNAL_AI_SETTINGS),
         "provider": compatible_provider_name(get_llm_endpoint(provider_adapter)),
         "model": get_llm_model_name(provider_adapter),
         "endpoint": get_llm_endpoint(provider_adapter),
@@ -1099,8 +1149,17 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     _claim_repair_enabled = claim_repair_enabled(
         bool(getattr(retrieval_runtime, "claim_repair_enabled", False))
     )
+    if dependency_sources:
+        # Locator provenance is not supported by the legacy repair validator.
+        if _claim_repair_enabled:
+            metrics['claim_repair_skipped_reason'] = 'computed_dependency_locator'
+        _claim_repair_enabled = False
+        _strict_realtime = False
     if _claim_repair_enabled:
         # Repair requires full-answer holdback; never release a violating draft.
+        _strict_realtime = False
+    if retrieved_docs:
+        # Attribution must pass before any factual answer reaches the client.
         _strict_realtime = False
 
     def _raise_if_cancelled():
@@ -1116,12 +1175,18 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         if not grounded_prefix:
             return value
         return f"{grounded_prefix}\n{value}".strip()
+
+    def _recheck_dependencies():
+        if plan.evidence.dependency_recheck is not None:
+            attributes = plan.evidence.dependency_recheck()
+            if attributes != plan.evidence.dependency_source_attributes:
+                raise PermissionError('Dependency source policy changed')
     _strict_holdback_chars = max(
         64,
         int(getattr(retrieval_runtime, "strict_streaming_holdback_chars", 160)),
     )
 
-    if (strict_answer_mode or is_high_risk_question(user_question)) and not _strict_realtime:
+    if (strict_answer_mode or retrieved_docs or is_high_risk_question(user_question) or dependency_sources) and not _strict_realtime:
         # LOP PHONG THU 3: Post-check so lieu. Voi cau hoi rui ro, tam hoan streaming de kiem tra
         # LLM co tu tao so lieu moi (vd 24 gio) khong co trong context/user question hay khong.
         def guarded_stream():
@@ -1131,6 +1196,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
             error_msg = ""
             try:
                 _raise_if_cancelled()
+                _recheck_dependencies()
                 for attempt in range(1, _stream_attempts + 1):
                     _raise_if_cancelled()
                     chunks.clear()
@@ -1170,6 +1236,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         time.sleep(delay)
                 _raise_if_cancelled()
                 answer = "".join(chunks)
+                _recheck_dependencies()
                 draft_override = getattr(
                     getattr(request_runtime, "invocation", None),
                     "evaluation_draft_override",
@@ -1188,7 +1255,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 
                 input_tokens = len(context_text + user_question + chat_history_str) // 4
                 output_tokens = len(answer) // 4
-                estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1000000
+                estimated_cost = metrics["reported_cost_usd"]
                 _record_final_generation_usage(
                     metrics,
                     input_tokens=input_tokens,
@@ -1217,10 +1284,14 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 # formats an otherwise sourced value differently.
                 bad_numbers = has_unsupported_numbers(
                     answer,
-                    context_text,
-                    user_question,
-                    strict_mode=is_high_risk_question(user_question),
+                    re.sub(r'<verified_computation[^>]*>', '', context_text) if dependency_sources else context_text,
+                    '' if dependency_sources else user_question,
+                    strict_mode=bool(dependency_sources) or is_high_risk_question(user_question),
                 )
+                if dependency_sources:
+                    from mech_chatbot.rag.query_dependencies import has_dependent_numeric_claim
+                    bad_numbers = bad_numbers or has_dependent_numeric_claim(
+                        answer, plan.evidence.independent_numeric_source_ids, retrieved_docs)
                 if self_contradiction:
                     violation_reason = "self_contradiction"
                 elif bad_mats or bad_codes:
@@ -1229,6 +1300,9 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     violation_reason = "units"
                 elif bad_numbers:
                     violation_reason = "numbers"
+                elif dependency_sources and not has_valid_source_citation(
+                        answer, retrieved_docs, dependency_sources=dependency_sources):
+                    violation_reason = "citations"
                 else:
                     violation_reason = ""
                 if violation_reason:
@@ -1270,7 +1344,8 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         estimated_cost=repair_result.estimated_cost,
                     )
                     metrics["repair_count"] = int(repair_result.attempted)
-                    metrics["estimated_cost"] += repair_result.estimated_cost
+                    if metrics["estimated_cost"] is not None:
+                        metrics["estimated_cost"] += repair_result.estimated_cost
                     if repair_result.accepted:
                         answer = _with_grounded_prefix(repair_result.answer)
                         yield answer
@@ -1295,6 +1370,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                             "câu trả lời vừa xác nhận tài liệu có nội dung vừa "
                             "phủ định chung rằng tài liệu không đề cập nội dung đó"
                         ),
+                        "citations": "câu trả lời không dẫn đúng nguồn đã xác nhận",
                     }[violation_reason]
                     refusal_reason = f"post_check_{violation_reason}"
                     outcome.refusal_reason = refusal_reason
@@ -1307,24 +1383,34 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(ans), blocked_by_post_check=True, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=True, refusal_reason=refusal_reason, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
                 elif (
-                    strict_answer_mode
-                    and requires_source_citation(user_question)
-                    # The API always attaches source cards from retrieved_docs.
-                    # Do not reject a grounded answer just because it does not
-                    # repeat the card's file/page/version syntax in prose.
-                    and not bool(
-                        getattr(
-                            retrieval_runtime,
-                            "auto_source_cards",
-                            True,
-                        )
+                    retrieved_docs
+                    and not has_valid_source_citation(
+                        answer, retrieved_docs, require_version=False,
+                        dependency_sources=dependency_sources,
                     )
-                    and not has_valid_source_citation(answer, retrieved_docs, require_version=True)
                 ):
-                    outcome.refusal_reason = "missing_source_page_version"
+                    cited_ids = extract_source_ids(answer)
+                    malformed_src = any(
+                        token.strip().upper() not in cited_ids
+                        for token in re.findall(r'\[SRC:\s*([^\]]+)\]', answer, flags=re.IGNORECASE)
+                    )
+                    citation_reason = (
+                        "malformed_src" if malformed_src else
+                        "missing_id" if not cited_ids else "invalid_binding"
+                    )
+                    metrics["citation_validation"] = {
+                        "reason": citation_reason,
+                        "recognized_source_ids": sorted(cited_ids),
+                        "evidence_source_ids": sorted({
+                            source_id for document in retrieved_docs
+                            if (source_id := _canonical_source_id(getattr(document, "metadata", {})))
+                        }),
+                    }
+                    outcome.refusal_reason = "citation_" + citation_reason
+                    metrics["final_refusal_reason"] = outcome.refusal_reason
                     ans = make_insufficient_evidence_message(
                         user_question,
-                        "câu trả lời không có đủ nguồn file/trang/version rõ ràng",
+                        "câu trả lời chưa gắn đúng mã nguồn được phép",
                         lang=response_language,
                     )
                     yield _with_grounded_prefix(ans)
@@ -1333,7 +1419,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                         trace_id,
                         final_latency_ms=int((time.time() - t_start) * 1000),
                         refusal=True,
-                        refusal_reason="missing_source_page_version"
+                        refusal_reason=outcome.refusal_reason,
                     )
                     return
                 else:
@@ -1426,7 +1512,7 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     answer = "".join(chunks)
                     input_tokens = len(context_text + user_question + chat_history_str) // 4
                     output_tokens = len(answer) // 4
-                    estimated_cost = (input_tokens * 2.5 + output_tokens * 15.0) / 1000000
+                    estimated_cost = metrics["reported_cost_usd"]
                     _record_final_generation_usage(
                         metrics,
                         input_tokens=input_tokens,
@@ -1659,13 +1745,14 @@ def _retrieve_many(
 def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
               query_to_search, rbac_filter, trace_id=None, vectorstore,
               client, collection_name, dense_top_k=None, sparse_top_k=None,
-              qdrant_timeout_seconds=_QDRANT_SEARCH_TIMEOUT_SECONDS):
+              qdrant_timeout_seconds=_QDRANT_SEARCH_TIMEOUT_SECONDS, checkpoint=None):
     """BUOC: truy xuat tai lieu (strict_exact / broad_fallback / general).
     Tra ve (retrieved_docs, base_k, retrieval_mode, t_retrieval, active_filter_or_sentinel).
     active_filter tra _RETRIEVE_UNSET neu chua set (duong hiem) de caller bind co dieu kien,
     bao toan ngu nghia '"active_filter" in locals()' nhu ban goc. Tach P0 slice #5.
     """
     retrieved_docs = []
+    checkpoint = checkpoint or current_request_checkpoint()
     t_retrieval = time.time()
     retrieval_mode = "unknown"
     if new_part_ids:
@@ -1682,6 +1769,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                 result_cap=base_k,
                 trace_id=trace_id,
                 phase="strict_exact",
+                checkpoint=checkpoint,
                 vectorstore=vectorstore,
                 client=client,
                 collection_name=collection_name,
@@ -1689,13 +1777,80 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
             )
             retrieval_mode = f"strict_exact:{strict_mode}"
             active_filter = strict_filter
+        except (ExternalAICallCancelled, RequestBudgetExceeded, RequestDeadlineExceeded):
+            raise
         except Exception as e:
+            if checkpoint:
+                checkpoint('strict_fallback')
             logger.warning(f"Strict retrieval that bai: {e}")
             strict_docs = []
                 
         if strict_docs and not is_bom_query:
             logger.info("Tim thay ket qua strict, khong lay them du lieu rong de tranh nhieu.")
             retrieved_docs = strict_docs
+            if len(new_part_ids) > 1:
+                from mech_chatbot.domain.part_ids import canonical_part_id
+                from mech_chatbot.domain.serving_state import filter_currently_servable
+                from mech_chatbot.rag.rbac import PART_ID_KEYS_STRICT, compose_retrieval_filters
+
+                def identifiers(doc):
+                    result = set()
+                    for key in PART_ID_KEYS_STRICT:
+                        if key == "metadata.ma_doi_tuong":
+                            continue  # Related identifiers do not prove coverage of their own source.
+                        values = doc.metadata.get(key.removeprefix("metadata.")) or []
+                        values = [values] if isinstance(values, str) else values
+                        if isinstance(values, (list, tuple)):
+                            result.update(canonical_part_id(value) for value in values if isinstance(value, str))
+                    return result
+
+                retrieved_docs = filter_currently_servable(strict_docs)
+                covered = set().union(*(identifiers(doc) for doc in retrieved_docs))
+                for code in new_part_ids:
+                    if canonical_part_id(code) in covered:
+                        continue
+                    # Keep every original condition; the extra identifier only narrows access.
+                    targeted, _ = compose_retrieval_filters([strict_filter], [code])
+                    primary_match = targeted.must[-1].model_copy(update={
+                        "should": [c for c in targeted.must[-1].should
+                                   if c.key != "metadata.ma_doi_tuong"]
+                    })
+                    targeted = targeted.model_copy(update={"must": [*targeted.must[:-1], primary_match]})
+                    try:
+                        extra, _ = _explicit_hybrid_rrf(
+                            query_to_search, targeted,
+                            dense_top_k=min(dense_top_k or 15, 15),
+                            sparse_top_k=min(sparse_top_k or 15, 15),
+                            result_cap=15, trace_id=trace_id,
+                            phase="missing_identifier", checkpoint=checkpoint,
+                            vectorstore=vectorstore, client=client, collection_name=collection_name,
+                            qdrant_timeout_seconds=qdrant_timeout_seconds,
+                        )
+                        identities = {
+                            (d.metadata.get("doc_id"), d.metadata.get("version_no"),
+                             d.metadata.get("trang_so"), d.page_content)
+                            for d in retrieved_docs
+                        }
+                        for doc in filter_currently_servable(extra):
+                            identity = (doc.metadata.get("doc_id"), doc.metadata.get("version_no"),
+                                        doc.metadata.get("trang_so"), doc.page_content)
+                            if identity not in identities:
+                                retrieved_docs = [*retrieved_docs, doc]
+                                identities.add(identity)
+                        # Reserve one candidate per requested identifier inside the original cap.
+                        representatives = []
+                        for requested in new_part_ids:
+                            found = next((d for d in retrieved_docs
+                                          if canonical_part_id(requested) in identifiers(d)), None)
+                            if found is not None and found not in representatives:
+                                representatives.append(found)
+                        retrieved_docs = (representatives + [d for d in retrieved_docs
+                                          if d not in representatives])[:base_k]
+                        covered = set().union(*(identifiers(doc) for doc in retrieved_docs))
+                    except (ExternalAICallCancelled, RequestBudgetExceeded, RequestDeadlineExceeded):
+                        raise
+                    except Exception as exc:
+                        logger.warning("Missing identifier retrieval failed: %s", type(exc).__name__)
         else:
             logger.info(f"Khong co ket qua strict hoac hoi BOM, mo rong truy xuat (broad) cho cac ma: {new_part_ids}...")
             retrieval_mode = "broad_fallback"
@@ -1712,6 +1867,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                     client=client,
                     collection_name=collection_name,
                     qdrant_timeout_seconds=qdrant_timeout_seconds,
+                    checkpoint=checkpoint,
                 )
                 retrieval_mode = f"broad_fallback:{broad_mode}"
                 active_filter = broad_filter
@@ -1729,7 +1885,11 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                     retrieved_docs = merged_docs
                 else:
                     retrieved_docs = broad_docs
+            except (ExternalAICallCancelled, RequestBudgetExceeded, RequestDeadlineExceeded):
+                raise
             except Exception as e:
+                if checkpoint:
+                    checkpoint('broad_fallback')
                 logger.warning(f"Broad retrieval that bai: {e}")
                 retrieved_docs = strict_docs
     else:
@@ -1753,6 +1913,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
             result_cap=base_k,
             trace_id=trace_id,
             phase="general",
+            checkpoint=checkpoint,
             vectorstore=vectorstore,
             client=client,
             collection_name=collection_name,
@@ -1765,7 +1926,9 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
     # that crossed its expiry date cannot reach reranking or generation while
     # lifecycle reconciliation is still catching up.
     from mech_chatbot.domain.serving_state import filter_currently_servable
-    retrieved_docs = filter_currently_servable(retrieved_docs)
+    retrieved_docs = run_retrieval_step(lambda: filter_currently_servable(retrieved_docs),
+                                      trace_id=trace_id,step='serving_filter',phase=retrieval_mode,
+                                      checkpoint=checkpoint)
     return retrieved_docs, base_k, retrieval_mode, t_retrieval, (active_filter if "active_filter" in locals() else _RETRIEVE_UNSET)
 
 
@@ -1826,7 +1989,7 @@ def _route(*, user_question, conversation_context, response_language,
                     getattr(runtime, "llm_router_min_confidence", 0.5)
                 ),
             )
-        except (ExternalAICallCancelled, RequestBudgetExceeded):
+        except (ExternalAICallCancelled, RequestBudgetExceeded, RequestDeadlineExceeded):
             raise
         except Exception:
             return None
@@ -1848,6 +2011,7 @@ def _route(*, user_question, conversation_context, response_language,
         semantic_enabled=bool(
             getattr(runtime, "semantic_router_enabled", True)
         ),
+        semantic_router=getattr(runtime, "semantic_router", None),
         semantic_threshold=float(
             getattr(runtime, "semantic_router_threshold", 0.62)
         ),
@@ -1857,7 +2021,6 @@ def _route(*, user_question, conversation_context, response_language,
         crag_fast_routes_enabled=bool(
             getattr(runtime, "crag_enabled", False)
         ),
-        semantic_router=getattr(runtime, "semantic_router", None),
     )
     is_chitchat = _route_result.is_chitchat()
     log_trace("route", trace_id, route=_route_result.route, layer=_route_result.layer,
@@ -1933,6 +2096,7 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
         trace_id=trace_id,
         invoke_provider=invoke_provider,
         runtime=getattr(runtime, "intent_runtime", None),
+        pending_candidates=_cc_in.get("pending_candidates"),
     )
     context_action = ctx_result["context_action"]
     _ctx_llm_resolved = bool(ctx_result.get("llm_resolved"))
@@ -2007,6 +2171,9 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
             getattr(runtime, "strict_site_filter", True)
         ),
     )
+    if ctx_result.get('clarification_required'):
+        return (user_question, [], False, False, {'clarification_required': True},
+                rbac_filter, rbac_filter, rbac_filter, False)
     strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data = extract_search_intent(
         effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel, trace_id=trace_id, invoke_provider=invoke_provider,
         runtime=getattr(runtime, "intent_runtime", None),
@@ -2053,6 +2220,14 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
     )
 
     if retrieved_docs and not _wants_all:
+        from mech_chatbot.rag.entity_resolver import named_file_documents
+
+        named = named_file_documents(retrieved_docs, user_question)
+        if named and all(doc.metadata.get("doc_id") is not None for doc in named) and len({
+            str(doc.metadata["doc_id"]) for doc in named
+        }) == 1:
+            # Enrichment can reintroduce sibling models after the explicit file was selected.
+            return None, named
         # Tap hop cac "ho" tai lieu khac nhau (base_code + variant_code)
         distinct_families = set()
         unique_variants = set()

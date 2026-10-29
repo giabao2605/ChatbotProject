@@ -76,6 +76,7 @@ def test_jina_rerank_uses_top_n_and_preserves_ranked_document_identity(
     assert docs[2].metadata["relevance_score"] == 0.93
     assert docs[0].metadata["relevance_score"] == 0.61
     assert posted["url"] == "https://api.jina.ai/v1/rerank"
+    assert posted["timeout"] == 15.0
     assert posted["json"] == {
         "query": "cau hoi",
         "documents": ["zero", "one", "two"],
@@ -221,3 +222,47 @@ def test_jina_settings_validation_rejects_unknown_provider_and_masks_key():
     assert any("RERANK_PROVIDER" in error for error in errors)
     assert summary["JINA_API_KEY"].startswith("SET(")
     assert secret not in str(summary)
+
+
+@pytest.mark.parametrize("provider", ["jina", "voyage"])
+@pytest.mark.parametrize("remaining", [1.0, 30.0, 0.0, "cancelled"])
+def test_rerank_adapters_honor_remaining_request_budget(monkeypatch, provider, remaining):
+    import threading
+    from contextlib import nullcontext
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    from mech_chatbot.rag import execution
+
+    now = [0.0]
+    cancelled = threading.Event()
+    monkeypatch.setattr(execution.time, "monotonic", lambda: now[0])
+    state = execution._ExecutionState.create(
+        execution.RagRequest("question", execution.AccessScope()),
+        execution.RagInvocation("rerank-timeout", mode="test"), cancelled, "rerank-timeout",
+        budget_limits=execution.RequestBudgetLimits(deadline_seconds=60),
+    )
+    if remaining == "cancelled":
+        cancelled.set()
+    else:
+        now[0] = 60 - remaining
+    posted = []
+    payload = {"results": [{"index": 0, "relevance_score": 0.9}],
+               "data": [{"index": 0, "relevance_score": 0.9}]}
+    monkeypatch.setattr(rerank.requests, "post", lambda *_a, **kw: posted.append(kw) or _Response(payload))
+    monkeypatch.setattr(rerank, "audited_external_call", lambda **_kw: nullcontext())
+    monkeypatch.setattr(rerank, "_reported_rerank_usage", lambda *_a: nullcontext({}))
+    runtime = SimpleNamespace(api_key="fixture", model="fixture", endpoint="https://api.jina.ai/v1")
+    adapter = getattr(rerank, provider + "_rerank_documents")
+    budget_token = execution._REQUEST_BUDGET.set(state.budget)
+    checkpoint_token = execution._REQUEST_CHECKPOINT.set(state.checkpoint)
+    try:
+        if remaining in (0.0, "cancelled"):
+            error = ExternalAICallCancelled if remaining == "cancelled" else TimeoutError
+            with pytest.raises(error):
+                adapter([_doc("source")], "question", runtime=runtime, timeout_seconds=15)
+            assert posted == []
+        else:
+            assert adapter([_doc("source")], "question", runtime=runtime, timeout_seconds=15)
+            assert posted[0]["timeout"] == min(15, remaining)
+    finally:
+        execution._REQUEST_CHECKPOINT.reset(checkpoint_token)
+        execution._REQUEST_BUDGET.reset(budget_token)

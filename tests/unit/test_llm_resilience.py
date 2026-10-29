@@ -85,3 +85,55 @@ def test_evaluator_accepts_ambiguous_state_from_verifier(monkeypatch):
     assert decision.state is evidence_gate.EvidenceState.AMBIGUOUS
     assert decision.telemetry_status == "verifier_block"
     assert calls[0]["policies"] == ["internal_only"]
+
+
+@pytest.mark.parametrize("response", ["not-json", "[]", "{}", '{"answerable":"false"}', '{"state":"UNKNOWN","answerable":true}', '{"state":"SUFFICIENT","evidence_quotes":[4]}'])
+def test_evaluator_does_not_approve_invalid_verifier_output(monkeypatch, response):
+    monkeypatch.setattr(
+        evidence_gate, "cohere_invoke",
+        lambda *_args, **_kwargs: SimpleNamespace(content=response),
+    )
+
+    decision = evidence_gate.evaluate_answerability(
+        "Quy định gì?", "Có một phần quy định.", verifier_enabled=True,
+    )
+
+    assert decision.state is evidence_gate.EvidenceState.INSUFFICIENT
+    assert decision.reason == "verifier_unavailable"
+    assert decision.telemetry_status == "verifier_unavailable"
+
+
+@pytest.mark.parametrize("error", [TimeoutError("timeout"), RuntimeError("unavailable")])
+def test_verifier_transport_error_is_not_answerable(monkeypatch, error):
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(evidence_gate, "cohere_invoke", fail)
+    decision = evidence_gate.evaluate_answerability("Quy định gì?", "Quy định nội bộ.", verifier_enabled=True)
+    assert not decision.answerable
+    assert decision.telemetry_status == "verifier_unavailable"
+
+
+@pytest.mark.parametrize("value, expected", [(True, True), (False, False)])
+def test_verifier_accepts_real_legacy_booleans(monkeypatch, value, expected):
+    import json
+    monkeypatch.setattr(evidence_gate, "cohere_invoke", lambda *a, **k: SimpleNamespace(content=json.dumps({"answerable": value})))
+    assert evidence_gate.evaluate_answerability("Quy định gì?", "Quy định nội bộ.", verifier_enabled=True).answerable is expected
+
+
+@pytest.mark.parametrize("lang", ["vi", "en"])
+def test_refusal_does_not_expose_internal_reason_or_irrelevant_examples(lang):
+    message = evidence_gate.make_insufficient_evidence_message("IT onboarding?", "private_internal_reason", lang)
+    assert "private_internal_reason" not in message
+    assert "gia công" not in message and "machining" not in message
+
+
+@pytest.mark.parametrize("kind", ["cancel", "budget"])
+def test_verifier_preserves_request_cancellation_and_budget(monkeypatch, kind):
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    from mech_chatbot.rag.execution import RequestBudgetExceeded
+    error = ExternalAICallCancelled("cancel") if kind == "cancel" else RequestBudgetExceeded("budget")
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(evidence_gate, "cohere_invoke", fail)
+    with pytest.raises(type(error)):
+        evidence_gate.evaluate_answerability("Quy định gì?", "Quy định nội bộ.", verifier_enabled=True)

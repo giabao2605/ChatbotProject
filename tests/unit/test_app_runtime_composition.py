@@ -25,6 +25,22 @@ from mech_chatbot.config.settings import AppProcessSettings, Settings
 pytestmark = pytest.mark.unit
 
 
+def test_browser_composition_preserves_advanced_evidence_options(monkeypatch):
+    from types import SimpleNamespace
+    from mech_chatbot.api import app_server
+
+    callbacks, saved = {}, []
+    engine = object()
+    monkeypatch.setattr(app_server, 'build_default_app_runtime', lambda *a, **kw: callbacks.update(kw))
+    monkeypatch.setattr(app_server, 'save_answer_evidence', lambda *a, **kw: saved.append((a, kw)) or True)
+    app_server._build_default_app_runtime(AppProcessSettings.from_settings(Settings()),
+        SimpleNamespace(), post=lambda *a, **kw: None, engine=engine)
+    metadata = {'query': {'schema': 'query-plan-v2', 'branches': []}}
+    cards = [{'doc_id': 3, 'version_no': 1}]
+    assert callbacks['save_answer_evidence'](91, cards, advanced_rag=metadata, citation_cards=cards)
+    assert saved == [((91, cards), {'db_engine': engine, 'advanced_rag': metadata, 'citation_cards': cards})]
+
+
 class ScriptedRag:
     def stream(self, request: RagStreamRequest, route: object | None):
         yield RagDelta("answer")

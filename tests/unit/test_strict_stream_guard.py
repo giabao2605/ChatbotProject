@@ -154,7 +154,6 @@ def _run_generation(
                 budget=plan_fields.get("budget"),
                 outcome=plan_fields.get("outcome", module.GenerationOutcome()),
             ),
-            explicit_negative_answer=plan_fields.get("explicit_negative_answer", ""),
             runtime=plan_fields["runtime"],
         ),
         cancel_event=cancel_event,
@@ -220,6 +219,22 @@ def _prepare(module, monkeypatch, chain, **retrieval_overrides):
     return _runtime(client=chain, **retrieval_overrides)
 
 
+@pytest.mark.parametrize("realtime", [False, True])
+def test_question_supplied_false_number_is_not_streamed(monkeypatch, realtime):
+    from mech_chatbot.rag.evidence_gate import has_unsupported_numbers
+
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    chain = _FakeChain(["Có ", "999 nhân viên."])
+    runtime = _prepare(module, monkeypatch, chain, strict_realtime_streaming=realtime)
+    monkeypatch.setattr(module, "has_unsupported_numbers", has_unsupported_numbers)
+    chunks = list(_run_generation(
+        module, question="Có phải 999 nhân viên không?",
+        context_text="Có 120 nhân viên.", runtime=runtime,
+    ))
+    assert "999" not in "".join(chunks)
+    assert "REFUSAL" in "".join(chunks)
+
+
 def test_strict_buffered_stream_never_yields_unsupported_factual_token(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     runtime = _prepare(module, monkeypatch, _FakeChain(["Gia tri la 999."]))
@@ -261,12 +276,16 @@ def test_strict_buffered_stream_keeps_separate_multi_part_coverage_claims(monkey
         "- Tài liệu mô tả quy trình lắp PART-A nhưng không nêu các bước cụ thể.\n\n"
         "- Tài liệu nội bộ hiện có không đề cập đến thông tin này cho PART-B."
     )
+    separate_topics = separate_topics + " [SRC:D7P3]"
     runtime = _prepare(module, monkeypatch, _FakeChain([separate_topics]))
     monkeypatch.setattr(
         module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
     )
 
-    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    events = _run_through_executor(
+        monkeypatch, module, runtime=runtime,
+        docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3, "version_no": 1, "security_level": "internal"})],
+    )
     emitted = [event.text for event in events if isinstance(event, RagToken)]
 
     assert emitted == [separate_topics]
@@ -278,12 +297,16 @@ def test_strict_buffered_stream_keeps_scoped_missing_detail_answer(monkeypatch):
     scoped_limitation = (
         "Tài liệu mô tả quy trình lắp nhưng không nêu các bước cụ thể."
     )
+    scoped_limitation = scoped_limitation + " [SRC:D7P3]"
     runtime = _prepare(module, monkeypatch, _FakeChain([scoped_limitation]))
     monkeypatch.setattr(
         module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
     )
 
-    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    events = _run_through_executor(
+        monkeypatch, module, runtime=runtime,
+        docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3, "version_no": 1, "security_level": "internal"})],
+    )
     emitted = [event.text for event in events if isinstance(event, RagToken)]
 
     assert emitted == [scoped_limitation]
@@ -299,16 +322,55 @@ def test_strict_buffered_stream_keeps_scoped_access_denied_partial_answer(
         "Tài liệu nội bộ hiện có không đề cập đến thông tin này.\n"
         "Phần bị chặn chưa thể trả lời do không có nguồn được phép truy cập."
     )
+    partial_answer = partial_answer + " [SRC:D7P3]"
     runtime = _prepare(module, monkeypatch, _FakeChain([partial_answer]))
     monkeypatch.setattr(
         module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
     )
 
-    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    events = _run_through_executor(
+        monkeypatch, module, runtime=runtime,
+        docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3, "version_no": 1, "security_level": "internal"})],
+    )
     emitted = [event.text for event in events if isinstance(event, RagToken)]
 
     assert emitted == [partial_answer]
     assert events[-1].outcome == "answered"
+
+
+@pytest.mark.parametrize("citation, reason, recognized_ids", [
+    ("", "missing_id", []),
+    ("SourceID D999P1", "invalid_binding", ["D999P1"]),
+    ("SourceID D7P1 [SRC:bad]", "malformed_src", ["D7P1"]),
+])
+def test_citation_refusal_explains_the_guard_without_exposing_draft(
+    monkeypatch, citation, reason, recognized_ids,
+):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    draft = "Ghi nhận chênh lệch. " + citation
+    runtime = _prepare(module, monkeypatch, _FakeChain([draft]))
+    monkeypatch.setattr(module, "has_unsupported_numbers", lambda *_args, **_kwargs: False)
+    traces = []
+    monkeypatch.setattr(module, "log_trace", lambda event, trace_id, **fields: traces.append((event, fields)))
+    metrics = {}
+    outcome = module.GenerationOutcome()
+    chunks = list(_run_generation(
+        module, question="Ghi nhận chênh lệch thế nào?", runtime=runtime,
+        docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 1, "security_level": "internal"})],
+        metrics=metrics, outcome=outcome,
+    ))
+
+    assert chunks == ["REFUSAL"]
+    assert metrics["citation_validation"] == {
+        "reason": reason,
+        "recognized_source_ids": recognized_ids,
+        "evidence_source_ids": ["D7P1"],
+    }
+    assert metrics["final_refusal_reason"] == outcome.refusal_reason == "citation_" + reason
+    assert traces[-1][0] == "rag_end"
+    assert traces[-1][1]["refusal"] is True
+    assert traces[-1][1]["refusal_reason"] == "citation_" + reason
+    assert draft not in json.dumps({"metrics": metrics, "traces": traces}, ensure_ascii=False)
 
 
 def test_claim_repair_removes_unsupported_code_before_serving(monkeypatch):
@@ -353,7 +415,7 @@ def test_cancelled_stream_raises_before_any_provider_chunk_is_emitted(monkeypatc
 def test_normal_policy_question_does_not_apply_global_numeric_holdback(monkeypatch):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
     seen_strict_values = []
-    runtime = _prepare(module, monkeypatch, _FakeChain(["Quy định là 20."]))
+    runtime = _prepare(module, monkeypatch, _FakeChain(["Quy định là 20. [SRC:D7P3]"]))
     monkeypatch.setattr(
         module,
         "has_unsupported_numbers",
@@ -364,50 +426,39 @@ def test_normal_policy_question_does_not_apply_global_numeric_holdback(monkeypat
         _run_generation(
             module,
             question="Quy định hiện hành là gì?",
+            docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3})],
             runtime=runtime,
         )
-    ) == ["Quy định là 20."]
+    ) == ["Quy định là 20. [SRC:D7P3]"]
     assert seen_strict_values == [False]
 
 
-def test_explicit_negative_evidence_skips_provider_and_claim_repair(monkeypatch):
+@pytest.mark.parametrize("suffix, accepted", [("", False), (" [SRC:D999P1]", False),
+    (" [SRC:D7P3] [SRC:FAKE]", False), (" [SRC:D7P3]", True)])
+def test_source_cards_require_valid_attribution_before_emitting_answer(monkeypatch, suffix, accepted):
     module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
-    monkeypatch.setattr(
-        module,
-        "_build_prompt_template",
-        lambda *_args, **_kwargs: pytest.fail("provider chain must not be built"),
-    )
-    trace_events = []
-    monkeypatch.setattr(
-        module,
-        "log_trace",
-        lambda event, _trace_id, **fields: trace_events.append((event, fields)),
-    )
-    docs = [
-        SimpleNamespace(
-            metadata={"doc_id": 73, "trang_so": 3, "security_level": "internal"}
-        )
-    ]
+    answer = "The approved policy requires review." + suffix
+    runtime = _prepare(module, monkeypatch, _FakeChain([answer]))
+    monkeypatch.setattr(module, "has_unsupported_numbers", lambda *_a, **_k: False)
+    docs = [SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3, "version_no": 1})]
+    result = list(_run_generation(module, question="What is the approved policy?", docs=docs, runtime=runtime))
+    assert result == ([answer] if accepted else ["REFUSAL"])
 
-    events = _run_through_executor(
-        monkeypatch,
-        module,
-        question="Đơn giá là bao nhiêu?",
-        docs=docs,
-        explicit_negative_answer=(
-            "Theo tài liệu, thông tin được nêu rõ: “Không có trường đơn giá "
-            "trong BOM này.” [SRC:D73P3]"
-        ),
-    )
-    emitted = [event.text for event in events if isinstance(event, RagToken)]
 
-    assert emitted == [
-        "Theo tài liệu, thông tin được nêu rõ: “Không có trường đơn giá "
-        "trong BOM này.” [SRC:D73P3]"
-    ]
-    deterministic = dict(trace_events)["deterministic_generation"]
-    assert deterministic["claim_repair_skipped_reason"] == "explicit_negative_evidence"
-    assert events[-1].outcome == "answered"
+def test_golden_answer_must_be_supported_by_its_selected_source(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    from mech_chatbot.db.repositories import feedback
+    monkeypatch.setattr(module, "build_common_metadata_context", lambda _docs: "")
+    monkeypatch.setattr(module, "build_structured_attributes_context", lambda _docs: "")
+    calls = []
+    def golden(_question, *, admitted_doc_ids):
+        calls.append(admitted_doc_ids)
+        return {"answer": "OUTDATED_UNSUPPORTED_ANSWER", "source_doc_id": 7}
+    monkeypatch.setattr(feedback, "find_golden_answer", golden)
+    docs = [SimpleNamespace(page_content="Current approved evidence", metadata={"doc_id": 7, "trang_so": 3})]
+    rendered = module._assemble_context(docs, "What is approved?")
+    assert calls == [[7]]
+    assert "OUTDATED_UNSUPPORTED_ANSWER" not in rendered
 
 
 @pytest.mark.parametrize("policy", ["internal_only", None])
@@ -622,6 +673,7 @@ def test_generation_debug_validates_served_calculation_documents_for_pilot():
             "citation_structure_passed": True,
             "decomposition_usage": {},
             "provenance_passed": True,
+            "decomposition_usage": {},
         },
     )
     debug = _generation_debug(*arguments)
@@ -725,7 +777,7 @@ def test_grounded_math_disabled_uses_normal_generation_path(monkeypatch):
     runtime = _prepare(
         module,
         monkeypatch,
-        _FakeChain(["Normal generation path."]),
+        _FakeChain(["Normal generation path. [SRC:D41P3]"]),
         grounded_math_enabled=False,
     )
     monkeypatch.setattr(
@@ -753,7 +805,7 @@ def test_grounded_math_disabled_uses_normal_generation_path(monkeypatch):
         runtime=runtime,
     ))
 
-    assert emitted == ["Normal generation path."]
+    assert emitted == ["Normal generation path. [SRC:D41P3]"]
 
 
 def test_vision_retries_share_the_request_wide_provider_budget(monkeypatch):

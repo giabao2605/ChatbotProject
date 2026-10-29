@@ -281,6 +281,23 @@ def test_rag_runtime_binds_trace_events_to_the_live_runtime_identity():
     })
 
 
+@pytest.mark.parametrize('execution_context', ['production', 'evaluation'])
+def test_default_text_adapter_keeps_process_external_policy(execution_context):
+    from mech_chatbot.composition.rag_runtime import build_rag_runtime
+    from mech_chatbot.config.settings import ExternalAiSettings
+    settings = Settings(LLM_API_KEY='fixture-only-not-a-secret', APP_ENV='evaluation',
+        EXTERNAL_AI_LOCAL_DEVELOPMENT=False, EXTERNAL_PROCESSING_POLICY='all_external',
+        RAG_EXECUTION_CONTEXT=execution_context, RERANK_PROVIDER='local_fusion', USE_VOYAGE_RERANK=False)
+    vectors = SimpleNamespace(vector_store=object(), qdrant_client=object(), collection_name='fixture')
+    runtime = build_rag_runtime(settings, qdrant_builder=lambda _: vectors,
+        vision_builder=lambda _: None, trace_persist=lambda *_: None)
+    try:
+        assert runtime.provider.external_ai_settings == ExternalAiSettings.from_settings(settings)
+        assert runtime.provider.client.max_retries == 0
+    finally:
+        runtime.close()
+
+
 def test_rag_runtime_composes_provider_vector_and_vision_adapters_explicitly():
     from mech_chatbot.composition.rag_runtime import build_rag_runtime
 

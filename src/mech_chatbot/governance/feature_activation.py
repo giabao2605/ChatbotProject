@@ -798,6 +798,62 @@ def activation_status(
     if failure is not None:
         return failure
     assert bundle is not None and digest is not None
+    if bundle.get('schema') == 'rag-activation-bundle-v8':
+        from mech_chatbot.governance.permanent_activation import validate_permanent_bundle
+        capability = validate_permanent_bundle(bundle, root=project_root, environ=env,
+            current_commit=current_commit, bundle_sha256=digest)
+        return _status(bool(capability), bool(capability), scope,
+            'permanent_core_authorized' if capability else 'permanent_core_grant_invalid',
+            enabled, profile=profile, decision_source_commit=current_commit, bundle_sha256=digest,
+            review_mode=capability.review_mode if capability else 'multi_reviewer')
+    if bundle.get('schema') == 'rag-activation-bundle-v7':
+        from mech_chatbot.governance.query_v2_activation import validate_query_v2_bundle
+        capability = validate_query_v2_bundle(bundle, root=project_root, environ=env,
+                                              current_commit=current_commit, bundle_sha256=digest)
+        return _status(bool(capability), bool(capability), scope,
+                       'query_v2_controlled_demo_accepted' if capability else 'query_v2_grant_invalid',
+                       enabled, profile=profile, decision_source_commit=current_commit,
+                       bundle_sha256=digest, review_mode=capability.review_mode if capability else 'multi_reviewer')
+    if bundle.get('schema') == 'rag-activation-bundle-v6':
+        from mech_chatbot.governance.math_templates_activation import validate_math_templates_bundle
+        capability = validate_math_templates_bundle(bundle, root=project_root, environ=env,
+                                                    current_commit=current_commit, bundle_sha256=digest)
+        return _status(bool(capability), bool(capability), scope,
+                       'math_templates_controlled_demo_accepted' if capability else 'math_templates_grant_invalid',
+                       enabled, profile=profile, decision_source_commit=current_commit,
+                       bundle_sha256=digest, review_mode=capability.review_mode if capability else 'multi_reviewer')
+    if bundle.get('schema') == 'rag-activation-bundle-v5':
+        from mech_chatbot.governance.scope_total_activation import validate_scope_total_bundle
+        capability = validate_scope_total_bundle(bundle, root=project_root, environ=env,
+                                                 current_commit=current_commit, bundle_sha256=digest)
+        return _status(bool(capability), bool(capability), scope,
+                       'scope_total_controlled_demo_accepted' if capability else 'scope_total_grant_invalid',
+                       enabled, profile=profile, decision_source_commit=current_commit,
+                       bundle_sha256=digest, review_mode=capability.review_mode if capability else 'multi_reviewer')
+    if bundle.get('schema') == 'rag-activation-bundle-v4':
+        from mech_chatbot.governance.math_graph_v2_activation import validate_math_graph_v2_bundle
+        capability = validate_math_graph_v2_bundle(bundle, root=project_root, environ=env,
+                                                  current_commit=current_commit, bundle_sha256=digest)
+        return _status(bool(capability), bool(capability), scope,
+                       'math_graph_v2_controlled_demo_accepted' if capability else 'math_graph_v2_grant_invalid',
+                       enabled, profile=profile, decision_source_commit=current_commit,
+                       bundle_sha256=digest, review_mode=capability.review_mode if capability else 'multi_reviewer')
+    if bundle.get('schema') == 'rag-activation-bundle-v3':
+        from mech_chatbot.governance.graph_v2_activation import validate_graph_v2_bundle
+        capability = validate_graph_v2_bundle(bundle, root=project_root, environ=env,
+                                             current_commit=current_commit, bundle_sha256=digest)
+        return _status(bool(capability), bool(capability), scope,
+                       'graph_v2_controlled_demo_accepted' if capability else 'graph_v2_grant_invalid',
+                       enabled, profile=profile, decision_source_commit=current_commit,
+                       bundle_sha256=digest, review_mode=capability.review_mode if capability else 'multi_reviewer')
+    if bundle.get('schema') == 'rag-activation-bundle-v2':
+        from mech_chatbot.governance.math_v2_activation import validate_math_v2_bundle
+        capability = validate_math_v2_bundle(bundle, root=project_root, environ=env,
+                                            current_commit=current_commit, bundle_sha256=digest)
+        return _status(bool(capability), bool(capability), scope,
+                       'math_v2_controlled_demo_accepted' if capability else 'math_v2_grant_invalid',
+                       enabled, profile=profile, decision_source_commit=current_commit,
+                       bundle_sha256=digest, review_mode=capability.review_mode if capability else 'multi_reviewer')
     failure, ledger, source_commit = _validate_activation_bundle(
         bundle, digest, env, project_root, flags, enabled, scope, profile,
         current_commit,

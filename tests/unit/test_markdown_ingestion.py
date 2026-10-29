@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 from contextlib import contextmanager
+from dataclasses import replace
 
 import pytest
 
@@ -115,6 +116,38 @@ def _install_success_path_stubs(monkeypatch, saved_pages, saved_bom=None):
     monkeypatch.setattr(pipeline, "_contextual_chunk_enabled", lambda: False)
     monkeypatch.setattr(pipeline, "update_document_classification", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(pipeline, "clear_reingest_snapshot", lambda *_args, **_kwargs: None)
+
+
+def test_csv_pipeline_keeps_pending_structured_scopes_and_source_snapshot(tmp_path, monkeypatch):
+    path = tmp_path / "export.csv"
+    path.write_text('code,amount [VND]\nA,9007199254740993.01\n', encoding="utf-8")
+    _install_success_path_stubs(monkeypatch, [])
+    scopes, snapshots = [], []
+    persistence = replace(pipeline._legacy_ingestion_persistence(),
+                          save_structured_scope=lambda scope: scopes.append(scope) or scope.scope_id,
+                          register_source_snapshot=lambda *args: snapshots.append(args) or args[2])
+    report = pipeline.process_and_ingest_file(str(path),path.name,"Technical",domain_override="generic",security_override="internal",site_override="HQ",dependencies=_dependencies(),persistence=persistence)
+    assert report["status"] == "success"
+    assert len(scopes) == len(snapshots) == 1
+    assert not scopes[0].completeness_reviewed
+    assert scopes[0].facts[0].review_status == "pending"
+    assert str(scopes[0].facts[0].value) == "9007199254740993.01"
+    assert scopes[0].facts[0].source_hash == snapshots[0][3]
+    assert report["structured_scope_ids"] == [scopes[0].scope_id]
+    assert report["structured_source_snapshot"]["status"] == "registered"
+
+
+def test_missing_structured_schema_reports_unavailable_without_changing_legacy_text(tmp_path, monkeypatch):
+    path = tmp_path / "export.csv"
+    path.write_text('code,quantity\nA,2\n',encoding="utf-8")
+    _install_success_path_stubs(monkeypatch, [])
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("missing migration")
+    persistence = replace(pipeline._legacy_ingestion_persistence(),save_structured_scope=unavailable,register_source_snapshot=unavailable)
+    report = pipeline.process_and_ingest_file(str(path),path.name,"Technical",domain_override="generic",security_override="internal",site_override="HQ",dependencies=_dependencies(),persistence=persistence)
+    assert report["status"] == "success" and report["structured_scope_ids"] == []
+    assert report["structured_source_snapshot"]["status"] == "unavailable"
+    assert any('structured_evidence_unavailable:scope_persistence' in warning for warning in report["warnings"])
 
 
 def test_markdown_upload_records_extracted_page_and_reaches_review(tmp_path, monkeypatch):

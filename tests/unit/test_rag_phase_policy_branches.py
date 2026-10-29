@@ -11,6 +11,7 @@ from mech_chatbot.rag.answer_policy import (
     AnswerOutcome,
 )
 from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+from mech_chatbot.rag.execution import AccessScope
 from mech_chatbot.rag.phases.evidence import EvidenceOutcome
 from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.preparation import PreparedRequest
@@ -231,6 +232,7 @@ def test_diagnostic_builders_tolerate_invalid_identifiers_and_namespace_failure(
 class _RoutingState:
     def __init__(self):
         self.refusal_reason = None
+        self.request = SimpleNamespace(access=AccessScope())
         self.retrieval_adapter = SimpleNamespace(
             semantic_cache_enabled=True,
             semantic_cache_ttl_hours=24.0,
@@ -297,6 +299,7 @@ def test_routing_returns_semantic_cache_hit(monkeypatch):
     ("intent", "reason"),
     [
         ({"version_policy": "compare_versions", "detected_versions": []}, "missing_compare_versions"),
+        ({"clarification_required": True}, "missing_context"),
         ({"is_chitchat": True}, "chitchat"),
     ],
 )
@@ -318,8 +321,16 @@ def test_routing_returns_typed_intent_terminals(monkeypatch, intent, reason):
     outcome = routing.route(_request(), state)
 
     assert outcome.reason_code == reason
-    if reason == "missing_compare_versions":
+    if reason in {"missing_compare_versions", "missing_context"}:
         assert state.refusal_reason == "clarification_required"
+
+
+def test_reference_question_is_ineligible_for_both_answer_caches():
+    from mech_chatbot.rag.phases.preparation import _normalize_request
+    request = SimpleNamespace(question='Quy trình đó thế nào?', image_path=None, history=(),
+        current_part_ids=(), conversation_context=None, access=AccessScope(), response_language='vi')
+    context = _normalize_request(SimpleNamespace(request=request, trace_id='reference-test'))
+    assert context.cache_eligible is False
 
 
 def test_routing_adds_glossary_and_recovers_glossary_failure(monkeypatch):
@@ -635,32 +646,6 @@ def test_grounded_calculation_supersedes_only_the_missing_bom_total_notice(
     assert isinstance(outcome, EvidenceOutcome)
     assert outcome.answer_policy.outcome is AnswerOutcome.FULL_ANSWER
     assert outcome.answer_policy.reason == "all_branches_sufficient"
-
-
-def test_grounded_calculation_keeps_an_unrelated_cost_denial():
-    from mech_chatbot.rag.phases.evidence import _relevant_negative_quote
-
-    document = Document(
-        page_content="calculation",
-        metadata={
-            "calculation_provenance": {
-                "status": "valid",
-                "operation": "sum",
-            },
-        },
-    )
-    invalid = Document(
-        page_content="invalid calculation metadata",
-        metadata={"calculation_provenance": None},
-    )
-
-    quote = _relevant_negative_quote(
-        "Tổng BOM là bao nhiêu và chi phí là bao nhiêu?",
-        "Tài liệu không công bố chi phí hoặc đơn giá.",
-        [invalid, document],
-    )
-
-    assert "chi phí" in quote
 
 
 def test_reconcile_grounded_math_ignores_null_provenance():
@@ -1081,7 +1066,6 @@ def test_generation_updates_context_and_wraps_semantic_cache(monkeypatch):
         answer_policy=answer_policy,
         evidence_decision=EvidenceDecision(EvidenceState.SUFFICIENT, reason="covered"),
         evidence_quotes=(),
-        explicit_negative_answer="",
     )
     cache_calls = []
     monkeypatch.setattr(generation, "generate_answer", lambda *_args, **_kwargs: iter(("answer [SRC:D7P2]",)))
@@ -1221,3 +1205,53 @@ def test_partial_generation_targets_only_answerable_branch(unavailable):
     assert _effective_generation_question(
         _decision(), primary, [Document(page_content="P-1", metadata={})],
     ) == "Giá trị P-1 là gì?"
+
+
+
+@pytest.mark.parametrize("stop_kind", ["cancelled", "deadline"])
+@pytest.mark.parametrize("stop_after", ["before_first", "jina", "voyage"])
+def test_rerank_fallback_stops_at_request_checkpoint(monkeypatch, stop_kind, stop_after):
+    import threading
+    from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+    from mech_chatbot.rag import execution
+    from mech_chatbot.rag.phases import retrieval_rerank
+
+    now = [0.0]
+    cancelled = threading.Event()
+    monkeypatch.setattr(execution.time, "monotonic", lambda: now[0])
+    state = execution._ExecutionState.create(
+        execution.RagRequest("question", AccessScope()),
+        execution.RagInvocation("rerank-stop", mode="test"),
+        cancelled, "rerank-stop",
+        budget_limits=execution.RequestBudgetLimits(deadline_seconds=1),
+    )
+    calls = []
+
+    def stop():
+        if stop_kind == "cancelled":
+            cancelled.set()
+        else:
+            now[0] = 2.0
+
+    def attempt(*args):
+        provider = args[-2]
+        calls.append(provider)
+        if stop_after == provider:
+            stop()
+        raise TimeoutError("provider response timeout")
+
+    if stop_after == "before_first":
+        stop()
+    runtime = SimpleNamespace(voyage_enabled=True, voyage_runtime=SimpleNamespace(api_key="fixture"))
+    monkeypatch.setattr(retrieval_rerank, "_attempt_provider_rerank", attempt)
+    monkeypatch.setattr(retrieval_rerank, "log_trace", lambda *_a, **_k: None)
+    monkeypatch.setattr(retrieval_rerank, "rerank_docs", lambda docs: calls.append("local") or docs)
+    token = execution._REQUEST_CHECKPOINT.set(state.checkpoint)
+    try:
+        error = ExternalAICallCancelled if stop_kind == "cancelled" else TimeoutError
+        with pytest.raises(error):
+            retrieval_rerank._provider_rerank([object()], "question", "question", "rerank-stop", [], 1, runtime, "jina")
+    finally:
+        execution._REQUEST_CHECKPOINT.reset(token)
+    expected = {"before_first": [], "jina": ["jina"], "voyage": ["jina", "voyage"]}
+    assert calls == expected[stop_after]

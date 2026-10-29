@@ -19,9 +19,11 @@ class UploadTooLarge(ValueError):
 class RequestBodyLimitMiddleware:
     """Reject oversized request bodies before multipart parsing."""
 
-    def __init__(self, app: ASGIApp, limits: Mapping[str, int]):
+    def __init__(self, app: ASGIApp, limits: Mapping[str, int],
+                 prefix_limits: Mapping[str, int] | None = None):
         self.app = app
         self.limits = dict(limits)
+        self.prefix_limits = dict(prefix_limits or {})
 
     async def __call__(
         self,
@@ -34,6 +36,9 @@ class RequestBodyLimitMiddleware:
             return
         path = str(scope.get("path") or "/").rstrip("/") or "/"
         limit = self.limits.get(path)
+        if limit is None:
+            limit = next((maximum for prefix, maximum in self.prefix_limits.items()
+                          if path.startswith(prefix)), None)
         if limit is None:
             await self.app(scope, receive, send)
             return

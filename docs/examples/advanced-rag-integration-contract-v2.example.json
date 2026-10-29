@@ -1,0 +1,355 @@
+{
+  "schema": "rag-integration-contract-v2",
+  "status": "draft",
+  "frozen": false,
+  "approved": false,
+  "reviewer_id": null,
+  "source_commit": null,
+  "snapshot_fingerprint": null,
+  "config_hash": null,
+  "gate_hash": null,
+  "eval_hash": null,
+  "evidence_kind": "offline_preparation",
+  "accepted": false,
+  "departments": [
+    "Accountant",
+    "HR",
+    "HSE_5S",
+    "ISO",
+    "IT",
+    "Maintenance",
+    "Molding",
+    "Planning",
+    "Production",
+    "Purchasing",
+    "QualityControl",
+    "Sales",
+    "Technical",
+    "Warehouse"
+  ],
+  "minimum_real_questions_per_department": 75,
+  "arms": [
+    "math",
+    "query",
+    "graph",
+    "math+query",
+    "math+graph",
+    "query+graph",
+    "math+query+graph"
+  ],
+  "concurrency": [
+    1,
+    5
+  ],
+  "variants": [
+    "baseline",
+    "candidate"
+  ],
+  "limits": {
+    "math": {
+      "max_latency_ratio": 1.25,
+      "max_cost_ratio": 1.5,
+      "required_exact_rate": 1.0,
+      "math_budget_version": "fixed-template-math-budgets-v2",
+      "max_domain_steps_per_template": {
+        "compare_two_scopes": 4,
+        "bom_rollup": 500
+      },
+      "max_recorded_domain_steps_per_request": 500
+    },
+    "query": {
+      "min_complex_answer_gain": 0.1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_final_generations": 1,
+      "max_terminal_answer_violations": 0
+    },
+    "graph": {
+      "min_accuracy_gain": 0.1,
+      "min_structured_coverage": 0.8,
+      "min_reviewed_edge_precision": 0.95,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5,
+      "min_governed_review_sample": 20,
+      "min_approved_edge_pool": 20,
+      "max_hops": 8,
+      "max_edges": 500,
+      "max_generation_edges": 50
+    },
+    "math+query": {
+      "max_planners": 1,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_repairs": 1,
+      "max_graph_edges": 50,
+      "max_provider_retries": 2,
+      "max_final_generations": 1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5,
+      "math_budget_version": "fixed-template-math-budgets-v2",
+      "max_domain_steps_per_template": {
+        "compare_two_scopes": 4,
+        "bom_rollup": 500
+      },
+      "max_recorded_domain_steps_per_request": 508
+    },
+    "math+graph": {
+      "max_planners": 1,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_repairs": 1,
+      "max_graph_edges": 50,
+      "max_provider_retries": 2,
+      "max_final_generations": 1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5,
+      "math_budget_version": "fixed-template-math-budgets-v2",
+      "max_domain_steps_per_template": {
+        "compare_two_scopes": 4,
+        "bom_rollup": 500
+      },
+      "max_recorded_domain_steps_per_request": 500,
+      "max_hops": 8,
+      "max_edges": 500,
+      "max_generation_edges": 50
+    },
+    "query+graph": {
+      "max_planners": 1,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_repairs": 1,
+      "max_calculations": 1,
+      "max_graph_edges": 50,
+      "max_provider_retries": 2,
+      "max_final_generations": 1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5,
+      "max_hops": 8,
+      "max_edges": 500,
+      "max_generation_edges": 50
+    },
+    "math+query+graph": {
+      "max_planners": 1,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_repairs": 1,
+      "max_graph_edges": 50,
+      "max_provider_retries": 2,
+      "max_final_generations": 1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5,
+      "math_budget_version": "fixed-template-math-budgets-v2",
+      "max_domain_steps_per_template": {
+        "compare_two_scopes": 4,
+        "bom_rollup": 500
+      },
+      "max_recorded_domain_steps_per_request": 508,
+      "max_hops": 8,
+      "max_edges": 500,
+      "max_generation_edges": 50
+    }
+  },
+  "extended_contracts": {
+    "graph": {
+      "version": "graph-v2",
+      "max_assembly_levels": 8,
+      "max_examined_relations_per_request": 500,
+      "max_generation_edges": 50,
+      "rollup_input": "complete_reviewed_occurrence_manifest",
+      "on_limit_cycle_missing_proof": "incomplete",
+      "source_scope": "current_reviewed_authorized"
+    },
+    "math": {
+      "version": "grounded-calculation-v2",
+      "templates": [
+        "compare_two_scopes",
+        "bom_rollup"
+      ],
+      "comparison_max_domain_steps": 4,
+      "bom_max_domain_steps": 500,
+      "comparison_steps": [
+        "sum_a",
+        "sum_b",
+        "delta",
+        "percent_change"
+      ],
+      "bom_domain_steps": "one recorded total per part/unit/currency with full occurrence operands",
+      "number_type": "Decimal",
+      "rounding": "reviewed business rule",
+      "cross_source_revisions": "independent pinned revisions",
+      "zero_denominator": "valid totals and undefined rate",
+      "budget_version": "fixed-template-math-budgets-v2",
+      "case_evidence": {
+        "candidate_required": true,
+        "reference_schema": "fixed-template-math-reference-v2",
+        "reference_binding": "frozen question references independent source inputs; hash, commit, snapshot, config, gate, eval, case, department and reviewer must match",
+        "observed_fields": [
+          "math_results",
+          "calculation_count"
+        ],
+        "observed_result_schema": "grounded-calculation-v2",
+        "observation_capture": {
+          "schema": "math-observation-v2",
+          "default_enabled": false,
+          "allowed_modes": ["evaluation", "test"],
+          "required_roles": ["reviewer", "knowledge_approver", "admin"],
+          "source": "actual canonical runtime results; never reconstruct observed operands from golden inputs",
+          "lifecycle": "export only after successful event collection and stream close; cancellation, deadline and snapshot failures cannot export",
+          "transport": "optional typed terminal field outside diagnostics; capture adds no REST, SSE, history or raw logging payload",
+          "approval": "local unreviewed observation only; accepted=false; offline_only=true; no activation authority",
+          "remaining_gate_work": "bind observations to versioned run/case/source snapshot and independent adjudication; preserve legacy run_eval v1 evidence"
+        },
+        "fixed_case_runner": {
+          "entry": "scripts.eval.run_fixed_math_v2.run_fixed_case",
+          "case_schema": "fixed-template-case-v2",
+          "observation_schema": "fixed-template-case-observation-v2",
+          "scope": "internal provider-free fixed-selection seam; no operator CLI or storage yet",
+          "actor": "strict active SQL profile with explicit ID and username must exactly match frozen roles, department/site permissions and clearance; reviewer privilege is required and never added",
+          "consistency": "actor, current department catalog and selected source evidence share one SERIALIZABLE SQL snapshot; collection, close, snapshot commit and post-commit cancellation/deadline checks must succeed",
+          "acl_failure": "query failure is not an unrestricted empty site set; unknown/inactive departments fail closed; missing or invalid clearance stays public",
+          "bindings": "declared source/snapshot/config/gate/eval plus run/case/dataset and case hash; binding_verification remains pending until runtime verification is implemented",
+          "approval": "adjudication_reference=null; no correctness/reviewer labels or acceptance generated",
+          "remaining": "operator authorization, protected evidence persistence, verified runtime bindings and independent adjudication; legacy run_eval remains unchanged"
+        },
+        "bound_review_join": {
+          "entry": "mech_chatbot.evaluation.adjudication.resolve_observation_reviews",
+          "review_schema": "fixed-template-case-reviews-v2",
+          "result_schema": "evaluation-adjudication-v2",
+          "bindings": "hash-pinned case, observation, reviews and business identities; exact source/snapshot/config/gate/eval, run/case/department/dataset, actor and case/observation hashes",
+          "reviewers": "exactly two unique independent quality reviewers; one third adjudicator only when quality labels disagree; active non-synthetic matching business identity artifacts required",
+          "risks": "any leaked=true or wrong_version=true from any reviewer including adjudicator remains true; risk disagreement stays separate and positive quality labels cannot clear it",
+          "metadata": "typed frozen actor shared with runner; observed outcome must be a valid string enum; output contains labels and hashes, no answer or Math operands",
+          "limits": "identity artifacts are assertions, not operator authentication; binding_verification remains pending; accepted=false and offline_only=true",
+          "remaining": "protected persistence, runtime binding verification, reviewer authorization and readiness gate adapter; artifact join alone grants no acceptance"
+        },
+        "validation": "recompute every step, source, outcome and rounding with evaluate_math_v2; count must equal actual branch steps; comparisons at most4 each, all BOM branches share500 totals, request at most508 with query and500 standalone",
+        "standalone_max_math_actions": 1,
+        "query_max_math_actions": 3,
+        "baseline_policy": "baseline_source_commit and original per-arm limits stay independent of candidate; legacy Math request count remains at most1",
+        "other_branches": "optional exact frozen branch_id/kind/status/source_ids records; only query requests, combined actions at most3, usable branch citations must occur in final case citations",
+        "query_branch_evidence": {
+          "schema": "query-branch-execution-v2",
+          "reference": "independently frozen query_branch_schema and query_branches in the fixed-template Math reference; observations must match exact typed fields",
+          "fields": ["branch_id", "template", "depends_on", "executed", "status", "data_complete", "reason", "source_ids"],
+          "maximum_branches": 3,
+          "dependencies": "unique earlier branch IDs; execute only when all dependencies have complete source data; partial Graph context with reviewed complete source data may satisfy a dependency",
+          "skipped_math": "executed=false, blocked/dependency_unavailable, no citations, no canonical Math result and zero contributed calculations",
+          "storage_failure": "executed=true, unknown/evidence_unavailable, incomplete source data, no citations or canonical Math result; exact failure must be independently frozen",
+          "canonical_link": "every other executed Math action has one canonical result and one reference input with matching branch_id and template, in branch order",
+          "outcome": "evaluate all branch statuses; Math partial data is incomplete; unknown/blocked data is incomplete; complete requires complete source data",
+          "compatibility": "legacy other_branches remains separate; do not mix it with this contract; absent branch fields or null schema plus empty list preserve standalone legacy references",
+          "unsupported": "per-branch intent overflow has no invented result and remains fail-closed; natural-language planning and versioned runner/adjudication integration remain pending"
+        },
+        "outcome_policy": "full requires all complete; partial requires usable and incomplete branches; refusals have no usable branches; clarification has no executed actions"
+      }
+    },
+    "query": {
+      "version": "query-plan-v2",
+      "max_independent_branches": 3,
+      "overflow": "request narrowing before planner",
+      "deadline_cancellation_budget": "shared whole request",
+      "source_read_consistency": "one SQL SERIALIZABLE read transaction across branches and standalone templates; nested actions reuse the outer transaction",
+      "sql_session_lock_wait": "bounded by remaining request deadline and original session limit; restore before returning the connection",
+      "sql_transaction_failure": "on SQL execution failure, continue independent branches only with XACT_STATE()=1; aborted, uncommittable or unverifiable transactions discard the whole response without retry",
+      "sql_staging_gate": "required: concurrency 1/5, writer interaction and existing latency limits",
+      "max_examined_relations_per_request": 500,
+      "max_generation_edges_per_request": 50,
+      "max_recorded_domain_steps_per_request": 508,
+      "domain_steps_basis": "BOM totals use the shared 500-relation budget; each comparison records at most four steps, up to two comparisons alongside a BOM",
+      "dependency_basis": "complete reviewed source data, separate from truncated answer context",
+      "implementation_scope": "explicit caller-selected fixed templates; natural-language planning and text retrieval branches remain pending",
+      "extended_gate_status": "requires frozen approved v2 gate; legacy limits are unchanged"
+    }
+  },
+  "zero_tolerance": [
+    "access_leak",
+    "wrong_source_version",
+    "ungrounded_critical_numbers"
+  ],
+  "deferred": [
+    "native_CAD_3D",
+    "direct_business_software_connection_or_writeback",
+    "historical_lot_serial_tree"
+  ],
+  "live_authorization": null,
+  "notes": "Example only. Bind immutable source/data/config/gate/evaluation and real reviewer before freezing; this file grants no pilot or activation authority.",
+  "baseline_source_commit": null,
+  "baseline_limits": {
+    "math": {
+      "max_calculations_per_query": 1,
+      "max_latency_ratio": 1.25,
+      "max_cost_ratio": 1.5,
+      "required_exact_rate": 1.0
+    },
+    "query": {
+      "min_complex_answer_gain": 0.1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_final_generations": 1,
+      "max_terminal_answer_violations": 0
+    },
+    "graph": {
+      "min_accuracy_gain": 0.1,
+      "min_structured_coverage": 0.8,
+      "min_reviewed_edge_precision": 0.95,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5,
+      "min_governed_review_sample": 20,
+      "min_approved_edge_pool": 20,
+      "max_hops": 2,
+      "max_edges": 50
+    },
+    "math+query": {
+      "max_planners": 1,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_repairs": 1,
+      "max_calculations": 1,
+      "max_graph_edges": 50,
+      "max_provider_retries": 2,
+      "max_final_generations": 1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5
+    },
+    "math+graph": {
+      "max_planners": 1,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_repairs": 1,
+      "max_calculations": 1,
+      "max_graph_edges": 50,
+      "max_provider_retries": 2,
+      "max_final_generations": 1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5
+    },
+    "query+graph": {
+      "max_planners": 1,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_repairs": 1,
+      "max_calculations": 1,
+      "max_graph_edges": 50,
+      "max_provider_retries": 2,
+      "max_final_generations": 1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5
+    },
+    "math+query+graph": {
+      "max_planners": 1,
+      "max_subqueries": 3,
+      "max_corrections": 1,
+      "max_repairs": 1,
+      "max_calculations": 1,
+      "max_graph_edges": 50,
+      "max_provider_retries": 2,
+      "max_final_generations": 1,
+      "max_latency_ratio": 1.5,
+      "max_cost_ratio": 1.5
+    }
+  }
+}

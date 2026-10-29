@@ -8,15 +8,19 @@ of the legacy five-value tuple and its post-consumption mutation rules.
 from __future__ import annotations
 
 from contextlib import ExitStack
+from copy import deepcopy
 from contextvars import Context, ContextVar, copy_context
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-import re
 import threading
 import time
 import uuid
 from typing import Any, Callable, Iterator, Literal, Mapping, Protocol
+from mech_chatbot.domain.graph_query import GraphQuery,BomRollupQuery
+from mech_chatbot.domain.query_plan import QueryPlan
+from mech_chatbot.domain.task_routing import CandidateSelectionContext, CANDIDATE_TASK_ROUTING, MIXED_CANDIDATE_TASK_ROUTING
+from mech_chatbot.rag.graph_retrieval_v2 import MAX_RELATIONS, MAX_GENERATION_EDGES
 
 from mech_chatbot.rag.execution_contracts import (
     CONTROLLED_DEMO_REQUEST_DEADLINE_SECONDS,
@@ -40,6 +44,7 @@ _REQUEST_BUDGET: ContextVar["RequestBudgetLedger | None"] = ContextVar(
     "rag_request_budget",
     default=None,
 )
+_REQUEST_CHECKPOINT: ContextVar[Callable[[str], None] | None] = ContextVar('rag_request_checkpoint',default=None)
 
 
 class RequestDeadlineExceeded(TimeoutError):
@@ -117,6 +122,10 @@ def remaining_request_timeout_int(
     return timeout
 
 
+def current_request_checkpoint() -> Callable[[str], None] | None:
+    return _REQUEST_CHECKPOINT.get()
+
+
 @dataclass(frozen=True, slots=True)
 class AccessScope:
     department: str | None = None
@@ -135,6 +144,39 @@ class RagRequest:
     current_part_ids: tuple[str, ...] = ()
     response_language: str = "vi"
     conversation_context: Mapping[str, Any] | None = None
+    scope_comparison: tuple[str, str] | None = None
+    graph_query: GraphQuery | None = None
+    bom_rollup: BomRollupQuery | None = None
+    query_plan: QueryPlan | None = None
+    text_query: bool = False
+    candidate_selection_context: CandidateSelectionContext | None = None
+    scope_total: str | None = None
+
+    def __post_init__(self):
+        if self.scope_total is not None and (
+                not isinstance(self.scope_total, str) or not self.scope_total.strip() or len(self.scope_total) > 255
+                or self.text_query or any(value is not None for value in (self.scope_comparison, self.graph_query,
+                    self.bom_rollup, self.query_plan, self.candidate_selection_context))):
+            raise ValueError('One bounded scope total action required')
+        if self.candidate_selection_context is not None and (
+                not isinstance(self.candidate_selection_context, CandidateSelectionContext)
+                or self.text_query or any(value is not None for value in
+                    (self.query_plan, self.scope_comparison, self.graph_query, self.bom_rollup))):
+            raise ValueError('Candidate alternatives require an unresolved standalone request')
+        if type(self.text_query) is not bool or (self.text_query and any(value is not None for value in
+                (self.query_plan,self.scope_comparison,self.graph_query,self.bom_rollup))):
+            raise ValueError('Use independent text queries or a fixed v2 template')
+        if self.query_plan is not None and (not isinstance(self.query_plan,QueryPlan)
+                or any(v is not None for v in (self.bom_rollup,self.scope_comparison,self.graph_query))):
+            raise ValueError('Use the plan or a standalone template')
+        if self.bom_rollup is not None and (not isinstance(self.bom_rollup,BomRollupQuery)
+                or self.scope_comparison is not None or self.graph_query is not None):
+            raise ValueError('One explicit v2 template per request required')
+        if self.graph_query is not None and (not isinstance(self.graph_query,GraphQuery) or self.scope_comparison is not None):
+            raise ValueError('One explicit v2 template per request required')
+        if self.scope_comparison is not None and (not isinstance(self.scope_comparison, tuple)
+                or len(self.scope_comparison) != 2 or any(not isinstance(s, str) or not s.strip() or len(s) > 255 for s in self.scope_comparison)):
+            raise ValueError('Two bounded scope identifiers required')
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,8 +185,19 @@ class RagInvocation:
     mode: ExecutionMode = "production"
     evaluation_force_ambiguous: bool = False
     evaluation_draft_override: str | None = None
+    capture_math_observations: bool = False
+    task_routing_contract: str | None = None
 
     def __post_init__(self) -> None:
+        if self.task_routing_contract is not None and (type(self.task_routing_contract) is not str
+                or self.task_routing_contract not in {'semantic-fixed-task-routing-v2-draft',
+                                                     'semantic-graph-fixed-task-routing-v3-draft', CANDIDATE_TASK_ROUTING,
+                                                     MIXED_CANDIDATE_TASK_ROUTING, 'semantic-scope-total-query-routing-v1-draft'}
+                or self.mode not in {'test', 'evaluation', 'production'}):
+            raise ValueError('Task routing requires the exact supported contract')
+        if type(self.capture_math_observations) is not bool or (
+                self.capture_math_observations and self.mode not in {'evaluation', 'test'}):
+            raise ValueError('Math observations require evaluation or test mode')
         if self.mode not in {"production", "evaluation", "pilot_replay", "test"}:
             raise ValueError(f"Unsupported RAG execution mode: {self.mode}")
         if (
@@ -219,6 +272,9 @@ class RagCompleted(_NormalizesRagDiagnostics):
     trace_id: str
     diagnostics: RagDiagnostics
     refusal_reason: str | None = None
+    observed_math_results: tuple[Mapping[str, Any], ...] | None = field(default=None, repr=False)
+    observed_task_routing: Mapping[str, Any] | None = field(default=None, repr=False)
+    observed_task_routing_failure_code: str | None = field(default=None, repr=False)
 
 @dataclass(frozen=True, slots=True)
 class RagFailed(_NormalizesRagDiagnostics):
@@ -248,6 +304,9 @@ class RagCollectedResult:
     trace_id: str
     diagnostics: RagDiagnostics
     refusal_reason: str | None
+    observed_math_results: tuple[Mapping[str, Any], ...] | None = field(default=None, repr=False)
+    observed_task_routing: Mapping[str, Any] | None = field(default=None, repr=False)
+    observed_task_routing_failure_code: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +317,7 @@ class RequestBudgetLimits:
     repairs: int = 1
     calculations: int = 1
     graph_edges: int = 50
+    graph_examined_relations: int = MAX_RELATIONS
     provider_retries: int = 2
     final_generations: int = 1
     deadline_seconds: float = 120.0
@@ -276,9 +336,11 @@ class RequestBudgetLedger:
     repairs: int = 0
     calculations: int = 0
     graph_edges: int = 0
+    graph_examined_relations: int = 0
     provider_retries: int = 0
     final_generations: int = 0
     deadline_exceeded: bool = False
+    provider_usage: tuple[dict[str, Any], ...] = ()
     _lock: threading.Lock = field(
         default_factory=threading.Lock,
         repr=False,
@@ -292,7 +354,7 @@ class RequestBudgetLedger:
     def record(self, field_name: str, value: int, *, cumulative: bool = False) -> None:
         if field_name not in {
             "planners", "subqueries", "corrections", "repairs", "calculations",
-            "graph_edges", "provider_retries", "final_generations",
+            "graph_edges", "graph_examined_relations", "provider_retries", "final_generations",
         }:
             raise ValueError(f"Unknown request budget field: {field_name}")
         normalized = max(0, int(value))
@@ -308,6 +370,10 @@ class RequestBudgetLedger:
     def consume_provider_retry(self) -> None:
         self.record("provider_retries", 1, cumulative=True)
 
+    def record_provider_usage(self, record: Mapping[str, Any]) -> None:
+        with self._lock:
+            self.provider_usage = (*self.provider_usage, dict(record))
+
 
 @dataclass(slots=True)
 class _ExecutionState:
@@ -318,11 +384,23 @@ class _ExecutionState:
     cancellation: CancellationSignal
     trace_id: str
     budget: RequestBudgetLedger
+    math_v2_capability: Any | None = field(default=None, repr=False)
+    math_v2_authorizer: Any | None = field(default=None, repr=False)
+    graph_v2_capability: Any | None = field(default=None, repr=False)
+    graph_v2_authorizer: Any | None = field(default=None, repr=False)
+    query_v2_capability: Any | None = field(default=None, repr=False)
+    query_v2_authorizer: Any | None = field(default=None, repr=False)
     retrieval_adapter: Any | None = field(default=None, repr=False)
     provider_adapter: Any | None = field(default=None, repr=False)
     refusal_reason: str | None = None
     generation_outcome: Any | None = field(default=None, repr=False)
     phase: str = "created"
+    task_binding: Any | None = field(default=None, repr=False)
+    task_slot: str | None = None
+    explicit_text_intents: tuple[str, ...] = ()
+    text_dependencies: tuple[Any, ...] = field(default=(), repr=False)
+    observed_task_routing: Mapping[str, Any] | None = field(default=None, repr=False)
+    observed_task_routing_failure_code: str | None = field(default=None, repr=False)
 
     @classmethod
     def create(
@@ -336,6 +414,24 @@ class _ExecutionState:
         budget_limits: RequestBudgetLimits | None = None,
     ) -> "_ExecutionState":
         started = time.monotonic()
+        limits = budget_limits or RequestBudgetLimits()
+        if invocation.task_routing_contract:
+            limits = replace(limits, provider_retries=0, planners=min(limits.planners, 1))
+        if invocation.mode in {"evaluation", "test"}:
+            if request.query_plan is not None:
+                branches = request.query_plan.branches
+                calculations = (MAX_RELATIONS if any(b.bom_rollup for b in branches) else 0)
+                calculations += 4 * sum(b.scope_comparison is not None for b in branches)
+                calculations += sum(b.scope_total is not None for b in branches)
+                limits = replace(limits, calculations=calculations)
+            elif request.bom_rollup is not None:
+                limits = replace(limits, calculations=MAX_RELATIONS)
+            elif request.scope_comparison is not None:
+                limits = replace(limits, calculations=4)
+            if request.query_plan is not None or request.graph_query is not None or request.bom_rollup is not None:
+                limits = replace(limits,
+                    graph_edges=min(limits.graph_edges, MAX_GENERATION_EDGES),
+                    graph_examined_relations=min(limits.graph_examined_relations, MAX_RELATIONS))
         return cls(
             request=request,
             invocation=invocation,
@@ -344,17 +440,20 @@ class _ExecutionState:
             retrieval_adapter=retrieval_adapter,
             provider_adapter=provider_adapter,
             budget=RequestBudgetLedger(
-                limits=budget_limits or RequestBudgetLimits(),
+                limits=limits,
                 started_monotonic=started,
             ),
         )
 
     def retrieve(self, **kwargs: Any) -> Any:
+        self.checkpoint('retrieval')
         if self.retrieval_adapter is not None:
-            return self.retrieval_adapter.retrieve(**kwargs)
-        from mech_chatbot.rag.pipeline_steps import _retrieve
-
-        return _retrieve(**kwargs)
+            result = self.retrieval_adapter.retrieve(**kwargs)
+        else:
+            from mech_chatbot.rag.pipeline_steps import _retrieve
+            result = _retrieve(**kwargs)
+        self.checkpoint('retrieval')
+        return result
 
     def retrieve_many(self, requests: tuple[dict[str, Any], ...]) -> Any:
         if self.retrieval_adapter is not None:
@@ -371,8 +470,24 @@ class _ExecutionState:
         return tuple(results)
 
     def invoke_provider(self, *args: Any, **kwargs: Any) -> Any:
+        self.require_query_authority()
+        if (kwargs.get('surface') == 'interaction_routing'
+                and self.invocation.task_routing_contract == MIXED_CANDIDATE_TASK_ROUTING
+                and self.task_binding is not None and self.task_slot == 'text-batch'):
+            from mech_chatbot.rag.candidate_task_routing import candidate_task_guard
+            if candidate_task_guard(self) is not None:
+                raise ValueError('Invalid candidate text routing binding')
+            # The bound planner already authorized retrieval; None retains the router's safe RAG fallback.
+            return None
         if self.provider_adapter is not None:
+            if self.invocation.task_routing_contract:
+                invoke = getattr(self.provider_adapter, 'invoke_once', self.provider_adapter.invoke)
+                return invoke(*args, **kwargs)
             return self.provider_adapter.invoke(*args, **kwargs)
+        if self.invocation.task_routing_contract:
+            from mech_chatbot.llm.llm_client import gpt_invoke
+            from tenacity import stop_after_attempt
+            return gpt_invoke.retry_with(stop=stop_after_attempt(1))(*args, **kwargs)
         from mech_chatbot.llm.llm_client import cohere_invoke
 
         return cohere_invoke(*args, **kwargs)
@@ -392,6 +507,13 @@ class _ExecutionState:
                 f"RAG request deadline exceeded during {stage}"
             )
 
+    def require_query_authority(self) -> None:
+        if self.query_v2_capability is not None:
+            from mech_chatbot.governance.query_v2_activation import select_query_capability
+            current = select_query_capability(self.query_v2_authorizer())
+            if current != self.query_v2_capability:
+                raise PermissionError('Query v2 source authority unavailable')
+
     def refuse(self, reason: str) -> None:
         if not self.refusal_reason:
             self.refusal_reason = str(reason or "refused")
@@ -404,7 +526,7 @@ class _ExecutionState:
         reason = str(generated_reason or self.refusal_reason or "").strip() or None
         return ("refused", reason) if reason else ("answered", None)
 
-    def prepared(self, values: tuple[Any, Any, Any, Any, Any]) -> "_PreparedExecution":
+    def prepared(self, values: tuple[Any, Any, Any, Any, Any], *, observed_math_results=()) -> "_PreparedExecution":
         stream, ref_text, ref_images, new_part_ids, diagnostics = values
         self.phase = "prepared"
         return _PreparedExecution(
@@ -413,9 +535,23 @@ class _ExecutionState:
             ref_images=tuple(ref_images or ()),
             new_part_ids=tuple(new_part_ids or ()),
             diagnostics=dict(diagnostics or {}),
+            observed_math_results=deepcopy(tuple(observed_math_results)) if self.invocation.capture_math_observations else None,
+            observed_task_routing=deepcopy(self.observed_task_routing),
+            observed_task_routing_failure_code=self.observed_task_routing_failure_code,
         )
 
     def capture_budget(self, diagnostics: Mapping[str, Any]) -> None:
+        if isinstance(diagnostics, dict):
+            records = [dict(record) for record in self.budget.provider_usage]
+            diagnostics["provider_usage"] = records
+            costs = [record.get("cost_usd") for record in records]
+            diagnostics["provider_cost_usd"] = (
+                sum(costs) if costs and all(cost is not None for cost in costs) else None
+            )
+            diagnostics["provider_usage_complete"] = bool(records) and all(
+                all(record.get(key) is not None for key in ("input_tokens", "output_tokens", "cost_usd"))
+                for record in records
+            )
         metrics = dict(diagnostics.get("generation_metrics") or {})
         self.budget.record("repairs", int(metrics.get("repair_count") or 0))
         self.budget.record("calculations", int(metrics.get("calculation_count") or 0))
@@ -430,6 +566,9 @@ class _PreparedExecution:
     ref_images: tuple[str, ...]
     new_part_ids: tuple[str, ...]
     diagnostics: dict[str, Any]
+    observed_math_results: tuple[Mapping[str, Any], ...] | None = field(default=None, repr=False)
+    observed_task_routing: Mapping[str, Any] | None = field(default=None, repr=False)
+    observed_task_routing_failure_code: str | None = field(default=None, repr=False)
 
 
 class _ContextBoundRagIterator:
@@ -512,6 +651,9 @@ def _collected_result(
         trace_id=completed.trace_id,
         diagnostics=completed.diagnostics,
         refusal_reason=completed.refusal_reason,
+        observed_math_results=completed.observed_math_results,
+        observed_task_routing=deepcopy(completed.observed_task_routing),
+        observed_task_routing_failure_code=completed.observed_task_routing_failure_code,
     )
 
 
@@ -573,51 +715,10 @@ def collect_rag_events(events: Iterator[RagEvent]) -> RagCollectedResult:
     return terminal
 
 
-_SOURCE_ID_RE = re.compile(
-    r"(?:source[_ ]?id\s*[:#]?\s*|\[SRC:)(?P<source_id>D\d+P\d+)",
-    re.IGNORECASE,
-)
-def attributed_citations(
-    diagnostics: Mapping[str, Any] | None,
-    answer: str,
-) -> tuple[Mapping[str, Any], ...]:
-    """Return source cards whose stable SourceID occurs in the final answer."""
-    source_ids = {
-        match.group("source_id").upper()
-        for match in _SOURCE_ID_RE.finditer(str(answer or ""))
-    }
-    if not source_ids:
-        return ()
-
-    result: list[Mapping[str, Any]] = []
-    seen: set[str] = set()
-    for item in (diagnostics or {}).get("citation_docs") or []:
-        if not isinstance(item, Mapping):
-            continue
-        try:
-            doc_id = int(item.get("doc_id"))
-            page_no = int(
-                item.get("trang") or item.get("trang_so") or item.get("page_no")
-            )
-        except (TypeError, ValueError):
-            continue
-        source_id = str(item.get("source_id") or f"D{doc_id}P{page_no}").upper()
-        if source_id not in source_ids or source_id in seen:
-            continue
-        seen.add(source_id)
-        result.append(
-            {
-                "doc_id": doc_id,
-                "page_no": page_no,
-                "file_name": item.get("file_goc") or item.get("file_name"),
-                "file_goc": item.get("file_goc") or item.get("file_name"),
-                "version_no": item.get("version_no"),
-                "score": item.get("score"),
-                "trang": page_no,
-                "source_id": source_id,
-            }
-        )
-    return tuple(result)
+def attributed_citations(diagnostics, answer):
+    """Preserve page and structured locator attribution through the shared rules."""
+    from mech_chatbot.application.chat_citations import attributed_rag_citations
+    return attributed_rag_citations(diagnostics, answer)
 
 
 def _successful_rag_events(
@@ -626,6 +727,7 @@ def _successful_rag_events(
     trace_id: str,
 ) -> Iterator[RagEvent]:
     diagnostics = prepared.diagnostics
+    state.require_query_authority()
     yield RagPrepared(
         ref_text=prepared.ref_text,
         ref_images=prepared.ref_images,
@@ -635,6 +737,7 @@ def _successful_rag_events(
     answer_parts: list[str] = []
     for chunk in prepared.stream:
         state.checkpoint("generation")
+        state.require_query_authority()
         text = str(chunk)
         answer_parts.append(text)
         yield RagToken(text=text)
@@ -647,6 +750,8 @@ def _successful_rag_events(
     state.checkpoint("completion")
     final_answer = "".join(answer_parts)
     for citation in attributed_citations(final_diagnostics, final_answer):
+        state.checkpoint("completion")
+        state.require_query_authority()
         yield RagCitation(citation=citation)
     outcome, refusal_reason = state.completion()
     _log_pilot_request_event(
@@ -657,6 +762,8 @@ def _successful_rag_events(
         outcome,
         refusal_reason,
     )
+    state.checkpoint("completion")
+    state.require_query_authority()
     yield RagCompleted(
         outcome=outcome,
         trace_id=trace_id,
@@ -664,7 +771,20 @@ def _successful_rag_events(
             final_diagnostics, ledger=state.budget
         ),
         refusal_reason=refusal_reason,
+        observed_math_results=prepared.observed_math_results,
+        observed_task_routing=deepcopy(prepared.observed_task_routing),
+        observed_task_routing_failure_code=prepared.observed_task_routing_failure_code,
     )
+    if state.math_v2_capability is not None:
+        from mech_chatbot.config.logging import log_trace
+        from mech_chatbot.rag.math_v2_pilot import comparison_event_fields
+        from mech_chatbot.rag.scope_total import total_event_fields
+        # Only count a request after its consumer drains the completed event.
+        total = state.math_v2_capability.template == 'sum_reviewed_scope'
+        fields = total_event_fields if total else comparison_event_fields
+        log_trace('math_scope_total_completed' if total else 'math_v2_comparison_completed',trace_id,execution_context=current_execution_context(),
+            **fields(final_diagnostics,final_answer,state.budget,state.math_v2_capability,
+                final_latency_ms=round((time.monotonic()-state.budget.started_monotonic)*1000),outcome=outcome))
 
 
 def _log_pilot_request_event(
@@ -675,6 +795,8 @@ def _log_pilot_request_event(
     outcome: CompletionOutcome,
     refusal_reason: str | None,
 ) -> None:
+    if state.math_v2_capability is not None or "math_v2" in diagnostics:
+        return
     from mech_chatbot.rag.pilot_evidence import pilot_request_event_fields
 
     fields = pilot_request_event_fields(
@@ -714,6 +836,7 @@ def _failed_rag_event(
     state: _ExecutionState,
 ) -> RagFailed:
     failure_diagnostics = dict(diagnostics or {})
+    state.capture_budget(failure_diagnostics)
     generation_metrics = failure_diagnostics.get("generation_metrics")
     if isinstance(generation_metrics, dict):
         generation_metrics["provider_retries"] = state.budget.provider_retries
@@ -733,6 +856,11 @@ def _terminal_rag_events(
     state: _ExecutionState,
     owner: _ContextBoundRagIterator,
 ) -> Iterator[RagEvent]:
+    if state.math_v2_capability is not None:
+        from mech_chatbot.config.logging import log_trace
+        log_trace("rag_error", state.trace_id, execution_context=current_execution_context(),
+            contract=state.math_v2_capability.contract,
+            code='scope_total_not_completed' if state.math_v2_capability.template == 'sum_reviewed_scope' else 'comparison_not_completed')
     if state.phase != "prepared":
         owner.note_setup_terminal(terminal)
         yield RagPrepared("", (), (), {})
@@ -749,11 +877,15 @@ class DefaultRagExecutor:
         retrieval_adapter: Any | None = None,
         provider_adapter: Any | None = None,
         budget_limits: RequestBudgetLimits | None = None,
+        math_v2_authorizer: Callable | None = None,
+        graph_v2_authorizer: Callable | None = None,
     ) -> None:
         self._execute_pipeline = execute_pipeline
         self._retrieval_adapter = retrieval_adapter
         self._provider_adapter = provider_adapter
         self._budget_limits = budget_limits or RequestBudgetLimits()
+        self._math_v2_authorizer = math_v2_authorizer
+        self._graph_v2_authorizer = graph_v2_authorizer
 
     def run(
         self,
@@ -783,7 +915,7 @@ class DefaultRagExecutor:
         with ExitStack() as stack:
             context_token = _EXECUTION_CONTEXT.set(invocation.mode)
             stack.callback(_EXECUTION_CONTEXT.reset, context_token)
-            if invocation.mode in {"evaluation", "pilot_replay"}:
+            if invocation.mode in {"evaluation", "pilot_replay"} or request.text_query:
                 stack.enter_context(replay_cache_disabled(True))
             if invocation.mode == "pilot_replay":
                 stack.enter_context(redact_sensitive_trace_fields(True))
@@ -817,13 +949,109 @@ class DefaultRagExecutor:
             budget_limits=self._budget_limits,
         )
         budget_token = _REQUEST_BUDGET.set(state.budget)
+        checkpoint_token = _REQUEST_CHECKPOINT.set(state.checkpoint)
         try:
+            query_request = any((request.query_plan, request.bom_rollup, request.text_query,
+                                 request.candidate_selection_context, invocation.task_routing_contract))
+            if invocation.mode not in {'evaluation', 'test'} and query_request:
+                from mech_chatbot.domain.query_plan import QueryBranch
+                from mech_chatbot.governance.query_v2_activation import select_query_capability
+                grant = self._math_v2_authorizer() if self._math_v2_authorizer else None
+                cap = select_query_capability(grant)
+                if invocation.mode != 'production' or grant is None:
+                    raise ValueError('Query v2 requires evaluation context or source authority')
+                if cap is None:
+                    raise PermissionError('Query v2 source authority unavailable')
+                plan = request.query_plan
+                if plan is None and request.candidate_selection_context is None:
+                    plan = QueryPlan((QueryBranch('selection', request.question,
+                        scope_total=request.scope_total, scope_comparison=request.scope_comparison,
+                        graph_query=request.graph_query, bom_rollup=request.bom_rollup,
+                        text_query=request.text_query),))
+                if plan is not None and not cap.permits_plan(plan):
+                    raise PermissionError('Query v2 source authority unavailable')
+                state.query_v2_capability, state.query_v2_authorizer = cap, self._math_v2_authorizer
+                if request.scope_total is not None or request.scope_comparison is not None:
+                    from mech_chatbot.governance.math_templates_activation import select_math_capability
+                    template = 'sum_reviewed_scope' if request.scope_total is not None else 'compare_two_scopes'
+                    state.math_v2_capability = select_math_capability(cap, template)
+                    state.math_v2_authorizer = lambda: select_math_capability(self._math_v2_authorizer(), template)
+                state.graph_v2_capability = cap.graph
+                state.graph_v2_authorizer = lambda: (
+                    current.graph if (current := select_query_capability(self._math_v2_authorizer())) == cap else None)
+                branches = plan.branches if plan is not None else ()
+                calculations = (MAX_RELATIONS if request.bom_rollup or any(b.bom_rollup for b in branches) else 0)
+                calculations += 4 * sum(b.scope_comparison is not None for b in branches)
+                calculations += sum(b.scope_total is not None for b in branches)
+                # Unresolved candidates reserve the existing maximum; resolution can only reduce it.
+                if request.candidate_selection_context is not None:
+                    calculations = MAX_RELATIONS + 8
+                state.budget.limits = replace(state.budget.limits, calculations=calculations,
+                    graph_edges=min(state.budget.limits.graph_edges, MAX_GENERATION_EDGES),
+                    graph_examined_relations=min(state.budget.limits.graph_examined_relations, MAX_RELATIONS),
+                    planners=min(state.budget.limits.planners, 1), provider_retries=0)
+            if request.scope_total is not None or (request.query_plan is not None
+                    and any(branch.scope_total is not None for branch in request.query_plan.branches)):
+                if invocation.mode not in {'evaluation', 'test'} and state.query_v2_capability is None:
+                    from mech_chatbot.governance.scope_total_activation import ScopeTotalCapability, CONTRACT
+                    from mech_chatbot.governance.math_templates_activation import select_math_capability
+                    authorize_total = lambda: select_math_capability(
+                        self._math_v2_authorizer() if self._math_v2_authorizer else None, 'sum_reviewed_scope')
+                    grant = self._math_v2_authorizer() if self._math_v2_authorizer else None
+                    cap = select_math_capability(grant, 'sum_reviewed_scope')
+                    if invocation.mode != 'production' or grant is None:
+                        raise ValueError('Scope total requires evaluation context or source authority')
+                    if (request.scope_total is None or request.query_plan is not None
+                            or not isinstance(cap, ScopeTotalCapability) or cap.contract != CONTRACT
+                            or cap.template != 'sum_reviewed_scope' or cap.context not in {'controlled_demo', 'default_rollout'}
+                            or invocation.task_routing_contract is not None):
+                        raise PermissionError('Scope total source authority unavailable')
+                    state.math_v2_capability, state.math_v2_authorizer = cap, authorize_total
+                    state.budget.limits = replace(state.budget.limits, calculations=1)
+                if (state.query_v2_capability is None and invocation.task_routing_contract
+                        and invocation.task_routing_contract != 'semantic-scope-total-query-routing-v1-draft'):
+                    raise ValueError('Scope total does not use a planner')
+            if invocation.mode not in {'evaluation', 'test'} and any((request.scope_comparison,
+                    request.graph_query, request.bom_rollup, request.query_plan, request.text_query)) and state.query_v2_capability is None:
+                if request.graph_query is not None and not any((request.scope_comparison,request.bom_rollup,request.query_plan,request.text_query)):
+                    from mech_chatbot.governance.graph_v2_activation import GraphV2Capability, CONTRACT
+                    cap = self._graph_v2_authorizer() if self._graph_v2_authorizer else None
+                    if invocation.mode!='production' or cap is None:
+                        raise ValueError('Graph v2 requires evaluation context or source authority')
+                    if (not isinstance(cap,GraphV2Capability)
+                            or cap.contract!=CONTRACT or cap.context not in {'controlled_demo', 'default_rollout'} or not cap.permits_query(request.graph_query)):
+                        raise PermissionError('Graph v2 source authority unavailable')
+                    state.graph_v2_capability,state.graph_v2_authorizer=cap,self._graph_v2_authorizer
+                else:
+                    from mech_chatbot.governance.math_v2_activation import MathV2Capability, CONTRACT
+                    from mech_chatbot.governance.math_templates_activation import select_math_capability
+                    authorize_comparison = lambda: select_math_capability(
+                        self._math_v2_authorizer() if self._math_v2_authorizer else None, 'compare_two_scopes')
+                    grant = self._math_v2_authorizer() if self._math_v2_authorizer else None
+                    cap = select_math_capability(grant, 'compare_two_scopes')
+                    if invocation.mode != 'production' or grant is None:
+                        raise ValueError('V2 contract requires evaluation context or comparison authority')
+                    if (request.scope_comparison is None
+                            or not isinstance(cap, MathV2Capability) or cap.contract != CONTRACT
+                            or cap.template != 'compare_two_scopes' or cap.context not in {'controlled_demo', 'default_rollout'}):
+                        raise PermissionError('Math v2 comparison authority required')
+                    state.math_v2_capability = cap
+                    state.math_v2_authorizer = authorize_comparison
+                    state.budget.limits = replace(state.budget.limits, calculations=4)
+            if invocation.capture_math_observations and not {
+                    role.lower() for role in request.access.roles}.intersection({'reviewer', 'knowledge_approver', 'admin'}):
+                raise PermissionError('Evaluation reviewer required for Math observations')
             execute_pipeline = self._execute_pipeline
             if execute_pipeline is None:
                 from mech_chatbot.rag import pipeline
 
                 execute_pipeline = pipeline.execute_pipeline
             prepared = execute_pipeline(state)
+            if request.text_query:
+                prepared=replace(prepared,diagnostics={**prepared.diagnostics,'text_query_v2':{
+                    'schema':'query-text-v2','accepted':False,'offline_only':state.query_v2_capability is None,
+                    **({'contract':state.query_v2_capability.contract,
+                        'activation_scope':state.query_v2_capability.context} if state.query_v2_capability else {})}})
             stream = prepared.stream
             diagnostics = prepared.diagnostics
             yield from _successful_rag_events(prepared, state, trace_id)
@@ -834,10 +1062,13 @@ class DefaultRagExecutor:
             terminal = _failed_rag_event(exc, diagnostics, state)
             yield from _terminal_rag_events(terminal, state, owner)
         finally:
-            close = getattr(stream, "close", None)
-            if callable(close):
-                close()
-            _REQUEST_BUDGET.reset(budget_token)
+            try:
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    close()
+            finally:
+                _REQUEST_CHECKPOINT.reset(checkpoint_token)
+                _REQUEST_BUDGET.reset(budget_token)
 
 
 __all__ = [
@@ -872,4 +1103,7 @@ __all__ = [
     "current_request_budget",
     "remaining_request_timeout",
     "remaining_request_timeout_int",
+
+
+    "current_request_checkpoint",
 ]

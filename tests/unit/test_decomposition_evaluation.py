@@ -517,3 +517,28 @@ def test_usage_summary_reconciles_priced_stages_without_double_counting_context(
     assert summary["legacy_total_estimated_cost"] == pytest.approx(0.7)
     assert summary["attributed_estimated_cost"] == pytest.approx(0.7)
     assert summary["cost_reconciled"] is True
+
+
+@pytest.mark.parametrize("calls,expected_cost,reconciled", [(1, None, False), (0, 0.0, True)])
+def test_usage_summary_preserves_unknown_generation_cost(calls, expected_cost, reconciled):
+    summary = summarize_decomposition_usage([{
+        "estimated_cost": None if calls else 0.0,
+        "decomposition_usage": {
+            "schema": "rag-decomposition-usage-v1",
+            "final_generation": {"calls": calls, "estimated_cost": None},
+        },
+    }])
+
+    assert summary["final_generation"]["estimated_cost"] == expected_cost
+    assert summary["attributed_estimated_cost"] == expected_cost
+    assert summary["legacy_total_estimated_cost"] == expected_cost
+    assert summary["cost_reconciled"] is reconciled
+
+
+@pytest.mark.parametrize("message", [
+    "Mình chưa tìm thấy đủ bằng chứng trong tài liệu được phép xem để trả lời phần này.",
+    "I could not find enough evidence in the documents you can access to answer this part.",
+])
+def test_current_refusal_template_is_a_terminal_notice(message):
+    from mech_chatbot.evaluation.decomposition import TERMINAL_POLICY_NOTICE_PATTERNS
+    assert any(pattern.fullmatch(message) for pattern in TERMINAL_POLICY_NOTICE_PATTERNS)

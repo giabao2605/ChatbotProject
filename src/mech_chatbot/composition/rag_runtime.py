@@ -198,6 +198,8 @@ class RagRuntime:
     provider: RagProviderAdapter
     semaphore: Any = field(repr=False)
     thread_pool: Any = field(repr=False)
+    math_v2_authorizer: Any = field(default=None, repr=False)
+    graph_v2_authorizer: Any = field(default=None, repr=False)
 
     def close(self) -> None:
         """Release resources owned by this process runtime."""
@@ -286,14 +288,15 @@ def _runtime_identity(
 
 def _build_external_stack(settings, qdrant_builder, llm_builder, vision_builder):
     from mech_chatbot.adapters.qdrant_runtime import build_qdrant_runtime
-    from mech_chatbot.config.settings import LlmSettings, QdrantSettings, VisionSettings
+    from mech_chatbot.config.settings import ExternalAiSettings, LlmSettings, QdrantSettings, VisionSettings
     from mech_chatbot.llm.llm_client import build_llm_adapter
     from mech_chatbot.llm.vision_client import build_vision_model
 
     vector_runtime = (qdrant_builder or build_qdrant_runtime)(
         QdrantSettings.from_settings(settings)
     )
-    provider = (llm_builder or build_llm_adapter)(
+    provider = (llm_builder or partial(build_llm_adapter,
+        external_ai_settings=ExternalAiSettings.from_settings(settings)))(
         LlmSettings.from_settings(settings)
     )
     vision_model = (vision_builder or build_vision_model)(
@@ -413,12 +416,16 @@ def _pipeline_environment(settings):
     return MappingProxyType(
         {
             name: serialize(getattr(settings, name))
-            for name in (*FEATURE_FLAGS, *VERSION_FIELDS)
+            for name in (*FEATURE_FLAGS, *VERSION_FIELDS, "GPT_MODEL_NAME", "LLM_BASE_URL",
+                         "GPT_TEMPERATURE", "GPT_MAX_OUTPUT_TOKENS")
         }
     )
 
 
 def _retrieval_feature_settings(settings, process):
+    from mech_chatbot.governance.math_v2_activation import math_v2_bundle_selected
+    from mech_chatbot.governance.graph_v2_activation import graph_v2_bundle_selected
+    from pathlib import Path
     return {
         "strict_answer_mode": settings.STRICT_ANSWER_MODE,
         "strict_realtime_streaming": settings.STRICT_REALTIME_STREAMING,
@@ -428,11 +435,13 @@ def _retrieval_feature_settings(settings, process):
         "strict_site_filter": process.strict_site_filter,
         "evaluation_force_ambiguous": process.evaluation_force_ambiguous,
         "crag_enabled": settings.RAG_CRAG_ENABLED,
-        "graph_retrieval_enabled": settings.RAG_GRAPH_RETRIEVAL_ENABLED,
+        "graph_retrieval_enabled": settings.RAG_GRAPH_RETRIEVAL_ENABLED and not graph_v2_bundle_selected(
+            {'RAG_ACTIVATION_BUNDLE_PATH':settings.RAG_ACTIVATION_BUNDLE_PATH},root=Path(__file__).resolve().parents[3]),
         "community_summaries_enabled": settings.RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED,
         "claim_repair_enabled": settings.RAG_CLAIM_REPAIR_ENABLED,
         "evidence_verifier_enabled": process.evidence_verifier_enabled,
-        "grounded_math_enabled": settings.RAG_GROUNDED_MATH_ENABLED,
+        "grounded_math_enabled": settings.RAG_GROUNDED_MATH_ENABLED and not math_v2_bundle_selected(
+            {'RAG_ACTIVATION_BUNDLE_PATH':settings.RAG_ACTIVATION_BUNDLE_PATH}, root=Path(__file__).resolve().parents[3]),
         "auto_source_cards": process.auto_source_cards,
         "history_summary_enabled": process.history_summary_enabled,
         "conversation_state_enabled": process.conversation_state_enabled,
@@ -531,6 +540,7 @@ def _build_default_adapters(
     jina_runtime_builder: Callable[..., Any] | None = None,
 ) -> tuple[RagRetrievalRuntime, RagProviderAdapter]:
     """Construct external adapters only when the composition root is called."""
+    from mech_chatbot.rag.interaction_router import SemanticRouter
     process = RagProcessSettings.from_settings(settings)
     qdrant_timeout_seconds = settings.QDRANT_SEARCH_TIMEOUT_SECONDS
     if qdrant_timeout_seconds <= 0:
@@ -689,6 +699,10 @@ def build_rag_runtime(
             thread_name_prefix="rag",
         )
     )
+    from mech_chatbot.governance.math_v2_activation import math_v2_authorizer_for_settings
+    math_authorizer = math_v2_authorizer_for_settings(existing_settings) if isinstance(existing_settings, Settings) else None
+    from mech_chatbot.governance.graph_v2_activation import graph_v2_authorizer_for_settings
+    graph_authorizer = graph_v2_authorizer_for_settings(existing_settings) if isinstance(existing_settings,Settings) else None
     return RagRuntime(
         settings=existing_settings,
         process_settings=process_settings,
@@ -704,6 +718,8 @@ def build_rag_runtime(
             ),
         ),
         executor=DefaultRagExecutor(
+            math_v2_authorizer=math_authorizer,
+            graph_v2_authorizer=graph_authorizer,
             execute_pipeline=resolved_execute,
             retrieval_adapter=resolved_retrieval,
             provider_adapter=resolved_provider,
@@ -716,6 +732,8 @@ def build_rag_runtime(
         provider=resolved_provider,
         semaphore=semaphore_factory(process_settings.max_concurrent_requests),
         thread_pool=pool_builder(process_settings.max_concurrent_requests),
+        math_v2_authorizer=math_authorizer,
+        graph_v2_authorizer=graph_authorizer,
     )
 
 

@@ -9,6 +9,7 @@ existing monkeypatch points.
 from __future__ import annotations
 
 import json
+from mech_chatbot.domain.graph_query import graph_query_context, bom_rollup_context
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
@@ -79,6 +80,18 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+
+def _query_plan_payload(plan):
+    branches=[]
+    for branch in plan.branches:
+        action=({'scope_total':{'scope_id':branch.scope_total}} if branch.scope_total is not None else
+                {'graph_query':graph_query_context(branch.graph_query)} if branch.graph_query else
+                {'bom_rollup':bom_rollup_context(branch.bom_rollup)} if branch.bom_rollup else
+                {'scope_comparison':{'scope_a':branch.scope_comparison[0],'scope_b':branch.scope_comparison[1]}})
+        branches.append({'branch_id':branch.branch_id,'question':branch.question,'depends_on':branch.depends_on,**action})
+    return {'branches':branches}
+
+
 def _default_payload(request: RagStreamRequest) -> dict[str, Any]:
     """Build the RAG request body from the application command.
 
@@ -101,6 +114,13 @@ def _default_payload(request: RagStreamRequest) -> dict[str, Any]:
             if isinstance(command.conversation_context, Mapping)
             else command.conversation_context
         ),
+        **({'scope_total': {'scope_id':command.scope_total}} if command.scope_total is not None else {}),
+        **({'scope_comparison': {'scope_a':command.scope_comparison[0], 'scope_b':command.scope_comparison[1]}}
+           if command.scope_comparison is not None else {}),
+        **({'graph_query':graph_query_context(command.graph_query)} if command.graph_query is not None else {}),
+        **({'bom_rollup':bom_rollup_context(command.bom_rollup)} if command.bom_rollup is not None else {}),
+        **({'query_plan':_query_plan_payload(command.query_plan)} if command.query_plan is not None else {}),
+        **({'text_query':True} if command.text_query else {}),
     }
 
 
@@ -246,20 +266,26 @@ class RepositoryChatStore:
         )
         if not chat_id:
             return None
-        self._save_answer_evidence(chat_id, list(record.evidence))
+        structured = any('locator' in item for item in record.evidence)
+        metadata = record.advanced_rag if record.advanced_rag and (
+            any(key in record.advanced_rag for key in ('query','text_query'))
+            or isinstance(record.advanced_rag.get('math'), Mapping)
+            and record.advanced_rag['math'].get('schema') == 'grounded-calculation-scope-total-v1'
+        ) else None
+        options = {'advanced_rag':metadata,'citation_cards':list(record.citations)} if metadata is not None else {}
+        if self._save_answer_evidence(chat_id, list(record.evidence), **options) is False and (structured or metadata is not None):
+            raise RuntimeError('Structured chat evidence was not persisted')
         if record.citations:
             persisted_sources = [
                 {
-                    "doc_id": citation.get("doc_id"),
+                    **dict(citation),
                     "file_goc": citation.get("file_name"),
-                    "version_no": citation.get("version_no"),
                     "trang": citation.get("page_no"),
-                    "score": citation.get("score"),
-                    "source_id": citation.get("source_id"),
                 }
                 for citation in record.citations
             ]
-            self._save_answer_sources(chat_id, persisted_sources)
+            if self._save_answer_sources(chat_id, persisted_sources) is False and structured:
+                raise RuntimeError('Structured chat sources were not persisted')
         return chat_id
 
 

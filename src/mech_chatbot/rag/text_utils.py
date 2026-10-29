@@ -6,6 +6,18 @@ remove_accents() WITHOUT importing the heavy PDF/OCR toolchain.
 """
 
 import unicodedata
+from threading import Lock
+
+
+_WORD_TOKENIZE_LOCK = Lock()
+
+
+def tokenize_vietnamese_text(text: str) -> str:
+    # Underthesea publishes its model before loading completes; native imports must stay lazy.
+    with _WORD_TOKENIZE_LOCK:
+        from underthesea import word_tokenize
+
+        return word_tokenize(text, format="text")
 
 
 def remove_accents(text: str) -> str:

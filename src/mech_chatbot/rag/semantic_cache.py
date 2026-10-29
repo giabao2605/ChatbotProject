@@ -8,6 +8,7 @@ import json
 import math
 import hashlib
 import re
+from pathlib import Path
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -16,6 +17,8 @@ from mech_chatbot.rag.entity_resolver import has_explicit_code
 
 
 _REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
+_ANSWER_CONTRACT = "grounded-answer-v8-source-scope"
+_PROMPT_SHA256 = hashlib.sha256(Path(__file__).with_name("prompt.py").read_bytes()).hexdigest()
 _FILE_REFERENCE = re.compile(
     rf"(?<=[^\s\"'“”‘’])(?:{'|'.join(sorted(map(re.escape, SUPPORTED_LEARNING_EXTENSIONS), key=len, reverse=True))})(?!\w)",
     re.IGNORECASE,
@@ -25,6 +28,20 @@ _FILE_REFERENCE = re.compile(
 def _document_specific(question):
     text = str(question or "")
     return bool(_FILE_REFERENCE.search(text) or has_explicit_code(text))
+
+
+def _requires_exact_question(question):
+    from mech_chatbot.rag.text_utils import remove_accents
+
+    text = remove_accents(str(question or "").lower()).replace("’", "'")
+    # shortcut: lexical constraints are conservative; expand only for observed cache collisions.
+    return bool(re.search(
+        r"\d|\b(?:khong|chua|chang|chua\s*tung|thang|quy|nam|ngay|tuan|hom|"
+        r"phien\s*ban|hien\s*tai|hien\s*nay|moi\s*nhat|ky|truoc|sau|not|no|never|without|cannot|can't|"
+        r"isn't|aren't|don't|doesn't|didn't|wasn't|weren't|won't|hasn't|haven't|"
+        r"version|revision|today|yesterday|tomorrow|current|previous|next|"
+        r"before|after|latest|last|until|period|date|month|quarter|year|week|day)\b", text,
+    ))
 
 
 @contextmanager
@@ -105,15 +122,23 @@ def scope_signature(
     user_roles,
     *,
     pipeline_environment=None,
+    response_language="vi",
 ):
     roles = sorted([str(r).lower() for r in (user_roles or [])])
-    if "admin" in roles:
-        return "admin|pipe=" + pipeline_namespace(pipeline_environment)
-    deps = sorted(set([str(d) for d in (allowed_departments or []) if d] +
-                      ([str(user_department)] if user_department else [])))
+    deps = sorted(set(str(d).strip() for d in (allowed_departments or []) if str(d).strip()) | {"CHUNG"})
     sites = sorted(set([str(s) for s in (allowed_sites or []) if s]))
     lvl = str(max_security_level or "public")
-    return "d=" + ",".join(deps) + "|lvl=" + lvl + "|s=" + ",".join(sites) + "|pipe=" + pipeline_namespace(pipeline_environment)
+    environment = pipeline_environment or {}
+    identity = {
+        "access": "admin" if "admin" in roles else [deps, lvl, sites, bool(roles)],
+        "language": str(response_language or "vi").strip().lower(),
+        "contract": _ANSWER_CONTRACT,
+        "prompt": _PROMPT_SHA256,
+        "provider": {name: str(environment.get(name, "")) for name in
+            ("GPT_MODEL_NAME", "LLM_BASE_URL", "GPT_TEMPERATURE", "GPT_MAX_OUTPUT_TOKENS")},
+    }
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
+    return "scope-v2|" + digest + "|pipe=" + pipeline_namespace(environment)
 
 
 def normalize_question(question):
@@ -135,12 +160,18 @@ def _snapshot(value):
     return [item for item in decoded if isinstance(item, dict)]
 
 
-def _validated_cache_payload(best):
+def _validated_cache_payload(best, actor):
     """Return cache metadata only if its complete access basis remains valid."""
     from mech_chatbot.db.repositories.semantic_cache import (
         sc_delete,
         sc_docs_all_current,
     )
+    from mech_chatbot.adapters.protected_files import SqlProtectedFileStore
+    from mech_chatbot.application.protected_files import evaluate_document_access
+    from mech_chatbot.config.repository_runtime import current_repository_engine
+
+    if actor is None or not actor.roles:
+        return None
 
     try:
         doc_ids = json.loads(best.get("source_doc_ids") or "[]")
@@ -162,10 +193,33 @@ def _validated_cache_payload(best):
         except Exception:
             pass
         return None
+    try:
+        source_ids = {int(doc_id) for doc_id in doc_ids}
+        from mech_chatbot.db.repositories.doc_metadata import get_common_metadata_for_rag
+        from mech_chatbot.rag.demo_sources import is_demo_source
+        current_metadata = get_common_metadata_for_rag(source_ids)
+        if any(doc_id not in current_metadata or is_demo_source(current_metadata[doc_id])
+               for doc_id in source_ids) or any(is_demo_source(item) for item in evidence):
+            return None
+        if source_ids != {int(item["doc_id"]) for item in evidence}:
+            return None
+        if not {int(item["doc_id"]) for item in citations}.issubset(source_ids):
+            return None
+        store = SqlProtectedFileStore(engine_provider=current_repository_engine)
+        for doc_id in source_ids:
+            record = store.load_document(doc_id)
+            if not evaluate_document_access(actor, record, strict_site_filter=True).allowed:
+                return None
+            for item in evidence:
+                if int(item["doc_id"]) == doc_id and item.get("version_no") is not None:
+                    if str(item["version_no"]) != str(record.version_no):
+                        return None
+    except Exception:
+        return None
     return doc_ids, citations, evidence
 
 
-def lookup_exact(question, scope_sig, *, ttl=24.0):
+def lookup_exact(question, scope_sig, *, ttl=24.0, actor=None):
     """Indexed fast path that avoids embeddings and interaction routing."""
     if _document_specific(question):
         return None
@@ -185,7 +239,7 @@ def lookup_exact(question, scope_sig, *, ttl=24.0):
     )
     if not best:
         return None
-    validated = _validated_cache_payload(best)
+    validated = _validated_cache_payload(best, actor)
     if not validated:
         sc_record_lookup(False, 0.0)
         return None
@@ -220,8 +274,8 @@ def select_best(candidates, embedding, threshold):
     return None, best_s
 
 
-def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93):
-    if _document_specific(question):
+def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93, actor=None):
+    if _document_specific(question) or _requires_exact_question(question):
         return None
     from mech_chatbot.db.repositories.semantic_cache import (
         sc_get_candidates, sc_docs_all_current, sc_record_lookup, sc_record_hit, sc_delete,
@@ -234,7 +288,8 @@ def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93):
     for c in cands:
         try:
             candidate_question = str(c.get("question") or "").strip()
-            if not candidate_question or _document_specific(candidate_question):
+            if (not candidate_question or _document_specific(candidate_question)
+                    or _requires_exact_question(candidate_question)):
                 continue
             emb = c.get("embedding")
             c["embedding"] = json.loads(emb) if isinstance(emb, str) else emb
@@ -250,7 +305,7 @@ def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93):
             pass
         return None
     try:
-        validated = _validated_cache_payload(best)
+        validated = _validated_cache_payload(best, actor)
     except Exception:
         # Cache validation is a security boundary.  A recheck error must force
         # normal retrieval instead of returning an unverifiable answer.
@@ -285,13 +340,14 @@ def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93):
 
 
 _REFUSAL_MARKERS = ["khong ghi thong tin", "khong tu uoc luong", "tai lieu hien tai",
-                    "khong du", "insufficient", "do not contain", "cannot answer"]
+                    "khong du", "insufficient", "do not contain", "cannot answer",
+                    "chua tim thay du bang chung", "could not find enough evidence"]
 
 
 def _looks_like_refusal(answer):
     try:
         from unicodedata import normalize, category
-        a = "".join(ch for ch in normalize("NFD", str(answer or "").lower()) if category(ch) != "Mn")
+        a = "".join(ch for ch in normalize("NFD", str(answer or "").lower()) if category(ch) != "Mn").replace("đ", "d")
         return any(m in a for m in _REFUSAL_MARKERS)
     except Exception:
         return False
@@ -315,7 +371,7 @@ def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, sco
             answer=answer, ref_text=ref_text or "",
             ref_images=json.dumps(ref_images or []),
             source_doc_ids=json.dumps([int(x) for x in (source_doc_ids or []) if x is not None]),
-            scope_sig=scope_sig, model=model, est_cost=float(est_cost or 0.0),
+            scope_sig=scope_sig, model=model, est_cost=float(est_cost) if est_cost is not None else None,
             question_hash=question_hash(question),
             citation_snapshot=json.dumps(citation_snapshot, ensure_ascii=False),
             evidence_snapshot=json.dumps(evidence_snapshot, ensure_ascii=False),
@@ -327,7 +383,7 @@ def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, sco
 def teeing_store_stream(inner, question, embedding, scope_sig, ref_text, ref_images,
                         source_doc_ids, model, input_char_len=0,
                         citation_snapshot=None, evidence_snapshot=None,
-                        cache_enabled=True):
+                        cache_enabled=True, reported_cost=None):
     chunks = []
     completed = False
     try:
@@ -339,9 +395,8 @@ def teeing_store_stream(inner, question, embedding, scope_sig, ref_text, ref_ima
         if completed:
             try:
                 answer = "".join(str(c) for c in chunks)
-                out_tok = len(answer) // 4
-                in_tok = int(input_char_len) // 4
-                est = (in_tok * 2.5 + out_tok * 15) / 1000000.0
+                # Unknown savings are not manufactured from a model-independent tariff.
+                est = reported_cost() if callable(reported_cost) else reported_cost
                 store(
                     question,
                     embedding,

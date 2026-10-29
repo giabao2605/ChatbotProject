@@ -4,7 +4,9 @@
 
 Accepted for the offline control plane; amended 2026-07-20 for cumulative
 activation profiles, Community Summaries, and the CRAG pre-pilot authorization.
-Live evaluation remains blocked until its prerequisite decisions and immutable
+Amended 2026-10-05: new rollout uses selective feature sets as specified in
+`../advanced-rag-value-first-rollout-plan.md`; the cumulative matrix below is
+the historical v1 contract. Live evaluation remains blocked until its prerequisite decisions and immutable
 evidence are complete.
 
 ## Context
@@ -15,7 +17,24 @@ controls. Enabling more than one path can still create cross-feature failures
 in cache isolation, shared correction budget, governance filtering, streaming,
 latency and cost.
 
-## Decision
+## Decision for new rollout
+
+- Enable only the individually accepted feature set, bound to the current
+  commit, source snapshot, ledger and signed selective bundle. Math, Query and
+  Graph do not acquire artificial cumulative prerequisites.
+- Keep CRAG and Claim Repair together. Community still depends on accepted
+  Graph and its own evidence; Late Interaction remains disabled.
+- The extended Graph v2 and Math v2 contracts are separate from v1 evidence.
+  Graph v2 bounds the entire request to 8 assembly levels, 500 examined
+  relations and 50 generation edges. Math comparison records four real steps.
+- Evaluate the three singles, three pairs and triple at concurrency 1 and 5,
+  with matched all-off baselines. Preserve each existing quality, latency and
+  cost gate and require the extended contract approval before a new live window.
+- The current department scope is fourteen confirmed business departments,
+  each with at least 75 real reviewed questions. Local validators and fixtures
+  are offline preparation and do not write human acceptance.
+
+## Historical v1 decision
 
 - Maintain a versioned matrix containing the five cumulative candidate
   profiles: CRAG + Claim Repair, then Grounded Math, Query Decomposition,

@@ -17,6 +17,20 @@ EVALUATOR_MODELS = {
 }
 
 
+def validate_frozen_actor(actor):
+    """Validate frozen evaluation permissions without resolving or granting them."""
+    fields = {'user_id','username','user_department','user_roles','allowed_departments','allowed_sites','max_security_level'}
+    if (not isinstance(actor, dict) or set(actor) != fields
+            or type(actor['user_id']) is not int or actor['user_id'] <= 0
+            or any(not isinstance(actor[f], str) or not actor[f].strip() or len(actor[f]) > 255
+                   for f in ('username','user_department','max_security_level'))
+            or actor['max_security_level'] not in ('public','internal','confidential')
+            or any(not isinstance(actor[f], list) or len(actor[f]) > 100
+                   or not all(isinstance(v,str) and v.strip() and len(v) <= 255 for v in actor[f])
+                   or len(actor[f]) != len(set(actor[f])) for f in ('user_roles','allowed_departments','allowed_sites'))):
+        raise ValueError('A frozen typed actor is required')
+
+
 def is_valid_relation_contract(value: object) -> bool:
     """Return whether a graph relation has the complete canonical identity."""
     return isinstance(value, dict) and all(

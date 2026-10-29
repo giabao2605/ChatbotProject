@@ -3,6 +3,7 @@
 from .chat import router as chat_router
 from .documents import files_router, router as documents_router
 from .operations import auth_router, router as operations_router
+from .rag_evidence import router as rag_evidence_router
 
 __all__ = [
     "auth_router",
@@ -10,4 +11,5 @@ __all__ = [
     "documents_router",
     "files_router",
     "operations_router",
+    "rag_evidence_router",
 ]

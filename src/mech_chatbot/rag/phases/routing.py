@@ -179,6 +179,7 @@ def _lookup_semantic_cache(
                         "semantic_cache_environment",
                         None,
                     ),
+                    response_language=prepared.response_language,
                 )
             hit = semantic_cache.lookup(
                 prepared.user_question,
@@ -190,6 +191,7 @@ def _lookup_semantic_cache(
                     "semantic_cache_sim_threshold",
                     0.93,
                 ),
+                actor=state.request.access,
             )
             if hit:
                 terminal = _semantic_cache_terminal(prepared, hit, lookup_started)
@@ -249,13 +251,13 @@ def _needs_version_clarification(rewrite: _RewriteDecision) -> bool:
     )
 
 
-def _version_policy(prepared: PreparedRequest):
+def _version_policy(prepared: PreparedRequest, reason="missing_compare_versions"):
     return decide_answer_policy(
         prepared.user_question,
         PolicyEvidence(
             decision=EvidenceDecision(
                 EvidenceState.AMBIGUOUS,
-                reason="missing_compare_versions",
+                reason=reason,
                 stage="intent",
                 telemetry_status="heuristic_block",
             ),
@@ -266,17 +268,21 @@ def _version_policy(prepared: PreparedRequest):
     )
 
 
-def _missing_version_terminal(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
+def _missing_version_terminal(prepared: PreparedRequest, state: Any, *, missing_context=False) -> RoutingOutcome:
+    reason = "missing_context" if missing_context else "missing_compare_versions"
     clarification_text = (
-        "Bạn muốn so sánh tài liệu này với phiên bản nào? (Ví dụ: v1 và v2, "
+        "Bạn muốn so sánh tài liệu nào và với phiên bản nào? (Ví dụ: v1 và v2, "
         "hoặc bản đang lưu hành và bản bị lưu trữ gần nhất). Vui lòng chỉ "
         "định rõ phiên bản để mình đối chiếu số liệu chính xác nhé."
     )
+    if missing_context:
+        clarification_text = ("Which process, document or topic are you asking about?" if prepared.response_language == "en"
+                              else "Bạn muốn hỏi quy trình, tài liệu hoặc nội dung nào? Vui lòng nói rõ chủ đề để mình tra cứu.")
 
     def ask_version_stream():
         yield _t_rag(clarification_text, prepared.response_language)
 
-    policy = _version_policy(prepared)
+    policy = _version_policy(prepared, reason)
     log_trace(
         "evidence_gate",
         prepared.trace_id,
@@ -293,7 +299,7 @@ def _missing_version_terminal(prepared: PreparedRequest, state: Any) -> RoutingO
         prepared.trace_id,
         final_latency_ms=int((time.time() - prepared.started_at) * 1000),
         refusal=True,
-        refusal_reason="missing_compare_versions",
+        refusal_reason=reason,
     )
     debug = make_debug_info([])
     debug.update(
@@ -308,7 +314,7 @@ def _missing_version_terminal(prepared: PreparedRequest, state: Any) -> RoutingO
     state.refuse("clarification_required")
     return RoutingOutcome(
         terminal=(ask_version_stream(), "", (), prepared.current_part_ids, debug),
-        reason_code="missing_compare_versions",
+        reason_code=reason,
     )
 
 
@@ -415,6 +421,8 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
     if cache.terminal is not None:
         return cache.terminal
     rewrite = _rewrite_request(prepared, state)
+    if rewrite.intent_data.get("clarification_required"):
+        return _missing_version_terminal(prepared, state, missing_context=True)
     if _needs_version_clarification(rewrite):
         return _missing_version_terminal(prepared, state)
     if rewrite.intent_data.get("is_chitchat"):

@@ -120,6 +120,9 @@ def _dataframe_to_text(df, title=None):
 
 def _read_table_file(file_path, ext):
     _require_package(pd, "bang tinh/CSV")
+    if ext in {'.xlsx', '.xlsm'}:
+        from mech_chatbot.ingestion.pdf.structured import validate_workbook_archive
+        validate_workbook_archive(file_path)
     if ext in {".csv", ".tsv"}:
         sep = "\t" if ext == ".tsv" else ","
         last_error = None

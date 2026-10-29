@@ -8,6 +8,8 @@ from mech_chatbot.rag.answer_policy import decide_terminal_policy
 
 
 def serialize_debug_documents(docs=None) -> list[dict[str, Any]]:
+    from mech_chatbot.rag.execution import current_execution_context
+    text_limit = None if current_execution_context() == "evaluation" else 800
     return [
         {
             "file_goc": doc.metadata.get("file_goc"),
@@ -27,6 +29,7 @@ def serialize_debug_documents(docs=None) -> list[dict[str, Any]]:
             "vision_used": bool(doc.metadata.get("vision_used", False)),
             "score": doc.metadata.get("relevance_score"),
             "security_level": doc.metadata.get("security_level"),
+            "external_processing_policy": doc.metadata.get("external_processing_policy"),
             "graph_edge_id": doc.metadata.get("graph_edge_id"),
             "graph_confidence": doc.metadata.get("graph_confidence"),
             "graph_relation_type": doc.metadata.get("graph_relation_type"),
@@ -36,7 +39,7 @@ def serialize_debug_documents(docs=None) -> list[dict[str, Any]]:
                 doc.metadata.get("noi_dung_goc")
                 or getattr(doc, "page_content", "")
                 or ""
-            )[:800],
+            )[:text_limit],
         }
         for doc in docs or []
     ]

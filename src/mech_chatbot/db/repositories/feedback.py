@@ -5,7 +5,7 @@ KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repo
 import hashlib
 import unicodedata
 from datetime import datetime
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from ..engine import _ensure_engine, engine
 from mech_chatbot.config.logging import logger
 from ._shared import _cap_len
@@ -203,8 +203,17 @@ def upsert_golden_answer(question, answer, source_doc_id=None, department=None, 
         return None
 
 
-def find_golden_answer(question, department=None):
-    """P3-4: Tra ve Golden Answer dang active khop cau hoi (theo hash cau hoi da chuan hoa)."""
+def find_golden_answer(question, *, admitted_doc_ids=()):
+    """Read an active approved answer only from an admitted source document."""
+    try:
+        admitted_doc_ids = tuple(admitted_doc_ids)
+        if any(type(value) not in (int, str) for value in admitted_doc_ids):
+            return None
+        doc_ids = sorted({int(value) for value in admitted_doc_ids})
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not str(question or "").strip() or not doc_ids or doc_ids[0] <= 0:
+        return None
     _ensure_engine()
     qhash = _question_hash(question)
     if not qhash:
@@ -213,9 +222,10 @@ def find_golden_answer(question, department=None):
         with engine.connect() as conn:
             row = conn.execute(text(
                 "SELECT TOP 1 GoldenID, QuestionText, GoldenAnswer, SourceDocID, Department, Site "
-                "FROM GoldenAnswer WHERE QuestionHash = :h AND IsActive = 1 ORDER BY CreatedAt DESC"
-            ), {"h": qhash}).fetchone()
-        if not row:
+                "FROM GoldenAnswer WHERE QuestionHash = :h AND IsActive = 1 "
+                "AND SourceDocID IN :doc_ids ORDER BY CreatedAt DESC"
+            ).bindparams(bindparam("doc_ids", expanding=True)), {"h": qhash, "doc_ids": doc_ids}).fetchone()
+        if not row or row[3] not in doc_ids:
             return None
         return {"golden_id": row[0], "question": row[1], "answer": row[2],
                 "source_doc_id": row[3], "department": row[4], "site": row[5]}

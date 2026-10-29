@@ -231,6 +231,9 @@ def _formal_budget_maxima(sources: object, base: Path, commit: str):
 
 
 def _window_valid(window: dict, now: datetime, base: Path) -> bool:
+    comparison = window.get("schema") == "math-comparison-pilot-window-v2"
+    if comparison:
+        from scripts.ops import math_v2_pilot_contract as v2
     try:
         started = _timestamp(window["started_at"])
         minimum_until = _timestamp(window["minimum_runtime_until"])
@@ -239,7 +242,7 @@ def _window_valid(window: dict, now: datetime, base: Path) -> bool:
         main = runtime["main"]
         budget = window["pilot_budget"]
         sources = window["formal_budget_sources"]
-        provider_smoke = window["provider_smoke"]
+        provider_smoke = window.get("provider_smoke")
         latency_multiplier = _decimal(sources["latency_multiplier"])
         cost_multiplier = _decimal(sources["cost_multiplier"])
         max_latency = _decimal(budget["max_final_latency_ms"])
@@ -248,34 +251,39 @@ def _window_valid(window: dict, now: datetime, base: Path) -> bool:
         return False
     if not _runtime_valid(pilot, pilot=True) or not _runtime_valid(main, pilot=False):
         return False
-    maxima = _formal_budget_maxima(sources, base, str(pilot.get("git_sha") or ""))
+    commit = str(pilot.get("git_sha") or "")
+    maxima = (v2.formal_budget_maxima(sources, base, commit, pilot["snapshot_fingerprint"])
+        if comparison else _formal_budget_maxima(sources, base, commit))
     if maxima is None:
         return False
     baseline_latency, baseline_cost = maxima
     return all(
         (
-            window.get("schema") == "math-lan-pilot-window-v1",
-            window.get("pilot_contract_version") == PILOT_CONTRACT_VERSION,
-            minimum_until - started >= PILOT_MINIMUM_DURATION,
+            comparison or window.get("schema") == "math-lan-pilot-window-v1",
+            (window.get("contract") == v2.CONTRACT
+                and window.get("template") == "compare_two_scopes")
+            if comparison else window.get("pilot_contract_version") == PILOT_CONTRACT_VERSION,
+            minimum_until - started >= (timedelta(days=7) if comparison else PILOT_MINIMUM_DURATION),
             now >= minimum_until,
-            type(window.get("minimum_eligible_requests")) is int,
-            window.get("minimum_eligible_requests") == 100,
+            type(window.get("minimum_eligible_requests")) is int
+            and (window["minimum_eligible_requests"] >= 100 if comparison
+                else window["minimum_eligible_requests"] == 100),
             window.get("required_automated_checks") == list(CHECKS),
             pilot["git_sha"] == main["git_sha"] == sources.get("source_commit"),
             type(budget.get("max_calculations")) is int,
-            budget.get("max_calculations") == 1,
+            budget.get("max_calculations") == (4 if comparison else 1),
             type(budget.get("max_provider_retries")) is int,
             budget.get("max_provider_retries") == 0,
             type(budget.get("max_final_generations")) is int,
-            budget.get("max_final_generations") == 1,
+            budget.get("max_final_generations") == (0 if comparison else 1),
             latency_multiplier == Decimal("1.25"),
             cost_multiplier == Decimal("1.5"),
             max_latency == baseline_latency * latency_multiplier,
             max_cost == baseline_cost * cost_multiplier,
-            isinstance(provider_smoke, dict),
-            isinstance(provider_smoke.get("path"), str)
-            and bool(provider_smoke.get("path").strip()),
-            _is_sha256(provider_smoke.get("sha256")),
+            comparison or (isinstance(provider_smoke, dict)
+                and isinstance(provider_smoke.get("path"), str)
+                and bool(provider_smoke["path"].strip())
+                and _is_sha256(provider_smoke.get("sha256"))),
         )
     )
 
@@ -283,6 +291,9 @@ def _window_valid(window: dict, now: datetime, base: Path) -> bool:
 def _state_valid(
     state: dict, window: dict, window_sha256: str, base: Path
 ) -> bool:
+    comparison = window.get("schema") == "math-comparison-pilot-window-v2"
+    if comparison:
+        from scripts.ops import math_v2_pilot_contract as v2
     bundle = _material(state.get("activation_bundle"), base)
     restore = _material(state.get("restore_receipt"), base)
     expected = window.get("expected_runtime")
@@ -297,7 +308,8 @@ def _state_valid(
             state.get("window_sha256") == window_sha256,
             state.get("expected_runtime") == expected,
             bundle[1] == pilot.get("activation_bundle_sha256"),
-            bundle_value.get("schema") == "rag-activation-bundle-v1",
+            bundle_value.get("schema") == ("rag-activation-bundle-v2" if comparison else "rag-activation-bundle-v1"),
+            not comparison or v2.bundle_valid(bundle_value, window, base, bundle[1]),
             bundle_value.get("source_commit") == pilot.get("git_sha"),
             bundle_value.get("activation_profile") == "selective",
             _math_only_flags(bundle_value.get("feature_flags")),
@@ -415,9 +427,11 @@ def _read_trace(path: Path) -> tuple[list[dict], bytes, bool]:
 
 
 def _provider_smoke_status(
-    path: Path, window: dict, base: Path
+    path: Path | None, window: dict, base: Path
 ) -> tuple[bool, str | None, str | None]:
     """Validate a predeclared smoke and classify provider outage separately."""
+    if path is None:
+        return False, "missing_provider_smoke", None
     try:
         artifact, raw = _load_json(path)
         digest = _sha256(raw)
@@ -512,6 +526,9 @@ def _provider_failure(events: list[dict], evidence: dict) -> bool:
 
 
 def _trace_checks(rows: list[dict], window: dict, now: datetime, parse_error: bool):
+    if window.get("schema") == "math-comparison-pilot-window-v2":
+        from scripts.ops.math_v2_pilot_contract import trace_checks
+        return trace_checks(rows, window, now, parse_error)
     started = _timestamp(window["started_at"])
     events_by_trace: dict[str, list[dict]] = defaultdict(list)
     candidate_ids = set()
@@ -662,7 +679,7 @@ def build_artifact(
     state_path: Path,
     health_path: Path,
     trace_path: Path,
-    provider_smoke_path: Path,
+    provider_smoke_path: Path | None,
     *,
     now: datetime | None = None,
 ) -> dict:
@@ -671,9 +688,12 @@ def build_artifact(
     state, state_raw = _load_json(state_path)
     health, health_raw = _load_json(health_path)
     rows, trace_raw, parse_error = _read_trace(trace_path)
-    provider_smoke_valid, provider_smoke_reason, provider_smoke_sha256 = _provider_smoke_status(
-        provider_smoke_path, window, window_path.parent
-    )
+    if window.get("schema") == "math-comparison-pilot-window-v2":
+        provider_smoke_valid, provider_smoke_reason, provider_smoke_sha256 = (
+            True, "not_applicable_no_provider_calls", None)
+    else:
+        provider_smoke_valid, provider_smoke_reason, provider_smoke_sha256 = _provider_smoke_status(
+            provider_smoke_path, window, window_path.parent)
     window_sha256 = _sha256(window_raw)
     base_runtime_valid = (
         _window_valid(window, now, window_path.parent)
@@ -699,8 +719,11 @@ def build_artifact(
         else "rejected"
     )
     return {
-        "schema": "grounded-math-production-pilot-gate-v1",
-        "pilot_contract_version": window.get("pilot_contract_version"),
+        "schema": "grounded-math-comparison-production-pilot-gate-v2"
+            if window.get("schema") == "math-comparison-pilot-window-v2"
+            else "grounded-math-production-pilot-gate-v1",
+        **({"pilot_contract_version": window.get("pilot_contract_version")}
+            if window.get("schema") != "math-comparison-pilot-window-v2" else {}),
         "passed": passed,
         "decision": decision,
         "evaluated_at": now.isoformat().replace("+00:00", "Z"),
@@ -744,7 +767,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--health-capture", type=Path, required=True)
     parser.add_argument("--trace", type=Path, required=True)
-    parser.add_argument("--provider-smoke", type=Path, required=True)
+    parser.add_argument("--provider-smoke", type=Path, help="Required for the v1 pilot; v2 fixed comparison makes no provider calls")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:

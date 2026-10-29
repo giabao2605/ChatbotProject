@@ -11,8 +11,6 @@ from mech_chatbot.rag.answer_policy import (
     AnswerOutcome,
     PolicyEvidence,
     decide_answer_policy,
-    explicit_negative_evidence_quote,
-    render_cited_explicit_negative_answer,
 )
 from mech_chatbot.rag.evidence_gate import (
     EvidenceState,
@@ -36,6 +34,7 @@ from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
 from mech_chatbot.rag.phases.retrieval_rerank import RerankOutcome
 from mech_chatbot.rag.phases.routing import RouteDecision
 from mech_chatbot.rag.pipeline_steps import _assemble_context
+from mech_chatbot.rag.demo_sources import DEMO_MISSING_NOTICE, demo_scope_context, filter_applicable_sources
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +45,6 @@ class EvidenceOutcome:
     answer_policy: Any
     evidence_decision: Any
     evidence_quotes: tuple[str, ...]
-    explicit_negative_answer: str
     reason_code: str = "evidence_approved"
 
 
@@ -95,32 +93,6 @@ def _audit_confidential_access(request: Any, documents: list[Any]) -> None:
         )
 
 
-def _relevant_negative_quote(
-    question: str,
-    context_text: str,
-    documents: list[Any],
-) -> str:
-    quote = explicit_negative_evidence_quote(question, context_text)
-    has_grounded_total = False
-    for document in documents:
-        provenance = (getattr(document, "metadata", {}) or {}).get(
-            "calculation_provenance"
-        )
-        if (
-            isinstance(provenance, dict)
-            and provenance.get("status") == "valid"
-            and provenance.get("operation") in {"add", "sum"}
-        ):
-            has_grounded_total = True
-            break
-    if not quote or not has_grounded_total:
-        return quote
-    folded_quote = quote.casefold()
-    if "tổng bom" in folded_quote or "total bom" in folded_quote:
-        return ""
-    return quote
-
-
 def _decide_evidence_policy(
     decision: RouteDecision,
     context_text: str,
@@ -142,16 +114,11 @@ def _decide_evidence_policy(
         crag_enabled=bool(getattr(runtime, "crag_enabled", False)),
         verifier_enabled=bool(
             getattr(runtime, "evidence_verifier_enabled", False)
-        ),
+        ) and not any(dependency.depends_on for dependency in getattr(state, 'text_dependencies', ())),
     )
     sufficient_branch_count = sum(
         branch.get("outcome") == "full_answer"
         for branch in decomposition_branches
-    )
-    negative_quote = _relevant_negative_quote(
-        request.user_question,
-        context_text,
-        documents,
     )
     answer_policy = decide_answer_policy(
         request.user_question,
@@ -162,8 +129,6 @@ def _decide_evidence_policy(
                 decision.crag_enabled
                 and state.budget.corrections < state.budget.limits.corrections
             ),
-            negative_evidence=bool(negative_quote),
-            negative_evidence_quote=negative_quote,
             sufficient_branch_count=sufficient_branch_count,
             total_branch_count=len(decomposition_branches),
         ),
@@ -229,11 +194,6 @@ def _approved_evidence_outcome(
     evidence_decision: Any,
     evidence_quotes: tuple[str, ...],
 ) -> EvidenceOutcome:
-    explicit_negative_quote = (
-        evidence_quotes[0]
-        if answer_policy.reason == "explicit_negative_evidence" and evidence_quotes
-        else ""
-    )
     return EvidenceOutcome(
         context_text=context_text,
         ref_text=ref_text,
@@ -241,11 +201,6 @@ def _approved_evidence_outcome(
         answer_policy=answer_policy,
         evidence_decision=evidence_decision,
         evidence_quotes=evidence_quotes,
-        explicit_negative_answer=render_cited_explicit_negative_answer(
-            explicit_negative_quote,
-            documents,
-            language=request.response_language,
-        ),
     )
 
 
@@ -312,7 +267,18 @@ def evaluate_evidence(
     request = decision.request
     documents = list(reranked.documents)
     decomposition_branches = list(primary.decomposition_branches)
+    if len(filter_applicable_sources(documents, request.user_question)) != len(documents):
+        from mech_chatbot.rag.phases.retrieval_rerank import _empty_context_terminal
+        return _empty_context_terminal(decision, enrichment, state, list(enrichment.new_part_ids), DEMO_MISSING_NOTICE)
     context_text = _assemble_context(documents, request.user_question) + primary.decomposition_notice
+    context_text = demo_scope_context(documents) + context_text
+    from mech_chatbot.rag.query_dependencies import dependency_context
+    dependencies = getattr(state, 'text_dependencies', ())
+    if dependencies:
+        usable_questions = {branch.get('subquery') for branch in decomposition_branches
+                            if branch.get('outcome') == 'full_answer'}
+        context_text += '\n' + dependency_context(tuple(dependency for dependency in dependencies
+                                                      if dependency.question in usable_questions))
     ref_text, ref_images = _select_citations(
         decision, primary, enrichment, documents, state
     )

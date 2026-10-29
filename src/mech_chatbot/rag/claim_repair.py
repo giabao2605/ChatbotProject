@@ -187,9 +187,7 @@ def repair_grounded_answer(
     _, unsupported_units = has_unsupported_units_symbols(
         answer, context_text, question
     )
-    allowed_numbers = sorted(
-        normalized_number_values(context_text) | normalized_number_values(question)
-    )
+    allowed_numbers = sorted(normalized_number_values(context_text))
     original_source_ids = sorted(set(re.findall(r"\bD\d+P\d+\b", answer, flags=re.IGNORECASE)))
     required_citations = re.findall(
         r"\[(?:Nguồn|Source):[^\]]+\]", answer, flags=re.IGNORECASE
@@ -226,7 +224,7 @@ def repair_grounded_answer(
                 )
 
     prompt = (
-        "Repair the draft using only facts and numbers present in CONTEXT or QUESTION. "
+        "Repair the draft using only facts and numbers present in CONTEXT. QUESTION defines the request, not evidence. "
         "Remove unsupported claims. Preserve every REQUIRED_SOURCE_ID exactly; only use ALLOWED_SOURCE_IDS. "
         "Do not explain the repair. Return only the repaired answer.\n\n"
         f"UNSUPPORTED_MATERIALS: {sorted(unsupported_materials)}\n"

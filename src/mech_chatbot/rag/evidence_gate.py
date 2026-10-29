@@ -70,9 +70,12 @@ RISKY_QUESTION_KEYWORDS = [
 
 
 TIME_EVIDENCE_PATTERNS = [
+    r"(?:thoi\s*gian|thoi\s*han|chu\s*ky)[^:\n]{0,100}:\s*[*_ ]*chua\s*xac\s*nhan",
     r"thoi\s*gian\s*(?:gia\s*cong|san\s*xuat|che\s*tao|lap\s*rap|xu\s*ly)",
     r"(?:gia\s*cong|san\s*xuat|che\s*tao|lap\s*rap).{0,40}(?:gio|phut|ngay|ca)",
-    r"(?:\d+(?:[\.,]\d+)?\s*)(?:gio|h|phut|p|ngay|ca|hours?|hrs?|minutes?|mins?|days?|weeks?|months?|years?)\b",
+    r"(?:\d+(?:[\.,]\d+)?\s*)(?:giay|gio|h|phut|p|ngay|ca|tuan|thang|quy|nam|hours?|hrs?|minutes?|mins?|days?|weeks?|months?|years?)\b",
+    r"\b(?:moi|hang)\s+(?:ngay|tuan|thang|quy|nam)\b",
+    r"\b(?:thu\s+(?:hai|ba|tu|nam|sau|bay)|chu\s+nhat)\b",
     r"nang\s*suat|dinh\s*muc|cycle\s*time|lead\s*time|takt\s*time",
 ]
 
@@ -120,10 +123,12 @@ def heuristic_missing_evidence_reason(question, context_text):
     if asks_time and not _has_any_pattern(ctx, TIME_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi thoi gian gia cong/nang suat/dinh muc san xuat"
 
+    # These phrases use "gia" as evaluation, value, processing or participation, not price.
+    price_question = re.sub(r"\b(?:danh\s+gia|gia\s+(?:tri|cong)|tham\s+gia)\b", " ", q)
     asks_cost = any(
         _contains_phrase(q, keyword)
         for keyword in ["chi phi", "bao nhieu tien", "don gia"]
-    ) or (_contains_phrase(q, "gia") and not _contains_phrase(q, "gia tri"))
+    ) or _contains_phrase(price_question, "gia")
     if asks_cost and not _has_any_pattern(ctx, COST_EVIDENCE_PATTERNS):
         return "tai lieu khong ghi chi phi/don gia/gia thanh"
 
@@ -149,16 +154,8 @@ def heuristic_missing_evidence_reason(question, context_text):
 
 def make_insufficient_evidence_message(question, reason, lang="vi"):
     if _normalize_lang(lang) == "en":
-        return (
-            f"The current documents do not contain enough information to answer this question ({reason}).\n\n"
-            "I will not estimate or fabricate data. To get an answer, please load documents with directly relevant data, "
-            "such as machining time per product, hourly/shift productivity, production norms, costs or applicable inspection standards."
-        )
-    return (
-        f"Tài liệu hiện tại không ghi thông tin đủ để trả lời câu hỏi này ({reason}).\n\n"
-        "Mình sẽ không tự ước lượng hoặc tự bịa số liệu. Để trả lời được, bạn cần bổ sung tài liệu có dữ kiện trực tiếp liên quan, "
-        "ví dụ thời gian gia công cho 1 sản phẩm, năng suất theo giờ/ca, định mức sản xuất, chi phí hoặc tiêu chuẩn kiểm tra tương ứng."
-    )
+        return "I could not find enough evidence in the documents you can access to answer this part."
+    return "Mình chưa tìm thấy đủ bằng chứng trong tài liệu được phép xem để trả lời phần này."
 
 
 def evaluate_answerability(
@@ -231,22 +228,18 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
         ).content
         data = _safe_json_loads(response)
         if not isinstance(data, dict):
-            logger.warning("Evidence gate khong parse duoc JSON, fallback cho phep final answer nhung van dung prompt nghiem ngat.")
-            return EvidenceDecision(
-                EvidenceState.SUFFICIENT,
-                stage="verifier",
-                telemetry_status="verifier_fail_open",
-            )
-        raw_state = str(data.get("state") or "").strip().upper()
-        if raw_state in EvidenceState.__members__:
-            state = EvidenceState[raw_state]
+            raise ValueError("Invalid verifier JSON")
+        raw_state = data.get("state")
+        if raw_state is not None:
+            state = EvidenceState(str(raw_state).strip().upper())
+        elif type(data.get("answerable")) is bool:
+            state = EvidenceState.SUFFICIENT if data["answerable"] else EvidenceState.INSUFFICIENT
         else:
-            state = EvidenceState.SUFFICIENT if bool(data.get("answerable")) else EvidenceState.INSUFFICIENT
+            raise ValueError("Invalid verifier decision")
         reason = str(data.get("reason") or "tai lieu khong co bang chung truc tiep")
-        quotes = data.get("evidence_quotes") or []
-        # if answerable and not quotes:
-        #     # Cau hoi rui ro ma verifier khong dua duoc quote -> khong cho qua.
-        #     return False, "khong tim thay trich dan bang chung truc tiep trong tai lieu", []
+        quotes = data.get("evidence_quotes", [])
+        if not isinstance(quotes, list) or any(not isinstance(quote, str) for quote in quotes):
+            raise ValueError("Invalid verifier evidence quotes")
         return EvidenceDecision(
             state,
             reason=reason,
@@ -257,11 +250,12 @@ Chi tra ve DUNG 1 JSON object theo schema sau, khong them text ngoai JSON. State
     except (ExternalAICallCancelled, RequestBudgetExceeded):
         raise
     except Exception as e:
-        logger.warning(f"Evidence gate loi ({e}). Fallback sang heuristic/prompt nghiem ngat.")
+        logger.warning("Evidence verification unavailable: %s", type(e).__name__)
         return EvidenceDecision(
-            EvidenceState.SUFFICIENT,
+            EvidenceState.INSUFFICIENT,
+            reason="verifier_unavailable",
             stage="verifier",
-            telemetry_status="verifier_fail_open",
+            telemetry_status="verifier_unavailable",
         )
 
 
@@ -271,12 +265,42 @@ def verify_answerability(question, context_text, docs=None, trace_id=None):
     return decision.answerable, decision.reason, list(decision.evidence_quotes)
 
 
+_CORRECTION_UNIT = r"[^\W\d_]+(?:\s+[^\W\d_]+){0,2}"
+_REJECTED_NUMBER = (
+    rf"[*_]{{0,2}}(?P<rejected>{_NUMBER_PATTERN.pattern})"
+    rf"(?:\s+(?P<rejected_unit>{_CORRECTION_UNIT}))?[*_]{{0,2}}"
+)
+_CORRECTED_NUMBER = (
+    rf"[*_]{{0,2}}(?P<corrected>{_NUMBER_PATTERN.pattern})"
+    rf"(?:\s+(?P<corrected_unit>{_CORRECTION_UNIT}))?[*_]{{0,2}}"
+)
+_DIRECT_NUMBER_CORRECTIONS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        rf"(?<!\w)(?:không\s+phải|khong\s+phai|not)\s+{_REJECTED_NUMBER}\s*[,;]?\s*"
+        rf"(?:đúng\s+là|dung\s+la|mà\s+là|ma\s+la|but|the\s+correct\s+(?:number|value)\s+is)\s+{_CORRECTED_NUMBER}",
+        rf"{_CORRECTED_NUMBER}\s*,\s*(?:không\s+phải|khong\s+phai|not)\s+{_REJECTED_NUMBER}",
+    )
+)
+
+
 def find_unsupported_numbers(answer, context_text, question, strict_mode=False):
     """Return positioned number violations after formatting normalization."""
     if not strict_mode and not is_high_risk_question(question):
         return []
-    allowed = normalized_number_values(context_text) | normalized_number_values(question)
+    allowed = normalized_number_values(context_text)
     answer_text = str(answer or "")
+    question_numbers = normalized_number_values(question)
+    # shortcut: only explicit paired corrections are recognized; ambiguous wording stays blocked.
+    rejected_spans = {
+        match.span("rejected")
+        for pattern in _DIRECT_NUMBER_CORRECTIONS
+        for match in pattern.finditer(answer_text)
+        if _normalize_number_token(match.group("rejected")) in question_numbers
+        and _normalize_number_token(match.group("corrected")) in allowed
+        and (not match.group("rejected_unit") or not match.group("corrected_unit")
+             or _norm(match.group("rejected_unit")) == _norm(match.group("corrected_unit")))
+    }
     formatting_spans = [
         match.span()
         for match in re.finditer(r"\[(?:Nguồn|Source):[^\]]+\]", answer_text, flags=re.IGNORECASE)
@@ -291,7 +315,7 @@ def find_unsupported_numbers(answer, context_text, question, strict_mode=False):
         if any(start <= match.start() and match.end() <= end for start, end in formatting_spans):
             continue
         normalized = _normalize_number_token(match.group(0))
-        if normalized in allowed:
+        if normalized in allowed or match.span() in rejected_spans:
             continue
         violations.append(
             NumberViolation(match.group(0), normalized, match.start(), match.end())

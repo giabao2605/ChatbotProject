@@ -13,7 +13,16 @@ export type UserProfile = {
 
 export type Citation = {
   doc_id: number;
-  page_no: number;
+  page_no: number | null;
+  source_id?: string;
+  citation_schema?: 'source-locator-v2';
+  scope_id?: string;
+  scope_hash?: string;
+  snapshot_id?: string;
+  source_hash?: string;
+  facts_url?: string;
+  locator?: { doc_id: string; version: string; page?: number | null; sheet?: string | null;
+    cell?: string | null; row_key?: string; table_index?: number | null; bbox?: number[] | null };
   file_name?: string | null;
   version_no?: number | string | null;
   score?: number | null;
@@ -31,7 +40,22 @@ export type ChatMessage = {
   feedback?: number | null;
   ref_text?: string;
   citations?: Citation[];
+  advanced_rag?: AdvancedRagMetadata;
 };
+
+export type EvidenceDocument = {DocID:number; OriginalFileName:string|null; DocNumber?:string|null; VersionNo?:number|null; Site?:string};
+export type ApprovedScopeChoice = {scope_id:string; definition:string; period:string; unit:string; currency:string};
+export type GraphAction = {root_key:string; product_scope:string; site:string; direction:'contains'|'where_used'};
+export type BomQuantity = {order_quantity:string;quantity_scope?:never}|{quantity_scope:string;order_quantity?:never};
+export type QueryAction = {branch_id:string; question:string; depends_on:string[]; graph_query?:GraphAction;
+  scope_total?:{scope_id:string};scope_comparison?:{scope_a:string;scope_b:string}; bom_rollup?:GraphAction & BomQuantity & {rounding_scope:string}};
+export type QueryActionState = {active:boolean;valid:boolean;scope_total?:{scope_id:string};query_plan?:{branches:QueryAction[]};text_query?:true;scope_comparison?:{scope_a:string;scope_b:string};graph_query?:GraphAction};
+export type MathEvidenceResult = {schema?:string;steps?:{step_id:string;formula:string;display_value?:string;value?:string|null;unit:string;status?:string}[]};
+export type AdvancedRagMetadata = {math?:MathEvidenceResult & {schema:string;template:string;status:string;accepted:boolean;offline_only:boolean;sources?:Citation[]};text_query?:{schema:string;contract?:string;activation_scope?:string;accepted:boolean;offline_only:boolean;
+  branches:{branch_id:string;subquery:string;outcome:string;evaluator_state?:string|null;cited_sources:Citation[]}[]};
+  query?:{schema:string;contract?:string;activation_scope?:string;status:string;accepted:boolean;offline_only:boolean;
+  branches:{branch_id:string;question:string;status:string;data_complete?:boolean;sources:Citation[];
+    graph?:{source_status?:string};math?:MathEvidenceResult}[]}};
 
 export type SessionItem = {
   session_id: string;
@@ -41,6 +65,7 @@ export type SessionItem = {
 };
 
 export type SessionMemory = {
+  chatId?: number;
   currentPartIds: string[];
   conversationContext: Record<string, unknown> | null;
 };

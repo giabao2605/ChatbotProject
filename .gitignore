@@ -155,7 +155,12 @@ archive/
 # ===== Empty components directory (legacy placeholder) =====
 components/
 
-# Generated local runtime cache and acceptance exports
+# Local audit exports, drawing inputs and generated runtime evidence
+/.project-audit/
+/9.1.00678/
+/9.3.03843/
+/9.3.04068/
+/9.3.04080/
 /src/data/cache/
 /backend-acceptance-*.xml
 /frontend-acceptance-*.json

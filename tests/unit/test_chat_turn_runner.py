@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, Iterable, Mapping
 
@@ -197,6 +198,30 @@ def test_success_orders_events_and_aggregates_the_answer() -> None:
     assert events[-1].new_part_ids == ("P123",)
 
 
+def test_v2_comparison_returns_versioned_steps_without_entering_v1_pilot():
+    math = {'schema':'grounded-calculation-v2', 'accepted':False, 'offline_only':True,
+            'steps':[{'step_id':'sum_a', 'display_value':'4.00'}]}
+    pilot = ScriptedPilotExperiments(route=object())
+    runner, rag, store, audit, pilot, citations = _runner(_success_events(debug_info={'math_v2':math}), pilot=pilot)
+    events = list(runner.stream(replace(_command(), scope_comparison=('a','b')), _actor()))
+    assert isinstance(events[-1], ChatDone)
+    assert events[-1].advanced_rag == {'math':math}
+    assert pilot.assignments == [] and pilot.replays == []
+    assert rag.requests[0][1] is None
+
+
+def test_scope_total_returns_its_metadata_without_entering_v1_pilot():
+    math = {'schema':'grounded-calculation-scope-total-v1', 'template':'sum_reviewed_scope',
+            'accepted':False, 'offline_only':True, 'steps':[{'step_id':'sum','display_value':'4.00'}]}
+    pilot = ScriptedPilotExperiments(route=object())
+    runner, rag, store, audit, pilot, citations = _runner(_success_events(debug_info={'math_v2':math}), pilot=pilot)
+    events = list(runner.stream(replace(_command(), scope_total='a'), _actor()))
+    assert events[-1].advanced_rag == {'math':{**math,'sources':()}}
+    assert store.records[-1].advanced_rag == {'math':{**math,'sources':()}}
+    assert pilot.assignments == [] and pilot.replays == []
+    assert rag.requests[0][1] is None
+
+
 def test_final_citations_and_ref_text_are_attributed_from_the_complete_answer() -> None:
     citation_doc = {
         "doc_id": 42,
@@ -375,3 +400,59 @@ def test_pilot_assignment_and_replay_do_not_change_the_user_stream(
         ChatDone,
     ]
     assert len(store.records) == 1
+
+
+def test_graph_turn_keeps_metadata_and_does_not_reuse_the_old_pilot():
+    from mech_chatbot.domain.graph_query import GraphQuery
+    metadata={'contract_version':'graph-v2','status':'partial','accepted':False,'offline_only':True}
+    pilot=ScriptedPilotExperiments(route=SimpleNamespace(arm='candidate'))
+    runner,rag,store,audit,pilot,citations=_runner(_success_events(debug_info={'graph_v2':metadata}),pilot=pilot)
+    selected=replace(_command(),graph_query=GraphQuery('document:1','product','factory'))
+    output=list(runner.stream(selected,_actor()))
+    assert output[-1].advanced_rag=={'graph':metadata}
+    assert pilot.assignments==[] and pilot.replays==[]
+    assert rag.requests[0][0].command.graph_query==selected.graph_query
+
+
+def test_bom_turn_preserves_math_steps_without_running_a_v1_pilot():
+    from mech_chatbot.domain.graph_query import GraphQuery,BomRollupQuery
+    metadata={'schema':'grounded-calculation-v2','template':'bom_rollup','status':'complete','steps':[],'accepted':False}
+    pilot=ScriptedPilotExperiments(route=SimpleNamespace(arm='candidate'))
+    runner,rag,store,audit,pilot,citations=_runner(_success_events(debug_info={'math_v2':metadata}),pilot=pilot)
+    selected=replace(_command(),bom_rollup=BomRollupQuery(GraphQuery('document:1','product','factory'),'3','policy'))
+    output=list(runner.stream(selected,_actor()))
+    assert output[-1].advanced_rag=={'math':metadata} and pilot.assignments==[] and pilot.replays==[]
+
+
+def test_query_plan_runner_keeps_branch_results_and_avoids_v1_pilot():
+    from mech_chatbot.domain.graph_query import GraphQuery
+    from mech_chatbot.domain.query_plan import QueryBranch,QueryPlan
+    metadata={'schema':'query-plan-v2','status':'partial','branches':[],'accepted':False}
+    pilot=ScriptedPilotExperiments(route=SimpleNamespace(arm='candidate'))
+    runner,rag,store,audit,pilot,citations=_runner(_success_events(debug_info={'query_v2':metadata}),pilot=pilot)
+    selected=replace(_command(),query_plan=QueryPlan((QueryBranch('graph','Contains what?',graph_query=GraphQuery('document:1','product','factory')),)))
+    output=list(runner.stream(selected,_actor()))
+    assert output[-1].advanced_rag=={'query':metadata} and pilot.assignments==[] and pilot.replays==[]
+    assert store.records[-1].advanced_rag == output[-1].advanced_rag
+
+
+def test_text_query_runner_keeps_branch_sources_and_skips_old_pilot_assignment():
+    branches=[{'branch_id':'branch-1','subquery':'HR policy','outcome':'insufficient_evidence','citations':[]}]
+    pilot=ScriptedPilotExperiments(route=SimpleNamespace(arm='candidate'))
+    runner,rag,store,audit,pilot,citations=_runner(_success_events(debug_info={'decomposition_branches':branches}),pilot=pilot)
+    output=list(runner.stream(replace(_command(),text_query=True),_actor()))
+    assert output[-1].advanced_rag=={'text_query':{'schema':'query-text-v2','accepted':False,'offline_only':True,
+        'branches':[{'branch_id':'branch-1','subquery':'HR policy','outcome':'insufficient_evidence',
+                     'evaluator_state':None,'cited_sources':[]}]}}
+    assert pilot.assignments==[] and pilot.replays==[]
+
+
+def test_text_query_sources_only_reference_resolved_answer_citations():
+    branches=[{'branch_id':'branch-1','subquery':'HR policy','outcome':'full_answer',
+        'citations':[{'source_id':'D17P2'},{'source_id':'D99P1'}]}]
+    card={'doc_id':17,'page_no':2,'source_id':'D17P2','has_vision':False,'original_url':'/api/files/documents/17/original'}
+    resolver=ScriptedCitationResolver(citations=(card,))
+    runner,rag,store,*_= _runner(_success_events(debug_info={'decomposition_branches':branches}),citations=resolver)
+    output=list(runner.stream(replace(_command(),text_query=True),_actor()))
+    assert output[-1].advanced_rag['text_query']['branches'][0]['cited_sources']==[card]
+    assert store.records[-1].advanced_rag == output[-1].advanced_rag

@@ -134,7 +134,6 @@ def _plan(
     steps,
     *,
     docs=None,
-    answer="",
     outcome=None,
     budget=None,
     provider=None,
@@ -177,7 +176,6 @@ def _plan(
             outcome=outcome or steps.GenerationOutcome(),
             budget=budget,
         ),
-        explicit_negative_answer=answer,
         runtime=SimpleNamespace(
             invocation=invocation or SimpleNamespace(
                 evaluation_draft_override=None,
@@ -646,6 +644,33 @@ def test_disambiguation_requests_more_detail_when_no_candidate_is_confident(load
     assert returned == docs
 
 
+def test_exact_filename_survives_enrichment_and_generic_request_words(load_steps):
+    steps = load_steps()
+    selected = _doc("Material tolerance 0.2 mm", doc_id=901, file_goc="FRAME-72-Model3.pdf",
+                    domain="mechanical", base_code="FRAME-72", variant_code="painted")
+    other = _doc("Assembly BOM", doc_id=902, file_goc="FRAME-72-Model4.pdf",
+                 domain="mechanical", base_code="FRAME-72", variant_code="assembled")
+
+    lifecycle, terminal, returned = _disambiguate(
+        steps, [selected, other],
+        "Trong bản vẽ FRAME-72-Model3.pdf, hãy nêu riêng dung sai vật liệu.",
+    )
+
+    assert terminal is None and lifecycle.refusal_reason is None
+    assert returned == [selected]
+
+
+def test_duplicate_filename_does_not_choose_between_two_documents(load_steps):
+    steps = load_steps()
+    docs = [_doc("Different drawing", doc_id=doc_id, file_goc="FRAME-72.pdf",
+                 domain="mechanical", base_code="FRAME-72", variant_code=variant)
+            for doc_id, variant in [(901, "painted"), (902, "assembled")]]
+
+    _, terminal, returned = _disambiguate(steps, docs, "Trong FRAME-72.pdf, hãy nêu dung sai.")
+
+    assert terminal is not None and returned == docs
+
+
 def test_administrative_pages_are_not_misclassified_as_selectable_variants(load_steps):
     steps = load_steps()
     docs = [
@@ -685,20 +710,20 @@ def test_grounded_math_malformed_provenance_fails_closed_without_provider(
         )
     )
 
-    assert "thông tin đủ để trả lời" in answer.lower()
+    assert "đủ bằng chứng" in answer.lower()
     assert outcome.refusal_reason == "grounded_math_post_check"
 
 
-def test_normal_streaming_returns_provider_chunks_when_strict_mode_is_disabled(
+def test_document_answer_is_buffered_for_attribution_when_strict_mode_is_disabled(
     load_steps,
     monkeypatch,
 ):
     steps = load_steps(strict=False)
-    provider = _prepare_provider(steps, monkeypatch, [["Approved ", "policy."]])
+    provider = _prepare_provider(steps, monkeypatch, [["Approved ", "policy. [SRC:D77P4]"]])
 
     answer = list(steps.generate_answer(_plan(steps, provider=provider)))
 
-    assert answer == ["Approved ", "policy."]
+    assert answer == ["Approved policy. [SRC:D77P4]"]
 
 
 def test_normal_streaming_retries_rate_limit_before_emitting(load_steps, monkeypatch):
@@ -706,7 +731,7 @@ def test_normal_streaming_retries_rate_limit_before_emitting(load_steps, monkeyp
     provider = _prepare_provider(
         steps,
         monkeypatch,
-        [RuntimeError("rate limit"), ["Recovered answer."]],
+        [RuntimeError("rate limit"), ["Recovered answer. [SRC:D77P4]"]],
     )
     metrics = {}
 
@@ -714,7 +739,7 @@ def test_normal_streaming_retries_rate_limit_before_emitting(load_steps, monkeyp
         steps.generate_answer(_plan(steps, provider=provider), metrics=metrics)
     )
 
-    assert answer == ["Recovered answer."]
+    assert answer == ["Recovered answer. [SRC:D77P4]"]
     assert metrics["provider_retries"] == 1
 
 
@@ -731,7 +756,7 @@ def test_guarded_generation_retries_split_provider_error_text(load_steps, monkey
                 "overloaded. Please try again later.",
             ],
             ["[Error] Error code: 5", "03 Service Unavailable"],
-            ["Recovered answer."],
+            ["Recovered answer. [SRC:D77P4]"],
         ],
     )
     metrics = {}
@@ -743,7 +768,7 @@ def test_guarded_generation_retries_split_provider_error_text(load_steps, monkey
         )
     )
 
-    assert answer == "Recovered answer."
+    assert answer == "Recovered answer. [SRC:D77P4]"
     assert metrics["provider_retries"] == 2
 
 
@@ -788,12 +813,12 @@ def test_normal_streaming_allows_valid_error_document_text(load_steps, monkeypat
     provider = _prepare_provider(
         steps,
         monkeypatch,
-        [["[Error] là tiền tố được mô tả trong tài liệu vận hành."]],
+        [["[Error] là tiền tố được mô tả trong tài liệu vận hành. [SRC:D77P4]"]],
     )
 
     answer = "".join(steps.generate_answer(_plan(steps, provider=provider)))
 
-    assert answer == "[Error] là tiền tố được mô tả trong tài liệu vận hành."
+    assert answer == "[Error] là tiền tố được mô tả trong tài liệu vận hành. [SRC:D77P4]"
 
 
 def test_normal_streaming_does_not_retry_non_retryable_provider_failure(
@@ -866,7 +891,7 @@ def test_guarded_generation_requires_inline_citation_when_source_cards_are_disab
     )
 
     assert answer != "Nhân viên nộp đề nghị."
-    assert outcome.refusal_reason == "missing_source_page_version"
+    assert outcome.refusal_reason == "citation_missing_id"
 
 
 def test_claim_repair_releases_only_the_grounded_rewrite(load_steps, monkeypatch):
@@ -914,7 +939,7 @@ def test_evaluation_draft_override_is_request_local(load_steps, monkeypatch):
 
     steps = load_steps()
     provider = _prepare_provider(steps, monkeypatch, [["ignored provider draft"]])
-    controlled_draft = "Quy định yêu cầu nhân viên nộp đề nghị."
+    controlled_draft = "Quy định yêu cầu nhân viên nộp đề nghị. [SRC:D77P4]"
     plan = _plan(
         steps,
         provider=provider,
