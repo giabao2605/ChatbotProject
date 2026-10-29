@@ -104,7 +104,7 @@ desktop.ini
 *.stackdump
 
 # ===== Local agent/Codex workspace state =====
-# Keep repository skills and instructions under .agents/ in version control.
+# Agent cache/state stay local; personal skills are managed outside this repository.
 .agents/state/
 .agents/cache/
 .codex/
@@ -153,7 +153,8 @@ reports/demo_wave/
 archive/
 
 # ===== Empty components directory (legacy placeholder) =====
-components/
+/components/
+/web-ui/coverage-query-ui/
 
 # Local audit exports, drawing inputs and generated runtime evidence
 /.project-audit/
@@ -165,3 +166,6 @@ components/
 /backend-acceptance-*.xml
 /frontend-acceptance-*.json
 /test-qa-acceptance.xml
+
+# Generated per-run coverage databases
+.coverage-*

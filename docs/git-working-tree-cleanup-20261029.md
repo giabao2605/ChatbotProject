@@ -24,3 +24,17 @@ Người dùng yêu cầu kiểm kê 141 thay đổi, làm sạch working tree v
 Audit dependency không sửa thư viện: lock QA có 7 cảnh báo (4 high, 3 moderate); lock bản F01–F06 có 4 (1 high, 3 moderate), đều không có critical theo npm audit tại thời điểm này. Python chat_env có 4 advisory trong langgraph-sdk và tornado. Đây là giới hạn còn mở, không coi việc push nhánh là đã khắc phục dependency hoặc nghiệm thu triển khai mới.
 
 Không push .env, file coverage, dữ liệu runtime, báo cáo audit thô hoặc credential. Không force-push và không xóa nhánh/worktree. Checkout phục vụ giữ commit và cấu hình phát hành hiện có.
+
+## Yêu cầu tiếp theo: hợp nhất main
+
+Sau khi các nhánh riêng đã được lưu, người dùng yêu cầu hợp nhất và đồng bộ main local với GitHub. Phần phân loại bên trên là checkpoint trước quyết định này.
+
+- Hợp nhất main cũ `4e8b52f` với bản phát hành/bàn giao, sau đó QA và checkpoint RAG; giữ lịch sử của cả ba nhánh, không force-push.
+- Giữ hợp đồng chung của main cùng F01–F06: nguồn theo phiên bản/hash, phân quyền, lọc demo, khôi phục hội thoại và hỏi rõ ngữ cảnh. Giữ các sửa QA về job/source identity, metadata, preview và đăng xuất nhiều tab.
+- Review phát hiện và sửa hai điểm giao auth: generation phải gắn với lúc xác thực mật khẩu; đổi mật khẩu và thu hồi phiên phải nằm trong cùng transaction SQL. Tận dụng bảng hiện có, không thêm schema. Có hồi quy cho reset xen giữa login và rollback khi thu hồi lỗi.
+- Sửa F04 để câu lịch sử còn thiếu đối tượng không được dùng làm chủ đề đã rõ; hai ca RED và bảy ca liên quan đạt sau sửa.
+- Giữ nguồn/checkpoint lịch sử đầy đủ. Quy tắc ignore thư mục components được giới hạn ở thư mục gốc để không che component frontend mới; coverage sinh tự động vẫn chỉ nằm local.
+
+Đã chạy các nhóm kiểm tra bị ảnh hưởng về file/ingestion, quyền và phiên bản nguồn, RAG/provider/routing, ops, job/SQL, API/auth và giao diện. Các fixture cũ được cập nhật đúng hợp đồng kết hợp rồi kiểm tra lại ca lỗi; không hạ kiểm quyền hoặc bỏ pin để làm test đạt. Frontend typecheck/build đạt; 326 file Python thay đổi so với main cũ qua kiểm tra cú pháp. Review độc lập đã đóng các finding nêu trên.
+
+Không chạy lại toàn bộ suite, kiểm tải hoặc GUI trên bản hợp nhất. Không cập nhật dependency ngoài việc giữ các phiên bản từ hai nhánh đã rà; các advisory đã ghi ở trên vẫn là giới hạn còn mở. Không chạy migration hoặc triển khai: web tiếp tục dùng bản `27800dc`; phát hành commit main mới cần luồng triển khai riêng.
