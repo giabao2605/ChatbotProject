@@ -37,7 +37,7 @@ const toolbar: ToolbarAction[] = [
   <ResourcePage
     title="Chất lượng tài liệu"
     eyebrow="Quality"
-    description="DocQualityScore được tính từ feedback người dùng; đây không phải điểm extraction hay classifier."
+    description="DocQualityScore được tính từ phản hồi người dùng; đây không phải điểm extraction hay classifier."
     :filters="filters"
     :columns="columns"
     :load="load"

@@ -7,8 +7,8 @@
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 5173",
-    "test": "vitest run --exclude tests/e2e/**",
-    "test:coverage": "vitest run --coverage --exclude tests/e2e/**",
+    "test": "vitest run --exclude \"tests/e2e/**\"",
+    "test:coverage": "vitest run --coverage --exclude \"tests/e2e/**\"",
     "test:e2e": "playwright test"
   },
   "dependencies": {
