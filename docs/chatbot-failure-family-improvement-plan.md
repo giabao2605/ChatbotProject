@@ -1,5 +1,78 @@
 # Kế hoạch cải thiện chatbot theo họ lỗi
 
+> Ghi chú lưu trữ 29/10/2026: các checkpoint bên dưới mô tả thời điểm được ghi. Bản web đã triển khai sau đó là `27800dc` (F01–F06). Nhánh bàn giao này lưu tài liệu và cấu hình skill; không đồng nghĩa triển khai thêm mã lên web.
+
+## Cập nhật hiện hành — 28/10/2026, thử lại theo yêu cầu
+
+Đã chốt thêm một lượt publicHTTPS trên đúng **e3ee814**: đăng nhập, SSE, tải nguồn đúng hash, lịch sử và đăng xuất đều200. Hai test retry cũ được xác nhận đúng nodeID trong XML đã có, không chạy lại. Rà soát độc lập không còn khoảng trống kỹ thuật cần kiểm tra thêm trong phạm vi đợt này. Phần còn thiếu là nguồn BOM: 15 file nguồn không đổi, đủ21 số lượng đã duyệt nhưng20 quan hệ con/lá và4 bản khai đầy đủ chưa có căn cứ, đồng thời vẫn mâu thuẫn201/304 và thiếu đúng bản vẽ8.1.06524.290. Các52 giá trị nghiệp vụ chưa xác nhận được giữ nguyên theo nội dung đã duyệt, không phải lỗi nạp. Không chờ mail hoặc chạy vòng kiểm tra mới để thay thế dữ kiện nguồn.
+
+Đang chạy **e3ee814**. Đã thử lại thay vì chờ mail: câu Kho gốc **3/3** lần có đáp án đúng nguồn. Nhóm năm yêu cầu đầu tiên chạy đồng thời trong runtime QA chưa khởi tạo phát hiện bốn `AttributeError`, trước khi gọi provider; không phải timeout Qdrant/Jina. Tokenizer-only tái hiện đúng `NoneType.process`: Underthesea công bố model trước khi nạp xong. Đã sửa bằng một khóa chung cho hai wrapper RAG/ingestion trong utility hiện có, giữ cache và import native muộn. Sáu test liên quan, review độc lập và tokenizer thật **5/5** đạt, output không đổi. Service vốn có warmup trước ready nên không suy lỗi này từng xảy ra qua HTTP.
+
+Sau sửa, full pipeline chạy lại năm yêu cầu đồng thời ngay từ lần đầu **5/5 đúng**, không lỗi retrieval, 10 lượt provider trả200. Đã phát hành có ký; ba service/health đúng commit và Query/Graph/Math đạt. Một câu Kho mới trên **service thật** trả200 trong7,469s, generation thực không dùng answer cache, nguồn D1185P1 đúng. [Kết quả hiện hành](../reports/remaining-followup-20261027/retry-current-summary.json).
+
+Timeout transport cũ hiện không tái hiện, coi là rủi ro gián đoạn đã ghi nhận; **không chặn việc dùng app để chờ mail** và không tăng timeout/retry. Chưa đủ bằng chứng khẳng định nguyên nhân lịch sử hoặc bảo đảm không bao giờ lặp lại. Phần thiếu dữ kiện BOM/giá trị nghiệp vụ vẫn giữ nguyên; goal toàn bộ chưa hoàn tất. Các mục sau là checkpoint lịch sử.
+
+## Checkpoint — 28/10/2026, chẩn đoán trích dẫn và tải có giới hạn
+
+Đang chạy **f60dee8**. Đã truy đúng trace gốc của câu Kho: provider sinh đáp án thành công nhưng backend chặn vì không xác nhận được Source ID; không phải timeout hay thiếu tài liệu. Mã cũ `missing_source_page_version` không chứng minh thiếu trang/version vì caller dùng `require_version=False`. Draft gốc không được lưu, nên chưa xác định được thiếu ID, sai binding hay marker lỗi. Đã phát hành diagnostics phân biệt ba trường hợp này, giữ nguyên gate và không lưu/log draft. **47** kiểm tra liên quan và review độc lập đạt. [Bằng chứng](../reports/remaining-followup-20261027/warehouse-citation-diagnosis.json).
+
+Đã chạy một lượt toàn pipeline có provider ở mức **1/3/5**, tổng **9/9 câu đúng**, 9 OpenRouter + 9 Jina trả200, không có answer-cache hit hoặc bước retrieval thất bại. Thời gian từng câu: lần đầu17,172s; nhóm3 từ4,266–4,906s; nhóm5 từ4,062–6,953s. Đây là QA cô lập có quyền/câu hỏi đóng băng, không phải SLA tải production. Không tái hiện timeout trong lượt này; vẫn chưa chứng minh nguyên nhân transport cũ đã được xử lý. [Báo cáo](../reports/remaining-followup-20261027/pipeline-after-client-summary.json).
+
+Ba service, authenticated health đúng commit và Query/Graph/Math đạt; 48 WIP giữ nguyên. 13 tài liệu đã phát hành và phạm vi đọc không đổi. Goal tổng thể vẫn mở vì nguồn BOM/giá trị nghiệp vụ còn thiếu, nguyên nhân transport chưa được xác định và subtype citation của draft Kho cũ chưa có bằng chứng. Đã đọc lại ticket Qdrant bằng phiên Chrome đang đăng nhập: Open, chưa có phản hồi hiển thị; thread Jina vẫn chỉ có thư SENT. Quyền truy cập browser/Gmail hiện dùng được; phần còn thiếu là bằng chứng mới. Các checkpoint dưới đây giữ nguyên lịch sử.
+
+## Checkpoint — 28/10/2026, sau phát hành nguồn đã duyệt
+
+Đang chạy **ba94111** với bundle ký và preflight ba service đạt. Đã phát hành đủ **13 tài liệu**, hiệu lực **28/10/2026**, từng phòng đọc nguồn của mình, admin đọc tất cả. **182/182** kiểm tra quyền và **13/13** lượt đăng nhập/tải đúng hash/chặn tải chéo/đăng xuất đạt. Không đổi quyền tài khoản hoặc tài liệu cũ. Hồ sơ: [business-source-release.json](../reports/remaining-followup-20261027/business-source-release.json).
+
+Đã chạy 39 câu trên nguồn mới: lần đầu 32 câu đủ toàn bộ claim đã đóng băng, 4 câu thiếu chi tiết bổ sung của rubric mà câu hỏi không yêu cầu trực tiếp, 3 câu từ chối sai. Đã sửa hai lỗi chung: thời gian ghi CHƯA XÁC NHẬN bị coi là không có bằng chứng; danh sách danh từ cùng câu hỏi xác nhận bị đếm quá ba yêu cầu. 92 kiểm tra liên quan, 51 kiểm tra cache và review độc lập đạt. Chỉ đo lại 3 ca lỗi: cả ba trả lời có nguồn; riêng Kho vẫn ghi mở vì chưa chứng minh nguyên nhân lần từ chối đầu. Giữ nguyên oracle và kết quả lần đầu; không ép trả lời dài để bù chi tiết ngoài câu hỏi. HTTP/SSE, lịch sử, logout và Query/Graph/Math sau phát hành đạt.
+
+BOM đã có cách dùng phần đã xác minh: số lượng cho mỗi cụm cha kèm cảnh báo chưa phải tổng toàn cây, nhánh chưa biết không tính là 0. Vật liệu Inox201/304, bản vẽ con chính xác và độ đầy đủ còn mở. Những ô nghiệp vụ CHƯA XÁC NHẬN vẫn chưa có giá trị cụ thể; bộ nguồn do Codex soạn và người dùng duyệt không thay thế hồ sơ công ty chưa được cung cấp.
+
+Goal tổng thể **chưa hoàn tất**. Ngoài nguồn BOM và tham số nghiệp vụ còn thiếu, timeout transport chưa xác định nguyên nhân, câu Kho cần bằng chứng về độ ổn định. Jina đã được đọc lại đúng thread qua Gmail, chưa có thư trả lời; chưa kiểm tra lại portal Qdrant trong lượt này. Các đoạn dưới đây là checkpoint lịch sử.
+
+## Bổ sung chẩn đoán client — 28/10/2026
+
+Đã phát hành **4bc63f2**: tái sử dụng 83 vector câu mẫu riêng theo runtime/model; chặn rerank fallback sau cancel/deadline; giới hạn timeout rerank theo thời gian còn lại. Đo routing bằng BGE thật: 9,61 giây trước sửa → 0,156 giây sau khởi tạo, điểm so khớp giữ nguyên. Lần đầu vẫn mất 9,312 giây.
+
+Hai query thật đúng 120/D20 (21,562 giây và 6,844 giây); Query/Graph/Math và giao diện đạt. 140+49 kiểm tra liên quan và review độc lập đạt; giữ nguyên 48 thay đổi có sẵn. Bằng chứng: `reports/remaining-followup-20261027/client-root-causes.json` và `runtime-client.json`.
+
+Timeout transport vẫn chưa xác định nguyên nhân ở máy, mạng hay provider. Không quy vị trí phát sinh lỗi thành nguyên nhân; không tăng timeout/retry. Nguồn BOM và xác nhận dự thảo nghiệp vụ còn mở. Các checkpoint dưới đây giữ nguyên làm lịch sử.
+
+## Trạng thái tiếp tục — 28/10/2026
+
+Bản code `76f45c5` và nhóm thư viện `89085b3` đã phát hành có ký bundle; identity preflight cả ba service và authenticated health đạt. Query, Graph và Math trả200 đúng kiểm tra có nguồn; UI đăng nhập/SSE/mở nguồn/lịch sử/đăng xuất đạt. Báo cáo tiếp tục: [remaining-followup-20261027](../reports/remaining-followup-20261027/README.md). Goal tổng thể vẫn mở.
+
+| Hạng mục | Trạng thái / điều kiện còn mở |
+| --- | --- |
+| Sửa occurrence BOM đã duyệt | Đã có luồng revision có audit, kiểm quyền/approver/current source pin và tái duyệt. Đã gắn đúng59C8→58 qua luồng này; không đổi số lượng/vật liệu/declaration. Graph vẫn partial. |
+| Ba test routing cũ | Đã sửa fixture để kiểm tra source authority tại executor, giữ từ chối pilot_replay.147 test của hai module đạt; không nới runtime. |
+| Tài liệu13 phòng | Đã soạn13 dự thảo theo yêu cầu, có CHƯA XÁC NHẬN và câu hỏi review. Chưa được công ty duyệt, chưa ingest và chưa được tính nghiệm thu. |
+| Thư viện còn lại | Đã phát hành10 bản vá và gỡ4 distribution tùy chọn không dùng; giữ parser và CPU embedding. Pip check sạch,13 runtimechecks đạt, không đổi package ngoài nhóm; BGE trước/sau tách biệt max delta0. Hai launcher Slim dùng chung giữ nguyên hash. Audit mới thấy Msgpack, đã vá1.2.3; không tuyên bố repo hết lỗi bảo mật. |
+| Qdrant/Jina | Qdrant timeout vẫn tái hiện khi tái sử dụng kết nối. Payload probe nhỏ/query nhanh không chứng minh nguyên nhân. Đã chuẩn bị gói đối chiếu an toàn; log Windows quanh2mốc lỗi không có sự kiện phù hợp, DNS operational tắt nên không có bằng chứng. Đã xem dashboard Qdrant/Jina: logview100dòng/usageaggregate không xác định được request lỗi cũ. Đã hoàn tất Support signup và gửi ticket QdrantCCS-16027 theo quyền gửi trực tiếp; đã xác nhận Open, chờ log/nhận định nhà cung cấp. Jina đã được phép gửi riêng và email tới support@jina.ai được xác nhận GmailSENT; cả2dịch vụ đang chờ phản hồi. Chưa sửa suy đoán. |
+| Graph còn thiếu | Doc60C2 Inox201/304 chờ căn cứ; Doc68C1 thiếu đúng bản vẽ8.1.06524.290; child/leaf và completeness chưa đủ. Không thay bằng bản vẽ khác công đoạn hoặc tự xác nhận leaf. |
+
+## Trạng thái mới nhất — triển khai 27/10/2026
+
+Bản sửa chính `af8569c`, thư viện `152ee80`; kiểm tra sau phát hành phát hiện thêm lỗi mất phạm vi tên file ở bước disambiguation, đã sửa tại `fb96820`. Các checkpoint bên dưới giữ nguyên làm lịch sử. Báo cáo hiện hành: [remaining-fixes-20261027](../reports/remaining-fixes-20261027/README.md).
+
+| Hạng mục | Trạng thái hiện hành / điều kiện còn mở |
+| --- | --- |
+| 19 tài liệu đồng bộ lỗi | Đã sửa chọn collection theo SourceSystem trước TOP. Dữ liệu QA vẫn nguyên. Worker thực tế đã đồng bộ 122/122, failed_doc_ids rỗng. |
+| Nguồn demo ngoài storage root | Đã sao chép và kiểm hash 42 file, chỉ đổi FilePath có điều kiện; giữ version/ID/quyền/nội dung. Doc76 tải200 với HR, Kho bị403. |
+| Query nhiều nhánh bị policy chặn | Đã trả refusal rõ ràng qua HTTP/SSE, tách lỗi audit; không đổi internal_only hoặc retry. |
+| Admin mất tài khoản hoạt động cuối | Đã sửa khóa giao dịch dùng chung cho disable/delete/role update, và caller không coi dict từ chối là thành công. SQL QA giữ lại một admin; không thay account production. |
+| Thư viện | Đã cài hai nhóm mạng/PDF và Pillow13 cùng phụ thuộc tương thích, pip check sạch. Cùng snapshot audit còn33 mục trong11 package; chi tiết dependency-review.md. |
+| Bản vẽ nêu đủ tên file vẫn bị hỏi lại | Test tái hiện đỏ; shared resolver giữ đúng một nguồn đã được quyền đọc sau enrichment. Hai DocID trùng filename vẫn cần phân giải. Hợp đồng cache v6. |
+| Qdrant/tải | 9/9 câu đúng ở mức1/3/5; có TLS-handshake timeout và Jina read timeout, fallback trả lời được. Probe transport5/5 thành công không chứng minh đã sửa lỗi gián đoạn. Giữ mở, không tăng timeout. |
+| OCR | Ba mẫu có OCR provider thật đạt extraction/retrieval/context/answer trong môi trường cô lập; không phải đo toàn kho scan công ty. |
+| Graph/BOM | Cả21 số lượng đã duyệt có nguồn;18 ô SoLuong trống thuộc trích thô. Vẫn mâu thuẫn Inox201/304, thiếu leaf/binding và độ đầy đủ. Ứng viên59C8→58 đã có ảnh đối chiếu nhưng chưa có luồng sửa occurrence đã duyệt để gắn binding; không UPDATE ngầm. |
+| Nghiệp vụ14 phòng | Codex đã được ủy quyền đối chiếu nguồn. Kỹ thuật có PDF thật;13 phòng còn lại vẫn thiếu tài liệu nghiệp vụ thật. Không yêu cầu người dùng chấm lại42 câu demo. |
+| Admin/quota | Login và đọc danh sách user bằng security-admin hợp lệ đã đạt; race trên SQL QA, quota-retry claim và rate-limit đạt. Không reset mật khẩu hay thử race trên production. |
+| Reboot | PASS theo xác nhận của người dùng; không yêu cầu reboot lại. Chưa suy thành bằng chứng khởi động tự động hoàn toàn vì đã có thao tác Start tay. |
+
+Chỉ thị mới của người dùng cho phép API trả phí vượt trần10USD cũ khi cần kiểm tra; sổ cũ giữ nguyên và usage mới được ghi riêng. Giữ phân biệt tiền provider báo, ước tính và phần chưa biết. Không đổi schema/model/framework, không reindex toàn kho hoặc làm mới oracle.
+
+
 ## Trạng thái hiện hành — đợt khắc phục 26/10/2026
 
 Mốc bắt đầu đợt này là `200a703`. Các checkpoint bên dưới giữ nguyên để truy vết lịch sử; các ghi chú cũ về Query/Graph chưa bật, grant QA hết hạn hoặc thiếu filename không mô tả trạng thái hiện hành. Query/Graph/Math đã có quyền phục vụ nguồn được duyệt; vẫn kiểm quyền, phiên bản và độ đầy đủ trên từng yêu cầu. Nghiệm thu nghiệp vụ là một bước riêng.
